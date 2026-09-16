@@ -41,7 +41,8 @@ import {
  *  started at, so a `set` or `clear` racing either never has its outcome overwritten by a mint or an
  *  exchange from before it. The counter is never reset: a `clear` bumps it too, so a delete followed
  *  by a new `set` can never present the number a stale mint is waiting for. `pending` is the OAuth
- *  attempt in flight; `consumedNonce` the last one completed, so its callback cannot complete twice.
+ *  attempt in flight; `completed` the last one finished (its nonce and the revision it wrote), so its
+ *  callback completes idempotently instead of exchanging twice.
  *  `catalog` is the owner's root context — the log the facts about this secret go to. */
 type Stored = { record: SecretRecord; revision: number };
 
@@ -57,12 +58,13 @@ export class SecretDurableObject extends DurableObject<Env> {
   /** Replace the record whole — material always travels with its complete policy (apps/os's
    *  `update` rule), so a value never inherits a pin or a strategy it was not set with. `catalog` is
    *  the owner's root context name, where this object appends its own facts. */
-  async set(record: SecretRecord, catalog: string): Promise<void> {
+  async set(record: SecretRecord, catalog: string): Promise<number> {
     const revision = await this.#bump();
     await this.ctx.storage.put<Stored>("stored", { record, revision });
     await this.ctx.storage.put("catalog", catalog);
     // A set supersedes any OAuth attempt in flight: its callback must not overwrite this material.
     await this.ctx.storage.delete("pending");
+    return revision;
   }
 
   /** The write counter, bumped: the number the write that follows is fenced by. */
@@ -76,7 +78,7 @@ export class SecretDurableObject extends DurableObject<Env> {
    *  an exchange started before the clear cannot land after it, even under a new `set`). */
   async clear(): Promise<void> {
     await this.#bump();
-    await this.ctx.storage.delete(["stored", "pending", "consumedNonce"]);
+    await this.ctx.storage.delete(["stored", "pending", "completed"]);
   }
 
   /** OAUTH, step one: keep the pending attempt, hand back the authorize URL. The `state` is a
@@ -113,14 +115,21 @@ export class SecretDurableObject extends DurableObject<Env> {
    *  context): the code for the pending attempt the nonce names → the exchange → the record, as a
    *  `set`. A stale or foreign callback (a back button, an older authorize URL, a replay with a junk
    *  code) fails without touching the live attempt; the attempt is consumed only when its exchange
-   *  succeeds, and the nonce is remembered so the same callback cannot complete twice. The exchange
-   *  lands only if nothing else wrote this object while the provider was answering: a `set` or
-   *  `clear` in that window wins and the tokens are discarded (from the fence to the nonce only
-   *  storage awaits follow, which the input gate holds together). Answers the pin the record was
-   *  stored with — what the catalog fact carries; never the material. */
+   *  succeeds. The exchange lands only if nothing else wrote this object while the provider was
+   *  answering: a `set` or `clear` in that window wins and the tokens are discarded (from the fence
+   *  to the completion mark only storage awaits follow, which the input gate holds together).
+   *  Answers the pin the record was stored with — what the catalog fact carries; never the
+   *  material. IDEMPOTENT for the attempt it completed: the same callback again (a refreshed tab,
+   *  or the root context retrying after its catalog append failed) runs no second exchange and
+   *  answers the same pin, as long as the record is still the one this attempt wrote — so the
+   *  catalog can always catch up with a live object. */
   async completeOAuth(input: { code: string; nonce: string }): Promise<{ urls: string[] }> {
-    if ((await this.ctx.storage.get<string>("consumedNonce")) === input.nonce)
-      throw new Error("this callback already completed — the secret holds its tokens");
+    const completed = await this.ctx.storage.get<{ nonce: string; revision: number }>("completed");
+    if (completed?.nonce === input.nonce) {
+      const stored = await this.ctx.storage.get<Stored>("stored");
+      if (stored?.revision === completed.revision) return { urls: stored.record.urls };
+      throw new Error("this attempt completed, but the secret was written since — begin again");
+    }
     const pending = await this.ctx.storage.get<PendingSecretOAuth>("pending");
     if (!pending || pending.nonce !== input.nonce)
       throw new Error("no pending attempt matches this callback — begin again");
@@ -138,8 +147,8 @@ export class SecretDurableObject extends DurableObject<Env> {
       throw new Error(
         "the secret was changed while the provider was answering — the tokens were discarded; begin again",
       );
-    await this.set(record, (await this.ctx.storage.get<string>("catalog")) ?? "");
-    await this.ctx.storage.put("consumedNonce", input.nonce);
+    const revision = await this.set(record, (await this.ctx.storage.get<string>("catalog")) ?? "");
+    await this.ctx.storage.put("completed", { nonce: input.nonce, revision });
     return { urls: record.urls };
   }
 

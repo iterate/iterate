@@ -226,8 +226,12 @@ test("beginOAuth, confidential client, in a directory-registered project: author
   expect(await itx.secrets.list()).toEqual([
     { name: "petshop", urls: [petshop], refresh: "oauth-refresh-token" },
   ]);
-  // a replayed callback completes nothing (the attempt was consumed)
-  expect((await fetch(back, member)).status).toBe(400);
+  // a replayed callback (a refreshed tab) completes idempotently: no second exchange, the same
+  // one catalog row — never a 400 for a secret that is live
+  expect((await fetch(back, member)).status).toBe(200);
+  expect(await itx.secrets.list()).toEqual([
+    { name: "petshop", urls: [petshop], refresh: "oauth-refresh-token" },
+  ]);
 
   // now an ordinary oauth-refresh-token secret: a call, expiry, transparent refresh
   expect(await bearerCall(itx, "petshop", "/api/me")).toMatchObject({

@@ -424,8 +424,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         ),
       // The object FIRST here (the exchange most often fails on the provider's side — a junk code,
       // a stale attempt — and must leave no row), then the fact; a refused append clears the object
-      // again, so what `list()` says and what egress finds never disagree. Serialized per name with
-      // `set` and `delete`, like every catalog write.
+      // again, so what `list()` says and what egress finds never disagree — and the object answers
+      // the same callback idempotently, so a retried callback after a lost fact catches the catalog
+      // up. Serialized per name with `set` and `delete`, like every catalog write.
       completeOAuth: (name, input) =>
         onRootContext(["completeOAuth", name, input], () =>
           serializeSecretMutation(name, async () => {
