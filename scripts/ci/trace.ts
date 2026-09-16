@@ -122,7 +122,9 @@ export default class CiTrace {
   }
 
   private async collect(workflow: z.infer<typeof Workflow>) {
-    const attempts = workflow.jobs.flatMap((job) => job.attempts);
+    const attempts = workflow.jobs
+      .flatMap((job) => job.attempts)
+      .filter((attempt) => attempt.startedAt);
     const entries = await Promise.all(
       attempts.map(async (attempt) => {
         const lines: z.infer<typeof LogPage>["lines"] = [];
