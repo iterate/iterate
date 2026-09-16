@@ -32,6 +32,7 @@ export async function loadTestTelemetryArtifacts(rawDirectory: string) {
 
 export async function finalizeTestTelemetry(options: {
   artifactRoot: string;
+  scope: "job" | "workflow";
   cancelled?: boolean;
   dryRun?: boolean;
   expectedWorkspaces?: readonly string[];
@@ -49,6 +50,7 @@ export async function finalizeTestTelemetry(options: {
   const completeness = analyzeTestTelemetryCompleteness(
     loaded.map(({ artifact }) => artifact),
     options.expectedWorkspaces ?? [],
+    options.scope,
   );
   const {
     expectedArtifactSources,
@@ -220,6 +222,7 @@ if (isMainModule(import.meta.url)) {
   const cancelled = process.argv.includes("--cancelled");
   await finalizeTestTelemetry({
     artifactRoot,
+    scope: process.argv.includes("--workflow-scope") ? "workflow" : "job",
     cancelled,
     dryRun: cancelled || process.argv.includes("--dry-run"),
     expectedWorkspaces,

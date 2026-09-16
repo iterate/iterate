@@ -462,7 +462,7 @@ operator capability, so use current `main` for manual preview deployments.
 ### Story 1: CI previews my PR
 
 Opening/pushing a PR that touches preview-relevant paths triggers the
-`Cloudflare Previews` workflow, which runs `pnpm preview run` — deploy then
+`Preview` workflow, which runs `pnpm preview run` — deploy then
 e2e as one step, sharing one resolved PR head so a push cannot race into a
 gap between them. The PR body's managed "Environment Config Lease" section
 records the slot, per-app URLs and statuses; the workflow logs narrate every

@@ -1,12 +1,12 @@
 # Preview cleanup on PR close — the other half of the preview lifecycle in
-# cloudflare-previews.yml. Cleanup lives in its own workflow because every run
+# preview.yml. Cleanup lives in its own workflow because every run
 # of a workflow re-emits all of its job check names on the head SHA: when
 # deploy and cleanup shared one workflow with complementary `if:`s, the
 # `closed`-event run re-reported "Preview / deploy + e2e" as skipped,
 # clobbering the earlier success on every merged PR (GitHub displays the
 # latest check run per name).
 #
-# The concurrency groups below match cloudflare-previews.yml for the same PR,
+# The concurrency groups below match preview.yml for the same PR,
 # so the two workflows still coordinate: closing a PR mid-deploy cancels the
 # in-flight deploy run (cancel-in-progress on the shared workflow-level group)
 # and the job-level lifecycle group serializes whatever remains. Cleanup never

@@ -1,12 +1,12 @@
 import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { expect, test } from "vitest";
 import { cloudflarePreviewApps } from "./preview.ts";
 
 test("both OS suites start after readiness and can run concurrently", async () => {
-  await using run = await previewCommands({ smokeExit: 0, rolloutExit: 0 });
+  await using run = await previewCommands({ smokeExit: 0, rolloutExit: 0, readinessOnly: false });
   const result = await run.result;
   expect(result, result.output).toMatchObject({ code: 0 });
   expect(await run.events()).toEqual(
@@ -19,16 +19,33 @@ test.each([
   { smokeExit: 1, rolloutExit: 0 },
   { smokeExit: 0, rolloutExit: 1 },
 ])("neither suite starts when readiness fails: %j", async (failure) => {
-  await using run = await previewCommands(failure);
+  await using run = await previewCommands({ ...failure, readinessOnly: false });
   expect(await run.result).toMatchObject({ code: 1 });
   expect(await run.events()).not.toContain("playwright");
   expect(await run.events()).not.toContain("vitest");
 });
 
+test.each([0, 1])(
+  "distributed preparation joins readiness and runs no tests (smoke exit %s)",
+  async (smokeExit) => {
+    await using run = await previewCommands({ smokeExit, rolloutExit: 0, readinessOnly: true });
+    expect(await run.result).toMatchObject({ code: smokeExit });
+    expect(await run.events()).toEqual(
+      expect.arrayContaining(["smoke-ready", "rollout-ready", "tui"]),
+    );
+    expect(await run.events()).not.toContain("playwright");
+    expect(await run.events()).not.toContain("vitest");
+  },
+);
+
 // Run the actual preview shell against controllable command-line services.
 // The test commands reject an early start and wait for each other, so a
 // sequential implementation cannot pass either.
-async function previewCommands(failure: { smokeExit: number; rolloutExit: number }) {
+async function previewCommands(failure: {
+  smokeExit: number;
+  rolloutExit: number;
+  readinessOnly: boolean;
+}) {
   const directory = await mkdtemp(join(tmpdir(), "os-suite-readiness-"));
   await mkdir(join(directory, "apps/os"), { recursive: true });
   await mkdir(join(directory, "bin"));
@@ -90,16 +107,19 @@ if (basename(process.argv[1]) === "sleep") {
   await writeFile(join(directory, "bin/timeout"), '#!/bin/sh\nshift\nexec "$@"\n', {
     mode: 0o755,
   });
-  const script = cloudflarePreviewApps.os.previewTestCommandArgs[2].replaceAll(
-    "/tmp/os-preview-",
-    `${directory}/os-preview-`,
-  );
+  const script = cloudflarePreviewApps.os.previewTestCommandArgs[2]
+    .replaceAll("/tmp/os-preview-", `${directory}/os-preview-`)
+    .replaceAll(
+      resolve(import.meta.dirname, "../../test-results/preview-summaries"),
+      join(directory, "summaries"),
+    );
   const child = spawn("bash", ["-c", script], {
     cwd: join(directory, "apps/os"),
     env: {
       ...process.env,
       PATH: `${directory}/bin:${process.env.PATH}`,
       TEST_DIRECTORY: directory,
+      PREVIEW_OS_READINESS_ONLY: failure.readinessOnly ? "1" : "0",
       SMOKE_EXIT: String(failure.smokeExit),
       ROLLOUT_EXIT: String(failure.rolloutExit),
       PREVIEW_APP_ROLLOUT_REMAINING_SECONDS: "90",

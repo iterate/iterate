@@ -19,7 +19,7 @@ repeat the same proof after substantial platform changes and record their exact
 base revision, run IDs, and findings below.
 
 Method: `scripts/preview/flake-hunt-loop.sh` sequentially dispatches the
-canonical Depot `cloudflare-previews.yml` workflow. Every iteration is a normal
+canonical Depot `preview.yml` workflow. Every iteration is a normal
 fresh-runner preview check—full-fleet deploy, every e2e lane, artifact upload,
 GitHub timing, and PostHog telemetry—not a second implementation hidden inside
 one long-running job. It fails fast on the first functional failure, moved

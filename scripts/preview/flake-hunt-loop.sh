@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Dispatch the canonical Depot preview workflow repeatedly. Every iteration is
-# a normal Cloudflare Preview run: fresh Depot runner, full-fleet deploy, all
+# a normal Preview run: fresh Depot runner, full-fleet deploy, all
 # e2e lanes, artifacts, GitHub check timings, and PostHog telemetry.
 set -euo pipefail
 
@@ -54,8 +54,8 @@ json_attempt_id() {
   node -e '
     const fs = require("node:fs");
     const status = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-    const workflow = status.workflows?.find((item) => item.workflow_path === "cloudflare-previews.yml");
-    const job = workflow?.jobs?.find((item) => item.job_key === "cloudflare-previews.yml:preview");
+    const workflow = status.workflows?.find((item) => item.workflow_path === "preview.yml");
+    const job = workflow?.jobs?.find((item) => item.job_key === "preview.yml:preview");
     const attempt = job?.attempts?.at(-1);
     if (!attempt?.attempt_id) process.exit(1);
     process.stdout.write(attempt.attempt_id);
@@ -110,11 +110,11 @@ for run in $(seq 1 "$RUNS"); do
   log_file="$LOG_DIR/run-$run_label.log"
   observed_started_epoch=$(date +%s)
 
-  echo "run $run/$RUNS: dispatching canonical cloudflare-previews.yml at $REF"
+  echo "run $run/$RUNS: dispatching canonical preview.yml at $REF"
   if ! depot ci dispatch \
     --org "$DEPOT_ORG" \
     --repo "$DEPOT_REPO" \
-    --workflow cloudflare-previews.yml \
+    --workflow preview.yml \
     --ref "$REF" \
     --input "pull-request-number=$PR_NUMBER" \
     --output json >"$dispatch_file"; then
