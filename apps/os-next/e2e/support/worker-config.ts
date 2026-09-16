@@ -42,6 +42,7 @@ export function e2eWorkerConfig(platformOrigin = "http://127.0.0.1"): Unstable_R
       APP_CONFIG_MCP_ORIGIN: "",
       APP_CONFIG_PROJECT_HOSTNAME_BASE: "localhost",
       APP_CONFIG_SESSION_SECRET: "e2e-session-secret",
+      APP_CONFIG_SECRETS_KEY: "e2e-secrets-key",
       APP_CONFIG_ADMIN_API_SECRET: E2E_ADMIN_API_SECRET,
     },
   };

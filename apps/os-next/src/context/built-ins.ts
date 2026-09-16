@@ -377,13 +377,14 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           .context(owner.rootPath)
           .invoke(["itx", "builtins", "secrets", call], [], deps.caller()) as Promise<T>);
 
-  // A secret mutation is append-THEN-object, two awaits; a concurrent set and delete of the SAME name
-  // could commit the log in one order while their object writes land in the other, leaving egress a
-  // value the catalog says is gone (or vice versa). Serialize per name — on the owner's root DO, where
-  // every verb runs (`onRootContext`) — so the log order IS the object's order. Different names never
-  // contend. (This is `#builtIns`, built ONCE per DO instance, so the chain persists across calls.) An
-  // eviction BETWEEN a delete's append and its clear can still strand a value — the catalog is the
-  // index a reconciliation sweep would walk; see docs/cleanup-log.md.
+  // A secret mutation is two awaits — the catalog fact and the object write; a concurrent set and
+  // delete of the SAME name could commit the log in one order while their object writes land in the
+  // other, leaving egress a value the catalog says is gone (or vice versa). Serialize per name — on
+  // the owner's root DO, where every verb runs (`onRootContext`) — so the log order IS the object's
+  // order. Different names never contend. (This is `#builtIns`, built ONCE per DO instance, so the
+  // chain persists across calls.) Within a mutation the two steps run in the order whose crash window
+  // fails loud (a row without material, never material without a row): `set` appends first, `delete`
+  // clears first, `completeOAuth` writes first and undoes on a refused append.
   const secretMutations = new Map<string, Promise<unknown>>();
   const serializeSecretMutation = <T>(name: string, work: () => Promise<T>): Promise<T> => {
     const result = (secretMutations.get(name) ?? Promise.resolve()).then(work, work);
@@ -474,15 +475,20 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             return { ok: true as const };
           }),
         ),
+      // The object FIRST here, the reverse of `set`: each verb runs its two steps in the order
+      // whose crash window fails LOUD. A delete cleared but not yet appended leaves a row egress
+      // answers 502 for ("no stored project secret") until the delete is retried; the other order
+      // would leave live material behind a catalog that says it is gone — silent, and the sweep that
+      // would have found it is not needed.
       delete: (name) =>
         onRootContext(["delete", name], () =>
           serializeSecretMutation(name, async () => {
             const store = secretStore(name);
+            await store.clear();
             await append({
               type: "events.iterate.com/secrets/changed",
               payload: { name, deleted: true },
             });
-            await store.clear();
             return { ok: true as const };
           }),
         ),
