@@ -77,27 +77,41 @@ export default class VoiceSetup extends WorkerEntrypoint<{ ITX: { get(): Promise
       instructions?: string;
       visemes?: boolean;
     } = {},
-  ): Promise<{ streamPath: string }> {
+  ): Promise<{ streamPath: string; phases: Record<string, number> }> {
     const streamPath = options.streamPath || `/agents/voice/${crypto.randomUUID()}`;
     if (!streamPath.startsWith("/")) {
       throw new Error(`voice streamPath must be absolute; received ${JSON.stringify(streamPath)}`);
     }
+    const t0 = Date.now();
+    const phases: Record<string, number> = {};
     const itx = await this.env.ITX.get();
     const call = itx.cd(streamPath);
+    /* The fresh context's Durable Object boots inside whichever call reaches it first — the
+     * enables below; measured 265–356 ms on 2026-09-16, the bulk of setup. */
+    const t1 = Date.now();
     await Promise.all([
-      call.processors.enable("voice-agent", {
-        source: "itx.kv.get('voice-agent.js')",
-        cacheKey: VOICE_AGENT_CACHE_KEY,
-        className: "VoiceAgentDurableObject",
-        consumes: VOICE_AGENT_CONSUMES,
-      }),
-      call.processors.enable("voice-backend", {
-        source: "itx.kv.get('voice-backend.js')",
-        cacheKey: VOICE_BACKEND_CACHE_KEY,
-        className: "VoiceBackendDurableObject",
-        consumes: VOICE_BACKEND_CONSUMES,
-      }),
+      call.processors
+        .enable("voice-agent", {
+          source: "itx.kv.get('voice-agent.js')",
+          cacheKey: VOICE_AGENT_CACHE_KEY,
+          className: "VoiceAgentDurableObject",
+          consumes: VOICE_AGENT_CONSUMES,
+        })
+        .then(() => {
+          phases.enableVoiceMs = Date.now() - t1;
+        }),
+      call.processors
+        .enable("voice-backend", {
+          source: "itx.kv.get('voice-backend.js')",
+          cacheKey: VOICE_BACKEND_CACHE_KEY,
+          className: "VoiceBackendDurableObject",
+          consumes: VOICE_BACKEND_CONSUMES,
+        })
+        .then(() => {
+          phases.enableBackendMs = Date.now() - t1;
+        }),
     ]);
+    const t2 = Date.now();
     await call.append(
       {
         type: `${T}created`,
@@ -123,6 +137,8 @@ export default class VoiceSetup extends WorkerEntrypoint<{ ITX: { get(): Promise
           ]
         : []),
     );
-    return { streamPath };
+    phases.birthAppendMs = Date.now() - t2;
+    phases.totalMs = Date.now() - t0;
+    return { streamPath, phases };
   }
 }

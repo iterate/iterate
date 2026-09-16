@@ -118,7 +118,12 @@ async function main(): Promise<void> {
     root.voice.setupVoiceAgent({ streamPath: CONTEXT_PATH, activation }),
   ).then((result: unknown) => {
     marks.setup = at();
-    return JSON.parse(JSON.stringify(result)) as { streamPath: string };
+    const parsed = JSON.parse(JSON.stringify(result)) as {
+      streamPath: string;
+      phases?: Record<string, number>;
+    };
+    for (const [phase, ms] of Object.entries(parsed.phases || {})) marks[`setup.${phase}`] = ms;
+    return parsed;
   });
 
   await itx.subscribe({
