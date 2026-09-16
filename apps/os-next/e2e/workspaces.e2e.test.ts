@@ -15,6 +15,12 @@ import { freshCtx, openItx, readAll, rejection } from "./support/client.ts";
 import { FakeGit, type FakeCommit } from "./support/fake-git.ts";
 import { deployedOnly } from "./support/project-host.ts";
 
+/** A log as its repo facts' short type names, in order. */
+const types = (log: { type: string }[]) =>
+  log
+    .filter((e) => e.type.startsWith("events.iterate.com/repo"))
+    .map((e) => e.type.replace("events.iterate.com/", ""));
+
 const SEED = { "/repos/config": { "worker.ts": "export default 1;\n", "notes/log.md": "# log\n" } };
 
 /** A fresh project whose repos (seeded by PATH) are CREATED over one fake `itx.git` lent to each
@@ -198,6 +204,66 @@ test("a workspace is its path: a second session opens the same overlay, uncommit
     "/repos/config/worker.ts",
     "/workspace/draft.md",
   ]);
+});
+
+test("the Notes app's story, spelled as apps/notes spells it: create the repo and the workspace (idempotent), read the file through the workspace, write it and commit ONE commit on the repo's main", async () => {
+  const itx = openItx(freshCtx("notes"));
+  const git = new FakeGit({});
+  await itx.cd("/repos/config").provide("itx.git", git);
+  const REPO = "/repos/config";
+  const WORKSPACE = "/workspaces/notes";
+  const FILE = `${REPO}/notes/log.md`;
+  // The loader, on every page load — a created repo and workspace answer at once.
+  const load = async () => {
+    await itx.invoke(["itx", "repos", ["get", REPO], ["create"]]);
+    await itx.invoke(["itx", "workspaces", ["get", WORKSPACE], ["create"]]);
+    return {
+      note: await itx.invoke(["itx", "workspaces", ["get", WORKSPACE], ["readFile", FILE]]),
+      tip: await itx.invoke(["itx", "repos", ["get", REPO], ["tip"]]),
+    };
+  };
+  expect(await load()).toEqual({ note: null, tip: null }); // an unborn repo: no note yet
+  expect(git.created).toEqual(["repos--config"]);
+  // Save and commit.
+  await itx.invoke([
+    "itx",
+    "workspaces",
+    ["get", WORKSPACE],
+    ["writeFile", FILE, "# log\n- one\n"],
+  ]);
+  const committed = await itx.invoke([
+    "itx",
+    "workspaces",
+    ["get", WORKSPACE],
+    ["gitCommit", { message: "notes: save", scope: REPO }],
+  ]);
+  expect(committed).toMatchObject({ mount: REPO, repo: REPO, changedPaths: [FILE] });
+  expect(git.snapshot("repos--config")?.files).toEqual({ "notes/log.md": "# log\n- one\n" });
+  // The next load reads the committed file at the new tip; nothing more was appended by the loads.
+  expect(await load()).toEqual({ note: "# log\n- one\n", tip: committed.commitOid });
+  expect(types(await readAll(itx.cd(REPO)))).toEqual([
+    "repos/create-requested",
+    "repos/created",
+    "repo/commit-completed",
+  ]);
+  // Saving the same text again commits nothing.
+  await itx.invoke([
+    "itx",
+    "workspaces",
+    ["get", WORKSPACE],
+    ["writeFile", FILE, "# log\n- one\n"],
+  ]);
+  expect(
+    await itx.invoke([
+      "itx",
+      "workspaces",
+      ["get", WORKSPACE],
+      ["gitCommit", { message: "notes: save", scope: REPO }],
+    ]),
+  ).toMatchObject({ commitOid: committed.commitOid, changedPaths: [] });
+  expect(
+    (await itx.invoke(["itx", "repos", ["get", REPO], ["log"]])).map((c: FakeCommit) => c.message),
+  ).toEqual(["notes: save"]);
 });
 
 deployedOnly(
