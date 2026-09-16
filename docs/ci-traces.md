@@ -7,7 +7,10 @@ click a bar, or zoom to a selected span. Download the same trace as OTLP JSON.
 
 `preview-run.yml` emits small lifecycle records into Depot logs using
 `scripts/ci/trace-shell.sh` (`BASH_ENV`) and `trace-reporter.ts`. Keep explicit
-step IDs: these are the trace labels. `wait_for_preview`, `consumers`,
+step IDs: these join timings to the authored commands. Reports show those
+commands with the Doppler wrapper stripped; the friendly step name is in the
+details. Commands come from the workflow YAML at the run's triggering SHA (the merge revision on PR runs),
+never expanded runner logs. `wait_for_preview`, `consumers`,
 `playwright` and `app_tests` also define the phase boundaries. The shell hook
 preserves exit codes and ignores nested shells. It requires only the Node
 already installed in the runner image, so it measures `pnpm install` too.

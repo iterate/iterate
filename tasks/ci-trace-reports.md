@@ -24,10 +24,10 @@ Automatically add a link to each PR body that opens a useful interactive trace o
 ## Acceptance
 
 - [x] Assemble correct parent relationships from measured CI/test evidence, including retries and missing evidence. *`trace-model.ts`; regression coverage for quiet steps, retries and cancelled runners.*
-- [ ] Render an interactive trace with readable setup/wait/test phases, drilldown, search and mobile support.
-- [ ] Publish immutable report links and automatically update the correct PR's body.
-- [ ] Wire automatic collection and cancellation reconciliation, with visible reporting failures.
-- [ ] Exercise the real publication path on this PR's own CI run and verify its body link in an isolated browser.
+- [x] Render an interactive trace with readable setup/wait/test phases, drilldown, search and mobile support. *`trace-viewer.html`; desktop/mobile, expand, search, details, zoom and OTLP download checked in isolated Playwriter.*
+- [x] Publish immutable report links and automatically update the correct PR's body. *Preview `7rlclr2zqf` automatically dispatched collector `r5fxsp0gq5`; published in 26s and added the link to #2681.*
+- [x] Wire automatic collection and cancellation reconciliation, with visible reporting failures. *`ci-trace.yml` callback plus bounded 24h scheduled scan; cancellation model regressions.*
+- [x] Exercise the real publication path on this PR's own CI run and verify its body link in an isolated browser. *Clicked the auto-added GitHub link anonymously, inspected a recovered retry, zoomed and downloaded the OTLP file. 93 attempts, unique span IDs, valid parent links.*
 - [ ] Run required checks, handle review feedback, document operating/replay commands and include a screenshot in the PR.
 
 ## Implementation log
@@ -37,3 +37,6 @@ Session: `01a09f64-ea4e-7c61-ab0a-c15eb65df3bc`.
 - Implemented shell lifecycle markers before dependency installation, a Playwright lifecycle reporter, OTLP assembly, a standalone viewer and a separate publication workflow.
 - Live Depot records include authored `stepId`/`stepName`; use those instead of the runner’s generated `GITHUB_ACTION` labels.
 - The first full test run exposed contention from nesting Playwright inside Vitest. Keep the reporter regression test as a lightweight isolated Node process; the real Playwright probe passed separately and preview provides integration proof. No timeout changes.
+
+- Human PR feedback requested commands instead of `run / run 2`. Added authored commands from the triggering workflow revision, stripping Doppler wrappers without copying expanded log commands. Checked the real run data with the updated viewer.
+- Local full typecheck/lint/knip/format passed. Full suite passed with two concurrent workspaces; scripts suite now has 356 passing tests. The next push includes the one-line logical-spread autofix requested by CI.

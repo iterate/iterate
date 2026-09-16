@@ -5,7 +5,10 @@ import { z } from "zod";
 export function assembleTrace(
   input: unknown,
   // Step metadata is absent on older Depot records.
-  logs: Map<string, { stepKey: string; body: string; stepId?: string; stepName?: string }[]>,
+  logs: Map<
+    string,
+    { stepKey: string; body: string; stepId?: string; stepName?: string; command?: string }[]
+  >,
 ) {
   const workflow = Workflow.parse(input);
   const execution = [...workflow.executions].sort((a, b) => b.execution - a.execution)[0];
@@ -54,6 +57,7 @@ export function assembleTrace(
       "ci.workflow.id": workflow.workflowId,
       "ci.execution.id": execution.executionId,
       "ci.source.sha": workflow.headSha,
+      "ci.workflow.sha": workflow.sha,
       "ci.source.ref": workflow.ref,
       "ci.url": `https://depot.dev/orgs/0p91s0lz49/workflows/${workflow.workflowId}`,
       "ci.evidence":
@@ -116,9 +120,10 @@ export function assembleTrace(
         return [
           {
             ...event,
-            ...(event.kind === "shell-start" ? { step: line.stepId || event.step } : {}),
+            ...(event.kind === "shell-start" && { step: line.stepId || event.step }),
             stepKey: line.stepKey,
             stepName: line.stepName || "",
+            command: line.command || "",
           },
         ];
       });
@@ -175,12 +180,14 @@ export function assembleTrace(
         const id = add(
           `${attempt.attemptId}/shell/${shell.id}`,
           parent,
-          shell.stepName || shell.step.replaceAll("_", " "),
+          shell.command || shell.stepName || shell.step.replaceAll("_", " "),
           shell.time,
           done?.time || end,
           {
             "ci.kind": "step",
             "ci.step.key": shell.stepKey,
+            "ci.step.name": shell.stepName,
+            "ci.command": shell.command,
             "ci.status": done ? (done.exitCode ? "failed" : "passed") : "incomplete",
             "ci.evidence": done
               ? "Measured shell start/exit"
@@ -208,6 +215,7 @@ export function assembleTrace(
             "test.line": String(test.line),
             "test.project": test.project,
             "test.retry": String(test.retry),
+            "test.expected_status": done?.expectedStatus || "unknown",
             "test.worker": done ? String(done.worker) : "unknown",
           },
           !!done && done.status !== done.expectedStatus && done.status !== "skipped",
@@ -249,6 +257,7 @@ export const Workflow = z.object({
   workflowPath: z.string(),
   repo: z.string(),
   headSha: z.string(),
+  sha: z.string(),
   ref: z.string(),
   workflowStatus: z.string(),
   workflowCreatedAt: z.string(),

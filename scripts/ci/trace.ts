@@ -5,6 +5,7 @@ import { z } from "zod";
 import { assembleTrace, Workflow } from "./trace-model.ts";
 import { renderTrace } from "./trace-viewer.ts";
 import { tracePullRequestBody } from "./trace-publication.ts";
+import { stepCommands } from "./trace-commands.ts";
 
 /** Completed-run CI traces. Invoke with `pnpm exec trpc-cli scripts/ci/trace.ts`. */
 export default class CiTrace {
@@ -122,6 +123,12 @@ export default class CiTrace {
   }
 
   private async collect(workflow: z.infer<typeof Workflow>) {
+    const source = await fetch(
+      `https://raw.githubusercontent.com/${repository}/${workflow.sha}/.depot/workflows/preview-run.yml`,
+      { signal: AbortSignal.timeout(30_000) },
+    );
+    if (!source.ok) throw new Error(`Could not read the source workflow: HTTP ${source.status}`);
+    const commands = stepCommands(await source.text());
     const attempts = workflow.jobs
       .flatMap((job) => job.attempts)
       .filter((attempt) => attempt.startedAt);
@@ -141,7 +148,18 @@ export default class CiTrace {
           lines.push(...page.lines.filter((line) => line.body.startsWith("@@ci-trace ")));
           pageToken = page.nextPageToken;
         } while (pageToken);
-        return [attempt.attemptId, lines] as const;
+        const job = workflow.jobs.find((job) =>
+          job.attempts.some((item) => item.attemptId === attempt.attemptId),
+        );
+        if (!job) throw new Error("Collected attempt has no job");
+        const jobKey = job.jobKey.replace(/^.*:preview:/, "").split(":")[0];
+        return [
+          attempt.attemptId,
+          lines.map((line) => ({
+            ...line,
+            command: commands.get(`${jobKey}/${line.stepId}`) || "",
+          })),
+        ] as const;
       }),
     );
     return assembleTrace(workflow, new Map(entries));

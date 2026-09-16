@@ -440,10 +440,14 @@
           const timeline = document.createElement("div");
           timeline.className = "timeline";
           timeline.tabIndex = 0;
+          timeline.setAttribute("role", "button");
           timeline.setAttribute("aria-label", `${span.name}, ${duration(span.end - span.start)}`);
           timeline.onclick = () => showDetail(span);
           timeline.onkeydown = (e) => {
-            if (e.key === "Enter") showDetail(span);
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              showDetail(span);
+            }
           };
           const bar = document.createElement("div");
           const state = span.a["ci.status"];

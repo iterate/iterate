@@ -35,6 +35,7 @@ test("the standalone report embeds OTLP without allowing source names to break o
       workflowPath: "preview.yml",
       repo: "iterate/iterate",
       headSha: "abc",
+      sha: "merge",
       ref: "refs/pull/1/merge",
       workflowStatus: "finished",
       workflowCreatedAt: "2026-09-16T12:00:00Z",
