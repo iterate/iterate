@@ -342,15 +342,14 @@ static void provide_completed(
 enum capnweb_status iterate_kit_itx_mount_start(
     struct iterate_kit_itx_mount *mount,
     const struct iterate_kit_itx_mount_options *options) {
-  static const struct capnweb_expression admin_secret = {
+  static const struct capnweb_expression bearer = {
     CAPNWEB_EXPRESSION_STRING,
     {.string = {
-      "admin-secret",
-      sizeof("admin-secret") - 1U,
+      "bearer",
+      sizeof("bearer") - 1U,
     }},
   };
-  struct capnweb_expression secret;
-  struct capnweb_object_field auth_fields[2];
+  struct capnweb_object_field auth_fields[1];
   struct capnweb_expression auth;
   enum capnweb_status status;
 
@@ -368,34 +367,20 @@ enum capnweb_status iterate_kit_itx_mount_start(
   mount->options = *options;
   mount->state = ITERATE_KIT_ITX_MOUNT_AUTHENTICATING;
   /*
-   * ADMIN-SECRET IS THE OPERATOR DOOR'S CREDENTIAL, AND THAT IS ALL IT IS.
-   *
-   * `/internal/rpc` carries no HTTP gate, so the upgrade needs no header and
-   * this two-field object is the whole of authentication. The secret it
-   * carries reaches every project in the deployment, which is why a board
-   * holding one is a bench board. Keeping the auth object construction
-   * isolated here makes the future device-scoped grant substitution explicit;
-   * it must not be mistaken for a permanent credential or silently fall back
-   * to another auth mechanism.
+   * THE CREDENTIAL ALREADY RODE THE UPGRADE. The blob's key is a personal
+   * access token the Kit page minted for the person who set this device up,
+   * scoped to this project; the transport sends it as `Authorization: Bearer`
+   * and os-next's OAuth gate resolves it before the first frame. This call
+   * only asks the session for what that gate resolved, so it carries no
+   * secret: `{type: "bearer"}` and nothing else.
    */
-  secret = (struct capnweb_expression){
-    CAPNWEB_EXPRESSION_STRING,
-    {.string = {
-      options->project_api_key,
-      strlen(options->project_api_key),
-    }},
-  };
   auth_fields[0] = (struct capnweb_object_field){
     {"type", sizeof("type") - 1U},
-    &admin_secret,
-  };
-  auth_fields[1] = (struct capnweb_object_field){
-    {"secret", sizeof("secret") - 1U},
-    &secret,
+    &bearer,
   };
   auth = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_OBJECT,
-    {.object = {auth_fields, 2U}},
+    {.object = {auth_fields, 1U}},
   };
   status = capnweb_session_call_expressions(
       options->session,

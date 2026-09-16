@@ -100,11 +100,10 @@ static void rejects_truncated_and_wrong_version_images(void) {
  * Convert only the transport scheme into a caller-sized fixed buffer and prove
  * both production TLS and local cleartext development forms.
  *
- * THE PATH IS `/internal/rpc`, NOT `/api`. os-next gates `/api` with its OAuth
- * provider, so an unauthenticated upgrade never reaches capnweb at all; the
- * operator door serves the same capnweb root with no HTTP gate and
- * authenticates in-band. That is why this firmware needs no Authorization
- * header, and why the endpoint is eleven bytes longer than the base URL.
+ * THE PATH IS `/api`: os-next's public door, whose OAuth gate resolves the
+ * `Authorization: Bearer` the transport sends on the upgrade (the blob's key,
+ * a personal access token). The endpoint is four bytes longer than the base
+ * URL.
  */
 static void builds_the_itx_websocket_endpoint_without_allocation(void) {
   char endpoint[ITERATE_KIT_ITX_WEBSOCKET_URL_CAPACITY];
@@ -112,12 +111,12 @@ static void builds_the_itx_websocket_endpoint_without_allocation(void) {
   CHECK(iterate_kit_configuration_build_itx_websocket_url(
       "https://os.iterate.com", endpoint, sizeof(endpoint)) ==
       ITERATE_KIT_CONFIGURATION_OK);
-  CHECK(strcmp(endpoint, "wss://os.iterate.com/internal/rpc") == 0);
+  CHECK(strcmp(endpoint, "wss://os.iterate.com/api") == 0);
 
   CHECK(iterate_kit_configuration_build_itx_websocket_url(
       "http://localhost:8787", endpoint, sizeof(endpoint)) ==
       ITERATE_KIT_CONFIGURATION_OK);
-  CHECK(strcmp(endpoint, "ws://localhost:8787/internal/rpc") == 0);
+  CHECK(strcmp(endpoint, "ws://localhost:8787/api") == 0);
 }
 
 /*

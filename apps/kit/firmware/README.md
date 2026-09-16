@@ -106,11 +106,11 @@ At boot, firmware rejects a missing or invalid partition, joins Wi-Fi and
 mounts. Health classifies provisioning, Wi-Fi/authentication, mount and audio
 failures.
 
-The device dials `wss://<os base url host>/internal/rpc` — the operator door,
-which carries no HTTP gate, so the upgrade needs no header at all. The blob's
-project id is a bare DNS-safe slug (`prj-voice`); its key field is the
-deployment admin secret, which reaches every project and is therefore a bench
-credential, never a fleet one. The mount's three calls, the subscription shape
+The device dials `wss://<os base url host>/api` — os-next's public door — with
+the blob's key as `Authorization: Bearer` on the upgrade: a personal access
+token the Kit page minted for the person who set the device up, scoped to the
+one project, revocable from that person's sessions list. The blob's project id
+is a bare DNS-safe slug (`prj-voice`). The mount's three calls, the subscription shape
 and the delivery contract are documented where they live:
 `components/core/include/iterate/kit/itx_mount.h` and `stream_subscription.h`.
 

@@ -28,12 +28,13 @@ import type { AuthenticationFact } from "./account/contract.ts";
  *  id IS its slug. */
 export type ProjectIdOrSlug = string;
 
-/** What `IterateRpcTarget.authenticate` accepts. `from-server-cookie` is the browser: the OAuth gate
- *  already resolved the session from the request, so this only says "hand me that session".
- *  `admin-secret` is the operator/CLI credential, verified in-band. Every other caller is an OAuth
- *  grant (a personal access token included) and arrives resolved, as `from-server-cookie` does. */
+/** What `IterateRpcTarget.authenticate` accepts. `from-server-cookie` is the browser and `bearer` is
+ *  a device or script whose token rode the upgrade: the OAuth gate already resolved the session from
+ *  the request, so either only says "hand me that session". `admin-secret` is the operator/CLI
+ *  credential, verified in-band. */
 const SessionCredentials = z.discriminatedUnion("type", [
   z.object({ type: z.literal("from-server-cookie") }),
+  z.object({ type: z.literal("bearer") }),
   z.object({
     type: z.literal("admin-secret"),
     secret: z.string(),
@@ -89,12 +90,12 @@ export class IterateRpcTarget extends RpcTarget {
     if (!credentials.success)
       throw codedError(
         "INVALID_CREDENTIALS",
-        "authenticate({ type }): 'from-server-cookie' (browser) or 'admin-secret' (operator).",
+        "authenticate({ type }): 'from-server-cookie' (browser), 'bearer' (a token on the upgrade) or 'admin-secret' (operator).",
       );
-    if (credentials.data.type === "from-server-cookie") {
+    if (credentials.data.type === "from-server-cookie" || credentials.data.type === "bearer") {
       if (!this.#resolved)
         throw codedError("UNAUTHENTICATED", "this transport carries no session — sign in first.");
-      this.#publishAuthenticationFact(this.#resolved.principal, "from-server-cookie");
+      this.#publishAuthenticationFact(this.#resolved.principal, credentials.data.type);
       return new SessionRpcTarget(this.#input, this.#sessionTeardown, this.#resolved);
     }
     const admin = await verifyAdminSecret(
@@ -122,7 +123,7 @@ export class IterateRpcTarget extends RpcTarget {
    *  a later refinement. Attribution is the user's until the platform principal lands. */
   #publishAuthenticationFact(
     principal: SessionPrincipal,
-    credential: "from-server-cookie" | "admin-secret",
+    credential: AuthenticationFact["credential"],
   ): void {
     if (!principal.email) return;
     const name = DurableObjectNameCodec.stringify({
@@ -263,11 +264,18 @@ export class SessionRpcTarget extends RpcTarget {
    *  has (`session.user` is `session.projects.get(...)` one namespace over). A getter, like
    *  `projects`. Refused for the admin credential — it names no human. */
   get user(): IterateContextRpcTarget {
-    const { principal } = this.#authority;
+    const { principal, reach } = this.#authority;
     if (!principal.email)
       throw codedError(
         "FORBIDDEN",
         "this credential identifies no user — the admin credential names no `.user` context",
+      );
+    // A grant bound to projects (a personal access token a device holds) reaches those projects
+    // and nothing of the person's own: the user context is the account, not a project.
+    if (reach !== "every" && "projectIds" in reach)
+      throw codedError(
+        "FORBIDDEN",
+        "this credential is bound to projects — it opens no `.user` context",
       );
     return this.#globalContext(`/users/${principal.actor}`);
   }

@@ -236,8 +236,7 @@ iterate_kit_configuration_build_itx_websocket_url(
     const char *os_base_url,
     char *destination,
     size_t destination_capacity) {
-  return build_websocket_url(
-      os_base_url, "/internal/rpc", destination, destination_capacity);
+  return build_websocket_url(os_base_url, "/api", destination, destination_capacity);
 }
 
 enum iterate_kit_configuration_error iterate_kit_configuration_decode(
