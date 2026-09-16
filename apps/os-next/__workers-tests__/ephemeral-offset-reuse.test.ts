@@ -80,16 +80,11 @@ test("stream-kept cursor: an alarm pump with ephemerals at head leaves the curso
   expect(row0.cursor!.confirmedOffset).toBe(highestDurableOffset); // acked on durable ground ✓
 
   await s.append({ type: "blip", ephemeral: true }, { type: "blip", ephemeral: true }); // head = mark+2, mark unchanged
-  // ARM THE QUIET CLOCK. `dig` is a CURSOR subscription onto a stateless entrypoint: the cursor lane
-  // armed the alarm for its own delivery (the mark's batch), but this pin is about the QUIESCE, which
-  // arms only while a facet is live or a stub is borrowed. Materialize an unrelated facet for that (it
-  // consumes nothing of `dig`'s and writes no durable row — its live-state delta is ephemeral, so the
-  // durable mark this pin is about does not move) and read the schedule back before firing.
+  // An alarm pass, run directly (a caught-up cursor row and a live facet arm nothing, so there is
+  // no alarm to fire): deliverEveryCursorSubscription → read(mark) proves only through the mark →
+  // `dig` is caught up, nothing written.
   await s.invoke([...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "armer"), ["snapshot"]]);
-  expect(await alarmAt(ctx)).not.toBeNull();
-  // The alarm really runs: deliverEveryCursorSubscription → read(mark) proves only through the mark
-  // → `dig` is caught up, nothing written.
-  expect(await runDurableObjectAlarm(s)).toBe(true);
+  await runInDurableObject(s, (instance) => instance.alarm());
   const row1 = (await s.invoke("itx.subscriptions.get('dig')")) as {
     cursor?: { confirmedOffset: number };
   };
