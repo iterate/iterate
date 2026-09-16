@@ -359,6 +359,8 @@ jobs reconcile dependencies and browsers before waiting for `preview-ready`.
 Preparation uploads the immutable deployment plan before publishing that GitHub
 commit status. `scripts/ci/status.ts` scopes the signal to the Depot workflow,
 execution, producer job and attempt, and checks producer liveness on each poll.
+The command surface is a default-exported class exposed by
+`pnpm exec trpc-cli scripts/ci/status.ts` (`set`, `wait-for`, `wait-for-jobs`).
 A terminated producer without its signal fails the wait. Reaching a milestone
 releases consumers even while the producer continues collecting artifacts.
 

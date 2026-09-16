@@ -542,20 +542,117 @@
     <main>
       <a href="https://github.com/iterate/iterate/pull/2659">Experiment PR #2659</a>
       <div class="eyebrow" style="margin-top: 18px">Measured CI · September 2026</div>
-      <h1>How many Playwright workers?</h1>
+      <h1>Playwright parallelisation experiments</h1>
       <p class="intro">
-        One runner can start many tests while they wait on the network. But every Playwright worker
-        is a separate Node process, normally with its own browser. How much concurrency helps before
-        CPU, memory or the backend starts slowing things down?
+        How quickly can we get useful test results? Compare more workers on one machine, six
+        separate browser runners, and starting those runners early so installation overlaps
+        deployment. Every measurement below has an interactive trace, including failed runs.
       </p>
       <div class="verdict">__VERDICT__</div>
+      <section class="card" id="overlapping-setup">
+        <h2>What changed in the nine-job run</h2>
+        <p>
+          Prepare, backend tests and six browser shards start together. Test jobs install, check
+          Chromium, then wait inside the job. Teardown starts after Prepare, installs during
+          testing, and waits for every consumer to finish uploading. Report merge and resource
+          cleanup then run together.
+        </p>
+        <div class="table-scroll">
+          <table class="results">
+            <thead>
+              <tr>
+                <th>Measured phase</th>
+                <th>Earlier 6 × 16 repeat</th>
+                <th>Overlapping setup</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Start → shared readiness complete</td>
+                <td>5m50s</td>
+                <td>6m53s</td>
+              </tr>
+              <tr>
+                <td>Readiness complete → workflow end</td>
+                <td>7m40s</td>
+                <td>4m45s</td>
+              </tr>
+              <tr>
+                <td>Longest browser shard</td>
+                <td>86s</td>
+                <td>74s</td>
+              </tr>
+              <tr>
+                <td>OS Vitest</td>
+                <td>146s</td>
+                <td>144s</td>
+              </tr>
+              <tr>
+                <td>Whole preview</td>
+                <td>13m31s · green</td>
+                <td>11m38s · red</td>
+              </tr>
+              <tr>
+                <td>Sum of runner time</td>
+                <td>23.5 runner-minutes</td>
+                <td>68.0 runner-minutes</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="note">
+          These are two observed runs, not a controlled speedup estimate. The new OS deployment took
+          126s. Installation also varied: 7.5–43.6s across consumers. Idle waiting increases
+          allocated runner time about 2.9× versus the earlier sharded run; this is not a dollar-cost
+          calculation.
+        </p>
+        <details>
+          <summary>The wait protocol and what the live run proved</summary>
+          <p>
+            Prepare uploads its deployment plan, then writes a GitHub status containing the exact
+            Depot workflow, execution, job and attempt IDs. Consumers poll that status and the
+            producer’s job state. A producer that stops without signaling fails the wait. All waits
+            have a deadline.
+          </p>
+          <p>
+            Shard 1 saw readiness 0.35s after publication and downloaded the plan successfully. The
+            finalizer saw shard 5 fail, kept waiting for the backend tests, then merged all six
+            reports and erased the slot. The last consumer ended at +571s; the barrier released at
+            +575s. Teardown’s 10s install had finished at +434s. Cleanup took 112s and continued
+            after report merging reported the test failure.
+          </p>
+          <p>
+            A telemetry wiring bug also made this run red: the finalizer’s old job scope rejected
+            valid sibling reports. The report commit adds workflow scope, preserves
+            repository/run/attempt checks, and passes a dry-run replay of all 17 retained artifacts.
+            Fresh validation is linked from the PR. Job-only retries are deliberately rejected:
+            after cleanup, tests need a fresh deployment.
+          </p>
+        </details>
+        <details>
+          <summary>Does this beat one runner with 24 workers?</summary>
+          <p>
+            Not in these measurements. The two 24-worker runs took 8m49s–9m19s overall, with browser
+            times of 121–123s and no retries. The overlapping run’s browsers were faster, but Vitest
+            still took 144s, versus about 126s on those runs. After shared readiness, this run took
+            about 39s longer than the 24-worker repeat. A faster browser suite alone cannot remove
+            that backend bottleneck.
+          </p>
+          <p>
+            The sharded run’s median attempt was 20.6s, close to 20.5s on the 24-worker repeat; p95
+            was 43.0s versus 37.8s. Sharding avoided the large per-test slowdown seen at extreme
+            worker counts on one machine, but did not eliminate retries. One sample cannot establish
+            a failure rate.
+          </p>
+        </details>
+      </section>
       <section class="card" id="comparison">
         <h2>Measured runs</h2>
         <p>
           Tap a row to open its full trace.
           <strong>Worker experiments use one 16-core / 64-GB runner</strong> for setup, deployment,
-          Playwright, Vitest and cleanup. Historical sharded runs use nine jobs. Times below
-          overlap; do not add them together.
+          Playwright, Vitest and cleanup. Sharded runs use nine jobs. Times below overlap; do not
+          add them together.
         </p>
         <div class="table-scroll">
           <table class="results">
@@ -563,7 +660,7 @@
               <tr>
                 <th>Setup / run</th>
                 <th>Whole preview</th>
-                <th>pnpm</th>
+                <th>pnpm outside overlap</th>
                 <th>Playwright</th>
                 <th>OS Vitest</th>
                 <th>Browser retries</th>
@@ -620,11 +717,8 @@
           <div class="fact"><b id="install-count"></b><small id="install-context"></small></div>
           <div class="fact"><b id="install-critical"></b><small id="install-path"></small></div>
           <div class="fact">
-            <b>Browser checks: untimed</b
-            ><small
-              >Chromium is baked in. The per-run install checks have no individual timestamps; their
-              enclosing interval is shown.</small
-            >
+            <b id="browser-timing-title">Browser checks</b
+            ><small id="browser-timing-detail"></small>
           </div>
         </div>
         <div class="toolbar">
@@ -676,7 +770,7 @@
             role="img"
             aria-label="CPU and memory samples during the root Playwright test window"
           ></svg>
-          <p class="note">
+          <p class="note" id="resource-legend">
             Blue: CPU as a share of 16 cores. Purple: memory as a share of 64 GB. Samples cover the
             whole runner, including concurrent Vitest and Expo, at roughly five-second intervals.
             Peaks between samples may be missed.
@@ -746,16 +840,20 @@ Browser / Vitest requests → deployed Cloudflare apps and DOs
           </p>
         </details>
         <p>
-          Same application revision and 92 named root browser cases; 16, 24, 32, 64 or 92 workers;
-          one unsharded runner; the same Playwright retry, timeout, trace and video settings; the
-          same readiness, lease and cleanup policy. Every run gets a fresh runner. The image uses
-          the same mutable tag, so an identical resolved image is not proven. Preview slot, test
-          retries, deploy reuse, remote-service latency and cold filesystem reads can still vary.
+          The worker-count series uses the same application revision and 92 named root browser
+          cases; 16, 24, 32, 64 or 92 workers; one unsharded runner; the same Playwright retry,
+          timeout, trace and video settings; the same readiness, lease and cleanup policy. Every run
+          gets a fresh runner. The image uses the same mutable tag, so an identical resolved image
+          is not proven. Preview slot, test retries, deploy reuse, remote-service latency and cold
+          filesystem reads can still vary.
         </p>
         <p>
           The older 16-worker reference is from another PR/slot. The two sharded runs split the same
-          catalogue across six browser jobs, alongside an app-test job, plus Prepare and Finish.
-          They explain the motivation; the new same-branch runs are the worker-count comparison.
+          catalogue across six browser jobs, alongside an app-test job, plus Prepare and Finish. The
+          overlapping-setup follow-up restores six shards and changes when runners start, wait and
+          clean up. It keeps the same application, package and spec trees as the worker-count
+          series, but was run later. Deploy and remote-service timing can differ; compare phases,
+          not just whole-run totals.
         </p>
         <details>
           <summary>How to interpret a “retry”, a quarantine result and a queue</summary>
@@ -867,12 +965,16 @@ Browser / Vitest requests → deployed Cloudflare apps and DOs
               : "Sharded run nv3l390bf0 · code 2996ffc9c · Prepare, seven concurrent test jobs, then Finish.");
         document.getElementById("install-count").textContent =
           `${data.installs.length} × pnpm install`;
-        document.getElementById("install-context").textContent = data.normal
-          ? "Once, before deploy. The same machine runs tests and cleanup."
-          : "Prepare, seven test runners, then Finish. Seven of those installs overlap.";
-        document.getElementById("install-path").textContent = data.normal
-          ? "Install time on the path to green, all in the one preview job."
-          : "Install time along Prepare → App tests → Finish.";
+        document.getElementById("install-context").textContent = data.overlappedSetup
+          ? "Eight jobs install immediately; teardown installs while tests run."
+          : data.normal
+            ? "Once, before deploy. The same machine runs tests and cleanup."
+            : "Prepare, seven test runners, then Finish. Seven of those installs overlap.";
+        document.getElementById("install-path").textContent = data.overlappedSetup
+          ? "Prepare install, plus any consumer install after readiness or teardown install after consumers stop. Observed overlap, not a simulated speedup."
+          : data.normal
+            ? "Install time on the path to green, all in the one preview job."
+            : "Install time along Prepare → App tests → Finish.";
         document.getElementById("install-critical").textContent =
           `${duration(data.installWall)} of installs`;
         document.getElementById("install-table").innerHTML = data.installs
@@ -881,12 +983,16 @@ Browser / Vitest requests → deployed Cloudflare apps and DOs
               `<tr><td>${x.job}</td><td>${fmt(x.start)}</td><td>${fmt(x.end)}</td><td>${duration(x.end - x.start)}</td></tr>`,
           )
           .join("");
-        document.getElementById("install-chain").innerHTML = data.normal
-          ? `<b>${duration(data.installSum)}</b> on one machine; no later install steps.`
-          : `<b>${duration(data.installSum)}</b> summed across nine jobs.<br><b>${duration(data.installWall)}</b> along Prepare → App tests → Finish.`;
-        document.getElementById("browser-context").innerHTML = data.normal
-          ? "<ul><li><strong>Earlier image build:</strong> Chromium is baked in, outside this trace.</li><li><strong>OS readiness:</strong> one Chromium check overlaps smoke, TUI and the rollout timer. The same machine later starts root Playwright.</li><li><strong>Streams suite:</strong> one additional Chromium check runs alongside Streams Vitest, before Streams Playwright.</li></ul><p><strong>Two per-run Chromium checks</strong>, with no recorded durations, plus the earlier image bake. No new check before cleanup.</p>"
-          : "<ul><li><strong>Earlier image build:</strong> Chromium is baked in, outside this trace.</li><li><strong>Prepare:</strong> a Chromium check overlaps smoke, TUI and the rollout timer.</li><li><strong>Each of six browser shards:</strong> <code>playwright install chromium</code> precedes <code>pnpm spec</code> in a short CLI/Doppler startup window.</li><li><strong>App-test runner:</strong> Streams checks Chromium alongside Streams Vitest, then starts Streams Playwright.</li><li><strong>Finish:</strong> no browser install.</li></ul><p><strong>Eight per-run Chromium checks</strong>, with no separately recorded durations, plus the earlier image bake. Empty install logs are consistent with a cached browser, not a measured zero duration.</p>";
+        document.getElementById("install-chain").innerHTML = data.overlappedSetup
+          ? `<b>${duration(data.installSum)}</b> summed runner time.<br><b>${duration(data.installWall)}</b> outside the readiness/test overlap; teardown install tail <b>${duration(data.installTail)}</b>.`
+          : data.normal
+            ? `<b>${duration(data.installSum)}</b> on one machine; no later install steps.`
+            : `<b>${duration(data.installSum)}</b> summed across nine jobs.<br><b>${duration(data.installWall)}</b> along Prepare → App tests → Finish.`;
+        document.getElementById("browser-context").innerHTML = data.overlappedSetup
+          ? "<p>All six browser shards check Chromium before waiting for readiness. The app-test runner also checks Chromium before waiting; Streams performs its own browser check later. Preparation retains its existing readiness check. Teardown installs no browser. These are cached-browser reconciliation commands, not necessarily downloads.</p>"
+          : data.normal
+            ? "<ul><li><strong>Earlier image build:</strong> Chromium is baked in, outside this trace.</li><li><strong>OS readiness:</strong> one Chromium check overlaps smoke, TUI and the rollout timer. The same machine later starts root Playwright.</li><li><strong>Streams suite:</strong> one additional Chromium check runs alongside Streams Vitest, before Streams Playwright.</li></ul><p><strong>Two per-run Chromium checks</strong>, with no recorded durations, plus the earlier image bake. No new check before cleanup.</p>"
+            : "<ul><li><strong>Earlier image build:</strong> Chromium is baked in, outside this trace.</li><li><strong>Prepare:</strong> a Chromium check overlaps smoke, TUI and the rollout timer.</li><li><strong>Each of six browser shards:</strong> <code>playwright install chromium</code> precedes <code>pnpm spec</code> in a short CLI/Doppler startup window.</li><li><strong>App-test runner:</strong> Streams checks Chromium alongside Streams Vitest, then starts Streams Playwright.</li><li><strong>Finish:</strong> no browser install.</li></ul><p><strong>Eight per-run Chromium checks</strong>, with no separately recorded durations, plus the earlier image bake. Empty install logs are consistent with a cached browser, not a measured zero duration.</p>";
         inspect();
         draw();
         resources();
@@ -986,12 +1092,19 @@ Browser / Vitest requests → deployed Cloudflare apps and DOs
       window.addEventListener("hashchange", navigateTrace);
 
       function resources() {
+        document.getElementById("browser-timing-title").textContent = data.overlappedSetup
+          ? "Browser checks: before waiting"
+          : "Browser checks: untimed";
+        document.getElementById("browser-timing-detail").textContent = data.overlappedSetup
+          ? "Chromium is baked in. Step timestamps show each consumer checking its installation before the readiness barrier."
+          : "Chromium is baked in. Individual check durations were not recorded in these older runs.";
         const samples = data.samples || [],
           m = data.metrics || {},
           svg = document.getElementById("resource-chart");
         document.getElementById("resource-summary").textContent =
           m.resourceSummary ||
           "No test-window resource summary recorded for this historical trace.";
+        document.getElementById("resource-legend").hidden = !samples.length;
         if (!samples.length) {
           svg.innerHTML = "";
           svg.style.display = "none";
@@ -1018,7 +1131,10 @@ Browser / Vitest requests → deployed Cloudflare apps and DOs
       }
       const entries = Object.entries(runs);
       const comparisonEntries = [
-        ...entries.filter(([key, r]) => r.workers).sort((a, b) => a[1].workers - b[1].workers),
+        ...entries.filter(([key, r]) => r.overlappedSetup),
+        ...entries
+          .filter(([key, r]) => r.workers && !r.overlappedSetup)
+          .sort((a, b) => a[1].workers - b[1].workers),
         ...entries.filter(([key, r]) => !r.workers),
       ];
       document.getElementById("run-picker").innerHTML = entries

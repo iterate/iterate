@@ -1,5 +1,6 @@
-<strong>Use 24 workers on one runner.</strong> Both trials finished the browser suite before Vitest,
-in 121–123 seconds, with zero retries and 18–20 GB peak memory. At 16 workers it took 148–149
-seconds. At 32 it was faster, but all three runs needed a retry and Vitest still finished last.
-Higher counts brought little benefit; 92 failed. This is the best balance in this sample, not proof
-that flakes are gone.
+<strong>Overlapping setup works. The first run was red.</strong>
+Six shards started 88 active browser cases within 4.9 seconds; the longest shard took 74 seconds.
+All test-runner installs finished before readiness, and teardown’s install finished during tests.
+The whole preview took 11m38s versus 13m31s for the earlier six-shard repeat, despite a slower
+deployment. One Docs click failed; four other browser tests passed on retry. This proves the
+scheduling works, not that this concurrency is reliable. Backend tests still finished last.

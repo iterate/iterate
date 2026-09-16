@@ -10,20 +10,19 @@ explainer route. No deployment of the product is needed to publish this page. Fo
 review link, replace the branch in `?sha=` with the full report commit SHA;
 branch-name requests can briefly serve a cached earlier revision.
 
-## Experiment
+## Earlier worker-count series
 
 The controlled series changes only the fixed `previewPlaywrightWorkers` value
 in each recorded commit: 16, 32, 64 and 92, then control/finalist repeats.
 A 24-worker follow-up checks a narrower compromise after all three measured
 32-worker browser runs needed one retry and both 16-worker runs needed none.
-The final configuration lives directly in `playwright.config.ts`; the unused
-sharding code was removed after the controlled series. Keep
+That series ended at 24 workers in `playwright.config.ts`; unused sharding
+code was removed at that point. The follow-up below restores sharding and changes scheduling. Keep
 application code, test catalogue, worker machine size, retries, readiness and
 cleanup unchanged. Each push must wait for the previous preview's cleanup to
 finish. The normal single-runner workflow runs `pnpm preview run` and then
 erases the slot. The sharded implementation remains reproducible at its
-recorded commits (`2996ffc9c` and `ec079ad53`), rather than remaining unused in
-the final CI code.
+recorded commits (`2996ffc9c` and `ec079ad53`), and supplies the baseline for the new overlapping-setup implementation.
 
 All worker experiments use the same named Depot image tag, but we cannot prove
 the resolved image digest is identical. Log the exact commit, run, slot,
@@ -86,19 +85,57 @@ unsharded run's known workflow, install, Playwright, Vitest and retry totals.
 - Historical runs use the same catalogue but differ in PR/slot and deployment
   reuse. They motivate the experiment; they are not a controlled comparison.
 
-The final implementation differs from application baseline `611c3769b` only
+The earlier one-runner implementation differed from application baseline `611c3769b` only
 in the root Playwright worker setting, two equivalent telemetry expressions
 required by current lint rules, and documentation/evidence. The measured
 application, package and spec trees are identical across the controlled trials.
 Final validation after removing unused sharding code is recorded separately;
 it does not replace any earlier failed measurement.
 
-## Result
+## Earlier result
 
-Keep 24 CI workers on one runner (local runs remain at one). Both measured
+The initial recommendation was 24 CI workers on one runner (local runs remain at one). Both measured
 24-worker trials passed all 88 non-skipped browser bodies without retries in
 120.5–123.0 seconds, before the concurrent OS Vitest suite. The report retains
 all nine one-runner measurements and three historical traces, including the
 failed 92-worker run. This small sample supports a performance tradeoff, not
 a proven long-term failure rate. Later report-publication checks are linked
 in the PR check history; the comparison data is a fixed measurement snapshot.
+
+## Overlapping shard setup experiment
+
+The follow-up keeps six shards × sixteen workers and nine machines, but removes
+`needs: prepare` from both test job definitions. They install and check browsers
+before waiting in-job for an attempt-scoped GitHub milestone backed by Depot
+producer liveness. Preparation publishes the plan before signaling. Teardown
+needs only preparation, installs while consumers test, then waits for all seven
+consumers to terminate. Report merge and environment erase run independently in
+parallel. No shard owns finalization.
+
+For each completed measurement, keep `metrics.json` from `depot ci metrics --run`,
+`<attempt-id>.log` from `depot ci logs --timestamps` for all nine attempts, and
+extract `preview-os-test-artifacts` into `artifacts/`, all under a temporary
+folder. Then:
+
+```sh
+python3 explainers/playwright-parallelisation/collect-sharded.py /tmp/measurement \
+  --key overlapped-shards --label '6 × 16 · overlapping setup'
+```
+
+The collector validates all six reporters, unique catalogue names and span
+containment. Only fixed labels, timing and outcomes are published. The install
+summary counts preparation's install plus any consumer install tail after the
+ready signal and any finalizer install tail after consumers stop. It describes
+observed overlap, not an estimate of running the entire workflow without installs.
+Full workflow timing is still sensitive to deployment, runner/image state and
+remote cleanup; compare phases before attributing a total-time difference to
+sharding.
+
+First overlapping-setup measurement: `fr1lf3l0rs`, implementation `b002e9f0c`.
+The nine-job schedule worked and cleanup succeeded. The run failed on a Docs
+click and a telemetry workflow-scope wiring bug. The latter is fixed with
+regression tests and a successful dry-run replay; raw artifacts remain in `/tmp`.
+The trace retains the failed sample. Its catalogue hash matches the worker-count
+series, and the measured application/package/spec trees are unchanged. No test
+or timeout was adjusted. Final publication checks are linked in the PR rather
+than changing the frozen comparison dataset.

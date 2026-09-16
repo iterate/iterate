@@ -56,7 +56,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
-          node scripts/ci/status.ts set preparing
+          pnpm exec trpc-cli scripts/ci/status.ts set preparing
       - name: Check fixed Playwright capacity
         env:
           CI: "true"
@@ -85,7 +85,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
-          node scripts/ci/status.ts set preview-ready
+          pnpm exec trpc-cli scripts/ci/status.ts set preview-ready
       - name: Collect test artifacts
         if: always()
         run: scripts/preview/collect-test-artifacts.sh test-results
@@ -121,7 +121,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
-          node scripts/ci/status.ts wait-for prepare preview-ready
+          pnpm exec trpc-cli scripts/ci/status.ts wait-for prepare preview-ready
       - name: Download prepared deployment identity
         uses: actions/download-artifact@v4
         with:
@@ -175,7 +175,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
-          node scripts/ci/status.ts wait-for prepare preview-ready
+          pnpm exec trpc-cli scripts/ci/status.ts wait-for prepare preview-ready
       - name: Download prepared deployment identity
         uses: actions/download-artifact@v4
         with:
@@ -224,7 +224,7 @@ jobs:
         # settled is written only once every consumer has actually stopped.
         run: >-
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
-          node scripts/ci/status.ts wait-for-jobs apps
+          pnpm exec trpc-cli scripts/ci/status.ts wait-for-jobs apps
           playwright:matrix-0 playwright:matrix-1 playwright:matrix-2
           playwright:matrix-3 playwright:matrix-4 playwright:matrix-5
       - if: always() && steps.consumers.outputs.settled == 'true'
