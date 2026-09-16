@@ -1,0 +1,256 @@
+<section class="card" id="install-findings">
+  <h2>Why does an “up to date” install take a minute?</h2>
+  <p>
+    <strong>A fresh-runner install is doing expensive work even when it adds no packages.</strong>
+    On an isolated 16-core Depot runner using the same baked image and commit, the first install
+    took 72.4s. Repeating it in the same checkout took 7.2s.
+  </p>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Isolated probe, in order</th>
+          <th>Elapsed</th>
+          <th>CPU: user + system</th>
+          <th>What it tells us</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>First pnpm install on fresh runner</td>
+          <td>72.4s</td>
+          <td>9.7s</td>
+          <td>No packages added or removed; most elapsed time is outside CPU execution.</td>
+        </tr>
+        <tr>
+          <td>Identical command, same runner</td>
+          <td>7.2s</td>
+          <td>8.4s</td>
+          <td>
+            The first invocation warmed or changed local state that a new job does not reliably
+            inherit.
+          </td>
+        </tr>
+        <tr>
+          <td>Third invocation, ignoring scripts</td>
+          <td>6.7s</td>
+          <td>7.7s</td>
+          <td>Hooks are small. The root prepare hook itself took 22–31ms.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    The detailed pnpm log puts most of the first-run delay between package import completion and
+    manifest updates, around dependency and executable linking. The
+    <a href="https://github.com/pnpm/pnpm/blob/v10.24.0/pkg-manager/headless/src/index.ts#L438"
+      >pinned pnpm source</a
+    >
+    still hoists and links executables on this path. Fresh filesystem access is the leading
+    explanation; we have not identified which Depot storage/cache layer accounts for it.
+  </p>
+  <details>
+    <summary>Probe method and limits</summary>
+    <p>
+      <a href="https://depot.dev/orgs/0p91s0lz49/workflows/6x072ksg55">Probe workflow 6x072ksg55</a
+      >, run <code>ndjqbsdmlq</code>, commit <code>ec079ad</code>, Node 24.21.0, pnpm 10.24.0, 16x64
+      runner. Same named custom image as preview CI; checkout uses <code>clean: false</code>.
+      Commands: <code>pnpm install --frozen-lockfile --prefer-offline --reporter=ndjson</code>,
+      repeated twice, then once with <code>--ignore-scripts</code>. The pnpm store and checkout are
+      on the same ext4 filesystem. CPU totals include child processes and may overlap across cores.
+    </p>
+    <p>
+      First-run gaps: import work ~6.4s; the next ~58s includes hoisting, bin linking and direct
+      dependency linking; project linking and state writes add ~6s. These are intervals between pnpm
+      events, not separately instrumented function durations. Bin-conflict messages mark progress;
+      they do not prove the conflicts themselves cause the delay. All three installs succeeded. Raw
+      evidence is retained as <code>pnpm-install-probe</code>.
+    </p>
+    <p>
+      This separates first-use state from warm state, not OS page cache from image lazy reads or
+      pnpm metadata writes. No new package-import/download events appeared. A fresh PR run gets new
+      machines; it does not reuse the last run’s in-memory filesystem cache. Some fresh machines can
+      nevertheless be fast, as the repeat preview trace shows.
+    </p>
+  </details>
+</section>
+<section class="card">
+  <h2>Depot / pnpm changes worth doing first</h2>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Order</th>
+          <th>Change</th>
+          <th>Why / what to validate</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1</td>
+          <td>
+            <strong>Start shard setup during Prepare.</strong> Checkout, pnpm and Chromium can run
+            before the backend is ready.
+          </td>
+          <td>
+            Moves setup off the path after readiness. Today <code>needs: prepare</code> prevents the
+            entire job from starting. Gate the test command on the prepared deployment identity
+            instead.
+          </td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td>
+            <strong>Stop doing a fresh full-workspace install before cleanup.</strong> Reuse the
+            prepared runner for finalization, or prepare the finalizer while tests run.
+          </td>
+          <td>
+            The old run spent 74s installing in Finish. Account for idle runner cost if keeping a
+            runner alive. A small standalone collector/cleaner is another option, but needs its
+            runtime dependencies packaged correctly.
+          </td>
+        </tr>
+        <tr>
+          <td>3</td>
+          <td>
+            <strong>Give the baked install an exact input fingerprint.</strong> Skip reconciliation
+            only when the checkout matches the image’s recorded dependency inputs.
+          </td>
+          <td>
+            Hash lockfile, workspace config, all package manifests, patches, pnpm hooks/config,
+            toolchain/platform and any install-hook inputs. On mismatch, run the normal frozen
+            install. Measure total job time: some cold reads may move into test startup.
+          </td>
+        </tr>
+        <tr>
+          <td>4</td>
+          <td>
+            <strong>Record image identity and setup timings.</strong> Log the resolved image
+            digest/bake identity, input fingerprint, install phase and Chromium start/end.
+          </td>
+          <td>
+            Distinguishes an old dependency image from a slow filesystem with the right
+            dependencies. The current mutable tag alone cannot prove which snapshot was used.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    <a href="https://depot.dev/blog/accelerating-test-suites"
+      >Depot also recommends questioning the final merge job.</a
+    >
+    Our report merge itself takes under a second; the expensive part is getting another machine
+    ready and doing cleanup. We still need reliable cleanup and complete results, but they need not
+    require another full install.
+  </p>
+  <p>
+    The repo already follows Depot’s main
+    <a href="https://depot.dev/docs/ci/how-to-guides/custom-images">custom-image advice</a>: bake
+    the installed workspace, pnpm store and Chromium, and preserve them with
+    <code>checkout clean:false</code>. Another ordinary cache action would not remove the work
+    observed here.
+  </p>
+  <details>
+    <summary>How to overlap setup safely</summary>
+    <p>
+      Start the test machines alongside Prepare. After local setup, wait for a ready record scoped
+      to the current run/attempt, commit and preview lease. The record names the actual deployed
+      versions. Preparation failure or cancellation ends that wait; it must not fall through to an
+      old preview. Prepare’s own install still precedes its deployment scripts; it is the other
+      machines’ setup that can overlap. Keep the existing lifecycle lock through tests and cleanup.
+    </p>
+    <p>
+      Depot’s
+      <a href="https://depot.dev/docs/ci/how-to-guides/parallel-steps">parallel steps</a> can
+      overlap independent work on one runner, with a join before dependent work. They do not bypass
+      a cross-job <code>needs</code> edge. For separate shard machines, readiness must be a
+      step-level barrier, or the workflow must be split into smaller jobs. Test the cancellation and
+      missing-plan paths as well as success.
+    </p>
+  </details>
+  <details>
+    <summary>Cache disks and image refresh: useful, but not the first fix</summary>
+    <p>
+      <a href="https://depot.dev/docs/ci/how-to-guides/cache-disks">Depot cache disks</a> could
+      retain fetched packages between runs when dependencies change. Our slow no-op probe fetched
+      none, so that is not yet evidence they will speed this case. Benchmark a pnpm-store mount
+      separately; do not share one mutable <code>node_modules</code> tree among concurrent
+      checkouts.
+    </p>
+    <p>
+      The image rebuilds on main dependency-file changes and weekly. Empty commits do not refresh
+      it. The rebuild path list names manifests and lock/workspace files, but omits direct patch and
+      pnpm-hook/config paths; include those inputs explicitly when introducing the fingerprint. A
+      matching lockfile often already triggers a rebuild, so this omission does not explain today’s
+      measured delay by itself.
+    </p>
+    <p>
+      Relevant repo files: <code>.depot/workflows/build-preview-ci-image.yml</code>,
+      <code>scripts/depot-ci/bake-preview-ci-image.sh</code>,
+      <code>.depot/workflows/cloudflare-preview-sharded.yml</code>.
+    </p>
+  </details>
+  <details>
+    <summary>Why not just enable optimisticRepeatInstall?</summary>
+    <p>
+      It is tempting, but the
+      <a href="https://github.com/pnpm/pnpm/blob/v10.24.0/deps/status/src/checkDepsStatus.ts#L219"
+        >10.24.0 implementation</a
+      >
+      can return “up to date” when no package manifests have newer timestamps, before examining
+      lockfile and patch changes. That is the wrong assumption for a checkout restored from an
+      image. Prove invalidation for lockfile-only changes, overrides, catalogs, patches and hooks
+      before adopting a fast path. An explicit content fingerprint avoids depending on those
+      timestamps.
+    </p>
+  </details>
+</section>
+<section class="card" id="nub">
+  <h2>Nub: promising idea, fails this repo’s first compatibility check</h2>
+  <p>
+    I tried <a href="https://github.com/nubjs/nub/releases/tag/v0.9.2">Nub v0.9.2</a> in a
+    disposable clean source tree on Depot. <code>nub install --frozen-lockfile</code> rejected the
+    existing lockfile immediately. The same commit’s frozen install succeeds with pnpm 10.24.0.
+  </p>
+  <pre
+    style="overflow: auto; padding: 14px; background: #f4f6f7; border-radius: 8px"
+  ><code>ERR_NUB_OUTDATED_LOCKFILE
+apps/dummy-petshop / capnweb:
+  manifest: npm:@iterate-com/capnweb@^0.12.2
+  lockfile: npm:@iterate-com/capnweb@0.12.2</code></pre>
+  <p>
+    Our workspace has a parent-scoped override pinning Dummy Petshop’s capnweb to 0.12.2. Nub’s
+    freshness check appears not to apply that override as pnpm does. The lockfile remained
+    unchanged. This is a compatibility failure, not a fast-install result.
+  </p>
+  <p>
+    <strong>Recommendation:</strong> keep Nub as a separate experiment. Resolve that blocker first,
+    then verify patches, package extensions, workspace aliases, native builds and the actual
+    Expo/Vite/Playwright tools before timing a replacement.
+  </p>
+  <details>
+    <summary>What Nub offers, and what was actually checked</summary>
+    <p>
+      <a href="https://nubjs.com/docs/install/pnpm">Nub’s pnpm compatibility docs</a> claim pnpm v9
+      lockfiles, catalogs, workspace links, overrides and patches. <code>nub install</code> uses its
+      own installation engine; <a href="https://nubjs.com/docs/pm"><code>nub pm</code></a> instead
+      provisions the real pinned package manager, so it is not the same optimization.
+    </p>
+    <p>
+      The
+      <a href="https://nubjs.com/docs/install/virtual-store">global virtual-store design</a> aims to
+      replace large numbers of per-file links with package-level links. In our actual probe Nub
+      printed “global virtual store auto-disabled in CI” and chose an isolated layout. Its published
+      warm global-store benchmarks therefore do not predict this CI setup.
+    </p>
+    <p>
+      <a href="https://depot.dev/orgs/0p91s0lz49/workflows/tr5jnh5t5v">Compatibility probe</a>, run
+      <code>t8pzl7kpn0</code>, pinned release archive checked against GitHub’s SHA-256 digest.
+      Install exited 16 in 0.21s, before package installation; planned test discovery and local unit
+      checks were not reached. This was an install-only experiment with no deployment and no
+      application credentials. An earlier probe stopped because my harness used the wrong extracted
+      binary path; it tested nothing.
+    </p>
+  </details>
+</section>

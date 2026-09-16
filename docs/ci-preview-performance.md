@@ -55,16 +55,23 @@ raise the budget automatically.
 - OS Vitest gives every current file a worker immediately and permits at most
   two concurrent tests per file in CI. Each file owns isolated projects; the
   examples matrix still overlaps its isolated runtimes inside each case.
-- Root Playwright keeps sixteen fully parallel workers in CI. The earlier
-  1,554-second aggregate and 117-second longest-test sample included shared
-  rollout waiting inside fixtures. Remeasure without that wait before using
-  per-test timings to size the worker pool. Preview still queues the long
-  reconnect/resume specs first.
-- The job uses a 16-core Depot runner. Measurements on larger runners showed
-  the overlapping local work peaking below ten cores; the deployed Worker and
-  Durable Objects, rather than host CPU, are the integration boundary. The
-  marathon is the capacity and tail-latency proof for the resulting remote
-  burst.
+- Root Playwright uses 24 workers on the 16-core / 64-GB preview runner.
+  Deployment, app tests, Playwright and post-test cleanup share that runner.
+  The two measured 24-worker trials took 121–123 seconds with zero browser/app
+  retries and 18–20 GB sampled peak memory; Vitest finished last in both.
+  The 16-worker controls took 148–149 seconds. All three 32-worker browser
+  runs were faster at 106–114 seconds but needed one retry each, while Vitest
+  still finished last. Higher counts brought little extra gain: the 92-worker
+  preview failed and its sampled peak memory reached 45.5 GB.
+- Compare whole-preview duration, Playwright and concurrent OS Vitest,
+  first-attempt failures, and CPU/memory during the test window. Install and
+  deployment variation can outweigh the worker-count change. These few trials
+  support a performance choice, not a proven long-term retry rate.
+- Measured traces and experiment details:
+  [Playwright parallelisation](../explainers/playwright-parallelisation.html).
+  The [live branch explainer](https://iterate.iterate.app/explainers/playwright-parallelisation?sha=codex%2Fplaywright-full-parallel)
+  retains the historical sharded runs, every worker-count trial, retries,
+  quarantined failures and measurement limits.
 
 Tests make this safe by owning isolated state. Test clients give every project
 create a collision-resistant caller-owned `prj_…` identifier, avoiding an
@@ -174,6 +181,6 @@ consecutive zero-retry runs of one head.
 
 Depot bills per second per vCPU. The preview runner is sized for the measured
 local peak while its worker pools overlap; inspect total core-seconds as well as
-duration after changing it. Cleanup remains on the small default runner.
+duration after changing it. The post-test erase runs on the same preview runner.
 `cancel-in-progress: true` prevents superseded pushes from continuing to
 consume preview compute.

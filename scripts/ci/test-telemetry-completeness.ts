@@ -65,7 +65,7 @@ export function analyzeTestTelemetryCompleteness(
   );
   const observedScopedArtifactSources = currentArtifacts.flatMap((artifact) => {
     const source = testTelemetryArtifactSource(artifact);
-    return source === null ? [] : [scopedArtifactSource(artifact, source)];
+    return source ? [scopedArtifactSource(artifact, source)] : [];
   });
 
   return {
@@ -173,7 +173,7 @@ function artifactCiScope(artifact: TestTelemetryArtifact): ArtifactCiScope {
     repository: artifact.ci.repository,
     workflowRunId: artifact.ci.workflowRunId,
     workflowRunAttempt: artifact.ci.workflowRunAttempt,
-    ...(artifact.ci.jobName === undefined ? {} : { jobName: artifact.ci.jobName }),
+    jobName: artifact.ci.jobName,
   };
 }
 

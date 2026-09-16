@@ -47,10 +47,10 @@ export default defineConfig({
   // (docs/testing.md#retries-and-timeouts). A burst that defeats it fails
   // the run on purpose: platform weather should be visible, not absorbed.
   retries: process.env.CI ? E2E_CI_RETRIES : 0,
-  // Keep the existing CI concurrency. Earlier aggregate/longest-test timings
-  // included the shared rollout wait inside fixtures; remeasure with readiness
-  // outside the runner before using those timings to change worker counts.
-  workers: process.env.CI ? 16 : 1,
+  // On the 16-core preview runner, 24 workers keep Playwright near the concurrent
+  // Vitest suite with less memory than 32+. Keep the measured tradeoffs visible:
+  // explainers/playwright-parallelisation.html.
+  workers: process.env.CI ? 24 : 1,
   outputDir: "test-results/playwright-output",
   reporter: [
     ["list"],

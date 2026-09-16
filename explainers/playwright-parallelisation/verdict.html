@@ -1,0 +1,5 @@
+<strong>Use 24 workers on one runner.</strong> Both trials finished the browser suite before Vitest,
+in 121–123 seconds, with zero retries and 18–20 GB peak memory. At 16 workers it took 148–149
+seconds. At 32 it was faster, but all three runs needed a retry and Vitest still finished last.
+Higher counts brought little benefit; 92 failed. This is the best balance in this sample, not proof
+that flakes are gone.
