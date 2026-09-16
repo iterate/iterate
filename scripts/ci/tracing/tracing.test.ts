@@ -277,6 +277,66 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
   ).toBe(true);
 });
 
+test("a second-precision Depot finish does not invent a negative finish phase", () => {
+  const report = assembleTrace(
+    {
+      workflowId: "failed-wait",
+      workflowName: "Preview",
+      workflowPath: "preview.yml",
+      repo: "iterate/iterate",
+      headSha: "abc",
+      sha: "merge",
+      ref: "refs/pull/2681/merge",
+      workflowStatus: "failed",
+      workflowCreatedAt: at(0),
+      workflowFinishedAt: at(34),
+      executions: [{ executionId: "one", execution: 1, createdAt: at(0) }],
+      jobs: [
+        {
+          jobId: "shard",
+          jobKey: "preview.yml:preview:playwright:matrix-0",
+          status: "failed",
+          attempts: [
+            {
+              attemptId: "attempt",
+              attempt: 1,
+              status: "failed",
+              startedAt: at(1),
+              finishedAt: at(33),
+            },
+          ],
+        },
+      ],
+    },
+    new Map([
+      [
+        "attempt",
+        [
+          line("wait_for_preview", {
+            kind: "shell-start",
+            id: "wait",
+            step: "wait_for_preview",
+            time: ms(2),
+          }),
+          line("wait_for_preview", { kind: "shell-end", id: "wait", time: ms(33.5), exitCode: 1 }),
+        ],
+      ],
+    ]),
+  );
+  const spans = report.resourceSpans[0].scopeSpans[0].spans;
+  const wait = spans.find((span) => span.name === "wait for preview")!;
+  const finish = spans.find((span) => span.name === "Finish")!;
+  expect(wait).toMatchObject({
+    status: { code: 2 },
+    endTimeUnixNano: String(BigInt(ms(33.5)) * 1_000_000n),
+  });
+  expect(finish.startTimeUnixNano).toBe(wait.endTimeUnixNano);
+  expect(finish.endTimeUnixNano).toBe(finish.startTimeUnixNano);
+  expect(spans.find((span) => span.name === "Playwright 1/6")).toMatchObject({
+    endTimeUnixNano: String(BigInt(ms(33)) * 1_000_000n),
+  });
+});
+
 test("cancelling before runner startup does not invent an attempt duration", () => {
   const trace = assembleTrace(
     {

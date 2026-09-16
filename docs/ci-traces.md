@@ -84,6 +84,9 @@ pnpm exec trpc-cli scripts/ci/tracing/cli.ts render <workflow-id> /tmp/ci-trace
   Quiet shell commands have measured start/exit times, not stdout estimates.
 - A missing completion marker produces a striped incomplete span bounded by the
   runner finish. It is not reported as an observed test duration or a pass.
+- Depot job-finish timestamps have whole-second precision. A millisecond marker
+  can fall just after that timestamp: preserve both recorded times and give the
+  synthetic trailing Finish phase zero duration rather than a negative interval.
 - Playwright durations include fixtures. Retries appear as separate attempts.
   Vitest test internals and deployed request spans are outside this report.
 - This is valid OTLP/JSON assembled after completion, not live SDK export. It

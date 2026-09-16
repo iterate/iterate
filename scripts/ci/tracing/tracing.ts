@@ -229,24 +229,30 @@ export function assembleTrace(
       }
       const phases =
         wait || tests
-          ? boundaries.map((boundary, index) => ({
-              start: boundary.time,
-              end: boundaries[index + 1]?.time || end,
-              id: add(
-                `${attempt.attemptId}/phase/${index}`,
-                jobSpan,
-                boundary.name,
-                boundary.time,
-                boundaries[index + 1]?.time || end,
-                {
-                  "ci.kind": "phase",
-                  "ci.phase": boundary.name.toLowerCase(),
-                  "ci.evidence":
-                    "Grouping from measured step boundaries; includes action/runner gaps",
-                },
-                false,
-              ),
-            }))
+          ? boundaries.map((boundary, index) => {
+              // Depot job finishes have whole-second precision. A final marker can
+              // fall later within that second: retain both source timestamps,
+              // but give the derived trailing phase zero duration, not negative.
+              const phaseEnd = boundaries[index + 1]?.time || Math.max(boundary.time, end);
+              return {
+                start: boundary.time,
+                end: phaseEnd,
+                id: add(
+                  `${attempt.attemptId}/phase/${index}`,
+                  jobSpan,
+                  boundary.name,
+                  boundary.time,
+                  phaseEnd,
+                  {
+                    "ci.kind": "phase",
+                    "ci.phase": boundary.name.toLowerCase(),
+                    "ci.evidence":
+                      "Grouping from measured step boundaries; includes action/runner gaps",
+                  },
+                  false,
+                ),
+              };
+            })
           : [];
       const stepParents = new Map<string, string>();
       const stepEnds = new Map<string, number>();

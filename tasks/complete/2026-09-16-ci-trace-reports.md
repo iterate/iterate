@@ -5,7 +5,7 @@ size: medium
 
 # Clickable CI trace reports
 
-Implemented in PR #2681. Reports now upload to Depot artifacts and are served by an independent route in `iterate/config`; generated Git commits and use of the explainer host have been removed. Local trace and route checks pass. A real collector uploaded a Depot artifact, verified its public URL and created a CI trace commit status automatically; browser drilldown and OTLP download are verified. A fresh preview is queued behind the existing main preview.
+Implemented in PR #2681. Reports now upload to Depot artifacts and are served by an independent route in `iterate/config`; generated Git commits and use of the explainer host have been removed. Local trace and route checks pass. A real collector uploaded a Depot artifact, verified its public URL and created a CI trace commit status automatically; browser drilldown and OTLP download are verified. Current PR preview `7df0g3p2qh` passed all nine jobs and published a Depot-backed status. A failed earlier preview exposed a timestamp-precision bug; its regression and local replay now pass.
 
 ## Request
 
@@ -57,3 +57,5 @@ Session: `01a09f64-ea4e-7c61-ab0a-c15eb65df3bc`.
 
 - Live acceptance: config `878c828` serves the Depot archive independently of explainers. Collector `rrm65p27zc` uploaded artifact `01a0ac01-8b6c-7633-a515-c7558aa9540c` and automatically created status `54321271382` on the source commit. The newer completed preview’s artifact `01a0abfc-45e7-7da2-b4fa-f3f1cae2e1d7` has 207 unique spans with valid parents; browser download equals the JSON endpoint. Drilldown works with no browser errors and the sandbox denies host storage access. Unrelated artifacts return 404; post-fix route error telemetry is empty.
 - Merged main without rewriting history. The only conflict was the Kit Knip comment, now identical to main. A local Workers-runtime probe identified the initial config serving error (calling global fetch with the wrong receiver); the deployed fix passed the same probe and live requests. Full preview `p62xxs9fz2` on `183bd829b` was dispatched through the serialized main workflow because GitHub’s PR head metadata lagged the pushed branch. The global PR monitor is tracking it.
+
+- Monitor batch `iterate-iterate-2681-c111ec1346949e89`: experimental main preview `p62xxs9fz2` failed because the intermediate `183bd829b` pkg.pr.new package remained 404; consumer failures and finalizer failure followed preparation, while slot erase succeeded. Its collector `xh58x0480k` independently exposed whole-second Depot finish times preceding a millisecond wait-end marker by 55ms. A regression first reproduced `Invalid span interval: Finish`; preserving source timings and giving the derived trailing phase zero duration fixes it. Local rendering of that exact failed run now passes. Current PR preview `7df0g3p2qh` passed all nine jobs and automatically linked artifact `01a0ac0b-1644-7a1e-9c23-b5520f338774`.
