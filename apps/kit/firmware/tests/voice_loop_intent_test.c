@@ -1290,12 +1290,36 @@ static void an_idle_session_probes_the_root_once_a_period(void) {
   pump();
 }
 
+/*
+ * AND AN ANSWERED PROBE IS LIVENESS, WHICH A PONG-ONLY WATCHDOG MISSED.
+ *
+ * The 420 s liveness watchdog restarts the chip when a READY transport shows no
+ * answered round trip. The transport originates its PING only after inbound
+ * SILENCE, and a probe answer on the same period is inbound — so a healthy
+ * mounted board suppressed the very PINGs the watchdog was counting and rebooted
+ * itself on a good network. This fake reports zero PONGs forever, which is
+ * exactly that board: eight answered periods, well past the restart bound.
+ */
+static void answered_probes_are_liveness_without_any_pong(void) {
+  size_t before;
+  unsigned period;
+  quiescent();
+  before = iterate_kit_fake_platform_sent_count();
+  for (period = 0U; period < 8U; ++period) {
+    run_ms(ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS + 500U);
+    pump();
+  }
+  assert(sent_after_count(before, "[\"whoami\"]") >= 7U);
+  assert(!iterate_kit_fake_esp_idf_restart_requested());
+}
+
 int main(void) {
   boot();
   conversation_start_raises_wants_call_with_no_button();
   conversation_control_opens_and_ends_a_call();
   nothing_physical_was_involved();
   an_idle_session_probes_the_root_once_a_period();
+  answered_probes_are_liveness_without_any_pong();
 
   pre_mount_speech_is_preserved_and_sent_immediately();
   rejected_stream_can_be_reused_by_an_immediate_new_activation();

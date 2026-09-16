@@ -2869,39 +2869,52 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
      * believing it has a session and a call, lights "listening" and "speaking"
      * at the user, and sends every word into a void for hours.
      *
-     * THE EVIDENCE IS A WEBSOCKET PONG, and it took two tries to get right.
+     * THE EVIDENCE IS AN ANSWERED ROUND TRIP, of which there are two kinds and
+     * either will do.
      *
-     * It was a pulled application-level `voice-agent/ping` append, which was a
-     * third liveness mechanism above the two that measure the hop honestly, and
-     * it woke a processor twelve times a minute to be told it was awake. That
-     * went. But deleting it left NOTHING watching this failure, because both
-     * ends of the connection answered pings and neither asked — so the device
-     * now originates a WebSocket PING when the hop has been quiet both ways
-     * (see the keepalive in websocket_connection.c) and this watches the PONGs.
+     * An ANSWERED `whoami()` PROBE is the stronger one: the mount asks the
+     * project root once a period (itx_mount.h) and an answer proves the session,
+     * the socket and the hop in one. A WEBSOCKET PONG is the weaker fallback,
+     * and it is what covers the window where the transport is ready but no
+     * mount exists yet — the only window on this device that is genuinely quiet.
+     *
+     * KEYING ON THE PONG ALONE WAS A RACE. The transport originates its PING
+     * only after inbound silence (websocket_connection.c), and an answered probe
+     * IS inbound traffic on the same period — so a healthy mounted board could
+     * suppress every PING it needed and reboot itself at 420 s on a good
+     * network. Reading the probe answers here removes the race without a second
+     * constant: a mounted board is kept alive by its probes, an unmounted one by
+     * its PONGs, and neither has to win a timing argument with the other.
      *
      * WHY NOT ANY INBOUND APPLICATION SIGNAL: delivery batches and served
      * dispatches both stop on a perfectly healthy IDLE board, so re-keying on
      * them would restart every idle device on a timer. The mount watchdog made
      * exactly that mistake; the note in voice_device_profile.h is what it cost.
-     * A PONG keeps arriving on an idle board, which is the whole point.
+     * A probe answer and a PONG both keep arriving on an idle board, which is
+     * the whole point.
      *
-     * A PONG IS NOT DELIVERY CREDIT. It proves the hop parsed a frame in order
-     * and nothing more — the rule at iterate_kit_websocket_tx_queue_control is
-     * unchanged and this must never become an application acknowledgement. It
-     * is read here, by a watchdog asking whether the hop is alive at all, and
-     * nowhere else.
+     * NEITHER IS DELIVERY CREDIT. They prove the hop is alive and nothing more —
+     * the rule at iterate_kit_websocket_tx_queue_control is unchanged and this
+     * must never become an application acknowledgement.
      */
     {
       static uint64_t last_liveness_ms;
       /** When the transport last stopped being ready; 0 while it is ready. */
       static uint64_t not_ready_since_ms;
       static uint32_t last_pong_count;
+      static uint32_t last_probe_answer_count;
+      const uint32_t probe_answers = runtime.connection.mount.probes_answered;
       struct iterate_kit_esp_idf_itx_transport_metrics liveness;
       iterate_kit_esp_idf_itx_transport_metrics(&transport, &liveness);
       if (last_liveness_ms == 0U) last_liveness_ms = now;
       if (liveness.websocket_pongs_received != last_pong_count) {
         last_pong_count = liveness.websocket_pongs_received;
         last_liveness_ms = now;
+      }
+      if (probe_answers != last_probe_answer_count) {
+        /* A remount zeroes the counter, so only a RISE is a fresh round trip. */
+        if (probe_answers > last_probe_answer_count) last_liveness_ms = now;
+        last_probe_answer_count = probe_answers;
       }
       /*
        * A TRANSPORT THAT IS NEVER READY MUST NOT DISABLE THE RESTART.
@@ -2933,7 +2946,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
           NO_LIVENESS_RESTART_MS) {
         ESP_LOGE(
             tag,
-            "no pong in %us despite a ready transport — restarting",
+            "no answered round trip in %us despite a ready transport — restarting",
             (unsigned int)(NO_LIVENESS_RESTART_MS / 1000U));
         iterate_kit_esp_restart_with_note("hop dead on a ready transport");
       }

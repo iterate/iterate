@@ -89,12 +89,13 @@ enum {
    * minute and a half between calls, and nothing in the logs but a reconnect.
    *
    * One period, two probes, two questions. The transport sends a WebSocket
-   * PING when the hop has been silent both ways (is this TCP hop half-open —
-   * its PONG is what the liveness watchdog keys on), and the mount sends
-   * `whoami()` on the project root (is this SESSION still there — and it is an
-   * application message, which is the only kind the idle close counts). On a
-   * mounted board the probe's own round trip keeps the hop busy, so the ping
-   * covers the window before a mount exists and little else.
+   * PING when the hop has been silent both ways (is this TCP hop half-open),
+   * and the mount sends `whoami()` on the project root (is this SESSION still
+   * there — and it is an application message, which is the only kind the idle
+   * close counts). On a mounted board the probe's own round trip keeps the hop
+   * busy and therefore suppresses the ping, so the liveness watchdog keys on
+   * BOTH answers: the probe's while mounted, the PONG in the window before a
+   * mount exists. Keying on the PONG alone made the two race.
    */
   ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS = 60000,
 
