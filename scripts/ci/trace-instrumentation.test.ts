@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { expect, test } from "vitest";
@@ -21,25 +20,31 @@ test("the shell hook preserves failures and does not double-count nested bash", 
   expect(events[1].time).toBeGreaterThanOrEqual(events[0].time);
 });
 
-test("a real Playwright retry emits both attempts without exception payloads", async () => {
-  const directory = await mkdtemp(resolve("../.ci-trace-test-ignoreme-"));
-  await using _cleanup = {
-    [Symbol.asyncDispose]: () => rm(directory, { recursive: true, force: true }),
-  };
-  await writeFile(
-    `${directory}/playwright.config.ts`,
-    `export default { retries: 1, workers: 1, outputDir: ${JSON.stringify(`${directory}/output`)}, reporter: [[${JSON.stringify(resolve("ci/trace-reporter.ts"))}]] };`,
-  );
-  await writeFile(
-    `${directory}/retry.spec.ts`,
-    `import { test, expect } from '@playwright/test'; test('a quiet retry', () => { expect(test.info().retry, 'secret exception payload').toBe(1); });`,
-  );
+test("reporter lifecycle records retain both retry attempts without exception payloads", async () => {
+  // Exercise the public reporter interface in its own process: no global console
+  // mocks, and no nested test runner competing with the monorepo's worker pool.
   const { stdout } = await promisify(execFile)(
-    "pnpm",
-    ["exec", "playwright", "test", "--config", `${directory}/playwright.config.ts`],
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `
+        import Reporter from ${JSON.stringify(new URL("./trace-reporter.ts", import.meta.url).href)};
+        const reporter = new Reporter();
+        const test = { id: "greets", repeatEachIndex: 0, title: "a quiet retry",
+          location: { file: process.cwd() + "/specs/greeting.spec.ts", line: 1 },
+          parent: { project: () => ({ name: "web" }) }, expectedStatus: "passed" };
+        for (const retry of [0, 1]) {
+          const result = { retry, startTime: new Date(), duration: 20, workerIndex: retry,
+            status: retry ? "passed" : "failed", errors: [{ message: "secret exception payload" }] };
+          reporter.onTestBegin(test, result);
+          reporter.onTestEnd(test, result);
+        }
+      `,
+    ],
     {
       cwd: resolve(".."),
-      env: { ...process.env, CI_TRACE_ENABLED: "1", CI_TRACE_SHELL: "" },
+      env: { ...process.env, CI_TRACE_ENABLED: "1" },
     },
   );
   const events = markers(stdout);

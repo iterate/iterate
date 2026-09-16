@@ -38,7 +38,7 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
         line("install_dependencies", {
           kind: "shell-start",
           id: "install",
-          step: "install_dependencies",
+          step: "__run",
           time: ms(3),
         }),
         line("install_dependencies", {
@@ -102,6 +102,7 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
     value: { stringValue: "incomplete; end bounded by job finish" },
   });
   expect(new Set(spans.map((span) => span.traceId)).size).toBe(1);
+  expect(spans.filter((span) => ["Setup", "Wait", "Test"].includes(span.name))).toHaveLength(3);
   expect(
     spans.every(
       (span) => !span.parentSpanId || spans.some((parent) => parent.spanId === span.parentSpanId),
@@ -109,9 +110,44 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
   ).toBe(true);
 });
 
+test("cancelling before runner startup does not invent an attempt duration", () => {
+  const trace = assembleTrace(
+    {
+      workflowId: "cancelled",
+      workflowName: "Preview",
+      workflowPath: "preview.yml",
+      repo: "iterate/iterate",
+      headSha: "abc",
+      ref: "refs/pull/1/merge",
+      workflowStatus: "cancelled",
+      workflowCreatedAt: at(0),
+      workflowFinishedAt: at(2),
+      executions: [{ executionId: "one", execution: 1, createdAt: at(0) }],
+      jobs: [
+        {
+          jobId: "job",
+          jobKey: "preview.yml:preview:prepare",
+          status: "cancelled",
+          attempts: [
+            { attemptId: "never-started", attempt: 1, status: "cancelled", finishedAt: at(2) },
+          ],
+        },
+      ],
+    },
+    new Map(),
+  );
+  const job = trace.resourceSpans[0].scopeSpans[0].spans[1];
+  expect(job.startTimeUnixNano).toBe(job.endTimeUnixNano);
+  expect(job.attributes).toContainEqual({
+    key: "ci.evidence",
+    value: { stringValue: "No runner attempt started" },
+  });
+});
+
 const ms = (seconds: number) => Date.parse("2026-09-16T12:00:00Z") + seconds * 1000;
 const at = (seconds: number) => new Date(ms(seconds)).toISOString();
 const line = (stepKey: string, event: object) => ({
-  stepKey,
+  stepKey: `opaque-${stepKey}`,
+  stepId: stepKey,
   body: `@@ci-trace ${JSON.stringify(event)}`,
 });

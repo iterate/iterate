@@ -305,7 +305,24 @@
       const children = new Map(
         spans.map((s) => [
           s.spanId,
-          spans.filter((c) => c.parentSpanId === s.spanId).sort((a, b) => a.start - b.start),
+          spans
+            .filter((c) => c.parentSpanId === s.spanId)
+            .sort((a, b) => {
+              if (s === root) {
+                const rank = (span) =>
+                  span.name === "Prepare"
+                    ? 0
+                    : span.name === "App tests"
+                      ? 1
+                      : span.name.startsWith("Playwright ")
+                        ? 2
+                        : 3;
+                return (
+                  rank(a) - rank(b) || a.name.localeCompare(b.name, undefined, { numeric: true })
+                );
+              }
+              return a.start - b.start;
+            }),
         ]),
       );
       let open = new Set(

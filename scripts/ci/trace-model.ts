@@ -4,7 +4,8 @@ import { z } from "zod";
 /** ExportTraceServiceRequest (OTLP/JSON). IDs are deterministic per Depot execution. */
 export function assembleTrace(
   input: unknown,
-  logs: Map<string, { stepKey: string; body: string }[]>,
+  // Step metadata is absent on older Depot records.
+  logs: Map<string, { stepKey: string; body: string; stepId?: string; stepName?: string }[]>,
 ) {
   const workflow = Workflow.parse(input);
   const execution = [...workflow.executions].sort((a, b) => b.execution - a.execution)[0];
@@ -61,11 +62,21 @@ export function assembleTrace(
     workflow.workflowStatus === "failed",
   );
   for (const job of workflow.jobs) {
-    const name = job.jobKey
-      .replace(/^.*:preview:/, "")
-      .replace(/playwright:matrix-(\d+)/, (_, index) => `Playwright ${Number(index) + 1}/6`);
+    const key = job.jobKey.replace(/^.*:preview:/, "");
+    const labels: Record<string, string> = {
+      prepare: "Prepare",
+      apps: "App tests",
+      finish: "Reports & cleanup",
+    };
+    const name =
+      labels[key] ||
+      job.jobKey
+        .replace(/^.*:preview:/, "")
+        .replace(/playwright:matrix-(\d+)/, (_, index) => `Playwright ${Number(index) + 1}/6`);
     const attempts = job.attempts.filter(
-      (attempt) => Date.parse(attempt.finishedAt || workflow.workflowFinishedAt) >= rootStart,
+      (attempt) =>
+        attempt.startedAt &&
+        Date.parse(attempt.finishedAt || workflow.workflowFinishedAt) >= rootStart,
     );
     if (!attempts.length) {
       add(
@@ -74,7 +85,7 @@ export function assembleTrace(
         name,
         rootEnd,
         rootEnd,
-        { "ci.kind": "job", "ci.status": job.status, "ci.evidence": "No runner attempt" },
+        { "ci.kind": "job", "ci.status": job.status, "ci.evidence": "No runner attempt started" },
         false,
       );
     }
@@ -101,10 +112,13 @@ export function assembleTrace(
       );
       const events = (logs.get(attempt.attemptId) || []).flatMap((line) => {
         if (!line.body.startsWith("@@ci-trace ")) return [];
+        const event = TraceEvent.parse(JSON.parse(line.body.slice("@@ci-trace ".length)));
         return [
           {
-            ...TraceEvent.parse(JSON.parse(line.body.slice("@@ci-trace ".length))),
+            ...event,
+            ...(event.kind === "shell-start" ? { step: line.stepId || event.step } : {}),
             stepKey: line.stepKey,
+            stepName: line.stepName || "",
           },
         ];
       });
@@ -161,7 +175,7 @@ export function assembleTrace(
         const id = add(
           `${attempt.attemptId}/shell/${shell.id}`,
           parent,
-          shell.step.replaceAll("_", " "),
+          shell.stepName || shell.step.replaceAll("_", " "),
           shell.time,
           done?.time || end,
           {
@@ -253,7 +267,7 @@ export const Workflow = z.object({
             attemptId: z.string(),
             attempt: z.number(),
             status: z.string(),
-            startedAt: z.string(),
+            startedAt: z.string().default(""),
             finishedAt: z.string().default(""),
           }),
         )

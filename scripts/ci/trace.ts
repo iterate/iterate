@@ -125,7 +125,7 @@ export default class CiTrace {
     const attempts = workflow.jobs.flatMap((job) => job.attempts);
     const entries = await Promise.all(
       attempts.map(async (attempt) => {
-        const lines: { body: string; stepKey: string }[] = [];
+        const lines: z.infer<typeof LogPage>["lines"] = [];
         let pageToken = "";
         do {
           const page = LogPage.parse(
@@ -271,6 +271,15 @@ const artifactBranch = "codex/ci-trace-artifacts";
 const terminal = new Set(["finished", "failed", "cancelled", "skipped"]);
 const APIError = z.object({ status: z.number() });
 const LogPage = z.object({
-  lines: z.array(z.object({ body: z.string().default(""), stepKey: z.string() })).default([]),
+  lines: z
+    .array(
+      z.object({
+        body: z.string().default(""),
+        stepKey: z.string(),
+        stepId: z.string().default(""),
+        stepName: z.string().default(""),
+      }),
+    )
+    .default([]),
   nextPageToken: z.string().default(""),
 });
