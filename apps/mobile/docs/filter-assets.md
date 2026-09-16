@@ -4,7 +4,7 @@ JavaScript stays in the app bundle: JavaScriptCore on iPhone, Expo DOM in the
 browser/Android camera. Artwork, the pinned browser MediaPipe WASM, and its
 face model live at `https://mobile.iterate.com/filter-assets/<slug>-<sha256>.<ext>`.
 The existing mobile website worker serves only that public prefix from its
-R2 bucket. No new runtime dependency or OS service is involved.
+R2 bucket. No new runtime dependency or OS service is involved
 
 iPhone uses Apple's Vision tracker and does not download the MediaPipe files.
 The browser/Android tracker downloads when filters open (~6.6 MB compressed).
