@@ -2,10 +2,9 @@
 //
 // Bundles examples/voice-agent/{voice-agent,agent,worker}.ts (esbuild; the SDK stays the injected
 // "./processor.js"), writes the three bundles to the project's KV (edge-cached: a fresh
-// conversation's facets load without a git read), makes worker.js the project's root worker
-// (`itx.worker`) and `itx.voice` an alias of it, sets /secrets/openai, and runs one throwaway
-// conversation so the loader has both facet isolates warm before the first real press. NOTE: this
-// replaces any config worker the project already had — `itx.worker` is one rule per project.
+// conversation's facets load without a git read), mounts worker.js at `itx.voice` (the project's
+// own root worker, `itx.worker`, is untouched), sets /secrets/openai, and runs one throwaway
+// conversation so the loader has both facet isolates warm before the first real press.
 //
 //   OPENAI_API_KEY=… WORKER_BASE_URL=https://os.iterate2.com ADMIN_API_SECRET=… \
 //   PROJECT=prj-voice pnpm exec tsx scripts/voice-install.ts
@@ -59,13 +58,14 @@ async function main(): Promise<void> {
   await root.kv.put("voice-agent.js", voiceAgent);
   await root.kv.put("agent.js", agent);
   await root.kv.put("worker.js", worker);
+  // `itx.voice` is its own mount: the project's root worker (`itx.worker`, its repo's worker.ts)
+  // stays whatever it was, so a real project keeps its website and apps.
   await root.append(
-    rule("itx.worker", [
+    rule("itx.voice", [
       "itx",
       "workers",
       ["get", { source: "itx.kv.get('worker.js')", cacheKey: workerKey }],
     ]),
-    rule("itx.voice", "itx.worker"),
   );
   const health = JSON.parse(JSON.stringify(await root.voice.health()));
 
