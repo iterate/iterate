@@ -110,12 +110,14 @@ async function main(): Promise<void> {
   const acceptedPromise = new Promise<void>((resolve) => (accepted = resolve));
 
   // THE DEVICE'S SETUP CALL, unchanged from apps/os: the installed setup worker enables the
-  // voice facet and its backend on this fresh context.
-  const setup = JSON.parse(
-    JSON.stringify(await root.voice.setupVoiceAgent({ streamPath: CONTEXT_PATH })),
-  );
-  if (setup.streamPath !== CONTEXT_PATH) throw new Error(`setup answered ${JSON.stringify(setup)}`);
-  marks.setup = at();
+  // voice facet and its backend on this fresh context and, given the activation, starts the call.
+  // PIPELINED with the subscription: neither depends on the other's answer, so both go out now.
+  const setupPromise = Promise.resolve(
+    root.voice.setupVoiceAgent({ streamPath: CONTEXT_PATH, activation }),
+  ).then((result: unknown) => {
+    marks.setup = at();
+    return JSON.parse(JSON.stringify(result)) as { streamPath: string };
+  });
 
   await itx.subscribe({
     name: "device",
@@ -145,6 +147,7 @@ async function main(): Promise<void> {
           case "conversation-accepted":
             marks.accepted = at();
             marks.handshakeTookMs = p.handshakeTookMs;
+            marks.upgradeTookMs = p.upgradeTookMs;
             accepted?.();
             break;
           case "conversation-ended":
@@ -173,6 +176,8 @@ async function main(): Promise<void> {
     },
   });
   marks.subscribed = at();
+  const setup = await setupPromise;
+  if (setup.streamPath !== CONTEXT_PATH) throw new Error(`setup answered ${JSON.stringify(setup)}`);
 
   // THE MICROPHONE: 50 ms frames on a wall clock, never awaited one by one (a device's outbox),
   // then silence until the answer had its say. The first frame mints the call server-side.

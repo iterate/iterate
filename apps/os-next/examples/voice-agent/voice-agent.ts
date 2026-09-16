@@ -432,6 +432,8 @@ export const VoiceAgentContract = defineProcessorContract({
         conversationId: z.string(),
         /** Facet clock: dial to usable, the number a cold call is judged on. */
         handshakeTookMs: z.number(),
+        /** Facet clock: dial to the provider's 101 — the egress and upgrade share of the handshake. */
+        upgradeTookMs: z.number().optional(),
         /** Capture held during the handshake and released in one go. */
         heldMicFrames: z.number(),
       }),
@@ -645,6 +647,8 @@ interface Dial {
   socket: WebSocket | null;
   /** True once `session.started` arrived and audio may flow. */
   ready: boolean;
+  /** Facet clock when the provider's 101 came back — the upgrade's own cost. */
+  socketReadyAtFacetMs: number;
   /** Capture held while this Dial's handshake completes, oldest first. */
   micQueue: string[];
   /** Decoded PCM bytes in micQueue. */
@@ -725,6 +729,7 @@ const freshDial = (conversationId: string, activation: string): Dial => ({
   dialId: crypto.randomUUID(),
   socket: null,
   ready: false,
+  socketReadyAtFacetMs: 0,
   micQueue: [],
   micQueueBytes: 0,
   speakerOutbox: [],
@@ -938,6 +943,30 @@ export class VoiceAgentProcessor extends StreamProcessor<
     if (state.call) {
       this.#callRequestedForActivation = null;
       this.#lastDeviceInputAtStreamMsMirror = state.call.lastDeviceInputAtStreamMs;
+    }
+
+    /*
+     * Setup may put `call-started` in this facet's first batch (it knows the
+     * device's activation). Dialling HERE overlaps the provider handshake with
+     * the device's downlink bind and its first microphone frames.
+     *
+     * Deliberately narrower than "a call exists": after an eviction the durable
+     * call still exists but this live event is absent, so the recovery branch
+     * below records the interruption instead of re-dialling a socket whose
+     * previous side effects are unknowable.
+     */
+    if (
+      event?.type === "events.iterate.com/voice-agent/call-started" &&
+      state.call?.activation === event.payload.activation &&
+      this.#dial === null
+    ) {
+      this.#openProviderConnection(
+        state.call.conversationId,
+        state.call.activation,
+        state,
+        append,
+        runInBackground,
+      );
     }
 
     /* A provider session is volatile. Its durable record cannot revive it. */
@@ -1166,6 +1195,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         return;
       }
       dial.socket = socket;
+      dial.socketReadyAtFacetMs = this.deps.nowAtFacetMs();
 
       /*
        * THE THIRD SWITCH, AND WHY IT IS NOT A STREAM EVENT. Everything else
@@ -1354,6 +1384,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
               activation: dial.activation,
               conversationId,
               handshakeTookMs: receivedAtFacetMs - dialStartedAtFacetMs,
+              upgradeTookMs: dial.socketReadyAtFacetMs - dialStartedAtFacetMs,
               heldMicFrames,
             },
           }),

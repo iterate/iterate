@@ -6,9 +6,12 @@
  * A stateless worker the installer points `itx.voice` at (a rewrite rule on
  * the project root, `scripts/voice-install.ts`). It puts the voice facet and
  * its backend on the conversation's own context — two `processors.enable`
- * calls whose sources are the files the installer committed to the project's
- * config repo — so the device carries no source and no class names, only the
- * same `voice.setupVoiceAgent` call it made on apps/os.
+ * calls whose sources are the bundles the installer wrote to the project's
+ * KV (edge-cached, read by the loader once per fresh context) — so the device
+ * carries no source and no class names, only the same `voice.setupVoiceAgent`
+ * call it made on apps/os. Given the device's activation it also writes
+ * `call-started` into the birth batch, so the facet dials the provider the
+ * moment it boots instead of on the first microphone frame.
  */
 import { WorkerEntrypoint } from "cloudflare:workers";
 
@@ -69,6 +72,8 @@ export default class VoiceSetup extends WorkerEntrypoint<{ ITX: { get(): Promise
   async setupVoiceAgent(
     options: {
       streamPath?: string;
+      /** The device's call identity; with it, the call starts at boot, before any microphone frame. */
+      activation?: string;
       instructions?: string;
       visemes?: boolean;
     } = {},
@@ -81,13 +86,13 @@ export default class VoiceSetup extends WorkerEntrypoint<{ ITX: { get(): Promise
     const call = itx.cd(streamPath);
     await Promise.all([
       call.processors.enable("voice-agent", {
-        source: "itx.repos.readFile('config', 'voice-agent.js')",
+        source: "itx.kv.get('voice-agent.js')",
         cacheKey: VOICE_AGENT_CACHE_KEY,
         className: "VoiceAgentDurableObject",
         consumes: VOICE_AGENT_CONSUMES,
       }),
       call.processors.enable("voice-backend", {
-        source: "itx.repos.readFile('config', 'voice-backend.js')",
+        source: "itx.kv.get('voice-backend.js')",
         cacheKey: VOICE_BACKEND_CACHE_KEY,
         className: "VoiceBackendDurableObject",
         consumes: VOICE_BACKEND_CONSUMES,
@@ -104,6 +109,19 @@ export default class VoiceSetup extends WorkerEntrypoint<{ ITX: { get(): Promise
         idempotencyKey: `voice-agent/configured:${streamPath}`,
         payload: { instructions: options.instructions || "", visemes: options.visemes || false },
       },
+      ...(options.activation
+        ? [
+            {
+              type: `${T}call-started`,
+              idempotencyKey: `voice-agent/call:${options.activation}`,
+              payload: {
+                activation: options.activation,
+                conversationId: `conv_${options.activation}`,
+                streamPath,
+              },
+            },
+          ]
+        : []),
     );
     return { streamPath };
   }

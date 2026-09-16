@@ -1,8 +1,9 @@
 // scripts/voice-install.ts — put the voice agent on an os-next project.
 //
 // Bundles examples/voice-agent/{voice-agent,voice-backend,voice-setup}.ts (esbuild; the SDK stays
-// the injected "./processor.js"), commits the three files to the project's `config` repo, points
-// the project root's `itx.voice` at the setup worker (a rewrite rule), and sets /secrets/openai.
+// the injected "./processor.js"), writes the three bundles to the project's KV (edge-cached: a
+// fresh conversation's facet loads from it without a git read), points the project root's
+// `itx.voice` at the setup worker (a rewrite rule), and sets /secrets/openai.
 // After this, a device's `root.voice.setupVoiceAgent({ streamPath })` works with no source on it.
 //
 //   OPENAI_API_KEY=… WORKER_BASE_URL=https://os.iterate2.com ADMIN_API_SECRET=… \
@@ -55,13 +56,13 @@ export async function installVoice(): Promise<{
   const root = session().authenticate(adminCredentials()).projects.get(PROJECT);
   await root.invoke(["itx", ["whoami"]]);
   await root.secrets.set("openai", apiKey, { urls: ["https://api.openai.com"] });
-  for (const [path, text] of [
+  for (const [key, text] of [
     ["voice-agent.js", voiceAgent],
     ["voice-backend.js", voiceBackend],
     ["voice-setup.js", setup],
   ] as const) {
-    await root.repos.writeFile("config", path, text);
-    console.log(`config/${path}: ${(text.length / 1024).toFixed(0)} KiB`);
+    await root.kv.put(key, text);
+    console.log(`kv ${key}: ${(text.length / 1024).toFixed(0)} KiB`);
   }
   // The raw event, not `provide`: a provided rule is a session-scoped handle, undone when this
   // installer's session ends. The event IS the durable rule.
@@ -72,7 +73,7 @@ export async function installVoice(): Promise<{
       target: [
         "itx",
         "workers",
-        ["get", { source: "itx.repos.readFile('config', 'voice-setup.js')", cacheKey: setupKey }],
+        ["get", { source: "itx.kv.get('voice-setup.js')", cacheKey: setupKey }],
       ],
     },
   });
