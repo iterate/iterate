@@ -94,6 +94,7 @@ export const BUILT_IN_ROOTS = [
   "kv",
   "secrets",
   "ai",
+  "browser",
   "cfArtifacts",
   "append",
   "schedules",
