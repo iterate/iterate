@@ -19,7 +19,7 @@ p.add_argument("--label", required=True)
 a = p.parse_args()
 here = Path(__file__).resolve().parent
 m = json.loads((a.directory / "metrics.json").read_text())
-w = next(w for w in m["workflows"] if w["workflow"]["workflow_path"] == "cloudflare-previews.yml")
+w = next(w for w in m["workflows"] if w["workflow"]["workflow_path"] in {"preview.yml", "cloudflare-previews.yml"})
 wf = w["workflow"]
 assert wf.get("finished_at"), "Wait for all jobs, including cleanup"
 t0 = datetime.fromisoformat(wf["started_at"].replace("Z", "+00:00"))
@@ -115,7 +115,7 @@ if readiness:
 
 finish_lines = logs["finish"]
 wait_start = mark(finish_lines, "[ci:status] waiting for all consumers")
-wait_end = next((t for t, line in finish_lines if "[ci:status] cloudflare-previews" in line and
+wait_end = next((t for t, line in finish_lines if f"[ci:status] {wf['workflow_path']}:" in line and
                  all(state not in line for state in [": running", ": queued", ": waiting"])), None)
 add(job_nodes["finish"], "Wait for all test jobs + report uploads", wait_start, wait_end, "readiness", "All-settled barrier: failed consumers do not release cleanup while others are running.")
 upload = mark(finish_lines, "##[group]Run doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry")

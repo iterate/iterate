@@ -1,6 +1,6 @@
-# Called only by cloudflare-previews.yml. Its caller holds the PR lifecycle
+# Called only by preview.yml. Its caller holds the PR lifecycle
 # lock until every job here, including cleanup, has finished.
-name: Sharded preview tests
+name: Preview run
 on:
   workflow_call:
     inputs:

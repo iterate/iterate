@@ -278,7 +278,7 @@ describe("preview workflow scope", () => {
     // it triggers a full-fleet preview. Cleanup is a separate closed-event
     // workflow with no paths filter (it must run for every closed PR that
     // might hold a lease, including full reverts).
-    expect(cloudflarePreviewSharedPaths).toContain(".depot/workflows/cloudflare-previews.yml");
+    expect(cloudflarePreviewSharedPaths).toContain(".depot/workflows/preview.yml");
     // Dependency manifests can change every app's build output; a diff that
     // touches only them must select the full fleet, not "no apps affected"
     // (which strands the fleet's recorded heads behind the PR head).
@@ -410,9 +410,9 @@ describe("preview workflow scope", () => {
     // Only the deploy workflow is path-filtered; cleanup deliberately has no
     // paths list (it must run for every closed PR — see the cleanup-trigger
     // test below), so it is not asserted here.
-    expect(
-      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
-    ).toContain("- apps/dummy-petshop/**");
+    expect(readFileSync(resolve(repoRoot, ".depot/workflows/preview.yml"), "utf8")).toContain(
+      "- apps/dummy-petshop/**",
+    );
   });
 
   test("resolves repository-owned preview origins without duplicating them in Doppler", () => {
@@ -451,12 +451,12 @@ describe("preview workflow scope", () => {
         "dummy-petshop": "PETSHOP_BASE_URL",
       },
     });
-    expect(
-      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
-    ).toContain("- packages/iterate/**");
-    expect(
-      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
-    ).toContain("- specs/**");
+    expect(readFileSync(resolve(repoRoot, ".depot/workflows/preview.yml"), "utf8")).toContain(
+      "- packages/iterate/**",
+    );
+    expect(readFileSync(resolve(repoRoot, ".depot/workflows/preview.yml"), "utf8")).toContain(
+      "- specs/**",
+    );
     expect(
       resolvePreviewTestBaseUrlEnvironment({
         app: os,
@@ -677,10 +677,7 @@ describe("preview workflow scope", () => {
   });
 
   test("rejects pre-RPC branches before the preview orchestrator can deploy Auth", () => {
-    const workflow = readFileSync(
-      resolve(repoRoot, ".depot/workflows/cloudflare-preview-sharded.yml"),
-      "utf8",
-    );
+    const workflow = readFileSync(resolve(repoRoot, ".depot/workflows/preview-run.yml"), "utf8");
     const epoch = readFileSync(resolve(repoRoot, "scripts/preview/deployment-epoch"), "utf8");
 
     expect(epoch.trim()).toBe("os-auth-rpc-v1");
@@ -692,7 +689,7 @@ describe("preview workflow scope", () => {
 
   test("serializes deploy and cleanup per PR without a fleet-wide maintenance gate", () => {
     const deployWorkflowText = readFileSync(
-      resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
+      resolve(repoRoot, ".depot/workflows/preview.yml"),
       "utf8",
     );
     const cleanupWorkflowText = readFileSync(
@@ -761,10 +758,7 @@ describe("preview workflow scope", () => {
 
 describe("preview workflow dispatch", () => {
   test("a manual dispatch redeploys the full fleet", () => {
-    const workflow = readFileSync(
-      resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
-      "utf8",
-    );
+    const workflow = readFileSync(resolve(repoRoot, ".depot/workflows/preview.yml"), "utf8");
 
     expect(workflow).toContain("all-apps: ${{ github.event_name == 'workflow_dispatch' }}");
   });
@@ -929,10 +923,7 @@ describe("preview test commands", () => {
   });
 
   test("normalizes OS preview artifacts before Depot upload", () => {
-    const workflow = readFileSync(
-      resolve(repoRoot, ".depot/workflows/cloudflare-preview-sharded.yml"),
-      "utf8",
-    );
+    const workflow = readFileSync(resolve(repoRoot, ".depot/workflows/preview-run.yml"), "utf8");
 
     expect(workflow).toContain("scripts/preview/collect-test-artifacts.sh test-results");
     expect(workflow).toContain("path: test-results");
@@ -1049,7 +1040,7 @@ describe("preview test commands", () => {
     expect(cloudflarePreviewApps.auth.previewTestRolloutGate).toBeUndefined();
 
     const workflow = parseYaml(
-      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-preview-sharded.yml"), "utf8"),
+      readFileSync(resolve(repoRoot, ".depot/workflows/preview-run.yml"), "utf8"),
     ) as { jobs: { prepare: { "timeout-minutes": number } } };
     // This is a diagnostic backstop, not the expected duration. Individual
     // lanes retain tighter watchdogs and only tests own retries.

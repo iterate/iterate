@@ -154,7 +154,7 @@ export const FlakeDashboardState = z.object({
    * Per suite, the offsets of its newest (up to 3) run-recorded events across
    * ALL branches, oldest first — the reference window for retiring absent
    * tests. All branches because the specs and preview-e2e suites only ever
-   * run on pull requests (cloudflare-previews.yml has no push trigger), so a
+   * run on pull requests (preview.yml has no push trigger), so a
    * default-branch reference point would never exist for them and their rows
    * could never retire. A window of 3 rather than the single latest run so
    * one PR push that deletes or renames a test — or a partial, push-cancelled

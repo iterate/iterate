@@ -1,6 +1,6 @@
 # Preview CI performance
 
-The **Cloudflare Previews** check deploys every affected app to one leased
+The **Preview** check deploys every affected app to one leased
 preview slot and runs its deployed e2e coverage. Its target is **under 3m30s
 end-to-end**. The 20-minute workflow timeout is only a runaway backstop.
 
@@ -168,7 +168,7 @@ For a release-level stability proof, run the thin Depot orchestrator:
 PR_NUMBER=<pr> REF=<branch> RUNS=25 ./scripts/preview/flake-hunt-loop.sh
 ```
 
-It sequentially dispatches the canonical `cloudflare-previews.yml` workflow;
+It sequentially dispatches the canonical `preview.yml` workflow;
 there is no second deploy/test implementation and no nested marathon runner.
 Every counted iteration therefore has its own ordinary Depot runner, artifacts,
 GitHub timing, and PostHog telemetry. The ledger records the immutable head,

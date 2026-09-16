@@ -221,7 +221,7 @@ describe("Depot credential boundaries", () => {
       permissions: { contents: "read", "pull-requests": "write" },
     },
     {
-      file: ".depot/workflows/cloudflare-previews.yml",
+      file: ".depot/workflows/preview.yml",
       permissions: { contents: "read", "pull-requests": "write", statuses: "write" },
     },
     {
@@ -283,7 +283,7 @@ describe("Depot validation capacity", () => {
   });
 
   it("starts preview deploy/e2e from the baked workspace", () => {
-    const workflow = loadWorkflow(".depot/workflows/cloudflare-preview-sharded.yml");
+    const workflow = loadWorkflow(".depot/workflows/preview-run.yml");
     const job = workflow.jobs.prepare;
 
     expect(job["runs-on"]).toEqual({
@@ -385,7 +385,7 @@ describe("Depot validation capacity", () => {
 
   it.each([
     { file: ".depot/workflows/test.yml", jobId: "test" },
-    { file: ".depot/workflows/cloudflare-preview-sharded.yml", jobId: "finish" },
+    { file: ".depot/workflows/preview-run.yml", jobId: "finish" },
   ])("$file always finalizes and retains test telemetry", ({ file, jobId }) => {
     const steps = loadWorkflow(file).jobs[jobId]?.steps ?? [];
     const finalizer = steps.find((step) =>
@@ -430,7 +430,7 @@ describe("Depot validation capacity", () => {
 
   it.each([
     { file: ".depot/workflows/test.yml", jobId: "test" },
-    { file: ".depot/workflows/cloudflare-preview-sharded.yml", jobId: "finish" },
+    { file: ".depot/workflows/preview-run.yml", jobId: "finish" },
   ])("$file sends finalized test telemetry to the canonical PostHog project", ({ file, jobId }) => {
     const finalizer = loadWorkflow(file).jobs[jobId]?.steps?.find((step) =>
       step.run?.includes("scripts/ci/upload-test-telemetry.ts"),

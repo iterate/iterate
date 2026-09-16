@@ -23,7 +23,7 @@ p.add_argument("--label", required=True)
 args = p.parse_args()
 HERE = Path(__file__).resolve().parent
 x = json.loads(args.metrics.read_text())
-w = next(w for w in x["workflows"] if w["workflow"]["workflow_path"] == "cloudflare-previews.yml")
+w = next(w for w in x["workflows"] if w["workflow"]["workflow_path"] in {"preview.yml", "cloudflare-previews.yml"})
 workflow = w["workflow"]
 assert workflow.get("finished_at"), "Wait for cleanup before collecting"
 t0 = datetime.fromisoformat(workflow["started_at"].replace("Z", "+00:00"))

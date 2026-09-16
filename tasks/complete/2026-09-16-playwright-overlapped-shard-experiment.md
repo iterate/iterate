@@ -39,3 +39,5 @@ Run the nine-job experiment: prepare, six identical 16-worker Playwright shards,
 
 - Successful repeat `0cvh1fw749` / `1dd7a8147`: 608.512s total, longest browser reporter 67.835s, OS Vitest 115.571s. All 88 active browser bodies passed with zero retries; one OS Vitest retry. All 17 telemetry artifacts were complete and matched the workflow.
 - User-requested trace hierarchy: each browser job defaults open to four sequential phases. Setup exposes install steps; Run Playwright exposes individual attempts directly. Both overlapping datasets retain measured boundaries and unchanged test timings. No run was interrupted to publish this update.
+
+- [x] Rename the workflow entry point to `preview.yml` and reusable workflow to `preview-run.yml`. *Updated workflow references, preview selection, tests, dispatch docs and trace collectors; kept lock keys shared with cleanup and older branches.*

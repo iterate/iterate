@@ -34,7 +34,7 @@ test("folds CI-reported records into per-test stats", async () => {
 });
 
 test("a renamed test's old row retires once absent from 3 suite runs, not before", async () => {
-  // The specs suite runs on PR branches only (cloudflare-previews.yml has no
+  // The specs suite runs on PR branches only (preview.yml has no
   // push trigger), so expiry must work from PR-branch runs alone — but a
   // 3-run window means no single PR push can hide a row by itself.
   const h = makeHarness();

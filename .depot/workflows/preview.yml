@@ -18,7 +18,7 @@
 # branch-only changes to the `on:` block do not take effect until merged. Test
 # a branch with:
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
-#     --workflow cloudflare-previews.yml --ref <branch> \
+#     --workflow preview.yml --ref <branch> \
 #     --input pull-request-number=<pr>
 #
 # The only Depot secret is DOPPLER_TOKEN. GitHub supplies the job-scoped token;
@@ -28,7 +28,7 @@
 # `cloudflarePreviewAdditionalTriggerPaths` + each app's `paths` in
 # scripts/preview/preview.ts (asserted in scripts/preview/preview.test.ts).
 
-name: Cloudflare Previews (Depot CI)
+name: Preview
 
 permissions:
   contents: read
@@ -42,8 +42,8 @@ on:
       - reopened
       - synchronize
     paths:
-      - .depot/workflows/cloudflare-previews.yml
-      - .depot/workflows/cloudflare-preview-sharded.yml
+      - .depot/workflows/preview.yml
+      - .depot/workflows/preview-run.yml
       - packages/shared/**
       - packages/ui/**
       - pnpm-lock.yaml
@@ -74,6 +74,7 @@ on:
         description: PR number to deploy + test
         required: true
 
+# Keep existing lock keys: older branches and close-PR cleanup share them.
 concurrency:
   group: cloudflare-previews-${{ github.event.pull_request.number || inputs.pull-request-number }}
   cancel-in-progress: true
@@ -86,7 +87,7 @@ jobs:
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}
       cancel-in-progress: false
-    uses: ./.depot/workflows/cloudflare-preview-sharded.yml
+    uses: ./.depot/workflows/preview-run.yml
     with:
       pull-request-number: ${{ format('{0}', github.event.pull_request.number || inputs.pull-request-number) }}
       head-sha: ${{ github.event.pull_request.head.sha || github.sha }}

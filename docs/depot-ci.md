@@ -231,7 +231,7 @@ the file basename, not the full path.
 
 ```bash
 depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
-  --workflow cloudflare-previews.yml \
+  --workflow preview.yml \
   --ref <branch> \
   --input pull-request-number=<pr-number>
 ```

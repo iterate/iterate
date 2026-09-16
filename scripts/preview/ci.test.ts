@@ -43,14 +43,10 @@ test("fixed capacity rejects catalogue growth and an overloaded individual shard
 
 test("the lifecycle owner encloses every fixed shard and cleanup waits for their completion", () => {
   const root = resolve(import.meta.dirname, "../..");
-  const caller = parse(
-    readFileSync(resolve(root, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
-  );
-  const workflow = parse(
-    readFileSync(resolve(root, ".depot/workflows/cloudflare-preview-sharded.yml"), "utf8"),
-  );
+  const caller = parse(readFileSync(resolve(root, ".depot/workflows/preview.yml"), "utf8"));
+  const workflow = parse(readFileSync(resolve(root, ".depot/workflows/preview-run.yml"), "utf8"));
   expect(caller.jobs.preview).toMatchObject({
-    uses: "./.depot/workflows/cloudflare-preview-sharded.yml",
+    uses: "./.depot/workflows/preview-run.yml",
     concurrency: { "cancel-in-progress": false },
   });
   expect(workflow.jobs.playwright).toMatchObject({

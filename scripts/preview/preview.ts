@@ -2511,8 +2511,8 @@ export const cloudflarePreviewSharedPaths = [
   // paths. Keep this in sync with both files' `on.pull_request.paths` lists:
   // a change to the workflow (or the shared preview orchestration) triggers a
   // full-fleet preview.
-  ".depot/workflows/cloudflare-previews.yml",
-  ".depot/workflows/cloudflare-preview-sharded.yml",
+  ".depot/workflows/preview.yml",
+  ".depot/workflows/preview-run.yml",
   ...cloudflareAppSharedPaths,
   "scripts/preview/**",
   "scripts/ci/status.ts",

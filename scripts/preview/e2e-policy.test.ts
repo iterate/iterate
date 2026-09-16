@@ -184,7 +184,7 @@ describe("watchdogs the shell can't import stay in sync", () => {
     // The harness only orchestrates the production preview workflow. It never
     // carries a second deploy/test implementation or a nested Depot runner.
     expect(source.match(/depot ci dispatch/g)).toHaveLength(1);
-    expect(source).toContain("--workflow cloudflare-previews.yml");
+    expect(source).toContain("--workflow preview.yml");
     expect(source).toContain('--input "pull-request-number=$PR_NUMBER"');
     expect(source).toContain('depot ci logs "$attempt_id"');
     expect(source).toContain('depot ci run show "$run_id"');
