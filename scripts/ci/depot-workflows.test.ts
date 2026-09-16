@@ -222,7 +222,12 @@ describe("Depot credential boundaries", () => {
     },
     {
       file: ".depot/workflows/preview.yml",
-      permissions: { contents: "read", "pull-requests": "write", statuses: "write" },
+      permissions: {
+        contents: "read",
+        checks: "read",
+        "pull-requests": "write",
+        statuses: "write",
+      },
     },
     {
       file: ".depot/workflows/deploy-os.yml",
