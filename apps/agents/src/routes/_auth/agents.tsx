@@ -25,10 +25,6 @@ const FileAttachment = z.object({
 /** The events the feed renders; anything else on the path is skipped. */
 const FeedEvent = z.discriminatedUnion("type", [
   z.object({
-    type: z.literal("events.iterate.com/agent/created"),
-    payload: z.object({ systemPrompt: z.string().optional() }),
-  }),
-  z.object({
     type: z.literal("events.iterate.com/agents/context-added"),
     payload: z.object({
       role: z.string(),
@@ -106,7 +102,8 @@ function AgentsPage() {
   async function createAgent(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!data.project) return;
-    const form = new FormData(event.currentTarget);
+    const element = event.currentTarget;
+    const form = new FormData(element);
     const path = `/agents/${String(form.get("name")).trim()}`;
     const systemPrompt = String(form.get("prompt")).trim();
     setError(null);
@@ -118,6 +115,7 @@ function AgentsPage() {
         ["get", path],
         ["create", systemPrompt ? { systemPrompt } : {}],
       ]);
+      element.reset();
       await router.invalidate();
       await navigate({ to: "/agents", search: { project: data.project.id, agent: path } });
     } catch (e) {
@@ -227,13 +225,10 @@ function deriveFeed(events: FeedEvent[]): { rows: Row[]; activity?: string } {
     const wasAfterSettlement = afterSettlement;
     afterSettlement = false;
     switch (event.type) {
-      case "events.iterate.com/agent/created":
-        if (event.payload.systemPrompt)
-          rows.push({ kind: "prompt", offset: event.offset, text: event.payload.systemPrompt });
-        break;
       case "events.iterate.com/agents/context-added": {
         const { role, content } = event.payload;
-        if (role === "user")
+        if (role === "system") rows.push({ kind: "prompt", offset: event.offset, text: content });
+        else if (role === "user")
           rows.push({
             kind: "user",
             offset: event.offset,
@@ -339,7 +334,9 @@ function Conversation({ project, path }: { project: string; path: string }) {
       stub = await api.projects.get(project);
       agent = await stub.cd(path);
       if (disposed) return;
-      setContext(agent);
+      // A capnweb stub is a callable proxy: handed to a state setter directly, React would take it
+      // for an updater and CALL it (an empty method call the server refuses).
+      setContext(() => agent);
       // Subscribe BEFORE the catch-up read, so nothing lands between the two; a push is a batch of
       // committed events, deduped into the map by offset.
       subscription = await agent.subscribe({

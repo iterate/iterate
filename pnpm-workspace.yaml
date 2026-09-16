@@ -112,6 +112,7 @@ overrides:
   '@cloudflare/vite-plugin@1.54.8>wrangler': 4.131.1
   '@iterate-com/notes>wrangler': 4.131.1
   '@iterate-com/voice>wrangler': 4.131.1
+  '@iterate-com/agents>wrangler': 4.131.1
   # apps/kit: the same recipe (BrowserSession + appAuth from os-next at the 2026-09-01 compat date).
   '@iterate-com/kit>wrangler': 4.131.1
   ws: 8.19.0
