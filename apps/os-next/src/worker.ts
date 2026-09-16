@@ -88,7 +88,7 @@ function secretOwnerOf(owner: string): {
     };
   return {
     kind,
-    id: id ?? "",
+    id: id || "",
     root: DurableObjectNameCodec.stringify({
       projectId: GLOBAL_PROJECT_ID,
       path: `/${kind}/${id}`,
