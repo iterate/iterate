@@ -1,7 +1,7 @@
 import { newWebSocketRpcSession } from "capnweb";
 import { redirect } from "@tanstack/react-router";
-import type { IterateRpcTarget } from "../session.ts";
-import { OAuthScopes } from "../oauth-scopes.ts";
+import type { IterateApi } from "./api.ts";
+import { OAuthScopes } from "./oauth-scopes.ts";
 
 /** Create once per TanStack app. Call authenticate in a client-only route's
  * beforeLoad; route loaders and actions share the returned public RPC session. */

@@ -2,16 +2,7 @@
   "name": "os-next",
   "private": true,
   "type": "module",
-  "description": "os-next — the clean-room platform — ONE worker, one package: worker.ts (the stateless capnweb edge + ingress router) + IterateContextDurableObject (iterate-context-durable-object.ts) + control-plane.ts (OAuth AS + D1 directory + /mcp + the console's server half, always in-process) + routes/ (the console: a TanStack Start app) + context/ stream/ sdk/ client/ + lib.ts + library.ts",
-  "exports": {
-    "./types": "./src/types.ts",
-    "./client": "./src/client/live-state.ts",
-    "./app": "./src/client/browser.ts",
-    "./app-server": "./src/client/app-auth.ts",
-    "./app-session": "./src/browser-session.ts",
-    "./dashboard": "./src/client/dashboard.tsx",
-    "./dashboard-data": "./src/client/dashboard-data.ts"
-  },
+  "description": "os-next \u2014 the clean-room platform \u2014 ONE worker, one package: worker.ts (the stateless capnweb edge + ingress router) + IterateContextDurableObject (iterate-context-durable-object.ts) + control-plane.ts (OAuth AS + D1 directory + /mcp + the console's server half, always in-process) + routes/ (the console: a TanStack Start app) + context/ stream/ sdk/ client/ + lib.ts + library.ts",
   "scripts": {
     "dev": "node scripts/dev.ts",
     "build": "vite build",
@@ -35,12 +26,13 @@
     "@tanstack/react-router": "1.168.3",
     "@tanstack/react-start": "1.167.5",
     "capnweb": "npm:@iterate-com/capnweb@^0.12.2",
+    "iterate": "workspace:*",
     "json5": "^2.2.3",
+    "oauth4webapi": "^3.8.5",
     "pako": "^3.0.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "zod": "^4.1.5",
-    "oauth4webapi": "^3.8.5"
+    "zod": "^4.1.5"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.54.8",

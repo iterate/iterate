@@ -15,8 +15,8 @@ import {
   ReduceCheckpointTable,
   type StreamEvent,
 } from "../stream/processor.ts";
-import type { ItxEntrypoint } from "../iterate-context.ts";
-import { parse } from "../context/expression.ts";
+
+import { parse } from "../expression.ts";
 import { auth } from "./auth.ts";
 
 export {

@@ -7,7 +7,7 @@
 //   invoke handle — `InvokeHandle` + the prototype hop: the DOTTED DOOR, every unknown chain one `invoke(expression)`
 import JSON5 from "json5";
 import { RpcTarget } from "capnweb";
-import { codedError, jsonEqual } from "../lib.ts";
+import { codedError, jsonEqual } from "./lib.ts";
 
 /** A STRING expression is for what a person types: short. Anything bigger — a worker's source, a large
  *  literal — rides the PARSED form (`["itx","workers",["get",{ source }]]`), which is plain data and never

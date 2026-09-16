@@ -5,7 +5,7 @@ import { z } from "zod";
 import { authorizationCodeRequest } from "./client/oauth.ts";
 import { OAuthScopes } from "./oauth-scopes.ts";
 import { isLocalOrigin } from "./lib.ts";
-import type { IterateRpcTarget } from "./session.ts";
+import type { IterateApi } from "./api.ts";
 
 const TokenResponse = z.object({
   token_type: z

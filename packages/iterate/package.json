@@ -51,7 +51,21 @@
     "./sdk/capnweb/react": "./src/sdk/capnweb/react.tsx",
     "./sdk/itx/react": "./src/sdk/itx/react.ts",
     "./worker": "./src/worker.ts",
-    "./document-review": "./src/document-review/index.ts"
+    "./document-review": "./src/document-review/index.ts",
+    "./next/sdk": "./src/next/sdk/index.ts",
+    "./next/app": "./src/next/app.ts",
+    "./next/app-server": "./src/next/app-server.ts",
+    "./next/app-session": "./src/next/app-session.ts",
+    "./next/client": "./src/next/client/live-state.ts",
+    "./next/react": "./src/next/client/react.tsx",
+    "./next/dashboard": "./src/next/client/dashboard.tsx",
+    "./next/dashboard-data": "./src/next/client/dashboard-data.ts",
+    "./next/api": "./src/next/api.ts",
+    "./next/lib": "./src/next/lib.ts",
+    "./next/expression": "./src/next/expression.ts",
+    "./next/principal": "./src/next/principal.ts",
+    "./next/stream/processor": "./src/next/stream/processor.ts",
+    "./next/oauth-scopes": "./src/next/oauth-scopes.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -190,6 +204,62 @@
         "types": "./dist/document-review/index.d.ts",
         "import": "./dist/document-review.mjs",
         "default": "./dist/document-review.mjs"
+      },
+      "./next/sdk": {
+        "types": "./dist/next/sdk.d.ts",
+        "import": "./dist/next/sdk.mjs"
+      },
+      "./next/app": {
+        "types": "./dist/next/app.d.ts",
+        "import": "./dist/next/app.mjs"
+      },
+      "./next/app-server": {
+        "types": "./dist/next/app-server.d.ts",
+        "import": "./dist/next/app-server.mjs"
+      },
+      "./next/app-session": {
+        "types": "./dist/next/app-session.d.ts",
+        "import": "./dist/next/app-session.mjs"
+      },
+      "./next/client": {
+        "types": "./dist/next/client.d.ts",
+        "import": "./dist/next/client.mjs"
+      },
+      "./next/react": {
+        "types": "./dist/next/react.d.ts",
+        "import": "./dist/next/react.mjs"
+      },
+      "./next/dashboard": {
+        "types": "./dist/next/dashboard.d.ts",
+        "import": "./dist/next/dashboard.mjs"
+      },
+      "./next/dashboard-data": {
+        "types": "./dist/next/dashboard-data.d.ts",
+        "import": "./dist/next/dashboard-data.mjs"
+      },
+      "./next/api": {
+        "types": "./dist/next/api.d.ts",
+        "import": "./dist/next/api.mjs"
+      },
+      "./next/lib": {
+        "types": "./dist/next/lib.d.ts",
+        "import": "./dist/next/lib.mjs"
+      },
+      "./next/expression": {
+        "types": "./dist/next/expression.d.ts",
+        "import": "./dist/next/expression.mjs"
+      },
+      "./next/principal": {
+        "types": "./dist/next/principal.d.ts",
+        "import": "./dist/next/principal.mjs"
+      },
+      "./next/stream/processor": {
+        "types": "./dist/next/stream/processor.d.ts",
+        "import": "./dist/next/stream/processor.mjs"
+      },
+      "./next/oauth-scopes": {
+        "types": "./dist/next/oauth-scopes.d.ts",
+        "import": "./dist/next/oauth-scopes.mjs"
       }
     }
   },
@@ -212,6 +282,10 @@
     "@orpc/client": "1.13.14",
     "@orpc/server": "1.13.14",
     "@tanstack/react-query": "^5.101.2",
+    "@tanstack/react-router": "1.168.3",
+    "capnweb": "npm:@iterate-com/capnweb@0.12.2",
+    "json5": "^2.2.3",
+    "oauth4webapi": "^3.8.5",
     "react": "^19.2.7",
     "sqlfu": "0.1.1",
     "trpc-cli": "0.15.1",

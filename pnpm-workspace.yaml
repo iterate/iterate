@@ -91,6 +91,8 @@ overrides:
   # rest of the graph) runs ahead on 0.12.0: arg-disposal-on-broken, exact binary serialization,
   # the batch-latency fix. The monorepo-wide pin above stays 0.10.0 until each consumer is verified.
   'os-next>capnweb': npm:@iterate-com/capnweb@0.12.2
+  # packages/iterate's `next/*` entries are os-next's SDK, moved: they speak the same 0.12 wire as os-next.
+  'iterate>capnweb': npm:@iterate-com/capnweb@0.12.2
   # dummy-petshop's /capnweb door is the pet shop the clean-room's `itx.connectToCapnweb` connector is
   # proved against, so its server speaks the same 0.12 wire as that client.
   '@iterate-com/dummy-petshop>capnweb': npm:@iterate-com/capnweb@0.12.2
@@ -111,7 +113,8 @@ overrides:
   'os-next>wrangler': 4.131.1
   '@cloudflare/vite-plugin@1.54.8>wrangler': 4.131.1
   '@iterate-com/notes>wrangler': 4.131.1
-  # apps/kit: the same recipe (BrowserSession + appAuth from os-next at the 2026-09-01 compat date).
+  # apps/kit: the same recipe (BrowserSession + appAuth from the `iterate` package's next/app-session
+  # and next/app-server entries, at the 2026-09-01 compat date).
   '@iterate-com/kit>wrangler': 4.131.1
   ws: 8.19.0
 
