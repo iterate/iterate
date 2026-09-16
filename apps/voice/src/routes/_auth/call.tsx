@@ -43,8 +43,9 @@ function CallPage() {
     setBusy(true);
     setError(undefined);
     setFacts([]);
+    let opened: AudioSession | undefined; // the session THIS press opened, not the render's state
     try {
-      const opened = await openAudio(); // inside the click: the browser wants a gesture
+      opened = await openAudio(); // inside the click: the browser wants a gesture
       setAudio(opened);
       const started = await startCall({
         api,
@@ -55,7 +56,7 @@ function CallPage() {
       setCall(started);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
-      await audio?.close();
+      await opened?.close();
       setAudio(undefined);
     } finally {
       setBusy(false);

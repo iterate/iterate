@@ -71,6 +71,6 @@ jobs:
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Notify Slack
         env:
-          APP_DISPLAY_NAME: Notes
+          APP_DISPLAY_NAME: Voice
           PUBLIC_URL: ${{ needs.deploy.outputs.public_url }}
         run: pnpm tsx scripts/ci/notify.ts deploy-${{ needs.deploy.result }}
