@@ -103,7 +103,10 @@ function makeTanstackTodoWorkspace(): WorkspaceConfig {
 
 function makeKitWorkspace(): WorkspaceConfig {
   return {
-    entry: ["vite.config.ts", "vitest.config.ts", "scripts/**/*.ts"],
+    // The worker entry is declared here, not read from wrangler.jsonc: that file is generated
+    // (gitignored, `pnpm gen:wrangler` inside kit's typecheck) and CI runs knip in parallel with
+    // typecheck — knip before the write saw no entry and reported src/worker.ts unused.
+    entry: ["vite.config.ts", "vitest.config.ts", "src/worker.ts!", "scripts/**/*.ts"],
     project: ["scripts/**/*.ts", "src/**/*.{ts,tsx}!", "!dist/**!"],
     vite: false,
     // TanStack Start resolves this factory by convention, while Wrangler and
