@@ -117,12 +117,16 @@ armed and every deadline the pass found (each source's, with the claiming delive
 when it releases the idle context, `alarm-pass` with what it armed next or `alarm-abandoned` with
 what it threw — plus the durable head, the last activity and last external request, and what is
 pinned. Only a pass traces: a reconcile outside one consumes no offset. `waitForEvent({ type })`
-sees a trace live; the stream's recent-ephemerals ring, `itx.facets.get('core').recentEphemerals()`,
-holds the current incarnation's last 1 MiB of ephemerals of every kind (live-state deltas, rpc-stub
-presence, traces) after the fact. A trace is never subscription input and never activity, so
-observing a context cannot keep it awake. The durable `stream/woken { incarnation, by, alarmAt? }`
-says what woke each incarnation: the native alarm stored as it started, and `by: "alarm"` when that
-alarm was due (workerd runs the constructor before the alarm handler), else `by: "request"`.
+sees a trace live; `itx.readEvents(afterOffset, limit, { includeEphemeral: true })` reads it back
+afterwards, merged in offset order with the durable rows — the stream keeps the current
+incarnation's ephemerals of every kind (live-state deltas, rpc-stub presence, traces) in a ring of
+`APP_CONFIG_RECENT_EPHEMERALS_BUDGET_CHARS` serialized characters, 1 MiB by default. The page's
+proof stays the log's: `scannedThroughOffset` never names an ephemeral, and an ephemeral past the
+durable mark comes back on every at-head read until a durable takes the head or the ring evicts it.
+A trace is never subscription input and never activity, so observing a context cannot keep it
+awake. The durable `stream/woken { incarnation, reason, alarmAt? }` says what woke each incarnation:
+the native alarm stored as it started, and `reason: "alarm"` when that alarm was due (workerd runs
+the constructor before the alarm handler), else `reason: "request"`.
 
 ## Bounds
 

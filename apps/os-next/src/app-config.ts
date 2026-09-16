@@ -59,6 +59,13 @@ export const AppConfig = z.object({
    *  Artifacts binding exists (the workers lane). */
   artifactsAccountId: z.string().trim().default(""),
   artifactsNamespace: z.string().trim().default(""),
+  /** How much of its ephemerals a context incarnation keeps for `readEvents(…, { includeEphemeral })`,
+   *  serialized JS chars (stream/stream.ts, the recent-ephemerals ring). */
+  recentEphemeralsBudgetChars: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(1024 * 1024),
   googleClientId: z.string().trim().default(""),
   /** The Google OAuth client secret — a secret, blank where Google login is off. */
   googleClientSecret: redacted(z.string().trim().default("")),

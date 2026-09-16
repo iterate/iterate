@@ -16,6 +16,9 @@
 // page's `scannedThroughOffset` is the mark, not the in-memory head — so nothing a reader persists
 // (a facet's checkpoint, a subscription cursor) can name an offset a later incarnation could hand
 // to a durable. Pushes still carry the full head in their ranges; only the log's own proof is capped.
+// THE RECENT-EPHEMERALS RING is the one place an ephemeral outlives its append: an incarnation keeps
+// its last RECENT_EPHEMERALS_BUDGET_CHARS of them, and `read(…, { includeEphemeral: true })` merges
+// them into a page — under the same proof, which never names one.
 
 import { codedError, errorCode, reportIssue } from "../lib.ts";
 import type { ItxExpressionInput } from "../context/expression.ts";
@@ -55,10 +58,10 @@ const READ_PAGE_BUDGET_BYTES = 8 * 1024 * 1024;
 /** The most rows one page returns whatever `limit` asks — the object overhead of tiny events, which
  *  the byte budget cannot see. */
 const READ_PAGE_MAX_EVENTS = 1000;
-/** THE RECENT-EPHEMERALS RING, in serialized JS chars: what an incarnation keeps of its ephemerals
- *  after the moment they were appended (`recentEphemerals()` — the one way to see one after the
- *  fact, since no ephemeral ever reaches a row). Oldest out first; an event over the whole budget is
- *  not kept. Per incarnation, like every ephemeral offset. */
+/** THE RECENT-EPHEMERALS RING's default size, in serialized JS chars (`StreamDeps` overrides it):
+ *  what an incarnation keeps of its ephemerals after the moment they were appended — the one way to
+ *  see one after the fact, since no ephemeral ever reaches a row. Oldest out first; an event over the
+ *  whole budget is not kept. Per incarnation, like every ephemeral offset. */
 const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
 
 /** THE ALARM TRACE — the DO's ephemeral record of one alarm decision (iterate-context-durable-object.ts
@@ -93,6 +96,8 @@ interface StreamDeps {
   /** The post-commit fan-out, once per offset-advancing commit with the newly committed events in
    *  offset order, ephemerals included (the waitForEvent waiters settle before it). */
   onCommit: (freshEvents: StreamEvent[], afterOffset: number, throughOffset: number) => void;
+  /** The recent-ephemerals ring's size, serialized JS chars (RECENT_EPHEMERALS_BUDGET_CHARS). */
+  recentEphemeralsBudgetChars?: number;
 }
 
 /** THE STREAM — the commit point: SQLite rows + ONE durable mark, idempotency at the door, one
@@ -114,9 +119,10 @@ export class Stream {
   #highestDurableOffset: number;
   /** FIFO; resolved from `freshEvents` in append's step 5. */
   readonly #waitForEventWaiters: WaitForEventWaiter[] = [];
-  /** This incarnation's newest ephemerals, oldest first, within RECENT_EPHEMERALS_BUDGET_CHARS. */
+  /** This incarnation's newest ephemerals, oldest first, within the budget. */
   readonly #recentEphemerals: { event: StreamEvent; chars: number }[] = [];
   #recentEphemeralsChars = 0;
+  readonly #recentEphemeralsBudgetChars: number;
   // ── THE CORE REDUCE's state: rehydrated by the constructor from the versioned checkpoint and caught
   // up to the durable mark, reduced inside every durable commit and checkpointed with it (the cursor
   // every batch, the state on change). Durable events only, so it rebuilds bit-identically. ──
@@ -130,6 +136,8 @@ export class Stream {
     this.#path = deps.path;
     this.#projectId = deps.projectId;
     this.#onCommit = deps.onCommit;
+    this.#recentEphemeralsBudgetChars =
+      deps.recentEphemeralsBudgetChars ?? RECENT_EPHEMERALS_BUDGET_CHARS;
     // THE DURABLE HEAD is the core checkpoint's offset — written every durable commit anyway (the
     // reduce inside the transaction below), so there is no separate mark to write. Read WHATEVER
     // version wrote it: a core-version bump still recovers the head and re-reduces the log up to it.
@@ -196,10 +204,10 @@ export class Stream {
   /** THE WAKE RECORD — the DO constructor calls this before any door opens, so a probe on a
    *  never-seen context materializes it (what is worth reaching is worth recording). The first
    *  incarnation appends `stream/created { projectId, path }` at offset 1, every incarnation
-   *  `stream/woken { incarnation, by, alarmAt? }` — WHY it woke: `alarmAt` is the native alarm
+   *  `stream/woken { incarnation, reason, alarmAt? }` — WHY it woke: `alarmAt` is the native alarm
    *  stored as this incarnation started (workerd runs the constructor before the alarm handler),
-   *  and an alarm at or before now is the one being delivered, so the wake is `by: "alarm"`; any
-   *  other wake is `by: "request"` (an RPC, a fetch, a message on a hibernated socket). Both events
+   *  and an alarm at or before now is the one being delivered, so the reason is `"alarm"`; any
+   *  other wake is `"request"` (an RPC, a fetch, a message on a hibernated socket). Both events
    *  are exempt from pause: a paused stream still records its wake. */
   appendCreatedAndWokenEvents(alarmAt: number | null = null): void {
     const born = this.#highestDurableOffset === 0;
@@ -216,7 +224,7 @@ export class Stream {
         type: "events.iterate.com/stream/woken",
         payload: {
           incarnation: this.storage.incarnation,
-          by: alarmAt !== null && alarmAt <= Date.now() ? "alarm" : "request",
+          reason: alarmAt !== null && alarmAt <= Date.now() ? "alarm" : "request",
           // oxlint-disable-next-line iterate/simple-truthiness-check -- a durable record: an absent alarm stays ABSENT, never `alarmAt: null`
           ...(alarmAt !== null && { alarmAt }),
         },
@@ -224,18 +232,11 @@ export class Stream {
     );
   }
 
-  /** This incarnation's newest ephemerals, oldest first — the last RECENT_EPHEMERALS_BUDGET_CHARS
-   *  of them: a live-state delta, an rpc-stub presence change, an alarm trace, a userspace ephemeral,
-   *  each seen after the moment it was appended. `itx.facets.get('core').recentEphemerals()`. */
-  recentEphemerals(): StreamEvent[] {
-    return this.#recentEphemerals.map(({ event }) => event);
-  }
-
   #rememberEphemeral(event: StreamEvent, chars: number): void {
-    if (chars > RECENT_EPHEMERALS_BUDGET_CHARS) return;
+    if (chars > this.#recentEphemeralsBudgetChars) return;
     this.#recentEphemerals.push({ event, chars });
     this.#recentEphemeralsChars += chars;
-    while (this.#recentEphemeralsChars > RECENT_EPHEMERALS_BUDGET_CHARS) {
+    while (this.#recentEphemeralsChars > this.#recentEphemeralsBudgetChars) {
       const oldest = this.#recentEphemerals.shift();
       if (!oldest) break;
       this.#recentEphemeralsChars -= oldest.chars;
@@ -476,12 +477,18 @@ export class Stream {
     );
   }
 
-  /** One page after `afterOffset`: at most `limit` rows AND at most READ_PAGE_BUDGET_BYTES of
-   *  bodies — the SERVER decides the page, `limit` only shrinks it. SYNCHRONOUS: the stream's own
-   *  single-turn scans call it inline, and cross-hop callers get a promise from Workers RPC
-   *  regardless. The budget bounds ONE read; many large reads at once are an accepted
-   *  client-behaviour limit (e2e/isolate-ceilings-deployed, CONCURRENT READERS, says why). */
-  read(afterOffset = 0, limit = 500): StreamPage {
+  /** One page after `afterOffset`: at most `limit` DURABLE rows AND at most READ_PAGE_BUDGET_BYTES
+   *  of bodies — the SERVER decides the page, `limit` only shrinks it. With `includeEphemeral`, the
+   *  ephemerals this incarnation still holds (the ring) ride the page too, in offset order: the ones
+   *  inside the page's proven span, and — on the page that reaches the head — the head's tail beyond
+   *  the durable mark. They count against no limit (the ring bounds them), and THE PROOF IS THE
+   *  LOG'S: `scannedThroughOffset` never names an ephemeral, so a head ephemeral comes back on every
+   *  at-head read until a durable takes the head or the ring evicts it — persist
+   *  `scannedThroughOffset`, never an event's offset. SYNCHRONOUS: the stream's own single-turn
+   *  scans call it inline, and cross-hop callers get a promise from Workers RPC regardless. The
+   *  budget bounds ONE read; many large reads at once are an accepted client-behaviour limit
+   *  (e2e/isolate-ceilings-deployed, CONCURRENT READERS, says why). */
+  read(afterOffset = 0, limit = 500, options: { includeEphemeral?: boolean } = {}): StreamPage {
     limit = Math.min(Math.max(1, limit), READ_PAGE_MAX_EVENTS); // limit 0 crashed the cut check (userspace-reachable)
     const { rows, nextRowDidNotFit } = this.storage.readEventPage(
       afterOffset,
@@ -511,7 +518,14 @@ export class Stream {
     const lastOffset = events.length ? events[events.length - 1].offset : afterOffset;
     const atHead =
       !nextRowDidNotFit && (events.length < limit || lastOffset >= highestDurableOffset);
-    return { events, scannedThroughOffset: atHead ? highestDurableOffset : lastOffset, atHead };
+    const scannedThroughOffset = atHead ? highestDurableOffset : lastOffset;
+    if (options.includeEphemeral) {
+      const ceiling = atHead ? Infinity : scannedThroughOffset;
+      for (const { event } of this.#recentEphemerals)
+        if (event.offset > afterOffset && event.offset <= ceiling) events.push(event);
+      events.sort((a, b) => a.offset - b.offset);
+    }
+    return { events, scannedThroughOffset, atHead };
   }
 
   /** Resolve with the next event matching `filter` — or the first COMMITTED durable match already in
@@ -802,7 +816,11 @@ class StreamStorage {
  *  `DurableObjectStub<IterateContextDurableObject>`, an off-platform `RpcTarget` over capnweb. */
 export interface ReachableContext {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-  read(afterOffset?: number, limit?: number): Promise<StreamPage>;
+  read(
+    afterOffset?: number,
+    limit?: number,
+    options?: { includeEphemeral?: boolean },
+  ): Promise<StreamPage>;
   /** THE dispatch door. `caller` (WHO is calling) is what a `cd(path)` hop carries across to a
    *  sibling — the same identity, so a sibling append is attributed too; `args` are the expression's
    *  positional args. Both optional, so a bare `invoke(call)` is an anonymous probe. */

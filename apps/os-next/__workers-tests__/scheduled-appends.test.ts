@@ -180,7 +180,7 @@ test("an interval coalesces an idle gap across eviction and stops on explicit ca
   expect(
     afterFirstTick.filter((event) => event.type === "events.iterate.com/stream/woken").at(-1)
       ?.payload,
-  ).toMatchObject({ by: "alarm", alarmAt: firstAt });
+  ).toMatchObject({ reason: "alarm", alarmAt: firstAt });
   expect(await s.invoke("itx.schedules.get('tick')")).toMatchObject({
     nextAt: new Date(firstAt + 70_000).toISOString(),
   });

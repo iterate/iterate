@@ -297,7 +297,7 @@ test("A BARE PROBE ON A DORMANT CONTEXT LEAVES NO ALARM: the config delivery ack
   expect(await alarmAt(ctx)).toBeNull();
 });
 
-test("AN OBSERVED PASS: an exact waitForEvent observer receives one ephemeral trace, the recent-ephemerals ring holds the whole pass, the durable log is untouched", async () => {
+test("AN OBSERVED PASS: an exact waitForEvent observer receives one ephemeral trace, a read with includeEphemeral holds the whole pass, the durable log is untouched", async () => {
   const ctx = "prj_q_observed";
   const s = stub(ctx);
   await enableCounter(ctx); // a live facet pins the DO: the idle deadline is what arms the alarm
@@ -323,7 +323,11 @@ test("AN OBSERVED PASS: an exact waitForEvent observer receives one ephemeral tr
   } finally {
     vi.useRealTimers();
   }
-  const ring = ((await s.invoke("itx.facets.get('core').recentEphemerals()")) as StreamEvent[])
+  const ring = (
+    (await s.invoke(["itx", ["readEvents", 0, 500, { includeEphemeral: true }]])) as {
+      events: StreamEvent[];
+    }
+  ).events
     .filter((event) => event.type === STREAM_ALARM_TRACE_EVENT)
     .map((event) => event.payload as unknown as AlarmTrace);
   expect(ring.map((t) => t.reason).slice(-3)).toEqual(["alarm-fired", "quiesce", "alarm-pass"]);

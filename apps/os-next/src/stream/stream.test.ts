@@ -11,7 +11,7 @@ import { expect, test } from "vitest";
 import { errorCode } from "../lib.ts";
 import type { StreamEvent, SqlStorageHandle } from "./processor.ts";
 import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
-import { STREAM_ALARM_TRACE_EVENT, Stream, type DurableObjectStorageSlice } from "./stream.ts";
+import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 
 /** THE ONE way a test constructs a Stream: over a fresh node:sqlite store unless given one (a
  *  second incarnation reuses the first's). `batches` records each `fresh` batch the fan-out was fed
@@ -22,6 +22,7 @@ function bareStream(
     storage?: DurableObjectStorageSlice;
     batches?: StreamEvent[][];
     onCommit?: (fresh: StreamEvent[]) => void;
+    recentEphemeralsBudgetChars?: number;
   } = {},
 ): Stream {
   return new Stream({
@@ -32,6 +33,7 @@ function bareStream(
       opts.batches?.push(fresh);
       opts.onCommit?.(fresh);
     },
+    recentEphemeralsBudgetChars: opts.recentEphemeralsBudgetChars,
   });
 }
 /** The fan-out minus core's live-state deltas — the batches a test's OWN appends produced. */
@@ -171,31 +173,69 @@ test("waitForEvent: an EPHEMERAL event resolves a waiting caller (and never hits
   expect(stream.read(0).events.some((e) => e.type === "blip")).toBe(false);
 });
 
-test("the recent-ephemerals ring: ephemerals are kept after the fact, oldest first, within the budget; durables are not (they are in the log)", () => {
+// ── THE RECENT-EPHEMERALS RING: `read(…, { includeEphemeral: true })` consults the ring AND the log ──
+
+test("read() is durable-only by default; with includeEphemeral the ring's ephemerals ride the page in offset order, under the log's own proof", () => {
   const stream = bareStream();
-  stream.append({ type: "seed" });
-  const [blip] = stream.append({ type: "blip", ephemeral: true, payload: { n: 1 } });
-  const [trace] = stream.append({
-    type: STREAM_ALARM_TRACE_EVENT,
-    ephemeral: true,
-    payload: { reason: "unit-test" },
+  stream.append({ type: "d1" }); // 1
+  const [e2] = stream.append({ type: "e2", ephemeral: true }); // 2
+  stream.append({ type: "d3" }); // 3
+  const [e4] = stream.append({ type: "e4", ephemeral: true }); // 4 — the head's tail, past the durable mark
+  const [e5] = stream.append({ type: "e5", ephemeral: true }); // 5
+  expect(stream.read(0).events.map((e) => e.type)).toEqual(["d1", "d3"]);
+  const page = stream.read(0, 500, { includeEphemeral: true });
+  expect(page.events.map((e) => e.type)).toEqual(["d1", "e2", "d3", "e4", "e5"]);
+  expect(page.events[1]).toBe(e2); // the event itself, not a copy
+  // The proof is the log's: the durable mark, never e5's offset.
+  expect({ scannedThroughOffset: page.scannedThroughOffset, atHead: page.atHead }).toEqual({
+    scannedThroughOffset: 3,
+    atHead: true,
   });
-  stream.append({ type: "durable" });
-  const ring = stream.recentEphemerals();
-  // core's own live-state deltas ride the ring too — the seed commit changed nothing, so none here
-  expect(ring.map((e) => [e.type, e.offset])).toEqual([
-    ["blip", blip.offset],
-    [STREAM_ALARM_TRACE_EVENT, trace.offset],
+  // A reader that persisted the proof and reads on sees the head's tail again (it is not provable),
+  // and an ephemeral below the mark exactly once: it falls inside one page's span.
+  expect(stream.read(page.scannedThroughOffset, 500, { includeEphemeral: true }).events).toEqual([
+    e4,
+    e5,
   ]);
-  expect(ring[0]).toBe(blip); // the event itself, not a copy
-  expect(stream.read(0).events.some((e) => e.ephemeral)).toBe(false);
-  // The budget is 1 MiB of serialized chars: a flood of 300 KiB ephemerals keeps the newest three.
+  expect(stream.read(2, 500, { includeEphemeral: true }).events.map((e) => e.type)).toEqual([
+    "d3",
+    "e4",
+    "e5",
+  ]);
+});
+
+test("a CUT page carries only the ephemerals inside its proven span; `limit` counts durable rows alone", () => {
+  const stream = bareStream();
+  stream.append({ type: "d1" });
+  stream.append({ type: "e2", ephemeral: true });
+  stream.append({ type: "d3" });
+  stream.append({ type: "e4", ephemeral: true });
+  stream.append({ type: "d5" });
+  stream.append({ type: "e6", ephemeral: true });
+  const first = stream.read(0, 2, { includeEphemeral: true });
+  expect(first.events.map((e) => e.offset)).toEqual([1, 2, 3]); // two durables, the ephemeral between them
+  expect({ scannedThroughOffset: first.scannedThroughOffset, atHead: first.atHead }).toEqual({
+    scannedThroughOffset: 3,
+    atHead: false,
+  });
+  const second = stream.read(first.scannedThroughOffset, 2, { includeEphemeral: true });
+  expect(second.events.map((e) => e.offset)).toEqual([4, 5, 6]);
+  expect(second.atHead).toBe(true);
+});
+
+test("the ring is byte-bounded and configurable: oldest out first, an event over the whole budget is not kept", () => {
+  const stream = bareStream({ recentEphemeralsBudgetChars: 1000 });
+  stream.append({ type: "seed" });
   for (let i = 0; i < 6; i++)
-    stream.append({ type: "big", ephemeral: true, payload: { i, blob: "x".repeat(300 * 1024) } });
-  expect(stream.recentEphemerals().map((e) => e.payload?.i)).toEqual([3, 4, 5]);
-  // An ephemeral over the whole budget is not kept, and evicts nothing.
-  stream.append({ type: "huge", ephemeral: true, payload: { blob: "x".repeat(1024 * 1024 + 1) } });
-  expect(stream.recentEphemerals().map((e) => e.payload?.i)).toEqual([3, 4, 5]);
+    stream.append({ type: "big", ephemeral: true, payload: { i, blob: "x".repeat(300) } });
+  const kept = () =>
+    stream
+      .read(0, 500, { includeEphemeral: true })
+      .events.filter((e) => e.ephemeral)
+      .map((e) => e.payload?.i);
+  expect(kept()).toEqual([4, 5]); // ~380 chars each: two fit under 1000
+  stream.append({ type: "huge", ephemeral: true, payload: { blob: "x".repeat(2000) } });
+  expect(kept()).toEqual([4, 5]); // not kept, evicted nothing
 });
 
 test("waitForEvent: one event resolves MULTIPLE waiters, in registration order", async () => {
@@ -272,9 +312,9 @@ test('the wake record says WHY: a stored alarm at or before now is the one being
     .events.filter((e) => e.type === "events.iterate.com/stream/woken")
     .map((e) => e.payload);
   expect(wokens).toEqual([
-    { incarnation: 1, by: "alarm", alarmAt: now - 5 },
-    { incarnation: 2, by: "request", alarmAt: now + 60_000 },
-    { incarnation: 3, by: "request" },
+    { incarnation: 1, reason: "alarm", alarmAt: now - 5 },
+    { incarnation: 2, reason: "request", alarmAt: now + 60_000 },
+    { incarnation: 3, reason: "request" },
   ]);
 });
 
@@ -290,7 +330,7 @@ test("appendCreatedAndWokenEvents(): a fresh store gets created@1 + woken@2 in O
     ["events.iterate.com/stream/woken", 2],
   ]);
   expect(page.events[0].payload).toEqual({ projectId: "prj_bare", path: "/" });
-  expect(page.events[1].payload).toEqual({ incarnation: 1, by: "request" }); // no alarm was stored: a request woke it
+  expect(page.events[1].payload).toEqual({ incarnation: 1, reason: "request" }); // no alarm was stored: a request woke it
   expect(first.storage.incarnation).toBe(1);
   // the wake batch, then core's live-state delta (the reduce changed identity + incarnation) at 3
   expect(batches.map((b) => b.map((e) => [e.type, e.offset]))).toEqual([

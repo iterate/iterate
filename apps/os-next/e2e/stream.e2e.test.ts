@@ -579,9 +579,9 @@ export default class Waiter extends WorkerEntrypoint {
   expect(got.offset).toBeGreaterThan(head);
 });
 
-// ── THE WAKE TRACE PROBE (opt-in, deployed): `stream/woken { by, alarmAt }` is the durable
-// incarnation boundary and says what woke it; every alarm decision of the CURRENT incarnation is an
-// ephemeral `events.iterate.com/stream/trace/alarm` in `itx.facets.get('core').recentEphemerals()`.
+// ── THE WAKE TRACE PROBE (opt-in, deployed): `stream/woken { reason, alarmAt }` is the durable
+// incarnation boundary and says what woke it; every alarm pass of the CURRENT incarnation is an
+// ephemeral `events.iterate.com/stream/trace/alarm`, read back with `readEvents(…, { includeEphemeral })`.
 // A stuck cursor delivery is the fastest self-waker (its ladder is 1s·2ⁿ); this prints each wake's
 // story from the ring, landing inside the incarnation each wake made:
 //
@@ -607,7 +607,11 @@ probe(
   async () => {
     const ctx = freshCtx("wake-loop");
     const traces = async (client: ReturnType<typeof openItx>) =>
-      ((await client.invoke("itx.facets.get('core').recentEphemerals()")) as StreamEvent[])
+      (
+        (await client.invoke(["itx", ["readEvents", 0, 500, { includeEphemeral: true }]])) as {
+          events: StreamEvent[];
+        }
+      ).events
         .filter((event) => event.type === "events.iterate.com/stream/trace/alarm")
         .map((event) => event.payload as unknown as AlarmTrace);
     const story = (ring: AlarmTrace[]) =>
@@ -647,7 +651,7 @@ probe(
     const events = await readAll(openItx(ctx));
     const wokens = events.filter((e) => e.type === WOKEN);
     console.log(
-      `wake-loop OBSERVE: woken=${wokens.length} by=${JSON.stringify(wokens.map((e) => (e.payload as { by?: string }).by))}`,
+      `wake-loop OBSERVE: woken=${wokens.length} reasons=${JSON.stringify(wokens.map((e) => (e.payload as { reason?: string }).reason))}`,
     );
     // The context is never poisoned by the loop; the durable log survives.
     const [ev] = await append(openItx(ctx), { type: "after-observe" });

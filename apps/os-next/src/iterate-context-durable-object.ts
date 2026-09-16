@@ -296,6 +296,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     storage: this.ctx.storage,
     path: this.#durableObjectAddress.path,
     projectId: this.#durableObjectAddress.projectId,
+    recentEphemeralsBudgetChars: this.#appConfig.recentEphemeralsBudgetChars,
     onCommit: (freshEvents, afterOffset, throughOffset) => {
       // An alarm trace answers waitForEvent, never a subscription (AlarmTrace says why).
       const events = freshEvents.filter((event) => event.type !== STREAM_ALARM_TRACE_EVENT);
@@ -388,10 +389,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** One BUDGETED page of the log (Stream.read). */
-  async read(afterOffset = 0, limit = 500): Promise<StreamPage> {
+  /** One BUDGETED page of the log (Stream.read), the ring's ephemerals merged in on request. */
+  async read(
+    afterOffset = 0,
+    limit = 500,
+    options: { includeEphemeral?: boolean } = {},
+  ): Promise<StreamPage> {
     this.#lastExternalRequestMs = Date.now();
-    return this.#stream.read(afterOffset, limit); // sync on the Stream, async at this cross-hop door
+    return this.#stream.read(afterOffset, limit, options); // sync on the Stream, async at this cross-hop door
   }
 
   /** THE EFFECTIVE rule table, read: the context's own rows (masks as `target: null`, a template's
@@ -432,7 +437,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  delivery) keeps caller attribution and committed effects but is not an external request. */
   readonly #localContext: ReachableContext = {
     append: async (...events) => this.#appendAndRunCommittedEffects(events),
-    read: async (afterOffset, limit) => this.#stream.read(afterOffset, limit),
+    read: async (afterOffset, limit, options) => this.#stream.read(afterOffset, limit, options),
     invoke: (call, args, caller) => this.#invokeLocal(call, args, caller),
   };
 
@@ -798,7 +803,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             value: {
               snapshot: () => this.#stream.coreReducedStateSnapshot(),
               liveSnapshot: () => this.#stream.coreLiveStateSnapshot(),
-              recentEphemerals: () => this.#stream.recentEphemerals(),
             },
             receiver: undefined,
           },

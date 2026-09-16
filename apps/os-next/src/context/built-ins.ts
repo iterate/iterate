@@ -152,8 +152,13 @@ export interface BuiltInScope extends LibraryRoots {
     get(key: ScheduleKey): ScheduledAppend | null;
   };
   /** Read a page of the durable log — `itx.readEvents(afterOffset?, limit?)`, the twin of `append`
-   *  (non-minting: a probe never wakes storage). */
-  readEvents(afterOffset?: number, limit?: number): Promise<StreamPage>;
+   *  (non-minting: a probe never wakes storage). `{ includeEphemeral: true }` merges in the
+   *  ephemerals this incarnation still holds (stream.ts, the recent-ephemerals ring). */
+  readEvents(
+    afterOffset?: number,
+    limit?: number,
+    options?: { includeEphemeral?: boolean },
+  ): Promise<StreamPage>;
   /** Wait for the next event matching `filter` (Stream.waitForEvent owns the contract: type filter,
    *  afterOffset default = the head, 30s/120s timeout → WAIT_TIMEOUT). A root, so the edge declares
    *  nothing for it. */
@@ -448,7 +453,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         });
       },
     },
-    readEvents: (afterOffset?: number, limit?: number) => ownContext().read(afterOffset, limit),
+    readEvents: (afterOffset?: number, limit?: number, options?: { includeEphemeral?: boolean }) =>
+      ownContext().read(afterOffset, limit, options),
     waitForEvent: deps.waitForEvent,
     // WHO crosses with the call: a sibling context runs it under the caller's principal (a Workers-RPC
     // hop, where the ambient store does not reach), so an event appended there is attributed too.
