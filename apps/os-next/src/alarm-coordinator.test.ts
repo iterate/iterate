@@ -1,5 +1,7 @@
-// alarm-coordinator.test.ts — the two holds and the dedupe, as a table over a recorded storage:
-// every `setAlarm` / `deleteAlarm` the coordinator issues lands in `writes`, in order.
+// alarm-coordinator.test.ts — the pass hold and the dedupe, as a table over a recorded storage:
+// every `setAlarm` / `deleteAlarm` the coordinator issues lands in `writes`, in order. The alarm is
+// a pure function of the deadlines: a restored alarm is only the dedupe seed, never a hold — every
+// reason to wake is derived again at construction, so a different derived time simply supersedes it.
 
 import { expect, test } from "vitest";
 import { AlarmCoordinator } from "./alarm-coordinator.ts";
@@ -41,30 +43,20 @@ test("no deadline deletes the alarm once; nothing armed, nothing deleted", () =>
   expect(writes).toEqual([T, "delete"]);
 });
 
-test("an inherited alarm already due is neither re-set nor deleted until a pass completes", async () => {
+test("a restored alarm is only the dedupe seed: the same derived time is not re-written, a later one supersedes it, nothing wanted deletes it", () => {
   const { alarms, writes, deadlines } = setup([T + 20_000]);
-  alarms.restore(T - 5_000);
+  alarms.restore(T + 20_000);
   alarms.reconcile();
+  expect(writes).toEqual([]);
+  // Nothing durable is due before T + 30 s: the stored T + 20 s was a reason that no longer exists
+  // (an idle deadline of a dead incarnation, say), and superseding it is right.
+  deadlines.splice(0, deadlines.length, T + 30_000);
+  alarms.reconcile();
+  expect(writes).toEqual([T + 30_000]);
   deadlines.length = 0;
   alarms.reconcile();
-  expect(writes).toEqual([]);
-  await alarms.pass(async () => {});
-  // The completed pass spent it (the runtime deletes it): nothing wanted, nothing written.
-  expect(writes).toEqual([]);
-  expect(alarms.snapshot()).toEqual({ armedAt: null, inheritedAt: null, passInProgress: false });
-  deadlines.push(T);
-  alarms.reconcile();
-  expect(writes).toEqual([T]);
-});
-
-test("a future inherited alarm is kept over a later deadline and yields to an earlier one", () => {
-  const { alarms, writes, deadlines } = setup([T + 10_000]);
-  alarms.restore(T);
-  alarms.reconcile();
-  expect(writes).toEqual([]);
-  deadlines.splice(0, deadlines.length, T - 10_000);
-  alarms.reconcile();
-  expect(writes).toEqual([T - 10_000]);
+  expect(writes).toEqual([T + 30_000, "delete"]);
+  expect(alarms.snapshot()).toEqual({ armedAt: null, passInProgress: false });
 });
 
 test("nothing is written during a pass; the pass's own time can be armed again afterwards", async () => {
@@ -82,15 +74,12 @@ test("nothing is written during a pass; the pass's own time can be armed again a
   expect(writes).toEqual([T, T]);
 });
 
-test("a pass that throws keeps the inherited hold and forgets the armed time", async () => {
+test("a pass that throws writes nothing (the runtime retries it) and forgets the armed time; the next reconcile derives afresh", async () => {
   const { alarms, writes } = setup([T + 50_000]);
   alarms.restore(T);
-  alarms.reconcile();
   await expect(alarms.pass(async () => Promise.reject(new Error("boom")))).rejects.toThrow("boom");
   expect(writes).toEqual([]);
-  expect(alarms.snapshot()).toEqual({ armedAt: null, inheritedAt: T, passInProgress: false });
-  alarms.reconcile(); // the hold still wins, and the forgotten time is armed again (a no-op write in storage)
-  expect(writes).toEqual([T]);
-  await alarms.pass(async () => {});
-  expect(writes).toEqual([T, T + 50_000]);
+  expect(alarms.snapshot()).toEqual({ armedAt: null, passInProgress: false });
+  alarms.reconcile();
+  expect(writes).toEqual([T + 50_000]);
 });
