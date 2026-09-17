@@ -94,10 +94,17 @@ test("a socket opened BARE authenticates in-band — the token in the authentica
   expect(whoami).toEqual(principal);
   expect(projects.map((row) => row.id)).toContain(project);
   expect((await api.projects.get(project).whoami()).projectId).toBe(project);
-  // one transport, one grant
+  // one transport, one grant — a later token, and a token racing the first, are both refused
   await expect(bare.authenticate({ type: "bearer", token })).rejects.toThrow(
     /already carries a session/,
   );
+  const racing = new UndiciWebSocket(url);
+  using bareRacing = newWebSocketRpcSession<IterateRpcTarget>(racing as unknown as WebSocket);
+  const outcomes = await Promise.allSettled([
+    bareRacing.authenticate({ type: "bearer", token }).whoami(),
+    bareRacing.authenticate({ type: "bearer", token }).whoami(),
+  ]);
+  expect(outcomes.map((outcome) => outcome.status).sort()).toEqual(["fulfilled", "rejected"]);
   // THE BROWSER'S ACTUAL SHAPE: the page that just did the OAuth dance also carries the platform's
   // own login cookie, from another origin. The cookie lends it nothing (CSRF — iterate/next/app-server
   // used to answer 403 here); the socket opens bare and the token still works in-band.

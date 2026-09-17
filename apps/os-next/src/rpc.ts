@@ -43,6 +43,7 @@ export async function rpcResponse(
   // one an in-band `authenticate` binds — once; a second token on the same socket is refused, a
   // refreshed token is a new socket (the guard below closes this one at the grant's expiry).
   let bound: Authorization | null = auth;
+  let binding = false; // an `authenticate` in flight: a second one on the same socket is refused at once
   let bindSocket: ((authorization: Authorization) => void) | undefined;
   const input: SessionInput = {
     contextNamespace: env.ITERATE_CONTEXT,
@@ -51,13 +52,19 @@ export async function rpcResponse(
     appConfig: appConfigOf(env),
     onProjectAccess: (projectId) => projects.add(projectId),
     resolveBearer: async (token) => {
-      if (bound) throw new Error("This transport already carries a session");
-      const authorization = await authorizationForToken(env, ctx, token);
-      if (!authorization) return null;
-      if (authorization.grant) ctx.waitUntil(recordGrantUse(env, authorization.grant));
-      bound = authorization;
-      bindSocket?.(authorization);
-      return authorityOf(authorization);
+      // Claimed BEFORE the gate is awaited: two tokens racing on one socket cannot both bind.
+      if (bound || binding) throw new Error("This transport already carries a session");
+      binding = true;
+      try {
+        const authorization = await authorizationForToken(env, ctx, token);
+        if (!authorization) return null;
+        if (authorization.grant) ctx.waitUntil(recordGrantUse(env, authorization.grant));
+        bound = authorization;
+        bindSocket?.(authorization);
+        return authorityOf(authorization);
+      } finally {
+        binding = false;
+      }
     },
   };
   const root = new IterateRpcTarget(input, teardown, auth && authorityOf(auth));
