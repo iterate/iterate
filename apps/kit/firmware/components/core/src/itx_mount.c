@@ -251,7 +251,6 @@ static void authenticated(
 static void project_completed(
     void *context, const struct capnweb_result *result) {
   struct iterate_kit_itx_mount *mount = context;
-  enum capnweb_status status;
   if (mount->state == ITERATE_KIT_ITX_MOUNT_CLOSED) {
     return;
   }
@@ -284,19 +283,13 @@ static void project_completed(
   }
   mount->has_project_capability = true;
   /*
-   * Shed the session import now that the project handle exists. Keeping both
-   * until READY would raise bounded import requirements and complicate
-   * cleanup without adding capability.
+   * THE SESSION IMPORT IS KEPT. It used to be shed here to keep the import
+   * table small, but it is what the liveness probe asks: the session's
+   * `whoami()` is answered at the edge from the admission gate, whereas the
+   * project root's is a call into the project's Durable Object — one that woke
+   * it every minute and appended a wake record each time. One more import for
+   * the mount's lifetime, released last in close().
    */
-  status = release_remote(
-      mount,
-      &mount->session_capability,
-      &mount->has_session_capability);
-  if (status != CAPNWEB_OK) {
-    (void)fail(
-        mount, ITERATE_KIT_ITX_MOUNT_FAILURE_RELEASE, status);
-    return;
-  }
   (void)begin_provide(mount);
 }
 
@@ -424,7 +417,7 @@ bool iterate_kit_itx_mount_probe_if_due(
   enum capnweb_status status;
   if (mount == NULL ||
       mount->state != ITERATE_KIT_ITX_MOUNT_READY ||
-      !mount->has_project_capability ||
+      !mount->has_session_capability ||
       mount->probe_pending) {
     return false;
   }
@@ -435,7 +428,7 @@ bool iterate_kit_itx_mount_probe_if_due(
   }
   status = capnweb_session_call_path(
       mount->options.session,
-      mount->project_capability,
+      mount->session_capability,
       whoami_path,
       sizeof(whoami_path) / sizeof(whoami_path[0]),
       no_arguments,

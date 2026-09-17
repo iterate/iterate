@@ -2886,7 +2886,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
      * either will do.
      *
      * An ANSWERED `whoami()` PROBE is the stronger one: the mount asks the
-     * project root once a period (itx_mount.h) and an answer proves the session,
+     * session once a period (itx_mount.h) and an answer proves the session,
      * the socket and the hop in one. A WEBSOCKET PONG is the weaker fallback,
      * and it is what covers the window where the transport is ready but no
      * mount exists yet — the only window on this device that is genuinely quiet.

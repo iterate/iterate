@@ -160,6 +160,91 @@ test("a hung body reports as not-the-pinned-failure at the wrapper's own deadlin
   }
 });
 
+// A failure that proves nothing is retried by the wrapper, because vitest's
+// own `retry` never reaches that outcome (see failing-test.ts).
+function pinWithRetry(bodies: Array<() => Promise<unknown>>) {
+  const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
+  const fake = Object.assign(vi.fn(), {
+    fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
+  });
+  let calls = 0;
+  createFailing(fake, /pinned/, { retries: 1, retryDelayMs: 0 })("name", async () => {
+    calls += 1;
+    return bodies[calls - 1]!();
+  });
+  return { run: () => registered[0]!(), calls: () => calls };
+}
+
+test("a failure that proves nothing re-runs the body once, and the pin holds on the retry", async () => {
+  using records = scopedFlakeRecordDir();
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const pin = pinWithRetry([
+      async () => {
+        throw new Error("internal error; reference = 5vdta3r5q0132pecveeqsvkr");
+      },
+      async () => {
+        throw new Error("pinned: woke 3 times after dispose");
+      },
+    ]);
+    await expect(pin.run()).rejects.toThrow(/pinned/);
+    expect(pin.calls()).toBe(2);
+    // Never silent: one record per attempt.
+    expect(records.records().map((r) => r.outcome)).toEqual(["unexpected-error", "pinned-fail"]);
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringMatching(/proves nothing about the pinned bug; retry 1 of 1/),
+      expect.objectContaining({ message: expect.stringContaining("internal error") }),
+    );
+  } finally {
+    consoleError.mockRestore();
+  }
+});
+
+test("a second failure that proves nothing goes red; a pass or the pinned failure never retries", async () => {
+  using records = scopedFlakeRecordDir();
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const blip = async () => {
+      throw new Error("Network connection lost.");
+    };
+    const twice = pinWithRetry([blip, blip]);
+    await expect(twice.run()).resolves.toBeUndefined(); // success = the native machinery goes red
+    expect(twice.calls()).toBe(2);
+    // No pause past the deadline: with 20ms left of a 100ms budget and a 50ms
+    // pause, the runner's timeout would fire mid-pause and count as the pin
+    // holding — so the first attempt's failure goes red at once instead.
+    const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
+    const fake = Object.assign(vi.fn(), {
+      fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
+    });
+    const late = vi.fn(
+      () => new Promise((_, reject) => setTimeout(() => reject(new Error("blip")), 80)),
+    );
+    createFailing(fake, /pinned/, { timeoutMs: 100, retries: 1, retryDelayMs: 50 })("name", late);
+    await expect(registered[0]!()).resolves.toBeUndefined();
+    expect(late).toHaveBeenCalledTimes(1);
+    const passed = pinWithRetry([async () => undefined]);
+    await expect(passed.run()).resolves.toBeUndefined();
+    expect(passed.calls()).toBe(1);
+    const held = pinWithRetry([
+      async () => {
+        throw new Error("pinned");
+      },
+    ]);
+    await expect(held.run()).rejects.toThrow(/pinned/);
+    expect(held.calls()).toBe(1);
+    expect(records.records().map((r) => r.outcome)).toEqual([
+      "unexpected-error",
+      "unexpected-error",
+      "unexpected-error",
+      "unexpected-pass",
+      "pinned-fail",
+    ]);
+  } finally {
+    consoleError.mockRestore();
+  }
+});
+
 // expectFailure is the standalone assertion for use INSIDE a plain test,
 // where throwing (not inverted success) is the right failure signal.
 
