@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, appendFile } from "node:fs/promises";
 import { z } from "zod";
 import { assembleTrace, Workflow, renderTrace, stepCommands } from "./tracing.ts";
 
@@ -26,7 +26,18 @@ export default class CiTrace {
     await mkdir(directory, { recursive: true });
     await writeFile(`${directory}/trace.json`, JSON.stringify(report, null, 2));
     await writeFile(`${directory}/trace.html`, await renderTrace(report));
-    return { directory };
+    const executionId = z
+      .string()
+      .min(1)
+      .parse(
+        report.resourceSpans[0].scopeSpans[0].spans[0].attributes.find(
+          (attribute) => attribute.key === "ci.execution.id",
+        )?.value.stringValue,
+      );
+    const name = `public-ci-trace-${workflow.workflowId}-${executionId}`;
+    if (process.env.GITHUB_OUTPUT)
+      await appendFile(process.env.GITHUB_OUTPUT, `artifact-name=${name}\n`);
+    return { directory, name };
   }
 
   private async collect(workflow: z.infer<typeof Workflow>) {

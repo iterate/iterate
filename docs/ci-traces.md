@@ -63,6 +63,8 @@ preview outcome.
 There is no dispatcher or scheduled repair. A workflow cancellation can prevent
 the report job from completing; such runs can be rendered manually. The explicit
 producer dependencies also handle cleanup failing before it waits for tests.
+Rerunning only the collector retains the execution that ran the preview, including
+in the artifact name, so collection retries cannot relabel old results as new work.
 
 Reports are Depot artifacts containing `trace.html` and `trace.json`, uploaded
 with `actions/upload-artifact`. No generated files or per-run commits go into Git.
@@ -79,7 +81,7 @@ index selection, attachments and Playwright reports.
 The config project receives Depot `check_run.completed` webhooks and scans the
 completed job's artifacts. It publishes only an explicit allowlist:
 `public-playwright-report` → **Playwright report** and
-`public-ci-trace` → **CI trace**. Retained `ci-trace-<workflow>-<execution>`
+`public-ci-trace-<workflow>-<execution>` → **CI trace**. Retained `ci-trace-<workflow>-<execution>`
 artifacts from the old `ci-trace.yml` workflow remain supported.
 The handler verifies that the hosted HTML is reachable before adding the status.
 CI does not run a publication command or need status-write permission.

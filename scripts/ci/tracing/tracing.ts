@@ -88,8 +88,6 @@ export function assembleTrace(
   >,
 ) {
   const workflow = Workflow.parse(input);
-  const execution = [...workflow.executions].sort((a, b) => b.execution - a.execution)[0];
-  if (!execution) throw new Error("Depot workflow has no execution");
   const inlineReport = workflow.jobs.some((job) => job.jobKey.endsWith(":trace"));
   if (inlineReport) {
     workflow.jobs = workflow.jobs.filter((job) => !job.jobKey.endsWith(":trace"));
@@ -115,6 +113,21 @@ export function assembleTrace(
           ? "skipped"
           : "finished";
   }
+  const producerStarts = workflow.jobs
+    .flatMap((job) => job.attempts)
+    .filter((attempt) => attempt.startedAt)
+    .map((attempt) => Date.parse(attempt.startedAt));
+  // A collector-only retry creates an execution without new preview work.
+  // Keep the original execution identity instead of starting after its jobs ended.
+  const execution = [...workflow.executions]
+    .sort((a, b) => b.execution - a.execution)
+    .find(
+      (execution) =>
+        !inlineReport ||
+        !producerStarts.length ||
+        Date.parse(execution.createdAt) <= Math.max(...producerStarts),
+    );
+  if (!execution) throw new Error("Depot workflow has no execution for its preview jobs");
   const traceId = hash(`${workflow.workflowId}/${execution.executionId}`, 32);
   const spans: Span[] = [];
   const dependencies: { sourceId: string; targetId: string; milestone: string }[] = [];

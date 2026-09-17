@@ -436,7 +436,7 @@ and service workers without sharing the project's origin.
 
 Additional artifacts opt into public serving with a `public-` name prefix.
 The viewer only accepts artifacts from `iterate/iterate`; existing `ci-trace-*`
-artifacts remain supported. Only `public-playwright-report`, `public-ci-trace` and the legacy named CI
+artifacts remain supported. Only `public-playwright-report`, `public-ci-trace-<workflow>-<execution>` and the legacy named CI
 trace artifacts automatically get commit statuses; other `public-*` artifacts
 remain browsable without adding checks. Upload only files intended to be public. Append
 `?download` to a file link to download it instead of displaying it.

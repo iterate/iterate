@@ -1,13 +1,13 @@
 # CI trace outcomes and layout
 
-Status: implemented and verified locally. Failed runs show the first failed job’s timing, Plan comes first, and labels have room for descenders. PR CI and review are pending.
+Status: display changes passed CI and review. Inline collection after cleanup is implemented and independently reviewed; live artifact/status verification is pending.
 
 - [x] Show **Time to red** for failed workflows, measured from workflow execution start to the first failed job completion. Do not count a retried test attempt as a red workflow. Keep any earlier green milestone in the trace evidence. *Implemented as OTLP attributes and a red event in `tracing.ts`.*
 - [x] Put the planning job first, while retaining stable grouping of parallel test jobs and cleanup last. *The viewer ranks the plan job first; the collector names it Plan.*
 - [x] Give span labels enough vertical space for descenders without losing horizontal ellipsis. *A 1.5 line-height leaves 19.5px for 13px text.*
 - [x] Verify with the reported failed workflow `hjrrdf5flj`, focused assembly tests and browser checks; also check a successful report. *The real failed run shows 2m55s to red vs 6m59s total; desktop/390px checks and a green report pass.*
 
-Assumptions: Depot's failed job completion timestamp is the available failure signal; if no failed job timestamp exists, use failed workflow completion and say so. Cancellation alone is not failure. Scope is report generation and presentation, with no CI scheduling or test-policy changes.
+Assumptions: Depot's failed job completion timestamp is the available failure signal; if no failed job timestamp exists, use failed workflow completion and say so. Cancellation alone is not failure. Original scope is report generation and presentation; the follow-up below moves collection into the preview workflow without changing test policy.
 
 ## Implementation log
 
@@ -22,7 +22,7 @@ Status: implemented locally. The collector is now a dependent preview job; dispa
 - [x] Add a trace job in `preview-run.yml` after preparation, tests and cleanup, with `if: always()`. *Uses the ordinary Depot dependency graph.*
 - [x] Remove the separate collector workflow, dispatch/reconcile CLI code and obsolete path triggers. *Removed `ci-trace.yml` and its callbacks.*
 - [x] Measure completed preview jobs through cleanup, excluding report generation itself. Refuse an incomplete producer set; preserve failed/cancelled results. *Assembly regressions cover active/failed collectors and pending producers.*
-- [x] Upload `public-ci-trace`; update the config project's explicit report-link allowlist so the click-through status still appears. *One config allowlist entry; 18 route/publication tests pass.*
+- [x] Upload `public-ci-trace-<workflow>-<execution>`; update the config project’s report-link allowlist. *The name preserves the measured execution on collector-only retries; all 19 route/publication tests pass. Config commit `b3f4e84` is deployed from main.*
 - [ ] Verify success/failure timing, both workflow entry points and the live uploaded report. Cancelled runs may miss a report if Depot cancels the collector too; no scheduled repair is retained.
 
-- Inline follow-up local validation: 411 scripts tests, scripts typecheck, focused lint and formatting pass. Config report handler passes strict scoped typecheck and all 18 tests.
+- Inline follow-up local validation: 412 scripts tests (37 tracing tests), scripts typecheck, focused lint and formatting pass. Config report handler passes strict scoped typecheck and all 19 tests. Independent review found a collector-only retry timing bug; a regression now proves it retains the original measured execution, and follow-up review found no blockers.

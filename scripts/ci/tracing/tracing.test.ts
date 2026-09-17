@@ -69,6 +69,35 @@ test("replaying an inline report excludes a failed collector from the preview ou
   });
 });
 
+test("retrying only the collector retains the execution that ran the preview", () => {
+  const workflow = greenWorkflow("running");
+  workflow.workflowFinishedAt = "";
+  workflow.jobs[0].status = "finished";
+  workflow.jobs[0].attempts[0].status = "finished";
+  workflow.executions.push({ executionId: "collector-retry", execution: 2, createdAt: at(120) });
+  workflow.jobs.push({
+    jobId: "trace",
+    jobKey: "preview.yml:preview:trace",
+    status: "running",
+    attempts: [
+      {
+        attemptId: "trace-retry",
+        attempt: 2,
+        status: "running",
+        startedAt: at(125),
+        finishedAt: "",
+      },
+    ],
+  });
+  expect(assembleTrace(workflow, new Map()).resourceSpans[0].scopeSpans[0].spans[0]).toMatchObject({
+    startTimeUnixNano: String(BigInt(ms(0)) * 1_000_000n),
+    endTimeUnixNano: String(BigInt(ms(90)) * 1_000_000n),
+    attributes: expect.arrayContaining([
+      { key: "ci.execution.id", value: { stringValue: "execution" } },
+    ]),
+  });
+});
+
 test("inline collection refuses to label still-running preview jobs as finished", () => {
   const workflow = greenWorkflow("running");
   workflow.jobs.push({
