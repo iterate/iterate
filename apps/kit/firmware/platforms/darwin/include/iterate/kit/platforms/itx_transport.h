@@ -1,5 +1,5 @@
-#ifndef ITERATE_KIT_PLATFORMS_POSIX_ITX_TRANSPORT_H
-#define ITERATE_KIT_PLATFORMS_POSIX_ITX_TRANSPORT_H
+#ifndef ITERATE_KIT_PLATFORMS_ITX_TRANSPORT_H
+#define ITERATE_KIT_PLATFORMS_ITX_TRANSPORT_H
 
 #include "iterate/kit/configuration.h"
 #include "iterate/kit/itx_connection.h"
@@ -20,27 +20,27 @@ extern "C" {
 
 enum {
   ITERATE_KIT_POSIX_CONTROL_MESSAGE_CAPACITY = 8192,
-  ITERATE_KIT_POSIX_ITX_MOUNT_TIMEOUT_MS = 10000,
+  ITERATE_KIT_ITX_MOUNT_TIMEOUT_MS = 10000,
 };
 
-enum iterate_kit_posix_itx_transport_state {
-  ITERATE_KIT_POSIX_ITX_IDLE = 0,
-  ITERATE_KIT_POSIX_ITX_WEBSOCKET_CONNECTING,
-  ITERATE_KIT_POSIX_ITX_MOUNTING,
-  ITERATE_KIT_POSIX_ITX_READY,
-  ITERATE_KIT_POSIX_ITX_FAILED,
-  ITERATE_KIT_POSIX_ITX_STOPPED,
+enum iterate_kit_itx_transport_state {
+  ITERATE_KIT_ITX_IDLE = 0,
+  ITERATE_KIT_ITX_WEBSOCKET_CONNECTING,
+  ITERATE_KIT_ITX_MOUNTING,
+  ITERATE_KIT_ITX_READY,
+  ITERATE_KIT_ITX_FAILED,
+  ITERATE_KIT_ITX_STOPPED,
 };
 
-enum iterate_kit_posix_itx_fatal_failure_reason {
-  ITERATE_KIT_POSIX_ITX_FATAL_NONE = 0,
-  ITERATE_KIT_POSIX_ITX_FATAL_SOCKET_GENERATION_EXHAUSTED,
-  ITERATE_KIT_POSIX_ITX_FATAL_CONTROL_RING_RESET,
-  ITERATE_KIT_POSIX_ITX_FATAL_CONNECTION_OPEN,
-  ITERATE_KIT_POSIX_ITX_FATAL_CONNECTION_STATE,
+enum iterate_kit_itx_fatal_failure_reason {
+  ITERATE_KIT_ITX_FATAL_NONE = 0,
+  ITERATE_KIT_ITX_FATAL_SOCKET_GENERATION_EXHAUSTED,
+  ITERATE_KIT_ITX_FATAL_CONTROL_RING_RESET,
+  ITERATE_KIT_ITX_FATAL_CONNECTION_OPEN,
+  ITERATE_KIT_ITX_FATAL_CONNECTION_STATE,
 };
 
-struct iterate_kit_posix_itx_transport_options {
+struct iterate_kit_itx_transport_options {
   const struct iterate_kit_configuration *configuration;
   struct iterate_kit_itx_connection *connection;
   struct iterate_kit_spsc_ring *control_inbox;
@@ -61,7 +61,7 @@ struct iterate_kit_posix_itx_transport_options {
   void *now_us_context;
 };
 
-struct iterate_kit_posix_itx_transport_metrics {
+struct iterate_kit_itx_transport_metrics {
   uint32_t websocket_connections;
   uint32_t websocket_start_attempts;
   uint32_t websocket_open_timeouts;
@@ -79,15 +79,25 @@ struct iterate_kit_posix_itx_transport_metrics {
   uint32_t control_send_failures;
   int32_t last_platform_error;
   int32_t last_capnweb_status;
+  /* The loop's health and state log read these by the names every platform
+   * shares; a Mac has no ESP-TLS or radio counters, so most stay zero. */
+  int32_t last_application_capnweb_status;
+  uint32_t last_application_capnweb_generation;
+  int32_t last_control_receive_status;
+  int32_t last_websocket_close_status_code;
+  int32_t last_websocket_error_type;
+  int32_t last_websocket_tls_error;
+  int32_t last_websocket_transport_errno;
+  uint32_t websocket_pongs_received;
   bool fatal_failure_latched;
-  enum iterate_kit_posix_itx_fatal_failure_reason fatal_failure_reason;
+  enum iterate_kit_itx_fatal_failure_reason fatal_failure_reason;
   struct iterate_kit_spsc_ring_metrics control_inbox;
   struct iterate_kit_spsc_ring_metrics control_outbox;
 };
 
-struct iterate_kit_posix_itx_transport_lifecycle {
+struct iterate_kit_itx_transport_lifecycle {
   bool fatal_failure_latched;
-  enum iterate_kit_posix_itx_fatal_failure_reason fatal_failure_reason;
+  enum iterate_kit_itx_fatal_failure_reason fatal_failure_reason;
   uint32_t ready_socket_generation;
 };
 
@@ -101,8 +111,8 @@ struct iterate_kit_posix_itx_transport_lifecycle {
  * in sizeof(transport); OpenSSL's opaque TLS allocations are the only external
  * workspace and are destroyed at each generation boundary.
  */
-struct iterate_kit_posix_itx_transport {
-  struct iterate_kit_posix_itx_transport_options options;
+struct iterate_kit_itx_transport {
+  struct iterate_kit_itx_transport_options options;
   struct iterate_kit_websocket_text_inbox control_inbox;
   struct iterate_kit_websocket_text_outbox control_outbox;
   struct iterate_kit_itx_outbox_sender control_sender;
@@ -114,7 +124,7 @@ struct iterate_kit_posix_itx_transport {
           ITERATE_KIT_POSIX_CONTROL_MESSAGE_CAPACITY)];
   struct iterate_kit_posix_websocket_client websocket;
   struct iterate_kit_retry_gate websocket_retry;
-  enum iterate_kit_posix_itx_transport_state state;
+  enum iterate_kit_itx_transport_state state;
   enum capnweb_status last_capnweb_status;
   int64_t websocket_open_deadline_us;
   int64_t mount_deadline_us;
@@ -143,39 +153,39 @@ struct iterate_kit_posix_itx_transport {
   bool started;
 };
 
-enum iterate_kit_status iterate_kit_posix_itx_transport_prepare(
-    struct iterate_kit_posix_itx_transport *transport,
-    const struct iterate_kit_posix_itx_transport_options *options);
+enum iterate_kit_status iterate_kit_itx_transport_prepare(
+    struct iterate_kit_itx_transport *transport,
+    const struct iterate_kit_itx_transport_options *options);
 
-enum iterate_kit_status iterate_kit_posix_itx_transport_start(
-    struct iterate_kit_posix_itx_transport *transport);
+enum iterate_kit_status iterate_kit_itx_transport_start(
+    struct iterate_kit_itx_transport *transport);
 
-enum iterate_kit_status iterate_kit_posix_itx_transport_poll(
-    struct iterate_kit_posix_itx_transport *transport,
+enum iterate_kit_status iterate_kit_itx_transport_poll(
+    struct iterate_kit_itx_transport *transport,
     size_t max_control_messages);
 
-enum capnweb_status iterate_kit_posix_itx_transport_send_text(
+enum capnweb_status iterate_kit_itx_transport_send_text(
     void *context,
     enum capnweb_text_fragment_kind kind,
     const char *data,
     size_t length);
 
-void iterate_kit_posix_itx_transport_request_restart(
-    struct iterate_kit_posix_itx_transport *transport);
+void iterate_kit_itx_transport_request_restart(
+    struct iterate_kit_itx_transport *transport);
 
-enum iterate_kit_status iterate_kit_posix_itx_transport_stop(
-    struct iterate_kit_posix_itx_transport *transport);
+enum iterate_kit_status iterate_kit_itx_transport_stop(
+    struct iterate_kit_itx_transport *transport);
 
-void iterate_kit_posix_itx_transport_metrics(
-    const struct iterate_kit_posix_itx_transport *transport,
-    struct iterate_kit_posix_itx_transport_metrics *metrics);
+void iterate_kit_itx_transport_metrics(
+    const struct iterate_kit_itx_transport *transport,
+    struct iterate_kit_itx_transport_metrics *metrics);
 
-void iterate_kit_posix_itx_transport_lifecycle(
-    const struct iterate_kit_posix_itx_transport *transport,
-    struct iterate_kit_posix_itx_transport_lifecycle *lifecycle);
+void iterate_kit_itx_transport_lifecycle(
+    const struct iterate_kit_itx_transport *transport,
+    struct iterate_kit_itx_transport_lifecycle *lifecycle);
 
-const char *iterate_kit_posix_itx_transport_state_name(
-    enum iterate_kit_posix_itx_transport_state state);
+const char *iterate_kit_itx_transport_state_name(
+    enum iterate_kit_itx_transport_state state);
 
 #ifdef __cplusplus
 }

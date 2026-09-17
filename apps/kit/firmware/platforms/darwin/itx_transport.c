@@ -1,10 +1,11 @@
-#include "iterate/kit/platforms/posix_itx_transport.h"
+#include "iterate/kit/platforms/itx_transport.h"
 
 #include "iterate/kit/atomic.h"
 #include "iterate/kit/voice_device_profile.h"
 
 #include <errno.h>
 #include <limits.h>
+#include <stdio.h>
 #include <string.h>
 #include <time.h>
 
@@ -43,7 +44,7 @@ static bool ring_empty(const struct iterate_kit_spsc_ring *ring) {
 }
 
 static void discard_inbox(
-    struct iterate_kit_posix_itx_transport *transport) {
+    struct iterate_kit_itx_transport *transport) {
   const void *message;
   size_t length;
   while (iterate_kit_spsc_ring_read_acquire(
@@ -60,7 +61,7 @@ static void discard_inbox(
 }
 
 static void close_generation(
-    struct iterate_kit_posix_itx_transport *transport,
+    struct iterate_kit_itx_transport *transport,
     int64_t now_us) {
   if (transport->socket_connected || transport->websocket.upgraded) {
     increment(&transport->websocket_disconnects);
@@ -76,24 +77,24 @@ static void close_generation(
   transport->mount_deadline_us = 0;
   transport->mount_deadline_generation = 0U;
   iterate_kit_retry_gate_defer(&transport->websocket_retry, now_us);
-  transport->state = ITERATE_KIT_POSIX_ITX_WEBSOCKET_CONNECTING;
+  transport->state = ITERATE_KIT_ITX_WEBSOCKET_CONNECTING;
 }
 
 static void protocol_failure(
-    struct iterate_kit_posix_itx_transport *transport,
+    struct iterate_kit_itx_transport *transport,
     enum capnweb_status status,
     int64_t now_us) {
   transport->last_capnweb_status = status;
   increment(&transport->protocol_failures);
   increment(&transport->control_receive_failures);
-  transport->state = ITERATE_KIT_POSIX_ITX_FAILED;
+  transport->state = ITERATE_KIT_ITX_FAILED;
   close_generation(transport, now_us);
   /* Keep the failing result visible until the caller chooses to poll again. */
-  transport->state = ITERATE_KIT_POSIX_ITX_FAILED;
+  transport->state = ITERATE_KIT_ITX_FAILED;
 }
 
 static bool inbox_has_room(
-    struct iterate_kit_posix_itx_transport *transport) {
+    struct iterate_kit_itx_transport *transport) {
   struct iterate_kit_spsc_ring_metrics metrics;
   if (transport->control_inbox.write_acquired) {
     return true;
@@ -105,7 +106,7 @@ static bool inbox_has_room(
 }
 
 static void receive_messages(
-    struct iterate_kit_posix_itx_transport *transport,
+    struct iterate_kit_itx_transport *transport,
     int64_t now_us) {
   unsigned int index;
   for (index = 0U;
@@ -166,7 +167,7 @@ static void receive_messages(
 
 static enum iterate_kit_websocket_tx_result send_message(
     void *context, const void *message, size_t length) {
-  struct iterate_kit_posix_itx_transport *transport = context;
+  struct iterate_kit_itx_transport *transport = context;
   return iterate_kit_posix_websocket_client_send(
       &transport->websocket,
       ITERATE_KIT_WEBSOCKET_TEXT,
@@ -175,7 +176,7 @@ static enum iterate_kit_websocket_tx_result send_message(
 }
 
 static void send_messages(
-    struct iterate_kit_posix_itx_transport *transport,
+    struct iterate_kit_itx_transport *transport,
     int64_t now_us) {
   unsigned int index;
   for (index = 0U;
@@ -200,7 +201,7 @@ static void send_messages(
 }
 
 static void service_control_messages(
-    struct iterate_kit_posix_itx_transport *transport,
+    struct iterate_kit_itx_transport *transport,
     int64_t now_us) {
   const enum iterate_kit_websocket_tx_result result =
       iterate_kit_posix_websocket_client_service_control(
@@ -214,11 +215,12 @@ static void service_control_messages(
 }
 
 static int64_t transport_now_us(
-    const struct iterate_kit_posix_itx_transport *transport);
+    const struct iterate_kit_itx_transport *transport);
 
 static void timeout_open_attempt(
-    struct iterate_kit_posix_itx_transport *transport,
+    struct iterate_kit_itx_transport *transport,
     int64_t now_us) {
+  (void)fprintf(stderr, "transport: websocket open timed out; retrying\n");
   increment(&transport->websocket_open_timeouts);
   transport->last_platform_error = ETIMEDOUT;
   transport->websocket_open_attempt_active = false;
@@ -228,14 +230,14 @@ static void timeout_open_attempt(
 }
 
 static void drive_socket(
-    struct iterate_kit_posix_itx_transport *transport,
+    struct iterate_kit_itx_transport *transport,
     int64_t now_us) {
   enum iterate_kit_posix_websocket_open_result result;
   int64_t step_now_us;
   if (!transport->socket_connected &&
-      transport->state == ITERATE_KIT_POSIX_ITX_FAILED) {
+      transport->state == ITERATE_KIT_ITX_FAILED) {
     /* FAILED describes the preceding poll; a later poll begins recovery. */
-    transport->state = ITERATE_KIT_POSIX_ITX_WEBSOCKET_CONNECTING;
+    transport->state = ITERATE_KIT_ITX_WEBSOCKET_CONNECTING;
   }
   if (transport->restart_requested) {
     transport->restart_requested = false;
@@ -269,6 +271,10 @@ static void drive_socket(
       return;
     }
     if (result == ITERATE_KIT_POSIX_WEBSOCKET_OPEN_FAILED) {
+      /* The loop only sees CONNECTING while this retries; say why here. */
+      (void)fprintf(
+          stderr, "transport: websocket open failed (error %d); retrying\n",
+          transport->websocket.last_error);
       transport->websocket_open_attempt_active = false;
       transport->websocket_open_deadline_us = 0;
       transport->last_platform_error =
@@ -283,10 +289,10 @@ static void drive_socket(
     if (transport->socket_generation == UINT32_MAX) {
       transport->fatal_failure_latched = true;
       transport->fatal_failure_reason =
-          ITERATE_KIT_POSIX_ITX_FATAL_SOCKET_GENERATION_EXHAUSTED;
+          ITERATE_KIT_ITX_FATAL_SOCKET_GENERATION_EXHAUSTED;
       iterate_kit_posix_websocket_client_close(
           &transport->websocket);
-      transport->state = ITERATE_KIT_POSIX_ITX_FAILED;
+      transport->state = ITERATE_KIT_ITX_FAILED;
       return;
     }
     ++transport->socket_generation;
@@ -302,7 +308,7 @@ static void drive_socket(
 }
 
 static enum iterate_kit_status accept_generation(
-    struct iterate_kit_posix_itx_transport *transport,
+    struct iterate_kit_itx_transport *transport,
     int64_t now_us) {
   enum capnweb_status status;
   if (!transport->socket_connected ||
@@ -325,8 +331,8 @@ static enum iterate_kit_status accept_generation(
           &transport->control_outbox) != CAPNWEB_OK) {
     transport->fatal_failure_latched = true;
     transport->fatal_failure_reason =
-        ITERATE_KIT_POSIX_ITX_FATAL_CONTROL_RING_RESET;
-    transport->state = ITERATE_KIT_POSIX_ITX_FAILED;
+        ITERATE_KIT_ITX_FATAL_CONTROL_RING_RESET;
+    transport->state = ITERATE_KIT_ITX_FAILED;
     return ITERATE_KIT_STATE_ERROR;
   }
   status = iterate_kit_itx_connection_open(
@@ -335,8 +341,8 @@ static enum iterate_kit_status accept_generation(
     transport->last_capnweb_status = status;
     transport->fatal_failure_latched = true;
     transport->fatal_failure_reason =
-        ITERATE_KIT_POSIX_ITX_FATAL_CONNECTION_OPEN;
-    transport->state = ITERATE_KIT_POSIX_ITX_FAILED;
+        ITERATE_KIT_ITX_FATAL_CONNECTION_OPEN;
+    transport->state = ITERATE_KIT_ITX_FAILED;
     return ITERATE_KIT_STATE_ERROR;
   }
   transport->handled_socket_generation =
@@ -344,13 +350,13 @@ static enum iterate_kit_status accept_generation(
   transport->mount_deadline_generation =
       transport->socket_generation;
   transport->mount_deadline_us = now_us +
-      (int64_t)ITERATE_KIT_POSIX_ITX_MOUNT_TIMEOUT_MS * 1000;
+      (int64_t)ITERATE_KIT_ITX_MOUNT_TIMEOUT_MS * 1000;
   transport->last_capnweb_status = CAPNWEB_OK;
   return ITERATE_KIT_OK;
 }
 
 static enum iterate_kit_status drain_application(
-    struct iterate_kit_posix_itx_transport *transport,
+    struct iterate_kit_itx_transport *transport,
     size_t max_control_messages,
     int64_t now_us) {
   size_t processed = 0U;
@@ -384,7 +390,7 @@ static enum iterate_kit_status drain_application(
         protocol_failure(transport, CAPNWEB_E_STATE, now_us);
         return ITERATE_KIT_STATE_ERROR;
       }
-      transport->state = ITERATE_KIT_POSIX_ITX_MOUNTING;
+      transport->state = ITERATE_KIT_ITX_MOUNTING;
       return ITERATE_KIT_OK;
     case ITERATE_KIT_ITX_CONNECTION_READY:
       transport->mount_deadline_us = 0;
@@ -392,7 +398,7 @@ static enum iterate_kit_status drain_application(
       transport->ready_socket_generation =
           transport->socket_generation;
       iterate_kit_retry_gate_reset(&transport->websocket_retry);
-      transport->state = ITERATE_KIT_POSIX_ITX_READY;
+      transport->state = ITERATE_KIT_ITX_READY;
       return ITERATE_KIT_OK;
     case ITERATE_KIT_ITX_CONNECTION_FAILED:
       protocol_failure(
@@ -403,19 +409,19 @@ static enum iterate_kit_status drain_application(
     case ITERATE_KIT_ITX_CONNECTION_DISCONNECTED:
     case ITERATE_KIT_ITX_CONNECTION_CLOSED:
       transport->state =
-          ITERATE_KIT_POSIX_ITX_WEBSOCKET_CONNECTING;
+          ITERATE_KIT_ITX_WEBSOCKET_CONNECTING;
       return ITERATE_KIT_OK;
   }
   transport->fatal_failure_latched = true;
   transport->fatal_failure_reason =
-      ITERATE_KIT_POSIX_ITX_FATAL_CONNECTION_STATE;
-  transport->state = ITERATE_KIT_POSIX_ITX_FAILED;
+      ITERATE_KIT_ITX_FATAL_CONNECTION_STATE;
+  transport->state = ITERATE_KIT_ITX_FAILED;
   return ITERATE_KIT_STATE_ERROR;
 }
 
-enum iterate_kit_status iterate_kit_posix_itx_transport_prepare(
-    struct iterate_kit_posix_itx_transport *transport,
-    const struct iterate_kit_posix_itx_transport_options *options) {
+enum iterate_kit_status iterate_kit_itx_transport_prepare(
+    struct iterate_kit_itx_transport *transport,
+    const struct iterate_kit_itx_transport_options *options) {
   struct iterate_kit_posix_websocket_client_options websocket_options;
   if (transport == NULL || options == NULL ||
       options->configuration == NULL || options->connection == NULL ||
@@ -460,35 +466,36 @@ enum iterate_kit_status iterate_kit_posix_itx_transport_prepare(
             sizeof(transport->websocket_transmit_storage),
         .DANGEROUS_disable_certificate_verification =
             options->DANGEROUS_disable_certificate_verification,
+        .bearer_token = options->configuration->project_api_key,
       };
   if (iterate_kit_posix_websocket_client_prepare(
           &transport->websocket, &websocket_options) != ITERATE_KIT_OK) {
     memset(transport, 0, sizeof(*transport));
     return ITERATE_KIT_IO_ERROR;
   }
-  transport->state = ITERATE_KIT_POSIX_ITX_IDLE;
+  transport->state = ITERATE_KIT_ITX_IDLE;
   transport->last_capnweb_status = CAPNWEB_OK;
   transport->initialized = true;
   return ITERATE_KIT_OK;
 }
 
-enum iterate_kit_status iterate_kit_posix_itx_transport_start(
-    struct iterate_kit_posix_itx_transport *transport) {
+enum iterate_kit_status iterate_kit_itx_transport_start(
+    struct iterate_kit_itx_transport *transport) {
   if (transport == NULL || !transport->initialized || transport->started ||
-      transport->state == ITERATE_KIT_POSIX_ITX_STOPPED) {
+      transport->state == ITERATE_KIT_ITX_STOPPED) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   transport->started = true;
-  transport->state = ITERATE_KIT_POSIX_ITX_WEBSOCKET_CONNECTING;
+  transport->state = ITERATE_KIT_ITX_WEBSOCKET_CONNECTING;
   return ITERATE_KIT_OK;
 }
 
-enum capnweb_status iterate_kit_posix_itx_transport_send_text(
+enum capnweb_status iterate_kit_itx_transport_send_text(
     void *context,
     enum capnweb_text_fragment_kind kind,
     const char *data,
     size_t length) {
-  struct iterate_kit_posix_itx_transport *transport = context;
+  struct iterate_kit_itx_transport *transport = context;
   if (transport == NULL || !transport->initialized) {
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
@@ -498,15 +505,15 @@ enum capnweb_status iterate_kit_posix_itx_transport_send_text(
 
 /** This transport's only clock source: the injected one, or the platform's. */
 static int64_t transport_now_us(
-    const struct iterate_kit_posix_itx_transport *transport) {
+    const struct iterate_kit_itx_transport *transport) {
   if (transport == NULL || transport->options.now_us == NULL) {
     return platform_monotonic_microseconds();
   }
   return transport->options.now_us(transport->options.now_us_context);
 }
 
-enum iterate_kit_status iterate_kit_posix_itx_transport_poll(
-    struct iterate_kit_posix_itx_transport *transport,
+enum iterate_kit_status iterate_kit_itx_transport_poll(
+    struct iterate_kit_itx_transport *transport,
     size_t max_control_messages) {
   enum iterate_kit_status status;
   int64_t now_us;
@@ -516,18 +523,18 @@ enum iterate_kit_status iterate_kit_posix_itx_transport_poll(
   }
   now_us = transport_now_us(transport);
   if (transport->fatal_failure_latched) {
-    transport->state = ITERATE_KIT_POSIX_ITX_FAILED;
+    transport->state = ITERATE_KIT_ITX_FAILED;
     return ITERATE_KIT_STATE_ERROR;
   }
   drive_socket(transport, now_us);
   if (transport->fatal_failure_latched) {
     return ITERATE_KIT_STATE_ERROR;
   }
-  if (transport->state == ITERATE_KIT_POSIX_ITX_FAILED) {
+  if (transport->state == ITERATE_KIT_ITX_FAILED) {
     return ITERATE_KIT_STATE_ERROR;
   }
   if (!transport->socket_connected) {
-    transport->state = ITERATE_KIT_POSIX_ITX_WEBSOCKET_CONNECTING;
+    transport->state = ITERATE_KIT_ITX_WEBSOCKET_CONNECTING;
     return ITERATE_KIT_OK;
   }
   status = accept_generation(transport, now_us);
@@ -548,15 +555,15 @@ enum iterate_kit_status iterate_kit_posix_itx_transport_poll(
   return ITERATE_KIT_OK;
 }
 
-void iterate_kit_posix_itx_transport_request_restart(
-    struct iterate_kit_posix_itx_transport *transport) {
+void iterate_kit_itx_transport_request_restart(
+    struct iterate_kit_itx_transport *transport) {
   if (transport != NULL && transport->initialized) {
     transport->restart_requested = true;
   }
 }
 
-enum iterate_kit_status iterate_kit_posix_itx_transport_stop(
-    struct iterate_kit_posix_itx_transport *transport) {
+enum iterate_kit_status iterate_kit_itx_transport_stop(
+    struct iterate_kit_itx_transport *transport) {
   if (transport == NULL || !transport->initialized) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
@@ -570,13 +577,13 @@ enum iterate_kit_status iterate_kit_posix_itx_transport_stop(
         transport->options.connection);
   }
   transport->started = false;
-  transport->state = ITERATE_KIT_POSIX_ITX_STOPPED;
+  transport->state = ITERATE_KIT_ITX_STOPPED;
   return ITERATE_KIT_OK;
 }
 
-void iterate_kit_posix_itx_transport_metrics(
-    const struct iterate_kit_posix_itx_transport *transport,
-    struct iterate_kit_posix_itx_transport_metrics *metrics) {
+void iterate_kit_itx_transport_metrics(
+    const struct iterate_kit_itx_transport *transport,
+    struct iterate_kit_itx_transport_metrics *metrics) {
   struct iterate_kit_itx_outbox_sender_metrics sender_metrics;
   if (metrics == NULL) {
     return;
@@ -612,9 +619,11 @@ void iterate_kit_posix_itx_transport_metrics(
   metrics->control_send_failures = sender_metrics.send_failures;
   metrics->last_platform_error = transport->last_platform_error;
   metrics->last_capnweb_status = transport->last_capnweb_status;
+  metrics->last_application_capnweb_status = transport->last_capnweb_status;
+  metrics->last_application_capnweb_generation = transport->socket_generation;
   metrics->fatal_failure_latched = transport->fatal_failure_latched;
   metrics->fatal_failure_reason =
-      (enum iterate_kit_posix_itx_fatal_failure_reason)
+      (enum iterate_kit_itx_fatal_failure_reason)
           transport->fatal_failure_reason;
   iterate_kit_spsc_ring_metrics(
       transport->options.control_inbox, &metrics->control_inbox);
@@ -622,9 +631,9 @@ void iterate_kit_posix_itx_transport_metrics(
       transport->options.control_outbox, &metrics->control_outbox);
 }
 
-void iterate_kit_posix_itx_transport_lifecycle(
-    const struct iterate_kit_posix_itx_transport *transport,
-    struct iterate_kit_posix_itx_transport_lifecycle *lifecycle) {
+void iterate_kit_itx_transport_lifecycle(
+    const struct iterate_kit_itx_transport *transport,
+    struct iterate_kit_itx_transport_lifecycle *lifecycle) {
   if (lifecycle == NULL) {
     return;
   }
@@ -634,25 +643,25 @@ void iterate_kit_posix_itx_transport_lifecycle(
   }
   lifecycle->fatal_failure_latched = transport->fatal_failure_latched;
   lifecycle->fatal_failure_reason =
-      (enum iterate_kit_posix_itx_fatal_failure_reason)
+      (enum iterate_kit_itx_fatal_failure_reason)
           transport->fatal_failure_reason;
   lifecycle->ready_socket_generation = transport->ready_socket_generation;
 }
 
-const char *iterate_kit_posix_itx_transport_state_name(
-    enum iterate_kit_posix_itx_transport_state state) {
+const char *iterate_kit_itx_transport_state_name(
+    enum iterate_kit_itx_transport_state state) {
   switch (state) {
-    case ITERATE_KIT_POSIX_ITX_IDLE:
+    case ITERATE_KIT_ITX_IDLE:
       return "idle";
-    case ITERATE_KIT_POSIX_ITX_WEBSOCKET_CONNECTING:
+    case ITERATE_KIT_ITX_WEBSOCKET_CONNECTING:
       return "websocket_connecting";
-    case ITERATE_KIT_POSIX_ITX_MOUNTING:
+    case ITERATE_KIT_ITX_MOUNTING:
       return "mounting";
-    case ITERATE_KIT_POSIX_ITX_READY:
+    case ITERATE_KIT_ITX_READY:
       return "ready";
-    case ITERATE_KIT_POSIX_ITX_FAILED:
+    case ITERATE_KIT_ITX_FAILED:
       return "failed";
-    case ITERATE_KIT_POSIX_ITX_STOPPED:
+    case ITERATE_KIT_ITX_STOPPED:
       return "stopped";
   }
   return "unknown";

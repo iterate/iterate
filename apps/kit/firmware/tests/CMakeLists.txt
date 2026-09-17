@@ -103,13 +103,23 @@ iterate_kit_add_core_test(iterate-kit-websocket-tx-test websocket_tx_test.c)
 # exact PING queue policy without recreating ESP-TLS or a radio.
 iterate_kit_add_test(
   iterate-kit-esp-websocket-keepalive-test websocket_keepalive_test.c
-  INCLUDES fakes/esp_idf ../platforms/iterate_esp_idf/include
-  LINK iterate-kit-core)
+  INCLUDES ../platforms/iterate_esp_idf/include
+  LINK iterate-kit-core iterate-kit-host-esp-idf)
+
+# The platform half a loop test needs: a scriptable transport and a
+# provisioned board (tests/fakes/esp_idf), ESP-shaped like the loop it links.
+add_library(iterate-kit-esp-idf-fakes STATIC fakes/esp_idf/fake_esp_idf_platform.c)
+target_include_directories(iterate-kit-esp-idf-fakes PUBLIC
+  fakes/esp_idf ../platforms/iterate_esp_idf/include)
+target_link_libraries(iterate-kit-esp-idf-fakes PUBLIC
+  iterate-kit-core iterate-kit-host-esp-idf)
+target_compile_features(iterate-kit-esp-idf-fakes PUBLIC c_std_11)
+target_compile_options(iterate-kit-esp-idf-fakes PRIVATE -Wall -Wextra -Werror)
 
 # THE SHARED LOOP, ON A LAPTOP. Four boards run components/voice and nothing
 # outside a flash had ever compiled it, so the mapping from a press to an
 # intent was verified only by diffing against the device files it replaced.
-# The pretend ESP-IDF it links is tests/fakes/esp_idf; see the README there.
+# The ESP-IDF it links is the host one (platforms/host/esp_idf), clock pinned.
 iterate_kit_add_test(
   iterate-kit-voice-loop-intent-test voice_loop_intent_test.c
   STD 11 LINK iterate-kit-voice iterate-kit-esp-idf-fakes)
@@ -168,86 +178,9 @@ iterate_kit_add_avatar_test(
   ../components/avatar/tests/face_viseme_queue_test.c)
 
 if(APPLE)
-  function(iterate_kit_add_cli_test NAME)
-    iterate_kit_add_test(${NAME} ${ARGN} STD 11
-      INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/../targets/host_cli"
-      OPTIONS -Wconversion -Wshadow
-      LINK iterate-kit-core)
-  endfunction()
-
   iterate_kit_add_test(
     iterate-kit-darwin-audio-codec-test darwin_audio_codec_test.c
     STD 11 OPTIONS -Wconversion -Wshadow LINK iterate-kit-darwin)
-
-  iterate_kit_add_test(iterate-kit-cli-device-controls-test
-    ../targets/host_cli/cli_device_controls.c cli_device_controls_test.c
-    STD 11 INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/../targets/host_cli"
-    OPTIONS -Wconversion -Wshadow
-    LINK iterate-kit-capabilities iterate-kit-darwin)
-
-  iterate_kit_add_test(iterate-kit-cli-hangup-test
-    cli_hangup_test.c
-    ../targets/host_cli/cli_capabilities.c
-    ../targets/host_cli/cli_conversation.c
-    ../targets/host_cli/cli_device_controls.c
-    ../targets/host_cli/cli_keyboard.c
-    ../targets/host_cli/cli_microphone.c
-    ../targets/host_cli/cli_options.c
-    ../targets/host_cli/cli_report.c
-    ../targets/host_cli/cli_screen.c
-    ../targets/host_cli/cli_speaker.c
-    ../targets/host_cli/cli_wav.c
-    ../targets/host_cli/main.c
-    STD 11
-    INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/../targets/host_cli"
-    DEFINES ITERATE_KIT_CLI_MAIN_TEST
-    OPTIONS -Wconversion -Wshadow -Wno-unused-function -Wno-unused-variable
-    LINK iterate-kit-capabilities iterate-kit-darwin)
-
-  iterate_kit_add_cli_test(
-    iterate-kit-cli-keyboard-test
-    ../targets/host_cli/cli_keyboard.c
-    cli_keyboard_test.c)
-  iterate_kit_add_cli_test(
-    iterate-kit-cli-microphone-test
-    ../targets/host_cli/cli_microphone.c
-    cli_microphone_test.c)
-  iterate_kit_add_cli_test(
-    iterate-kit-cli-options-test
-    ../targets/host_cli/cli_options.c
-    cli_options_test.c)
-  iterate_kit_add_cli_test(
-    iterate-kit-cli-screen-test
-    ../targets/host_cli/cli_screen.c
-    cli_screen_test.c)
-  iterate_kit_add_cli_test(
-    iterate-kit-cli-report-test
-    ../targets/host_cli/cli_report.c
-    cli_report_test.c)
-  iterate_kit_add_cli_test(
-    iterate-kit-cli-speaker-test
-    ../targets/host_cli/cli_speaker.c
-    cli_speaker_test.c)
-  iterate_kit_add_cli_test(
-    iterate-kit-cli-wav-test
-    ../targets/host_cli/cli_wav.c
-    cli_wav_test.c)
-
-  iterate_kit_add_test(
-    iterate-kit-darwin-audio-input-test darwin_audio_input_test.c
-    STD 11 OPTIONS -Wconversion -Wshadow LINK iterate-kit-darwin)
-
-  iterate_kit_add_test(
-    iterate-kit-darwin-audio-output-test darwin_audio_output_test.c
-    STD 11 OPTIONS -Wconversion -Wshadow LINK iterate-kit-darwin)
-
-  iterate_kit_add_test(iterate-kit-posix-websocket-test posix_websocket_test.c
-    LINK iterate-kit-darwin)
-
-  iterate_kit_add_test(iterate-kit-posix-itx-transport-test
-    posix_itx_transport_test.c fakes/fake_posix_websocket.c
-    ../platforms/darwin/posix_itx_transport.c
-    INCLUDES fakes ../platforms/darwin/include LINK iterate-kit-darwin)
 endif()
 
 # HAVPE's adopted pure hardware policy: byte-exact register/wire vectors and

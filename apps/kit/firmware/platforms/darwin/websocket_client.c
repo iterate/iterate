@@ -312,27 +312,30 @@ static bool build_request(
     return false;
   }
   key[24] = '\0';
-  request_size = ((client->secure && client->port == 443U) ||
-                  (!client->secure && client->port == 80U))
-      ? snprintf(
-            client->request,
-            sizeof(client->request),
-            "GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\n"
-            "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
-            "Sec-WebSocket-Version: 13\r\nUser-Agent: iterate-kit/0\r\n\r\n",
-            client->path,
-            client->host,
-            key)
-      : snprintf(
-            client->request,
-            sizeof(client->request),
-            "GET %s HTTP/1.1\r\nHost: %s:%u\r\nUpgrade: websocket\r\n"
-            "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
-            "Sec-WebSocket-Version: 13\r\nUser-Agent: iterate-kit/0\r\n\r\n",
-            client->path,
-            client->host,
-            (unsigned int)client->port,
-            key);
+  const bool default_port = (client->secure && client->port == 443U) ||
+      (!client->secure && client->port == 80U);
+  const char *bearer = client->options.bearer_token;
+  char host_port[sizeof(client->host) + sizeof(":65535")];
+  if (default_port) {
+    (void)snprintf(host_port, sizeof(host_port), "%s", client->host);
+  } else {
+    (void)snprintf(
+        host_port, sizeof(host_port), "%s:%u", client->host,
+        (unsigned int)client->port);
+  }
+  request_size = snprintf(
+      client->request,
+      sizeof(client->request),
+      "GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\n"
+      "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
+      "Sec-WebSocket-Version: 13\r\nUser-Agent: iterate-kit/0\r\n"
+      "%s%s%s\r\n",
+      client->path,
+      host_port,
+      key,
+      bearer != NULL ? "Authorization: Bearer " : "",
+      bearer != NULL ? bearer : "",
+      bearer != NULL ? "\r\n" : "");
   if (request_size <= 0 || (size_t)request_size >= sizeof(client->request)) {
     return false;
   }
