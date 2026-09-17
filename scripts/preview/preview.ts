@@ -414,7 +414,11 @@ export async function ciPlan(options: DeployCommandOptions = {}) {
     );
   }
   const result = { head: history.head, ...decision, ...outputs };
-  logPreview(decision.reason);
+  logPreview(
+    decision.action === "inherit"
+      ? `${decision.reason} (https://github.com/${target.run.repositoryFullName}/compare/${decision.result.commit}...${history.head})`
+      : decision.reason,
+  );
   if (decision.action === "inherit" && decision.result.conclusion === "failure") {
     throw new Error(
       `Inherited failed preview from ${decision.result.commit}: ${decision.result.url}`,
