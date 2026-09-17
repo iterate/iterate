@@ -169,7 +169,7 @@ type PrepareConfinedWorkerOptions = {
  */
 export async function prepareConfinedWorker(
   opts: PrepareConfinedWorkerOptions,
-): Promise<{ loaderId: string; load: () => WorkerStub }> {
+): Promise<{ loaderId: string; load: () => WorkerStub; retire: () => void }> {
   const { where, source, cacheKey } = opts;
   const requireMainModule = (modules: unknown): WorkerModules => {
     if (!isWorkerModules(modules) || typeof modules["cap.js"] !== "string")
@@ -247,5 +247,12 @@ export async function prepareConfinedWorker(
         globalOutbound: opts.itxEntrypoint,
       };
     });
-  return { loaderId, load };
+  return {
+    loaderId,
+    load,
+    /** Mark this identity DEAD: the next `prepareConfinedWorker` for the same base loads under the
+     *  next generation — a genuinely fresh isolate. The recovery for a cached isolate that can no
+     *  longer be called (the clone-version failure the DO's facet call names). */
+    retire: () => loaderIdGenerations.set(loaderIdBase, { generation, dead: true }),
+  };
 }
