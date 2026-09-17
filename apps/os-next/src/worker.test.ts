@@ -26,6 +26,7 @@ const MINIMAL = {
   APP_CONFIG_ENVIRONMENT_NAME: "poc",
   APP_CONFIG_PLATFORM_ORIGIN: "https://control.test",
   APP_CONFIG_SESSION_SECRET: "cookie-secret",
+  APP_CONFIG_SECRETS_KEY: "secrets-key",
   APP_CONFIG_ADMIN_API_SECRET: "admin-secret",
 };
 /** What MINIMAL becomes: every optional var blank, the deploy id defaulted. */
@@ -39,8 +40,11 @@ const MINIMAL_CONFIG = {
   projectHostnameBase: "",
   artifactsAccountId: "",
   artifactsNamespace: "",
+  recentEphemeralsBudgetChars: 1024 * 1024,
   sessionSecret: "cookie-secret",
   adminApiSecret: "admin-secret",
+  secretsKey: "secrets-key",
+  secretsKeyPrevious: "",
   deployId: "unversioned",
 };
 
@@ -51,6 +55,8 @@ const expose = (config: AppConfig) => ({
   sessionSecret: config.sessionSecret.exposeSecret(),
   adminApiSecret: config.adminApiSecret.exposeSecret(),
   googleClientSecret: config.googleClientSecret.exposeSecret(),
+  secretsKey: config.secretsKey.exposeSecret(),
+  secretsKeyPrevious: config.secretsKeyPrevious.exposeSecret(),
 });
 
 describe("parseAppConfig", () => {

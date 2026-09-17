@@ -160,7 +160,7 @@ describe("retries live in exactly one layer", () => {
   it("bounds the agent smoke as a joined background lane", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs.at(-1)!;
     expect(script).toContain(
-      `run_logged_lane smoke /tmp/os-preview-smoke.log env TEST_TELEMETRY_LANE=agent-smoke TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=/tmp/os-preview-agent-smoke.json timeout ${OS_AGENT_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/agent-smoke.ts & SMOKE_PID=$!`,
+      `run_logged_lane smoke /tmp/os-preview-smoke.log env TEST_TELEMETRY_LANE=agent-smoke TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${resolve(import.meta.dirname, "../../test-results/preview-summaries/os-preview-agent-smoke.json")} timeout ${OS_AGENT_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/agent-smoke.ts & SMOKE_PID=$!`,
     );
     expect(script).toContain('wait "$SMOKE_PID"');
   });
@@ -184,7 +184,7 @@ describe("watchdogs the shell can't import stay in sync", () => {
     // The harness only orchestrates the production preview workflow. It never
     // carries a second deploy/test implementation or a nested Depot runner.
     expect(source.match(/depot ci dispatch/g)).toHaveLength(1);
-    expect(source).toContain("--workflow cloudflare-previews.yml");
+    expect(source).toContain("--workflow preview.yml");
     expect(source).toContain('--input "pull-request-number=$PR_NUMBER"');
     expect(source).toContain('depot ci logs "$attempt_id"');
     expect(source).toContain('depot ci run show "$run_id"');

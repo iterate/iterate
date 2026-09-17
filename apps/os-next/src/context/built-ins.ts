@@ -1,7 +1,7 @@
 // built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (the one list
 // is context/itx-expression-rewriting.ts). Three kinds of key, one record: the AXIOMS (the log, the stub
 // registry, the rule table, the two hosts, addressing), the BINDINGS (`kv`, `secrets`, `ai`,
-// `cfArtifacts`, `repos` — a Cloudflare binding only this env holds, exposed or scoped) and THE
+// `browser`, `cfArtifacts`, `repos` — a Cloudflare binding only this env holds, exposed or scoped) and THE
 // LIBRARY (`connectTo*`, library.ts — code a user could write, taking only `itx`).
 // THE RECORD IS `itx.builtins`, the reserved root: `itx.builtins.<root>…` runs against it directly
 // and never reads the rule table; a short `itx.<root>…` reaches it through the IMPLICIT PLATFORM ROW
@@ -10,29 +10,9 @@
 // Dynamic code has two doors, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
-import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
-import { stampPrincipal, type Caller } from "../principal.ts";
-import type { StreamEvent, StreamEventInput } from "../stream/processor.ts";
-import type { LibraryRoots } from "../library.ts";
-import { GLOBAL_PROJECT_ID, resolveContextPath, resourceScope } from "../iterate-context.ts";
-import { codedError } from "../lib.ts";
-import {
-  assertSecretName,
-  normalizeSecretRecord,
-  type SecretCatalogEntry,
-  type SecretMaterial,
-  type SecretRefresh,
-} from "../secrets.ts";
-import type { SecretDurableObject } from "../secret-durable-object.ts";
-import { normalizeSecretConnect, type SecretConnectOptions } from "../secret-connect.ts";
-import {
-  assertFacetSourceWithinCeiling,
-  facetSpecOf,
-  prepareConfinedWorker,
-  type FacetSpec,
-  type WorkerCacheKey,
-  type WorkerSource,
-} from "./worker-loader.ts";
+import { stampPrincipal, type Caller } from "iterate/next/principal";
+import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
+import { codedError } from "iterate/next/lib";
 import {
   itxExpressionStepName,
   print,
@@ -42,15 +22,42 @@ import {
   FacetHandle,
   InvokeHandle,
   RpcStubHandle,
-} from "./expression.ts";
-import type { BuiltInRoot } from "./itx-expression-rewriting.ts";
+} from "iterate/next/expression";
+import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
-  projectScopedArtifacts,
-  projectScopedRepos,
-  type ArtifactsNamespace,
-  type ArtifactsScope,
-  type ReposScope,
-} from "./repos.ts";
+  ScheduleKey,
+  ScheduleReceipt,
+  type ScheduledAppendInput,
+  type ScheduledAppend,
+} from "../stream/scheduled-appends.ts";
+import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
+import type { LibraryRoots } from "../library.ts";
+import {
+  DurableObjectNameCodec,
+  GLOBAL_PROJECT_ID,
+  resolveContextPath,
+  resourceScope,
+} from "../iterate-context.ts";
+import {
+  assertSecretName,
+  normalizeSecretRecord,
+  type SecretCatalogEntry,
+  type SecretMaterial,
+  type SecretRefresh,
+} from "../secrets.ts";
+import type { SecretDurableObject } from "../secret-durable-object.ts";
+import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.ts";
+import {
+  assertFacetSourceWithinCeiling,
+  facetSpecOf,
+  prepareConfinedWorker,
+  type FacetSpec,
+  type WorkerCacheKey,
+  type WorkerSource,
+} from "./worker-loader.ts";
+import type { BuiltInRoot } from "./itx-expression-rewriting.ts";
+import { cfBrowser } from "./browser.ts";
+import { projectScopedArtifacts, type ArtifactsNamespace, type ArtifactsScope } from "./repos.ts";
 
 /** One row of `itx.rewriteRules.list()`: a context row (`target` a string, or `null` for a mask) or an
  *  implicit platform row. */
@@ -76,6 +83,22 @@ export type SubscriptionListEntry = {
   halted?: { afterOffset: number; attempts: number; error?: string };
 };
 
+/** An `R2Object` as `itx.r2` answers it: every field the class carries, as data — the key with the
+ *  owner prefix stripped, dates as ISO strings, checksums as hex. */
+export type R2ObjectRecord = {
+  key: string;
+  version: string;
+  size: number;
+  etag: string;
+  httpEtag: string;
+  checksums: Record<string, string>;
+  uploaded: string;
+  httpMetadata: R2HTTPMetadata;
+  customMetadata: Record<string, string>;
+  range?: R2Range;
+  storageClass: string;
+};
+
 /** THE built-in scope, as ONE interface — the clean-room's whole kernel surface; the library's verbs
  *  come in by `extends` (library.ts). The record is a PLAIN OBJECT of own-enumerable closures,
  *  not an RpcTarget class, on purpose: the resolver gates on `Object.hasOwn`, so a prototype-method
@@ -97,32 +120,82 @@ export interface BuiltInScope extends LibraryRoots {
     delete(key: string): Promise<{ ok: true }>;
     list(prefix?: string): Promise<{ keys: string[] }>;
   };
+  /** THE OBJECT STORE: the R2 bucket binding, verbatim, on the resource owner's slice of ONE bucket
+   *  (`FILES`) — every key prefixed `<owner.id>/` as kv's are `<owner.id>:`, the prefix applied to
+   *  every key and `prefix`/`startAfter` option and stripped from every key and prefix answered.
+   *  The binding's own verbs, arguments and pagination (`list` is ONE page, with its cursor); what
+   *  cannot cross the wire is answered as data — an `R2Object` as its fields, a body as its bytes.
+   *  `presign` is the one verb the binding lacks: a signed URL on the project host (file-urls.ts),
+   *  a download or an upload, the platform serving the bytes itself — R2's own presigned URLs need
+   *  S3 credentials this worker does not hold. Multipart uploads are not here yet. */
+  r2: {
+    head(key: string): Promise<R2ObjectRecord | null>;
+    get(
+      key: string,
+      options?: { range?: R2Range },
+    ): Promise<(R2ObjectRecord & { data: Uint8Array }) | null>;
+    put(
+      key: string,
+      value: ArrayBuffer | ArrayBufferView | string | null,
+      options?: {
+        httpMetadata?: R2HTTPMetadata;
+        customMetadata?: Record<string, string>;
+        storageClass?: string;
+      },
+    ): Promise<R2ObjectRecord>;
+    delete(keys: string | string[]): Promise<void>;
+    list(options?: {
+      limit?: number;
+      prefix?: string;
+      cursor?: string;
+      delimiter?: string;
+      startAfter?: string;
+    }): Promise<{
+      objects: R2ObjectRecord[];
+      delimitedPrefixes: string[];
+      truncated: boolean;
+      cursor?: string;
+    }>;
+    presign(input: {
+      key: string;
+      method?: "GET" | "PUT";
+      expiresInSeconds?: number;
+    }): Promise<{ url: string; expiresAt: string }>;
+  };
   /** The resource owner's secrets for egress (a project's; a global user's or organization's own —
-   *  never a catalog shared across users) — THE SECRET CELL (secrets.ts, secret-durable-object.ts): a
-   *  `getSecret("/secrets/NAME")` placeholder in an outbound request's URL (path or query) or
-   *  headers substitutes to the value at egress (`fetch`), and `getSecret("/secrets/NAME",
-   *  { field: "a.b" })` to one string field of a JSON material — apps/os's placeholder grammar for
-   *  a URL or a header (not its `Basic base64(user:getSecret(…))` peeling nor its JSON-body
-   *  template — the body is never scanned). The material is a string or a JSON object; `urls` pins
-   *  it to those ORIGINS only (a mis-typed URL cannot mail a credential to a stranger); `refresh`
-   *  names the strategy the cell re-mints an expired credential with, in trusted code, on a 401 or
-   *  on first use (`oauth-refresh-token`, `waitrose-session`). WRITE-ONLY — `set`, `delete`, and a
-   *  `list` of names, pins and strategy kinds, never a value. Every change appends
+   *  never a catalog shared across users) — each one its own Durable Object (secrets.ts,
+   *  secret-durable-object.ts): a `getSecret("/secrets/NAME")` placeholder in an outbound request's
+   *  URL (path or query) or headers substitutes to the value at egress (`fetch`), and
+   *  `getSecret("/secrets/NAME", { field: "a.b" })` to one string field of a JSON material —
+   *  apps/os's placeholder grammar for a URL or a header (not its `Basic base64(user:getSecret(…))`
+   *  peeling nor its JSON-body template — the body is never scanned). The material is a string or a
+   *  JSON object; `urls` (required) pins it to those ORIGINS only — a mis-typed URL cannot mail a
+   *  credential to a stranger, nor can an app that forwards a visitor's headers; `refresh` names the
+   *  strategy the secret's object re-mints an expired credential with, in trusted code, on a 401 or
+   *  on first use (`oauth-refresh-token`, `waitrose-session`). WRITE-ONLY — `set`, `beginOAuth`,
+   *  `delete`, and a `list` of names, pins and strategy kinds, never a value. Every change appends
    *  `events.iterate.com/secrets/changed` with the name, the pin and the strategy kind (or
-   *  `deleted`) — the value never enters the log — attributed like any append (`source.principal`).
-   *  A name is what the placeholder can spell, `[a-zA-Z0-9._-]+`; the project's own API key lives
-   *  outside this catalog (principal.ts) and no placeholder reaches it. */
+   *  `deleted`) — the value never enters the log — attributed like any append (`source.principal`);
+   *  a refresh's outcome is `secrets/refreshed { name, kind, ok, error? }`, appended by the object.
+   *  A name is what the placeholder can spell, `[a-zA-Z0-9._-]+`. */
   secrets: {
     set(
       name: string,
       material: SecretMaterial,
-      options?: { urls?: string[]; refresh?: SecretRefresh },
+      options: { urls: string[]; refresh?: SecretRefresh },
     ): Promise<{ ok: true }>;
-    /** THE OAUTH CONNECT HALF (secret-connect.ts): reserve `name` as an `oauth-refresh-token` secret
-     *  and hand back the provider's authorize URL — send a human there; the provider redirects to
-     *  the platform's `/.auth/connect/callback`, and the secret's own Durable Object exchanges the
-     *  code for the first tokens. Bring your own OAuth client. */
-    connect(name: string, options: SecretConnectOptions): Promise<{ authorizationUrl: string }>;
+    /** OAUTH, THE FIRST TOKENS (secret-oauth.ts): hand back the provider's authorize URL for the
+     *  project's own OAuth client — send a human there. The provider redirects the human to the
+     *  platform's callback (`/.secrets/oauth/callback`; the human must be signed in to Iterate as
+     *  someone who reaches the secret's owner — a project's member, the user themself for a user's
+     *  own secret), and the secret's own Durable Object exchanges the code, becomes an
+     *  `oauth-refresh-token` secret, and the catalog fact is appended. Until then nothing is stored
+     *  under `name` but the attempt. */
+    beginOAuth(name: string, options: SecretOAuthOptions): Promise<{ authorizationUrl: string }>;
+    /** The platform's callback completes the attempt through here — the exchange in the secret's
+     *  object, then the catalog fact, in the same per-name order as `set` and `delete`. You never
+     *  call this: the code and the nonce reach only the callback. */
+    completeOAuth(name: string, input: { code: string; nonce: string }): Promise<{ ok: true }>;
     delete(name: string): Promise<{ ok: true }>;
     list(): Promise<SecretCatalogEntry[]>;
   };
@@ -132,20 +205,40 @@ export interface BuiltInScope extends LibraryRoots {
    *  model with `@` (`itx.fable ⇒ itx.ai.run('@cf/…', @)`). A test shadows it with `provide("itx.ai",
    *  fake)`; the physical door stays `itx.builtins.ai`. */
   ai: Ai;
-  /** THE ESCAPE HATCH: the raw Cloudflare Artifacts binding, project-scoped (repos.ts
-   *  `ArtifactsScope`); `itx.repos` is built on top of it. */
+  /** Cloudflare Browser Run (`apps/os` `itx.browser`): `.quickAction(action, options)` returns the
+   *  action's RESULT; `.fetch(input, init)` is the raw CDP door. */
+  browser: ReturnType<typeof cfBrowser>;
+  /** THE ARTIFACTS PROXY (repos.ts `ArtifactsScope`): Cloudflare Artifacts, project-scoped and
+   *  addressed BY THE REPO'S PATH — the binding's own verbs only: `create`, `get` (a handle with
+   *  `createToken` and `remote()`), `list`, `delete`. Git itself is the repo facet's (src/repo/, the
+   *  domain object `itx.repos.get(path)` — THE way a project touches its repos): it mints its token and
+   *  learns its remote here, then speaks git-over-HTTPS from inside its own worker. */
   cfArtifacts: ArtifactsScope;
-  /** THE PRIMARY REPO DOOR (repos.ts `ReposScope`): a repo's file BYTES over git-over-HTTPS —
-   *  `readFile`/`writeFile` one root-level path on `main`, enough to hold the config worker's source
-   *  (`itx.provide("itx.worker", "…itx.repos.readFile(…)")`). */
-  repos: ReposScope;
   /** Append to this context's append-only event log (the facets that REDUCE it are
    *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge
    *  RpcTarget exactly: `itx.append({...})` is one spelling on every hop. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
+  /** Durable batches appended after a deadline or on a fixed interval (missed ticks coalesce). Setting a key
+   *  replaces it; cancelling cannot retract an occurrence already committed. Pause holds work
+   *  until resume; set is refused while paused, while cancel remains available. Failure remains
+   *  visible until replacement or cancellation. */
+  schedules: {
+    set(
+      input: ScheduledAppendInput,
+      options?: { idempotencyKey?: string },
+    ): Promise<ScheduleReceipt>;
+    cancel(schedule: ScheduleKey | ScheduleReceipt): Promise<StreamEvent[]>;
+    list(): ScheduledAppend[];
+    get(key: ScheduleKey): ScheduledAppend | null;
+  };
   /** Read a page of the durable log — `itx.readEvents(afterOffset?, limit?)`, the twin of `append`
-   *  (non-minting: a probe never wakes storage). */
-  readEvents(afterOffset?: number, limit?: number): Promise<StreamPage>;
+   *  (non-minting: a probe never wakes storage). `{ includeEphemeral: true }` merges in the
+   *  ephemerals this incarnation still holds (stream.ts, the recent-ephemerals ring). */
+  readEvents(
+    afterOffset?: number,
+    limit?: number,
+    options?: { includeEphemeral?: boolean },
+  ): Promise<StreamPage>;
   /** Wait for the next event matching `filter` (Stream.waitForEvent owns the contract: type filter,
    *  afterOffset default = the head, 30s/120s timeout → WAIT_TIMEOUT). A root, so the edge declares
    *  nothing for it. */
@@ -207,7 +300,10 @@ export interface BuiltInScope extends LibraryRoots {
    *  so loaded code (`env.ITX.get().processors.enable(…)`) and a sibling (`itx.cd(p).processors…`) do
    *  it through the same door as a client. */
   processors: {
-    enable(name: string, spec: FacetSpec & { consumes?: string[] }): Promise<{ name: string }>;
+    enable(
+      name: string,
+      spec?: (FacetSpec & { consumes?: string[] }) | { consumes?: string[] },
+    ): Promise<{ name: string }>;
     disable(name: string): Promise<void>;
     list(): SubscriptionListEntry[];
   };
@@ -240,28 +336,57 @@ type RootsAreTheSameSet = [Exclude<keyof BuiltInScope, "builtins">] extends [Bui
 const _rootsAreTheSameSet: RootsAreTheSameSet = true;
 void _rootsAreTheSameSet;
 
+/** An `R2Object` as data, the owner prefix off its key. */
+function r2ObjectRecord(object: R2Object, prefix: string): R2ObjectRecord {
+  return {
+    key: object.key.slice(prefix.length),
+    version: object.version,
+    size: object.size,
+    etag: object.etag,
+    httpEtag: object.httpEtag,
+    // R2Checksums.toJSON: the hex forms — the class holds ArrayBuffers, which are not data over the wire.
+    checksums: object.checksums.toJSON() as Record<string, string>,
+    uploaded: object.uploaded.toISOString(),
+    httpMetadata: object.httpMetadata || {},
+    customMetadata: object.customMetadata || {},
+    range: object.range,
+    storageClass: object.storageClass,
+  };
+}
+
 /** What the CONTEXT (the DO) injects: identity, the bindings, and the seams only it can serve. */
 interface BuildBuiltInsDeps {
   projectId: string;
   path: string;
   /** The codec name of the context these roots belong to (loader cache keys). */
   iterateContextName: string;
-  /** The bindings the built-ins reach (the workers lane binds neither AI nor Artifacts; nothing
-   *  there calls them). */
+  /** The bindings the built-ins reach (the workers lane binds neither AI, Browser Run, nor Artifacts;
+   *  nothing there calls them). */
   env: {
     LOADER: WorkerLoader;
     ITX_KV: KVNamespace;
-    /** The secret cells (secret-durable-object.ts): one per secret, `<owner.id>:<name>` — the
+    /** The one R2 bucket, every owner's objects under its own prefix — the built-in root `itx.r2`. */
+    FILES: R2Bucket;
+    /** The secrets' Durable Objects (secret-durable-object.ts): one per secret, `<owner.id>:<name>` — the
      *  resource owner's id (iterate-context.ts `resourceScope`). */
     SECRET: DurableObjectNamespace<SecretDurableObject>;
     AI: Ai;
+    BROWSER: BrowserRun;
     ARTIFACTS: ArtifactsNamespace;
   };
   /** The deploy identity every loader cacheKey folds in (worker.ts `AppConfig`). */
   deployId: string;
-  /** The Artifacts account + namespace `itx.repos` builds git remotes from (worker.ts `AppConfig`). */
+  /** The Artifacts account + namespace `itx.cfArtifacts` names git remotes with (worker.ts `AppConfig`). */
   artifactsAccountId: string;
   artifactsNamespace: string;
+  /** A signed file URL on the project host (file-urls.ts `signedFileUrl`, closed over the app
+   *  config's secret and hosts) — `itx.r2.presign`. */
+  signFileUrl: (input: {
+    project: string;
+    key: string;
+    method: "GET" | "PUT";
+    expiresInSeconds?: number;
+  }) => Promise<{ url: string; expiresAt: string }>;
   /** The secrets catalog — names, pins and strategy kinds, from the core reduce (strongly
    *  consistent; never a value). */
   secrets: () => SecretCatalogEntry[];
@@ -281,6 +406,10 @@ interface BuildBuiltInsDeps {
   /** The rpcStubs view — closures over the DO's transport table (the pager sockets can never move). */
   rpcStubs: BuiltInScope["rpcStubs"];
   subscriptions: BuiltInScope["subscriptions"];
+  schedules: {
+    get(key: string): ScheduledAppend | null;
+    list(): ScheduledAppend[];
+  };
   rewriteRules: BuiltInScope["rewriteRules"];
   /** The own context's — a wait never crosses a hop. */
   waitForEvent: BuiltInScope["waitForEvent"];
@@ -305,11 +434,14 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   // `owner.id`; the secrets catalog lives in the log at `owner.rootPath`.
   const owner = resourceScope(projectId, path);
   const kvPrefix = `${owner.id}:`;
+  const r2Prefix = `${owner.id}/`;
   const ownContext = () => deps.context(path);
-  // A secret's cell is the Durable Object `<owner.id>:<name>` — the one the context DO's `#egress`
-  // forwards a placeholder-bearing request to, by the same derivation (an owner id never holds a `:`).
-  const secretCell = (name: string) =>
+  // A secret's Durable Object is `<owner.id>:<name>` — the one the context DO's `#egress` forwards a
+  // placeholder-bearing request to, by the same derivation (an owner id never holds a `:`). The
+  // object appends its own facts (a refresh's outcome, an OAuth completion) to the owner's root log.
+  const secretStore = (name: string) =>
     env.SECRET.getByName(`${owner.id}:${assertSecretName(name)}`);
+  const secretsCatalog = DurableObjectNameCodec.stringify({ projectId, path: owner.rootPath });
   /** THE append: every event appended through this scope carries WHO appended it — the DO's own
    *  stamp, never a client's (src/principal.ts): the session's verified principal, or none. */
   const append = (...events: StreamEventInput[]) =>
@@ -331,13 +463,14 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           .context(owner.rootPath)
           .invoke(["itx", "builtins", "secrets", call], [], deps.caller()) as Promise<T>);
 
-  // A secret mutation is append-THEN-cell, two awaits; a concurrent set and delete of the SAME name
-  // could commit the log in one order while their cell writes land in the other, leaving egress a
-  // value the catalog says is gone (or vice versa). Serialize per name — on the owner's root DO, where
-  // every verb runs (`onRootContext`) — so the log order IS the cell's order. Different names never contend.
-  // (This is `#builtIns`, built ONCE per DO instance, so the chain persists across calls.) An eviction
-  // BETWEEN a delete's append and its cell clear can still strand a value — a durable reconciliation
-  // sweep is the follow-up; see docs/cleanup-log.md.
+  // A secret mutation is two awaits — the catalog fact and the object write; a concurrent set and
+  // delete of the SAME name could commit the log in one order while their object writes land in the
+  // other, leaving egress a value the catalog says is gone (or vice versa). Serialize per name — on
+  // the owner's root DO, where every verb runs (`onRootContext`) — so the log order IS the object's
+  // order. Different names never contend. (This is `#builtIns`, built ONCE per DO instance, so the
+  // chain persists across calls.) Within a mutation the two steps run in the order whose crash window
+  // fails loud (a row without material, never material without a row): `set` appends first, `delete`
+  // clears first, `completeOAuth` writes first and undoes on a refused append.
   const secretMutations = new Map<string, Promise<unknown>>();
   const serializeSecretMutation = <T>(name: string, work: () => Promise<T>): Promise<T> => {
     const result = (secretMutations.get(name) ?? Promise.resolve()).then(work, work);
@@ -377,65 +510,151 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         }
       },
     },
+    r2: {
+      head: async (key) => {
+        const object = await env.FILES.head(r2Prefix + key);
+        return object ? r2ObjectRecord(object, r2Prefix) : null;
+      },
+      get: async (key, options = {}) => {
+        const object = await env.FILES.get(r2Prefix + key, options);
+        if (!object) return null;
+        return {
+          ...r2ObjectRecord(object, r2Prefix),
+          data: new Uint8Array(await object.arrayBuffer()),
+        };
+      },
+      put: async (key, value, options = {}) =>
+        r2ObjectRecord(await env.FILES.put(r2Prefix + key, value, options), r2Prefix),
+      delete: (keys) =>
+        env.FILES.delete(
+          typeof keys === "string" ? r2Prefix + keys : keys.map((key) => r2Prefix + key),
+        ),
+      list: async (options = {}) => {
+        const page = await env.FILES.list({
+          ...options,
+          prefix: r2Prefix + (options.prefix || ""),
+          ...(options.startAfter && { startAfter: r2Prefix + options.startAfter }),
+        });
+        return {
+          objects: page.objects.map((object) => r2ObjectRecord(object, r2Prefix)),
+          delimitedPrefixes: page.delimitedPrefixes.map((prefix) => prefix.slice(r2Prefix.length)),
+          truncated: page.truncated,
+          ...(page.truncated && { cursor: page.cursor }),
+        };
+      },
+      presign: (input) =>
+        deps.signFileUrl({
+          project: owner.id,
+          key: input.key,
+          method: input.method || "GET",
+          expiresInSeconds: input.expiresInSeconds,
+        }),
+    },
     secrets: {
       set: (name, material, options) =>
         onRootContext(["set", name, material, options], () =>
           serializeSecretMutation(name, async () => {
-            const cell = secretCell(name);
+            const store = secretStore(name);
             const record = normalizeSecretRecord(material, options);
             // The change is appended FIRST: a refused append (a paused stream) leaves the value
-            // untouched; a cell failure after it leaves a catalog row whose value egress cannot find
-            // — loud, not silent. The fact carries the pin and the strategy KIND, never the material.
+            // untouched; an object failure after it leaves a catalog row whose value egress cannot
+            // find — loud, not silent. The fact carries the pin and the strategy KIND, never the material.
             await append({
               type: "events.iterate.com/secrets/changed",
               payload: {
                 name,
-                ...(record.urls.length > 0 && { urls: record.urls }),
+                urls: record.urls,
                 ...(record.refresh && { refresh: record.refresh.kind }),
               },
             });
-            await cell.set(record);
+            await store.set(record, secretsCatalog);
             return { ok: true as const };
           }),
         ),
-      connect: (name, options) =>
-        onRootContext(["connect", name, options], () =>
+      // No append here: the catalog learns of the secret when the exchange succeeds, so an
+      // abandoned attempt leaves no row that advertises a pin and a strategy the object does not hold.
+      beginOAuth: (name, options) =>
+        onRootContext(["beginOAuth", name, options], () =>
+          secretStore(name).beginOAuth(normalizeSecretOAuth(options), secretsCatalog),
+        ),
+      // The object FIRST here (the exchange most often fails on the provider's side — a junk code,
+      // a stale attempt — and must leave no row), then the fact. A refused append undoes the write
+      // THIS call made (`exchanged`), so what `list()` says and what egress finds never disagree; a
+      // replayed callback (the object answers it idempotently) undoes nothing — the catalog may
+      // already advertise the secret, and a failed re-append must not erase live material — so a
+      // retried callback after a lost fact catches the catalog up. Serialized per name with `set`
+      // and `delete`, like every catalog write.
+      completeOAuth: (name, input) =>
+        onRootContext(["completeOAuth", name, input], () =>
           serializeSecretMutation(name, async () => {
-            const cell = secretCell(name);
-            const connect = normalizeSecretConnect(options);
-            // The catalog fact first, as for `set`: the name, its pin and the strategy the exchange
-            // will configure — the material arrives later, at the callback, and only into the cell.
-            await append({
-              type: "events.iterate.com/secrets/changed",
-              payload: { name, urls: connect.urls, refresh: "oauth-refresh-token" },
-            });
-            return cell.beginConnect(connect);
+            const store = secretStore(name);
+            const { urls, exchanged } = await store.completeOAuth(input);
+            try {
+              await append({
+                type: "events.iterate.com/secrets/changed",
+                payload: { name, urls, refresh: "oauth-refresh-token" },
+              });
+            } catch (error) {
+              if (exchanged) await store.clear();
+              throw error;
+            }
+            return { ok: true as const };
           }),
         ),
+      // The object FIRST here, the reverse of `set`: each verb runs its two steps in the order
+      // whose crash window fails LOUD. A delete cleared but not yet appended leaves a row egress
+      // answers 502 for ("no stored project secret") until the delete is retried; the other order
+      // would leave live material behind a catalog that says it is gone — silent, and the sweep that
+      // would have found it is not needed.
       delete: (name) =>
         onRootContext(["delete", name], () =>
           serializeSecretMutation(name, async () => {
-            const cell = secretCell(name);
+            const store = secretStore(name);
+            await store.clear();
             await append({
               type: "events.iterate.com/secrets/changed",
               payload: { name, deleted: true },
             });
-            await cell.clear();
             return { ok: true as const };
           }),
         ),
       list: () => onRootContext(["list"], async () => deps.secrets()),
     },
     ai: env.AI, // the binding object itself — dispatch walks its methods
-    cfArtifacts: projectScopedArtifacts(env.ARTIFACTS, owner.id),
-    repos: projectScopedRepos({
+    browser: cfBrowser(env.BROWSER),
+    cfArtifacts: projectScopedArtifacts({
       namespace: env.ARTIFACTS,
       projectId: owner.id,
       accountId: deps.artifactsAccountId,
       namespaceName: deps.artifactsNamespace,
     }),
     append,
-    readEvents: (afterOffset?: number, limit?: number) => ownContext().read(afterOffset, limit),
+    schedules: {
+      ...deps.schedules,
+      get: (key) => deps.schedules.get(ScheduleKey.parse(key)),
+      set: async (input, options) => {
+        const [definition] = await append({
+          type: "events.iterate.com/stream/append-scheduled",
+          payload: input,
+          idempotencyKey: options?.idempotencyKey,
+        });
+        return ScheduleReceipt.parse({
+          key: definition.payload?.key,
+          scheduledAtOffset: definition.offset,
+        });
+      },
+      cancel: (schedule) => {
+        const receipt = ScheduleReceipt.safeParse(schedule);
+        return append({
+          type: "events.iterate.com/stream/append-schedule-cancelled",
+          payload: receipt.success
+            ? { key: receipt.data.key, ifScheduledAtOffset: receipt.data.scheduledAtOffset }
+            : { key: ScheduleKey.parse(schedule) },
+        });
+      },
+    },
+    readEvents: (afterOffset?: number, limit?: number, options?: { includeEphemeral?: boolean }) =>
+      ownContext().read(afterOffset, limit, options),
     waitForEvent: deps.waitForEvent,
     // WHO crosses with the call: a sibling context runs it under the caller's principal (a Workers-RPC
     // hop, where the ambient store does not reach), so an event appended there is attributed too.
@@ -475,14 +694,24 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     subscriptions: deps.subscriptions,
     processors: {
       enable: async (name, spec) => {
-        // Refused HERE, before anything is appended: a spec names the source's host class (there are
-        // no built-in processors to name), and its literal source is under the ceiling.
-        // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of a caller-supplied spec (its static type is a claim, not a guarantee, across the capability boundary)
-        if (typeof spec !== "object" || spec === null || typeof spec.className !== "string")
-          throw new Error(
-            `processors.enable(${JSON.stringify(name)}, { source, className, consumes? }): name the host class the source exports — there are no built-in processors to enable by name`,
-          );
-        assertFacetSourceWithinCeiling(spec, `processors.enable("${name}")`);
+        // Refused HERE, before anything is appended. A FIRST-PARTY name (first-party-facets.ts) hosts
+        // this worker's own class: `consumes` at most, never a source; any other name's spec names
+        // the source's host class, and its literal source is under the ceiling.
+        const firstPartyClassName = firstPartyFacetClassOf(name);
+        const loaded = spec as (FacetSpec & { consumes?: string[] }) | undefined;
+        if (firstPartyClassName) {
+          if (loaded && ("source" in loaded || "className" in loaded))
+            throw new Error(
+              `processors.enable(${JSON.stringify(name)}): "${name}" is first-party — hosted from this worker's own ${firstPartyClassName}; pass { consumes? } at most, never a source`,
+            );
+        } else {
+          // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of a caller-supplied spec (its static type is a claim, not a guarantee, across the capability boundary)
+          if (typeof loaded !== "object" || loaded === null || typeof loaded.className !== "string")
+            throw new Error(
+              `processors.enable(${JSON.stringify(name)}, { source, className, consumes? }): name the host class the source exports — only a first-party name (${Object.keys(FIRST_PARTY_FACET_CLASSES).join(", ")}) is enabled without one`,
+            );
+          assertFacetSourceWithinCeiling(loaded, `processors.enable("${name}")`);
+        }
         await append({
           type: "events.iterate.com/stream/subscription-configured",
           payload: {
@@ -491,10 +720,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               "itx",
               "builtins",
               "facets",
-              ["get", name, facetSpecOf(spec)],
+              firstPartyClassName ? ["get", name] : ["get", name, facetSpecOf(loaded!)],
               "processEventBatch",
             ],
-            consumes: spec.consumes,
+            consumes: spec?.consumes,
           },
         });
         return { name };

@@ -1077,7 +1077,7 @@ const ALLOWED_RUNTIME_IMPORTS = new Set([
   "capnweb",
   "cloudflare:workers",
   "zod", // an npm package a userspace worker could bundle too — used to PARSE untrusted MCP responses
-  "./context/expression.ts",
+  "iterate/next/expression", // the codec — the package's, as a userspace worker would import it
 ]);
 
 describe("the library boundary", () => {

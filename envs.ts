@@ -626,6 +626,22 @@ export interface OsNextEnv {
   resources: { directoryDbId: string; oauthKvId: string; itxKvId: string };
 }
 export const osNextEnvs: Record<string, OsNextEnv> = {
+  // Isolated API preview; workers.dev only (no project-host routing).
+  preview_2: {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: "preview_2",
+    workerName: "os-next-preview-2",
+    baseUrl: "https://os-next-preview-2.iterate-dev-preview.workers.dev",
+    mcpBaseUrl: "https://os-next-preview-2.iterate-dev-preview.workers.dev/mcp",
+    projectHostnameBase: "",
+    artifactsNamespace: "os-next-preview-2-repos",
+    resourceNamePrefix: "os-next-preview-2",
+    resources: {
+      directoryDbId: "8b094736-c4cc-4b2b-bb62-8c50a0b345e9",
+      oauthKvId: "5faf2d083c04499fbeeedceb2ed9dde7",
+      itxKvId: "40904582e6fe4efdb580138ff34ba913",
+    },
+  },
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
@@ -643,6 +659,16 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
     },
   },
 };
+/** apps/agents — the agents page (README there); the notes app's shape: its own workers.dev origin. */
+export const agentsEnvs = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "agents",
+    baseUrl: "https://agents.iterate.workers.dev",
+  },
+};
+
 export const notesEnvs = {
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
@@ -652,5 +678,17 @@ export const notesEnvs = {
     // project custom hostname (the iterate project in iterate.iterate2.app), mirroring production
     // where os.iterate.com maps to a project. A workers.dev baseUrl adds no custom route (below).
     baseUrl: "https://notes.iterate.workers.dev",
+  },
+};
+
+export const voiceEnvs = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "voice",
+    // Its own workers.dev subdomain — NOT a custom domain. iterate2.com is reserved to become a
+    // project custom hostname (the iterate project in iterate.iterate2.app), mirroring production
+    // where os.iterate.com maps to a project. A workers.dev baseUrl adds no custom route (below).
+    baseUrl: "https://voice.iterate.workers.dev",
   },
 };

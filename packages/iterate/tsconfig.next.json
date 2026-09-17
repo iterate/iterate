@@ -1,0 +1,42 @@
+{
+  // `iterate/next/*` — os-next's SDK: Worker code (Durable Objects, WorkerEntrypoints, capnweb over
+  // workerd), typed against the REAL Cloudflare types in its own program, apart from the package's
+  // Node/DOM program (tsconfig.json excludes src/next). `typecheck` runs it; `build` runs it with
+  // emitDeclarationOnly for dist/next/**/*.d.ts (the .mjs come from tsdown.config.ts's next entries).
+  "files": [
+    "src/next/sdk/index.ts",
+    "src/next/app.ts",
+    "src/next/app-server.ts",
+    "src/next/app-session.ts",
+    "src/next/client/live-state.ts",
+    "src/next/client/react.tsx",
+    "src/next/client/dashboard.tsx",
+    "src/next/client/dashboard-data.ts",
+    "src/next/api.ts",
+    "src/next/lib.ts",
+    "src/next/expression.ts",
+    "src/next/principal.ts",
+    "src/next/stream/processor.ts",
+    "src/next/oauth-scopes.ts",
+    "src/next/client/oauth.ts"
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["@cloudflare/workers-types/experimental"],
+    "strict": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "erasableSyntaxOnly": true,
+    "rewriteRelativeImportExtensions": true,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "rootDir": "src/next",
+    "outDir": "dist/next",
+    "skipLibCheck": true
+  }
+}

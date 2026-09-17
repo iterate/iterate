@@ -21,6 +21,9 @@ declare module "vitest" {
      *  (support/client.ts): the local worker's (worker-config.ts), a deployed worker's
      *  `APP_CONFIG_ADMIN_API_SECRET` handed to the run as ADMIN_API_SECRET (never in the tree). */
     adminApiSecret: string;
+    /** An OpenAI key for the deployed stories that speak to the real default model (set as the test
+     *  project's `openai` secret); empty locally, and when the run has none. */
+    openaiApiKey: string;
     /** The base project hosts hang under — `localhost` for the local worker, the deployed worker's
      *  `APP_CONFIG_PROJECT_HOSTNAME_BASE` otherwise. Injected into the worker thread's env so
      *  support/project-host.ts reads it (vitest worker threads do NOT inherit the run's process.env). */
@@ -44,6 +47,9 @@ export default async function setup(project: TestProject): Promise<() => Promise
       );
     project.provide("workerBaseUrl", deployedWorkerBaseUrl);
     project.provide("adminApiSecret", adminApiSecret);
+    // The OpenAI key a deployed story sets as a project's `openai` secret (the agent's default
+    // model speaks to OpenAI); absent, those stories skip. Never needed locally: the fake model.
+    project.provide("openaiApiKey", process.env.OPENAI_API_KEY || "");
     // The deployment's ingress lives in envs.ts (the same source the deploy and wrangler-config
     // generation read): project hosts hang under `projectHostnameBase`, MCP on `mcpBaseUrl`. Match the
     // env by its baseUrl; an explicit PROJECT_HOSTNAME_BASE / MCP_BASE_URL still wins.
@@ -66,6 +72,7 @@ export default async function setup(project: TestProject): Promise<() => Promise
     root: PACKAGE_DIR,
     workers: [{ config: e2eWorkerConfig() }],
   });
+  project.provide("openaiApiKey", "");
   const { url } = await server.listen();
   await server.update({ root: PACKAGE_DIR, workers: [{ config: e2eWorkerConfig(url.origin) }] });
   // THE DIRECTORY SCHEMA into the local D1 the harness bound — applied through the worker's OWN binding

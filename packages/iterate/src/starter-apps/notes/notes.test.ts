@@ -29,7 +29,15 @@ function fakeWorkspace() {
   let committed = new Map<string, string>();
   const workspace: NotesWorkspace = {
     readFile: async (path) => (files.has(path) ? files.get(path)! : null),
-    writeFile: async (path, content) => void files.set(path, content),
+    edit: async ({ path, oldString, newString }) => {
+      if (oldString === "") throw new Error("edit oldString must be a non-empty string.");
+      if (!files.has(path)) return { status: "not-applied", reason: "file-missing", path };
+      const content = files.get(path)!;
+      if (!content.includes(oldString))
+        return { status: "not-applied", reason: "text-mismatch", path };
+      files.set(path, content.replace(oldString, newString));
+      return { status: "applied", occurrenceCount: 1, path };
+    },
     dirtyNotePaths: async () => {
       const dirty = new Set<string>();
       for (const [path, content] of files) {
@@ -98,6 +106,30 @@ test("capture: analysis lands title/tags IN the file's frontmatter and settles",
   expect(h.state().pendingAnalyses).toEqual({});
 });
 
+test.each(["", " \n\t", composeNoteFile({ capturedAt: "2026-09-15T00:00:00Z" }, "")])(
+  "a blank note stays unchanged without spending an analysis call: %j",
+  async (content) => {
+    const { files, workspace } = fakeWorkspace();
+    files.set(NOTE_PATH, content);
+    let analysisCalls = 0;
+    const h = makeNotesHarness({
+      workspace,
+      analyze: async () => {
+        analysisCalls += 1;
+        return { title: "Invented title", tags: [], processedBy: "fake" };
+      },
+    });
+    await h.append(captured(NOTE_PATH));
+
+    expect(h.events("events.iterate.com/notes/analysis-settled")).toMatchObject([
+      { payload: { result: { status: "superseded", reason: "note has no text to analyze" } } },
+    ]);
+    expect(files.get(NOTE_PATH)).toBe(content);
+    expect(analysisCalls).toBe(0);
+    expect(h.state().pendingAnalyses).toEqual({});
+  },
+);
+
 test("re-read guard: a body edited mid-analysis settles superseded, file untouched", async () => {
   const { files, workspace } = fakeWorkspace();
   files.set(NOTE_PATH, composeNoteFile({}, "old text"));
@@ -120,6 +152,53 @@ test("re-read guard: a body edited mid-analysis settles superseded, file untouch
   });
   expect(h.events("events.iterate.com/notes/analysis-settled")).toMatchObject([
     { payload: { result: { status: "superseded", reason: "note body changed during analysis" } } },
+  ]);
+});
+
+test.each(["edit", "delete"])(
+  "a %s after the analysis guard read cannot be overwritten by stale analysis",
+  async (change) => {
+    const { files, workspace } = fakeWorkspace();
+    const original = composeNoteFile({}, "76cm felt right");
+    const edited = composeNoteFile({}, "76cm — confirmed at home");
+    files.set(NOTE_PATH, original);
+    let reads = 0;
+    const readFile = workspace.readFile;
+    workspace.readFile = async (path) => {
+      const snapshot = await readFile(path);
+      if (++reads === 2) {
+        // The guard read is already answered on the server. A user's save wins
+        // before that RPC answer gets back to the analysis processor.
+        if (change === "edit") files.set(NOTE_PATH, edited);
+        else files.delete(NOTE_PATH);
+      }
+      return snapshot;
+    };
+    const h = makeNotesHarness({
+      workspace,
+      analyze: async () => ({ title: "Old analysis", tags: [], processedBy: "fake" }),
+    });
+    await h.append(captured(NOTE_PATH));
+    expect(files.get(NOTE_PATH)).toBe(change === "edit" ? edited : undefined);
+    expect(h.events("events.iterate.com/notes/analysis-settled")).toMatchObject([
+      { payload: { result: { status: "superseded" } } },
+    ]);
+  },
+);
+
+test("an unrelated analysis write failure remains a failure, not a superseded edit", async () => {
+  const { files, workspace } = fakeWorkspace();
+  files.set(NOTE_PATH, composeNoteFile({}, "green apples"));
+  workspace.edit = async () => {
+    throw new Error("transport disconnected");
+  };
+  const h = makeNotesHarness({
+    workspace,
+    analyze: async () => ({ title: "Shopping", tags: [], processedBy: "fake" }),
+  });
+  await h.append(captured(NOTE_PATH));
+  expect(h.events("events.iterate.com/notes/analysis-settled")).toMatchObject([
+    { payload: { result: { status: "failed", error: "transport disconnected" } } },
   ]);
 });
 
@@ -274,7 +353,7 @@ test("replay: a fresh instance re-executes no analysis, no writes, no commits", 
     },
     workspace: {
       readFile: workspace.readFile,
-      writeFile: async () => {
+      edit: async () => {
         throw new Error("replay must not write files");
       },
       dirtyNotePaths: async () => [],

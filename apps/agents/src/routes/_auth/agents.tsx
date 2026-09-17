@@ -1,0 +1,377 @@
+import { createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { CircleIcon } from "lucide-react";
+import { z } from "zod";
+import type { AuthenticatedApp } from "iterate/next/app";
+import { useLiveState } from "iterate/next/react";
+import {
+  Conversation,
+  ConversationContent,
+  ConversationScrollButton,
+} from "@iterate-com/ui/components/ai-elements/conversation";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@iterate-com/ui/components/sidebar";
+import { Spinner } from "@iterate-com/ui/components/spinner";
+import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
+import { cn } from "@iterate-com/ui/lib/utils";
+import type { Event } from "@iterate-com/ui/components/events/types";
+import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
+import { EventsList, InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
+import { AgentsSidebar } from "../../components/agents-sidebar.tsx";
+import { Composer, type OutgoingFile } from "../../components/composer.tsx";
+import { reduceAgentFeed, toAgentEvent } from "../../lib/agent-events.ts";
+
+// An agent is a conversation on its own path (`/agents/<name>`); everything it does is an event
+// there. This page is a window onto that log — apps/os's agent view at the size os-next carries:
+// the CHAT (the shared agent-UI reducer's items: messages, and the activities that open into
+// rounds of script + result), the EVENTS (the raw log), and the TRACES (one sheet, URL-backed: an
+// LLM request, a script execution, a raw event). The project stub is held for the page's life; the
+// agent's context is `project.cd(path)`, subscribed for every committed event and caught up with
+// `readEvents`. The header's status is the agent facet's LIVE STATE.
+type Project = Awaited<ReturnType<AuthenticatedApp["api"]["projects"]["get"]>>;
+type Context = Awaited<ReturnType<Project["cd"]>>;
+
+const AgentList = z.array(z.object({ path: z.string(), createdAt: z.string() }));
+
+export const Route = createFileRoute("/_auth/agents")({
+  validateSearch: z.object({
+    project: z.string().optional(),
+    agent: z.string().optional(),
+    view: z.enum(["chat", "events"]).optional(),
+    llmRequest: z.number().int().positive().optional(),
+    scriptExecution: z.string().optional(),
+    event: z.number().int().positive().optional(),
+  }),
+  loaderDeps: ({ search }) => ({ project: search.project, agent: search.agent }),
+  loader: async ({ context, deps }) => {
+    const projects = await context.api.projects.list();
+    const project = deps.project ? projects.find((item) => item.id === deps.project) : projects[0];
+    if (deps.project && !project) throw new Error("This session cannot access that project.");
+    let agents: z.infer<typeof AgentList> = [];
+    if (project) {
+      using itx = await context.api.projects.get(project.id);
+      agents = AgentList.parse(await itx.invoke(["itx", "agents", ["list"]]));
+    }
+    return { projects, project, agents, agent: deps.agent || agents[0]?.path };
+  },
+  component: AgentsPage,
+});
+
+function AgentsPage() {
+  const data = Route.useLoaderData();
+  const { api, info } = Route.useRouteContext();
+  const navigate = useNavigate();
+  const router = useRouter();
+  if (!data.project)
+    return (
+      <Empty className="min-h-svh">
+        <EmptyHeader>
+          <EmptyTitle>No projects yet</EmptyTitle>
+          <EmptyDescription>
+            <a href="/dashboard" className="underline underline-offset-4">
+              Create a project
+            </a>{" "}
+            to give an agent a home.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  const project = data.project.id;
+  return (
+    <SidebarProvider className="h-svh">
+      <AgentsSidebar
+        projects={data.projects}
+        project={project}
+        agents={data.agents}
+        agent={data.agent}
+        account={info.principal.email || info.principal.actor}
+        onCreate={async (name, systemPrompt) => {
+          const path = `/agents/${name}`;
+          using itx = await api.projects.get(project);
+          await itx.invoke([
+            "itx",
+            "agents",
+            ["get", path],
+            ["create", systemPrompt ? { systemPrompt } : {}],
+          ]);
+          await router.invalidate();
+          await navigate({ to: "/agents", search: { project, agent: path } });
+        }}
+      />
+      <SidebarInset className="min-w-0 overflow-hidden">
+        {data.agent ? (
+          <AgentConversation key={`${project}${data.agent}`} project={project} path={data.agent} />
+        ) : (
+          <div className="flex h-full flex-col">
+            <header className="flex shrink-0 items-center gap-3 px-4 pb-1 pt-2.5">
+              <SidebarTrigger className="-ml-1 md:hidden" />
+            </header>
+            <Empty className="flex-1">
+              <EmptyHeader>
+                <EmptyTitle>No agents yet</EmptyTitle>
+                <EmptyDescription>
+                  Create one in the sidebar, then talk to it here.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          </div>
+        )}
+      </SidebarInset>
+    </SidebarProvider>
+  );
+}
+
+// ── the agent's log, live ──
+
+/** The agent's context, its log so far, and whether the catch-up read has reached the head. */
+function useAgentLog(api: AuthenticatedApp["api"], project: string, path: string) {
+  const [context, setContext] = useState<Context>();
+  const [events, setEvents] = useState<Map<number, Event>>(() => new Map());
+  const [caughtUp, setCaughtUp] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let disposed = false;
+    const merge = (batch: unknown[]) =>
+      setEvents((held) => {
+        const next = new Map(held);
+        for (const raw of batch) {
+          const event = toAgentEvent(raw, path);
+          if (event) next.set(event.offset, event);
+        }
+        return next;
+      });
+    // What the connect holds so far; released on unmount AND again after the connect settles, since
+    // an unmount mid-await comes before the handle that await returns.
+    const held: { stub?: Project; agent?: Context; subscription?: { [Symbol.dispose](): void } } =
+      {};
+    const release = () => {
+      held.subscription?.[Symbol.dispose]();
+      held.agent?.[Symbol.dispose]();
+      held.stub?.[Symbol.dispose]();
+      held.subscription = held.agent = held.stub = undefined;
+    };
+    (async () => {
+      held.stub = await api.projects.get(project);
+      if (disposed) return;
+      const agent = (held.agent = await held.stub.cd(path));
+      if (disposed) return;
+      // A capnweb stub is a callable proxy: handed to a state setter directly, React would take it
+      // for an updater and CALL it (an empty method call the server refuses).
+      setContext(() => agent);
+      // Subscribe BEFORE the catch-up read, so nothing lands between the two; a push is a batch of
+      // committed events, deduped into the map by offset. No `consumes`: the Events view is the
+      // whole log, and the reducer keeps what it renders.
+      held.subscription = await agent.subscribe({
+        target: (batch: unknown[]) => !disposed && merge(batch),
+      });
+      for (let after = 0; ; ) {
+        const page = await agent.readEvents(after, 500);
+        if (disposed) return;
+        merge(page.events);
+        if (page.atHead || page.scannedThroughOffset <= after) break;
+        after = page.scannedThroughOffset;
+      }
+      setCaughtUp(true);
+    })()
+      .catch((e: unknown) => !disposed && setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => disposed && release());
+    return () => {
+      disposed = true;
+      release();
+    };
+  }, [api, project, path]);
+  const sorted = useMemo(() => [...events.values()].sort((a, b) => a.offset - b.offset), [events]);
+  return { context, events: sorted, caughtUp, error };
+}
+
+/** The agent facet's live state, the fields the header reads. */
+const AgentLive = z.object({
+  paused: z.object({ reason: z.string() }).nullable(),
+  openRequest: z.object({ model: z.string() }).nullable(),
+  pendingLlmRequestTrigger: z.object({}).nullable(),
+  activeScriptExecutions: z.record(z.string(), z.unknown()),
+});
+
+function AgentConversation({ project, path }: { project: string; path: string }) {
+  const { api } = Route.useRouteContext();
+  const search = Route.useSearch();
+  const navigate = useNavigate();
+  const { context, events, caughtUp, error } = useAgentLog(api, project, path);
+  const live = useLiveState<unknown>(context, {
+    key: "agent",
+    door: async () =>
+      z
+        .object({ rev: z.number(), state: z.unknown() })
+        .parse(await context!.invoke("itx.facets.get('agent').liveSnapshot()")),
+  });
+  const facet = AgentLive.safeParse(live.value);
+  // The turn is over when the facet holds no obligation — a pause included (a paused loop owes no
+  // follow-up round). Without live state at all (the read failed), the log alone decides: the
+  // reducer settles only once no step is running, and a follow-up round reopens an activity.
+  const idle = facet.success
+    ? !facet.data.openRequest &&
+      !facet.data.pendingLlmRequestTrigger &&
+      Object.keys(facet.data.activeScriptExecutions).length === 0
+    : live.status === "error";
+  const feed = useMemo(() => reduceAgentFeed(events, idle), [events, idle]);
+  const [toggled, setToggled] = useState<ReadonlySet<string>>(() => new Set());
+  const onToggle = useCallback(
+    (id: string) =>
+      setToggled((held) => {
+        const next = new Set(held);
+        if (!next.delete(id)) next.add(id);
+        return next;
+      }),
+    [],
+  );
+  const inspected: Inspected = search.llmRequest
+    ? { kind: "llmRequest", llmRequestOffset: search.llmRequest }
+    : search.scriptExecution
+      ? { kind: "scriptExecution", executionId: search.scriptExecution }
+      : search.event
+        ? { kind: "event", offset: search.event }
+        : null;
+  const onInspect = useCallback(
+    (next: Inspected) =>
+      void navigate({
+        to: "/agents",
+        search: (prev) => ({
+          ...prev,
+          llmRequest: next?.kind === "llmRequest" ? next.llmRequestOffset : undefined,
+          scriptExecution: next?.kind === "scriptExecution" ? next.executionId : undefined,
+          event: next?.kind === "event" ? next.offset : undefined,
+        }),
+        replace: true,
+      }),
+    [navigate],
+  );
+  const inspect = useMemo<Inspect>(
+    () => ({
+      llmRequest: (llmRequestOffset) => onInspect({ kind: "llmRequest", llmRequestOffset }),
+      scriptExecution: (executionId) => onInspect({ kind: "scriptExecution", executionId }),
+    }),
+    [onInspect],
+  );
+  const signedUrl = useCallback(
+    async (filePath: string) => {
+      if (!context) throw new Error("not connected");
+      return z
+        .object({ url: z.string() })
+        .parse(await context.invoke(["itx", "files", ["get", filePath], ["url"]])).url;
+    },
+    [context],
+  );
+  const view = search.view || "chat";
+  const status = !facet.success
+    ? {
+        text: live.status === "error" ? "Live state unavailable" : "Connecting…",
+        tone: "muted" as const,
+      }
+    : facet.data.paused
+      ? { text: `Paused — ${facet.data.paused.reason}`, tone: "amber" as const }
+      : Object.keys(facet.data.activeScriptExecutions).length > 0
+        ? {
+            text: `Running a script${feed.state.summaryActivity ? ` · ${feed.state.summaryActivity}` : ""}`,
+            tone: "live" as const,
+          }
+        : facet.data.openRequest
+          ? { text: `Thinking · ${facet.data.openRequest.model}`, tone: "live" as const }
+          : facet.data.pendingLlmRequestTrigger
+            ? { text: "About to think", tone: "live" as const }
+            : { text: "Idle", tone: "muted" as const };
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="flex shrink-0 items-center gap-3 px-4 pb-1 pt-2.5">
+        <SidebarTrigger className="-ml-1 md:hidden" />
+        <span className="truncate font-mono text-sm">{path}</span>
+        <span
+          className="flex min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground"
+          title={live.error}
+          data-status={status.tone}
+        >
+          <CircleIcon
+            className={cn(
+              "size-2 shrink-0",
+              status.tone === "live" && "animate-pulse fill-emerald-500 text-emerald-500",
+              status.tone === "amber" && "fill-amber-500 text-amber-500",
+              status.tone === "muted" && "fill-muted-foreground/40 text-muted-foreground/40",
+            )}
+          />
+          <span className="truncate">{status.text}</span>
+        </span>
+        <Tabs
+          value={view}
+          onValueChange={(value) =>
+            void navigate({
+              to: "/agents",
+              search: (prev) => ({ ...prev, view: value === "chat" ? undefined : "events" }),
+              replace: true,
+            })
+          }
+          className="ml-auto"
+        >
+          <TabsList className="h-8">
+            <TabsTrigger value="chat" className="text-xs">
+              Chat
+            </TabsTrigger>
+            <TabsTrigger value="events" className="text-xs">
+              Events
+              <span className="font-mono text-[10px] text-muted-foreground/70">
+                {events.length}
+              </span>
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </header>
+      {error ? <p className="px-4 py-2 text-sm text-destructive">{error}</p> : null}
+      {view === "events" ? (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <EventsList events={events} onOpen={(offset) => onInspect({ kind: "event", offset })} />
+        </div>
+      ) : (
+        <>
+          <Conversation className="min-h-0 flex-1">
+            <ConversationContent className="mx-auto w-full max-w-3xl gap-0 px-4 py-2 md:px-6">
+              {!caughtUp ? (
+                <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+                  <Spinner className="size-4" /> Reading the log…
+                </div>
+              ) : feed.items.length === 0 && !feed.state.live ? (
+                <Empty className="py-16">
+                  <EmptyHeader>
+                    <EmptyTitle>Nothing said yet</EmptyTitle>
+                    <EmptyDescription>
+                      Say something below. The agent answers with prose, or with a script it runs
+                      against the project.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              ) : null}
+              {feed.items.map((item) => (
+                <AgentFeedItemRow
+                  key={item.id}
+                  item={item}
+                  expanded={toggled.has(item.id)}
+                  onToggle={onToggle}
+                  inspect={inspect}
+                  signedUrl={signedUrl}
+                />
+              ))}
+              <AgentLiveActivity state={feed.state} inspect={inspect} />
+            </ConversationContent>
+            <ConversationScrollButton />
+          </Conversation>
+          <div className="shrink-0 px-4 pb-4 pt-2 md:px-6">
+            <Composer
+              onSend={async (message, files: OutgoingFile[]) => {
+                using itx = await api.projects.get(project);
+                await itx.invoke(["itx", "agents", ["get", path], ["message", { message, files }]]);
+              }}
+            />
+          </div>
+        </>
+      )}
+      <InspectorSheet events={events} inspected={inspected} onInspect={onInspect} />
+    </div>
+  );
+}

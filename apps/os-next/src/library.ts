@@ -5,6 +5,10 @@
 //   capnweb     — `itx.connectToCapnweb(url)`: a remote capnweb API as a pipelinable handle
 //   mcp         — `itx.connectToMcp(url)`: an MCP client over Streamable HTTP
 //   openapi     — `itx.connectToOpenApi(spec)`: an OpenAPI 3 service as an RpcTarget of operationIds
+//   repos       — `itx.repos.get(path)` / `.list()`: a repo as a stream on any path — its `repo` facet
+//   workspaces  — `itx.workspaces.get(path)` / `.list()`: the workspace of any context — its `workspace` facet
+//   agents      — `itx.agents.get(path)` / `.list()`: an agent on any path — its `agent` facet, the loop that acts by scripts
+//   files       — `itx.files.get(path)` / `.list()`: project file storage — a path, its bytes and content type, over `itx.r2`
 
 import {
   RpcSession,
@@ -14,8 +18,17 @@ import {
   RpcTarget,
 } from "capnweb";
 import { z } from "zod";
+import {
+  keySortedForPrint,
+  InvokeHandle,
+  print,
+  walkStepsOnRpcStub,
+} from "iterate/next/expression";
 import type { BuiltInScope } from "./context/built-ins.ts";
-import { keySortedForPrint, InvokeHandle, walkStepsOnRpcStub } from "./context/expression.ts";
+import type { AgentDurableObject } from "./agent/durable-object.ts";
+import type { ProjectView } from "./project/contract.ts";
+import type { RepoDurableObject } from "./repo/durable-object.ts";
+import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 
 // ── the library ── THE LIBRARY: the built-ins that could be userspace. context/built-ins.ts has TWO
 // groups: ROOTS, implemented against ctx/env (the log, the stub registry, the rule table, the two
@@ -28,8 +41,9 @@ import { keySortedForPrint, InvokeHandle, walkStepsOnRpcStub } from "./context/e
 // from the stream, the DO or the context folder, except context/expression.ts — the codec and the
 // pipelinable handle).
 //
-// The verbs: `run` · `connectToMcp` · `connectToOpenApi` · `connectToCapnweb`. `run` is sugar over
-// `itx.workers.get` (the run section). The three connectors each
+// The verbs: `run` · `connectToMcp` · `connectToOpenApi` · `connectToCapnweb` · `repos.get`/`list` ·
+// `workspaces.get`/`list` · `agents.get`/`list` · `files.get`/`list`. `run` is sugar over `itx.workers.get` (the run section); the entity handles
+// over `itx.cd(path).facets.get` (the entities section). The three connectors each
 // return a connection RpcTarget a caller can hold across calls, and each does ALL its HTTP through
 // `itx.fetch` (egress: `getSecret("/secrets/NAME")` placeholders in headers substitute for free; a user
 // rule shadowing `itx.fetch` redirects the library too, which is how a test fakes a remote). The
@@ -46,9 +60,10 @@ import { keySortedForPrint, InvokeHandle, walkStepsOnRpcStub } from "./context/e
 // reopens itself on its next use (the mcp and capnweb sections), so a memoized one is never dead.
 
 /** What a library module is handed: the itx handle (the record's own dotted surface), narrowed to
- *  what the library uses today — `fetch`, the connectors' HTTP, and `workers`, the host `run` loads
- *  into. Widen it HERE when a module needs more of itx — never by importing something else. */
-export type LibraryItx = Pick<BuiltInScope, "fetch" | "workers">;
+ *  what the library uses today — `fetch`, the connectors' HTTP; `workers`, the host `run` loads
+ *  into; `cd`, the sibling a repo or workspace facet is hosted on. Widen it HERE when a module needs
+ *  more of itx — never by importing something else. */
+export type LibraryItx = Pick<BuiltInScope, "fetch" | "workers" | "cd" | "r2">;
 
 /** The library's roots, exactly as the built-ins record spreads them in: each verb closed over ONE
  *  `itx`. `BuiltInScope` (context/built-ins.ts) extends this, so the typed surface has them once. */
@@ -74,26 +89,115 @@ export interface LibraryRoots {
    *  (default) or one HTTP batch per chain (`{ transport: "batch" }`); dotted calls chain with no round
    *  trip per step. */
   connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
+  /** THE REPOS (src/repo/): a repo as a DOMAIN OBJECT — a stream on ANY path (`/repos/<name>` by
+   *  convention) whose `repo` facet lands the creation facts and the commit facts and memoizes the
+   *  tip — git spoken from inside the facet, its token and remote from `itx.cfArtifacts` (which derives the Artifacts repo's name from the path). `get(path)` is that
+   *  facet, hosted on its first call and addressed after; `create()` births it, and every other
+   *  method refuses until it has. Every call on the handle is one dotted expression on the facet
+   *  (`RepoDurableObject`'s methods: `create` `tip` `readFile` `listFiles` `commitFiles` `writeFile`
+   *  `log`). `list()` is the project catalog: the birth certificates cross-posted to `/`, folded by
+   *  the project processor (src/project/). */
+  repos: {
+    get(path: string): InvokeHandle & RepoFacet;
+    list(): Promise<{ path: string; createdAt: string }[]>;
+  };
+  /** THE WORKSPACES (src/workspace/): the workspace of ANY context, at most one per path —
+   *  `get(path)` is the `workspace` facet on `itx.cd(path)`, hosted on its first call and addressed
+   *  after — a workspace IS its path; `create()` births it, and every other method refuses until
+   *  it has. Every call on the handle is one dotted expression on that facet
+   *  (`WorkspaceDurableObject`'s methods: `readFile` `readBase` `writeFile` `deleteFile` `revert`
+   *  `listAllFiles` `mounts` `gitStatus` `gitCommit` `gitLog`). `list()` is the project catalog (as for repos). */
+  workspaces: {
+    get(path: string): InvokeHandle & WorkspaceFacet;
+    list(): Promise<{ path: string; createdAt: string }[]>;
+  };
+  /** THE AGENTS (src/agent/): an agent as a DOMAIN OBJECT — a conversation on the context at ANY
+   *  path (`/agents/<name>` by convention), driven by a model that acts by writing scripts against
+   *  that context's `itx`; apps/os's agent, lean. `get(path)` is the `agent` facet there, hosted on
+   *  its first call and addressed after; `create({ systemPrompt? })` births it — the processor row
+   *  (the loop runs on every commit) and the certificate, cross-posted to `/` — and `message(text)`
+   *  is a person's words, the trigger of a turn; everything the loop does is an event on the path.
+   *  `list()` is the project catalog: every `agent/created` cross-posted to `/`, folded by the
+   *  project processor (src/project/) — a userspace agent that announces itself lists the same. */
+  agents: {
+    get(path: string): InvokeHandle & AgentFacet;
+    list(): Promise<{ path: string; createdAt: string }[]>;
+  };
+  /** THE FILES (apps/os's `itx.files`, lean): project file storage as a PATH namespace over `itx.r2`
+   *  — a file is its path (leading slash), its bytes and a content type; last write wins, no
+   *  events. `get(path)` is a handle: `.put({ contentType, data })` (data: bytes, or a string that
+   *  is base64 or a `data:` URL) → the record, `.bytes()`, `.head()` (null when absent), `.delete()`,
+   *  and `.url({ method?, expiresInSeconds? })` — a signed URL on the project host that downloads
+   *  (`GET`, the default) or uploads (`PUT`) the file, `itx.r2.presign` underneath. `list(prefix?)`
+   *  is what apps/os lacks and an agent needs: the records under a prefix. */
+  files: {
+    get(path: string): InvokeHandle & FileHandle;
+    list(prefix?: string): Promise<FileRecord[]>;
+  };
 }
+
+/** A stored file as `itx.files` answers it: its path, content type and size. */
+export type FileRecord = { path: string; contentType: string; size: number };
+/** What a file handle's dotted members reach. */
+export type FileHandle = {
+  put(input: {
+    contentType?: string;
+    data: Uint8Array | ArrayBuffer | string;
+  }): Promise<FileRecord>;
+  bytes(): Promise<Uint8Array>;
+  head(): Promise<FileRecord | null>;
+  delete(): Promise<void>;
+  url(input?: {
+    method?: "GET" | "PUT";
+    expiresInSeconds?: number;
+  }): Promise<{ url: string; expiresAt: string }>;
+};
+
+/** What a repo handle's dotted members reach: the repo facet's own methods. */
+export type RepoFacet = Pick<
+  RepoDurableObject,
+  "create" | "tip" | "readFile" | "listFiles" | "commitFiles" | "writeFile" | "log"
+>;
+/** What an agent handle's dotted members reach: the agent facet's own doors. */
+export type AgentFacet = Pick<AgentDurableObject, "create" | "message">;
+/** What a workspace handle's dotted members reach: the workspace facet's own methods. */
+export type WorkspaceFacet = Pick<
+  WorkspaceDurableObject,
+  | "mounts"
+  | "readFile"
+  | "readBase"
+  | "writeFile"
+  | "deleteFile"
+  | "revert"
+  | "listAllFiles"
+  | "gitStatus"
+  | "gitCommit"
+  | "gitLog"
+>;
 
 /** The library, built once per context: the verbs closed over one `itx`, memoizing the live
  *  connections the connectors open, and the one release door. Nothing is constructed here: a wake
  *  pays nothing for the library until a verb runs. */
 export function buildLibrary(itx: LibraryItx): {
   roots: LibraryRoots;
-  /** Whether the library holds any live connection — one thing the idle quiesce must wait for (they
-   *  pin this actor awake the same way a live facet or a borrowed stub does). */
-  hasOpenConnections(): boolean;
+  /** Whether the library holds an open SOCKET — a capnweb WebSocket session — the one kind of
+   *  connection that keeps this actor resident (measured: like a borrowed stub), so the idle quiesce
+   *  arms for it. An MCP or OpenAPI client is HTTP handshakes: it holds nothing and pins nothing. */
+  holdsOpenSocket(): boolean;
   /** Close every connection the library holds (the idle quiesce's call); the next use reopens. */
   releaseConnections(): void;
 } {
-  const liveConnections = new Map<string, Promise<unknown>>();
-  const memoized = <T>(key: unknown[], open: () => Promise<T>): Promise<T> => {
+  const liveConnections = new Map<string, { connection: Promise<unknown>; holdsSocket: boolean }>();
+  const memoized = <T>(
+    key: unknown[],
+    holdsSocket: boolean,
+    open: () => Promise<T>,
+  ): Promise<T> => {
     const memoKey = JSON.stringify(key, keySortedForPrint); // keys sorted: two spellings, one key
-    let connection = liveConnections.get(memoKey) as Promise<T> | undefined;
+    let connection = liveConnections.get(memoKey)?.connection as Promise<T> | undefined;
     if (!connection) {
       connection = open();
-      liveConnections.set(memoKey, connection);
+      liveConnections.set(memoKey, { connection, holdsSocket });
       // a connect that FAILS is not kept — the next call retries (the caller sees the rejection)
       connection.catch(() => liveConnections.delete(memoKey));
     }
@@ -103,17 +207,58 @@ export function buildLibrary(itx: LibraryItx): {
     roots: {
       run: (script) => runScript(itx, script),
       connectToMcp: (url, options) =>
-        memoized(["mcp", url, options], () => connectToMcp(itx, url, options)),
+        memoized(["mcp", url, options], false, () => connectToMcp(itx, url, options)),
       connectToOpenApi: (specOrUrl, options) =>
-        memoized(["openapi", specOrUrl, options], () => connectToOpenApi(itx, specOrUrl, options)),
+        memoized(["openapi", specOrUrl, options], false, () =>
+          connectToOpenApi(itx, specOrUrl, options),
+        ),
       connectToCapnweb: (url, options) =>
-        memoized(["capnweb", url, options], () => connectToCapnweb(itx, url, options)),
+        memoized(["capnweb", url, options], options?.transport !== "batch", () =>
+          connectToCapnweb(itx, url, options),
+        ),
+      repos: {
+        get: (path) => repoHandle(itx, path),
+        list: async () =>
+          Object.entries((await projectCatalog(itx)).repos).map(([path, repo]) => ({
+            path,
+            ...repo,
+          })),
+      },
+      workspaces: {
+        get: (path) => workspaceHandle(itx, path),
+        list: async () =>
+          Object.entries((await projectCatalog(itx)).workspaces).map(([path, workspace]) => ({
+            path,
+            ...workspace,
+          })),
+      },
+      files: {
+        get: (path) => fileHandle(itx, path),
+        list: async (prefix = "") => {
+          // Every page: the semantic layer answers the whole set under a prefix.
+          const records: FileRecord[] = [];
+          for (let cursor: string | undefined; ; ) {
+            const page = await itx.r2.list({ prefix: fileKey(prefix), cursor });
+            for (const object of page.objects) records.push(fileRecord(object));
+            if (!page.truncated) return records;
+            cursor = page.cursor;
+          }
+        },
+      },
+      agents: {
+        get: (path) => agentHandle(itx, path),
+        list: async () =>
+          Object.entries((await projectCatalog(itx)).agents).map(([path, agent]) => ({
+            path,
+            ...agent,
+          })),
+      },
     },
-    hasOpenConnections: () => liveConnections.size > 0,
+    holdsOpenSocket: () => [...liveConnections.values()].some((c) => c.holdsSocket),
     releaseConnections: () => {
       // `close()` where a connection has one (the graceful half-close), else its dispose; a release
       // that throws is REPORTED — a connection that will not close is a fact worth a log line.
-      for (const [memoKey, connection] of liveConnections)
+      for (const [memoKey, { connection }] of liveConnections)
         void connection
           .then((c) => {
             const held = c as { close?: () => unknown; [Symbol.dispose]?: () => void };
@@ -172,6 +317,146 @@ export function runScript(itx: LibraryItx, script: unknown): Promise<unknown> {
     };
     return worker.run();
   })();
+}
+
+// ── the entities ── `itx.repos.get(path)`, `itx.workspaces.get(path)`: a repo (src/repo/) and a
+// workspace (src/workspace/) are each a FACET hosted on their own context — a facet named with a
+// spec is hosted on its first call and addressed after (the DO's startup memo; an unchanged spec never
+// restarts it), so nothing is appended to get one; `create()` appends the birth certificate (on its
+// path, cross-posted to `/`). Every call on the handle is one dotted expression
+// on that facet, run in the sibling under ITS rules (a test lends a fake `itx.cfArtifacts` on a repo's
+// context). A first-party facet is this worker's own class (first-party-facets.ts); a userspace one
+// could carry just the same. `list()` for both — and `agents.list()`, the agents having no
+// first-party facet to `get` — reads THE CATALOG: the `project` facet on `/` (src/project/), which
+// folds the cross-posted certificates; hosted the same way, on first read.
+
+/** A facet on the context at `path`: the call's steps, relative to the facet, as one dispatch there. */
+function facetHandle(itx: LibraryItx, path: string, name: string): InvokeHandle {
+  return new InvokeHandle(async (itxExpressionSteps) => {
+    // TWO dotted calls, never one chain (the `run` section says why): the sibling's handle first —
+    // in-process a VALUE — then the facet chain relative to it.
+    const context = await itx.cd(path);
+    return context.invoke(["facets", ["get", name], ...itxExpressionSteps]);
+  });
+}
+
+// An InvokeHandle's dotted members are DYNAMIC (expression.ts: every unknown member reduces to one
+// dispatch), so a handle types as the facet it dispatches to — the class the spec names — by
+// assertion: `InvokeHandle & RepoFacet` says what `handle.readFile(…)` lands on, which the runtime
+// guarantees (the spec's `className` IS that class) and the type system cannot see.
+
+/** The `workspace` facet on the context at `path`. */
+function workspaceHandle(itx: LibraryItx, path: string): InvokeHandle & WorkspaceFacet {
+  return facetHandle(itx, path, "workspace") as InvokeHandle & WorkspaceFacet;
+}
+
+// ── the files ── `itx.files.get(path)`: the path's object in `itx.r2` (already the owner's slice),
+// the key being the path without its leading slash, so `itx.r2.list()` shows the same objects.
+
+/** A file path's R2 key: leading slash off (a prefix may be empty). */
+const fileKey = (path: string): string => path.replace(/^\/+/, "");
+
+/** `put`'s data as bytes: bytes as they are; a string is base64, with or without a `data:` prefix
+ *  (apps/os's FileData rule — a string is never raw text). A `data:` URL's own content type wins. */
+function fileBytes(data: Uint8Array | ArrayBuffer | string): {
+  bytes: Uint8Array;
+  contentType?: string;
+} {
+  if (typeof data !== "string")
+    return { bytes: data instanceof Uint8Array ? data : new Uint8Array(data) };
+  const dataUrl = /^data:([^;,]*)(?:;[^,]*)?,(.*)$/s.exec(data);
+  const base64 = dataUrl ? dataUrl[2]! : data;
+  const binary = atob(base64.replace(/\s+/g, ""));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return { bytes, ...(dataUrl?.[1] && { contentType: dataUrl[1] }) };
+}
+
+/** A stored object as a file record: its key as a path, its content type from the HTTP metadata. */
+const fileRecord = (object: {
+  key: string;
+  size: number;
+  httpMetadata: { contentType?: string };
+}): FileRecord => ({
+  path: `/${object.key}`,
+  contentType: object.httpMetadata.contentType || "application/octet-stream",
+  size: object.size,
+});
+
+/** The file at `path`: every dotted member is one of the handle's verbs over `itx.r2`. */
+function fileHandle(itx: LibraryItx, path: string): InvokeHandle & FileHandle {
+  const key = fileKey(path);
+  const verbs: FileHandle = {
+    put: async (input) => {
+      const { bytes, contentType } = fileBytes(input.data);
+      return fileRecord(
+        await itx.r2.put(key, bytes, {
+          httpMetadata: {
+            contentType: input.contentType || contentType || "application/octet-stream",
+          },
+        }),
+      );
+    },
+    bytes: async () => {
+      const object = await itx.r2.get(key);
+      if (!object) throw new Error(`files: nothing at "/${key}"`);
+      return object.data;
+    },
+    head: async () => {
+      const object = await itx.r2.head(key);
+      return object ? fileRecord(object) : null;
+    },
+    delete: () => itx.r2.delete(key),
+    url: (input = {}) => itx.r2.presign({ key, ...input }),
+  };
+  return new InvokeHandle(async (itxExpressionSteps) => {
+    const [step, ...rest] = itxExpressionSteps;
+    if (rest.length > 0 || !Array.isArray(step) || !(step[0] in verbs))
+      throw new Error(
+        `files.get(path): one of put({ contentType, data }) · bytes() · head() · delete() · url({ method?, expiresInSeconds? }), got ${print(itxExpressionSteps)}`,
+      );
+    const [verb, ...args] = step as [keyof FileHandle, ...unknown[]];
+    // The verb's argument is wire-fed (an InvokeHandle's steps carry no validation); each verb
+    // reads what it needs and the runtime checks in fileBytes are the contract.
+    return (verbs[verb] as (...verbArgs: unknown[]) => unknown)(...args);
+  }) as InvokeHandle & FileHandle;
+}
+
+/** The `agent` facet's spec — ONE object for the library's hosting and the processor row it enables,
+ *  so the facet's startup memo never changes between the two. */
+
+/** The `agent` facet on the context at `path`. A `create` is TWO appends there: the processor row —
+ *  `itx.processors.enable`, spelled HERE because the library is what knows the facet's spec; DURABLE,
+ *  so the loop runs on every commit and outlives this session; enabled ONCE, a row already there is
+ *  left alone — and then the facet's own birth, idempotent on its side. */
+function agentHandle(itx: LibraryItx, path: string): InvokeHandle & AgentFacet {
+  return new InvokeHandle(async (itxExpressionSteps) => {
+    const context = await itx.cd(path);
+    const [first] = itxExpressionSteps;
+    if (Array.isArray(first) && first[0] === "create") {
+      const rows = (await context.invoke(["processors", ["list"]])) as { name: string }[];
+      if (!rows.some((row) => row.name === "agent"))
+        await context.invoke(["processors", ["enable", "agent"]]);
+    }
+    return context.invoke(["facets", ["get", "agent"], ...itxExpressionSteps]);
+  }) as InvokeHandle & AgentFacet;
+}
+
+/** The `repo` facet on the context at `path` — any path; the facet derives the Artifacts name from
+ *  it and refuses one it cannot back. */
+function repoHandle(itx: LibraryItx, path: string): InvokeHandle & RepoFacet {
+  return facetHandle(itx, path, "repo") as InvokeHandle & RepoFacet;
+}
+
+/** THE CATALOG: the `project` facet's view on `/` — what `repos.list()`, `workspaces.list()` and
+ *  `agents.list()` read. */
+async function projectCatalog(itx: LibraryItx): Promise<ProjectView> {
+  const context = await itx.cd("/");
+  const snapshot = await context.invoke(["facets", ["get", "project"], ["snapshot"]]);
+  // The facet is the platform's own ProjectDurableObject and `snapshot()` is the engine's
+  // `{ offset, state }`, its state the contract's parsed view — the shape is ours, so the read is
+  // asserted, not re-validated.
+  return (snapshot as { state: ProjectView }).state;
 }
 
 // ── what the three connectors share ──

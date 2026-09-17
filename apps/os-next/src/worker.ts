@@ -5,25 +5,30 @@ import * as cloudflareWorkers from "cloudflare:workers";
 import {
   newWorkersRpcResponse,
   RpcPromise as CapnwebRpcPromise,
+  RpcSession,
   RpcStub as CapnwebRpcStub,
+  WebSocketTransport,
 } from "capnweb";
+import { auth } from "iterate/next/sdk";
+import { verifyClaims } from "iterate/next/principal";
+import { registerPipelinedRpcBrand } from "iterate/next/expression";
+import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/next/principal";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 // the one worker's env: the DO's bindings plus the in-process control plane's (control-plane.ts `Env`)
 import type { Env as WorkerEnv } from "./control-plane.ts";
-import { auth } from "./sdk/auth.ts";
 import { identityDoor } from "./identity.ts";
-import { SECRET_CONNECT_CALLBACK_PATH, secretConnectCallback } from "./secret-connect.ts";
+import { isSecretOAuthState, SECRET_OAUTH_CALLBACK_PATH } from "./secret-oauth.ts";
+import type { Reach } from "./directory.ts";
 import { oauthResponse } from "./api.ts";
 import { consoleHandler } from "./control-plane.ts";
 import { appConfigOf } from "./app-config.ts";
 import { projectHostOf, hostnameLabelsUnderBase } from "./hosts.ts";
+import { FILES_APP_LABEL, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
 import { directory } from "./directory.ts";
-import { registerPipelinedRpcBrand } from "./context/expression.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
-import { DurableObjectNameCodec } from "./iterate-context.ts";
+import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./iterate-context.ts";
 import { IterateRpcTarget, SessionTeardown, type SessionInput } from "./session.ts";
-import { ITX_PRINCIPAL_HEADER, type Principal } from "./principal.ts";
 import { authorizationForToken, recordGrantUse, cleanGrantActivity } from "./oauth.ts";
 
 /** A project host's re-entry count — THE COUNT THE APP FORWARDS: an app that fetches its own host
@@ -69,6 +74,110 @@ function projectHostRequestTo(
   return new Request(request, { headers });
 }
 
+/** A secret's OWNER (iterate-context.ts `resourceScope`), read back from its id: a project's id,
+ *  or `global--users--<id>` / `global--organizations--<id>`; `root` is the owner's root context —
+ *  the catalog, where `itx.secrets` runs. */
+function secretOwnerOf(owner: string): {
+  kind: "project" | "users" | "organizations";
+  id: string;
+  root: string;
+} {
+  const [, kind, id] = /^global--(users|organizations)--(.+)$/.exec(owner) ?? [];
+  if (kind !== "users" && kind !== "organizations")
+    return {
+      kind: "project",
+      id: owner,
+      root: DurableObjectNameCodec.stringify({ projectId: owner, path: "/" }),
+    };
+  return {
+    kind,
+    id: id || "",
+    root: DurableObjectNameCodec.stringify({
+      projectId: GLOBAL_PROJECT_ID,
+      path: `/${kind}/${id}`,
+    }),
+  };
+}
+
+/** WHO may complete a secret's OAuth: a session that reaches the secret's owner — for a project's
+ *  secret, a session reaching that project; for a user's own, that user; for an organization's, a
+ *  member; the admin reaches every one. A project-bound bearer reaches no user's or organization's
+ *  own secrets; nothing but the admin reaches the global root's. */
+async function reachesSecretOwner(
+  directory: SessionInput["directory"],
+  reach: Reach,
+  owner: ReturnType<typeof secretOwnerOf>,
+): Promise<boolean> {
+  if (reach === "every") return true;
+  if (owner.kind === "project")
+    return owner.id !== GLOBAL_PROJECT_ID && directory.reachesProject(reach, owner.id);
+  if (!("userId" in reach)) return false;
+  if (owner.kind === "users") return reach.userId === owner.id;
+  return (await directory.listOrgs(reach.userId)).some((org) => org.id === owner.id);
+}
+
+/** A secret's OAuth callback: the provider redirected the human here with `code` and the
+ *  platform-signed `state` (secret-oauth.ts) naming the secret's owner, its name and the nonce. WHO
+ *  completes it is admitted the way a project host admits a visitor — the same platform session (a
+ *  browser cookie, or a bearer) — and must reach the owner (`reachesSecretOwner`): a stranger who saw
+ *  the authorize URL cannot plant their own provider account into someone else's secret. The
+ *  secret's Durable Object then exchanges the code; a failure is a plain-text 4xx with the reason,
+ *  never a credential. */
+async function secretOAuthCallback(
+  request: Request,
+  env: WorkerEnv,
+  ctx: ExecutionContext,
+  sessionInput: SessionInput,
+): Promise<Response> {
+  const url = new URL(request.url);
+  const answer = (status: number, text: string) =>
+    new Response(`${text}\n`, {
+      status,
+      headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
+    });
+  const claims = await verifyClaims(
+    url.searchParams.get("state") ?? "",
+    sessionInput.appConfig.sessionSecret.exposeSecret(),
+  );
+  if (!isSecretOAuthState(claims) || claims.exp <= Date.now())
+    return answer(400, "This link is not one the platform issued, or it has expired.");
+  const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
+  const authorization = bearer
+    ? await authorizationForToken(env, ctx, bearer)
+    : await browserAuthorization(env, request, ctx);
+  if (!authorization)
+    return answer(
+      401,
+      "Sign in to Iterate in this browser first, then open this link again — the tokens go into a project you must be a member of.",
+    );
+  const owner = secretOwnerOf(claims.owner);
+  if (!(await reachesSecretOwner(sessionInput.directory, authorization.reach, owner)))
+    return answer(403, `Your session cannot access the secrets of ${claims.owner}.`);
+  const denied = url.searchParams.get("error");
+  if (denied) return answer(400, `The provider declined: ${denied}`);
+  const code = url.searchParams.get("code");
+  if (!code) return answer(400, "The provider sent no authorization code.");
+  // Through the owner's root context — `itx.secrets.completeOAuth` (built-ins.ts) runs the exchange
+  // in the secret's object and appends the catalog fact, serialized with every other write to
+  // that name; the platform's own call, no principal.
+  try {
+    await env.ITERATE_CONTEXT.getByName(owner.root).invoke(
+      ["itx", "builtins", "secrets", ["completeOAuth", claims.name, { code, nonce: claims.nonce }]],
+      [],
+      { principal: null },
+    );
+  } catch (error) {
+    return answer(
+      400,
+      `Storing the tokens for ${claims.name} failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  return answer(
+    200,
+    `Done: the secret "${claims.name}" of ${claims.owner} holds the tokens. You can close this tab.`,
+  );
+}
+
 // The native workerd brands the step walk threads unawaited (expression.ts `PIPELINED_RPC_BRANDS` —
 // it cannot import cloudflare:workers itself). A call step yields an RpcPromise; a PROPERTY step on
 // one yields an RpcProperty — both pipeline, so both register. The cast bridges a workers-types gap:
@@ -85,8 +194,16 @@ registerPipelinedRpcBrand(CapnwebRpcPromise as unknown as abstract new () => unk
 registerPipelinedRpcBrand(CapnwebRpcStub as unknown as abstract new () => unknown);
 
 export { IterateContextDurableObject };
-export { BrowserSession } from "./browser-session.ts";
+export { BrowserSession } from "iterate/next/app-session";
 export { SecretDurableObject } from "./secret-durable-object.ts";
+// THE FIRST-PARTY FACETS: exported Durable Object classes hosted as facets of a context through
+// `ctx.exports` (first-party-facets.ts FIRST_PARTY_FACET_CLASSES) — ordinary bundled
+// worker code with the worker's real env, never a loaded source.
+export { AccountDurableObject } from "./account/durable-object.ts";
+export { AgentDurableObject } from "./agent/durable-object.ts";
+export { ProjectDurableObject } from "./project/durable-object.ts";
+export { RepoDurableObject } from "./repo/durable-object.ts";
+export { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 export { ItxEntrypoint } from "./iterate-context.ts";
 
 export default {
@@ -139,6 +256,16 @@ export default {
           { status: 421 },
         );
       const projectId = project.id;
+      // THE FILES HOST (context/file-urls.ts): `files--<project>` serves a signed file URL straight
+      // from the bucket, before any session or DO — the token in the URL is the authorization.
+      if (projectHost.app === FILES_APP_LABEL)
+        return serveProjectFileRequest({
+          bucket: env.FILES,
+          secret: appConfig.sessionSecret.exposeSecret(),
+          project: projectId,
+          keyPrefix: `${resourceScope(projectId, "/").id}/`,
+          request,
+        });
       const browserResponse = await browserClient(request, env, ctx);
       if (browserResponse) return browserResponse;
       const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
@@ -189,19 +316,44 @@ export default {
 
     // Explicit operator fixtures. Public clients authenticate at the HTTP boundary.
     if (url.pathname === "/internal/rpc") {
-      // newWorkersRpcResponse serves BOTH a WebSocket upgrade AND a one-shot HTTP batch —
-      // a CLI script or cron does one POST, no socket handshake. (Batch sessions cannot hold
-      // live capabilities: a live provide needs the relay to outlive the response —
-      // the relay's lend call simply fails there, which is the honest error.)
-      return newWorkersRpcResponse(
-        request,
-        new IterateRpcTarget(sessionInput, new SessionTeardown(), null),
+      const root = new IterateRpcTarget(sessionInput, new SessionTeardown(), null);
+      // A one-shot HTTP batch — a CLI script or cron does one POST, no socket handshake. (Batch
+      // sessions cannot hold live capabilities: a live provide needs the relay to outlive the
+      // response — the relay's lend call simply fails there, which is the honest error.)
+      if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
+        return newWorkersRpcResponse(request, root);
+      // The WebSocket session spelled out (what newWorkersRpcResponse does) so the transport is ours:
+      // a peer's `["abort", …]` frame is its only word on WHY it left — the ESP32's C client says
+      // CAPNWEB_E_TOKEN_LIMIT and kin there — and capnweb consumes it without a hook.
+      const pair = new WebSocketPair();
+      pair[0].accept();
+      const transport = new WebSocketTransport(pair[0] as unknown as WebSocket);
+      new RpcSession(
+        {
+          send: (message) => transport.send(message),
+          receive: async () => {
+            const message = await transport.receive();
+            if (message.startsWith('["abort"'))
+              console.warn({
+                event: "rpc-session-aborted-by-peer",
+                namespace: "worker",
+                message: "the client aborted its capnweb session and said why",
+                door: "internal-rpc",
+                reason: (JSON.parse(message) as [string, unknown])[1],
+              });
+            return message;
+          },
+          abort: (reason) => transport.abort(reason),
+        },
+        root,
       );
+      return new Response(null, { status: 101, webSocket: pair[1] });
     }
 
-    // The OAuth connect half's one callback (secret-connect.ts): a provider sends a human back here
-    // with the code for a project secret. Before the browser adapter, which owns the rest of /.auth/*.
-    if (url.pathname === SECRET_CONNECT_CALLBACK_PATH) return secretConnectCallback(request, env);
+    // A project secret's OAuth callback (secret-oauth.ts): the provider sends the human back here
+    // with the code. Its own reserved path, `/.secrets/`, beside `/version` and `/internal/rpc`.
+    if (url.pathname === SECRET_OAUTH_CALLBACK_PATH)
+      return secretOAuthCallback(request, env, ctx, sessionInput);
     const identityResponse = await identityDoor(request, env);
     if (identityResponse) return identityResponse;
     if (!appConfig.mcpOrigin && url.pathname === "/mcp") return oauthResponse(request, env, ctx);
@@ -209,8 +361,8 @@ export default {
     if (browserResponse) return browserResponse;
     if (url.pathname.startsWith("/api")) return new Response("Not found", { status: 404 });
 
-    // THE STATIC ASSETS — the console's client bundle (dist/client, `vite build`) and the hosted /demo
-    // page (public/demo.html, build-sdk.mjs) — are the PLATFORM HOST's. Every request runs
+    // THE STATIC ASSETS — the console's client bundle (dist/client, `vite build`) — are the PLATFORM
+    // HOST's. Every request runs
     // worker-first (wrangler.jsonc `run_worker_first: true` — the patterns are paths, never hostnames,
     // so "every host but a project host" is spelled by asking the binding HERE, after the project
     // hosts and the platform's own doors): no asset ever answers on a project host, and a miss falls

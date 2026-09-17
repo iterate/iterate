@@ -5,12 +5,12 @@
 // kernel every project processor uses, no new framework. The contract's `events` map is the
 // vocabulary: each type string with its zod payload schema, visible right here. The reduce's event
 // union is DERIVED from the contract (`ConsumedEvent`), so there is no hand-kept discriminated union.
-// The copy that runs in a facet is NOT hand-kept either — build-sdk.mjs bundles the
+// The copy that runs in a facet is NOT hand-kept either — the facet is this worker's own class, the
 // `AccountProcessor` (via ./durable-object.ts) into the loaded `cap.js`, one source. No D1: the
 // processor only reduces its own stream. Credentials are NOT here: a personal access token is an
 // OAuth grant (grants.ts), listed and ended through `session.grants`, never an account event.
 import { z } from "zod";
-import { defineProcessorContract } from "../stream/processor.ts";
+import { defineProcessorContract } from "iterate/next/stream/processor";
 
 // ── event payloads (facts the platform publishes) ──
 

@@ -1,17 +1,15 @@
-// client/demo.tsx — THE HOSTED DEMO. build-sdk.mjs bundles this (React + react-dom + the capnweb
-// fork + the useLiveState hook, all inlined — no CDN) into one self-contained HTML string the worker
-// serves at `/demo` (worker.ts). Open it against any deployment: it dials `/api` over capnweb exactly
+// client/demo.tsx — THE HOSTED DEMO, the console's `/demo` route (src/routes/demo.tsx). Open it against any deployment: it dials `/api` over capnweb exactly
 // like production, loads the `PresenceProcessor` into a dynamic worker, subscribes to its live state,
 // and renders reduced ⊕ runtime — the `ticks` reduce and the `lastPokeMs` runtime field — updating live
 // as you press the buttons, each of which just appends an event on the stream.
 
 import { useEffect, useState } from "react";
-import { createRoot } from "react-dom/client";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import { z } from "zod";
-import { PRESENCE_PROCESSOR_SOURCE } from "../generated/presence-processor-source.ts";
-import type { IterateContextRpcTarget, IterateRpcTarget } from "../types.ts";
-import { useLiveState } from "./react.tsx";
+import PRESENCE_PROCESSOR_SOURCE from "virtual:presence-processor-source";
+import { useLiveState } from "iterate/next/react";
+import type { IterateContextRpcTarget } from "../iterate-context.ts";
+import type { IterateRpcTarget } from "../session.ts";
 
 /** Dial /api with the console's login cookie (it rode the handshake; the visitor signed in at `/`)
  *  and open the visitor's own demo project — `demo-<email>`, created in their org on first visit.
@@ -37,7 +35,7 @@ async function connectAndEnable(): Promise<RpcStub<IterateContextRpcTarget>> {
 }
 
 // oxlint-disable-next-line react/only-export-components -- entry-point bundle: Demo is rendered below, never imported, so fast refresh doesn't apply
-function Demo() {
+export function Demo() {
   const [itx, setItx] = useState<RpcStub<IterateContextRpcTarget>>();
   const [connectError, setConnectError] = useState<string>();
   useEffect(() => {
@@ -145,6 +143,3 @@ const btn: React.CSSProperties = {
   background: "#fff",
   cursor: "pointer",
 };
-
-const el = document.getElementById("root");
-if (el) createRoot(el).render(<Demo />);

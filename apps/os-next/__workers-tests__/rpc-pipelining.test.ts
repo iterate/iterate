@@ -12,7 +12,7 @@
 import "../src/worker.ts";
 import * as cloudflareWorkers from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { walkSteps } from "../src/context/expression.ts";
+import { walkSteps } from "iterate/next/expression";
 import { stub } from "./support.ts";
 
 test("cloudflare:workers exports RpcPromise and native RPC calls are instanceof it", async () => {

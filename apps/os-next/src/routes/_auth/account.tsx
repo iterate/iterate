@@ -7,9 +7,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo } from "react";
 import { z } from "zod";
-import { useLiveState } from "../../client/react.tsx";
+import { useLiveState } from "iterate/next/react";
 import { useItx } from "../-itx.tsx";
-import { ACCOUNT_PROCESSOR_SOURCE } from "../../generated/account-processor-source.ts";
 import { AccountContract, AccountView } from "../../account/contract.ts";
 
 export const Route = createFileRoute("/_auth/account")({
@@ -18,8 +17,6 @@ export const Route = createFileRoute("/_auth/account")({
   // deferred with the enforcement.
   loader: async ({ context }) => {
     await context.api.user.processors.enable("account", {
-      source: ACCOUNT_PROCESSOR_SOURCE,
-      className: "AccountDurableObject",
       consumes: [...AccountContract.consumes],
     });
   },

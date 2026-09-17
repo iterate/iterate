@@ -388,9 +388,11 @@ invariants:
   teardown is decoupled from releasing the slot (and how disposable data
   expires 3h after last use).
 - **A slot is only populated while a run is in progress.** `preview deploy`
-  erases the slot's data (Durable Objects, D1, KV, Artifacts repos —
-  `erase-data`) before every deploy, not just when the slot changes hands,
-  and CI runs `preview erase` again after the e2e. Each run otherwise leaves a
+  resets the slot's active state (Durable Objects, D1 and KV) before every
+  deploy, not just when the slot changes hands, and CI runs `preview erase`
+  again after the e2e. These normal resets pass `--preserve-artifacts`:
+  repository sweeps wait until PR-close cleanup, explicit reclaim or expiry GC.
+  Each run otherwise leaves a
   population of test projects whose Durable Objects keep waking until the
   next push or the lease expiry (~$15–25/hour per slot; the 2026-09-01
   runaway), and a push that cancels a running e2e SIGKILLs it, so in-test
@@ -459,12 +461,50 @@ direct deploy from an old checkout cannot be protected by code that checkout
 does not contain and is unsupported. Doppler/Cloudflare deploy access is an
 operator capability, so use current `main` for manual preview deployments.
 
+### Main preview runs
+
+Main runs the full preview fleet after each push through the same distributed
+`preview-run.yml` workflow as PRs. Its commands use `--commit <full-sha>`.
+It leases an ordinary slot with the
+holder `main-preview`. Each run renews that holder's existing lease when present,
+then erases test data after the tests without releasing the slot. The same 3h
+expiry applies as for PRs: after a quiet period, main may get a different slot.
+No slots are reserved and no Semaphore policy changes are needed.
+
+The main workflow finishes its active deploy/test/erase before starting the
+newest queued commit. PR cancellation behavior is unchanged. Dispatch it with
+`depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow preview-main.yml --ref <branch>`.
+Local `--commit` invocations are refused because they bypass that workflow lock.
+
+`preview ci-prepare --commit` requires a clean checkout at the exact SHA and that commit's
+pkg.pr.new packages (published by main/PR CI). A branch dispatch keeps its branch
+identity, so validation cannot replace the dashboard's main results.
+The same `ci-prepare`, `ci-test`, `ci-finish`, `deploy`, `test`, `run`, `test-target`, `assign`, `erase`, and `cleanup`
+commands accept either `--pull-request-number <n>` or `--commit <full-sha>`.
+Target setup supplies the revision, lease holder, comparison base, review login
+and report. PRs compare against their base; the workflow target deploys the full
+fleet. Execution does not branch on the source.
+
+PR state lives in the managed PR body. Main saves its report atomically in
+`test-results/main-preview-state.json`; subsequent commands in the same job
+attempt reload it. A new job/attempt starts fresh, while Semaphore independently
+retains the lease. These are job-local reports, not a cross-job deployment store.
+The immutable `preview-ci-plan.json` carries the deployment between jobs;
+consumers validate its commit, attempt, holder and branch before using it.
+
+Both workflows call `preview erase` only after every test job has settled,
+in parallel with report collection. Cleanup does not depend on downloading reports.
+It keeps the lease; `preview cleanup` erases and releases it. Main erase failures
+fail the finalizer job. Cleanup still runs if the build dirtied tracked files;
+preparation requires a clean checkout. Main's fixed concurrency group covers the
+whole called workflow, including erase. PRs retain their existing superseded-head erase guard.
+
 ### Story 1: CI previews my PR
 
 Opening/pushing a PR that touches preview-relevant paths triggers the
-`Cloudflare Previews` workflow, which runs `pnpm preview run` — deploy then
-e2e as one step, sharing one resolved PR head so a push cannot race into a
-gap between them. The PR body's managed "Environment Config Lease" section
+`Preview` workflow. Preparation deploys once, then app tests and six browser
+shards consume the same immutable deployment plan. The caller holds the lifecycle
+lock through result collection and cleanup. The PR body's managed "Environment Config Lease" section
 records the slot, per-app URLs and statuses; the workflow logs narrate every
 decision (which apps were selected and why, lease transitions, slot waits).
 Diff selection may reuse an unchanged app's exact recorded Worker deployment,
@@ -472,8 +512,8 @@ but never its test result: every triggered PR head reruns every recorded app's
 e2e suite, and a run with no runnable deployment fails instead of reporting a
 green `deploy + e2e` check.
 Closing or merging the PR runs `pnpm preview cleanup`, which destroys the
-PR's apps (for os that means erasing the slot's data — auth D1 and
-project-directory KV) and releases the slot — after verifying the PR still
+PR's apps (including OS Durable Objects, auth D1, project-directory KV and
+Artifacts repositories) and releases the slot — after verifying the PR still
 holds it.
 
 Slot cleanliness is an **invariant of entry**, not a promise about exits:
@@ -481,8 +521,9 @@ every handover — a fresh acquire, an adopted lease, a reclaim, an
 `assign`ed slot — erases the slot's data before the new holder gets it. So
 even when an exit path skips the cleanup erase (failed cleanup followed by
 lease expiry, `release --force`, a run cancelled mid-claim), the next tenant
-never sees the previous one's data; they just pay the ~half-minute wipe on
-their first deploy to that slot. The one deliberate exception is manual
+starts with fresh application state. Orphaned Artifacts repositories remain
+until a full cleanup; new project IDs isolate subsequent tests, and tests of
+deployment-wide repos use unique paths. The one deliberate exception is manual
 `preview acquire` (Story 4): it parks a slot without wiping it, so you can
 lease a slot precisely to inspect what's on it.
 

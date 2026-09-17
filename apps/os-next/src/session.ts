@@ -3,6 +3,9 @@
 
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
+import type { IterateApi } from "iterate/next/api";
+import { codedError } from "iterate/next/lib";
+import { verifyAdminSecret, type Principal } from "iterate/next/principal";
 import type { Consent } from "./consent.ts";
 import type { Grants } from "./grants.ts";
 import {
@@ -20,20 +23,19 @@ import {
   type Reach,
 } from "./directory.ts";
 import type { AppConfig } from "./app-config.ts";
-import { codedError } from "./lib.ts";
-import { verifyAdminSecret, type Principal } from "./principal.ts";
 import type { AuthenticationFact } from "./account/contract.ts";
 
 /** One DNS-safe name — the directory row, the DO name, the host label; in this deployment a project's
  *  id IS its slug. */
 export type ProjectIdOrSlug = string;
 
-/** What `IterateRpcTarget.authenticate` accepts. `from-server-cookie` is the browser: the OAuth gate
- *  already resolved the session from the request, so this only says "hand me that session".
- *  `admin-secret` is the operator/CLI credential, verified in-band. Every other caller is an OAuth
- *  grant (a personal access token included) and arrives resolved, as `from-server-cookie` does. */
+/** What `IterateRpcTarget.authenticate` accepts. `from-server-cookie` is the browser and `bearer` is
+ *  a device or script whose token rode the upgrade: the OAuth gate already resolved the session from
+ *  the request, so either only says "hand me that session". `admin-secret` is the operator/CLI
+ *  credential, verified in-band. */
 const SessionCredentials = z.discriminatedUnion("type", [
   z.object({ type: z.literal("from-server-cookie") }),
+  z.object({ type: z.literal("bearer") }),
   z.object({
     type: z.literal("admin-secret"),
     secret: z.string(),
@@ -89,12 +91,16 @@ export class IterateRpcTarget extends RpcTarget {
     if (!credentials.success)
       throw codedError(
         "INVALID_CREDENTIALS",
-        "authenticate({ type }): 'from-server-cookie' (browser) or 'admin-secret' (operator).",
+        "authenticate({ type }): 'from-server-cookie' (browser), 'bearer' (a token on the upgrade) or 'admin-secret' (operator).",
       );
-    if (credentials.data.type === "from-server-cookie") {
+    if (credentials.data.type === "from-server-cookie" || credentials.data.type === "bearer") {
       if (!this.#resolved)
         throw codedError("UNAUTHENTICATED", "this transport carries no session — sign in first.");
-      this.#publishAuthenticationFact(this.#resolved.principal, "from-server-cookie");
+      // A person signing in is an account fact; a device or script presenting its token on every
+      // reconnect is not (the grant's last use already records it) — so only the browser form
+      // publishes one.
+      if (credentials.data.type === "from-server-cookie")
+        this.#publishAuthenticationFact(this.#resolved.principal, "from-server-cookie");
       return new SessionRpcTarget(this.#input, this.#sessionTeardown, this.#resolved);
     }
     const admin = await verifyAdminSecret(
@@ -263,11 +269,18 @@ export class SessionRpcTarget extends RpcTarget {
    *  has (`session.user` is `session.projects.get(...)` one namespace over). A getter, like
    *  `projects`. Refused for the admin credential — it names no human. */
   get user(): IterateContextRpcTarget {
-    const { principal } = this.#authority;
+    const { principal, reach } = this.#authority;
     if (!principal.email)
       throw codedError(
         "FORBIDDEN",
         "this credential identifies no user — the admin credential names no `.user` context",
+      );
+    // A grant bound to projects (a personal access token a device holds) reaches those projects
+    // and nothing of the person's own: the user context is the account, not a project.
+    if (reach !== "every" && "projectIds" in reach)
+      throw codedError(
+        "FORBIDDEN",
+        "this credential is bound to projects — it opens no `.user` context",
       );
     return this.#globalContext(`/users/${principal.actor}`);
   }
@@ -450,3 +463,7 @@ export class SessionTeardown {
     this.#undoByKey.clear();
   }
 }
+
+// THE PUBLISHED API IS DECLARED, NOT GENERATED (iterate/next/api): this root satisfies it, checked here.
+const _iterateApi: IterateApi = null as unknown as IterateRpcTarget;
+void _iterateApi;

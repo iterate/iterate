@@ -21,8 +21,8 @@ export interface Env {
    * internal error).
    */
   WORKER_SELF: string;
-  /** Preview-only pkg.pr.new ref pinned onto iterate/iterate package specs in
-   * dynamic builds. Deploy writes this from PREVIEW_PULL_REQUEST_HEAD_SHA. */
+  /** Deployed pkg.pr.new ref pinned onto iterate/iterate package specs in
+   * dynamic builds. Deploy writes this from PLATFORM_DEPLOY_HEAD_SHA. */
   APP_CONFIG_ITERATE_REPO_PKG_REF?: string;
   /** Local-dev-only JSON map of dependency name → replacement spec (the
    * worktree SDK tarball lockstep — scripts/lib/dev-sdk-tarball.ts). */

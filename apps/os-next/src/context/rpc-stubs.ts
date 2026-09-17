@@ -5,10 +5,10 @@
 //   rpc stub fetch     — the fetch-shaped transport under both (`dialRpcStubFetch`, `RpcStubFetchServer`)
 
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
-import { codedError, errorCode } from "../lib.ts";
-import type { StreamEventInput } from "../stream/processor.ts";
+import { codedError, errorCode } from "iterate/next/lib";
+import type { StreamEventInput } from "iterate/next/stream/processor";
+import { type ItxExpression, walkStepsOnRpcStub } from "iterate/next/expression";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
-import { type ItxExpression, walkStepsOnRpcStub } from "./expression.ts";
 
 // ── rpc stub directory ── THE RPC STUBS, DO side: the `itx.rpcStubs` built-in's backing
 // table — physical, never event-sourced. Two layers, in the order the tutorial builds them:
@@ -184,7 +184,7 @@ export class RpcStubDirectory {
     }
   }
 
-  /** Any stub borrowed right now (O(1)) — what makes the quiet clock worth arming. */
+  /** Any stub borrowed right now (O(1)) — what makes the idle deadline worth arming. */
   hasBorrowedRpcStubs(): boolean {
     return this.#borrowedRpcStubs.size > 0;
   }
@@ -483,9 +483,16 @@ class LentRpcStub extends WorkersRpcTarget {
  *  which the DO appends as it accepts the pager (the directory section above; a refusal comes back
  *  as the upgrade's answer with its code, and this function throws it with nothing lent) — and answer
  *  every page with a fresh `LentRpcStub`. The pager lives until disposed (explicitly, or at session
- *  end); its close makes the DO return the stub. */
+ *  end); its close makes the DO return the stub. THE LEND IS THE SESSION'S, NOT THE SOCKET'S: the
+ *  pager is a connection between this isolate and the DO, never the client's own socket, and it
+ *  drops while the session lives — a fault on the hop between colos, a DO reset (which kills every
+ *  hibernatable socket with no close handler run). A pager that closes with neither side having
+ *  ended the lend is RE-DIALED: the DO's attach re-appends `appendEvents`, and the directory treats
+ *  a second pager at the key as a reconnect, never a detach. */
 export async function lendRpcStubOverPager(
-  durableObject: IterateContextDurableObjectStub,
+  /** Minted per use, never held: a DurableObjectStub that saw a reset replays it on every later call
+   *  (Cloudflare's error-handling guide), and a re-dial after a reset must reach the fresh incarnation. */
+  durableObjectStub: () => IterateContextDurableObjectStub,
   clientRpcStub: ClientRpcStub,
   rpcStubKey: string,
   appendEvents: StreamEventInput[],
@@ -494,10 +501,10 @@ export async function lendRpcStubOverPager(
   const sessionRpcStub = clientRpcStub.dup(); // dup FIRST: a value that is not a stub fails here, before any socket
   // the one shared "the lend ended" reason (LentRpcStub#lendEnded says why it is shared)
   const lendEnded: { reason: string | null } = { reason: null };
-  // THE PAGER WEBSOCKET, opened through the DO's fetch door: the header is the attach request.
-  let response: Response;
-  try {
-    response = await durableObject.fetch("https://rpc-stub-pager.internal/", {
+  // THE PAGER WEBSOCKET, opened through the DO's fetch door: the header is the attach request — the
+  // first dial here, every re-dial below.
+  const dialPager = () =>
+    durableObjectStub().fetch("https://rpc-stub-pager.internal/", {
       headers: {
         Upgrade: "websocket",
         [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeRpcStubPagerAttachRequest({
@@ -506,13 +513,15 @@ export async function lendRpcStubOverPager(
         }),
       },
     });
+  let response: Response;
+  try {
+    response = await dialPager();
   } catch (error) {
     // the DO never answered: nothing is lent, and the session's dup must not outlive the attempt
     disposeRpcStub(sessionRpcStub);
     throw error;
   }
-  const pagerWebSocket = response.webSocket;
-  if (response.status !== 101 || !pagerWebSocket) {
+  if (response.status !== 101 || !response.webSocket) {
     // The DO refused (a paused stream, a row the reduce rejects): nothing is lent, and the refusal's
     // CODE crosses to the caller as the same coded error the append door would have thrown.
     disposeRpcStub(sessionRpcStub);
@@ -528,43 +537,113 @@ export async function lendRpcStubOverPager(
       refusal?.code ? { code: refusal.code } : {},
     );
   }
-  pagerWebSocket.accept();
-  // Keep this leg warm: a 30s keepalive the DO auto-answers via setWebSocketAutoResponse WITHOUT
-  // waking it — defeats the ~100s idle-close and keeps the /api isolate warm. Dies with the isolate.
-  const keepalive = setInterval(() => {
-    try {
-      pagerWebSocket.send(RPC_STUB_PAGER_KEEPALIVE_REQUEST);
-    } catch {
-      clearInterval(keepalive);
-    }
-  }, 30_000);
-  pagerWebSocket.addEventListener("close", () => clearInterval(keepalive));
-  // The page answer: a fresh Workers-RPC leg around the session's capnweb stub, lent to the DO. The
-  // keepalive ack rides this same socket, so anything that is not a page is ignored.
-  pagerWebSocket.addEventListener("message", (event: MessageEvent) => {
-    if (typeof event.data !== "string") return;
-    let page: unknown;
-    try {
-      page = JSON.parse(event.data);
-    } catch {
-      return;
-    }
-    if ((page as { type?: string } | null)?.type !== "page") return;
-    waitUntil(
-      durableObject
-        .lendRpcStub({
-          rpcStubKey,
-          stub: new LentRpcStub(sessionRpcStub, lendEnded, durableObject),
-        })
-        .catch(() => undefined), // offline throws — ignore; the DO's page times out on its own
-    );
-  });
   // THE ONE PLACE the session's dup is disposed, the reason set FIRST (the first reason wins) so a
   // call already walking the dup re-codes (LentRpcStub#recodeIfLendEnded).
   const disposeSessionRpcStub = (reason: string) => {
     lendEnded.reason ||= reason;
     disposeRpcStub(sessionRpcStub);
   };
+  /** The pager in service — a re-dial replaces it. */
+  let pagerWebSocket = response.webSocket;
+  /** Take one accepted pager into service: the keepalive, the page answer, and what its close means. */
+  const attachPager = (ws: WebSocket): void => {
+    pagerWebSocket = ws;
+    ws.accept();
+    // Keep this leg warm: a 30s keepalive the DO auto-answers via setWebSocketAutoResponse WITHOUT
+    // waking it — defeats the ~100s idle-close and keeps the /api isolate warm. Dies with the socket.
+    const keepalive = setInterval(() => {
+      try {
+        ws.send(RPC_STUB_PAGER_KEEPALIVE_REQUEST);
+      } catch {
+        clearInterval(keepalive);
+      }
+    }, 30_000);
+    // The page answer: a fresh Workers-RPC leg around the session's capnweb stub, lent to the DO. The
+    // keepalive ack rides this same socket, so anything that is not a page is ignored.
+    ws.addEventListener("message", (event: MessageEvent) => {
+      if (typeof event.data !== "string") return;
+      let page: unknown;
+      try {
+        page = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      if ((page as { type?: string } | null)?.type !== "page") return;
+      const durableObject = durableObjectStub();
+      waitUntil(
+        durableObject
+          .lendRpcStub({
+            rpcStubKey,
+            stub: new LentRpcStub(sessionRpcStub, lendEnded, durableObject),
+          })
+          .catch(() => undefined), // offline throws — ignore; the DO's page times out on its own
+      );
+    });
+    ws.addEventListener("close", (event: CloseEvent) => {
+      clearInterval(keepalive);
+      // The lender ended it (dispose, the session broke), or the DO closed it cleanly (a newer pager
+      // at this key replaced it): the lend is over and the dup goes back with the pager.
+      if (lendEnded.reason || event.code === 1000) {
+        disposeSessionRpcStub("was returned (its pager closed)");
+        return;
+      }
+      waitUntil(redialPager(event));
+    });
+  };
+  /** The leg dropped under a live lend: dial again — three tries, two seconds apart — and take the
+   *  new pager into service. A lend recalled meanwhile, or a DO that refuses the attach, ends here. */
+  const redialPager = async (dropped: CloseEvent): Promise<void> => {
+    console.warn({
+      event: "rpc-stub-pager-dropped",
+      namespace: "rpc-stubs",
+      message: "a lent stub's pager closed under a live session — re-dialing",
+      rpcStubKey,
+      code: dropped.code,
+      reason: dropped.reason,
+    });
+    let lastFailure = "";
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      if (attempt > 1) await new Promise((resolve) => setTimeout(resolve, 2_000));
+      if (lendEnded.reason) return;
+      let redialed: Response;
+      try {
+        redialed = await dialPager();
+      } catch (error) {
+        // the DO did not answer (a reset in progress): the next try
+        lastFailure = error instanceof Error ? error.message : String(error);
+        continue;
+      }
+      lastFailure = `the DO answered ${redialed.status}`;
+      if (redialed.status === 101 && redialed.webSocket) {
+        if (lendEnded.reason) {
+          // recalled while the dial was in flight: nothing to take into service
+          redialed.webSocket.accept();
+          redialed.webSocket.close(1000, "pager disposed");
+          return;
+        }
+        attachPager(redialed.webSocket);
+        console.warn({
+          event: "rpc-stub-pager-redialed",
+          namespace: "rpc-stubs",
+          message: "the pager is back in service; the DO re-appended what names the key",
+          rpcStubKey,
+          attempt,
+        });
+        return;
+      }
+      break; // refused (a paused stream): the DO's answer, not a fault to retry
+    }
+    console.warn({
+      event: "rpc-stub-pager-redial-failed",
+      namespace: "rpc-stubs",
+      message:
+        "the pager could not be re-dialed; the lend ends and the DO has un-set what named it",
+      rpcStubKey,
+      lastFailure,
+    });
+    disposeSessionRpcStub("went offline (its pager dropped and could not be re-dialed)");
+  };
+  attachPager(pagerWebSocket);
   // capnweb's own death signal, registered ONCE: set the shared reason AND close the pager NOW so the
   // DO returns the stub immediately — without this the presence list lies until a page times out.
   (sessionRpcStub as { onRpcBroken?: (cb: () => void) => void }).onRpcBroken?.(() => {
@@ -575,17 +654,14 @@ export async function lendRpcStubOverPager(
       /* already closing */
     }
   });
-  pagerWebSocket.addEventListener("close", () =>
-    disposeSessionRpcStub("was returned (its pager closed)"),
-  );
   return {
     dispose: () => {
+      disposeSessionRpcStub("was recalled by its lender");
       try {
         pagerWebSocket.close(1000, "pager disposed");
       } catch {
         /* already closing */
       }
-      disposeSessionRpcStub("was recalled by its lender");
     },
   };
 }

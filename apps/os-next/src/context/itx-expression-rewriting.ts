@@ -60,7 +60,7 @@
 // the match as its canonical STRING (the table's key) and the target in the PARSED form; the core
 // reduce parses the match once and takes the target as it is.
 
-import { codedError, jsonEqual } from "../lib.ts";
+import { codedError, jsonEqual } from "iterate/next/lib";
 import {
   callOn,
   walkSteps,
@@ -74,7 +74,7 @@ import {
   type ItxExpression,
   type ItxExpressionInput,
   type ItxExpressionPrefix,
-} from "./expression.ts";
+} from "iterate/next/expression";
 
 /** One rewrite rule: a canonical match prefix and the target it rewrites to (both parsed once, at
  *  reduce; a call step pins literal args, `itx.ai.run('gpt-5')` — expression.ts). A `null` target is a
@@ -94,9 +94,11 @@ export const BUILT_IN_ROOTS = [
   "kv",
   "secrets",
   "ai",
+  "browser",
+  "r2",
   "cfArtifacts",
-  "repos",
   "append",
+  "schedules",
   "readEvents",
   "waitForEvent",
   "cd",
@@ -112,6 +114,10 @@ export const BUILT_IN_ROOTS = [
   "connectToMcp",
   "connectToOpenApi",
   "connectToCapnweb",
+  "repos",
+  "workspaces",
+  "agents",
+  "files",
 ] as const;
 
 export type BuiltInRoot = (typeof BUILT_IN_ROOTS)[number];
@@ -130,7 +136,7 @@ export type ItxExpressionRewriteRule = { match: ItxExpressionPrefix; target: Itx
  *  that subscription would halt on a project that never set one up. The default loads this bundled
  *  NO-OP ConfigWorker (its processEventBatch does nothing, so a project with no config worker set up
  *  delivers quietly); a context OVERRIDES it with its own rule, picked before this fallback —
- *  `itx.provide("itx.worker", "itx.workers.get({ source: itx.repos.readFile('config','worker.ts') })")`
+ *  `itx.provide("itx.worker", "itx.workers.get({ source: itx.repos.get('/repos/config').readFile('worker.ts') })")`
  *  — or MASKS it with `null` (kept as a row: core-processor.ts), which is default-deny, never the no-op. */
 const DEFAULT_CONFIG_WORKER_SPEC = {
   source: {

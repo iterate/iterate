@@ -1,8 +1,8 @@
+import { startAppSession } from "iterate/next/app-server";
+import { sameOriginPath } from "iterate/next/lib";
 import type { Env } from "./control-plane.ts";
 import type { User } from "./directory.ts";
-import { startAppSession } from "./client/app-auth.ts";
 import { oauthAddresses, oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
-import { sameOriginPath } from "./lib.ts";
 
 /** Verified Google login and explicitly enabled test/administrator login call this tail.
  * Its grant is the issuer's sole browser identity: ordinary storage, public token

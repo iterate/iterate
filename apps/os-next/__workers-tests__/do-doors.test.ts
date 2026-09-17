@@ -13,9 +13,9 @@
 // literal; no event-builder helper stands between the caller and the event. The pins:
 //
 //   • the QUIET CLOCK's reason to exist: a probe (`itx.facets.get('core').snapshot()`) on a
-//     never-touched ctx MATERIALIZES it (the constructor's `Stream.appendCreatedAndWokenEvents()`
-//     writes created + woken before any door opens) yet arms NO alarm — #recordActivityForQuietClock
-//     arms only when there is something to quiesce (a live facet, a borrowed rpc stub); only
+//     never-touched ctx MATERIALIZES it (the constructor's `Stream.appendBirthRecord()` writes
+//     created + woken before any door opens) yet arms NO alarm — #lastPinUseMs
+//     arms only when there is something to release (a borrowed rpc stub, an open socket); only
 //     storage.getAlarm() can see that (the e2e lane pins the records but cannot read the alarm);
 //   • the doors themselves: the four deleted configuration verbs are gone; the rewrite-rule EVENT's
 //     match is canonicalized at the append BOUNDARY (a Workers-RPC caller bypasses the edge, appends a
@@ -34,7 +34,7 @@
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { parse, print, type ItxExpression } from "../src/context/expression.ts";
+import { parse, print, type ItxExpression } from "iterate/next/expression";
 import { restoreRuleTarget } from "../src/context/itx-expression-rewriting.ts";
 import { adminCredentials, openSession, stub, until } from "./support.ts";
 
@@ -79,12 +79,13 @@ class Alive extends RpcTarget {
   }
 }
 
-test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created, woken, config subscription) and arms the config-worker delivery alarm — EVERY stream subscribes itx.cd('/').worker", async () => {
+test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created, woken, config subscription) — EVERY stream subscribes itx.cd('/').worker — and leaves no alarm once that delivery is caught up", async () => {
   await runInDurableObject(stub("prj_doors_virginprobe"), async (instance, state) => {
     // ANY door materializes a context: the constructor writes the birth certificate, the wake record,
     // AND the `config` subscription — every stream subscribes the "/" context's config worker (the
-    // apps/os funnel). That subscription is a cursor delivery, so it arms an alarm from birth; a DOWN
-    // config worker cannot wake-loop forever (the self-wake breaker halts it — stream.ts).
+    // apps/os funnel). That subscription is a cursor delivery: a durable commit it consumes is
+    // insured on the DO's alarm until the config worker acks, and a caught-up row owes nothing (a
+    // DOWN config worker climbs a bounded ladder and halts).
     const snap = (await instance.invoke("itx.facets.get('core').snapshot()")) as {
       offset: number;
       state: { projectId?: string; path?: string; createdAt?: string; incarnation?: number };
@@ -96,7 +97,8 @@ test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created, wok
     });
     expect(typeof snap.state.createdAt).toBe("string");
     expect(snap.offset).toBe(4); // reduced through created, woken and the config subscription
-    expect(await state.storage.getAlarm()).not.toBeNull(); // the config subscription's delivery arms it
+    // The config row was born at its own offset with nothing before it to deliver: no alarm.
+    await until("no alarm after the probe", async () => (await state.storage.getAlarm()) === null);
     expect((await instance.read(0)).events.map((e) => [e.type, e.offset])).toEqual([
       ["events.iterate.com/stream/created", 1],
       ["events.iterate.com/stream/woken", 2],
@@ -112,7 +114,8 @@ test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created, wok
     // (the wake commit at 3, the config commit at 5) — offset 6.
     const [mark] = (await instance.append({ type: "mark" })) as unknown as { offset: number }[];
     expect(mark.offset).toBe(6);
-    expect(await state.storage.getAlarm()).not.toBeNull(); // still armed — the config delivery
+    // The mark is owed to the config worker (insured) until it acks — then nothing is, again.
+    await until("no alarm after the ack", async () => (await state.storage.getAlarm()) === null);
   });
 });
 

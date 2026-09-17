@@ -202,4 +202,39 @@ export default defineConfig([
     sourcemap: true,
     clean: false,
   },
+  {
+    // `iterate/next/*` — os-next's SDK, moved here (src/next/README-in-code: next/api.ts). ONE object
+    // on purpose, like the itx client entries above: lib, expression, the stream kernel and api are
+    // shared chunks, so every next/* entry sees ONE module instance of each. Library entries: deps
+    // stay external (capnweb — the fork's 0.12 line, zod, json5, oauth4webapi, react, react-router);
+    // cloudflare:workers is the runtime's. No dts here: declarations come from `tsc -p
+    // tsconfig.next.json` in the build script.
+    entry: {
+      "next/sdk": "src/next/sdk/index.ts",
+      "next/app": "src/next/app.ts",
+      "next/app-server": "src/next/app-server.ts",
+      "next/app-session": "src/next/app-session.ts",
+      "next/client": "src/next/client/live-state.ts",
+      "next/react": "src/next/client/react.tsx",
+      "next/dashboard": "src/next/client/dashboard.tsx",
+      "next/dashboard-data": "src/next/client/dashboard-data.ts",
+      "next/api": "src/next/api.ts",
+      "next/lib": "src/next/lib.ts",
+      "next/expression": "src/next/expression.ts",
+      "next/principal": "src/next/principal.ts",
+      "next/stream/processor": "src/next/stream/processor.ts",
+      "next/oauth-scopes": "src/next/oauth-scopes.ts",
+      "next/oauth": "src/next/client/oauth.ts",
+    },
+    format: "esm",
+    fixedExtension: true,
+    platform: "neutral",
+    target: "es2022",
+    deps: {
+      neverBundle: ["cloudflare:workers"],
+    },
+    dts: false,
+    sourcemap: true,
+    clean: false,
+  },
 ]);

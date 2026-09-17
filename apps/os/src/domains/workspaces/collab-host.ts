@@ -403,7 +403,7 @@ export class CollabHost {
       const content = doc.toString();
       occurrenceCount = countOccurrences(content, input.oldString);
       if (occurrenceCount === 0) {
-        throw new Error(`Edit oldString was not found in "${input.path}".`);
+        return null;
       }
       if (!input.replaceAll && occurrenceCount !== 1) {
         throw new Error(
@@ -419,7 +419,10 @@ export class CollabHost {
         }),
       );
     });
-    return { occurrenceCount, path: input.path };
+    if (occurrenceCount === 0) {
+      return { status: "not-applied", reason: "text-mismatch", path: input.path };
+    }
+    return { status: "applied", occurrenceCount, path: input.path };
   }
 
   // -- settlement and lifecycle ------------------------------------------------

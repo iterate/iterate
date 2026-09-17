@@ -16,7 +16,7 @@ import {
   StreamProcessor,
   type ProcessEventArgs,
   type ReduceArgs,
-} from "./processor.ts";
+} from "iterate/next/stream/processor";
 import { memoryStorage, memoryStream, settle } from "./test-support.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

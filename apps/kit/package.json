@@ -17,14 +17,12 @@
     "firmware:build:host": "pnpm firmware:configure && cmake --build firmware/.build/host --parallel",
     "firmware:test:host": "pnpm firmware:build:host && ctest --test-dir firmware/.build/host --output-on-failure",
     "typecheck": "pnpm gen:wrangler && tsc --noEmit",
-    "voice": "tsx ./clients/voice-cli.ts",
     "firmware:release": "tsx ./scripts/build-firmware-assets.ts"
   },
   "dependencies": {
     "@iterate-com/ui": "workspace:*",
-    "@iterate-com/voice-agent": "workspace:*",
-    "@tanstack/react-router": "^1.170.10",
-    "@tanstack/react-start": "^1.168.18",
+    "@tanstack/react-router": "1.168.3",
+    "@tanstack/react-start": "1.167.5",
     "esp-web-tools": "^10.4.0",
     "iterate": "workspace:*",
     "lucide-react": "^0.553.0",
@@ -33,7 +31,8 @@
     "zod": "4.5.4"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "catalog:cloudflare",
+    "@cloudflare/vite-plugin": "1.54.8",
+    "@cloudflare/workers-types": "catalog:cloudflare",
     "@tailwindcss/vite": "^4.3.2",
     "@types/node": "^24.12.4",
     "@types/react": "^19.2.17",
@@ -45,7 +44,6 @@
     "typescript": "^5.9.3",
     "vite": "^8.0.16",
     "vitest": "^4.1.7",
-    "wrangler": "catalog:cloudflare",
-    "@cloudflare/workers-types": "catalog:cloudflare"
+    "wrangler": "4.131.1"
   }
 }

@@ -21,7 +21,7 @@ export default async function deploy(options: { env?: string } = {}) {
     },
     smokes: (env) => [
       {
-        url: `${env.baseUrl}/devices/${DEFAULT_DEVICE_ID}/firmware/${DEFAULT_FIRMWARE_VERSION}?host=os.iterate.com&project=`,
+        url: `${env.baseUrl}/devices/${DEFAULT_DEVICE_ID}/firmware/${DEFAULT_FIRMWARE_VERSION}`,
         ok: (status) => status === 200,
         label: "installer",
       },

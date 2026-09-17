@@ -1,4 +1,4 @@
-import { codedError } from "./lib.ts";
+import { codedError } from "iterate/next/lib";
 
 // ── directory ── the control plane IS the directory. One D1 store, strongly consistent (no KV
 // list() lag), relational and org-centric: users → orgs (via org_members) → projects. A project's id is

@@ -6,3 +6,5 @@ apps/os/src/domains/repos/config-repo-template.generated.ts linguist-generated=t
 packages/voice-agent/src/viseme-model.generated.ts linguist-generated=true
 apps/os/src/itx/examples.generated.ts linguist-generated=true
 **/stream-repros/*.events.json linguist-generated=true
+explainers/playwright-parallelisation.html linguist-generated=true
+explainers/playwright-parallelisation/runs/*.json linguist-generated=true

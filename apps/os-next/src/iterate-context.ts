@@ -22,6 +22,18 @@
 
 import { RpcTarget } from "capnweb";
 import { WorkerEntrypoint } from "cloudflare:workers";
+import {
+  canonicalItxExpressionPrefix,
+  normalizedItxExpression,
+  type ItxExpression,
+  type ItxExpressionInput,
+  print,
+  installPrototypeInvokeFallback,
+} from "iterate/next/expression";
+import type { IterateContextApi } from "iterate/next/api";
+import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/next/principal";
+import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
+import { codedError } from "iterate/next/lib";
 import type { IterateContextDurableObject, Env } from "./iterate-context-durable-object.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
@@ -31,22 +43,11 @@ import {
   type IterateContextDurableObjectStub,
 } from "./context/rpc-stubs.ts";
 import {
-  canonicalItxExpressionPrefix,
-  normalizedItxExpression,
-  type ItxExpression,
-  type ItxExpressionInput,
-  print,
-  installPrototypeInvokeFallback,
-} from "./context/expression.ts";
-import {
   normalizeRewriteRuleConfigured,
   restoreRuleTarget,
 } from "./context/itx-expression-rewriting.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import { SessionTeardown } from "./session.ts";
-import { ITX_PRINCIPAL_HEADER, type Principal } from "./principal.ts";
-import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
-import { codedError } from "./lib.ts";
 
 export type IterateContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
 export type WaitUntil = (p: Promise<unknown>) => void;
@@ -232,7 +233,7 @@ export class IterateContextRpcTarget extends RpcTarget {
       },
     };
     const pager = await lendRpcStubOverPager(
-      this.#durableObject,
+      () => this.#durableObject,
       target,
       matchString,
       [ruleEvent],
@@ -289,7 +290,7 @@ export class IterateContextRpcTarget extends RpcTarget {
         },
       };
       const pager = await lendRpcStubOverPager(
-        this.#durableObject,
+        () => this.#durableObject,
         input.target as ClientRpcStub,
         rpcStubKey,
         [row],
@@ -494,6 +495,10 @@ export const DurableObjectNameCodec = {
 // TWO doors, nothing else — `get()` (the itx scope) and `fetch` (`globalOutbound`) — both addressing
 // the DO through `env.ITERATE_CONTEXT`, this worker's own binding to its namespace.
 
+/** The itx scope as `env.ITX.get()` types it — the Workers-RPC stub of a context, every dotted step
+ *  pipelined. The platform's own facets extend the SDK's host with THIS scope, so they spell every
+ *  root; an app's facet has the declared `IterateContextApi` (iterate/next/api). */
+export type ItxEntrypointScope = ReturnType<Service<ItxEntrypoint>["get"]>;
 export class ItxEntrypoint extends WorkerEntrypoint<Env, { iterateContextName: string }> {
   /** THE handoff: the genuine itx scope — the SAME `IterateContextRpcTarget` RpcTarget a capnweb client gets
    *  from `projects.get(id)` (capnweb's RpcTarget IS the native `cloudflare:workers` RpcTarget on
@@ -535,3 +540,7 @@ export function itxEntrypointFor(ctx: DurableObjectState, iterateContextName: st
   };
   return exports.ItxEntrypoint({ props: { iterateContextName } });
 }
+
+// THE PUBLISHED API IS DECLARED, NOT GENERATED (iterate/next/api): a context satisfies it, checked here.
+const _iterateContextApi: IterateContextApi = null as unknown as IterateContextRpcTarget;
+void _iterateContextApi;

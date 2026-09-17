@@ -22,6 +22,7 @@
 //   doppler run --config preview_N -- pnpm --dir apps/os e2e --run abandoned-project-goes-quiet
 import { expect, test } from "vitest";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
+import { E2E_RETRIES_THIS_RUN } from "@iterate-com/shared/test-support/e2e-policy";
 import { interceptor } from "@iterate-com/test-support";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { createAdminOsItx } from "../test-support/os-client.ts";
@@ -39,9 +40,11 @@ const WOKEN = "events.iterate.com/stream/woken";
 const failWakeUp = createFailing(
   test.skipIf(deployedBaseUrl() === null),
   /woke \d+ times after dispose/,
-  {
-    timeoutMs: 230_000,
-  },
+  // The CI retry every plain e2e test gets, inside the 230s: a platform blip
+  // during the 90-120s body (2026-09-16, a Durable Object storage reset on the
+  // slot, seen as "internal error; reference = …") re-runs it once instead of
+  // going red for a reason that proves nothing about the pin.
+  { timeoutMs: 230_000, retries: E2E_RETRIES_THIS_RUN },
 );
 
 failWakeUp(

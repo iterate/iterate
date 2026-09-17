@@ -32,15 +32,19 @@ export function writeWranglerConfig() {
           routes: [
             { pattern: `${new URL(env.baseUrl).hostname}/*`, zone_name: "iterate2.com" },
             { pattern: `${new URL(env.mcpBaseUrl).hostname}/*`, zone_name: "iterate2.com" },
-            { pattern: `*.${env.projectHostnameBase}/*`, zone_name: env.projectHostnameBase },
-          ],
+            ...(env.projectHostnameBase
+              ? [{ pattern: `*.${env.projectHostnameBase}/*`, zone_name: env.projectHostnameBase }]
+              : []),
+          ].filter((route) => !route.pattern.includes(".workers.dev/")),
           durable_objects: template.durable_objects,
           exports: template.exports,
           worker_loaders: template.worker_loaders,
           ai: template.ai,
+          browser: template.browser,
           assets: template.assets,
           version_metadata: template.version_metadata,
           artifacts: [{ binding: "ARTIFACTS", namespace: env.artifactsNamespace }],
+          r2_buckets: [{ binding: "FILES", bucket_name: `${env.resourceNamePrefix}-files` }],
           d1_databases: [
             {
               binding: "DB",
@@ -56,7 +60,8 @@ export function writeWranglerConfig() {
             APP_CONFIG_ENVIRONMENT_NAME: name,
             APP_CONFIG_PLATFORM_ORIGIN: env.baseUrl,
             APP_CONFIG_TEST_EMAIL_LOGIN: String(env.testEmailLogin ?? false),
-            APP_CONFIG_MCP_ORIGIN: env.mcpBaseUrl,
+            APP_CONFIG_MCP_ORIGIN:
+              new URL(env.mcpBaseUrl).origin === new URL(env.baseUrl).origin ? "" : env.mcpBaseUrl,
             APP_CONFIG_PROJECT_HOSTNAME_BASE: env.projectHostnameBase,
             APP_CONFIG_ARTIFACTS_ACCOUNT_ID: env.cloudflareAccountId,
             APP_CONFIG_ARTIFACTS_NAMESPACE: env.artifactsNamespace,

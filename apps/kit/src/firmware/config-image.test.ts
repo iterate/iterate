@@ -151,9 +151,20 @@ describe("encodeDeviceConfiguration", () => {
     ).toThrow("invalid Wi-Fi password");
     expect(() =>
       encodeDeviceConfiguration(
-        { ...configuration, iterate: { ...configuration.iterate, projectId: "voice-lab" } },
+        { ...configuration, iterate: { ...configuration.iterate, projectId: "voice lab" } },
         512,
       ),
     ).toThrow("invalid project id");
+  });
+
+  /* A project's id on os-next IS its DNS-safe slug: no `prj_` to insist on,
+   * and hyphens are ordinary. Refusing one here is a board that cannot be
+   * provisioned for the deployment it is meant to talk to. */
+  it("writes a bare slug project id", () => {
+    const image = encodeDeviceConfiguration(
+      { ...configuration, iterate: { ...configuration.iterate, projectId: "prj-voice" } },
+      512,
+    );
+    expect(decodeLikeFirmware(image).get(4)).toBe("prj-voice");
   });
 });

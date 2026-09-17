@@ -19,16 +19,16 @@
 
 import { memoryUsage } from "node:process";
 import { deserialize, serialize } from "node:v8";
-import { FacetHandle } from "../context/expression.ts";
-import { errorCode } from "../lib.ts";
-import { CoreContract, normalizeControlEvent } from "./core-processor.ts";
+import { FacetHandle } from "iterate/next/expression";
+import { errorCode } from "iterate/next/lib";
 import {
   type StreamEvent,
   ProcessorEngine,
   StreamProcessor,
   type ReduceArgs,
   ReduceCheckpointTable,
-} from "./processor.ts";
+} from "iterate/next/stream/processor";
+import { CoreContract, normalizeControlEvent } from "./core-processor.ts";
 import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
 import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 import { SubscriptionDelivery } from "./subscription-delivery.ts";
@@ -428,7 +428,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       stream,
       evaluateItxExpression: async () =>
         new FacetHandle(() => new Promise((resolve) => callsInFlight.push(resolve))),
-      recordActivityForQuietClock: () => {},
+      reconcileAlarm: () => {},
     });
     stream.append(
       normalizeControlEvent({
@@ -477,7 +477,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
           callsStarted++;
           return new Promise((resolve) => callsInFlight.push(resolve));
         }),
-      recordActivityForQuietClock: () => {},
+      reconcileAlarm: () => {},
     });
     const typeOf = (i: number) => (args.disjointTypes ? `blob-${i % args.rowCount}` : "blob");
     stream.append(
@@ -556,7 +556,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
           }, args.callMs ?? 250),
         );
       },
-      recordActivityForQuietClock: () => {},
+      reconcileAlarm: () => {},
     });
     stream.append({ type: "blob", payload: { n: -1 } }); // ONE commit
     // Every row gets its first call — how many at once is the ledger's decision, measured.
@@ -589,7 +589,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
         callsStarted++;
         return new Promise((resolve) => callsInFlight.push(resolve));
       },
-      recordActivityForQuietClock: () => {},
+      reconcileAlarm: () => {},
     });
     stream.append(
       ...Array.from({ length: args.rowCount }, (_, i) =>

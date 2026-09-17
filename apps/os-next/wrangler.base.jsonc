@@ -5,7 +5,7 @@
   // runs the worker in workerd, `vite build` bundles it (with the console's routes and their server
   // functions) to dist/server/index.js beside a resolved copy of this config,
   // dist/server/wrangler.json, which `pnpm deploy` and the local lanes consume. The processor
-  // SDK bundle (src/generated/*, gitignored) and public/demo.html are built by build-sdk.mjs at Vite
+  // The injected SDK is a virtual module of the Vite build (scripts/vite-plugin-processor-sdk.ts).
   // config load.
   "main": "src/worker.ts",
   // nodejs_compat, spelled out: the DO's AsyncLocalStorage (node:async_hooks) and the console's Start
@@ -42,7 +42,7 @@
   "limits": { "subrequests": 1000000, "cpu_ms": 300000 },
 
   // THE STATIC ASSETS: the console's client bundle (Vite's dist/client) plus public/ verbatim — the
-  // hosted /demo page build-sdk.mjs writes there (255 KiB kept out of every /api and DO isolate). The
+  // console's /demo route renders the demo (src/routes/demo.tsx). The
   // Vite plugin sets the directory. `run_worker_first: true`, on purpose: the patterns are paths, never
   // hostnames, and a project host (`<app>--<project>.<base>`) must never answer with a platform asset —
   // so src/worker.ts asks the ASSETS binding itself, on the platform host only, after the project
@@ -54,6 +54,12 @@
   "worker_loaders": [{ "binding": "LOADER" }],
   // Workers AI, exposed VERBATIM as the built-in root `itx.ai` (context/built-ins.ts).
   "ai": { "binding": "AI" },
+  // Browser Run, the built-in root `itx.browser` (context/built-ins.ts). Quick Actions need the
+  // remote binding in local wrangler; the workers test lane omits this the same way it omits `ai`.
+  "browser": { "binding": "BROWSER" },
+  // R2, the built-in root `itx.r2` (`itx.files` on top). Local wrangler keeps it in .wrangler/state;
+  // a deployment's bucket is `<resourceNamePrefix>-files` (envs.ts, ensure-resources).
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "os-next-files" }],
   // Cloudflare Artifacts ("git for agents", beta) — the ONE bound namespace, project-scoped as the
   // built-in root `itx.cfArtifacts` (context/built-ins.ts forces every repo name under `${projectId}.`).
   // repo-create auto-provisions the namespace; APP_CONFIG_ARTIFACTS_ACCOUNT_ID/NAMESPACE (vars, below)
@@ -83,6 +89,14 @@
     "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "BrowserSession": { "type": "durable-object", "storage": "sqlite" },
     "SecretDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    // THE FIRST-PARTY FACETS: Durable Object classes hosted as facets of a context through
+    // `ctx.exports` (iterate-context-durable-object.ts FIRST_PARTY_FACET_CLASSES) — declared like any
+    // DO class (wrangler requires the storage line); their state lives in the facet's own SQLite.
+    "AccountDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    "AgentDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    "ProjectDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    "RepoDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    "WorkspaceDurableObject": { "type": "durable-object", "storage": "sqlite" },
   },
 
   // The in-process control plane's directory (src/control-plane.sql: users, orgs,
@@ -104,16 +118,17 @@
 
   // Configuration (src/worker.ts `parseAppConfig`): `APP_CONFIG_*` vars — the ONE door, parsed once per isolate,
   // loud on a bad or unknown one. Bindings are declared above; a var is what differs between
-  // deployments of the same code. The two secrets — APP_CONFIG_SESSION_SECRET (the login flow's
-  // cookie) and APP_CONFIG_ADMIN_API_SECRET (the admin secret: `authenticate({ type: "admin-secret" })`,
-  // the test configs' admin bearer) — are wrangler secrets, never committed vars; both are required.
+  // deployments of the same code. The three secrets — APP_CONFIG_SESSION_SECRET (the login flow's
+  // cookie), APP_CONFIG_ADMIN_API_SECRET (the admin secret: `authenticate({ type: "admin-secret" })`,
+  // the test configs' admin bearer) and APP_CONFIG_SECRETS_KEY (project secrets' material at rest,
+  // secret-at-rest.ts) — are wrangler secrets, never committed vars; all three are required.
   "vars": {
     "APP_CONFIG_ENVIRONMENT_NAME": "poc",
     "APP_CONFIG_PLATFORM_ORIGIN": "https://os.iterate2.com",
     "APP_CONFIG_MCP_ORIGIN": "https://mcp.iterate2.com",
     "APP_CONFIG_PROJECT_HOSTNAME_BASE": "project-worker.iterate.com",
     // The Artifacts git remote is `https://<ACCOUNT_ID>.artifacts.cloudflare.net/git/<NAMESPACE>/<repo>.git`
-    // — the `itx.repos` layer builds it from these when it does git over HTTPS.
+    // — the `itx.git` layer builds it from these when it does git over HTTPS.
     "APP_CONFIG_ARTIFACTS_ACCOUNT_ID": "04b3b57291ef2626c6a8daa9d47065a7",
     "APP_CONFIG_ARTIFACTS_NAMESPACE": "project-worker-repos",
   },

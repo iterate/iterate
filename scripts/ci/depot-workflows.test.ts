@@ -147,7 +147,7 @@ describe("Depot deployment safety", () => {
     expect(deployKit?.run).toContain('source "$IDF_PATH/export.sh"');
     expect(workflow.on?.push?.paths).toEqual(
       expect.arrayContaining([
-        "packages/voice-agent/**",
+        "apps/os-next/**", // the page is an app of os-next (workspace dependency)
         "package.json",
         "pnpm-lock.yaml",
         "pnpm-workspace.yaml",
@@ -221,8 +221,8 @@ describe("Depot credential boundaries", () => {
       permissions: { contents: "read", "pull-requests": "write" },
     },
     {
-      file: ".depot/workflows/cloudflare-previews.yml",
-      permissions: { contents: "read", "pull-requests": "write", statuses: "read" },
+      file: ".depot/workflows/preview.yml",
+      permissions: { contents: "read", "pull-requests": "write", statuses: "write" },
     },
     {
       file: ".depot/workflows/deploy-os.yml",
@@ -283,8 +283,8 @@ describe("Depot validation capacity", () => {
   });
 
   it("starts preview deploy/e2e from the baked workspace", () => {
-    const workflow = loadWorkflow(".depot/workflows/cloudflare-previews.yml");
-    const job = workflow.jobs.preview;
+    const workflow = loadWorkflow(".depot/workflows/preview-run.yml");
+    const job = workflow.jobs.prepare;
 
     expect(job["runs-on"]).toEqual({
       size: "16x64",
@@ -385,7 +385,7 @@ describe("Depot validation capacity", () => {
 
   it.each([
     { file: ".depot/workflows/test.yml", jobId: "test" },
-    { file: ".depot/workflows/cloudflare-previews.yml", jobId: "preview" },
+    { file: ".depot/workflows/preview-run.yml", jobId: "finish" },
   ])("$file always finalizes and retains test telemetry", ({ file, jobId }) => {
     const steps = loadWorkflow(file).jobs[jobId]?.steps ?? [];
     const finalizer = steps.find((step) =>
@@ -430,7 +430,7 @@ describe("Depot validation capacity", () => {
 
   it.each([
     { file: ".depot/workflows/test.yml", jobId: "test" },
-    { file: ".depot/workflows/cloudflare-previews.yml", jobId: "preview" },
+    { file: ".depot/workflows/preview-run.yml", jobId: "finish" },
   ])("$file sends finalized test telemetry to the canonical PostHog project", ({ file, jobId }) => {
     const finalizer = loadWorkflow(file).jobs[jobId]?.steps?.find((step) =>
       step.run?.includes("scripts/ci/upload-test-telemetry.ts"),

@@ -21,7 +21,7 @@ import {
   type ProcessorEngine,
   type ProcessorStream,
   ReduceCheckpointTable,
-} from "./processor.ts";
+} from "iterate/next/stream/processor";
 import type { DurableObjectStorageSlice } from "./stream.ts";
 
 /** THE PROCESSOR HARNESS: fold `inputs` through a processor's pure `reduce`, exactly as the engine
@@ -180,6 +180,5 @@ export function nodeSqliteDurableObjectStorage(): DurableObjectStorageSlice {
         throw error;
       }
     },
-    setAlarm: async () => {},
   };
 }

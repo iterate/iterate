@@ -37,6 +37,8 @@ admin secret is a bearer on `/mcp` too (it reaches every project, so `run` must 
 
 ## Read next
 
+- [Scheduled appends](docs/scheduled-appends.md) — durable deadlines for userspace facets, cancellation, and executable examples
+
 - `docs/itx-surface-as-built.md` — every signature, transcribed from source (start here)
 - `docs/clean-room-api-walkthrough.md` — the long-form walkthrough, module by module
 - `docs/design-onion-subscriptions-processors.md` — the design of record for subscriptions + processors
@@ -56,9 +58,11 @@ one is warned about at boot and ignored). The two secrets are wrangler secrets o
 | `APP_CONFIG_ENVIRONMENT_NAME`                                       | yes      | the deployment's name at `/version` ("poc", "test", "e2e")                                   |
 | `APP_CONFIG_SESSION_SECRET`                                         | yes      | signs the ten-minute Google login flow (secret)                                              |
 | `APP_CONFIG_ADMIN_API_SECRET`                                       | yes      | the admin secret: `authenticate({ type: "admin-secret" })`, the lanes' admin bearer (secret) |
+| `APP_CONFIG_SECRETS_KEY`                                            | yes      | encrypts project secrets' material at rest (`secret-at-rest.ts`; secret)                     |
+| `APP_CONFIG_SECRETS_KEY_PREVIOUS`                                   | no       | the key before a rotation, decrypt-only; records are rewritten under the current key as read |
 | `APP_CONFIG_PROJECT_HOSTNAME_BASE`                                  | no       | the base project hosts hang under; blank ⇒ no project-host ingress                           |
 | `APP_CONFIG_TEST_EMAIL_LOGIN`                                       | no       | `true` permits unverified email sign-in; disabled remotely by default                        |
-| `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`, `APP_CONFIG_ARTIFACTS_NAMESPACE` | no       | `itx.repos`' git remotes                                                                     |
+| `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`, `APP_CONFIG_ARTIFACTS_NAMESPACE` | no       | the git remotes `itx.cfArtifacts` names for the repo facet                                   |
 
 ## The console
 
@@ -89,7 +93,7 @@ authorization contract.
 
 ## Build, run, deploy
 
-The build is Vite's (`vite.config.ts`: the Cloudflare plugin + TanStack Start + React; `build-sdk.mjs`
+The build is Vite's (`vite.config.ts`: the Cloudflare plugin + TanStack Start + React; the processor-SDK Vite plugin, `scripts/vite-plugin-processor-sdk.ts`,
 runs at config load for the processor SDK bundle and the hosted `/demo` page). `vite build` emits
 `dist/client` (the console's bundle + `public/`) and `dist/server` (the worker + `wrangler.json`,
 the config a deploy and both local lanes consume). The Cloudflare Vite plugin's own workerd is older

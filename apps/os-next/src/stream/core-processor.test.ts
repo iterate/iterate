@@ -8,12 +8,8 @@
 // hand-appended event THROWS at the reduce — the host contains it (stream.test.ts pins the skip). The DOORS that build these events are pinned beside their modules
 // (context/itx-expression-rewriting.test.ts, the subscriptions section below).
 import { describe, expect, test } from "vitest";
-import {
-  parse,
-  print,
-  type ItxExpression,
-  type ItxExpressionInput,
-} from "../context/expression.ts";
+import { parse, print, type ItxExpression, type ItxExpressionInput } from "iterate/next/expression";
+import type { StreamEvent } from "iterate/next/stream/processor";
 import {
   CoreContract,
   reduceCoreEvent,
@@ -22,7 +18,6 @@ import {
   type Subscription,
   normalizeControlEvent,
 } from "./core-processor.ts";
-import type { StreamEvent } from "./processor.ts";
 import { memoryStream } from "./test-support.ts";
 
 /** A committed DURABLE event at `offset`; createdAt derives from the offset so identity pins read. */
@@ -37,13 +32,14 @@ const reduceAll = (events: StreamEvent[], initial = CoreContract.initialState())
   events.reduce((s, e) => reduceCoreEvent({ event: e, state: s }) ?? s, initial);
 
 describe("the contract", () => {
-  test("slug `core` v8.0.0; the every-field-defaulted initial state", () => {
+  test("slug `core` v10.0.0; the every-field-defaulted initial state", () => {
     expect(CoreContract.slug).toBe("core");
-    expect(CoreContract.version).toBe("8.0.0");
+    expect(CoreContract.version).toBe("10.0.0");
     expect(CoreContract.initialState()).toEqual({
       paused: null,
       itxExpressionRewriteRules: {},
       subscriptions: {},
+      schedules: {},
       secrets: {},
     });
   });

@@ -231,7 +231,7 @@ the file basename, not the full path.
 
 ```bash
 depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
-  --workflow cloudflare-previews.yml \
+  --workflow preview.yml \
   --ref <branch> \
   --input pull-request-number=<pr-number>
 ```
@@ -351,3 +351,62 @@ run named "autofix.ci"`, the real signal is that autofix found a diff to apply
 (the apply step only contacts GitHub when there is one) and could not correlate
 the Depot run with a GitHub Actions run. Look at the `git diff` output in the
 job logs, apply the same fix locally (usually `pnpm format`), and push.
+
+## Preview overlap experiment
+
+PR #2659 starts preparation, app tests and six Playwright shards together. Test
+jobs reconcile dependencies and browsers before waiting for `preview-ready`.
+Preparation uploads the immutable deployment plan before publishing that GitHub
+commit status. `scripts/ci/status.ts` scopes the signal to the Depot workflow,
+execution, producer job and attempt, and checks producer liveness on each poll.
+The command surface is a default-exported class exposed by
+`pnpm exec trpc-cli scripts/ci/status.ts` (`set`, `wait-for`, `wait-for-jobs`).
+A terminated producer without its signal fails the wait. Reaching a milestone
+releases consumers even while the producer continues collecting artifacts.
+
+The finalizer needs only preparation. Its setup overlaps the tests, then one
+`wait-for-jobs` call polls all seven consumers together. Only a confirmed terminal
+state for every consumer authorizes cleanup; failed consumers are collected and
+fail the final result. Report download/merge and environment erase run in parallel
+with fail-fast disabled. The caller holds the preview lifecycle lock throughout.
+
+Coordination reads Depot's API with the existing Doppler-managed
+`DEPOT_CI_TELEMETRY_TOKEN` from `_shared/preview`; it does not introduce a Depot
+secret or copy a personal token. GitHub milestones use the job token with
+`statuses: write`. The organization token has broad scope, as documented above.
+For this experiment, use a fresh push or workflow dispatch, not retry/rerun:
+individual test retries would reuse an erased deployment, and old plan artifacts
+must not be accepted. Normal Playwright/Vitest test retries are unchanged.
+
+## Interactive trace reports
+
+Preview workflows publish a **CI trace** commit status after completion; its
+**Details** link opens the report:
+workflow → jobs → setup/wait/test/finish → shell steps → Playwright attempts.
+See [CI traces](./ci-traces.md) for the timing model, publishing, replay commands
+and OTLP JSON export.
+
+## Browser reports from artifacts
+
+The preview finalizer uploads the merged Playwright HTML directory as
+`public-playwright-report`, even after test failures. The config project handles Depot
+`check_run.completed` webhooks and adds a **Playwright report** commit status
+alongside **CI trace**. CI only uploads the artifacts.
+These statuses mean the reports are available; the preview check retains the
+actual test outcome. Links use Depot artifact UUIDs and expire with their
+30-day retention.
+
+The config worker serves `https://depot-<id>--iterate.iterate.app/`.
+`/foo.xyz` serves ZIP entry `foo.xyz`; old `/depot/artifacts/<id>` links redirect.
+It opens a root `index.html`, redirects a single-file artifact to that file,
+or generates an index linking all files. Relative assets and binary attachments
+are served from the ZIP using range reads. Each artifact gets a separate
+`depot-<id>--iterate.iterate.app` origin, so HTML reports can use browser storage
+and service workers without sharing the project's origin.
+
+Additional artifacts opt into public serving with a `public-` name prefix.
+The viewer only accepts artifacts from `iterate/iterate`; existing `ci-trace-*`
+artifacts remain supported. Only `public-playwright-report` and the named CI
+trace artifacts automatically get commit statuses; other `public-*` artifacts
+remain browsable without adding checks. Upload only files intended to be public. Append
+`?download` to a file link to download it instead of displaying it.

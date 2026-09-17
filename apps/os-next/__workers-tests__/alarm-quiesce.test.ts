@@ -2,7 +2,7 @@
 // lane — the ONLY lane that can fire the DO's alarm (runDurableObjectAlarm) and force a graceful
 // teardown (evictDurableObject) deterministically).
 //
-// Target surface: IterateContextDurableObject.alarm()/#recordActivityForQuietClock/#liveFacetNames/#facetWorkInFlight
+// Target surface: IterateContextDurableObject.alarm()/#lastPinUseMs/#liveFacetNames/#facetWorkInFlight
 // (src/iterate-context-durable-object.ts), the delivery loop's cursor lane +
 // `deliverEveryCursorSubscription` (src/stream/subscription-delivery.ts), and the rpc-stub directory
 // (src/context/rpc-stubs.ts).
@@ -12,13 +12,14 @@
 //      progress — a stateless Worker-Loader entrypoint) whose retry is due is delivered from its
 //      cursor row; the awaited call is the ack, the ladder resets. AWAITED before step 2, so the quiesce never aborts a
 //      delivery in flight and a later retry's re-arm lands before the actor hibernates.
-//   2. the idle QUIESCE: 60s without activity (and nothing in flight) aborts every live facet and
-//      RETURNS every borrowed stub, so the actor can hibernate. A MEASURED PROPERTY, load-bearing
-//      below: a materialized facet or a borrowed stub PINS the DO non-hibernatable (workerd#6800)
-//      — evictDurableObject on such a DO times out after 30s ("still has active references"). You
-//      must quiesce BEFORE you can evict — the exact production sequence (support.ts's `quiesce`).
-//      It is also what ARMS the alarm at all: a context with no live facet and no borrowed stub
-//      schedules nothing, so every pin below that fires the alarm creates one of the two FIRST.
+//   2. the idle QUIESCE: 30s without a PIN being used RETURNS every borrowed stub and closes every
+//      open socket — the two things that keep an actor resident on the edge (measured) — and aborts
+//      every live facet on the way, so the actor can hibernate. A facet is NOT a pin: on the edge it
+//      dies with the actor, so it arms nothing; here in workerd a materialized facet or a borrowed
+//      stub does keep the DO non-hibernatable (workerd#6800 — evictDurableObject on such a DO times
+//      out after 30s, "still has active references"), so a test must release BEFORE it can evict
+//      (support.ts's `quiesce` runs the release directly). Only a borrowed stub ARMS the alarm:
+//      every pin below that fires the alarm borrows one FIRST.
 //
 // PROCESSORS here are what they are everywhere: userspace two-class sources — a pure
 // `StreamProcessor` (`CounterProcessor`) and its one-line `StreamProcessorDurableObject` host
@@ -32,8 +33,11 @@
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test, vi } from "vitest";
-import type { ItxExpression } from "../src/context/expression.ts";
-import { adminCredentials, Echo, openSession, quiesce, stub } from "./support.ts";
+import type { ItxExpression } from "iterate/next/expression";
+import type { StreamEvent } from "iterate/next/stream/processor";
+import type { AlarmTrace } from "../src/iterate-context-durable-object.ts";
+import { STREAM_ALARM_TRACE_EVENT } from "../src/stream/stream.ts";
+import { adminCredentials, Echo, openSession, quiesce, stub, until } from "./support.ts";
 
 /** A tiny userspace processor: counts every durable event. The tally fixture's shape
  *  (e2e/support/sources.ts), reduced to one number — the pure `CounterProcessor` plus its host
@@ -59,10 +63,10 @@ export class CounterDurableObject extends StreamProcessorDurableObject {
 type FacetSnap = { offset: number; state: { n: number } };
 const snapCounter = (ctx: string, name = "counter") =>
   stub(ctx).invoke(["itx", "facets", ["get", name], ["snapshot"]]) as Promise<FacetSnap>;
-// The number of DURABLE events (read is durable-only). CounterProcessor consumes "*", so its `n` equals this
-// — the exact-once invariant. (Not `n === offset`: every processor's live-state delta is an
-// ephemeral that consumes an offset, so a durable event's offset exceeds the count of durable
-// events before it.)
+// The number of DURABLE events a "*" consumer sees (read is durable-only; every incarnation's wake
+// record is one of them). CounterProcessor consumes "*", so its `n` equals this — the exact-once
+// invariant. (Not `n === offset`: every processor's live-state delta is an ephemeral that consumes
+// an offset, so a durable event's offset exceeds the count of durable events before it.)
 const durableCount = async (ctx: string): Promise<number> =>
   ((await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: unknown[] }).events
     .length;
@@ -170,7 +174,7 @@ test("QUIESCE THEN EVICT THEN WAKE: the facet re-drives from its durable checkpo
   await evictDurableObject(s);
 
   const after = await snapCounter(ctx); // wakes a fresh incarnation → catch-up from the durable checkpoint
-  expect(after.state.n).toBeGreaterThanOrEqual(7); // created + woken (2) + subscription-configured (1) + b/1..b/4 (4), + the new incarnation's woken
+  expect(after.state.n).toBeGreaterThanOrEqual(7); // created, the first woken, subscription-configured, b/1..b/4 — and one woken per incarnation since
   expect(after.state.n).toBe(await durableCount(ctx)); // EXACTLY one reduce per durable event across the eviction
 });
 
@@ -280,90 +284,189 @@ test("RE-ENABLE WITH NEW SOURCE: a materialized processor re-enabled under the s
   expect(after.state.n).toBe(before.state.n + 20);
 });
 
-// ─────────── THE BREAKER'S RESIDUAL: a facet call in flight at the halting pass ───────────
+// ─────────── THE ONE ALARM: no wake without a reason, and every decision observable ───────────
 
-/** A hosted class whose push takes a while: the call is IN FLIGHT while the alarm passes below. */
-const SLOW_PUSH_SRC = /* js */ `
-import { DurableObject } from "cloudflare:workers";
-export class SlowPushDurableObject extends DurableObject {
-  async processEventBatch() { await new Promise((r) => setTimeout(r, 3000)); }
-  catchUpFromLog() {}
-}
-`;
-
-// WHAT IT DIES OF: the breaker NEVER TRIPS on the "/" context. Every wake's `config` delivery —
-// `itx.cd('/').worker.processEventBatch`, and on the root context `cd('/')` IS this DO
-// (`deps.context(ownPath)` hands back the instance) — goes through `this.invoke`, the public door
-// (context/built-ins.ts `cd`): `#notePublicDoor` marks the incarnation as in use and clears the
-// durable streak before the alarm can count it, so an alarm-only wake of the root context is never a
-// self-wake. Behind it, unreachable until this moves, sits the halt's own residual: a facet call in
-// flight at the halting pass (`#facetWorkInFlight` — never abort a facet mid-reduce) finishes after
-// it and re-notes activity through `Stream.armAlarmNoLaterThan`, which the breaker gates — nothing
-// scheduled, the facet stays live, a live facet pins the actor (workerd#6800), billed for duration.
-// The fix is a NEW mechanism, not a flag: the own-context door must be a PRIVATE one (the resolver's
-// run door, the stream's append — never `this.invoke`), or the breaker must count doors at the RPC
-// entry only; and the quiet clock's arm must bypass the breaker (it is self-limiting — the quiesce
-// branch never re-arms). Staged: a facet consuming `stream/woken` (pushed by every wake) whose push
-// parks 3 s; a fresh incarnation woken with NO request (runInDurableObject touches no door); the
-// scheduled alarm fired eight times — eight alarm-only passes, and no halt fact.
-test.fails("the self-wake breaker never trips on the root context: the wake's own `config` delivery goes through this.invoke — a public door — so eight alarm-only passes append no halt fact (and the halt's residual, a facet left pinned mid-call, stays unreachable behind it)", async () => {
-  const ctx = "prj_q_halt_pinned";
+test("A BARE PROBE ON A DORMANT CONTEXT LEAVES NO ALARM: the config delivery acks, nothing is pinned, the alarm is deleted — the every-minute wake loop's negative", async () => {
+  const ctx = "prj_q_bare_probe";
   const s = stub(ctx);
-  await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
-    payload: {
-      name: "slow",
-      target: [
-        "itx",
-        "facets",
-        [
-          "get",
-          "slow",
-          { source: { "cap.js": SLOW_PUSH_SRC }, className: "SlowPushDurableObject" },
-        ],
-        "processEventBatch",
-      ],
-      consumes: ["events.iterate.com/stream/woken"],
-    },
-  });
-  await new Promise((r) => setTimeout(r, 300)); // materialized (catchUpFromLog)
-  await quiesce(ctx);
-  await evictDurableObject(s);
-  // THE WAKE, with no public door: the constructor's `woken` commit pushes the facet (its call parks
-  // 3 s) and the `config` row arms the cursor lane's insurance alarm. The push materializes the facet
-  // asynchronously (the loader) — wait until its call is IN FLIGHT before the alarm passes, else the
-  // first pass finds no live facet, arms nothing (alarm() re-arms only with something to quiesce),
-  // and there is no alarm left to fire.
-  await runInDurableObject(s, () => Promise.resolve());
-  await new Promise((r) => setTimeout(r, 600));
-  const haltFacts = () =>
-    runInDurableObject(s, (_instance, state) =>
-      Promise.resolve(
-        Number(
-          state.storage.sql
-            .exec("SELECT count(*) AS n FROM events WHERE body LIKE '%stream/self-wake-halted%'")
-            .one().n,
-        ),
-      ),
-    );
-  // Eight alarm-only passes — the facet is live throughout (its call parks, then stays materialized),
-  // so every pass re-arms the quiet clock and there is always an alarm to fire. A pass that finds
-  // NO alarm scheduled is a staging change, not the pinned failure: the guard turns the pin red.
-  for (let pass = 1; pass <= 8; pass++) {
-    if (await runDurableObjectAlarm(s)) continue;
-    console.warn(
-      `PIN MOVED — pinned: eight alarm-only passes — observed: no alarm scheduled at pass ${pass}`,
-    );
-    return;
+  // The probe materializes the context: created, woken, the config row — whose delivery is owed
+  // from that commit (the +20 s insurance is the alarm armed from birth)…
+  await s.invoke("itx.schedules.list()");
+  // …until the config worker (the bundled no-op default) acks and the row is caught up.
+  await untilRow(ctx, "config", (r) => (r?.cursor?.confirmedOffset ?? 0) > 0);
+  await until("no alarm", async () => (await alarmAt(ctx)) === null);
+  expect(await alarmAt(ctx)).toBeNull();
+});
+
+test("AN OBSERVED PASS: an exact waitForEvent observer receives one ephemeral trace, a read with includeEphemeral holds the whole pass, the durable log is untouched — and observing is not a pin's use, so the observed pass releases", async () => {
+  const ctx = "prj_q_observed";
+  const s = stub(ctx);
+  // A BORROWED STUB is the pin that arms the idle deadline (a facet is not a pin: it does not keep
+  // the actor resident on the edge, so nothing arms an alarm for it).
+  const clientItx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
+  await clientItx.provide("itx.p0", new Echo(0));
+  const caller = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
+  expect(await caller.invoke("itx.p0.echo('warm')")).toBe("echo-0:warm");
+  expect(await alarmAt(ctx)).not.toBeNull();
+  const rowsBefore = await durableCount(ctx);
+  const observed = s.invoke([
+    "itx",
+    ["waitForEvent", { type: STREAM_ALARM_TRACE_EVENT, timeoutMs: 10_000 }],
+  ]) as Promise<StreamEvent>;
+  await new Promise((r) => setTimeout(r, 100)); // the waiter is registered
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+  try {
+    vi.setSystemTime(Date.now() + 61_000);
+    expect(await runDurableObjectAlarm(s)).toBe(true); // the observed pass: its first trace answers the waiter
+  } finally {
+    vi.useRealTimers();
   }
-  // WANTED: five alarm-only passes are a self-wake streak — the halt fact landed.
-  expect(await haltFacts()).toBe(1);
+  const trace = await observed;
+  expect(trace).toMatchObject({ type: STREAM_ALARM_TRACE_EVENT, ephemeral: true });
+  expect(trace.payload).toMatchObject({ reason: "alarm-fired", borrowedRpcStubs: true });
+  // The observer's call resolving mid-pass touches no pin (only a borrowed stub's call or a
+  // library connection's use moves the idle clock), so THIS pass returns the stub.
+  const ring = (
+    (await s.invoke(["itx", ["readEvents", 0, 500, { includeEphemeral: true }]])) as {
+      events: StreamEvent[];
+    }
+  ).events
+    .filter((event) => event.type === STREAM_ALARM_TRACE_EVENT)
+    .map((event) => event.payload as unknown as AlarmTrace);
+  expect(ring.map((t) => t.reason)).toEqual(["alarm-fired", "quiesce", "alarm-pass"]);
+  const pass = ring.at(-1)!;
+  expect(pass.alarm.after).toBeNull(); // released everything: no deadline left, no alarm
+  expect(pass.borrowedRpcStubs).toBe(false);
+  expect(pass.lastPinUseMs).toBeNull();
+  expect(await durableCount(ctx)).toBe(rowsBefore);
+  expect(await alarmAt(ctx)).toBeNull();
+});
+
+test("A FACET IS NOT A PIN: a request that materializes and calls a facet arms NO alarm; a borrowed stub arms the idle deadline, a call that touches no pin leaves it, and the quiesce returns the stub", async () => {
+  const ctx = "prj_q_pin_clock";
+  const s = stub(ctx);
+  await enableCounter(ctx);
+  await s.append({ type: "a/1" }); // the push materializes the facet
+  await new Promise((r) => setTimeout(r, 300));
+  await snapCounter(ctx); // and a direct facet call
+  await until("config acked", async () => (await alarmAt(ctx)) === null);
+  expect(await alarmAt(ctx)).toBeNull(); // a facet does not keep the actor resident on the edge: no deadline, no alarm
+  // A borrowed stub DOES pin the actor: its use arms the idle deadline.
+  const clientItx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
+  await clientItx.provide("itx.p0", new Echo(0));
+  const caller = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
+  expect(await caller.invoke("itx.p0.echo('warm')")).toBe("echo-0:warm");
+  const armed = await alarmAt(ctx);
+  expect(armed).not.toBeNull();
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+  try {
+    vi.setSystemTime(Date.now() + 30_000);
+    await s.invoke("itx.schedules.list()"); // a request, not a pin's use
+    await snapCounter(ctx); // a facet call: not a pin's use either
+    expect(await alarmAt(ctx)).toBe(armed);
+    expect(await caller.invoke("itx.p0.echo('again')")).toBe("echo-0:again"); // the stub's use: a fresh quiet period
+    expect(await alarmAt(ctx)).toBeGreaterThan(armed!);
+  } finally {
+    vi.useRealTimers();
+  }
+  await quiesce(ctx);
+  expect((await stateOf(ctx)).borrowedRpcStubs).toBe(0);
+  expect(await alarmAt(ctx)).toBeNull();
+});
+
+test("A '*' FACET WAKE ARMS NOTHING: a facet-hosting context holds no alarm after a request, and an alarm-woken incarnation whose wake record materializes the facet leaves none either — one woken, then quiet", async () => {
+  const ctx = "prj_q_star_facet_wake";
+  const s = stub(ctx);
+  await enableCounter(ctx); // a "*" facet: every incarnation's wake record is pushed to it
+  await s.append({ type: "a/1" });
+  await new Promise((r) => setTimeout(r, 300));
+  await until("config acked", async () => (await alarmAt(ctx)) === null);
+  expect(await alarmAt(ctx)).toBeNull(); // the live facet armed nothing: it is not a pin
+  const wokens = async () =>
+    ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events.filter(
+      (event) => event.type === "events.iterate.com/stream/woken",
+    );
+  const before = (await wokens()).length;
+  // A stale alarm fires into an evicted actor: the fresh incarnation's wake record materializes
+  // the counter for the push, and the pass arms nothing for it.
+  await quiesce(ctx); // un-pin the facet so the eviction below can happen (workerd pins, the edge does not)
+  await runInDurableObject(s, (_inst, state) => state.storage.setAlarm(Date.now() + 300));
+  await evictDurableObject(s);
+  await new Promise((r) => setTimeout(r, 2_500));
+  expect(await alarmAt(ctx)).toBeNull(); // (a read constructs nothing: the alarm is storage)
+  await new Promise((r) => setTimeout(r, 1_500));
+  const woken = await wokens(); // this read is a request: at most one more incarnation, by request
+  expect(woken.slice(before).map((event) => (event.payload as { reason: string }).reason)).toEqual(
+    expect.arrayContaining(["alarm"]),
+  );
+  expect(woken.length).toBeLessThanOrEqual(before + 2);
+  expect(
+    woken.slice(before).filter((e) => (e.payload as { reason: string }).reason === "alarm"),
+  ).toHaveLength(1);
+  expect((await snapCounter(ctx)).state.n).toBe(await durableCount(ctx)); // the wake record reached the "*" facet exactly once
+});
+
+test("A WAKE MAKES NO LOOP: an incarnation the alarm woke delivers its own wake record to the config row, acks, and ends with no alarm — one woken per incarnation, never a second", async () => {
+  const ctx = "prj_q_wake_no_loop";
+  const s = stub(ctx);
+  await s.invoke("itx.schedules.list()"); // born: created, woken, the config row
+  await untilRow(ctx, "config", (r) => (r?.cursor?.confirmedOffset ?? 0) > 0);
+  await until("no alarm", async () => (await alarmAt(ctx)) === null);
+  const wokens = async () =>
+    ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events.filter(
+      (event) => event.type === "events.iterate.com/stream/woken",
+    );
+  const before = (await wokens()).length;
+  // An alarm with no reason left behind (a dead incarnation's idle deadline, say — set here on the
+  // quiet incarnation, which is then evicted) fires for real and wakes a FRESH incarnation: its
+  // constructor reads the alarm, so its wake record says so.
+  await runInDurableObject(s, (_inst, state) => state.storage.setAlarm(Date.now() + 300));
+  await evictDurableObject(s);
+  await new Promise((r) => setTimeout(r, 1_500)); // the alarm has fired; nothing else has touched the context
+  const woken = await wokens();
+  expect(woken).toHaveLength(before + 1);
+  expect(woken.at(-1)!.payload).toMatchObject({ reason: "alarm" });
+  // Its own wake record delivered and acked, nothing pinned: no alarm — and none appears.
+  await untilRow(ctx, "config", (r) => (r?.cursor?.confirmedOffset ?? 0) >= woken.at(-1)!.offset);
+  await until("no alarm", async () => (await alarmAt(ctx)) === null);
+  await new Promise((r) => setTimeout(r, 1_500));
+  expect(await alarmAt(ctx)).toBeNull();
+  expect(await wokens()).toHaveLength(before + 1);
+});
+
+test("A BORROW IS A USE: the first call through a stub arms the idle deadline a quiet period out — never an instant already past, which would fire an alarm pass for nothing", async () => {
+  const ctx = "prj_q_first_borrow";
+  const clientItx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
+  await clientItx.provide("itx.p0", new Echo(0));
+  const caller = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
+  // The first borrow through a PUSH: a live "*" subscriber's callback is lent, and the commit that
+  // pushes to it acks the config row meanwhile — a reconcile lands while the stub's first call is
+  // still in flight, with the borrow already counted.
+  const seen: unknown[] = [];
+  await clientItx.subscribe({
+    name: "live",
+    consumes: ["*"],
+    target: (events: unknown[]) => void seen.push(...events),
+  });
+  const before = Date.now();
+  await stub(ctx).append({ type: "mark" });
+  expect(await caller.invoke("itx.p0.echo('first')")).toBe("echo-0:first"); // and a direct borrow
+  await new Promise((r) => setTimeout(r, 800)); // an alarm armed in the past would have fired by now
+  const armed = await alarmAt(ctx);
+  expect(armed).not.toBeNull();
+  expect(armed!).toBeGreaterThanOrEqual(before + 30_000);
+  const ring = (
+    (await stub(ctx).invoke(["itx", ["readEvents", 0, 500, { includeEphemeral: true }]])) as {
+      events: StreamEvent[];
+    }
+  ).events.filter((event) => event.type === STREAM_ALARM_TRACE_EVENT);
+  expect(ring).toEqual([]); // no pass ran: nothing was due
 });
 
 test("A BORROW RACES THE QUIESCE ALARM: a stub invoke fired concurrently with the alarm still answers", async () => {
   // A quiesce RETURNS borrowed stubs (#borrowed) but never touches a PENDING page (#rpcStubPagesInFlight),
-  // and the invoke's own #recordActivityForQuietClock keeps the actor warm. PINS: an invoke that
-  // borrows a stub while the 60s alarm fires resolves with the right per-client answer (the stub it
+  // and the borrow the invoke makes is the pin's use that keeps the actor warm. PINS: an invoke that
+  // borrows a stub while the 30s alarm fires resolves with the right per-client answer (the stub it
   // is borrowing is not returned out from under it).
   const ctx = "prj_pagein";
   const clientItx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
@@ -523,7 +626,7 @@ test("ALARM PUMPS THE CURSOR LANE: a failed at-least-once delivery is retried fr
   expect(await s.invoke(["itx", "kv", ["get", "flaky-digested"]])).toBeNull();
 
   // Heal the target, then fire the alarm with Date faked PAST the retry instant (30s clears every
-  // early rung of the 1s·2ⁿ ladder; well short of the 60s quiesce).
+  // early rung of the 1s·2ⁿ ladder; a rung the 30s quiesce is not part of).
   await s.invoke(["itx", "kv", ["put", "flaky-mode", "ok"]]);
   vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
   try {
@@ -540,4 +643,6 @@ test("ALARM PUMPS THE CURSOR LANE: a failed at-least-once delivery is retried fr
   expect(after.cursor!.nextAttemptAtMs).toBeUndefined();
   expect(after.halted).toBeUndefined();
   expect(await s.invoke(["itx", "kv", ["get", "flaky-digested"]])).toBe("1");
+  // Caught up, nothing pinned: the pass left no alarm behind.
+  expect(await alarmAt(ctx)).toBeNull();
 });

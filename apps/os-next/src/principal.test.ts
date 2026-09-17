@@ -1,7 +1,7 @@
 // principal.test.ts — the signed-claims codec as a table: what verifies, what does not; the admin
 // secret's compare; and the cookie header — read back, refused.
 import { expect, test } from "vitest";
-import { cookieValueOf, signClaims, verifyAdminSecret, verifyClaims } from "./principal.ts";
+import { cookieValueOf, signClaims, verifyAdminSecret, verifyClaims } from "iterate/next/principal";
 
 const SECRET = "test-secret";
 const claims = { actor: "user_a", email: "a@example.com", next: "/" };

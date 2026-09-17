@@ -1,0 +1,4314 @@
+{
+  "root": {
+    "id": "o0",
+    "label": "6 \u00d7 16 \u00b7 overlapping setup \u00b7 green",
+    "start": 0,
+    "end": 608.512,
+    "kind": "job",
+    "note": "Prepare, app tests and six browser shards start together. Test runners prepare before waiting for readiness. Finalizer setup overlaps testing.",
+    "basis": "Depot workflow timestamps",
+    "children": [
+      {
+        "id": "o84",
+        "label": "Prepare",
+        "start": 5.587,
+        "end": 363.101,
+        "kind": "job",
+        "note": "Dedicated runner. Parent durations include their children. Whole-job sampled peak: 4.7/16 CPU cores, 8.2/64 GB RAM. Includes install and waiting, not just test time.",
+        "basis": "Depot job timestamps",
+        "children": [
+          {
+            "id": "o85",
+            "label": "Runner startup / unlogged setup",
+            "start": 5.587,
+            "end": 16.293,
+            "kind": "other",
+            "note": "Runner startup before the first checkout log.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "o86",
+            "label": "Checkout",
+            "start": 16.293,
+            "end": 20.087,
+            "kind": "other",
+            "note": "Checkout the exact candidate into the baked workspace.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "o87",
+            "label": "pnpm install",
+            "start": 20.087,
+            "end": 62.134,
+            "kind": "install",
+            "note": "Frozen, prefer-offline dependency reconciliation.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "o88",
+            "label": "Clean old preview data",
+            "start": 75.204,
+            "end": 175.504,
+            "kind": "cleanup",
+            "note": "Measured erase command duration. Report processing may overlap.",
+            "basis": "End log minus reported duration",
+            "children": []
+          },
+          {
+            "id": "o96",
+            "label": "Deploy os",
+            "start": 176.205,
+            "end": 245.43,
+            "kind": "deploy",
+            "note": "Deployment outcome: passed",
+            "basis": "Deployment telemetry",
+            "children": []
+          },
+          {
+            "id": "o97",
+            "label": "Deploy docs",
+            "start": 176.206,
+            "end": 199.865,
+            "kind": "deploy",
+            "note": "Deployment outcome: passed",
+            "basis": "Deployment telemetry",
+            "children": []
+          },
+          {
+            "id": "o98",
+            "label": "Deploy semaphore",
+            "start": 176.206,
+            "end": 196.223,
+            "kind": "deploy",
+            "note": "Deployment outcome: passed",
+            "basis": "Deployment telemetry",
+            "children": []
+          },
+          {
+            "id": "o99",
+            "label": "Deploy auth",
+            "start": 176.207,
+            "end": 206.815,
+            "kind": "deploy",
+            "note": "Deployment outcome: passed",
+            "basis": "Deployment telemetry",
+            "children": []
+          },
+          {
+            "id": "o100",
+            "label": "Deploy streams-example-app",
+            "start": 176.207,
+            "end": 199.122,
+            "kind": "deploy",
+            "note": "Deployment outcome: passed",
+            "basis": "Deployment telemetry",
+            "children": []
+          },
+          {
+            "id": "o101",
+            "label": "Deploy dummy-petshop",
+            "start": 196.223,
+            "end": 201.624,
+            "kind": "deploy",
+            "note": "Deployment outcome: passed",
+            "basis": "Deployment telemetry",
+            "children": []
+          },
+          {
+            "id": "o89",
+            "label": "Shared OS readiness",
+            "start": 249.487,
+            "end": 359.481,
+            "kind": "readiness",
+            "note": "Smoke and rollout wait run together before publishing the deployment plan.",
+            "basis": "Timestamped log boundaries",
+            "children": [
+              {
+                "id": "o90",
+                "label": "Rollout timer",
+                "start": 249.488,
+                "end": 334.489,
+                "kind": "readiness",
+                "note": "Readiness component.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o91",
+                "label": "Agent smoke",
+                "start": 249.488,
+                "end": 359.481,
+                "kind": "readiness",
+                "note": "Readiness component.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o92",
+                "label": "TUI check",
+                "start": 249.488,
+                "end": 249.917,
+                "kind": "readiness",
+                "note": "Readiness component.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              }
+            ]
+          }
+        ],
+        "attempt": "twhc6xm1tr",
+        "order": 0,
+        "failed": false
+      },
+      {
+        "id": "o1",
+        "label": "App tests",
+        "start": 5.474,
+        "end": 489.542,
+        "kind": "job",
+        "note": "Dedicated runner. Parent durations include their children. Whole-job sampled peak: 6.3/16 CPU cores, 8.4/64 GB RAM. Includes install and waiting, not just test time.",
+        "basis": "Depot job timestamps",
+        "children": [
+          {
+            "id": "o2",
+            "label": "Runner startup / unlogged setup",
+            "start": 5.474,
+            "end": 15.656,
+            "kind": "other",
+            "note": "Runner startup before the first checkout log.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "o3",
+            "label": "Checkout",
+            "start": 15.656,
+            "end": 19.174,
+            "kind": "other",
+            "note": "Checkout the exact candidate into the baked workspace.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "o4",
+            "label": "pnpm install",
+            "start": 19.174,
+            "end": 62.021,
+            "kind": "install",
+            "note": "Frozen, prefer-offline dependency reconciliation.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "o5",
+            "label": "Chromium install/check",
+            "start": 62.105,
+            "end": 62.985,
+            "kind": "browser",
+            "note": "Reconcile browsers before waiting. End is the next step boundary.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "o6",
+            "label": "Wait for preview readiness",
+            "start": 62.985,
+            "end": 365.684,
+            "kind": "readiness",
+            "note": "Exact producer-attempt milestone, guarded by Depot producer liveness. Includes waiter startup and polling.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "o382",
+            "label": "semaphore \u00b7 vitest",
+            "start": 370.14,
+            "end": 390.706,
+            "kind": "test",
+            "note": "App suite reporter interval.",
+            "basis": "Test telemetry",
+            "children": []
+          },
+          {
+            "id": "o385",
+            "label": "dummy-petshop \u00b7 vitest",
+            "start": 370.144,
+            "end": 377.963,
+            "kind": "test",
+            "note": "App suite reporter interval.",
+            "basis": "Test telemetry",
+            "children": []
+          },
+          {
+            "id": "o387",
+            "label": "auth \u00b7 vitest",
+            "start": 370.144,
+            "end": 388.205,
+            "kind": "test",
+            "note": "App suite reporter interval.",
+            "basis": "Test telemetry",
+            "children": []
+          },
+          {
+            "id": "o383",
+            "label": "streams-example-app \u00b7 vitest",
+            "start": 372.706,
+            "end": 394.16,
+            "kind": "test",
+            "note": "App suite reporter interval.",
+            "basis": "Test telemetry",
+            "children": []
+          },
+          {
+            "id": "o381",
+            "label": "os \u00b7 vitest",
+            "start": 372.71,
+            "end": 488.281,
+            "kind": "test",
+            "note": "App suite reporter interval.",
+            "basis": "Test telemetry",
+            "children": []
+          },
+          {
+            "id": "o386",
+            "label": "streams-example-app \u00b7 playwright",
+            "start": 372.753,
+            "end": 417.14,
+            "kind": "test",
+            "note": "App suite reporter interval.",
+            "basis": "Test telemetry",
+            "children": []
+          },
+          {
+            "id": "o384",
+            "label": "docs \u00b7 vitest",
+            "start": 372.806,
+            "end": 373.346,
+            "kind": "test",
+            "note": "App suite reporter interval.",
+            "basis": "Test telemetry",
+            "children": []
+          }
+        ],
+        "attempt": "s60fdcvwdh",
+        "order": 1,
+        "failed": false
+      },
+      {
+        "id": "o12",
+        "label": "Playwright 1/6",
+        "start": 4.898,
+        "end": 426.503,
+        "kind": "job",
+        "note": "Dedicated runner. Parent durations include their children. Whole-job sampled peak: 7.9/16 CPU cores, 9.3/64 GB RAM. Includes install and waiting, not just test time.",
+        "basis": "Depot job timestamps",
+        "children": [
+          {
+            "id": "o13",
+            "label": "Setup",
+            "start": 4.898,
+            "end": 18.091,
+            "kind": "other",
+            "note": "Runner startup, checkout, dependencies and Chromium. Expand to see the measured components.",
+            "basis": "Job start to readiness-wait step start",
+            "children": [
+              {
+                "id": "o19",
+                "label": "Runner startup / unlogged setup",
+                "start": 4.898,
+                "end": 7.056,
+                "kind": "other",
+                "note": "Runner startup before the first checkout log.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o20",
+                "label": "Checkout",
+                "start": 7.056,
+                "end": 8.122,
+                "kind": "other",
+                "note": "Checkout the exact candidate into the baked workspace.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o21",
+                "label": "pnpm install",
+                "start": 8.122,
+                "end": 17.293,
+                "kind": "install",
+                "note": "Frozen, prefer-offline dependency reconciliation.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o22",
+                "label": "Chromium install/check",
+                "start": 17.382,
+                "end": 18.091,
+                "kind": "browser",
+                "note": "Reconcile browsers before waiting. End is the next step boundary.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              }
+            ]
+          },
+          {
+            "id": "o23",
+            "label": "Wait for preview readiness",
+            "start": 18.091,
+            "end": 366.482,
+            "kind": "readiness",
+            "note": "Exact producer-attempt milestone, guarded by Depot producer liveness. Includes waiter startup and polling.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "o14",
+            "label": "Run Playwright",
+            "start": 366.482,
+            "end": 425.915,
+            "kind": "test",
+            "note": "Download the prepared deployment plan, validate it, run Playwright and write its reports. Expand for startup and individual test attempts. The reporter interval is 54.8s within this phase; the phase also includes plan download and command overhead.",
+            "basis": "Readiness acknowledgement to first result-upload log",
+            "children": [
+              {
+                "id": "o18",
+                "label": "Download deployment plan",
+                "start": 366.955,
+                "end": 367.034,
+                "kind": "artifact",
+                "note": "Download the immutable plan published before the readiness milestone.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o280",
+                "label": "Resolve preview and start CLI",
+                "start": 367.034,
+                "end": 369.481,
+                "kind": "other",
+                "note": "Validate deployment identity and slot ownership; start the spec command.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o281",
+                "label": "Playwright startup / global setup",
+                "start": 369.481,
+                "end": 375.077,
+                "kind": "other",
+                "note": "CLI invocation until the first test attempt starts, including global setup, the web server and worker startup. Reporter timing begins within this interval.",
+                "basis": "CLI log to first reporter-recorded attempt",
+                "children": []
+              },
+              {
+                "id": "o287",
+                "label": "preview-resilience \u203a stream-resume-after-suspend.spec.ts \u203a feed resumes after the /api WebSocket dies (clean close)",
+                "start": 375.077,
+                "end": 396.386,
+                "kind": "test",
+                "note": "passed \u00b7 worker 1 / slot 1",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o288",
+                    "label": "Before Hooks",
+                    "start": 375.085,
+                    "end": 380.603,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o289",
+                    "label": "create project fixture",
+                    "start": 380.603,
+                    "end": 390.855,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o290",
+                    "label": "connect admin itx",
+                    "start": 390.858,
+                    "end": 391.863,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o316",
+                "label": "web \u203a agent-fake-model-chat.spec.ts \u203a recreating an agent at the same path resets its composer",
+                "start": 375.079,
+                "end": 398.325,
+                "kind": "test",
+                "note": "passed \u00b7 worker 8 / slot 8",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o317",
+                    "label": "Before Hooks",
+                    "start": 375.088,
+                    "end": 380.602,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o318",
+                    "label": "create project fixture",
+                    "start": 380.602,
+                    "end": 389.372,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o319",
+                    "label": "connect admin itx",
+                    "start": 389.373,
+                    "end": 390.257,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o320",
+                    "label": "connect admin itx",
+                    "start": 391.784,
+                    "end": 392.654,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o311",
+                "label": "web \u203a agent-fake-model-chat.spec.ts \u203a switching agents clears the previous stream's submission acknowledgement",
+                "start": 375.085,
+                "end": 397.677,
+                "kind": "test",
+                "note": "passed \u00b7 worker 7 / slot 7",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o312",
+                    "label": "Before Hooks",
+                    "start": 375.094,
+                    "end": 380.61,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o313",
+                    "label": "create project fixture",
+                    "start": 380.61,
+                    "end": 388.764,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o314",
+                    "label": "connect admin itx",
+                    "start": 388.765,
+                    "end": 389.75,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o315",
+                    "label": "connect admin itx",
+                    "start": 391.242,
+                    "end": 392.21,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o291",
+                "label": "preview-resilience \u203a stream-resume-after-suspend.spec.ts \u203a feed resumes after page freeze + socket death (mobile suspend shape)",
+                "start": 375.112,
+                "end": 395.249,
+                "kind": "test",
+                "note": "passed \u00b7 worker 2 / slot 2",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o292",
+                    "label": "Before Hooks",
+                    "start": 375.121,
+                    "end": 380.607,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o293",
+                    "label": "create project fixture",
+                    "start": 380.607,
+                    "end": 390.503,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o336",
+                "label": "web \u203a create-project.spec.ts \u203a the config template opens a proactive onboarding conversation for a new project",
+                "start": 375.117,
+                "end": 420.286,
+                "kind": "test",
+                "note": "passed \u00b7 worker 13 / slot 13",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o337",
+                    "label": "Before Hooks",
+                    "start": 375.125,
+                    "end": 380.602,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o325",
+                "label": "web \u203a agent-script-reuse.spec.ts \u203a run() return values are typed from the reused row's data, through the real gate",
+                "start": 375.139,
+                "end": 405.126,
+                "kind": "test",
+                "note": "passed \u00b7 worker 10 / slot 10",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o326",
+                    "label": "Before Hooks",
+                    "start": 375.148,
+                    "end": 380.605,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o327",
+                    "label": "create project fixture",
+                    "start": 380.605,
+                    "end": 391.109,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o328",
+                    "label": "connect admin itx",
+                    "start": 391.109,
+                    "end": 392.048,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o306",
+                "label": "web \u203a agent-fake-model-chat.spec.ts \u203a multi-turn chat with a sarcastic agent served by the spec's own fake-model interceptor",
+                "start": 375.173,
+                "end": 403.36,
+                "kind": "test",
+                "note": "passed \u00b7 worker 6 / slot 6",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o307",
+                    "label": "Before Hooks",
+                    "start": 375.181,
+                    "end": 380.616,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o308",
+                    "label": "create project fixture",
+                    "start": 380.617,
+                    "end": 390.023,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o309",
+                    "label": "connect admin itx",
+                    "start": 390.024,
+                    "end": 390.885,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o310",
+                    "label": "connect admin itx",
+                    "start": 392.95,
+                    "end": 394.357,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o302",
+                "label": "web \u203a agent-fake-model-chat.spec.ts \u203a a config file mention is materialized before the model sees the turn",
+                "start": 375.219,
+                "end": 394.316,
+                "kind": "test",
+                "note": "passed \u00b7 worker 5 / slot 5",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o303",
+                    "label": "Before Hooks",
+                    "start": 375.227,
+                    "end": 380.61,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o304",
+                    "label": "create project fixture",
+                    "start": 380.611,
+                    "end": 390.847,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o305",
+                    "label": "connect admin itx",
+                    "start": 390.848,
+                    "end": 391.893,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o283",
+                "label": "preview-resilience \u203a stream-resume-after-suspend.spec.ts \u203a control: appended event is delivered to a live stream feed",
+                "start": 375.239,
+                "end": 391.79,
+                "kind": "test",
+                "note": "passed \u00b7 worker 0 / slot 0",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o284",
+                    "label": "Before Hooks",
+                    "start": 375.247,
+                    "end": 380.607,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o285",
+                    "label": "create project fixture",
+                    "start": 380.608,
+                    "end": 389.332,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o286",
+                    "label": "connect admin itx",
+                    "start": 389.332,
+                    "end": 390.419,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o321",
+                "label": "web \u203a agent-script-reuse.spec.ts \u203a a repeat request reuses the previous turn's journaled script instead of re-deriving it",
+                "start": 375.243,
+                "end": 408.705,
+                "kind": "test",
+                "note": "passed \u00b7 worker 9 / slot 9",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o322",
+                    "label": "Before Hooks",
+                    "start": 375.251,
+                    "end": 380.61,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o323",
+                    "label": "create project fixture",
+                    "start": 380.611,
+                    "end": 389.194,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o324",
+                    "label": "connect admin itx",
+                    "start": 389.194,
+                    "end": 390.412,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o294",
+                "label": "preview-resilience \u203a stream-resume-after-suspend.spec.ts \u203a feed resumes after the /api WebSocket goes half-open (no close frame)",
+                "start": 375.259,
+                "end": 412.857,
+                "kind": "test",
+                "note": "passed \u00b7 worker 3 / slot 3",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o295",
+                    "label": "Before Hooks",
+                    "start": 375.267,
+                    "end": 380.607,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o296",
+                    "label": "create project fixture",
+                    "start": 380.608,
+                    "end": 388.127,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o297",
+                    "label": "connect admin itx",
+                    "start": 388.13,
+                    "end": 389.167,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o298",
+                "label": "web \u203a agent-chat.spec.ts \u203a agent replies to a browser chat message in the feed",
+                "start": 375.26,
+                "end": 393.77,
+                "kind": "test",
+                "note": "passed \u00b7 worker 4 / slot 4",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o299",
+                    "label": "Before Hooks",
+                    "start": 375.268,
+                    "end": 380.61,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o300",
+                    "label": "create project fixture",
+                    "start": 380.61,
+                    "end": 389.052,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o301",
+                    "label": "connect admin itx",
+                    "start": 389.053,
+                    "end": 390.935,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o333",
+                "label": "web \u203a collect-secret.spec.ts \u203a a person provides a secret from a phone-sized sheet",
+                "start": 375.276,
+                "end": 391.617,
+                "kind": "test",
+                "note": "passed \u00b7 worker 12 / slot 12",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o334",
+                    "label": "Before Hooks",
+                    "start": 375.285,
+                    "end": 380.624,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o335",
+                    "label": "create project fixture",
+                    "start": 380.624,
+                    "end": 389.194,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o338",
+                "label": "web \u203a dashboard.spec.ts \u203a can enter the dashboard with a forged session",
+                "start": 375.277,
+                "end": 386.175,
+                "kind": "test",
+                "note": "passed \u00b7 worker 14 / slot 14",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o339",
+                    "label": "Before Hooks",
+                    "start": 375.285,
+                    "end": 380.603,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o340",
+                "label": "web \u203a dashboard.spec.ts \u203a loads project navigation only when it opens",
+                "start": 375.283,
+                "end": 387.536,
+                "kind": "test",
+                "note": "passed \u00b7 worker 15 / slot 15",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o341",
+                    "label": "Before Hooks",
+                    "start": 375.291,
+                    "end": 380.608,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o329",
+                "label": "web \u203a clients-os-app.spec.ts \u203a two dashboard tabs are two clients; an itx caller navigates each independently",
+                "start": 375.342,
+                "end": 395.685,
+                "kind": "test",
+                "note": "passed \u00b7 worker 11 / slot 11",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o330",
+                    "label": "Before Hooks",
+                    "start": 375.35,
+                    "end": 380.601,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o331",
+                    "label": "create project fixture",
+                    "start": 380.602,
+                    "end": 389.248,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o332",
+                    "label": "connect admin itx",
+                    "start": 389.249,
+                    "end": 390.101,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o282",
+                "label": "Write reports / command finish",
+                "start": 420.286,
+                "end": 425.915,
+                "kind": "artifact",
+                "note": "Final reporter output and command completion before the first upload log.",
+                "basis": "Last attempt end to first upload log",
+                "children": []
+              }
+            ],
+            "failed": false
+          },
+          {
+            "id": "o15",
+            "label": "Upload results",
+            "start": 425.915,
+            "end": 426.503,
+            "kind": "artifact",
+            "note": "Upload the report artifact and finish the job. The cleanup barrier waits for this job to terminate.",
+            "basis": "First upload log to job completion",
+            "children": [
+              {
+                "id": "o16",
+                "label": "Upload artifact",
+                "start": 425.915,
+                "end": 426.195,
+                "kind": "artifact",
+                "note": "Report ZIP upload and finalization.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o17",
+                "label": "Job teardown",
+                "start": 426.195,
+                "end": 426.503,
+                "kind": "other",
+                "note": "Post-action cleanup and remaining job completion time.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              }
+            ]
+          }
+        ],
+        "attempt": "bdqkw989g6",
+        "order": 2,
+        "failed": false,
+        "shard": 1
+      },
+      {
+        "id": "o24",
+        "label": "Playwright 2/6",
+        "start": 5.5,
+        "end": 399.255,
+        "kind": "job",
+        "note": "Dedicated runner. Parent durations include their children. Whole-job sampled peak: 7.3/16 CPU cores, 8.4/64 GB RAM. Includes install and waiting, not just test time.",
+        "basis": "Depot job timestamps",
+        "children": [
+          {
+            "id": "o25",
+            "label": "Setup",
+            "start": 5.5,
+            "end": 63.009,
+            "kind": "other",
+            "note": "Runner startup, checkout, dependencies and Chromium. Expand to see the measured components.",
+            "basis": "Job start to readiness-wait step start",
+            "children": [
+              {
+                "id": "o31",
+                "label": "Runner startup / unlogged setup",
+                "start": 5.5,
+                "end": 15.648,
+                "kind": "other",
+                "note": "Runner startup before the first checkout log.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o32",
+                "label": "Checkout",
+                "start": 15.648,
+                "end": 19.179,
+                "kind": "other",
+                "note": "Checkout the exact candidate into the baked workspace.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o33",
+                "label": "pnpm install",
+                "start": 19.179,
+                "end": 61.955,
+                "kind": "install",
+                "note": "Frozen, prefer-offline dependency reconciliation.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o34",
+                "label": "Chromium install/check",
+                "start": 62.04,
+                "end": 63.009,
+                "kind": "browser",
+                "note": "Reconcile browsers before waiting. End is the next step boundary.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              }
+            ]
+          },
+          {
+            "id": "o35",
+            "label": "Wait for preview readiness",
+            "start": 63.009,
+            "end": 366.578,
+            "kind": "readiness",
+            "note": "Exact producer-attempt milestone, guarded by Depot producer liveness. Includes waiter startup and polling.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "o26",
+            "label": "Run Playwright",
+            "start": 366.578,
+            "end": 398.66,
+            "kind": "test",
+            "note": "Download the prepared deployment plan, validate it, run Playwright and write its reports. Expand for startup and individual test attempts. The reporter interval is 27.6s within this phase; the phase also includes plan download and command overhead.",
+            "basis": "Readiness acknowledgement to first result-upload log",
+            "children": [
+              {
+                "id": "o30",
+                "label": "Download deployment plan",
+                "start": 367.071,
+                "end": 367.164,
+                "kind": "artifact",
+                "note": "Download the immutable plan published before the readiness milestone.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o239",
+                "label": "Resolve preview and start CLI",
+                "start": 367.164,
+                "end": 369.664,
+                "kind": "other",
+                "note": "Validate deployment identity and slot ownership; start the spec command.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o240",
+                "label": "Playwright startup / global setup",
+                "start": 369.664,
+                "end": 375.464,
+                "kind": "other",
+                "note": "CLI invocation until the first test attempt starts, including global setup, the web server and worker startup. Reporter timing begins within this interval.",
+                "basis": "CLI log to first reporter-recorded attempt",
+                "children": []
+              },
+              {
+                "id": "o247",
+                "label": "web \u203a forged-session-repl.spec.ts \u203a project REPL accepts a forged session",
+                "start": 375.464,
+                "end": 392.335,
+                "kind": "test",
+                "note": "passed \u00b7 worker 3 / slot 3",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o248",
+                    "label": "Before Hooks",
+                    "start": 375.475,
+                    "end": 380.92,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o249",
+                    "label": "create project fixture",
+                    "start": 380.92,
+                    "end": 388.895,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o252",
+                "label": "web \u203a project-route-ssr.spec.ts \u203a project home hydrates the dashboard and REPL still server-renders",
+                "start": 375.479,
+                "end": 391.127,
+                "kind": "test",
+                "note": "passed \u00b7 worker 5 / slot 5",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o253",
+                    "label": "Before Hooks",
+                    "start": 375.488,
+                    "end": 380.922,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o254",
+                    "label": "create project fixture",
+                    "start": 380.923,
+                    "end": 388.929,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o265",
+                "label": "web \u203a reactivity.spec.ts \u203a reactivity page processor panel goes live and repaints from a server push",
+                "start": 375.484,
+                "end": 388.47,
+                "kind": "test",
+                "note": "passed \u00b7 worker 11 / slot 11",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o266",
+                    "label": "Before Hooks",
+                    "start": 375.495,
+                    "end": 380.875,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o267",
+                    "label": "create project fixture",
+                    "start": 380.875,
+                    "end": 388.051,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o250",
+                "label": "web \u203a integrations-hydration.spec.ts \u203a hydrates the client-only integrations route without rebuilding the shell",
+                "start": 375.49,
+                "end": 387.957,
+                "kind": "test",
+                "note": "passed \u00b7 worker 4 / slot 4",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o251",
+                    "label": "Before Hooks",
+                    "start": 375.506,
+                    "end": 380.877,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o242",
+                "label": "web \u203a dashboard.spec.ts \u203a opening OS returns to the most recently active project",
+                "start": 375.5,
+                "end": 392.45,
+                "kind": "test",
+                "note": "passed \u00b7 worker 0 / slot 0",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o243",
+                    "label": "Before Hooks",
+                    "start": 375.509,
+                    "end": 380.833,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o271",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"scheduler-basics\" through the project REPL",
+                "start": 375.507,
+                "end": 392.455,
+                "kind": "test",
+                "note": "passed \u00b7 worker 13 / slot 13",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o272",
+                    "label": "Before Hooks",
+                    "start": 375.518,
+                    "end": 380.924,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o273",
+                    "label": "create project fixture",
+                    "start": 380.925,
+                    "end": 389.357,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o246",
+                "label": "web \u203a flake-sentinel.spec.ts \u203a flake sentinel (specs)",
+                "start": 375.512,
+                "end": 375.514,
+                "kind": "test",
+                "note": "body passed; expected wrapper throw \u00b7 worker 2 / slot 2",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o259",
+                "label": "web \u203a reactivity.spec.ts \u203a reactivity page appends a batch and renders every delivered marker",
+                "start": 375.515,
+                "end": 387.755,
+                "kind": "test",
+                "note": "passed \u00b7 worker 8 / slot 8",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o260",
+                    "label": "Before Hooks",
+                    "start": 375.525,
+                    "end": 380.925,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o261",
+                "label": "web \u203a reactivity.spec.ts \u203a reactivity page replays already appended events after reload",
+                "start": 375.518,
+                "end": 387.575,
+                "kind": "test",
+                "note": "passed \u00b7 worker 9 / slot 9",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o262",
+                    "label": "Before Hooks",
+                    "start": 375.53,
+                    "end": 380.931,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o255",
+                "label": "web \u203a reactivity-hydration.spec.ts \u203a hydrates the client-only reactivity route without rebuilding the shell",
+                "start": 375.527,
+                "end": 386.394,
+                "kind": "test",
+                "note": "passed \u00b7 worker 6 / slot 6",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o256",
+                    "label": "Before Hooks",
+                    "start": 375.536,
+                    "end": 380.832,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o274",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"scheduler-agent-checkin\" through the project REPL",
+                "start": 375.531,
+                "end": 393.208,
+                "kind": "test",
+                "note": "passed \u00b7 worker 14 / slot 14",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o275",
+                    "label": "Before Hooks",
+                    "start": 375.539,
+                    "end": 380.831,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o276",
+                    "label": "create project fixture",
+                    "start": 380.831,
+                    "end": 389.189,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o263",
+                "label": "web \u203a reactivity.spec.ts \u203a reactivity page delivers an appended event to another open tab",
+                "start": 375.54,
+                "end": 389.642,
+                "kind": "test",
+                "note": "passed \u00b7 worker 10 / slot 10",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o264",
+                    "label": "Before Hooks",
+                    "start": 375.549,
+                    "end": 380.921,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o244",
+                "label": "web \u203a dashboard.spec.ts \u203a project settings is available under /settings",
+                "start": 375.561,
+                "end": 387.444,
+                "kind": "test",
+                "note": "passed \u00b7 worker 1 / slot 1",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o245",
+                    "label": "Before Hooks",
+                    "start": 375.569,
+                    "end": 380.921,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o257",
+                "label": "web \u203a reactivity.spec.ts \u203a reactivity page repaints from a stream subscription after a page action",
+                "start": 375.561,
+                "end": 389.465,
+                "kind": "test",
+                "note": "passed \u00b7 worker 7 / slot 7",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o258",
+                    "label": "Before Hooks",
+                    "start": 375.569,
+                    "end": 380.923,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o268",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"stream-receive-events-from\" through the project REPL",
+                "start": 375.561,
+                "end": 392.806,
+                "kind": "test",
+                "note": "passed \u00b7 worker 12 / slot 12",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o269",
+                    "label": "Before Hooks",
+                    "start": 375.571,
+                    "end": 380.926,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o270",
+                    "label": "create project fixture",
+                    "start": 380.927,
+                    "end": 389.819,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o277",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"describe-project\" through the project REPL",
+                "start": 375.572,
+                "end": 391.535,
+                "kind": "test",
+                "note": "passed \u00b7 worker 15 / slot 15",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o278",
+                    "label": "Before Hooks",
+                    "start": 375.58,
+                    "end": 380.833,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o279",
+                    "label": "create project fixture",
+                    "start": 380.833,
+                    "end": 388.818,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o241",
+                "label": "Write reports / command finish",
+                "start": 393.208,
+                "end": 398.66,
+                "kind": "artifact",
+                "note": "Final reporter output and command completion before the first upload log.",
+                "basis": "Last attempt end to first upload log",
+                "children": []
+              }
+            ],
+            "failed": false
+          },
+          {
+            "id": "o27",
+            "label": "Upload results",
+            "start": 398.66,
+            "end": 399.255,
+            "kind": "artifact",
+            "note": "Upload the report artifact and finish the job. The cleanup barrier waits for this job to terminate.",
+            "basis": "First upload log to job completion",
+            "children": [
+              {
+                "id": "o28",
+                "label": "Upload artifact",
+                "start": 398.66,
+                "end": 398.956,
+                "kind": "artifact",
+                "note": "Report ZIP upload and finalization.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o29",
+                "label": "Job teardown",
+                "start": 398.956,
+                "end": 399.255,
+                "kind": "other",
+                "note": "Post-action cleanup and remaining job completion time.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              }
+            ]
+          }
+        ],
+        "attempt": "8ddwh80mxp",
+        "order": 3,
+        "failed": false,
+        "shard": 2
+      },
+      {
+        "id": "o36",
+        "label": "Playwright 3/6",
+        "start": 5.294,
+        "end": 406.992,
+        "kind": "job",
+        "note": "Dedicated runner. Parent durations include their children. Whole-job sampled peak: 10.2/16 CPU cores, 12.3/64 GB RAM. Includes install and waiting, not just test time.",
+        "basis": "Depot job timestamps",
+        "children": [
+          {
+            "id": "o37",
+            "label": "Setup",
+            "start": 5.294,
+            "end": 62.878,
+            "kind": "other",
+            "note": "Runner startup, checkout, dependencies and Chromium. Expand to see the measured components.",
+            "basis": "Job start to readiness-wait step start",
+            "children": [
+              {
+                "id": "o43",
+                "label": "Runner startup / unlogged setup",
+                "start": 5.294,
+                "end": 15.336,
+                "kind": "other",
+                "note": "Runner startup before the first checkout log.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o44",
+                "label": "Checkout",
+                "start": 15.336,
+                "end": 19.18,
+                "kind": "other",
+                "note": "Checkout the exact candidate into the baked workspace.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o45",
+                "label": "pnpm install",
+                "start": 19.18,
+                "end": 61.909,
+                "kind": "install",
+                "note": "Frozen, prefer-offline dependency reconciliation.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o46",
+                "label": "Chromium install/check",
+                "start": 61.991,
+                "end": 62.878,
+                "kind": "browser",
+                "note": "Reconcile browsers before waiting. End is the next step boundary.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              }
+            ]
+          },
+          {
+            "id": "o47",
+            "label": "Wait for preview readiness",
+            "start": 62.878,
+            "end": 365.061,
+            "kind": "readiness",
+            "note": "Exact producer-attempt milestone, guarded by Depot producer liveness. Includes waiter startup and polling.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "o38",
+            "label": "Run Playwright",
+            "start": 365.061,
+            "end": 406.394,
+            "kind": "test",
+            "note": "Download the prepared deployment plan, validate it, run Playwright and write its reports. Expand for startup and individual test attempts. The reporter interval is 36.7s within this phase; the phase also includes plan download and command overhead.",
+            "basis": "Readiness acknowledgement to first result-upload log",
+            "children": [
+              {
+                "id": "o42",
+                "label": "Download deployment plan",
+                "start": 365.537,
+                "end": 365.613,
+                "kind": "artifact",
+                "note": "Download the immutable plan published before the readiness milestone.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o102",
+                "label": "Resolve preview and start CLI",
+                "start": 365.613,
+                "end": 368.241,
+                "kind": "other",
+                "note": "Validate deployment identity and slot ownership; start the spec command.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o103",
+                "label": "Playwright startup / global setup",
+                "start": 368.241,
+                "end": 374.971,
+                "kind": "other",
+                "note": "CLI invocation until the first test attempt starts, including global setup, the web server and worker startup. Reporter timing begins within this interval.",
+                "basis": "CLI log to first reporter-recorded attempt",
+                "children": []
+              },
+              {
+                "id": "o108",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"files-roundtrip\" through the project REPL",
+                "start": 374.971,
+                "end": 393.103,
+                "kind": "test",
+                "note": "passed \u00b7 worker 1 / slot 1",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o109",
+                    "label": "Before Hooks",
+                    "start": 374.979,
+                    "end": 380.878,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o110",
+                    "label": "create project fixture",
+                    "start": 380.878,
+                    "end": 389.665,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o132",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"sandbox-exec\" through the project REPL",
+                "start": 374.993,
+                "end": 397.946,
+                "kind": "test",
+                "note": "passed \u00b7 worker 9 / slot 9",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o133",
+                    "label": "Before Hooks",
+                    "start": 375.003,
+                    "end": 380.888,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o134",
+                    "label": "create project fixture",
+                    "start": 380.889,
+                    "end": 389.196,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o126",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"dynamic-worker-stateless\" through the project REPL",
+                "start": 375.015,
+                "end": 396.455,
+                "kind": "test",
+                "note": "passed \u00b7 worker 7 / slot 7",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o127",
+                    "label": "Before Hooks",
+                    "start": 375.023,
+                    "end": 380.886,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o128",
+                    "label": "create project fixture",
+                    "start": 380.886,
+                    "end": 390.117,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o138",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"workspace-files-transfer\" through the project REPL",
+                "start": 375.037,
+                "end": 393.498,
+                "kind": "test",
+                "note": "passed \u00b7 worker 11 / slot 11",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o139",
+                    "label": "Before Hooks",
+                    "start": 375.045,
+                    "end": 380.879,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o140",
+                    "label": "create project fixture",
+                    "start": 380.88,
+                    "end": 388.942,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o141",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"use-project-skill\" through the project REPL",
+                "start": 375.044,
+                "end": 397.671,
+                "kind": "test",
+                "note": "passed \u00b7 worker 12 / slot 12",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o142",
+                    "label": "Before Hooks",
+                    "start": 375.056,
+                    "end": 380.879,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o143",
+                    "label": "create project fixture",
+                    "start": 380.88,
+                    "end": 389.975,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o123",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"provide-itx-expression\" through the project REPL",
+                "start": 375.046,
+                "end": 394.599,
+                "kind": "test",
+                "note": "passed \u00b7 worker 6 / slot 6",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o124",
+                    "label": "Before Hooks",
+                    "start": 375.055,
+                    "end": 380.88,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o125",
+                    "label": "create project fixture",
+                    "start": 380.881,
+                    "end": 391.23,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o114",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"egress-rules-configured\" through the project REPL",
+                "start": 375.048,
+                "end": 393.942,
+                "kind": "test",
+                "note": "passed \u00b7 worker 3 / slot 3",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o115",
+                    "label": "Before Hooks",
+                    "start": 375.056,
+                    "end": 380.874,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o116",
+                    "label": "create project fixture",
+                    "start": 380.875,
+                    "end": 390.03,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o120",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"run-script\" through the project REPL",
+                "start": 375.053,
+                "end": 400.581,
+                "kind": "test",
+                "note": "passed \u00b7 worker 5 / slot 5",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o121",
+                    "label": "Before Hooks",
+                    "start": 375.061,
+                    "end": 380.881,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o122",
+                    "label": "create project fixture",
+                    "start": 380.881,
+                    "end": 389.205,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o129",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"dynamic-worker-stateful\" through the project REPL",
+                "start": 375.068,
+                "end": 396.433,
+                "kind": "test",
+                "note": "passed \u00b7 worker 8 / slot 8",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o130",
+                    "label": "Before Hooks",
+                    "start": 375.077,
+                    "end": 380.88,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o131",
+                    "label": "create project fixture",
+                    "start": 380.88,
+                    "end": 391.889,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o147",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"repo-read-file\" through the project REPL",
+                "start": 375.088,
+                "end": 393.615,
+                "kind": "test",
+                "note": "passed \u00b7 worker 14 / slot 14",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o148",
+                    "label": "Before Hooks",
+                    "start": 375.098,
+                    "end": 380.879,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o149",
+                    "label": "create project fixture",
+                    "start": 380.88,
+                    "end": 389.258,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o105",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"discover-tree\" through the project REPL",
+                "start": 375.093,
+                "end": 393.866,
+                "kind": "test",
+                "note": "passed \u00b7 worker 0 / slot 0",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o106",
+                    "label": "Before Hooks",
+                    "start": 375.1,
+                    "end": 380.88,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o107",
+                    "label": "create project fixture",
+                    "start": 380.881,
+                    "end": 391.93,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o144",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"repo-commit-files\" through the project REPL",
+                "start": 375.098,
+                "end": 391.422,
+                "kind": "test",
+                "note": "passed \u00b7 worker 13 / slot 13",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o145",
+                    "label": "Before Hooks",
+                    "start": 375.106,
+                    "end": 380.88,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o146",
+                    "label": "create project fixture",
+                    "start": 380.881,
+                    "end": 388.637,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o111",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"append-and-read-stream\" through the project REPL",
+                "start": 375.099,
+                "end": 393.219,
+                "kind": "test",
+                "note": "passed \u00b7 worker 2 / slot 2",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o112",
+                    "label": "Before Hooks",
+                    "start": 375.108,
+                    "end": 380.879,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o113",
+                    "label": "create project fixture",
+                    "start": 380.88,
+                    "end": 390.693,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o135",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"workspace-edit-and-push\" through the project REPL",
+                "start": 375.099,
+                "end": 394.864,
+                "kind": "test",
+                "note": "passed \u00b7 worker 10 / slot 10",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o136",
+                    "label": "Before Hooks",
+                    "start": 375.107,
+                    "end": 380.872,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o137",
+                    "label": "create project fixture",
+                    "start": 380.873,
+                    "end": 389.571,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o117",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"ephemeral-events\" through the project REPL",
+                "start": 375.107,
+                "end": 391.571,
+                "kind": "test",
+                "note": "passed \u00b7 worker 4 / slot 4",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o118",
+                    "label": "Before Hooks",
+                    "start": 375.114,
+                    "end": 380.871,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o119",
+                    "label": "create project fixture",
+                    "start": 380.872,
+                    "end": 388.827,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o104",
+                "label": "Write reports / command finish",
+                "start": 400.581,
+                "end": 406.394,
+                "kind": "artifact",
+                "note": "Final reporter output and command completion before the first upload log.",
+                "basis": "Last attempt end to first upload log",
+                "children": []
+              }
+            ],
+            "failed": false
+          },
+          {
+            "id": "o39",
+            "label": "Upload results",
+            "start": 406.394,
+            "end": 406.992,
+            "kind": "artifact",
+            "note": "Upload the report artifact and finish the job. The cleanup barrier waits for this job to terminate.",
+            "basis": "First upload log to job completion",
+            "children": [
+              {
+                "id": "o40",
+                "label": "Upload artifact",
+                "start": 406.394,
+                "end": 406.7,
+                "kind": "artifact",
+                "note": "Report ZIP upload and finalization.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o41",
+                "label": "Job teardown",
+                "start": 406.7,
+                "end": 406.992,
+                "kind": "other",
+                "note": "Post-action cleanup and remaining job completion time.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              }
+            ]
+          }
+        ],
+        "attempt": "x3p323f2x2",
+        "order": 4,
+        "failed": false,
+        "shard": 3
+      },
+      {
+        "id": "o48",
+        "label": "Playwright 4/6",
+        "start": 4.213,
+        "end": 404.899,
+        "kind": "job",
+        "note": "Dedicated runner. Parent durations include their children. Whole-job sampled peak: 4.6/16 CPU cores, 10.0/64 GB RAM. Includes install and waiting, not just test time.",
+        "basis": "Depot job timestamps",
+        "children": [
+          {
+            "id": "o49",
+            "label": "Setup",
+            "start": 4.213,
+            "end": 18.024,
+            "kind": "other",
+            "note": "Runner startup, checkout, dependencies and Chromium. Expand to see the measured components.",
+            "basis": "Job start to readiness-wait step start",
+            "children": [
+              {
+                "id": "o55",
+                "label": "Runner startup / unlogged setup",
+                "start": 4.213,
+                "end": 6.442,
+                "kind": "other",
+                "note": "Runner startup before the first checkout log.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o56",
+                "label": "Checkout",
+                "start": 6.442,
+                "end": 7.579,
+                "kind": "other",
+                "note": "Checkout the exact candidate into the baked workspace.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o57",
+                "label": "pnpm install",
+                "start": 7.579,
+                "end": 17.374,
+                "kind": "install",
+                "note": "Frozen, prefer-offline dependency reconciliation.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o58",
+                "label": "Chromium install/check",
+                "start": 17.459,
+                "end": 18.024,
+                "kind": "browser",
+                "note": "Reconcile browsers before waiting. End is the next step boundary.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              }
+            ]
+          },
+          {
+            "id": "o59",
+            "label": "Wait for preview readiness",
+            "start": 18.024,
+            "end": 362.427,
+            "kind": "readiness",
+            "note": "Exact producer-attempt milestone, guarded by Depot producer liveness. Includes waiter startup and polling.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "o50",
+            "label": "Run Playwright",
+            "start": 362.427,
+            "end": 404.265,
+            "kind": "test",
+            "note": "Download the prepared deployment plan, validate it, run Playwright and write its reports. Expand for startup and individual test attempts. The reporter interval is 36.7s within this phase; the phase also includes plan download and command overhead.",
+            "basis": "Readiness acknowledgement to first result-upload log",
+            "children": [
+              {
+                "id": "o54",
+                "label": "Download deployment plan",
+                "start": 362.905,
+                "end": 362.992,
+                "kind": "artifact",
+                "note": "Download the immutable plan published before the readiness milestone.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o150",
+                "label": "Resolve preview and start CLI",
+                "start": 362.992,
+                "end": 366.096,
+                "kind": "other",
+                "note": "Validate deployment identity and slot ownership; start the spec command.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o151",
+                "label": "Playwright startup / global setup",
+                "start": 366.096,
+                "end": 371.721,
+                "kind": "other",
+                "note": "CLI invocation until the first test attempt starts, including global setup, the web server and worker startup. Reporter timing begins within this interval.",
+                "basis": "CLI log to first reporter-recorded attempt",
+                "children": []
+              },
+              {
+                "id": "o162",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"docs-search-and-get\" through the project REPL",
+                "start": 371.721,
+                "end": 390.126,
+                "kind": "test",
+                "note": "passed \u00b7 worker 3 / slot 3",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o163",
+                    "label": "Before Hooks",
+                    "start": 371.729,
+                    "end": 379.717,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o164",
+                    "label": "create project fixture",
+                    "start": 379.718,
+                    "end": 388.768,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o193",
+                "label": "web \u203a repo-ide.spec.ts \u203a edit, stage, inspect the Index, and commit through the repo IDE",
+                "start": 371.726,
+                "end": 394.822,
+                "kind": "test",
+                "note": "passed \u00b7 worker 12 / slot 13",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o194",
+                    "label": "Before Hooks",
+                    "start": 371.734,
+                    "end": 379.804,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o195",
+                    "label": "create project fixture",
+                    "start": 379.808,
+                    "end": 388.258,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o196",
+                    "label": "connect admin itx",
+                    "start": 388.258,
+                    "end": 389.186,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o165",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"typed-capability-mount\" through the project REPL",
+                "start": 371.784,
+                "end": 390.715,
+                "kind": "test",
+                "note": "passed \u00b7 worker 4 / slot 4",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o166",
+                    "label": "Before Hooks",
+                    "start": 371.792,
+                    "end": 379.759,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o167",
+                    "label": "create project fixture",
+                    "start": 379.801,
+                    "end": 389.522,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o197",
+                "label": "web \u203a repo-ide.spec.ts \u203a discarding a new file confirms before permanently removing it",
+                "start": 371.787,
+                "end": 392.342,
+                "kind": "test",
+                "note": "passed \u00b7 worker 13 / slot 14",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o198",
+                    "label": "Before Hooks",
+                    "start": 371.795,
+                    "end": 379.716,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o199",
+                    "label": "create project fixture",
+                    "start": 379.716,
+                    "end": 387.883,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o200",
+                    "label": "connect admin itx",
+                    "start": 387.883,
+                    "end": 388.921,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o153",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"repo-edit-file\" through the project REPL",
+                "start": 371.789,
+                "end": 396.394,
+                "kind": "test",
+                "note": "passed \u00b7 worker 0 / slot 0",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o154",
+                    "label": "Before Hooks",
+                    "start": 371.797,
+                    "end": 379.812,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o155",
+                    "label": "create project fixture",
+                    "start": 379.812,
+                    "end": 386.14,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o190",
+                "label": "web \u203a repo-ide-svg-index-preview.spec.ts \u203a preview a staged snapshot from the readonly Index view",
+                "start": 371.814,
+                "end": 394.188,
+                "kind": "test",
+                "note": "passed \u00b7 worker 11 / slot 12",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o191",
+                    "label": "Before Hooks",
+                    "start": 371.823,
+                    "end": 379.757,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o192",
+                    "label": "create project fixture",
+                    "start": 379.801,
+                    "end": 389.925,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o174",
+                "label": "web \u203a repo-ide-html-preview.spec.ts \u203a toggle an html file between Code and its sandboxed Preview",
+                "start": 371.815,
+                "end": 395.262,
+                "kind": "test",
+                "note": "passed \u00b7 worker 7 / slot 7",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o175",
+                    "label": "Before Hooks",
+                    "start": 371.825,
+                    "end": 379.806,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o176",
+                    "label": "create project fixture",
+                    "start": 379.807,
+                    "end": 387.562,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o177",
+                    "label": "connect admin itx",
+                    "start": 387.562,
+                    "end": 388.634,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o182",
+                "label": "web \u203a repo-ide-markdown-preview.spec.ts \u203a toggle a markdown file between Code and its rendered Preview",
+                "start": 371.82,
+                "end": 396.477,
+                "kind": "test",
+                "note": "passed \u00b7 worker 9 / slot 10",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o183",
+                    "label": "Before Hooks",
+                    "start": 371.828,
+                    "end": 379.714,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o184",
+                    "label": "create project fixture",
+                    "start": 379.757,
+                    "end": 387.933,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o185",
+                    "label": "connect admin itx",
+                    "start": 387.933,
+                    "end": 388.803,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o159",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"journal-is-the-record\" through the project REPL",
+                "start": 371.821,
+                "end": 390.961,
+                "kind": "test",
+                "note": "passed \u00b7 worker 2 / slot 2",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o160",
+                    "label": "Before Hooks",
+                    "start": 371.829,
+                    "end": 379.757,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o161",
+                    "label": "create project fixture",
+                    "start": 379.759,
+                    "end": 388.722,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o156",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"secrets-lifecycle\" through the project REPL",
+                "start": 371.831,
+                "end": 390.637,
+                "kind": "test",
+                "note": "passed \u00b7 worker 1 / slot 1",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o157",
+                    "label": "Before Hooks",
+                    "start": 371.839,
+                    "end": 379.807,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o158",
+                    "label": "create project fixture",
+                    "start": 379.807,
+                    "end": 389.196,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o171",
+                "label": "web \u203a repl-lazy.spec.ts \u203a the REPL creates no session stream until the first Run",
+                "start": 371.85,
+                "end": 392.576,
+                "kind": "test",
+                "note": "passed \u00b7 worker 6 / slot 6",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o172",
+                    "label": "Before Hooks",
+                    "start": 371.857,
+                    "end": 379.804,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o173",
+                    "label": "create project fixture",
+                    "start": 379.804,
+                    "end": 390.453,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o168",
+                "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"agent-send-message\" through the project REPL",
+                "start": 371.852,
+                "end": 392.879,
+                "kind": "test",
+                "note": "passed \u00b7 worker 5 / slot 5",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o169",
+                    "label": "Before Hooks",
+                    "start": 371.859,
+                    "end": 379.807,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o170",
+                    "label": "create project fixture",
+                    "start": 379.807,
+                    "end": 390.693,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o178",
+                "label": "web \u203a repo-ide-json-schema.spec.ts \u203a flags a package.json schema violation with a red squiggle",
+                "start": 371.856,
+                "end": 393.402,
+                "kind": "test",
+                "note": "passed \u00b7 worker 8 / slot 8",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o179",
+                    "label": "Before Hooks",
+                    "start": 371.864,
+                    "end": 379.759,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o180",
+                    "label": "create project fixture",
+                    "start": 379.76,
+                    "end": 387.717,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o181",
+                    "label": "connect admin itx",
+                    "start": 387.718,
+                    "end": 388.568,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o186",
+                "label": "web \u203a repo-ide-svg-index-preview.spec.ts \u203a toggle an svg file between Code and its sandboxed Preview",
+                "start": 371.867,
+                "end": 393.672,
+                "kind": "test",
+                "note": "passed \u00b7 worker 10 / slot 11",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o187",
+                    "label": "Before Hooks",
+                    "start": 371.875,
+                    "end": 379.761,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o188",
+                    "label": "create project fixture",
+                    "start": 379.761,
+                    "end": 389.106,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o189",
+                    "label": "connect admin itx",
+                    "start": 389.106,
+                    "end": 389.983,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o152",
+                "label": "Write reports / command finish",
+                "start": 396.477,
+                "end": 404.265,
+                "kind": "artifact",
+                "note": "Final reporter output and command completion before the first upload log.",
+                "basis": "Last attempt end to first upload log",
+                "children": []
+              }
+            ],
+            "failed": false
+          },
+          {
+            "id": "o51",
+            "label": "Upload results",
+            "start": 404.265,
+            "end": 404.899,
+            "kind": "artifact",
+            "note": "Upload the report artifact and finish the job. The cleanup barrier waits for this job to terminate.",
+            "basis": "First upload log to job completion",
+            "children": [
+              {
+                "id": "o52",
+                "label": "Upload artifact",
+                "start": 404.265,
+                "end": 404.596,
+                "kind": "artifact",
+                "note": "Report ZIP upload and finalization.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o53",
+                "label": "Job teardown",
+                "start": 404.596,
+                "end": 404.899,
+                "kind": "other",
+                "note": "Post-action cleanup and remaining job completion time.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              }
+            ]
+          }
+        ],
+        "attempt": "9tjcwct4lw",
+        "order": 5,
+        "failed": false,
+        "shard": 4
+      },
+      {
+        "id": "o60",
+        "label": "Playwright 5/6",
+        "start": 4.164,
+        "end": 428.329,
+        "kind": "job",
+        "note": "Dedicated runner. Parent durations include their children. Whole-job sampled peak: 7.9/16 CPU cores, 11.5/64 GB RAM. Includes install and waiting, not just test time.",
+        "basis": "Depot job timestamps",
+        "children": [
+          {
+            "id": "o61",
+            "label": "Setup",
+            "start": 4.164,
+            "end": 17.883,
+            "kind": "other",
+            "note": "Runner startup, checkout, dependencies and Chromium. Expand to see the measured components.",
+            "basis": "Job start to readiness-wait step start",
+            "children": [
+              {
+                "id": "o67",
+                "label": "Runner startup / unlogged setup",
+                "start": 4.164,
+                "end": 6.829,
+                "kind": "other",
+                "note": "Runner startup before the first checkout log.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o68",
+                "label": "Checkout",
+                "start": 6.829,
+                "end": 7.846,
+                "kind": "other",
+                "note": "Checkout the exact candidate into the baked workspace.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o69",
+                "label": "pnpm install",
+                "start": 7.846,
+                "end": 17.058,
+                "kind": "install",
+                "note": "Frozen, prefer-offline dependency reconciliation.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o70",
+                "label": "Chromium install/check",
+                "start": 17.148,
+                "end": 17.883,
+                "kind": "browser",
+                "note": "Reconcile browsers before waiting. End is the next step boundary.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              }
+            ]
+          },
+          {
+            "id": "o71",
+            "label": "Wait for preview readiness",
+            "start": 17.883,
+            "end": 362.779,
+            "kind": "readiness",
+            "note": "Exact producer-attempt milestone, guarded by Depot producer liveness. Includes waiter startup and polling.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "o62",
+            "label": "Run Playwright",
+            "start": 362.779,
+            "end": 427.69,
+            "kind": "test",
+            "note": "Download the prepared deployment plan, validate it, run Playwright and write its reports. Expand for startup and individual test attempts. The reporter interval is 60.5s within this phase; the phase also includes plan download and command overhead.",
+            "basis": "Readiness acknowledgement to first result-upload log",
+            "children": [
+              {
+                "id": "o66",
+                "label": "Download deployment plan",
+                "start": 363.209,
+                "end": 363.292,
+                "kind": "artifact",
+                "note": "Download the immutable plan published before the readiness milestone.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o201",
+                "label": "Resolve preview and start CLI",
+                "start": 363.292,
+                "end": 365.807,
+                "kind": "other",
+                "note": "Validate deployment identity and slot ownership; start the spec command.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o202",
+                "label": "Playwright startup / global setup",
+                "start": 365.807,
+                "end": 371.416,
+                "kind": "other",
+                "note": "CLI invocation until the first test attempt starts, including global setup, the web server and worker startup. Reporter timing begins within this interval.",
+                "basis": "CLI log to first reporter-recorded attempt",
+                "children": []
+              },
+              {
+                "id": "o223",
+                "label": "web \u203a stream-cache-before-live.spec.ts \u203a a cold stream stays pending until its server history catches up",
+                "start": 371.416,
+                "end": 391.062,
+                "kind": "test",
+                "note": "passed \u00b7 worker 7 / slot 7",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o224",
+                    "label": "Before Hooks",
+                    "start": 371.424,
+                    "end": 379.731,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o225",
+                    "label": "create project fixture",
+                    "start": 379.732,
+                    "end": 387.479,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o226",
+                    "label": "connect admin itx",
+                    "start": 387.479,
+                    "end": 388.436,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o221",
+                "label": "web \u203a stream-cache-before-live.spec.ts \u203a empty agent feeds distinguish waiting from filtered zero matches",
+                "start": 371.417,
+                "end": 388.486,
+                "kind": "test",
+                "note": "passed \u00b7 worker 6 / slot 6",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o222",
+                    "label": "Before Hooks",
+                    "start": 371.427,
+                    "end": 379.728,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o204",
+                "label": "web \u203a repo-markdown-preview.spec.ts \u203a markdown files get a sanitized Code | Preview toggle in the repo IDE",
+                "start": 371.419,
+                "end": 395.821,
+                "kind": "test",
+                "note": "passed \u00b7 worker 0 / slot 0",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o205",
+                    "label": "Before Hooks",
+                    "start": 371.427,
+                    "end": 379.728,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o206",
+                    "label": "create project fixture",
+                    "start": 379.734,
+                    "end": 388.643,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o207",
+                    "label": "connect admin itx",
+                    "start": 388.643,
+                    "end": 389.5,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o213",
+                "label": "web \u203a seeded-apps.spec.ts \u203a undo keeps a peer's shopping-list edit in the seeded Docs app",
+                "start": 371.429,
+                "end": 397.496,
+                "kind": "test",
+                "note": "passed \u00b7 worker 3 / slot 3",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o214",
+                    "label": "Before Hooks",
+                    "start": 371.437,
+                    "end": 379.75,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o215",
+                    "label": "connect admin itx",
+                    "start": 387.405,
+                    "end": 389.054,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o208",
+                "label": "web \u203a seeded-apps.spec.ts \u203a the seeded guestbook app works after creating a project",
+                "start": 371.463,
+                "end": 392.044,
+                "kind": "test",
+                "note": "passed \u00b7 worker 1 / slot 1",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o209",
+                    "label": "Before Hooks",
+                    "start": 371.472,
+                    "end": 379.723,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o210",
+                    "label": "create project fixture",
+                    "start": 379.723,
+                    "end": 387.77,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o219",
+                "label": "web \u203a signup.spec.ts \u203a can sign up with an email one-time passcode",
+                "start": 371.467,
+                "end": 391.742,
+                "kind": "test",
+                "note": "passed \u00b7 worker 5 / slot 5",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o220",
+                    "label": "Before Hooks",
+                    "start": 371.474,
+                    "end": 379.727,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o216",
+                "label": "web \u203a seeded-apps.spec.ts \u203a review a workspace document in the seeded Docs app",
+                "start": 371.489,
+                "end": 410.003,
+                "kind": "test",
+                "note": "body passed; expected wrapper throw \u00b7 worker 4 / slot 4",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o217",
+                    "label": "Before Hooks",
+                    "start": 371.497,
+                    "end": 379.722,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o218",
+                    "label": "connect admin itx",
+                    "start": 388.039,
+                    "end": 388.875,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o211",
+                "label": "web \u203a seeded-apps.spec.ts \u203a the seeded todo app authenticates a real project member",
+                "start": 371.505,
+                "end": 404.453,
+                "kind": "test",
+                "note": "passed \u00b7 worker 2 / slot 2",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o212",
+                    "label": "Before Hooks",
+                    "start": 371.512,
+                    "end": 379.731,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o232",
+                "label": "web \u203a test-support/screenshot.spec.ts \u203a does not overwrite a screenshot from another page in the same test",
+                "start": 371.519,
+                "end": 373.01,
+                "kind": "test",
+                "note": "passed \u00b7 worker 10 / slot 10",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o233",
+                "label": "mobile \u203a mobile/approvals.spec.ts \u203a approve and reject script bursts from inside the chat thread",
+                "start": 371.523,
+                "end": 419.999,
+                "kind": "test",
+                "note": "passed \u00b7 worker 13 / slot 13",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o234",
+                    "label": "Before Hooks",
+                    "start": 371.53,
+                    "end": 379.722,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o235",
+                    "label": "create mobile fixture",
+                    "start": 379.943,
+                    "end": 403.712,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o236",
+                    "label": "connect admin itx",
+                    "start": 407.734,
+                    "end": 408.718,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o227",
+                "label": "web \u203a stream-cache-before-live.spec.ts \u203a a cached stream opens before its live connection",
+                "start": 371.531,
+                "end": 390.351,
+                "kind": "test",
+                "note": "passed \u00b7 worker 8 / slot 8",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o228",
+                    "label": "Before Hooks",
+                    "start": 371.538,
+                    "end": 379.73,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o229",
+                    "label": "create project fixture",
+                    "start": 379.73,
+                    "end": 388.339,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o230",
+                    "label": "connect admin itx",
+                    "start": 388.339,
+                    "end": 389.336,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o237",
+                "label": "mobile \u203a mobile/chat-attachment-sheet.spec.ts \u203a + opens the sheet; carousel attaches chips that need a confirm to remove",
+                "start": 371.532,
+                "end": 400.511,
+                "kind": "test",
+                "note": "passed \u00b7 worker 14 / slot 14",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o238",
+                    "label": "Before Hooks",
+                    "start": 371.54,
+                    "end": 379.725,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o231",
+                "label": "web \u203a test-support/screenshot.spec.ts \u203a saves a successful locator screenshot under its readable locator slug",
+                "start": 371.566,
+                "end": 373.005,
+                "kind": "test",
+                "note": "passed \u00b7 worker 9 / slot 9",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o203",
+                "label": "Write reports / command finish",
+                "start": 419.999,
+                "end": 427.69,
+                "kind": "artifact",
+                "note": "Final reporter output and command completion before the first upload log.",
+                "basis": "Last attempt end to first upload log",
+                "children": []
+              }
+            ],
+            "failed": false
+          },
+          {
+            "id": "o63",
+            "label": "Upload results",
+            "start": 427.69,
+            "end": 428.329,
+            "kind": "artifact",
+            "note": "Upload the report artifact and finish the job. The cleanup barrier waits for this job to terminate.",
+            "basis": "First upload log to job completion",
+            "children": [
+              {
+                "id": "o64",
+                "label": "Upload artifact",
+                "start": 427.69,
+                "end": 428.043,
+                "kind": "artifact",
+                "note": "Report ZIP upload and finalization.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o65",
+                "label": "Job teardown",
+                "start": 428.043,
+                "end": 428.329,
+                "kind": "other",
+                "note": "Post-action cleanup and remaining job completion time.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              }
+            ]
+          }
+        ],
+        "attempt": "qlxrq9q4lb",
+        "order": 6,
+        "failed": false,
+        "shard": 5
+      },
+      {
+        "id": "o72",
+        "label": "Playwright 6/6",
+        "start": 5.488,
+        "end": 438.332,
+        "kind": "job",
+        "note": "Dedicated runner. Parent durations include their children. Whole-job sampled peak: 8.8/16 CPU cores, 13.1/64 GB RAM. Includes install and waiting, not just test time.",
+        "basis": "Depot job timestamps",
+        "children": [
+          {
+            "id": "o73",
+            "label": "Setup",
+            "start": 5.488,
+            "end": 62.84,
+            "kind": "other",
+            "note": "Runner startup, checkout, dependencies and Chromium. Expand to see the measured components.",
+            "basis": "Job start to readiness-wait step start",
+            "children": [
+              {
+                "id": "o79",
+                "label": "Runner startup / unlogged setup",
+                "start": 5.488,
+                "end": 15.845,
+                "kind": "other",
+                "note": "Runner startup before the first checkout log.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o80",
+                "label": "Checkout",
+                "start": 15.845,
+                "end": 19.163,
+                "kind": "other",
+                "note": "Checkout the exact candidate into the baked workspace.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o81",
+                "label": "pnpm install",
+                "start": 19.163,
+                "end": 61.811,
+                "kind": "install",
+                "note": "Frozen, prefer-offline dependency reconciliation.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o82",
+                "label": "Chromium install/check",
+                "start": 61.9,
+                "end": 62.84,
+                "kind": "browser",
+                "note": "Reconcile browsers before waiting. End is the next step boundary.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              }
+            ]
+          },
+          {
+            "id": "o83",
+            "label": "Wait for preview readiness",
+            "start": 62.84,
+            "end": 365.155,
+            "kind": "readiness",
+            "note": "Exact producer-attempt milestone, guarded by Depot producer liveness. Includes waiter startup and polling.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "o74",
+            "label": "Run Playwright",
+            "start": 365.155,
+            "end": 437.701,
+            "kind": "test",
+            "note": "Download the prepared deployment plan, validate it, run Playwright and write its reports. Expand for startup and individual test attempts. The reporter interval is 67.8s within this phase; the phase also includes plan download and command overhead.",
+            "basis": "Readiness acknowledgement to first result-upload log",
+            "children": [
+              {
+                "id": "o78",
+                "label": "Download deployment plan",
+                "start": 365.617,
+                "end": 365.705,
+                "kind": "artifact",
+                "note": "Download the immutable plan published before the readiness milestone.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o342",
+                "label": "Resolve preview and start CLI",
+                "start": 365.705,
+                "end": 368.16,
+                "kind": "other",
+                "note": "Validate deployment identity and slot ownership; start the spec command.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o343",
+                "label": "Playwright startup / global setup",
+                "start": 368.16,
+                "end": 374.878,
+                "kind": "other",
+                "note": "CLI invocation until the first test attempt starts, including global setup, the web server and worker startup. Reporter timing begins within this interval.",
+                "basis": "CLI log to first reporter-recorded attempt",
+                "children": []
+              },
+              {
+                "id": "o367",
+                "label": "mobile \u203a mobile/media.spec.ts \u203a renders, searches, and views seeded media",
+                "start": 374.878,
+                "end": 407.892,
+                "kind": "test",
+                "note": "passed \u00b7 worker 9 / slot 9",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o368",
+                    "label": "Before Hooks",
+                    "start": 374.887,
+                    "end": 380.657,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o350",
+                "label": "mobile \u203a mobile/collect-secret.spec.ts \u203a provides a secret from the thread, with no browser in the way",
+                "start": 374.905,
+                "end": 415.525,
+                "kind": "test",
+                "note": "passed \u00b7 worker 2 / slot 2",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o351",
+                    "label": "Before Hooks",
+                    "start": 374.914,
+                    "end": 380.653,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o352",
+                    "label": "create mobile fixture",
+                    "start": 380.653,
+                    "end": 409.349,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o353",
+                    "label": "connect admin itx",
+                    "start": 412.312,
+                    "end": 413.24,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o364",
+                "label": "mobile \u203a mobile/live-status.spec.ts \u203a the live card wears the agent-set status and a phase glyph per round",
+                "start": 374.909,
+                "end": 420.407,
+                "kind": "test",
+                "note": "passed \u00b7 worker 8 / slot 8",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o365",
+                    "label": "Before Hooks",
+                    "start": 374.919,
+                    "end": 380.658,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o366",
+                    "label": "create mobile fixture",
+                    "start": 380.659,
+                    "end": 412.149,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o372",
+                "label": "mobile \u203a mobile/notes.spec.ts \u203a captures a note from the global composer and manages it on /notes",
+                "start": 374.911,
+                "end": 413.572,
+                "kind": "test",
+                "note": "passed \u00b7 worker 12 / slot 12",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o373",
+                    "label": "Before Hooks",
+                    "start": 374.921,
+                    "end": 380.658,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o374",
+                    "label": "create mobile fixture",
+                    "start": 380.658,
+                    "end": 409.079,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o358",
+                "label": "mobile \u203a mobile/expected-backend-signin.spec.ts \u203a scanning the channel you're already on shows the bundle's expected backend",
+                "start": 374.915,
+                "end": 384.515,
+                "kind": "test",
+                "note": "passed \u00b7 worker 5 / slot 5",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o359",
+                    "label": "Before Hooks",
+                    "start": 374.923,
+                    "end": 380.656,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o362",
+                "label": "mobile \u203a mobile/integrations.spec.ts \u203a opens the project integration catalogue from the mobile drawer",
+                "start": 374.93,
+                "end": 404.466,
+                "kind": "test",
+                "note": "passed \u00b7 worker 7 / slot 7",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o363",
+                    "label": "Before Hooks",
+                    "start": 374.939,
+                    "end": 380.655,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o345",
+                "label": "mobile \u203a mobile/chat-photos.spec.ts \u203a photos share a mosaic row; tall solo on a blurred backdrop",
+                "start": 374.934,
+                "end": 408.293,
+                "kind": "test",
+                "note": "body passed; expected wrapper throw \u00b7 worker 0 / slot 0",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o346",
+                    "label": "Before Hooks",
+                    "start": 374.943,
+                    "end": 380.657,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o347",
+                    "label": "create mobile fixture",
+                    "start": 380.659,
+                    "end": 406.468,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o354",
+                "label": "mobile \u203a mobile/expected-backend-mismatch.spec.ts \u203a a mismatched phone sees the differences and a one-tap sign-in fix",
+                "start": 374.939,
+                "end": 384.407,
+                "kind": "test",
+                "note": "passed \u00b7 worker 3 / slot 3",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o355",
+                    "label": "Before Hooks",
+                    "start": 374.947,
+                    "end": 380.657,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o379",
+                "label": "mobile \u203a mobile/signed-out.spec.ts \u203a the mobile app can be reviewed without an iOS build",
+                "start": 374.939,
+                "end": 384.529,
+                "kind": "test",
+                "note": "passed \u00b7 worker 14 / slot 14",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o380",
+                    "label": "Before Hooks",
+                    "start": 374.947,
+                    "end": 380.654,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o360",
+                "label": "mobile \u203a mobile/expected-backend-signin.spec.ts \u203a one tap signs the test identity in: consent is the only stop before the project",
+                "start": 374.973,
+                "end": 402.119,
+                "kind": "test",
+                "note": "passed \u00b7 worker 6 / slot 6",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o361",
+                    "label": "Before Hooks",
+                    "start": 374.98,
+                    "end": 380.657,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o369",
+                "label": "mobile \u203a mobile/note-composer-camera-roll.spec.ts \u203a attaches a recent photo to a note through the shared attachment sheet",
+                "start": 374.995,
+                "end": 411.996,
+                "kind": "test",
+                "note": "passed \u00b7 worker 11 / slot 11",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o370",
+                    "label": "Before Hooks",
+                    "start": 375.002,
+                    "end": 380.656,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o371",
+                    "label": "create mobile fixture",
+                    "start": 380.717,
+                    "end": 406.998,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o348",
+                "label": "mobile \u203a mobile/chat-titles.spec.ts \u203a a chat wears its agent-set title in the thread header and chat list",
+                "start": 374.999,
+                "end": 402.732,
+                "kind": "test",
+                "note": "passed \u00b7 worker 1 / slot 1",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o349",
+                    "label": "Before Hooks",
+                    "start": 375.006,
+                    "end": 380.653,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o375",
+                "label": "mobile \u203a mobile/notifications.spec.ts \u203a the approval push is suppressed in the watched thread and sent when you're elsewhere",
+                "start": 375.003,
+                "end": 431.661,
+                "kind": "test",
+                "note": "passed \u00b7 worker 13 / slot 13",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o376",
+                    "label": "Before Hooks",
+                    "start": 375.012,
+                    "end": 380.66,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o377",
+                    "label": "create mobile fixture",
+                    "start": 380.95,
+                    "end": 407.677,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  },
+                  {
+                    "id": "o378",
+                    "label": "connect admin itx",
+                    "start": 416.639,
+                    "end": 417.581,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o356",
+                "label": "mobile \u203a mobile/expected-backend-mismatch.spec.ts \u203a a phone already matching the expectation is told so",
+                "start": 375.004,
+                "end": 384.437,
+                "kind": "test",
+                "note": "passed \u00b7 worker 4 / slot 4",
+                "basis": "Playwright per-attempt telemetry",
+                "children": [
+                  {
+                    "id": "o357",
+                    "label": "Before Hooks",
+                    "start": 375.011,
+                    "end": 380.654,
+                    "kind": "other",
+                    "note": "Fixed-name fixture phase; dynamic data remains private.",
+                    "basis": "Playwright step telemetry",
+                    "children": []
+                  }
+                ],
+                "test": true,
+                "failed": false
+              },
+              {
+                "id": "o344",
+                "label": "Write reports / command finish",
+                "start": 431.661,
+                "end": 437.701,
+                "kind": "artifact",
+                "note": "Final reporter output and command completion before the first upload log.",
+                "basis": "Last attempt end to first upload log",
+                "children": []
+              }
+            ],
+            "failed": false
+          },
+          {
+            "id": "o75",
+            "label": "Upload results",
+            "start": 437.701,
+            "end": 438.332,
+            "kind": "artifact",
+            "note": "Upload the report artifact and finish the job. The cleanup barrier waits for this job to terminate.",
+            "basis": "First upload log to job completion",
+            "children": [
+              {
+                "id": "o76",
+                "label": "Upload artifact",
+                "start": 437.701,
+                "end": 438.027,
+                "kind": "artifact",
+                "note": "Report ZIP upload and finalization.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              },
+              {
+                "id": "o77",
+                "label": "Job teardown",
+                "start": 438.027,
+                "end": 438.332,
+                "kind": "other",
+                "note": "Post-action cleanup and remaining job completion time.",
+                "basis": "Timestamped log boundaries",
+                "children": []
+              }
+            ]
+          }
+        ],
+        "attempt": "p991thd40n",
+        "order": 7,
+        "failed": false,
+        "shard": 6
+      },
+      {
+        "id": "o7",
+        "label": "Teardown + reporting",
+        "start": 371.177,
+        "end": 605.567,
+        "kind": "job",
+        "note": "Dedicated runner. Parent durations include their children. Whole-job sampled peak: 0.6/4 CPU cores, 2.1/16 GB RAM. Includes install and waiting, not just test time.",
+        "basis": "Depot job timestamps",
+        "children": [
+          {
+            "id": "o8",
+            "label": "Runner startup / unlogged setup",
+            "start": 371.177,
+            "end": 383.101,
+            "kind": "other",
+            "note": "Runner startup before the first checkout log.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "o9",
+            "label": "Checkout",
+            "start": 383.101,
+            "end": 387.449,
+            "kind": "other",
+            "note": "Checkout the exact candidate into the baked workspace.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "o10",
+            "label": "pnpm install",
+            "start": 387.449,
+            "end": 441.819,
+            "kind": "install",
+            "note": "Frozen, prefer-offline dependency reconciliation.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "o93",
+            "label": "Wait for all test jobs + report uploads",
+            "start": 444.515,
+            "end": 489.866,
+            "kind": "readiness",
+            "note": "All-settled barrier: failed consumers do not release cleanup while others are running.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "o94",
+            "label": "Collect and merge reports / cleanup in parallel",
+            "start": 489.866,
+            "end": 602.045,
+            "kind": "artifact",
+            "note": "Enclosing parallel phase. Resource erase has its own measured span; do not add overlapping durations.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "o11",
+            "label": "Erase preview resources",
+            "start": 492.73,
+            "end": 602.03,
+            "kind": "cleanup",
+            "note": "Measured erase command duration. Report processing may overlap.",
+            "basis": "End log minus reported duration",
+            "children": []
+          },
+          {
+            "id": "o95",
+            "label": "Telemetry + artifact uploads",
+            "start": 602.045,
+            "end": 605.567,
+            "kind": "artifact",
+            "note": "Normalize telemetry, upload reports and assert all consumer outcomes.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          }
+        ],
+        "attempt": "nt9m0nnvbk",
+        "order": 8,
+        "failed": false
+      }
+    ],
+    "failed": false
+  },
+  "total": 608.512,
+  "run": "0cvh1fw749",
+  "workflow": "rdsx90g87f",
+  "head": "1dd7a81470260cea198aa57ac9bf449d729b1711",
+  "label": "6 \u00d7 16 \u00b7 overlapping setup \u00b7 green",
+  "normal": false,
+  "overlappedSetup": true,
+  "groupedShardPhases": true,
+  "workers": 16,
+  "shards": 6,
+  "slot": "preview-6",
+  "metrics": {
+    "result": "success",
+    "playwright": 67.834782,
+    "vitest": 115.571,
+    "browserRetries": 0,
+    "appRetries": 1,
+    "browserGreen": 88,
+    "browserSkipped": 4,
+    "browserBodyFailures": 0,
+    "browserSentinelFailures": 0,
+    "peakActiveAttempts": 85,
+    "firstStartSpread": 4.156000000000006,
+    "attemptDurationMedian": 19.7055,
+    "attemptDurationP95": 40.620000000000005,
+    "attemptDurationMax": 56.658000000000015,
+    "activeAttemptSeconds": 1895.5600000000002,
+    "erase": [100.3, 109.3],
+    "resourceSummary": "Nine separate runners. Select a job in the trace for its sampled peak CPU/memory; no single-machine percentage is meaningful for the whole workflow.",
+    "runnerSeconds": 3550.725,
+    "allocatedCpuMinutes": 899.982
+  },
+  "installs": [
+    {
+      "job": "App tests",
+      "start": 19.174,
+      "end": 62.021,
+      "order": 1
+    },
+    {
+      "job": "Teardown + reporting",
+      "start": 387.449,
+      "end": 441.819,
+      "order": 8
+    },
+    {
+      "job": "Playwright 1/6",
+      "start": 8.122,
+      "end": 17.293,
+      "order": 2
+    },
+    {
+      "job": "Playwright 2/6",
+      "start": 19.179,
+      "end": 61.955,
+      "order": 3
+    },
+    {
+      "job": "Playwright 3/6",
+      "start": 19.18,
+      "end": 61.909,
+      "order": 4
+    },
+    {
+      "job": "Playwright 4/6",
+      "start": 7.579,
+      "end": 17.374,
+      "order": 5
+    },
+    {
+      "job": "Playwright 5/6",
+      "start": 7.846,
+      "end": 17.058,
+      "order": 6
+    },
+    {
+      "job": "Playwright 6/6",
+      "start": 19.163,
+      "end": 61.811,
+      "order": 7
+    },
+    {
+      "job": "Prepare",
+      "start": 20.087,
+      "end": 62.134,
+      "order": 0
+    }
+  ],
+  "installWall": 42.047,
+  "installUnion": 107.13600000000001,
+  "installTail": 0,
+  "installSum": 295.59499999999997,
+  "windows": {
+    "prepare": [5.587, 363.101],
+    "tests": [371.416, 489.866],
+    "finish": [371.177, 608.512]
+  },
+  "browserWindow": [366.566, 436.879],
+  "catalogueCount": 92,
+  "catalogueHash": "1cd6aa275ec282cda82f881106a453210ce64bd9c4af164e5fac87bff38da0cd",
+  "context": "Nine jobs; six \u00d7 sixteen browser workers. Run 0cvh1fw749; commit 1dd7a8147.",
+  "findings": "All nine jobs finished green, including the trpc-cli milestone commands, merged reports, workflow-scoped telemetry and resource cleanup. All 88 non-skipped browser bodies passed with zero retries; four tests were skipped. OS Vitest had one retry: the empty agent catalogue live-state subscription test. Longest browser reporter interval: 67.8s; OS Vitest: 115.6s. First attempts started within 4.2s; peak concurrent attempts was 85. Consumer installs completed before readiness; finalizer installation completed during tests. Total: 608.5s, with 59.2 summed runner-minutes. This successful repeat is the default; the first failed run remains available. No application or spec code changed between the two."
+}

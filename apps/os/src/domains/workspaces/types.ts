@@ -87,8 +87,8 @@ export type EditWorkspaceFileInput = {
   replaceAll?: boolean;
 };
 
-/** Result of `Workspace.edit`. The change is in the working tree only — not committed. */
-export type EditWorkspaceFileResult = {
-  occurrenceCount: number;
-  path: string;
-};
+/** Result of `Workspace.edit`. Applied changes are in the working tree, not committed.
+ * Missing files and unmatched text return not-applied without changing the file. */
+export type EditWorkspaceFileResult =
+  | { status: "applied"; occurrenceCount: number; path: string }
+  | { status: "not-applied"; reason: "text-mismatch" | "file-missing"; path: string };

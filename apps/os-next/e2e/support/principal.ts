@@ -1,7 +1,7 @@
 // Real issuer login, consent and code exchange. Only identity proof is an admin fixture.
 // eslint-disable-next-line iterate/no-capnweb-http-batch -- Bounded fixture calls; the returned public client uses WebSocket.
 import { newHttpBatchRpcSession } from "capnweb";
-import { authorizationCodeRequest } from "../../src/client/oauth.ts";
+import { authorizationCodeRequest } from "iterate/next/oauth";
 import type { IterateRpcTarget } from "../../src/session.ts";
 import { adminCredentials, publicSession, workerUrl } from "./client.ts";
 

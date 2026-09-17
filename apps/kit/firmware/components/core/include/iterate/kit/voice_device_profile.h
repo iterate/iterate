@@ -79,8 +79,27 @@ enum {
   ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS = 10000,
 
 
-  /* Long idle probe permits DO hibernation; any inbound frame proves liveness. */
-  ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS = 120000,
+  /*
+   * SHORTER THAN THE FAR END'S IDLE CLOSE, which is what decides this number.
+   *
+   * It was 120 s, chosen to permit DO hibernation. os-next closes a socket
+   * carrying nothing at about 100 s — its own pager answers that with a 30 s
+   * keepalive — so a 120 s probe is a probe that arrives after the socket it
+   * was meant to keep. On a board that reads as flaky Wi-Fi: a re-mount every
+   * minute and a half between calls, and nothing in the logs but a reconnect.
+   *
+   * One period, two probes, two questions. The transport sends a WebSocket
+   * PING when the hop has been silent both ways (is this TCP hop half-open),
+   * and the mount sends `whoami()` on the SESSION (is this session still there
+   * — an application message, which is the only kind the idle close counts,
+   * answered at the edge without waking the project's Durable Object; asking
+   * the project root instead woke it once a minute). On a mounted board the
+   * probe's own round trip keeps the hop
+   * busy and therefore suppresses the ping, so the liveness watchdog keys on
+   * BOTH answers: the probe's while mounted, the PONG in the window before a
+   * mount exists. Keying on the PONG alone made the two race.
+   */
+  ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS = 60000,
 
   ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS = 420000,
 

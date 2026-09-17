@@ -1694,7 +1694,9 @@ export interface Workspace {
   writeFile(path: string, content: string): Promise<void>;
   /** Write raw bytes to one file in the private overlay. */
   writeFileBytes(path: string, data: Uint8Array): Promise<void>;
-  /** Replace an exact string in one file (copies a mount file up first). */
+  /** Replace an exact string in one file (copies a mount file up on success).
+   * Returns not-applied when the file is missing or oldString no longer matches.
+   * Invalid arguments, ambiguous matches and storage failures still throw. */
   edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult>;
   /** Delete one file (whiteouts a mount copy; false when it did not exist). */
   deleteFile(path: string): Promise<boolean>;
@@ -4926,11 +4928,11 @@ export type EditWorkspaceFileInput = {
   replaceAll?: boolean;
 };
 
-/** Result of `Workspace.edit`. The change is in the working tree only — not committed. */
-export type EditWorkspaceFileResult = {
-  occurrenceCount: number;
-  path: string;
-};
+/** Result of `Workspace.edit`. Applied changes are in the working tree, not committed.
+ * Missing files and unmatched text return not-applied without changing the file. */
+export type EditWorkspaceFileResult =
+  | { status: "applied"; occurrenceCount: number; path: string }
+  | { status: "not-applied"; reason: "text-mismatch" | "file-missing"; path: string };
 
 /**
  * A durable processor input. Wake processors never receive ephemeral events, so

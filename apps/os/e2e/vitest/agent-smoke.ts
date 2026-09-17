@@ -49,16 +49,31 @@ async function attemptAgentSmoke(phases: SmokePhase[]): Promise<void> {
   // boundary as Playwright so this early lane cannot create an object while
   // Cloudflare is still replacing its assigned worker version.
   await waitForPreviewRolloutBeforeProjectCreation();
+  const connectionStartedAt = Date.now();
   using session = connectItx({
     baseUrl,
     headers: cloudflareWorkerVersionOverrideHeaders(process.env),
   });
-  const start = Date.now();
   using root = session.authenticate({ type: "admin-secret", secret: secret! });
+  // authenticate() returns a lazy handle; await a round trip before timing create.
+  await root.__describe();
+  phases.push({
+    name: "connect and authenticate",
+    category: "fixture",
+    durationMs: Date.now() - connectionStartedAt,
+  });
+  const createStartedAt = Date.now();
   using project = await root.projects.get(`agent-smoke-${marker}`).create({});
+  const createMs = Date.now() - createStartedAt;
+  phases.push({ name: "create project", category: "fixture", durationMs: createMs });
+  const describeStartedAt = Date.now();
   const description = await project.__describe();
-  phases.push({ name: "create project", category: "fixture", durationMs: Date.now() - start });
-  console.log(`project created in ${Date.now() - start}ms:`, description.projectId);
+  phases.push({
+    name: "describe project",
+    category: "fixture",
+    durationMs: Date.now() - describeStartedAt,
+  });
+  console.log(`project created in ${createMs}ms:`, description.projectId);
 
   using agent = project.agents.get("/agents/smoke");
   const readyStartedAt = Date.now();
@@ -79,7 +94,7 @@ async function attemptAgentSmoke(phases: SmokePhase[]): Promise<void> {
     category: "runtime",
     durationMs: Date.now() - replyStartedAt,
   });
-  console.log(`agent replied in ${Date.now() - start}ms:`);
+  console.log(`agent replied in ${Date.now() - replyStartedAt}ms:`);
   console.log(JSON.stringify(reply.payload, null, 2));
 
   const events = await agent.stream.getEvents({});

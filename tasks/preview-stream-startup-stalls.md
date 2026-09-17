@@ -1,0 +1,46 @@
+---
+status: ready
+size: medium
+---
+
+# Explain the remaining preview stream startup stalls
+
+The Playwright flake investigation found two startup failures in a 16-worker batch. Neither reached the freeze stimulus. They remain ordinary failures; no timeout increase or quarantine hides them.
+
+- [ ] Bound and explain a stalled browser SQLite startup. *Observed: the WASM request returned HTTP 200 headers but no completed body appeared in the trace before the baseline's 30-second deadline. The browser mirror had a client, no event connection and no delivered events. Check whether the body download stalled or the browser worker failed to report completion; don't assume an OPFS bug.*
+- [ ] Trace the keyed append timeout during agent creation. *Observed: `stream-unavailable: keyed stream append received no response within 10000ms`. Keep the durable outcome/idempotency evidence when a caller times out; do not add a whole-test retry.*
+- [ ] Audit the reset/recovery errors recorded during these runs. *A brief Cloudflare internal-storage reset burst caused delivery-gap errors; the inspected project, agent and repository processors subsequently caught up. Separate the platform failure from any defect in our recovery or error classification. Registry alarm-arming failures also need a useful durable cause, not only a stack.*
+
+Evidence is in the retained worktree `/Users/mmkal/src/worktrees/iterate/playwright-flake-causes/.flake-validation.ignoreme/`: `final-16workers/`, `freeze-mirror-1.json`, `freeze-baseline-probe.json`, `telemetry-final-16workers-errors.json`, and `telemetry-acceptance-errors.json`.
+
+The missing baseline belonged to project `prj_2338f41ebfaa473b8174f3c396fb8b1d`, stream `/agents/suspend-freeze-f029fb01`, at 2026-09-14 23:11:53 UTC. The server published it at offset 51. The browser stayed on “Initializing agent”; the saved runtime snapshot remained `connecting`. The same WASM asset completed in all 16 successful fully traced comparison runs. OS version: `cb1ea6cf-25d9-4ef5-82af-3b689e24bde3`.
+
+Run `specs/stream-resume-after-suspend.spec.ts` with `--grep 'feed resumes after page freeze' --retries=0 --repeat-each=40 --workers=8 --trace=on` against an isolated preview. That focused batch passed 40/40 after the two failures in the mixed 16-worker batch. To investigate further, record browser worker startup and the asset response body lifecycle before changing timeouts or reconnection behavior.
+
+
+## Review rerun: 2026-09-15
+
+The 16-worker, zero-retry review batch reproduced this symptom in the script-reuse spec before its first send (`specs/agent-script-reuse.spec.ts:218`). Project `agent-script-reuse-typed-mu2gu9ra-51c03c68`, stream `/agents/agent-script-reuse-typed-c15ea2b2`. The page stayed on “Initializing agent”; Send remained disabled for the full 60-second spinner budget. Its `wa-sqlite-XZW__iJk.wasm` request began at 09:25:10.027 UTC and received 200 headers, but the trace records `receive: -1`, `content.size: -1`, and no completed response body. This is matching evidence, not proof of which network/worker step stalled.
+
+Evidence: `.flake-validation.ignoreme/review-repeat24/playwright-output/agent-script-reuse-run-ret-d6565--data-through-the-real-gate-web-repeat10/{trace.zip,error-context.md}`. Test head `dadd42f98`, SDK `e165a68cb`, OS `9bfe9dab-7752-4f34-a5fa-844de6c1d644`, published Middlewright `e3f2374`. This run exercised the normal first-send path with no warm-up agent. Neither timeouts nor the allowed-flake pattern were changed.
+
+
+The same batch had three mobile fixture failures before reaching Notes: OAuth `authorize` returned 429 at 09:28:34.653 and 09:28:45.679 UTC; OAuth `register` returned 429 at 09:28:54.419 UTC. The last page displayed `OAuth client registration failed: Too many requests. Please try again later.` These are captured in `review-repeat24/playwright-output/mobile-notes-…-repeat{13,20,23}`. Do not convert these into Notes/inputValue failures or hide them with retries; investigate the preview auth capacity and fixture request volume separately.
+
+The stress-run OS audit recorded five registry alarm-arming errors, two ITX `LiveStateRelay.subscribe` server errors after roughly five seconds, and one `/repos/config` hosted-processor acknowledgement timeout after 20 seconds. Subscribe traces: `06b1effa21fddb600028e67835a8c846`, `368526acbc2fab802639fd16b7dbb923`; callback trace `ee7fa4c305ee839e6d2a55ce108412c2`, project `prj_d281a29f9146454aaeafc50893f7f92b`. These are unresolved reliability/telemetry findings, not classified as harmless. Evidence: `review-repeat24-errors.json`, `review-subscribe-{a,b}.json`, `review-durable-callback.json` in the same retained folder.
+
+
+The callback's repository was checked at 09:31:23 UTC: `repo` and `feed` both confirmed offset 17/17, active, zero lag, zero retry attempt, no next attempt/deadline/error. Recovery of those inspected subscribers is confirmed (`review-repo-recovery-probe.json`); the original latency and alarm/subscription errors still need explanation.
+
+## Conditional-edit follow-up: 2026-09-15
+
+All 84 deployed follow-up checks passed with zero retries on OS `01073dfa-5417-4ec4-ba6c-d83aa139c1c9`, source/SDK `067718dd9cf104caad7f4b6df1b5797747c1df6a`. The audit from 09:46:27–09:55:11 UTC still found three registry alarm-arming errors: traces `efdf97c45f4117a11b77bf753210d906`, `a0b530c388d6dbc63a1b4084b10d5d14`, `0deebdb1d3142b0815e372a556db6980`. The first is a background alarm/processor trace, with no Workspace.edit call. Its log still contains only a getAlarm stack, not a useful error cause. Preserve this as unresolved work; passing edit tests do not explain the alarm failure. Evidence: `followup-final-errors.json` and `edit-followup-alarm.json` in the retained validation folder.
+
+The old full Workspace suite also deliberately provoked 13 rejected operations (uncreated workspaces, invalid/read-only paths, ambiguous or empty commits, conflicting creation/configuration), plus a stream kill. Those calls are still labelled ITX server errors. They are explained test outcomes, but their telemetry classification remains separate debt; do not recreate a method-name/message whitelist. Conditional Workspace.edit conflicts now return typed results and are recorded as successful requests.
+
+
+## Todo/auth follow-up: 2026-09-15
+
+Preview OAuth and fixed-test OTP limits are now configured as 600 requests per 60 seconds when fixed OTP is enabled; production defaults are unchanged. The new deployment passed 52 focused Todo/Notes browser runs, including 48 at 16 workers with zero retries. All 24 registrations, 96 authorizations and 24 token exchanges in the stress traces succeeded, with no 429s. This addresses the captured auth-capacity failures; it does not address the separate SQLite/browser startup stalls. Better Auth's existing instance-local, expiry-extending counter behavior is deliberately unchanged, as approved.
+
+The 10:37:23–10:40:29 UTC audit still captured one registry alarm-arming error, trace `a79d0e40fd5449fc6557f27f10f67261`, ProcessorFacet DO `7238452db434192627a3dc2f057c6512025900a3d4ef0a1a40e715886f875338`, at 10:39:55.689 UTC. It again exposes only a getAlarm stack, with no useful error cause. Preserve it as unresolved. Four more error records belong to one network-closure trace, `dc62b452307939e5b8ce527b5ef5e425`; all 32 captured ITX calls on that session returned `ok`. No new ITX server-error call or Auth error record was found in this window. OS `47f7d312-6866-467e-9f95-f184c5f6f63a`, SDK `4ae692529`; evidence `todo-auth-final-{os,auth}-errors.json`, `todo-auth-{alarm,connection}.json` in the retained validation folder.

@@ -116,7 +116,7 @@ static void notify_peer_session_ended(void *context) {
 }
 
 static void fixture_init(struct fixture *fixture) {
-  static const char *const client_path = "/clients/m5stick-s3";
+  static const char *const capability_match = "itx.clients.m5stick_s3";
   static const char description[] = "{}";
   struct iterate_kit_itx_connection_options options;
   struct iterate_kit_peer_options peer_options;
@@ -148,12 +148,10 @@ static void fixture_init(struct fixture *fixture) {
     .outbound_buffer_size = OUTPUT_CAPACITY,
     .send_text = capture_text,
     .send_text_context = fixture,
-    .project_id = "prj_test",
-    .project_api_key = "itxk_test",
-    .client_path = client_path,
+    .project_id = "prj-voice",
+    .project_api_key = "operator-secret",
+    .capability_match = capability_match,
     .capability = iterate_kit_peer_capability(&fixture->peer),
-    .description = "test device",
-    .types = NULL,
     .session_ended = notify_peer_session_ended,
     .session_ended_context = fixture,
   };
@@ -190,9 +188,10 @@ static void connection_mounts_reconnects_and_revokes(void) {
   assert(fixture.connection.generation == 1U);
   assert(fixture.captured_count == 2U);
 
-  /* Two calls mount a client now: authenticate, then projects.connect. */
+  /* Three calls mount a client now: authenticate, projects.get, provide. */
   receive(&fixture, "[\"resolve\",1,[\"export\",-10]]");
   receive(&fixture, "[\"resolve\",2,[\"export\",-11]]");
+  receive(&fixture, "[\"resolve\",3,[\"export\",-12]]");
   assert(
       fixture.connection.state ==
       ITERATE_KIT_ITX_CONNECTION_READY);
@@ -212,6 +211,7 @@ static void connection_mounts_reconnects_and_revokes(void) {
 
   receive(&fixture, "[\"resolve\",1,[\"export\",-20]]");
   receive(&fixture, "[\"resolve\",2,[\"export\",-21]]");
+  receive(&fixture, "[\"resolve\",3,[\"export\",-22]]");
   assert(
       fixture.connection.state ==
       ITERATE_KIT_ITX_CONNECTION_READY);
@@ -222,9 +222,17 @@ static void connection_mounts_reconnects_and_revokes(void) {
   assert(
       fixture.connection.state ==
       ITERATE_KIT_ITX_CONNECTION_CLOSED);
+  /* The rule handle is revoked first, then the project it was made on, then
+   * the session the mount kept for its liveness probe. */
+  assert(strcmp(
+      fixture.captured[fixture.captured_count - 3U],
+      "[\"release\",-22,1]") == 0);
+  assert(strcmp(
+      fixture.captured[fixture.captured_count - 2U],
+      "[\"release\",-21,1]") == 0);
   assert(strcmp(
       fixture.captured[fixture.captured_count - 1U],
-      "[\"release\",-21,1]") == 0);
+      "[\"release\",-20,1]") == 0);
 }
 
 /*
@@ -290,9 +298,10 @@ static void session_loss_does_not_close_device_modules(void) {
   assert(
       iterate_kit_itx_connection_open(&fixture.connection) ==
       CAPNWEB_OK);
-  /* Two calls mount a client now: authenticate, then projects.connect. */
+  /* Three calls mount a client now: authenticate, projects.get, provide. */
   receive(&fixture, "[\"resolve\",1,[\"export\",-10]]");
   receive(&fixture, "[\"resolve\",2,[\"export\",-11]]");
+  receive(&fixture, "[\"resolve\",3,[\"export\",-12]]");
 
   iterate_kit_itx_connection_lost(&fixture.connection);
 

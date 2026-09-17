@@ -11,7 +11,7 @@
 
 import { parseAppConfigFromEnv, redacted, type Redacted } from "@iterate-com/shared/config";
 import { z } from "zod";
-import { isLocalOrigin } from "./lib.ts";
+import { isLocalOrigin } from "iterate/next/lib";
 
 /** A field's failure message names the SHAPE; `parseAppConfig` prefixes the env var it came from. */
 const REQUIRED = "required, but unset or blank";
@@ -55,10 +55,25 @@ export const AppConfig = z.object({
   /** The deployment's admin secret — `authenticate({ type: "admin-secret" })` and the project host's
    *  admin bearer: every project. */
   adminApiSecret: requiredSecret,
-  /** The Cloudflare account + Artifacts namespace `itx.repos` builds git remotes from; blank where no
-   *  Artifacts binding exists (the workers lane). */
+  /** The key a project secret's material is encrypted with at rest (secret-at-rest.ts) — any string;
+   *  the AES-256 key is its SHA-256. Losing it loses every stored secret's material (the catalog
+   *  survives; each secret is set again). */
+  secretsKey: requiredSecret,
+  /** The key before a rotation, decrypt-only: a record it opens is written back under `secretsKey`
+   *  on that read, so the old key can be dropped once every record has been read once. Blank when
+   *  not rotating. */
+  secretsKeyPrevious: redacted(z.string().trim().default("")),
+  /** The Cloudflare account + Artifacts namespace `itx.cfArtifacts` names git remotes with; blank
+   *  where no Artifacts binding exists (the vitest workers project). */
   artifactsAccountId: z.string().trim().default(""),
   artifactsNamespace: z.string().trim().default(""),
+  /** How much of its ephemerals a context incarnation keeps for `readEvents(…, { includeEphemeral })`,
+   *  serialized JS chars (stream/stream.ts, the recent-ephemerals ring). */
+  recentEphemeralsBudgetChars: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(1024 * 1024),
   googleClientId: z.string().trim().default(""),
   /** The Google OAuth client secret — a secret, blank where Google login is off. */
   googleClientSecret: redacted(z.string().trim().default("")),

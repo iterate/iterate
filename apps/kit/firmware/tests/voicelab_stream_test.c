@@ -1,7 +1,7 @@
 /*
  * voicelab_stream: single-WebSocket device end of the voicelab protocol —
- * caller-owned streams.get -> bind -> openConnection, then one-way mic-frame
- * appends (base64 PCM16, ephemeral).
+ * caller-owned cd -> bind -> subscribe, then one-way mic-frame appends
+ * (base64 PCM16, ephemeral).
  */
 #include "iterate/kit/voicelab_stream.h"
 
@@ -275,11 +275,12 @@ static void push_spk_to(
   static char message[16384];
   (void)snprintf(
       message, sizeof(message),
-      "[\"push\",[\"pipeline\",%d,[],[{\"events\":[["
+      "[\"push\",[\"pipeline\",%d,[],[[["
       "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":%lld,"
       "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",%s\"pcm\":\"%s\"}}"
-      "]],\"scannedThroughOffset\":%lld,\"state\":null}]]]",
-      callback_id, (long long)offset, flags, pcm_b64, (long long)offset);
+      "]],{\"after\":%lld,\"through\":%lld}]]]",
+      callback_id, (long long)offset, flags, pcm_b64,
+      (long long)offset - 1, (long long)offset);
   receive(fixture, message);
   {
     char release[64];
@@ -347,24 +348,27 @@ static void downlink_flow(void) {
   static struct fixture fixture;
   fixture_init(&fixture);
   start_and_mount(&fixture);
-  /* The open call rides the wire with the caps and the exported callback. */
+  /* The open call rides the wire with the consumed types and the callback. */
   {
     const char *open_message = NULL;
     size_t index;
     for (index = 0U; index < fixture.captured_count; ++index) {
-      if (strstr(fixture.captured[index], "openConnection") != NULL) {
+      if (strstr(fixture.captured[index], "[\"subscribe\"]") != NULL) {
         open_message = fixture.captured[index];
       }
     }
     assert(open_message != NULL);
-    assert(strstr(open_message,
-        "\"connectionKey\":\"kit-voice-") != NULL);
+    assert(strstr(open_message, "\"name\":\"kit-voice-") != NULL);
     /*
      * The subscription IS the wire contract, so it is pinned literally rather
      * than checked for membership: a type quietly added or dropped upstream
      * must fail here and not on a bench.
      *
-     * THREE, down from six. `pong` went with the ping that earned it;
+     * NAMED ONE BY ONE, AND THAT IS NOT STYLE. `consumes` accepts "*", and a
+     * wildcard never sweeps an EPHEMERAL — which is what `spk-frame` is, and
+     * what every syllable of every answer rides on.
+     *
+     * FOUR, down from six. `pong` went with the ping that earned it;
      * `grok-event` carried two facts that now ride `spk-frame` as `drop` and
      * `last`; `viseme` is deleted from the contract because the face is
      * reduced processor runtime state read by a direct RPC poll.
@@ -372,16 +376,23 @@ static void downlink_flow(void) {
     assert(
         strstr(
             open_message,
-            "\"eventTypes\":[["
+            "\"consumes\":[["
             "\"events.iterate.com/voice-agent/spk-frame\","
             "\"events.iterate.com/voice-agent/conversation-ended\","
             "\"events.iterate.com/voice-agent/conversation-accepted\","
             "\"events.iterate.com/voice-agent/call-started\"]]") !=
         NULL);
-    assert(strstr(open_message, "\"maxDeliveryEvents\":16") != NULL);
-    assert(strstr(open_message, "\"maxDeliveryBytes\":13000") != NULL);
-    assert(strstr(open_message, "\"state\":false") != NULL);
-    assert(strstr(open_message, "\"processEventBatch\":[\"export\",-1]") != NULL);
+    /*
+     * AND NOTHING ASKS FOR A DELIVERY BOUND, because os-next has no knob to
+     * ask with: commits landing behind an in-flight delivery fold into one
+     * call. What used to be `maxDeliveryEvents`/`maxDeliveryBytes` is now the
+     * sender's discipline of one speaker frame per append, plus this device's
+     * own bounded inbox.
+     */
+    assert(strstr(open_message, "maxDelivery") == NULL);
+    /* The capability IS the target — not a `processEventBatch` member — which
+     * is what makes the callback a bare two-argument function. */
+    assert(strstr(open_message, "\"target\":[\"export\",-1]") != NULL);
   }
   /* The platform invokes the exported callback exactly like the live wire:
    * a push with an EMPTY path, followed by a release of the result import
@@ -397,16 +408,14 @@ static void downlink_flow(void) {
      */
     (void)snprintf(
         message, sizeof(message),
-        "[\"push\",[\"pipeline\",-1,[],[{\"projectId\":\"prj_test\","
-        "\"path\":\"/voice-agent/dev-test\",\"streamId\":\"sid\",\"events\":[["
+        "[\"push\",[\"pipeline\",-1,[],[[["
         "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
         "\"offset\":39,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"conversationId\":\"wsdev\"}},"
         "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":40,"
         "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"pcm\":\"%s\"}},"
         "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":41,"
         "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"clearSpeakerBufferBeforeFrame\":true,\"pcm\":\"%s\"}}"
-        "]],\"scannedAfterOffset\":38,\"scannedThroughOffset\":41,"
-        "\"streamMaxOffset\":41,\"state\":null}]]]",
+        "]],{\"after\":38,\"through\":41}]]]",
         frames_b64(1U, 0x41), frames_b64(1U, 0x45));
     receive(&fixture, message);
   }
@@ -520,10 +529,10 @@ static void downlink_flow(void) {
   assert(fixture.voicelab.call_active);
   receive(
       &fixture,
-      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "[\"push\",[\"pipeline\",-1,[],[[["
       "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\",\"offset\":50,"
       "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"conversationId\":\"wsdev\",\"bridge\":\"worker\"}}"
-      "]],\"scannedThroughOffset\":50,\"state\":null}]]]");
+      "]],{\"after\":49,\"through\":50}]]]");
   receive(&fixture, "[\"release\",6,1]");
   assert(fixture.voicelab.call_active);
 
@@ -540,12 +549,12 @@ static void downlink_flow(void) {
     static char message[16384];
     (void)snprintf(
         message, sizeof(message),
-        "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+        "[\"push\",[\"pipeline\",-1,[],[[["
         "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":40,"
         "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"pcm\":\"%s\"}},"
         "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":43,"
         "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"lastFrameOfAnswer\":true,\"pcm\":\"%s\"}}"
-        "]],\"scannedThroughOffset\":43,\"state\":null}]]]",
+        "]],{\"after\":42,\"through\":43}]]]",
         frames_b64(1U, 0x41), frames_b64(1U, 0x49));
     receive(&fixture, message);
   }
@@ -650,12 +659,12 @@ static void the_second_agents_dialect(void) {
     static char message[16384];
     (void)snprintf(
         message, sizeof(message),
-        "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+        "[\"push\",[\"pipeline\",-1,[],[[["
         "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
         "\"offset\":99,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"conversationId\":\"wsdev\"}},"
         "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":100,"
         "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"deviceSpeakerFrameSeq\":0,\"pcm\":\"%s\"}}"
-        "]],\"scannedThroughOffset\":100,\"state\":null}]]]",
+        "]],{\"after\":99,\"through\":100}]]]",
         frames_b64(1U, 0x40));
     receive(&fixture, message);
     receive(&fixture, "[\"release\",1,1]");
@@ -841,9 +850,9 @@ static int latest_callback_id(const struct fixture *fixture) {
   size_t index;
   for (index = fixture->captured_count; index > 0U; --index) {
     const char *at = strstr(fixture->captured[index - 1U],
-        "\"processEventBatch\":[\"export\",");
+        "\"target\":[\"export\",");
     if (at != NULL) {
-      return atoi(at + sizeof("\"processEventBatch\":[\"export\",") - 1U);
+      return atoi(at + sizeof("\"target\":[\"export\",") - 1U);
     }
   }
   assert(false);
@@ -881,12 +890,12 @@ static void accept_call(
   char message[768];
   char release_message[64];
   const int length = snprintf(message, sizeof(message),
-      "[\"push\",[\"pipeline\",%d,[],[{\"events\":[["
+      "[\"push\",[\"pipeline\",%d,[],[[["
       "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
       "\"offset\":%lld,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\","
       "\"conversationId\":\"test\"}}"
-      "]],\"scannedThroughOffset\":%lld,\"state\":null}]]]",
-      callback, (long long)offset, (long long)offset);
+      "]],{\"after\":%lld,\"through\":%lld}]]]",
+      callback, (long long)offset, (long long)offset - 1, (long long)offset);
   assert(length > 0 && (size_t)length < sizeof(message));
   receive(fixture, message);
   assert(snprintf(release_message, sizeof(release_message),
@@ -904,14 +913,14 @@ static void fenced_voicelab_ignores_late_callback(void) {
   frames = spoken_frames;
   fixture.voicelab.state = ITERATE_KIT_VOICELAB_CLOSED;
   receive(&fixture,
-      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "[\"push\",[\"pipeline\",-1,[],[[["
       "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
       "\"offset\":1,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\","
       "\"conversationId\":\"late\"}},"
       "{\"type\":\"events.iterate.com/voice-agent/spk-frame\","
       "\"offset\":2,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\","
       "\"pcm\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}}"
-      "]],\"scannedThroughOffset\":2,\"state\":null}]]]");
+      "]],{\"after\":1,\"through\":2}]]]");
   receive(&fixture, "[\"release\",1,1]");
   assert(fixture.voicelab.batches_on_connection == 0U);
   assert(fixture.voicelab.last_event_offset == -1);
@@ -960,14 +969,14 @@ static void terminal_fence_stops_later_events_in_its_batch(void) {
   frames = spoken_frames;
   fence_on_call_ended = &fixture.voicelab;
   receive(&fixture,
-      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "[\"push\",[\"pipeline\",-1,[],[[["
       "{\"type\":\"events.iterate.com/voice-agent/conversation-ended\","
       "\"offset\":2,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\","
       "\"reason\":\"button\"}},"
       "{\"type\":\"events.iterate.com/voice-agent/spk-frame\","
       "\"offset\":3,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\","
       "\"pcm\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}}"
-      "]],\"scannedThroughOffset\":3,\"state\":null}]]]");
+      "]],{\"after\":2,\"through\":3}]]]");
   receive(&fixture, "[\"release\",2,1]");
   fence_on_call_ended = NULL;
   assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_CLOSED);
@@ -1075,8 +1084,38 @@ static void terminal_rejects_unsafe_reason_without_an_ephemeral_append(void) {
   assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
 }
 
+/*
+ * ARGUMENT 1 IS NOT DECORATION. A dropped push has no symptom but silence
+ * (stream_subscription.h), so the device counts it: a continuous range counts
+ * nothing, and a range that does not continue the last one counts once.
+ */
+static void a_discontinuous_delivery_range_is_counted(void) {
+  static struct fixture fixture;
+  fixture_init(&fixture);
+  start_and_mount(&fixture);
+  accept_call(&fixture, -1, 1, 10);
+  assert(fixture.voicelab.last_delivery_through == 10);
+  assert(fixture.voicelab.delivery_gaps == 0U);
+
+  /* after == the last through: nothing was missed. */
+  push_spk(&fixture, 2, 11, "", frames_b64(1U, 0x41));
+  assert(fixture.voicelab.last_delivery_through == 11);
+  assert(fixture.voicelab.delivery_gaps == 0U);
+
+  /* A jump: push_spk stamps `after` as offset - 1, so offset 20 leaves 11. */
+  push_spk(&fixture, 3, 20, "", frames_b64(1U, 0x42));
+  assert(fixture.voicelab.delivery_gaps == 1U);
+
+  /* And it keeps counting from the new position rather than latching. */
+  push_spk(&fixture, 4, 21, "", frames_b64(1U, 0x43));
+  assert(fixture.voicelab.delivery_gaps == 1U);
+  assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
+  release_server_callback(&fixture, latest_callback_id(&fixture));
+}
+
 int main(void) {
   downlink_flow();
+  a_discontinuous_delivery_range_is_counted();
   face_runtime_state_is_polled_and_deduped();
   the_second_agents_dialect();
   recycle_keeps_call_epoch_and_fences_closed_predecessor();

@@ -153,7 +153,7 @@ packages/v3/project-worker/
     library.ts                   THE LIBRARY: connectToMcp, connectToOpenApi, connectToCapnweb; the memo
                                  table
     context/                     chapter 1 — the context: rpc stubs, expressions, rewrite rules
-      built-ins.ts               the kernel roots: whoami, kv, secrets, ai, cfArtifacts, repos, append, readEvents,
+      built-ins.ts               the kernel roots: whoami, kv, secrets, ai, browser, cfArtifacts, repos, append, readEvents,
                                  waitForEvent, cd, fetch, rpcStubs, rewriteRules, facets, subscriptions, workers,
                                  connectToMcp, connectToOpenApi, connectToCapnweb (library.ts)
       expression.ts              the codec: "itx.a.b(1)" ⇄ ["itx","a",["b",1]]; ItxExpression /
@@ -169,8 +169,8 @@ packages/v3/project-worker/
                                  relay), LentRpcStub; fetch-shaped calls — the x-itx-expression lane and the
                                  101 tunnel on a lent stub (fenced WORKAROUND, delete-day checklist inside)
       worker-loader.ts           prepareConfinedWorker, facetLoaderOwner, WorkerSource
-      repos.ts                   itx.repos (readFile / writeFile, one file at a time), itx.cfArtifacts
-                                 (ArtifactsScope), and the git-over-HTTPS engine beneath them
+      repos.ts                   itx.cfArtifacts (ArtifactsScope: the Artifacts binding PROXY by repo
+                                 PATH — create/get/list/delete; a handle's createToken + remote())
     stream/                      chapter 3 — the log and what reduces it
       stream.ts                  Stream (the commit pipeline), the typed SQL tables (StreamStorage),
                                  ReachableContext
@@ -589,16 +589,24 @@ interface BuiltInScope {
     list(prefix?: string): Promise<{ keys: string[] }>;
   };
 
-  /** The project's secrets for egress: `getSecret("/secrets/NAME")` in an outbound request's URL or
-   *  headers substitutes to the value at the egress door (`fetch`); `getSecret("/secrets/NAME",
-   *  { field: "a.b" })` to one field of a JSON value. WRITE-ONLY — `set`, `delete`, and a `list` of
-   *  names and origins, never a value. A secret `set` with an `origin` is sent to that origin ONLY.
-   *  Every change appends `events.iterate.com/secrets/changed` with the name (and origin, or
-   *  `deleted`) — the value never enters the log. A name is `[a-zA-Z0-9._-]+`. */
+  /** The project's secrets for egress, each its own Durable Object: `getSecret("/secrets/NAME")` in
+   *  an outbound request's URL or headers substitutes to the value at egress (`fetch`);
+   *  `getSecret("/secrets/NAME", { field: "a.b" })` to one field of a JSON material. WRITE-ONLY —
+   *  `set(name, material, { urls, refresh? })` (the pin is required: a secret is sent to those
+   *  origins ONLY; `refresh` is `oauth-refresh-token` or `waitrose-session`, run by the object on a
+   *  401), `beginOAuth(name, options)` (the provider's authorize URL; the platform's callback and the
+   *  object obtain the first tokens), `delete`, and a `list` of names, pins and strategy kinds, never
+   *  a value. Every change appends `events.iterate.com/secrets/changed { name, urls, refresh? }` (or
+   *  `{ name, deleted: true }`) — the value never enters the log. A name is `[a-zA-Z0-9._-]+`. */
   secrets: {
-    set(name: string, value: string, options?: { origin?: string }): Promise<{ ok: true }>;
+    set(
+      name: string,
+      material: string | object,
+      options: { urls: string[]; refresh?: SecretRefresh },
+    ): Promise<{ ok: true }>;
+    beginOAuth(name: string, options: SecretOAuthOptions): Promise<{ authorizationUrl: string }>;
     delete(name: string): Promise<{ ok: true }>;
-    list(): Promise<{ name: string; origin?: string }[]>;
+    list(): Promise<{ name: string; urls?: string[]; refresh?: string }[]>;
   };
 
   /** Workers AI, the binding verbatim; Cloudflare Artifacts project-scoped (the escape hatch); the
@@ -610,7 +618,7 @@ interface BuiltInScope {
     list(options?: { limit?: number; cursor?: string }): Promise<ArtifactListResult>;
     delete(name: string): Promise<boolean>;
   };
-  repos: ReposScope; // readFile(repo, path) · writeFile(repo, path, content)
+  git: GitScope; // list · create · tip · snapshot · readFile · listFiles · commitFiles · writeFile · log
 
   /** This context's log — the same commit pipeline the edge's verbs write through. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
@@ -623,9 +631,10 @@ interface BuiltInScope {
    *  Own path → same isolate; anything else → a Workers-RPC call to that DO. */
   cd(path: string): InvokeHandle;
 
-  /** Egress: getSecret("/secrets/NAME") placeholders substituted in the URL and headers (a
-   *  placeholder with no stored secret, or a secret bound to another origin, is a 502 to the caller —
-   *  never sent), then the terminal `fetch` — the same door a loaded worker's globalOutbound lands on. */
+  /** Egress: a request naming a secret is forwarded to that secret's Durable Object, which substitutes
+   *  the placeholders in the URL and headers (a placeholder with no stored secret, or a secret pinned
+   *  to other origins, is a 502 to the caller — never sent), refreshes on a 401, then the terminal
+   *  `fetch` — the same path a loaded worker's globalOutbound lands on. */
   fetch(request: Request): Promise<Response>;
 
   /** The rpc-stub REGISTRY — physical, never event-sourced: a client's live value lent under an
@@ -782,9 +791,9 @@ type CoreState = {
       resumed?: { afterOffset?: number; atOffset: number };
     }
   >;
-  // THE SECRETS CATALOG: by name — the origin a secret is bound to, never a value (the value is
+  // THE SECRETS CATALOG: by name — the pin and the strategy kind, never a value (the value is
   // physical, in the secret's own Durable Object); `itx.secrets.list()` reads this, strongly consistent
-  secrets: Record<string, { origin?: string }>;
+  secrets: Record<string, { urls?: string[]; refresh?: string }>;
 };
 
 type ItxExpressionRewriteRule = CoreState["itxExpressionRewriteRules"][string];
@@ -1218,7 +1227,9 @@ the held rev triggers one single-flight re-read of the door.
   resumes from the last durable mark, and `stream/woken` (durable, appended by
   each incarnation's constructor) marks the boundary. Every persisted checkpoint
   in the package advances only on a batch that carried a durable.
-- The wake record: the DO's constructor calls `Stream.appendCreatedAndWokenEvents()` synchronously,
+- The wake record: the DO's constructor calls `Stream.appendBirthRecord()` synchronously (a
+  store with rows records its wake at the first door that opens, `appendWakeRecord` — the alarm
+  handler says `"alarm"`, every other door `"request"`),
   before any door opens. The first incarnation appends
   `stream/created { projectId, path }` at offset 1 and `stream/woken { incarnation }`
   at offset 2; every later incarnation appends its `woken` first. So the first
@@ -1250,8 +1261,8 @@ await itx.append({ type: "events.iterate.com/stream/resumed" });
 | `events.iterate.com/stream/subscription-delivery-resumed`       | `{ name, afterOffset? }`                            | you, to un-halt and optionally seek                                                                                                           |
 | `events.iterate.com/rpc-stub/attached` / `detached` (ephemeral) | `{ rpcStubKey }`                                    | the rpc-stub directory, first/last pager of a key                                                                                             |
 | `events.iterate.com/live-state/changed` (ephemeral)             | `{ key, from, to, patch }`                          | `LiveState.set`                                                                                                                               |
-| `events.iterate.com/stream/created`                             | `{ projectId, path }`                               | the DO constructor (`Stream.appendCreatedAndWokenEvents`), offset 1, once                                                                     |
-| `events.iterate.com/stream/woken`                               | `{ incarnation }`                                   | the DO constructor (`Stream.appendCreatedAndWokenEvents`), every incarnation                                                                  |
+| `events.iterate.com/stream/created`                             | `{ projectId, path }`                               | the DO constructor (`Stream.appendBirthRecord`), offset 1, once                                                                               |
+| `events.iterate.com/stream/woken`                               | `{ incarnation, reason }`                           | the first door of every incarnation (`Stream.appendWakeRecord`; the alarm handler says `"alarm"`)                                             |
 | `events.iterate.com/stream/paused` / `resumed`                  | `{ reason }` / `{}`                                 | you, or a policy facet such as `BreakerProcessor`                                                                                             |
 
 Refusals surface as coded errors (`src/lib.ts`): `STREAM_PAUSED`,
@@ -1348,8 +1359,9 @@ clamped to the stream head. Every subscription made through `subscribe` is
 removed when its handle is disposed or the session ends (capnweb disposes the
 exported handle); `processors.enable` returns no handle, so a processor's row
 stays until `processors.disable`. The DO's
-quiet clock is 60 s: an alarm that finds no delivery or facet call in flight
-and no activity for a minute aborts every live facet and returns every borrowed
+idle quiesce is 30 s from the last use of a pin (a
+borrowed stub called, an open capnweb socket used — a request moves nothing): the
+alarm then aborts every live facet and returns every borrowed
 stub; the next call re-materializes them (a facet delete — `processors.disable`'s
 one effect — that lands while a facet's source is loading wins: the load refuses with `NO_FACET` instead of
 resurrecting an orphan), and a context with no live facet and no borrowed stub
@@ -1492,7 +1504,7 @@ Bindings (`wrangler.jsonc`):
 | `ITERATE_CONTEXT`     | DO namespace → `IterateContextDurableObject` | every context, `getByName(codec)`                                                                                                                                                                                                                                                                                                                                                      |
 | `LOADER`              | Worker Loader                                | `itx.workers.get`, processors                                                                                                                                                                                                                                                                                                                                                          |
 | `AI`                  | Workers AI                                   | `itx.ai`, the binding verbatim                                                                                                                                                                                                                                                                                                                                                         |
-| `ARTIFACTS`           | Cloudflare Artifacts namespace               | `itx.cfArtifacts` (project-scoped), `itx.repos`                                                                                                                                                                                                                                                                                                                                        |
+| `ARTIFACTS`           | Cloudflare Artifacts namespace               | `itx.cfArtifacts` (project-scoped), `itx.git`                                                                                                                                                                                                                                                                                                                                          |
 | `ITX_KV`              | KV                                           | `itx.kv`, keys prefixed `${projectId}:`                                                                                                                                                                                                                                                                                                                                                |
 | `SECRET`              | Durable Object (`SecretDurableObject`)       | THE SECRET CELL, one per secret of a project (`<projectId>:<name>`): the material, its pin and its refresh strategy; `itx.secrets` writes it, egress forwards a placeholder-bearing request to it (src/secrets.ts, src/secret-durable-object.ts)                                                                                                                                       |
 | `DB`                  | D1                                           | the control plane's directory (`definitions.sql`)                                                                                                                                                                                                                                                                                                                                      |

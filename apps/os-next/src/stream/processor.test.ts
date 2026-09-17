@@ -8,7 +8,7 @@
 // processor-rules.test.ts.
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
-import { applyPatch, type PatchOp } from "../lib.ts";
+import { applyPatch, type PatchOp } from "iterate/next/lib";
 import {
   defineProcessorContract,
   type StreamEvent,
@@ -19,7 +19,7 @@ import {
   type ReduceArgs,
   sameIdempotentEvent,
   LiveState,
-} from "./processor.ts";
+} from "iterate/next/stream/processor";
 import { memoryStorage, memoryStream, settle } from "./test-support.ts";
 
 // ── a counter processor exercising every hook ──
@@ -134,6 +134,13 @@ describe("consumesEvent — THE ONE consumes rule (engine, delivery loop, inline
   test("undefined consumes = every durable event, no ephemerals (a subscriber's default)", () => {
     expect(consumesEvent(undefined, { type: "a" })).toBe(true);
     expect(consumesEvent(undefined, { type: "eph", ephemeral: true })).toBe(false);
+  });
+
+  test("the wake record (stream/woken) is an ordinary durable event: swept by default and by \"*\" like any other — that a wake makes no LOOP is the delivery loop's and the alarm's to keep, never a carve-out here", () => {
+    const t = "events.iterate.com/stream/woken";
+    expect(consumesEvent(undefined, { type: t })).toBe(true);
+    expect(consumesEvent(["*"], { type: t })).toBe(true);
+    expect(consumesEvent([t], { type: t })).toBe(true);
   });
 
   test("a NAMED type opts that type in, INCLUDING when ephemeral", () => {

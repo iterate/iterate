@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
+import { sameOriginPath } from "iterate/next/lib";
 import { browserAuthorization } from "../browser-client.ts";
 import { appConfigOf } from "../app-config.ts";
-import { sameOriginPath } from "../lib.ts";
 import { consoleContext } from "./-console-context.ts";
 
 const loginOptions = createServerFn({ method: "GET" })

@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { OAuthProvider, type GrantSummary } from "@cloudflare/workers-oauth-provider";
 import { RpcTarget } from "capnweb";
+import { codedError, isLocalOrigin } from "iterate/next/lib";
+import { authorizationCodeRequest } from "iterate/next/oauth";
 import type { Env } from "./control-plane.ts";
-import { codedError, isLocalOrigin } from "./lib.ts";
 import { directory } from "./directory.ts";
 import {
   authorizationOf,
@@ -14,7 +15,6 @@ import {
   type GrantProps,
   type Authorization,
 } from "./oauth.ts";
-import { authorizationCodeRequest } from "./client/oauth.ts";
 
 const DisplayMetadata = z.object({
   clientName: z.string().optional(),
@@ -23,6 +23,9 @@ const DisplayMetadata = z.object({
 const MintInput = z.object({
   name: z.string().trim().min(1).max(100),
   projects: z.array(z.string()).min(1),
+  /** Epoch ms. Default 30 days; at most ten years — a device that can neither refresh nor
+   *  reflash itself is retired by revocation from the sessions list, not by a clock. */
+  expiresAt: z.number().int().positive().optional(),
 });
 
 /** Whether this deployment mints personal access tokens: a bearer that acts as a person must only
@@ -168,8 +171,9 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
     throw new Error("The local console client did not become visible to the provider.");
   }
 
-  /** A PERSONAL ACCESS TOKEN: one finite OAuth grant of this user's — 30 days, scoped to the
-   * `projects` named (each one the user reaches), revocable from `list`/`end` like any grant — whose
+  /** A PERSONAL ACCESS TOKEN: one finite OAuth grant of this user's — 30 days unless `expiresAt`
+   * says longer (up to ten years, for a device that holds it), scoped to the `projects` named (each
+   * one the user reaches), revocable from `list`/`end` like any grant — whose
    * access token is answered ONCE and never stored readable; it carries no refresh credential
    * (`tokenExchangeCallback`, oauth.ts, refuses a refresh of a personal grant). The bearer opens
    * `/api`, `/mcp` and a project host of a covered project as the user (`authorizationForToken`).
@@ -198,7 +202,12 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
     });
     const helpers = oauthHelpers(env);
     const auth = await parseAuthorization(env, new Request(flow.url));
-    const expiresAt = Date.now() + 30 * 24 * 3600_000;
+    const expiresAt = Math.min(
+      data.expiresAt ?? Date.now() + 30 * 24 * 3600_000,
+      Date.now() + 10 * 365 * 24 * 3600_000,
+    );
+    if (expiresAt < Date.now() + 60_000)
+      throw codedError("INVALID_INPUT", "expiresAt must be at least a minute away.");
     const approved = await helpers.completeAuthorization({
       request: auth,
       userId: session.sub,

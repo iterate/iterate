@@ -1,18 +1,14 @@
-/**
- * Todo UI — one reconnectable Cap'n Web provider, consumed by useLiveState.
- * @jsxImportSource react
- */
+/** @jsxImportSource react */
 import React, { type FormEvent, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { newWebSocketRpcSession, type RpcStub } from "../../sdk/capnweb/index.ts";
 import { CapnWebProvider, useCapnWebRoot, useLiveState } from "../../sdk/capnweb/react.tsx";
 import type { TodoApi } from "./worker.ts";
 
-function makeConnection() {
-  const endpoint = new URL("/api", window.location.href);
-  endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
-  return newWebSocketRpcSession<TodoApi>(endpoint.toString());
-}
+type PendingOperation =
+  | { type: "add"; id: string; title: string }
+  | { type: "setDone"; id: string; done: boolean }
+  | { type: "remove"; id: string };
 
 export function TodoClient() {
   const api = useCapnWebRoot<RpcStub<TodoApi>>();
@@ -22,30 +18,62 @@ export function TodoClient() {
   );
   const [title, setTitle] = useState("");
   const [actionError, setActionError] = useState("");
-  const [pendingMutations, setPendingMutations] = useState(0);
-  const mutating = pendingMutations > 0;
+  const [pending, setPending] = useState<PendingOperation[]>([]);
+  const remaining = state
+    ? pending.filter((operation) => {
+        const todo = state.todos.find((todo) => todo.id === operation.id);
+        switch (operation.type) {
+          case "add":
+            return !todo;
+          case "setDone":
+            return !!todo && todo.done !== operation.done;
+          case "remove":
+            return !!todo;
+        }
+      })
+    : pending;
+  // Retire confirmed operations permanently, so a later remote edit or
+  // deletion cannot resurrect an optimistic row or restart its spinner.
+  if (remaining.length !== pending.length) setPending(remaining);
 
   const error = liveError || (actionError.length > 0 ? actionError : undefined);
-  const todos = state?.todos || [];
+  const todos = [
+    ...(state?.todos || []),
+    ...remaining
+      .filter((operation) => operation.type === "add")
+      .map(({ id, title }) => ({ id, title, done: false })),
+  ];
 
-  const run = async (action: () => Promise<void>) => {
+  const run = async (operation: PendingOperation) => {
+    if (api === undefined) return;
     setActionError("");
-    setPendingMutations((current) => current + 1);
+    setPending((current) => [...current, operation]);
     try {
-      await action();
+      switch (operation.type) {
+        case "add":
+          await api.add(operation.title, operation.id);
+          break;
+        case "setDone":
+          await api.setDone(operation.id, operation.done);
+          break;
+        case "remove":
+          await api.remove(operation.id);
+          break;
+      }
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setPendingMutations((current) => current - 1);
+      // A late rejection must not clear a newer operation on the same row.
+      setPending((current) => current.filter((entry) => entry !== operation));
     }
   };
 
-  const add = async (event: FormEvent) => {
+  const add = (event: FormEvent) => {
     event.preventDefault();
     if (api === undefined || title.trim().length === 0) return;
-    const next = title;
+    const next = title.trim().slice(0, 200);
+    const id = crypto.randomUUID();
     setTitle("");
-    await run(() => api.add(next));
+    void run({ type: "add", id, title: next });
   };
 
   return (
@@ -62,52 +90,63 @@ export function TodoClient() {
           type="text"
           value={title}
         />
-        <button disabled={api === undefined || mutating} type="submit">
+        <button disabled={api === undefined} type="submit">
           Add
         </button>
       </form>
-      {mutating && (
+      {remaining.length > 0 && (
         <p aria-live="polite" data-spinner="true" role="status">
           Saving…
         </p>
       )}
-      {error !== undefined && <p role="alert">{error}</p>}
-      {state === undefined ? (
-        <p>Loading…</p>
+      {error && (
+        <p role="alert" data-type="error">
+          {error}
+        </p>
+      )}
+      {!state ? (
+        <p data-spinner="true">Loading…</p>
       ) : todos.length === 0 ? (
         <p>No todos yet.</p>
       ) : (
         <ul>
-          {todos.map((todo) => (
-            <li key={todo.id}>
-              <input
-                aria-label={`Mark ${todo.title} ${todo.done ? "not done" : "done"}`}
-                checked={todo.done}
-                disabled={mutating}
-                onChange={(event) => {
-                  const done = event.currentTarget.checked;
-                  if (api === undefined) return;
-                  void run(() => api.setDone(todo.id, done));
-                }}
-                type="checkbox"
-              />
-              <span className={todo.done ? "done" : ""}>{todo.title}</span>
-              <button
-                disabled={mutating}
-                onClick={() => {
-                  if (api === undefined) return;
-                  void run(() => api.remove(todo.id));
-                }}
-                type="button"
-              >
-                Delete
-              </button>
-            </li>
-          ))}
+          {todos.map((todo) => {
+            const operation = remaining.find((operation) => operation.id === todo.id);
+            return (
+              <li key={todo.id} data-spinner={operation ? "true" : undefined}>
+                <input
+                  aria-label={`Mark ${todo.title} ${todo.done ? "not done" : "done"}`}
+                  checked={todo.done}
+                  disabled={api === undefined || !!operation}
+                  onChange={(event) => {
+                    const done = event.currentTarget.checked;
+                    void run({ type: "setDone", id: todo.id, done });
+                  }}
+                  type="checkbox"
+                />
+                <span className={todo.done ? "done" : ""}>{todo.title}</span>
+                <button
+                  disabled={api === undefined || !!operation}
+                  onClick={() => {
+                    void run({ type: "remove", id: todo.id });
+                  }}
+                  type="button"
+                >
+                  {operation?.type === "remove" ? "Deleting…" : "Delete"}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </>
   );
+}
+
+function makeConnection() {
+  const endpoint = new URL("/api", window.location.href);
+  endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
+  return newWebSocketRpcSession<TodoApi>(endpoint.toString());
 }
 
 const root = document.getElementById("root");

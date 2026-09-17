@@ -6,9 +6,9 @@
 // are reduced / delivered exactly as at-least-once promises. (Found by the r1 correctness review;
 // the same hunt found that an undisposed facet RPC RESULT pinned the parent after a quiesce — the
 // read-verb cases below are also the pin for that fix: they evict at once after ONE quiesce.)
-import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
-import type { ItxExpression } from "../src/context/expression.ts";
+import type { ItxExpression } from "iterate/next/expression";
 import { quiesce, stub } from "./support.ts";
 
 const COUNTER_SRC = /* js */ `
@@ -40,12 +40,6 @@ type Page = { events: { type: string; offset: number }[]; scannedThroughOffset: 
 const page = async (ctx: string): Promise<Page> =>
   (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as Page;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-/** The DO's scheduled alarm instant, or null. The quiet clock arms ONLY while a facet is live or an
- *  rpc stub is borrowed, so a pin that fires the alarm must first create one of the two and read
- *  this back — otherwise runDurableObjectAlarm fires into an empty schedule and proves nothing. */
-const alarmAt = (ctx: string): Promise<number | null> =>
-  runInDurableObject(stub(ctx), (_inst, state) => state.storage.getAlarm());
-
 /** The hosting door as an expression: `itx.facets.get(name, { source, className })` — the source is
  *  the worker's modules, literally. */
 const hostedFacet = (source: Record<string, string>, cls: string, name: string): ItxExpression => [
@@ -80,16 +74,11 @@ test("stream-kept cursor: an alarm pump with ephemerals at head leaves the curso
   expect(row0.cursor!.confirmedOffset).toBe(highestDurableOffset); // acked on durable ground ✓
 
   await s.append({ type: "blip", ephemeral: true }, { type: "blip", ephemeral: true }); // head = mark+2, mark unchanged
-  // ARM THE QUIET CLOCK. `dig` is a CURSOR subscription onto a stateless entrypoint: the cursor lane
-  // armed the alarm for its own delivery (the mark's batch), but this pin is about the QUIESCE, which
-  // arms only while a facet is live or a stub is borrowed. Materialize an unrelated facet for that (it
-  // consumes nothing of `dig`'s and writes no durable row — its live-state delta is ephemeral, so the
-  // durable mark this pin is about does not move) and read the schedule back before firing.
+  // An alarm pass, run directly (a caught-up cursor row and a live facet arm nothing, so there is
+  // no alarm to fire): deliverEveryCursorSubscription → read(mark) proves only through the mark →
+  // `dig` is caught up, nothing written.
   await s.invoke([...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "armer"), ["snapshot"]]);
-  expect(await alarmAt(ctx)).not.toBeNull();
-  // The alarm really runs: deliverEveryCursorSubscription → read(mark) proves only through the mark
-  // → `dig` is caught up, nothing written.
-  expect(await runDurableObjectAlarm(s)).toBe(true);
+  await runInDurableObject(s, (instance) => instance.alarm());
   const row1 = (await s.invoke("itx.subscriptions.get('dig')")) as {
     cursor?: { confirmedOffset: number };
   };
@@ -101,7 +90,9 @@ test("stream-kept cursor: an alarm pump with ephemerals at head leaves the curso
   const rowKv = (await s.invoke("itx.subscriptions.get('dig')")) as {
     cursor?: { confirmedOffset: number };
   };
-  expect(rowKv.cursor!.confirmedOffset).toBe(highestDurableOffset); // what kv held through the eviction
+  // What kv held through the eviction was the mark; the fresh incarnation's woken@mark+1 is a
+  // durable commit `dig` does not consume, so the cursor moved along past it without a call.
+  expect(rowKv.cursor!.confirmedOffset).toBe(highestDurableOffset + 1);
 
   await s.append({ type: "mark" }); // woken@mark+1 (the constructor's; its core delta took mark+2), mark@mark+3 — durable
   await sleep(600);
@@ -162,8 +153,8 @@ test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals
     state: { n: number };
   };
   // n = created + woken + config-subscription + configured + tick + note: the configured push's gap
-  // repair read the log from 0 (so the filter's unsent created@1, woken@2 and the config subscription
-  // were reduced too), the push reduced tick, this wake read note.
+  // repair read the log from 0 (so the filter's unsent created@1, the first incarnation's woken and
+  // the config subscription were reduced too), the push reduced tick, this wake read note.
   expect(mid.state.n).toBe(6);
   expect(p0.scannedThroughOffset).toBe(highestDurableOffset); // read() proves the durable log only
   expect(mid.offset).toBe(highestDurableOffset); // so the checkpoint the wake persisted is the mark, not the head
@@ -181,8 +172,7 @@ test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals
     offset: number;
     state: { n: number };
   };
-  // the pushed tick@mark+3 is reduced exactly once, and the new incarnation's woken@mark+1 exactly
-  // once via the engine's durable gap repair (the push range starts past the cursor; the contract
-  // consumes "*") → n grows by exactly 2.
+  // the pushed tick@mark+3 is reduced exactly once, and the new incarnation's woken@mark+1 — a
+  // durable event like any other, pushed to the "*" row — once → n grows by exactly 2.
   expect(after.state.n).toBe(mid.state.n + 2);
 });
