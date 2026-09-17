@@ -19,6 +19,7 @@ import {
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
 import { Input } from "@iterate-com/ui/components/input";
 import { Label } from "@iterate-com/ui/components/label";
+import { cn } from "@iterate-com/ui/lib/utils";
 import {
   Table,
   TableBody,
@@ -57,7 +58,7 @@ function AllowAccount() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <a href={stepUp} className={buttonVariants({ variant: "outline" })}>
+          <a href={stepUp} className={cn(buttonVariants({ variant: "outline" }))}>
             Allow the dash to manage them
           </a>
         </CardContent>

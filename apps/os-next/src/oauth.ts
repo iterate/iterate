@@ -20,6 +20,9 @@ export const GrantProps = z.object({
   version: z.literal(2),
   userId: z.string().startsWith("user_"),
   email: z.string(),
+  /** the identity provider's picture of the person (Google's), shown where the grant's session is
+   *  — the consent page's "signed in as" */
+  picture: z.string().optional(),
   projects: z.array(z.string()).nullable(),
   deadline: z.number().int().positive(),
 });

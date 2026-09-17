@@ -13,6 +13,7 @@ import {
 } from "@iterate-com/ui/components/card";
 import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
+import { cn } from "@iterate-com/ui/lib/utils";
 import { projectsByOrg } from "../../../lib/projects.ts";
 import { projectHostOf } from "../../_auth.tsx";
 
@@ -225,7 +226,7 @@ function AllowOrganizations() {
         <CardDescription>This session may not create organizations.</CardDescription>
       </CardHeader>
       <CardContent>
-        <a href={stepUp} className={buttonVariants({ variant: "outline" })}>
+        <a href={stepUp} className={cn(buttonVariants({ variant: "outline" }))}>
           Allow the dash to create organizations
         </a>
       </CardContent>
