@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 // Control the mock capnweb session from tests: `hangSessionProbe` makes the
 // liveness `Session.__describe()` call hang, modelling a half-open transport
@@ -96,6 +96,16 @@ class FakeWebSocket {
     for (const cb of this.handlers[type] ?? []) cb();
   }
 }
+
+// Load the module graph ONCE before any test's clock starts. Every test re-imports
+// ./react.ts after `vi.resetModules()` (fresh module-level session state), and the
+// FIRST import also pays the transform of react.ts and everything under it; on a
+// saturated CI runner that cost ran the first test to 6,021 ms against its 5 s
+// budget (2026-09-16, `pnpm -r --parallel test`). Warmed here, each test's import
+// is a re-evaluation from cache, milliseconds like its neighbours.
+beforeAll(async () => {
+  await import("./react.ts");
+});
 
 beforeEach(() => {
   control.hangSessionProbe = false;
