@@ -44,8 +44,8 @@ userspace code runs in Worker Loader isolates or as facets of the DO, and its
 entire world is one binding, `env.ITX`. The control plane — an OAuth AS, the D1
 directory of users, orgs and projects (a project's id IS its DNS-safe name),
 `/mcp`, the issuer's two pages — runs IN-PROCESS as the same worker's
-catch-all (`src/control-plane.ts`): `/login` and the `/authorize` consent, both HTML the worker
-renders whole (no framework, no build, no static assets); a project host
+catch-all (`src/control-plane.ts`): `/login` and the `/authorize` consent, files in `public/`
+served by the assets binding (no framework, no build); a project host
 (`<app>--<project>.<base>`, `<app>.<project>.<base>`, the apex `<project>.<base>` — the one
 HTTP way into a project) is admitted by one directory read before any DO is
 dialled. Egress is terminal: secrets substituted, then `fetch`.
@@ -105,8 +105,8 @@ packages/v3/project-worker/
   scripts/                       build.ts (THE BUILD, one esbuild script: wrangler.jsonc, src/generated/*.js — the
                                  injected SDK's text and the presence fixture's source), dev.ts (`pnpm dev`: the
                                  build, then wrangler dev on wrangler.jsonc, which bundles src/worker.ts itself)
-  src/issuer-css.ts              the issuer's stylesheet, inlined into /login and /authorize (control-plane.ts renders
-                                 both whole — the consent page is one form; no framework, no build, no static assets).
+  public/                        the issuer's two pages as files — login.html, authorize.html, issuer.css, login.js,
+                                 authorize.js, _headers (their CSP) — served by the assets binding (no framework, no build).
                                  The dash — sessions, projects, organizations — is apps/dash on dash.iterate2.com, an
                                  ordinary OAuth client of this issuer; agents and notes are apps of the same shape.
   src/
@@ -1468,9 +1468,9 @@ origin — the provider wants its one resource as an absolute URL) owning `/oaut
 `/oauth/register` (DCR; CIMD for clients that self-describe by URL), `/.well-known/*` and the bearer
 check on `/mcp` (its ONLY protected route, and its ONE resource: `<origin>/mcp`, this origin the
 authorization server — every token is bound to it, a foreign one refused); everything else falls
-through to THE ISSUER'S PAGES — `/login`, HTML the worker renders whole (control-plane.ts), and
-`/authorize`, the consent page — one form, its three buttons naming approve / create an organization
-/ create a project, answered by a session built the way `/api` builds one (`consentDoor`); the one
+through to THE ISSUER'S PAGES — `/login` and `/authorize`, files in public/ the assets binding serves;
+the consent page's script asks `/authorize.json` what to show and posts approve / create an
+organization / create a project to `/authorize`, answered by a session built the way `/api` builds one (`consentDoor`); the one
 machine door beside them (`signInDoor`) is the sign-in form's plain POST — `POST /login`,
 `/logout` (the session is the signed `__Host-itx-control-plane-session` cookie, `signClaims` under
 `APP_CONFIG_SESSION_SECRET`), `POST /projects` (a program creates projects over `/api`,

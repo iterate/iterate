@@ -581,8 +581,8 @@ request's origin: `/authorize` app-owned, `/oauth/token`, `/oauth/register` (DCR
 `global_fetch_strictly_public` flag), `/.well-known/*`; `/mcp` its ONLY protected route and its ONE
 pinned resource, `<origin>/mcp`, this origin the authorization server — every token bound to it, a
 foreign one refused), a D1 directory (`control-plane.sql`: users → orgs via `org_members` →
-projects; access is org membership), THE ISSUER'S PAGES (`/login` and the `/authorize` consent form, both rendered whole here; the
-stylesheet inlined from `src/issuer-css.ts`): `/login`
+projects; access is org membership), THE ISSUER'S PAGES (`/login` and the `/authorize` consent, files in `public/` the assets
+binding serves, each asking its JSON sibling here what to show): `/login`
 (the email form; "continue as / switch account" with a session), the `_auth` layout (no session ⇒
 `/login?next=`), the account page at `/` (orgs; projects — a project's hosts, the APEX (the config
 worker's `fetch`, the bundled default's 404 for a project with none of its own) and one per app it
@@ -665,7 +665,7 @@ skipped on 45 files (the deployed-only ones run against the deployed worker).
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----: |
 | the edge                 | `worker.ts` · `session.ts` · `iterate-context.ts` · `principal.ts` · `types.ts`                                                                                     | 1,250 |
 | the control plane        | `control-plane.ts` · `control-plane.sql`                                                                                                                            | ≈ 830 |
-| the issuer's pages       | `control-plane.ts` (`loginPage`, `consentPage`, `consentDoor`) · `issuer-css.ts`                                                                                    | ≈ 400 |
+| the issuer's pages       | `control-plane.ts` (`loginState`, `consentDoor`) · `public/` (login.html, authorize.html, issuer.css, login.js, authorize.js, \_headers)                            | ≈ 500 |
 | the DO                   | `iterate-context-durable-object.ts`                                                                                                                                 |   949 |
 | expressions + dispatch   | `context/expression.ts` · `dispatch.ts` · `invoke-handle.ts`                                                                                                        |   623 |
 | built-ins + loader       | `context/built-ins.ts` · `worker-loader.ts` · `durable-object-names.ts`                                                                                             |   859 |

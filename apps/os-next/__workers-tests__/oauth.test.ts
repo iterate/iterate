@@ -182,7 +182,8 @@ test("discovery advertises CIMD AND DCR: the registration endpoint is published 
     ).toMatchObject({
       resource: `${ORIGIN}/${protocol}`,
       authorization_servers: [ORIGIN],
-      scopes_supported: protocol === "mcp" ? ["iterate"] : ["iterate", "account"],
+      scopes_supported:
+        protocol === "mcp" ? ["iterate"] : ["iterate", "account", "organizations:write"],
     });
     const challenge = await call(`/${protocol}`);
     expect(challenge.status).toBe(401);

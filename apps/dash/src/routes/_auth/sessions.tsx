@@ -11,16 +11,40 @@ import { z } from "zod";
 export const Route = createFileRoute("/_auth/sessions")({
   validateSearch: z.object({ cursor: z.string().optional() }),
   loaderDeps: ({ search }) => ({ cursor: search.cursor }),
-  loader: async ({ context, deps }) => await context.api.grants.list(deps.cursor),
+  // `account` is optional at consent: without it there is no list to load — the page offers the
+  // step-up instead of the error the API would answer with.
+  loader: async ({ context, deps }) =>
+    context.info.scopes.includes("account") ? await context.api.grants.list(deps.cursor) : null,
   component: SessionsPage,
 });
+
+/** The dash asked for `account` and the person unticked it: the login door with the scopes asked
+ *  for again re-consents (`/.auth/login` bounces a session that already holds them). */
+function AllowAccount() {
+  const stepUp = `/.auth/login?${new URLSearchParams({
+    next: "/sessions",
+    scope: "iterate account organizations:write",
+  })}`;
+  return (
+    <main>
+      <p>
+        <Link to="/dashboard">Projects</Link>
+      </p>
+      <h1>Sessions</h1>
+      <p className="muted">
+        This session may not manage your sessions and personal access tokens.{" "}
+        <a href={stepUp}>Allow the dash to manage them</a>
+      </p>
+    </main>
+  );
+}
 
 /** A personal access token as the form just minted it — held only in this page's state, shown
  *  once; a reload forgets it, as the server already has. */
 type MintedPersonalAccessToken = { name: string; token: string; expiresAt: number };
 
 function SessionsPage() {
-  const { items, cursor: nextCursor, projects, canMintToken } = Route.useLoaderData();
+  const data = Route.useLoaderData();
   const { cursor } = Route.useSearch();
   const { api } = Route.useRouteContext();
   const router = useRouter();
@@ -30,6 +54,8 @@ function SessionsPage() {
   const [minted, setMinted] = useState<MintedPersonalAccessToken | null>(null);
   const [copied, setCopied] = useState(false);
   const [minting, setMinting] = useState(false);
+  if (!data) return <AllowAccount />;
+  const { items, cursor: nextCursor, projects, canMintToken } = data;
   const selectedProjectIds = projects
     .filter((project) => !excludedProjectIds.has(project.id))
     .map((project) => project.id);

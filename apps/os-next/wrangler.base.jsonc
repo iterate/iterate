@@ -4,10 +4,15 @@
   // WRANGLER BUNDLES THE WORKER ITSELF from this entry — `wrangler dev`, `wrangler deploy`, the e2e
   // harness and the workers test lane all start from src/worker.ts. What the worker cannot import
   // from source, scripts/build.ts writes first: the generated modules (the injected SDK's text, the
-  // demo facet's source). The issuer's pages are HTML the worker renders — no assets. This template becomes
-  // wrangler.jsonc (gitignored) through scripts/generate-wrangler-config.ts: the top-level block is
-  // local dev, one `env` block per deployment from the root envs.ts.
+  // demo facet's source). This template becomes wrangler.jsonc (gitignored) through
+  // scripts/generate-wrangler-config.ts: the top-level block is local dev, one `env` block per
+  // deployment from the root envs.ts.
   "main": "src/worker.ts",
+  // THE ISSUER'S PAGES are files in public/ (login.html, authorize.html, their stylesheet and
+  // scripts, public/_headers for their CSP) — the assets binding serves them. `run_worker_first`:
+  // every request reaches src/worker.ts first, which asks the binding only for the issuer's paths
+  // on the platform host — no asset ever answers on a project host.
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   // nodejs_compat, spelled out: the DO's AsyncLocalStorage (node:async_hooks) needs it. Loaded
   // userspace isolates are the pure-play half — context/worker-loader.ts mints them with
   // no_nodejs_compat, so what runs inside a context stays portable across workerd builds.

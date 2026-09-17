@@ -149,7 +149,7 @@ test("first consent creates organization and project through the ordinary sessio
   ).toBeNull();
 });
 
-test("copied issuer client metadata and account scope confer app permissions but never consent authority", async () => {
+test("copied issuer client metadata and every scope confer app permissions but never consent authority", async () => {
   const user = await directory(bindings.DB).upsertUser("copied-client@example.com");
   const login = await startIssuerSession(bindings, user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
@@ -158,7 +158,7 @@ test("copied issuer client metadata and account scope confer app permissions but
     clientId: `${origin}/.auth/client.json`,
     redirectUri: `${origin}/.auth/callback`,
     resources: [`${origin}/api`],
-    scopes: ["iterate", "account"],
+    scopes: ["iterate", "account", "organizations:write"],
   });
   const approved = await issuer.consent.approve({ query: flow.url.search, projects: ["*"] });
   if ("error" in approved) throw new Error(approved.error);
@@ -177,7 +177,7 @@ test("copied issuer client metadata and account scope confer app permissions but
   expect(exchange.status, await exchange.clone().text()).toBe(200);
   const token = await exchange.json<{ access_token: string }>();
   const app = await connect({ Authorization: `Bearer ${token.access_token}` });
-  expect((await app.info()).scopes).toEqual(["iterate", "account"]);
+  expect((await app.info()).scopes).toEqual(["iterate", "account", "organizations:write"]);
   expect((await app.grants.list()).items).toHaveLength(2);
   const org = await app.createOrg("Clone organization");
   expect((await app.orgs()).map((org) => org.id)).toContain(org.id);
@@ -185,6 +185,57 @@ test("copied issuer client metadata and account scope confer app permissions but
   await expect(app.consent.approve({ query: flow.url.search, projects: ["*"] })).rejects.toThrow(
     /Sign in to Iterate/,
   );
+});
+
+test("consent grants only the scopes left ticked; organizations:write, not project reach, is what creates an organization", async () => {
+  const user = await directory(bindings.DB).upsertUser("ticked-scopes@example.com");
+  const login = await startIssuerSession(bindings, user, "/");
+  const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
+  const org = await issuer.createOrg("Ticked scopes organization");
+  await issuer.projects.create({ project: "ticked-scopes-project", orgId: org.id });
+  // the same request three scopes wide, approved for ONE project with the scopes given
+  async function grant(scopes: string[]) {
+    const flow = await authorizationCodeRequest({
+      issuer: origin,
+      clientId: `${origin}/.auth/client.json`,
+      redirectUri: `${origin}/.auth/callback`,
+      resources: [`${origin}/api`],
+      scopes: ["iterate", "account", "organizations:write"],
+    });
+    const approved = await issuer.consent.approve({
+      query: flow.url.search,
+      projects: ["ticked-scopes-project"],
+      scopes,
+    });
+    if ("error" in approved) throw new Error(approved.error);
+    const callback = new URL(approved.redirectTo);
+    const exchange = await SELF.fetch(`${origin}/oauth/token`, {
+      method: "POST",
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code: callback.searchParams.get("code")!,
+        client_id: `${origin}/.auth/client.json`,
+        redirect_uri: `${origin}/.auth/callback`,
+        code_verifier: flow.verifier,
+        resource: `${origin}/api`,
+      }),
+    });
+    expect(exchange.status, await exchange.clone().text()).toBe(200);
+    const token = await exchange.json<{ access_token: string }>();
+    return connect({ Authorization: `Bearer ${token.access_token}` });
+  }
+  // account and organizations:write unticked — and a scope the request never asked for is no scope
+  const narrow = await grant(["iterate", "made-up"]);
+  expect((await narrow.info()).scopes).toEqual(["iterate"]);
+  await expect(narrow.createOrg("Refused organization")).rejects.toThrow(/organizations:write/);
+  await expect(narrow.grants.list()).rejects.toThrow(/Account permission/);
+  // every scope ticked: the grant is narrowed to one project and still creates an organization —
+  // which is the person's; the grant's own reach is unchanged and does not see it
+  const full = await grant(["iterate", "account", "organizations:write"]);
+  expect((await full.info()).scopes).toEqual(["iterate", "account", "organizations:write"]);
+  const created = await full.createOrg("Created by a project-narrowed grant");
+  expect((await issuer.orgs()).map((candidate) => candidate.id)).toContain(created.id);
+  expect((await full.orgs()).map((candidate) => candidate.id)).not.toContain(created.id);
 });
 
 test("consent requires PKCE, defaults empty scopes, rejects empty reach and returns a cancellable request", async () => {
@@ -229,7 +280,7 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
   });
   const refreshed = await session.bearer();
   expect(refreshed).not.toBe(before);
-  expect(await session.scopes()).toEqual(["iterate", "account"]);
+  expect(await session.scopes()).toEqual(["iterate", "account", "organizations:write"]);
   expect(
     (await connect({ Authorization: `Bearer ${refreshed}` }).then((api) => api.info())).principal
       .actor,

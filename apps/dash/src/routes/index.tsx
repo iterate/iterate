@@ -6,7 +6,9 @@ export const Route = createFileRoute("/")({
       <p className="eyebrow">DASH</p>
       <h1>Your sessions, projects and organizations.</h1>
       <p>Sign in, see everything your Iterate account reaches, and manage it from one place.</p>
-      <a href="/.auth/login?next=/dashboard&scope=iterate%20account">Log in with Iterate</a>
+      <a href="/.auth/login?next=/dashboard&scope=iterate%20account%20organizations%3Awrite">
+        Log in with Iterate
+      </a>
       <h2>Apps</h2>
       <ul>
         {APPS.map((app) => (

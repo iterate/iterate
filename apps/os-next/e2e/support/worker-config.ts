@@ -27,6 +27,11 @@ export function e2eWorkerConfig(platformOrigin = "http://127.0.0.1"): Unstable_R
   return {
     ...rawConfig,
     main: join(PACKAGE_DIR, String(rawConfig.main)),
+    // the issuer's pages (public/), an absolute directory like `main`
+    assets: {
+      ...rawConfig.assets,
+      directory: join(PACKAGE_DIR, String(rawConfig.assets?.directory)),
+    },
     // Configuration (src/worker.ts `parseAppConfig`): the e2e lane is its own deployment name, its project
     // hosts hang under `localhost` (support/project-host.ts reaches them with a Host header), and the
     // two secrets a deployment keeps in wrangler are plain test values here.

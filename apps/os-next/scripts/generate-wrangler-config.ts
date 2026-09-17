@@ -41,6 +41,7 @@ export function writeWranglerConfig() {
               zone_name: hostname.split(".").slice(-2).join("."),
             })),
           ].filter((route) => !route.pattern.includes(".workers.dev/")),
+          assets: template.assets,
           durable_objects: template.durable_objects,
           exports: template.exports,
           worker_loaders: template.worker_loaders,

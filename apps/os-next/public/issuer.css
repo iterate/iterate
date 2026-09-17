@@ -1,7 +1,5 @@
-// issuer-css.ts — the one stylesheet of the issuer's two pages, inlined into each document by
-// control-plane.ts: the platform serves HTML strings and nothing else, no static assets.
-export const ISSUER_CSS = `
-/* console.css — the ONE stylesheet of the console (src/routes/**): the string console's rules, verbatim. */
+/* public/issuer.css — the one stylesheet of the issuer's two pages (login.html, authorize.html),
+ * a file the assets binding serves. The plain rules first (the login page); the consent card after. */
 :root {
   color-scheme: light dark;
 }
@@ -246,7 +244,7 @@ body:has(.consent-card) {
   justify-content: space-between;
   gap: 0.5rem;
 }
-.consent-card form > p + .consent-project-heading {
+.consent-permissions + .consent-project-heading {
   margin-top: 1.25rem;
 }
 .consent-projects {
@@ -340,4 +338,22 @@ body:has(.consent-card) {
     display: none;
   }
 }
-`;
+
+/* The permissions the app asked for: `iterate` fixed, every other scope tickable. */
+.consent-permissions {
+  margin: 0 0 1.25rem;
+}
+.consent-scope {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  margin: 0.6rem 0 0;
+  cursor: pointer;
+}
+.consent-scope .muted {
+  display: block;
+  margin-top: 0.15rem;
+}
+.consent-scope input:disabled {
+  opacity: 0.6;
+}

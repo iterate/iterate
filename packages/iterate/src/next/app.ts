@@ -56,11 +56,11 @@ export function createIterateClient(options: { scopes?: string[] } = {}): Iterat
     );
     window.addEventListener("pagehide", dispose, { once: true });
     try {
+      // Consent is task-based: the person may have granted fewer scopes than the app asked for
+      // (every scope but `iterate` is optional on the consent page). The granted set is
+      // `info.scopes` — an app reads it and offers a step-up link (`/.auth/login?scope=…`) for what
+      // it lacks; it is never bounced back to consent for a permission the person declined.
       const info = await api.info();
-      if (!scopes.every((scope) => info.scopes.includes(scope))) {
-        dispose();
-        return leaveForLogin(login);
-      }
       // The pipelined  answer IS the session stub (capnweb: a promise that proxies).
       return { api: api as unknown as RpcStub<IterateSessionApi>, info };
     } catch (error) {

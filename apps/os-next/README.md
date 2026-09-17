@@ -5,8 +5,8 @@ project-host ingress — `<app>--<project>.<base>`, `<app>.<project>.<base>`, th
 `<project>.<base>` — the one HTTP way into a project) with
 the control plane in-process as its catch-all (`src/control-plane.ts`: OAuth AS + a D1 directory +
 `/mcp`, the ONE MCP server for every project + the issuer's server half) and THE ISSUER'S TWO PAGES —
-`/login` and the `/authorize` consent, both HTML the worker renders whole: no framework, no build, no
-static assets — the consent page is one form, its session built the way `/api` builds one;
+`/login` and the `/authorize` consent, files in `public/` the assets binding serves (no framework, no
+build), each asking its JSON sibling what to show — the consent's session built the way `/api` builds one;
 `src/iterate-context-durable-object.ts` is THE CONTEXT — one Durable Object per `{ projectId, path }`
 holding the event log, the core reduce, subscription delivery, the facets, the rpc-stub pagers and
 the fetch door. Everything a client does is one dotted expression on `itx`.
@@ -76,14 +76,17 @@ one is warned about at boot and ignored). The two secrets are wrangler secrets o
 
 The platform serves two pages and nothing else a person looks at: sign-in, because the session
 cookie is the issuer origin's, and consent, because the authorization server is the one that asks.
-Both are HTML strings (`control-plane.ts`, the stylesheet inlined from `src/issuer-css.ts`); the
-consent page is one form whose buttons name the action — approve, create an organization, create a
-project — and a dozen lines of script that keep the Approve button in step with the checkboxes. The
-session that answers it is built in the worker the way `/api` builds one. Everything else — the dash
-(sessions, projects, organizations), agents, notes — is an app on its own origin holding an OAuth grant
-(`kind: "app"`, the `account` scope for sessions); only the issuer's own grant (`kind: "issuer"`) can
-approve consent. The dashboard
-component and loader are also used verbatim by the independently hosted Notes app.
+Both are files in `public/` (`login.html`, `authorize.html`, `issuer.css`, a script each, `_headers`
+for their CSP), served by the assets binding; each page's script asks its JSON sibling
+(`/login.json`, `/authorize.json` — `control-plane.ts`) what to show, and the consent page posts its
+actions — approve, create an organization, create a project — to `/authorize`. The session that
+answers is built in the worker the way `/api` builds one. Consent is task-based: an app asks for
+scopes (`iterate`; `account` for sessions and personal access tokens; `organizations:write` to create
+organizations), the person may untick every one but `iterate`, and the grant carries what stayed
+ticked — an app reads `session.info().scopes` and offers a step-up link for what it lacks. Everything
+else — the dash (sessions, projects, organizations), agents, notes — is an app on its own origin holding
+an OAuth grant (`kind: "app"`); only the issuer's own grant (`kind: "issuer"`) can approve consent. The
+dashboard component and loader are also used verbatim by the independently hosted Notes app.
 
 Google login proves identity to our issuer. Its callback establishes one ordinary, revocable
 issuer grant through the same `BrowserSession` used by other apps. There is no separate

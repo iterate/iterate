@@ -10,7 +10,7 @@ export const Route = createFileRoute("/_auth/dashboard")({
 });
 function DashboardPage() {
   const data = Route.useLoaderData();
-  const { api } = Route.useRouteContext();
+  const { api, info } = Route.useRouteContext();
   const router = useRouter();
   return (
     <>
@@ -24,9 +24,30 @@ function DashboardPage() {
           await router.invalidate();
         }}
       />
-      <CreateOrganization />
+      {info.scopes.includes("organizations:write") ? (
+        <CreateOrganization />
+      ) : (
+        <AllowOrganizations />
+      )}
       <Apps />
     </>
+  );
+}
+/** The dash asked for `organizations:write` and the person unticked it at consent: creating an
+ *  organization is off until they grant it — the login door with the scope asked for again, which
+ *  re-consents (the granted set is what `info.scopes` says, never what the dash requested). */
+function AllowOrganizations() {
+  const stepUp = `/.auth/login?${new URLSearchParams({
+    next: "/dashboard",
+    scope: "iterate account organizations:write",
+  })}`;
+  return (
+    <section className="account" aria-label="Organizations">
+      <p className="muted">
+        This session may not create organizations.{" "}
+        <a href={stepUp}>Allow the dash to create organizations</a>
+      </p>
+    </section>
   );
 }
 /** The first-party apps, each independently deployed on its own origin (src/apps.ts). */

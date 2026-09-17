@@ -14,8 +14,8 @@
 //      fixtures' demo processor, bundled the way an author's tooling would: its SDK imports left
 //      external as "./processor.js", the module the host injects.
 //
-// The issuer's pages need no build at all: control-plane.ts renders them whole, stylesheet inlined
-// (src/issuer-css.ts) — the platform serves no static assets. The two generated modules have
+// The issuer's pages need no build at all: they are files in public/ (login.html, authorize.html,
+// their stylesheet and scripts), served by the assets binding. The two generated modules have
 // committed `.d.ts` siblings, so `tsc` and knip resolve the imports without a build; every runtime
 // lane runs this first (vitest.global-setup.ts, scripts/dev.ts, scripts/deploy.ts).
 import { mkdirSync, writeFileSync } from "node:fs";

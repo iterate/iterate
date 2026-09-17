@@ -2,6 +2,7 @@ import { AuthorizationError, CimdFetchError } from "@cloudflare/workers-oauth-pr
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
 import { codedError } from "iterate/next/lib";
+import { OAuthScope, OAuthScopes } from "iterate/next/oauth-scopes";
 import type { Env } from "./control-plane.ts";
 import { directory, type Org, type Project } from "./directory.ts";
 import { projectHostOf } from "./hosts.ts";
@@ -108,12 +109,23 @@ export class Consent extends RpcTarget {
       return authorizationFailure(error);
     }
   }
+  /** Approve: the projects ticked (`["*"]` = every current and future project) and, task-based
+   *  consent, the scopes left ticked — `iterate` always, never one the request did not ask for; the
+   *  grant and its tokens carry exactly that set (`session.info().scopes` tells the app). Without
+   *  `scopes`, the request's whole set. */
   async approve(input: {
     query: string;
     projects: string[];
+    scopes?: string[];
   }): Promise<{ redirectTo: string } | { error: string }> {
     const env = this.#env;
-    const data = z.object({ query: z.string(), projects: z.array(z.string()) }).parse(input);
+    const data = z
+      .object({
+        query: z.string(),
+        projects: z.array(z.string()),
+        scopes: z.array(z.string()).optional(),
+      })
+      .parse(input);
     try {
       const request = await this.#request(data.query);
       const client = await oauthHelpers(env).lookupClient(request.clientId);
@@ -127,11 +139,18 @@ export class Consent extends RpcTarget {
       const allProjects = !projectBound && checked.has("*");
       if (!allProjects && !granted.length)
         return { error: "Choose at least one project you can access." };
+      const scope = OAuthScopes.parse(
+        (data.scopes || request.scope).filter(
+          (candidate): candidate is OAuthScope =>
+            request.scope.includes(candidate) &&
+            OAuthScope.options.includes(candidate as OAuthScope),
+        ),
+      );
       return await oauthHelpers(env).completeAuthorization({
         request,
         userId: this.#grant.userId,
         metadata: { clientName: client?.clientName ?? request.clientId },
-        scope: request.scope,
+        scope,
         revokeExistingGrants: false,
         props: {
           kind: "app",

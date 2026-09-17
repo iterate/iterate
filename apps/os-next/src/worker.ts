@@ -20,7 +20,7 @@ import { identityDoor } from "./identity.ts";
 import { isSecretOAuthState, SECRET_OAUTH_CALLBACK_PATH } from "./secret-oauth.ts";
 import type { Reach } from "./directory.ts";
 import { oauthResponse } from "./api.ts";
-import { issuerHandler } from "./control-plane.ts";
+import { issuerHandler, issuerPagePaths } from "./control-plane.ts";
 import { appConfigOf } from "./app-config.ts";
 import { customProjectHostOf, projectHostOf, hostnameLabelsUnderBase } from "./hosts.ts";
 import { FILES_APP_LABEL, serveProjectFileRequest } from "./context/file-urls.ts";
@@ -364,8 +364,11 @@ export default {
     if (browserResponse) return browserResponse;
     if (url.pathname.startsWith("/api")) return new Response("Not found", { status: 404 });
 
+    // The issuer's own doors are open to a browser that is not signed in yet: the pages and their
+    // files (control-plane.ts `issuerPagePaths`), the token and registration endpoints, discovery.
     const issuerRoute =
-      ["/login", "/authorize", "/oauth/token", "/oauth/register"].includes(url.pathname) ||
+      issuerPagePaths.includes(url.pathname) ||
+      ["/oauth/token", "/oauth/register"].includes(url.pathname) ||
       url.pathname.startsWith("/.well-known/");
     if (!issuerRoute) {
       const authorization = await browserAuthorization(env, request, ctx);

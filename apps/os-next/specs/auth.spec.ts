@@ -121,6 +121,20 @@ test("first Claude consent creates the organization and project on the consent p
       .getByRole("heading", { name: "Create your first organization", exact: true })
       .waitFor();
     expect(new URL(page.url()).search).toBe(flow.url.search);
+    // Task-based consent: `iterate` is fixed, the account permission is optional — untick it; the
+    // choice survives every round trip below and the grant carries `iterate` alone.
+    const projectAccess = page.getByRole("checkbox", {
+      name: "Read and make changes in the projects you grant it",
+      exact: true,
+    });
+    expect(await projectAccess.isChecked()).toBe(true);
+    expect(await projectAccess.isDisabled()).toBe(true);
+    const accountAccess = page.getByRole("checkbox", {
+      name: "See and end your sessions, and mint personal access tokens",
+      exact: true,
+    });
+    expect(await accountAccess.isChecked()).toBe(true);
+    await accountAccess.uncheck();
     await page
       .getByRole("textbox", { name: "Organization name", exact: true })
       .fill("First consent studio");
@@ -185,7 +199,8 @@ test("first Claude consent creates the organization and project on the consent p
       .filter({ hasText: /^1 selected$/ })
       .waitFor();
     expect(new URL(page.url()).search).toBe(flow.url.search);
-    // The consent page is a form: it opens no socket — its session is built in the worker.
+    expect(await accountAccess.isChecked()).toBe(false);
+    // The consent page opens no socket — it posts JSON, and its session is built in the worker.
     expect(sockets.filter((url) => new URL(url).pathname === "/api")).toHaveLength(0);
     await page.screenshot({ path: test.info().outputPath("first-consent.png"), fullPage: true });
     await page.getByRole("button", { name: "Approve", exact: true }).click();

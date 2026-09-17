@@ -113,9 +113,11 @@ export class IterateRpcTarget extends RpcTarget {
       credentials.data.as && (await this.#input.directory.upsertUser(credentials.data.as.email));
     const principal = user ? { actor: user.id, email: user.email } : admin;
     this.#publishAuthenticationFact(principal, "admin-secret");
+    // the operator acting as a user is that user with every scope
     return new SessionRpcTarget(this.#input, this.#sessionTeardown, {
       principal,
       reach: user ? { userId: user.id } : "every",
+      ...(user && { scopes: ["iterate", "account", "organizations:write"] }),
     });
   }
 
@@ -224,13 +226,18 @@ export class SessionRpcTarget extends RpcTarget {
     return orgs.filter((org) => projects.some((project) => project.orgId === org.id));
   }
 
-  /** The same directory operation is available to any unrestricted user grant. */
+  /** Creating an organization is the `organizations:write` scope's: a user grant whose consent kept
+   *  it ticked (the dash asks for it; the consent page lets the person untick it), the issuer's own
+   *  session, or the operator acting as a user. The grant's project reach is beside the point — the
+   *  new organization is the person's, and the grant reaches what it reached before. */
   createOrg(name: string) {
-    const { reach } = this.#authority;
-    if (reach === "every" || "projectIds" in reach)
+    const { reach, scopes } = this.#authority;
+    if (reach === "every" || !("userId" in reach))
+      throw codedError("FORBIDDEN", "A user session is required to create an organization.");
+    if (!scopes?.includes("organizations:write"))
       throw codedError(
         "FORBIDDEN",
-        "An unrestricted user session is required to create an organization.",
+        "The organizations:write permission is required to create an organization.",
       );
     return this.#input.directory.createOrg(reach.userId, z.string().trim().min(1).parse(name));
   }

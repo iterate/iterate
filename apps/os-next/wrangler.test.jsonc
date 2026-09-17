@@ -22,6 +22,8 @@
     "global_fetch_strictly_public",
   ],
   "worker_loaders": [{ "binding": "LOADER" }],
+  // The issuer's pages, the same files (issuer-bootstrap.test.ts fetches /authorize).
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   // NO `ai` or `browser` binding here, on purpose: Workers AI and Browser Run are REMOTE-ONLY in
   // local dev, and vitest-pool-workers starts a remote proxy session for them at boot (an account to
   // pick, a network to reach). The workers lane never calls `itx.ai` / `itx.browser`; the e2e lane
