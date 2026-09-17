@@ -5,6 +5,22 @@ Its **Details** link opens the report for that tested commit. The report shows
 jobs, setup/wait/test/finish phases, measured shell steps and individual Playwright attempts. Expand rows, search for a test,
 click a bar, or zoom to a selected span. Download the same trace as OTLP JSON.
 
+Expand a **Wait** phase, then select its wait step (click/tap, or focus its bar
+and press Enter) to show curved arrows from its prerequisites. Selection shows
+only that span's own links, never links belonging to its children. The details list lets you reveal either
+endpoint, even when collapsed, filtered out or outside the current zoom range. Yellow diagonal stripes indicate
+waiting; grey stripes still mean incomplete evidence. A consumer whose runner
+never started has no measured endpoint: its dependency is listed without a
+timing arrow.
+
+The status CLI records exact producer attempt IDs and successful milestone
+publication. The collector exports standard OTLP `links` with a `ci.link.label`
+attribute: preview waits require `preview-ready`; cleanup waits for consumer jobs
+to settle, including failures. Missing milestone evidence links to the recorded
+producer attempt with “not observed”, never to a later replacement attempt.
+Links supplement the existing parent tree. They describe explicit prerequisites,
+not an inferred critical path; old runs without these records have no links.
+
 Expand the `pnpm preview ci-prepare` step to compare **Provision and deploy
 preview** with **Shared readiness: rollout, agent smoke and TUI**. Deployment
 contains slot acquisition/cleanup and each app's parallel build/deploy command
@@ -20,9 +36,10 @@ remain visibly incomplete. Names and status are recorded, not exception text.
 
 `preview-run.yml` emits small lifecycle records into Depot logs using
 `scripts/ci/tracing/shell.sh` (`BASH_ENV`) and `TraceReporter` in
-`scripts/ci/tracing/tracing.ts`. Keep explicit step IDs: these join timings to the authored commands. Reports show those
-commands with the Doppler wrapper stripped; the friendly step name is in the
-details. Commands come from the workflow YAML at the run's triggering SHA (the merge revision on PR runs),
+`scripts/ci/tracing/tracing.ts`. Keep explicit step IDs: these join timings to the authored commands. Reports show
+the step's name, falling back to its ID and then its normalized run command.
+Hover the label or bar to see all three. Commands have the Doppler wrapper stripped
+and come from the workflow YAML at the run's triggering SHA (the merge revision on PR runs),
 never expanded runner logs. `wait_for_preview`, `consumers`,
 `playwright` and `app_tests` also define the phase boundaries. The shell hook
 preserves exit codes and ignores nested shells. It requires only the Node

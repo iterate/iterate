@@ -35,8 +35,8 @@ No cost ledger, cost-log ingestion, or cross-service budgeting is included.
 ## Gateway rules
 
 The account-level rules live in
-`apps/os/scripts/ai-gateway-budgets.ts`. Proposed limits are $30/day globally
-in production ($10/day in the development account), $10/day per environment/project,
+`apps/os/scripts/ai-gateway-budgets.ts`. Limits are $30/day globally
+in each production/development account, $10/day per environment/project,
 and $3/hour per environment/project/stream. These are rolling Gateway windows;
 they are separate from any future Iterate budget model.
 
@@ -65,6 +65,6 @@ Use `--apply true` to write the reviewed configuration. Unknown existing rule ID
 must be explicitly adopted through `replaceRuleIds`; no-op runs avoid resetting
 spending counters. Use the CLI for a deliberate manual reconciliation.
 
-This reduced implementation has not been deployed or applied to either account.
-A preview proof of routing, attribution, response streaming and refusals remains
-necessary before production rollout.
+The development account's global limit was raised from $10/day to $30/day on
+2026-09-17 after shared preview traffic exhausted it and blocked live agent tests.
+The project and stream limits were unchanged.

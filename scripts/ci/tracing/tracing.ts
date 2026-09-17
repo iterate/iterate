@@ -92,6 +92,7 @@ export function assembleTrace(
   if (!execution) throw new Error("Depot workflow has no execution");
   const traceId = hash(`${workflow.workflowId}/${execution.executionId}`, 32);
   const spans: Span[] = [];
+  const dependencies: { sourceId: string; targetId: string; milestone: string }[] = [];
   const rootStart = Date.parse(execution.createdAt);
   const rootEnd = Date.parse(workflow.workflowFinishedAt);
   const greenSignals: { time: number; evidence: string }[] = [];
@@ -119,6 +120,7 @@ export function assembleTrace(
         value: { stringValue },
       })),
       status: { code: failed ? 2 : 0 },
+      links: [],
     };
     spans.push(span);
     return span.spanId;
@@ -200,6 +202,7 @@ export function assembleTrace(
             ...event,
             ...(event.kind === "shell-start" && { step: line.stepId || event.step }),
             stepKey: line.stepKey,
+            stepId: line.stepId || "",
             stepName: line.stepName || "",
             command: line.command || "",
           },
@@ -280,12 +283,13 @@ export function assembleTrace(
         const id = add(
           `${attempt.attemptId}/shell/${shell.id}`,
           parent,
-          shell.command || shell.stepName || shell.step.replaceAll("_", " "),
+          shell.stepName || shell.stepId || shell.command || shell.step,
           shell.time,
           shellEnd,
           {
             "ci.kind": "step",
             "ci.step.key": shell.stepKey,
+            "ci.step.id": shell.stepId,
             "ci.step.name": shell.stepName,
             "ci.command": shell.command,
             "ci.status": done ? (done.exitCode ? "failed" : "passed") : "incomplete",
@@ -299,6 +303,26 @@ export function assembleTrace(
         );
         stepParents.set(shell.stepKey, id);
         stepEnds.set(shell.stepKey, shellEnd);
+      }
+      for (const event of events) {
+        if (event.kind === "milestone") {
+          add(
+            `${attempt.attemptId}/milestone/${event.name}`,
+            stepParents.get(event.stepKey) || jobSpan,
+            event.name,
+            event.time,
+            event.time,
+            { "ci.kind": "milestone", "ci.evidence": "Status publication succeeded" },
+            false,
+          );
+        }
+        if (event.kind === "dependency") {
+          dependencies.push({
+            sourceId: stepParents.get(event.stepKey) || jobSpan,
+            targetId: event.targetId,
+            milestone: event.milestone,
+          });
+        }
       }
       const operations = events.filter((event) => event.kind === "span-start");
       const operationIds = new Map(
@@ -360,6 +384,38 @@ export function assembleTrace(
         );
       }
     }
+  }
+  // Resolve after collecting every job; Depot need not return producers first.
+  const byId = new Map(spans.map((span) => [span.spanId, span]));
+  for (const dependency of dependencies) {
+    const source = byId.get(dependency.sourceId)!;
+    const milestone =
+      dependency.milestone &&
+      byId.get(hash(`${traceId}/${dependency.targetId}/milestone/${dependency.milestone}`, 16));
+    // Cancelled runners can have an attempt ID without ever starting. Their
+    // evidence is the zero-duration job placeholder, not an invented attempt.
+    const unstartedJob = workflow.jobs.find((job) =>
+      job.attempts.some(
+        (attempt) => attempt.attemptId === dependency.targetId && !attempt.startedAt,
+      ),
+    );
+    const target =
+      milestone || byId.get(hash(`${traceId}/${unstartedJob?.jobId || dependency.targetId}`, 16));
+    if (!target) throw new Error(`Missing CI dependency target: ${dependency.targetId}`);
+    source.links.push({
+      traceId,
+      spanId: target.spanId,
+      attributes: [
+        {
+          key: "ci.link.label",
+          value: {
+            stringValue: dependency.milestone
+              ? `Requires ${dependency.milestone}${milestone ? "" : " (not observed)"}`
+              : "Waits for job to settle",
+          },
+        },
+      ],
+    });
   }
   const firstGreen = greenSignals
     .filter((signal) => signal.time >= rootStart && signal.time <= rootEnd)
@@ -446,6 +502,7 @@ type Span = {
     attributes: { key: string; value: { stringValue: string } }[];
   }[];
   status: { code: number };
+  links: { traceId: string; spanId: string; attributes: Span["attributes"] }[];
 };
 
 export const Workflow = z.object({
@@ -483,6 +540,16 @@ export const Workflow = z.object({
 });
 
 const TraceEvent = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("dependency"),
+    targetId: z.string().min(1),
+    milestone: z.string(),
+  }),
+  z.object({
+    kind: z.literal("milestone"),
+    name: z.string().min(1),
+    time: z.number().finite(),
+  }),
   z.object({
     kind: z.literal("check-green"),
     time: z.number().finite(),
