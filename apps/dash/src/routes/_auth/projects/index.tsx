@@ -13,7 +13,8 @@ import {
 } from "@iterate-com/ui/components/card";
 import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
-import { projectsByOrg } from "../../../components/dash-sidebar.tsx";
+import { projectsByOrg } from "../../../lib/projects.ts";
+import { projectHostOf } from "../../_auth.tsx";
 
 const shell = getRouteApi("/_auth");
 
@@ -25,11 +26,7 @@ function ProjectsPage() {
   const { orgs, projects } = shell.useLoaderData();
   const { info } = shell.useRouteContext();
   const groups = projectsByOrg(orgs, projects);
-  const origin = new URL(info.platformOrigin);
-  const hostOf = (projectId: string) =>
-    info.projectHostnameBase
-      ? `${origin.protocol}//${projectId}.${info.projectHostnameBase}${origin.port ? `:${origin.port}` : ""}/`
-      : null;
+  const hostOf = (projectId: string) => projectHostOf(info, projectId);
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
       <div className="flex flex-col gap-1">
@@ -109,9 +106,10 @@ function CreateProject({ orgs }: { orgs: { id: string; name: string }[] }) {
     setError(null);
     setPending(true);
     try {
+      // no organization chosen (none to choose from): the platform picks the person's default
       using _created = await api.projects.create({
         project: name.trim(),
-        ...(orgId && { orgId }),
+        orgId: orgId || undefined,
       });
       setName("");
       await router.invalidate();

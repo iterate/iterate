@@ -1,6 +1,7 @@
-// The dash's sidebar, the shape of apps/os's: a project switcher in the header, the active
-// project's sections (or the top-level pages) in the body, theme + collapse + the account menu in
-// the footer. Mobile renders it as a sheet (shadcn Sidebar), closed again on navigation.
+// The dash's sidebar, the shape of apps/os's: the project switcher in the header, the pages that
+// exist in the body — inside a project its overview and its site, outside one the projects and
+// sessions pages and the other first-party apps — and the account menu in the footer. Mobile
+// renders it as a sheet (shadcn Sidebar), closed again on navigation.
 import { useRef } from "react";
 import { Link, useMatchRoute, useParams } from "@tanstack/react-router";
 import {
@@ -11,6 +12,7 @@ import {
   ExternalLink,
   FolderKanban,
   KeyRound,
+  LayoutDashboard,
   LogOut,
   Plus,
 } from "lucide-react";
@@ -39,22 +41,21 @@ import {
   SidebarRail,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
-import { SidebarThemeSwitcher } from "@iterate-com/ui/components/sidebar-theme-switcher";
 import { APPS } from "../apps.ts";
-import { OVERVIEW, PROJECT_SECTIONS } from "../sections.ts";
+import { projectsByOrg, type Org, type Project } from "../lib/projects.ts";
 import { CloseMobileSidebarOnNavigate } from "./close-mobile-sidebar-on-navigate.tsx";
-
-export type Org = { id: string; name: string; role?: string };
-export type Project = { id: string; orgId: string; role?: string };
 
 export function DashSidebar({
   orgs,
   projects,
   email,
+  projectHost,
 }: {
   orgs: Org[];
   projects: Project[];
   email: string;
+  /** the project's own site (its config worker), null when this deployment has no project hosts */
+  projectHost: (projectId: string) => string | null;
 }) {
   const { projectId } = useParams({ strict: false });
   return (
@@ -62,13 +63,16 @@ export function DashSidebar({
       <CloseMobileSidebarOnNavigate />
       <Sidebar collapsible="icon">
         <SidebarHeader>
-          <ProjectSwitcher orgs={orgs} projects={projects} activeProjectId={projectId ?? null} />
+          <ProjectSwitcher orgs={orgs} projects={projects} activeProjectId={projectId || null} />
         </SidebarHeader>
         <SidebarContent>
-          {projectId ? <ProjectNav projectId={projectId} /> : <TopLevelNav />}
+          {projectId ? (
+            <ProjectNav projectId={projectId} host={projectHost(projectId)} />
+          ) : (
+            <TopLevelNav />
+          )}
         </SidebarContent>
         <SidebarFooter>
-          <SidebarThemeSwitcher />
           <CollapseButton />
           <AccountMenu email={email} />
         </SidebarFooter>
@@ -76,19 +80,6 @@ export function DashSidebar({
       </Sidebar>
     </>
   );
-}
-
-/** Projects grouped by organization; a project whose organization this grant does not list
- *  (a narrowed grant) sits under "Other". */
-export function projectsByOrg(orgs: Org[], projects: Project[]) {
-  const groups = orgs.map((org) => ({
-    org,
-    projects: projects.filter((project) => project.orgId === org.id),
-  }));
-  const known = new Set(orgs.map((org) => org.id));
-  const other = projects.filter((project) => !known.has(project.orgId));
-  if (other.length) groups.push({ org: { id: "", name: "Other" }, projects: other });
-  return groups.filter((group) => group.projects.length);
 }
 
 function ProjectSwitcher({
@@ -119,7 +110,7 @@ function ProjectSwitcher({
                 <span className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">iterate</span>
                   <span className="truncate text-xs text-muted-foreground">
-                    {activeProjectId ?? "(select project)"}
+                    {activeProjectId || "(select project)"}
                   </span>
                 </span>
                 <ChevronsUpDown className="ml-auto" />
@@ -182,50 +173,43 @@ function ProjectSwitcher({
   );
 }
 
-/** Inside a project: the overview and every section, in the registry's order. */
-function ProjectNav({ projectId }: { projectId: string }) {
+/** Inside a project: what the dash has for it today — its overview, and its own site. */
+function ProjectNav({ projectId, host }: { projectId: string; host: string | null }) {
   const matchRoute = useMatchRoute();
-  const overviewActive = Boolean(
-    matchRoute({ to: "/projects/$projectId", params: { projectId }, fuzzy: false }),
-  );
   return (
     <SidebarGroup>
-      <SidebarGroupLabel>Project</SidebarGroupLabel>
       <SidebarGroupContent>
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
-              tooltip={OVERVIEW.label}
-              isActive={overviewActive}
+              tooltip="Overview"
+              isActive={Boolean(
+                matchRoute({ to: "/projects/$projectId", params: { projectId }, fuzzy: false }),
+              )}
               render={<Link to="/projects/$projectId" params={{ projectId }} />}
             >
-              <OVERVIEW.icon />
-              <span>{OVERVIEW.label}</span>
+              <LayoutDashboard />
+              <span>Overview</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
-          {PROJECT_SECTIONS.map((section) => (
-            <SidebarMenuItem key={section.id}>
+          {host ? (
+            <SidebarMenuItem>
               <SidebarMenuButton
-                tooltip={section.label}
-                isActive={Boolean(
-                  matchRoute({
-                    to: "/projects/$projectId/$section",
-                    params: { projectId, section: section.id },
-                    fuzzy: false,
-                  }),
-                )}
+                tooltip={new URL(host).host}
                 render={
-                  <Link
-                    to="/projects/$projectId/$section"
-                    params={{ projectId, section: section.id }}
+                  <a
+                    href={host}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label={`Open ${new URL(host).host}`}
                   />
                 }
               >
-                <section.icon />
-                <span>{section.label}</span>
+                <ExternalLink />
+                <span>Project site</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
-          ))}
+          ) : null}
         </SidebarMenu>
       </SidebarGroupContent>
     </SidebarGroup>
@@ -271,7 +255,9 @@ function TopLevelNav() {
               <SidebarMenuItem key={app.url}>
                 <SidebarMenuButton
                   tooltip={app.name}
-                  render={<a href={app.url} target="_blank" rel="noreferrer" />}
+                  render={
+                    <a href={app.url} target="_blank" rel="noreferrer" aria-label={app.name} />
+                  }
                 >
                   <ExternalLink />
                   <span>{app.name}</span>
@@ -315,7 +301,6 @@ function AccountMenu({ email }: { email: string }) {
   return (
     <SidebarMenu>
       <SidebarMenuItem>
-        <form ref={logout} method="post" action="/.auth/logout" hidden />
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
@@ -341,22 +326,26 @@ function AccountMenu({ email }: { email: string }) {
             align="end"
             sideOffset={4}
           >
-            <DropdownMenuLabel className="truncate font-normal">{email}</DropdownMenuLabel>
-            <DropdownMenuSeparator />
+            {/* Base UI: a menu label lives inside a group, never bare in the menu */}
             <DropdownMenuGroup>
+              <DropdownMenuLabel className="truncate font-normal">{email}</DropdownMenuLabel>
               <DropdownMenuItem render={<Link to="/sessions" />}>
                 <KeyRound />
                 <span>Sessions and tokens</span>
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => logout.current?.requestSubmit()}>
-              <LogOut />
-              <span>Sign out</span>
-            </DropdownMenuItem>
+            <DropdownMenuGroup>
+              <DropdownMenuItem onClick={() => logout.current?.requestSubmit()}>
+                <LogOut />
+                <span>Sign out</span>
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>
+      {/* the sign-out POST, outside the menu item so nothing but the item's click submits it */}
+      <form ref={logout} method="post" action="/.auth/logout" hidden />
     </SidebarMenu>
   );
 }

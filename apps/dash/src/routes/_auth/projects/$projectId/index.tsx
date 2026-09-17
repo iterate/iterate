@@ -1,11 +1,12 @@
-// /projects/<project>/ — the overview: where the project answers, and a card per section, the map
-// the dash fills in over time.
-import { createFileRoute, getRouteApi, Link } from "@tanstack/react-router";
+// /projects/<project>/ — the overview: which organization it belongs to, where it answers, and
+// the apps that work on it today. The frame the project's own pages fill in over time.
+import { createFileRoute, getRouteApi } from "@tanstack/react-router";
 import { ArrowUpRight } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@iterate-com/ui/components/card";
-import { PROJECT_SECTIONS } from "../../../../sections.ts";
+import { APPS } from "../../../../apps.ts";
+import { projectHostOf } from "../../../_auth.tsx";
 
 const shell = getRouteApi("/_auth");
 
@@ -18,17 +19,14 @@ function ProjectOverview() {
   const { orgs } = shell.useLoaderData();
   const { info } = shell.useRouteContext();
   const org = orgs.find((candidate) => candidate.id === project.orgId);
-  const origin = new URL(info.platformOrigin);
-  const host = info.projectHostnameBase
-    ? `${origin.protocol}//${project.id}.${info.projectHostnameBase}${origin.port ? `:${origin.port}` : ""}/`
-    : null;
+  const host = projectHostOf(info, project.id);
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
             <h1 className="font-mono text-2xl font-semibold tracking-tight">{project.id}</h1>
-            {project.role ? <Badge variant="secondary">{project.role}</Badge> : null}
+            {org?.role ? <Badge variant="secondary">{org.role}</Badge> : null}
           </div>
           <p className="text-sm text-muted-foreground">
             {org ? `In ${org.name}. ` : ""}
@@ -50,25 +48,24 @@ function ProjectOverview() {
         ) : null}
       </div>
       <section className="flex flex-col gap-3">
-        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-          Sections
-        </h2>
-        <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {PROJECT_SECTIONS.map((section) => (
-            <li key={section.id}>
+        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Apps</h2>
+        <ul className="grid gap-3 sm:grid-cols-3">
+          {APPS.map((app) => (
+            <li key={app.url}>
               <Card size="sm" className="relative h-full transition-colors hover:bg-accent/50">
                 <CardHeader>
-                  <CardTitle className="flex items-center gap-2 text-sm">
-                    <section.icon className="size-4 text-muted-foreground" />
-                    <Link
-                      to="/projects/$projectId/$section"
-                      params={{ projectId: project.id, section: section.id }}
+                  <CardTitle className="flex items-center gap-1 text-sm">
+                    <a
+                      href={app.url}
+                      target="_blank"
+                      rel="noreferrer"
                       className="after:absolute after:inset-0"
                     >
-                      {section.label}
-                    </Link>
+                      {app.name}
+                    </a>
+                    <ArrowUpRight className="size-3.5 text-muted-foreground" />
                   </CardTitle>
-                  <CardDescription>{section.blurb}</CardDescription>
+                  <CardDescription>{app.blurb}</CardDescription>
                 </CardHeader>
               </Card>
             </li>

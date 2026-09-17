@@ -1,6 +1,5 @@
-// The path in the shell's header: Projects › <organization> › <project> › <section>. Read from the
-// route params, so every page under /projects gets it for free; the organization segment hides
-// on narrow screens.
+// The path in the shell's header: Projects › <organization> › <project>. Read from the route params,
+// so every page under /projects gets it for free; the leading segments hide on narrow screens.
 import { Link, useParams } from "@tanstack/react-router";
 import {
   Breadcrumb,
@@ -10,8 +9,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@iterate-com/ui/components/breadcrumb";
-import { OVERVIEW, sectionById } from "../sections.ts";
-import type { Org, Project } from "./dash-sidebar.tsx";
+import type { Org, Project } from "../lib/projects.ts";
 
 export function DashBreadcrumbs({
   orgs,
@@ -23,26 +21,16 @@ export function DashBreadcrumbs({
   /** the label of a page outside /projects (Sessions) */
   page?: string;
 }) {
-  const { projectId, section } = useParams({ strict: false });
+  const { projectId } = useParams({ strict: false });
   const project = projects.find((candidate) => candidate.id === projectId);
   const org = project ? orgs.find((candidate) => candidate.id === project.orgId) : undefined;
-  const sectionLabel = section ? (sectionById(section)?.label ?? section) : null;
-  const crumbs: {
-    label: string;
-    to?: string;
-    params?: Record<string, string>;
-    hideOnMobile?: boolean;
-  }[] = projectId
+  const crumbs: { label: string; to?: string; hideOnMobile?: boolean }[] = projectId
     ? [
         { label: "Projects", to: "/projects", hideOnMobile: true },
         ...(org ? [{ label: org.name, hideOnMobile: true }] : []),
-        {
-          label: projectId,
-          ...(sectionLabel ? { to: "/projects/$projectId", params: { projectId } } : {}),
-        },
-        ...(sectionLabel ? [{ label: sectionLabel }] : []),
+        { label: projectId },
       ]
-    : [{ label: page ?? "Projects" }];
+    : [{ label: page || "Projects" }];
   return (
     <Breadcrumb>
       <BreadcrumbList>
@@ -51,16 +39,14 @@ export function DashBreadcrumbs({
           const hidden = crumb.hideOnMobile && !last ? "hidden md:inline-flex" : "";
           return [
             <BreadcrumbItem key={`${crumb.label}-item`} className={hidden}>
-              {last || !crumb.to ? (
-                last ? (
-                  <BreadcrumbPage>{crumb.label}</BreadcrumbPage>
-                ) : (
-                  <span className="text-muted-foreground">{crumb.label}</span>
-                )
-              ) : (
-                <BreadcrumbLink render={<Link to={crumb.to} params={crumb.params} />}>
+              {last ? (
+                <BreadcrumbPage className={project ? "font-mono" : undefined}>
                   {crumb.label}
-                </BreadcrumbLink>
+                </BreadcrumbPage>
+              ) : crumb.to ? (
+                <BreadcrumbLink render={<Link to={crumb.to} />}>{crumb.label}</BreadcrumbLink>
+              ) : (
+                <span>{crumb.label}</span>
               )}
             </BreadcrumbItem>,
             last ? null : <BreadcrumbSeparator key={`${crumb.label}-sep`} className={hidden} />,
@@ -70,5 +56,3 @@ export function DashBreadcrumbs({
     </Breadcrumb>
   );
 }
-
-export const overviewLabel = OVERVIEW.label;

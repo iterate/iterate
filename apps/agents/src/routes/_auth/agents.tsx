@@ -22,8 +22,9 @@ import { AgentsSidebar } from "../../components/agents-sidebar.tsx";
 import { AgentComposer, type StreamInterrupt } from "../../components/composer.tsx";
 import { QueuedMessagesPanel } from "../../components/queued-messages.tsx";
 import { reduceAgentFeed, toAgentEvent, traceOffsetByMessage } from "../../lib/agent-events.ts";
+import { newWebAgentPath } from "../../lib/web-agent.ts";
 
-// An agent is a conversation on its own path (`/agents/<name>`); everything it does is an event
+// An agent is a conversation on its own path (`/agents/...`); everything it does is an event
 // there. This page is a window onto that log — apps/os's agent view at the size os-next carries:
 // the CHAT (the shared agent-UI reducer's items: messages, and the activities that open into
 // rounds of script + result), the EVENTS (the raw log), and the TRACES (one sheet, URL-backed: an
@@ -92,15 +93,11 @@ function AgentsPage() {
         agents={data.agents}
         agent={data.agent}
         account={info.principal.email || info.principal.actor}
-        onCreate={async (name, systemPrompt) => {
-          const path = `/agents/${name}`;
+        onCreate={async () => {
+          // an agent is its path; a new one is born at the moment's path, as in apps/os
+          const path = newWebAgentPath(new Date());
           using itx = await api.projects.get(project);
-          await itx.invoke([
-            "itx",
-            "agents",
-            ["get", path],
-            ["create", systemPrompt ? { systemPrompt } : {}],
-          ]);
+          await itx.invoke(["itx", "agents", ["get", path], ["create", {}]]);
           await router.invalidate();
           await navigate({ to: "/agents", search: { project, agent: path } });
         }}
