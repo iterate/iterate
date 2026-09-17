@@ -36,7 +36,7 @@ declare module "vitest" {
 }
 
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
-  // DEPLOYED-TARGET MODE — the proof that counts: `WORKER_BASE_URL=https://auth.iterate2.com
+  // DEPLOYED-TARGET MODE — the proof that counts: `WORKER_BASE_URL=https://os.iterate2.com
   // ADMIN_API_SECRET=… pnpm e2e` runs the SAME suite against the deployed worker, no local boot.
   const deployedWorkerBaseUrl = process.env.WORKER_BASE_URL;
   if (deployedWorkerBaseUrl) {

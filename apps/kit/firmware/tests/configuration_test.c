@@ -161,7 +161,7 @@ static void decodes_the_os_next_image_with_a_slug_and_a_full_length_key(void) {
   key[sizeof(key) - 1U] = '\0';
 
   CHECK(error == ITERATE_KIT_CONFIGURATION_OK);
-  CHECK(strcmp(configuration.os_base_url, "https://auth.iterate2.com") == 0);
+  CHECK(strcmp(configuration.os_base_url, "https://os.iterate2.com") == 0);
   CHECK(strcmp(configuration.project_id, "prj-voice") == 0);
   CHECK(strlen(configuration.project_api_key) ==
       ITERATE_KIT_PROJECT_API_KEY_CAPACITY - 1U);

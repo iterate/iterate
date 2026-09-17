@@ -5,7 +5,7 @@
 // e2e run's fake remote (support/fake-git-server.ts) cannot prove — the binding is wired, the remote URL
 // and the token the proxy hands out open the real git-over-HTTPS endpoint, and the project scoping
 // holds end to end across /api. DEPLOYED-TARGET ONLY: every row skips against a local worker (plain
-// `pnpm e2e`) — run them with `WORKER_BASE_URL=https://auth.iterate2.com pnpm e2e cfartifacts`. A repo is
+// `pnpm e2e`) — run them with `WORKER_BASE_URL=https://os.iterate2.com pnpm e2e cfartifacts`. A repo is
 // addressed by its context PATH (`/e2e/<suffix>`, unique per run; the Artifacts NAME behind it is
 // src/context/repos.ts's own detail — the remote URL ends with it); every repo created here is
 // deleted in a `finally`, so prd is never littered. Pins:

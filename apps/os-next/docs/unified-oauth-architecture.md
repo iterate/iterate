@@ -1,6 +1,6 @@
 # Unified OAuth and the issuer app
 
-Implementation snapshot, 2026-09-10. Clean-room deployment: `auth.iterate2.com`,
+Implementation snapshot, 2026-09-10. Clean-room deployment: `os.iterate2.com`,
 `mcp.iterate2.com`, `*.iterate2.app`; independent example: `notes.iterate2.com`.
 [Deployment and acceptance evidence](research/unified-oauth-deployment-proof.md).
 
@@ -31,7 +31,7 @@ begin, server-approved code, ordinary public token exchange. Its grant has
 session inventory. The test/admin login path calls the same session-creation tail.
 Email-only login is available on localhost and explicitly enabled test deployments
 (`APP_CONFIG_TEST_EMAIL_LOGIN=true`); it assumes the entered identity without
-verification. This is enabled on the isolated `auth.iterate2.com` deployment.
+verification. This is enabled on the isolated `os.iterate2.com` deployment.
 
 A signed ten-minute Google flow cookie is temporary correlation state, not a
 signed-in identity. A separate stateless identity cookie no longer exists.

@@ -307,7 +307,7 @@ const customRows: { hostname: string; becomes: ReturnType<typeof customProjectHo
   { hostname: "Iterate2.COM.", becomes: { app: null, project: "iterate" } },
   { hostname: "www.iterate2.com", becomes: null }, // only the hostnames named — no wildcard under them
   { hostname: "iterate.iterate2.app", becomes: null }, // the base's shapes are projectHostOf's
-  { hostname: "auth.iterate2.com", becomes: null },
+  { hostname: "os.iterate2.com", becomes: null },
 ];
 for (const { hostname, becomes } of customRows)
   test(`custom hostname ${hostname} ⇒ ${JSON.stringify(becomes)}`, () => {

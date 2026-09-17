@@ -12,11 +12,11 @@ export default class extends ConfigWorker {
     if (denied) return denied;
     // Route by the app slug, exactly like apps/os's config repo: the `agents` app fetches through to
     // the independently-deployed Agents worker (its own origin), so agents--<project>.<base> serves the
-    // same app as os.iterate2.com.
+    // same app as dash.iterate2.com.
     if (request.headers.get("x-iterate-app") === "agents") {
       const url = new URL(request.url);
       url.protocol = "https:";
-      url.host = "os.iterate2.com";
+      url.host = "dash.iterate2.com";
       return fetch(new Request(url, new Request(request, { redirect: "manual" })));
     }
     return new Response("Not found\n", { status: 404 });

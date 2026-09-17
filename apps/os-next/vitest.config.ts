@@ -6,7 +6,7 @@
 //               under test is src/worker.ts, bundled by the plugin — SELF.fetch, never
 //               `import worker from "../src/worker.ts"`.
 //   • e2e     — ONE real worker booted once by e2e/support/global-setup.ts (local workerd by default;
-//               the DEPLOYED worker with `WORKER_BASE_URL=https://auth.iterate2.com`,
+//               the DEPLOYED worker with `WORKER_BASE_URL=https://os.iterate2.com`,
 //               the proof that counts), every file a capnweb client at /api exactly like a production
 //               client, files in parallel, tests within a file sequential (the per-test session-dispose
 //               in support/setup.ts must not race a sibling)

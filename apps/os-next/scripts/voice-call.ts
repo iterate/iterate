@@ -8,7 +8,7 @@
 // when there is nothing to say), the terminal. It writes what came back to a WAV and prints the
 // timeline from the press.
 //
-//   WORKER_BASE_URL=https://auth.iterate2.com \
+//   WORKER_BASE_URL=https://os.iterate2.com \
 //   ADMIN_API_SECRET=$(doppler secrets get APP_CONFIG_ADMIN_API_SECRET --project project-worker --config prd --plain) \
 //   pnpm exec tsx scripts/voice-call.ts --utterance ask.wav --out answer.wav
 //   pnpm exec tsx scripts/voice-call.ts --say "Say: ready."

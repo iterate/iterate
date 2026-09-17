@@ -68,11 +68,11 @@ one is warned about at boot and ignored). The two secrets are wrangler secrets o
 
 | Origin              | What answers                                                                                                                                                           | Whose                                                                                                                                                                   |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `auth.iterate2.com` | THE ISSUER: `/login`, the `/authorize` consent, `/oauth/*`, `/.well-known/*`, `/api` for bearers                                                                       | the platform — this worker; the one origin that is cryptographically load-bearing (the OAuth issuer identifier, the `__Host-` cookie, the resource tokens are bound to) |
+| `os.iterate2.com`   | THE HEADLESS PLATFORM — the issuer: `/login`, the `/authorize` consent, `/oauth/*`, `/.well-known/*`, `/api` for bearers                                               | the platform — this worker; the one origin that is cryptographically load-bearing (the OAuth issuer identifier, the `__Host-` cookie, the resource tokens are bound to) |
 | `mcp.iterate2.com`  | the ONE MCP server, a door beside `/api`                                                                                                                               | the platform — this worker                                                                                                                                              |
 | `*.iterate2.app`    | project hosts: `<app>--<project>`, `<app>.<project>`, the apex `<project>` (the config worker's `fetch`)                                                               | userspace                                                                                                                                                               |
 | `iterate2.com`      | the `iterate` project's apex — its config worker's `fetch`, through the custom-hostname door (`APP_CONFIG_PROJECT_CUSTOM_HOSTNAMES`, envs.ts `projectCustomHostnames`) | userspace                                                                                                                                                               |
-| `os.iterate2.com`   | THE OS — the fat first-party app (apps/agents: agents, the dashboard, sessions and personal access tokens), an ordinary OAuth client of the issuer                     | an app; anyone could ship another                                                                                                                                       |
+| `dash.iterate2.com` | THE OS — the fat first-party app (apps/agents: agents, the dashboard, sessions and personal access tokens), an ordinary OAuth client of the issuer                     | an app; anyone could ship another                                                                                                                                       |
 
 The platform serves two pages and nothing else a person looks at: sign-in, because the session
 cookie is the issuer origin's, and consent, because the authorization server is the one that asks.
@@ -88,8 +88,8 @@ issuer grant through the same `BrowserSession` used by other apps. There is no s
 identity cookie. The explicit `/login` page has a small server function for safe login options;
 the test/admin `POST /login` path establishes that same issuer session.
 
-For the isolated `auth.iterate2.com` deployment, `testEmailLogin: true` in `envs.ts`
-enables the email form at [Sign in](https://auth.iterate2.com/login). Enter any email
+For the isolated `os.iterate2.com` deployment, `testEmailLogin: true` in `envs.ts`
+enables the email form at [Sign in](https://os.iterate2.com/login). Enter any email
 to assume that user immediately, without verification. Localhost also offers this
 form. Other deployments require Google unless they explicitly enable test login.
 
@@ -121,6 +121,6 @@ pnpm build                      # scripts/build.ts: wrangler.jsonc + src/generat
 pnpm run typecheck              # the three tsconfigs (worker · tests · scripts)
 pnpm test                       # every lane: unit (node), workers (workerd, src/worker.ts), e2e (one real worker), bench
 pnpm e2e                        # the wire lane alone, against a local worker the harness bundles from src
-WORKER_BASE_URL=https://auth.iterate2.com ADMIN_API_SECRET=… pnpm e2e   # the proof that counts
+WORKER_BASE_URL=https://os.iterate2.com ADMIN_API_SECRET=… pnpm e2e   # the proof that counts
 pnpm run deploy                 # the build, then wrangler deploy --config wrangler.jsonc --env <name>
 ```

@@ -9,7 +9,7 @@ export function writeWranglerConfig() {
     compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
     durable_objects: { bindings: [{ name: "BROWSER_SESSION", class_name: "BrowserSession" }] },
     exports: { BrowserSession: { type: "durable-object", storage: "sqlite" } },
-    vars: { ITERATE_ORIGIN: "https://auth.iterate2.com" },
+    vars: { ITERATE_ORIGIN: "https://os.iterate2.com" },
     observability: OBSERVABILITY,
     assets: { binding: "ASSETS", not_found_handling: "none", run_worker_first: true },
   };

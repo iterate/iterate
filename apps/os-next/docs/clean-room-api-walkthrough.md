@@ -109,7 +109,7 @@ packages/v3/project-worker/
                                  OAuth consent and THE PROJECT SELECTION, org + project creation inline — React,
                                  htm and capnweb through the shell's import map) · issuer.css. /login is HTML the
                                  worker renders whole (control-plane.ts). The OS — dashboard, sessions, agents — is
-                                 apps/agents on os.iterate2.com, an ordinary OAuth client of this issuer.
+                                 apps/agents on dash.iterate2.com, an ordinary OAuth client of this issuer.
   src/
     worker.ts                    THE EDGE and the front door. default fetch: project-host ingress (the three
                                  host shapes, admission, x-iterate-app, the OAuth bearer or the app's
@@ -191,7 +191,7 @@ packages/v3/project-worker/
                                  schema applied through the worker's own DB binding), every
                                  <primitive>-<claim>.e2e.test.ts speaks capnweb at /api through
                                  support/client.ts (the whole client surface a test uses).
-                                 WORKER_BASE_URL=https://auth.iterate2.com pnpm e2e runs the
+                                 WORKER_BASE_URL=https://os.iterate2.com pnpm e2e runs the
                                  same suite against the DEPLOYED worker; `deployedOnly` (support/project-host.ts)
                                  gates what only a deployment can prove
   __workers-tests__/             the workers project — @cloudflare/vitest-plugin over wrangler.test.jsonc,

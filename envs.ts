@@ -651,9 +651,10 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
     workerName: "os-next-prd",
-    // THE ISSUER: sign-in, consent, `/api`, the OAuth endpoints. `os.iterate2.com` is the OS — the
-    // fat first-party app (apps/agents), an ordinary OAuth client of this issuer.
-    baseUrl: "https://auth.iterate2.com",
+    // THE HEADLESS PLATFORM: sign-in, consent, `/api`, the OAuth endpoints — two no-build pages and
+    // doors, nothing else a person looks at. `dash.iterate2.com` is the OS: the fat first-party app
+    // (apps/agents), an ordinary OAuth client of this issuer.
+    baseUrl: "https://os.iterate2.com",
     mcpBaseUrl: "https://mcp.iterate2.com",
     projectHostnameBase: "iterate2.app",
     // The apex is the `iterate` project's: its config worker's `fetch` serves iterate2.com.
@@ -668,14 +669,14 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
     },
   },
 };
-/** apps/agents — THE OS: the fat first-party app (README there), an ordinary OAuth client of the
- *  issuer at auth.iterate2.com, on the custom domain the issuer used to hold. */
+/** apps/agents — THE OS: the fat first-party TanStack Start app (README there), an ordinary OAuth
+ *  client of the headless platform at os.iterate2.com. */
 export const agentsEnvs = {
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
     workerName: "agents",
-    baseUrl: "https://auth.iterate2.com",
+    baseUrl: "https://dash.iterate2.com",
   },
 };
 

@@ -585,7 +585,7 @@ export default class Waiter extends WorkerEntrypoint {
 // A stuck cursor delivery is the fastest self-waker (its ladder is 1s·2ⁿ); this prints each wake's
 // story from the ring, landing inside the incarnation each wake made:
 //
-//   RUN_WAKE_LOOP_PROBE=1 WORKER_BASE_URL=https://auth.iterate2.com \
+//   RUN_WAKE_LOOP_PROBE=1 WORKER_BASE_URL=https://os.iterate2.com \
 //     pnpm e2e stream.e2e ──
 
 const OPT_IN = process.env.RUN_WAKE_LOOP_PROBE === "1";

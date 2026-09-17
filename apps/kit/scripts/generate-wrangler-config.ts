@@ -14,7 +14,7 @@ const bindings = {
   compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
   durable_objects: { bindings: [{ name: "BROWSER_SESSION", class_name: "BrowserSession" }] },
   exports: { BrowserSession: { type: "durable-object", storage: "sqlite" } },
-  vars: { ITERATE_ORIGIN: "https://auth.iterate2.com" },
+  vars: { ITERATE_ORIGIN: "https://os.iterate2.com" },
   observability: OBSERVABILITY,
   // public/ (the favicon and the synced firmware binaries) is served by the worker's
   // ASSETS fallback; the Vite plugin fills in the built directory.

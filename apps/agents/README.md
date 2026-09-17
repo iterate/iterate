@@ -1,8 +1,8 @@
 # Agents
 
 A page to talk to a project's agents — apps/os's agent UI at the size os-next can carry today, on
-the notes app's shape: one TanStack Start worker on its own origin (https://os.iterate2.com), OAuth
-through the platform (the issuer, https://auth.iterate2.com), `/api` proxied with the session's bearer,
+the notes app's shape: one TanStack Start worker on its own origin (https://dash.iterate2.com), OAuth
+through the platform (the issuer, https://os.iterate2.com), `/api` proxied with the session's bearer,
 capnweb from the browser.
 
 - `/agents?project=<id>&agent=<path>` — the project's agents (the catalog `itx.agents.list()`), one
@@ -16,7 +16,7 @@ capnweb from the browser.
 - `/sessions` — every OAuth grant the signed-in user holds (browsers, connected apps, personal access
   tokens), each endable on its own, and where a personal access token is minted (the `account` scope).
 
-Dev: `pnpm dev` (talks to the platform at https://auth.iterate2.com; a gitignored `.dev.vars` with
+Dev: `pnpm dev` (talks to the platform at https://os.iterate2.com; a gitignored `.dev.vars` with
 `ITERATE_ORIGIN=http://localhost:8788` points it at a local os-next). Deploy: `doppler run --project agents
---config prd -- pnpm run deploy --env prd` → https://os.iterate2.com (`.depot/workflows/deploy-agents.yml`
+--config prd -- pnpm run deploy --env prd` → https://dash.iterate2.com (`.depot/workflows/deploy-agents.yml`
 runs it on every push to main that touches the app or os-next).

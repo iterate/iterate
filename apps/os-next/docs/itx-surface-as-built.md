@@ -638,7 +638,7 @@ blank ⇒ no project-host ingress), `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`
 `wrangler.test.jsonc`, `__workers-tests__/**`), `e2e` (ONE real worker booted once by
 `e2e/support/global-setup.ts` from `e2e/support/worker-config.ts` — wrangler.jsonc patched for the
 lane, the directory schema applied through the worker's own `DB` binding; every file a capnweb client
-at `/api`), `bench`. `pnpm test` runs all; `pnpm e2e` the wire lane; `WORKER_BASE_URL=https://auth.iterate2.com pnpm e2e`
+at `/api`), `bench`. `pnpm test` runs all; `pnpm e2e` the wire lane; `WORKER_BASE_URL=https://os.iterate2.com pnpm e2e`
 the same suite against the DEPLOYED worker, the proof that counts; `deployedOnly` (`e2e/support/project-host.ts`)
 gates what only a deployment can prove. The package exports `./types` and `./client`.
 
