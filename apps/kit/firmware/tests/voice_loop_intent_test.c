@@ -1311,7 +1311,7 @@ static void an_unaccepted_activation_times_out_once(void) {
  * has to be reached from the loop's own clock while NOTHING else is happening.
  *
  * PINNED BECAUSE THE FIRST ATTEMPT GOT IT WRONG. The probe was first put beside
- * the call keepalive, inside a block that runs only while a voicelab is bound
+ * the call keepalive, inside a block that runs only while a voice_stream is bound
  * and ready — that is, only while the socket was busy anyway. It would have
  * passed every conversation test and kept exactly the connections that did not
  * need keeping.

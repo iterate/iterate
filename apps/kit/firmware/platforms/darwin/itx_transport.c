@@ -621,6 +621,7 @@ void iterate_kit_itx_transport_metrics(
   metrics->last_capnweb_status = transport->last_capnweb_status;
   metrics->last_application_capnweb_status = transport->last_capnweb_status;
   metrics->last_application_capnweb_generation = transport->socket_generation;
+  metrics->websocket_pongs_received = transport->websocket.pongs_received;
   metrics->fatal_failure_latched = transport->fatal_failure_latched;
   metrics->fatal_failure_reason =
       (enum iterate_kit_itx_fatal_failure_reason)

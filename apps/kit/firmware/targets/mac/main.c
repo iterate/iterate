@@ -93,7 +93,11 @@ static void present(void *context, const struct iterate_kit_voice_view *value) {
       stderr, "mac: %s%s%s%s — %s\n", screen_name(value->screen),
       value->call_active ? ", in a call" : "",
       value->listening ? ", listening" : "", value->fault ? ", FAULT" : "",
-      after);
+      after[0] != '\0' ? after
+      : (value->screen == ITERATE_KIT_VOICE_SCREEN_IDLE && value->link_ready &&
+         !value->call_active && !value->wants_call && !value->listening)
+          ? "ready: space presses the button, q leaves"
+          : "");
 }
 
 static void poll(void *context, struct iterate_kit_voice_intent *out) {

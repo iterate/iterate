@@ -21,10 +21,10 @@ enum {
   ITERATE_KIT_OS_BASE_URL_CAPACITY = 129,
   ITERATE_KIT_PROJECT_ID_CAPACITY = 65,
   ITERATE_KIT_PROJECT_API_KEY_CAPACITY = 129,
-  /* "https://" (8) becomes "wss://" (6) and the fixed operator path
-   * "/api" (4) is appended: two bytes more than the base URL. */
+  /* "https://" (8) becomes "wss://" (6) and "/api" (4) is appended: two
+   * bytes more than the base URL. */
   ITERATE_KIT_ITX_WEBSOCKET_URL_CAPACITY =
-      ITERATE_KIT_OS_BASE_URL_CAPACITY + 11,
+      ITERATE_KIT_OS_BASE_URL_CAPACITY + 2,
 };
 
 /**

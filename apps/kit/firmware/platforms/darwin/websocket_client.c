@@ -551,6 +551,7 @@ iterate_kit_posix_websocket_client_receive(
     return ITERATE_KIT_POSIX_WEBSOCKET_RECEIVE_CONTROL;
   }
   if (classified.opcode == ITERATE_KIT_WEBSOCKET_PONG) {
+    ++client->pongs_received;
     return ITERATE_KIT_POSIX_WEBSOCKET_RECEIVE_CONTROL;
   }
   status = iterate_kit_websocket_tx_queue_control(

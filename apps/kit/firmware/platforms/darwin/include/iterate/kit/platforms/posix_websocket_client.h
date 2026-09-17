@@ -89,6 +89,8 @@ struct iterate_kit_posix_websocket_client {
    */
   int64_t last_inbound_us;
   int64_t last_outbound_us;
+  /** Pongs answering this client's own pings: the loop's hop liveness. */
+  uint32_t pongs_received;
   int last_error;
   bool request_built;
   bool upgraded;

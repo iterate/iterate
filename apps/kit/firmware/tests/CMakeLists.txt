@@ -80,9 +80,9 @@ iterate_kit_add_core_test(iterate-kit-itx-mount-test itx_mount_test.c)
 iterate_kit_add_core_test(iterate-kit-microphone-flush-test microphone_flush_test.c)
 
 iterate_kit_add_core_test(iterate-kit-retry-gate-test retry_gate_test.c)
-# The one session grammar all four boards drive: both postures, the tap-end
-# grace, hold-is-the-wake, the single end-chime edge, and ENDING absorbing
-# every control. Board tests keep only their gesture wiring.
+# The one session grammar all four boards drive: a press starts a session
+# (with the wake chime), a press or an end-press ends it, and leaving a
+# session is the one end-chime edge. Board tests keep only their gesture wiring.
 iterate_kit_add_core_test(
   iterate-kit-session-grammar-test session_grammar_test.c)
 iterate_kit_add_core_test(iterate-kit-spsc-ring-test spsc_ring_test.c)
@@ -92,7 +92,7 @@ iterate_kit_add_core_test(
 # THE STEP BOTH TARGETS RUN, against a ring that is an array and a sink that
 # counts: every branch the board's and the CLI's playback share, asserted once.
 iterate_kit_add_core_test(iterate-kit-voice-playout-test voice_playout_test.c)
-iterate_kit_add_core_test(iterate-kit-voicelab-stream-test voicelab_stream_test.c)
+iterate_kit_add_core_test(iterate-kit-voice-stream-test voice_stream_test.c)
 iterate_kit_add_core_test(
   iterate-kit-websocket-frame-writer-test websocket_frame_writer_test.c)
 iterate_kit_add_core_test(iterate-kit-websocket-rx-test websocket_rx_test.c)

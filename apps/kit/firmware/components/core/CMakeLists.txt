@@ -17,7 +17,7 @@ set(ITERATE_KIT_CORE_SOURCES
   src/touch_tap.c
   src/voice_playback_clock.c
   src/voice_playout.c
-  src/voicelab_stream.c
+  src/voice_stream.c
   src/websocket_frame_reader.c
   src/websocket_frame_writer.c
   src/websocket_rx.c
