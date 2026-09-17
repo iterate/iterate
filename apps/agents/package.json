@@ -13,6 +13,8 @@
     "routes:generate": "node scripts/generate-route-tree.ts"
   },
   "dependencies": {
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.6",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@tanstack/react-router": "1.168.3",
@@ -22,6 +24,7 @@
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "tailwindcss": "^4.3.2",
+    "yaml": "^2.8.3",
     "zod": "^4.1.5"
   },
   "devDependencies": {
