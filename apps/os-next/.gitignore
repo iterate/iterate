@@ -1,4 +1,6 @@
-# scripts/build.ts: the two generated modules (their .d.ts siblings are committed).
-/src/generated/*.js
+# scripts/build.ts: the two generated modules (their .d.ts siblings are committed). Only the
+# declarations belong in git — a stale generated .ts here shadows them for tsc.
+/src/generated/*
+!/src/generated/*.d.ts
 
 /wrangler.jsonc
