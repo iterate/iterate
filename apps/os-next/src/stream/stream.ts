@@ -201,6 +201,8 @@ export class Stream {
     );
   }
 
+  #wakeRecorded = false;
+
   /** THE BIRTH RECORD — the DO constructor calls this before any door opens, so a probe on a
    *  never-seen context materializes it (what is worth reaching is worth recording): a FRESH store
    *  gets `stream/created { projectId, path }` at offset 1 and the first incarnation's wake record
@@ -221,7 +223,7 @@ export class Stream {
         payload: { incarnation: this.storage.incarnation, reason: "request" },
       },
     );
-    this.#wakeRecorded = true; // after the append: a refused wake record is not a recorded one
+    this.#wakeRecorded = true;
   }
 
   /** THE WAKE RECORD, once per incarnation: `stream/woken { incarnation, reason }` — `"alarm"` from
@@ -235,7 +237,6 @@ export class Stream {
     });
     this.#wakeRecorded = true;
   }
-  #wakeRecorded = false;
 
   #rememberEphemeral(event: StreamEvent, chars: number) {
     if (chars > this.#recentEphemeralsBudgetChars) return;

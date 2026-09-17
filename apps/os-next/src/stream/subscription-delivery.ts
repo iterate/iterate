@@ -17,7 +17,8 @@
 // on the DO's alarm (`deadlines()`, which alarm-coordinator.ts reconciles against) — 20 s from when
 // it was first seen behind; and before every awaited call the row is written, durably, with the
 // attempt and a time to come back by, so a death mid-call is retried by the next incarnation within
-// 30 s and a batch that keeps killing its caller halts after fifteen, as fifteen refusals would.
+// 20 s of when the row was first seen behind, and a batch that keeps killing its caller halts after
+// fifteen, as fifteen refusals would.
 // A row on its retry ladder is covered by the cursor's own `nextAttemptAtMs` the same way. Nothing
 // in memory is a reason to wake.
 //
@@ -77,13 +78,12 @@ const PENDING_PUSHES_TOTAL_BUDGET_CHARS = 8 * 1024 * 1024;
 
 /** A failure that can only repeat — halt the row now, not after the ladder: the flag workerd itself
  *  stamps (`retryable: false`, processor.ts's ReduceCheckpointTable stamps it too) or one of OUR codes that a
- *  retry cannot change (a target that is not callable, nothing matching the target's expression,
- *  a checkpoint or an event over its ceiling). */
+ *  retry cannot change (a target that is not callable, a checkpoint or an event over its ceiling).
+ *  Never NO_ITX_EXPRESSION_MATCH: a target nothing resolves DANGLES (`danglingUnder`), it is not halted. */
 const deterministicFailure = (error: unknown): boolean =>
   (error as { retryable?: unknown } | null)?.retryable === false ||
   [
     "NOT_A_METHOD",
-    "NO_ITX_EXPRESSION_MATCH",
     "REDUCE_CHECKPOINT_TOO_LARGE",
     "EVENT_TOO_LARGE",
     "FORBIDDEN", // a target this context may not reach (a global path that is not its own): a retry cannot change who the caller is
@@ -198,7 +198,6 @@ export type DeliveryDeadline = {
   at: number;
   nextAttemptAtMs?: number;
   attempt: number;
-  confirmedOffset: number;
   /** A `#deliverFromCursor` loop holds the row: a call or a budget wait is in progress. */
   inFlight: boolean;
 };
@@ -282,7 +281,6 @@ export class SubscriptionDelivery {
         at,
         nextAttemptAtMs: cursor?.nextAttemptAtMs,
         attempt: cursor?.attempt ?? 0,
-        confirmedOffset,
         inFlight,
       });
     }
@@ -299,7 +297,7 @@ export class SubscriptionDelivery {
         case "events.iterate.com/stream/subscription-delivery-resumed": {
           // An operator's resume is itself the wake: deliver that name NOW, whatever its `consumes`
           // says (the resumed fact is rarely a type the subscriber asked for, and a halted row has no
-          // retry armed — without this it would wait for the next matching commit or the quiet clock).
+          // retry armed — without this it would wait for the next matching commit).
           // A halted FACET row resumes by catching up from the log itself; a cursor row from its cursor.
           const name = (event.payload as { name: string }).name;
           const row = rows[name];
@@ -370,9 +368,9 @@ export class SubscriptionDelivery {
         record.lastDeliveredThroughOffset = throughOffset;
       } else {
         if (!durable) continue;
-        // A durable batch this row does not consume: nothing to deliver, and the row must not read
-        // as behind (a claim, an alarm) for it — a row that was caught up and is idle is moved
-        // along NOW, as an ack would move it; any other row's loop pages past it.
+        // A durable batch this row does not consume: a caught-up idle row is moved along HERE,
+        // as an ack would move it, without the loop's page read (the loop would advance it the same
+        // way, one read later); any other row's loop pages past it.
         const cursor = record.cursor || {
           confirmedOffset: row.afterOffset ?? row.configuredAtOffset,
           attempt: 0,
@@ -640,10 +638,7 @@ export class SubscriptionDelivery {
     error: unknown,
   ): void {
     const current = this.#stream.coreReducedState.subscriptions[name];
-    if (current?.configuredAtOffset !== configuredAtOffset || current.halted) {
-      this.#reconcileAlarm(); // the failed attempt's claim may have been this row's last
-      return;
-    }
+    if (current?.configuredAtOffset !== configuredAtOffset || current.halted) return;
     // A halted row owes nothing; the fact's own commit reconciles the alarm.
     this.#stream.append({
       type: "events.iterate.com/stream/subscription-delivery-halted",

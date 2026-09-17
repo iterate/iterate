@@ -117,9 +117,7 @@ export type ProcessEventArgs<State, Event = StreamEvent> = {
  *  (a subscriber's default). "*" = every durable event. A NAMED type opts that type in, INCLUDING
  *  ephemerals ("*" NEVER sweeps ephemerals) — so a live-state watcher spells
  *  `consumes: ["events.iterate.com/live-state/changed"]` and filters `payload.key` itself. The wake
- *  record (`stream/woken`) is a durable event like any other: a "*" row receives every incarnation's.
- *  That a wake makes no LOOP is the delivery loop's and the alarm's to keep (subscription-delivery.ts,
- *  alarm-coordinator.ts) — never a carve-out here. */
+ *  record (`stream/woken`) is a durable event like any other: a "*" row receives every incarnation's. */
 export function consumesEvent(
   consumes: readonly string[] | undefined,
   event: { type: string; ephemeral?: boolean },

@@ -625,11 +625,16 @@ probe(
         )
         .join("\n");
     let itx = openItx(ctx);
-    await itx.provide("itx.faildeliver", ["itx", "workers", ["get", { source: THROWING_WORKER }]]);
-    await itx.subscribe({
-      name: "faildeliver",
-      target: "itx.faildeliver.processEventBatch",
-      consumes: ["kick"],
+    // The row is appended RAW with the worker inlined in its target: a session's `provide` and
+    // `subscribe` are removed when the session is disposed below, and the ladder must outlive
+    // every session here.
+    await append(itx, {
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        name: "faildeliver",
+        target: ["itx", "workers", ["get", { source: THROWING_WORKER }], "processEventBatch"],
+        consumes: ["kick"],
+      },
     });
     await append(itx, { type: "kick", payload: { n: 1 } }); // kicks the ladder
     await sleep(2_000); // the first attempt fails and the ladder arms
@@ -656,5 +661,10 @@ probe(
     // The context is never poisoned by the loop; the durable log survives.
     const [ev] = await append(openItx(ctx), { type: "after-observe" });
     expect(ev.offset).toBeGreaterThan(0);
+    // The row is removed: a deployed context must not keep laddering after the observation.
+    await append(openItx(ctx), {
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: { name: "faildeliver", target: null },
+    });
   },
 );
