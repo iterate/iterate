@@ -257,7 +257,7 @@ no hop. That signature is the litmus test ("could this be written in a userspace
 whole layering: a library module could move to userspace unchanged, and the surface shows no level.
 `src/library.test.ts` pins it — no runtime import from the stream, the DO, the fetch module
 or `context/` except `invoke-handle.ts`. A held capnweb WebSocket connection pins the context awake
-like a busy facet; a batch connection and the two HTTP connectors hold nothing. `connectToGraphql`
+(a facet does not); a batch connection and the two HTTP connectors hold nothing. `connectToGraphql`
 is the obvious next member of the family and does not exist yet.
 
 `WorkerSource` is the worker's modules, literally (`Record<string, string>`, module name → code,
@@ -286,7 +286,8 @@ Two layers, in the order the tutorial builds them.
 
 **Layer 1, the borrowed table.** Anyone with a Workers-RPC route to the DO can
 `lendRpcStub({ rpcStubKey, stub })`. The DO keeps it in `#borrowedRpcStubs`, every call on that
-key rides it, and `returnBorrowedRpcStubs()` at the 60 s idle quiesce, because a held stub
+key rides it, and `returnBorrowedRpcStubs()` at the idle quiesce (30 s after the pins' last use,
+rounded up to the next 10 s), because a held stub
 pins the DO awake. A lender with no pager is one-shot.
 
 **Layer 2, the pagers.** One hibernatable WebSocket per key, opened by the edge relay in ONE
@@ -412,7 +413,7 @@ session ending) restores the platform row.
 
 ---
 
-## 8. The stream and the core reduce (`src/stream/stream.ts` · `core-processor.ts` · `stream-storage.ts`)
+## 8. The stream and the core reduce (`src/stream/stream.ts` · `core-processor.ts`)
 
 One append-only log per context. Offsets shared by durable and ephemeral events (an
 ephemeral consumes an offset, never a row). Idempotency at the door. `waitForEvent`.
@@ -452,7 +453,7 @@ the stream by appending `stream/paused`. Runtime state IS reduced state:
 `itx.facets.get('core').snapshot()`. The whole state is plain JSON (hand-written types — no zod on this script — records and arrays),
 so the checkpoint and the live-state snapshot carry it as is.
 
-Event envelope (`src/stream/processor.ts`, plain TS types):
+Event envelope (`packages/iterate/src/next/stream/processor.ts`, plain TS types):
 `{ type, payload?, metadata?, source?, idempotencyKey?, offset?, ephemeral? }` in;
 `+ offset, createdAt, path` out.
 

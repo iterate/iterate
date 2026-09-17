@@ -63,8 +63,8 @@ export function memoryStream(path = "/") {
   const pushedEvents: StreamEvent[] = []; // every committed event, ephemerals included (the pump's view)
   const eventsByIdempotencyKey = new Map<string, StreamEvent>();
   const engines: ProcessorEngine<any>[] = []; // the pump only needs `processEventBatch`
-  // The revive's timer doors, RECORDED (never fired — a test that wants the tick appends it): what
-  // was armed, in order, and which receipts were retracted.
+  // The revive's schedule calls, RECORDED (never fired — a test that wants the tick appends it):
+  // what was armed, in order, and which receipts were retracted.
   const scheduled: Parameters<ProcessorStream["schedule"]>[0][] = [];
   const cancelled: ScheduleReceipt[] = [];
   let maxAssigned = 0;

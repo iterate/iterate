@@ -290,7 +290,7 @@ test("A BARE PROBE ON A DORMANT CONTEXT LEAVES NO ALARM: the config delivery ack
   const ctx = "prj_q_bare_probe";
   const s = stub(ctx);
   // The probe materializes the context: created, woken, the config row — whose delivery is owed
-  // from that commit (the +20 s insurance is the alarm armed from birth)…
+  // from that commit (the config row's +20 s claim is the alarm armed from birth)…
   await s.invoke("itx.schedules.list()");
   // …until the config worker (the bundled no-op default) acks and the row is caught up.
   await untilRow(ctx, "config", (r) => (r?.cursor?.confirmedOffset ?? 0) > 0);
@@ -473,9 +473,10 @@ test("A BORROW RACES THE QUIESCE ALARM: a stub invoke fired concurrently with th
   for (let i = 0; i < 4; i++) await clientItx.provide(`itx.p${i}`, new Echo(i));
   const caller = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
 
-  // THERE MUST BE AN ALARM TO RACE. Lending four stubs arms nothing — the quiet clock arms only
-  // while a facet is live or a stub is BORROWED — so warm one stub first and read the schedule
-  // back. Without this the alarm below fires into an empty schedule and the race is vacuous.
+  // THERE MUST BE AN ALARM TO RACE. Lending four stubs arms nothing — the idle deadline arms only
+  // while a stub is BORROWED (or the library holds a socket); a facet is not a pin — so warm one
+  // stub first and read the schedule back. Without this the alarm below fires into an empty
+  // schedule and the race is vacuous.
   expect(await caller.invoke("itx.p0.echo('warm')")).toBe("echo-0:warm");
   expect((await stateOf(ctx)).borrowedRpcStubs).toBeGreaterThanOrEqual(1);
   expect(await alarmAt(ctx)).not.toBeNull();
@@ -520,7 +521,7 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a DISPOSED live provide stays gone; t
   expect(dropped.rpcStubPagers).toBe(K - 1);
 
   // The K-1 surviving lends arm nothing on their own, so warm one stub: that borrow is what arms
-  // the quiet clock AND what the quiesce then has to return.
+  // the idle deadline AND what the quiesce then has to return.
   expect(await caller.invoke("itx.k0.echo('warm')")).toBe("echo-0:warm");
   expect(await alarmAt(ctx)).not.toBeNull();
   await quiesce(ctx);

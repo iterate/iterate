@@ -12,7 +12,7 @@
 // append boundary (stream/core-processor.ts `normalizeControlEvent`) validates + canonicalizes the
 // literal; no event-builder helper stands between the caller and the event. The pins:
 //
-//   • the QUIET CLOCK's reason to exist: a probe (`itx.facets.get('core').snapshot()`) on a
+//   • the idle deadline's reason to exist: a probe (`itx.facets.get('core').snapshot()`) on a
 //     never-touched ctx MATERIALIZES it (the constructor's `Stream.appendBirthRecord()` writes
 //     created + woken before any door opens) yet arms NO alarm — #lastPinUseMs
 //     arms only when there is something to release (a borrowed rpc stub, an open socket); only
@@ -114,7 +114,7 @@ test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created, wok
     // (the wake commit at 3, the config commit at 5) — offset 6.
     const [mark] = (await instance.append({ type: "mark" })) as unknown as { offset: number }[];
     expect(mark.offset).toBe(6);
-    // The mark is owed to the config worker (insured) until it acks — then nothing is, again.
+    // The mark is owed to the config worker (its 20 s claim) until it acks — then nothing is, again.
     await until("no alarm after the ack", async () => (await state.storage.getAlarm()) === null);
   });
 });
