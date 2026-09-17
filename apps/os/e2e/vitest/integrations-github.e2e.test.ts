@@ -1,3 +1,5 @@
+import { generateKeyPairSync } from "node:crypto";
+import { interceptor } from "@iterate-com/test-support";
 // The GitHub-App installation lane of the integrations model, proven end to
 // end against the deployed dummy-petshop's GitHub-App stand-in. A GitHub App
 // acts *as an installation* by minting a short-lived installation token: sign
@@ -23,7 +25,6 @@
 // Requires a deployed OS (APP_CONFIG_BASE_URL) and a reachable dummy-petshop
 // (the exact PETSHOP_BASE_URL supplied by preview orchestration).
 
-import { generateKeyPairSync } from "node:crypto";
 import { expect, test } from "vitest";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -59,7 +60,7 @@ test.skipIf(shouldSkipPetshopE2e())(
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects.get(`github-${run}`).create({});
+    using project = await interceptor.createProject(itx.projects.get(`github-${run}`));
     await project.__describe();
 
     const connectionPath = `/secrets/integrations/mygithub-${run}/acme`;

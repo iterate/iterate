@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 import { test } from "vitest";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -15,6 +16,10 @@ test(
     using project = session.projects.get(slug).create({}, { waitUntilCreated: false });
     const identity = await project.identity();
     expect(identity).toMatchObject({ slug });
+
+    // Configure only the agent and capability-host processors, never the project
+    // processor whose independent progress this regression checks.
+    await interceptor.configureOnboarding(await project);
 
     // Observer-effect-free probe: waitForEvent talks only to the stream
     // spine, never a processor, so terminal `project/created` arriving proves create's

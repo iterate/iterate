@@ -1,12 +1,14 @@
+import { notesWorkerRef } from "iterate/starter-apps/notes/ref";
 // The notes feature through the real phone-sized web build: the GLOBAL
 // capture composer (visible the moment the project opens — the feature's
 // whole premise), a real capture appended to /notes with no AI in the path,
 // the ✕→📝-pill collapse, the /notes screen's list, search, inline edit and
 // delete confirm, and the 💬 hand-off into a conversation about a note. The title/tags analysis obligation runs server-side and is
-// covered by apps/mobile/e2e/notes.e2e.test.ts (AI-dependent); assertions
+// covered by apps/mobile/e2e/notes.e2e.test.ts with scripted AI; assertions
 // here stick to the note's own text, which is stable whether or not the
 // derived title has landed yet.
 
+import { interceptor } from "@iterate-com/test-support";
 import { expect } from "@playwright/test";
 import { test } from "../test-support/test.ts";
 
@@ -15,6 +17,15 @@ test("captures a note from the global composer and manages it on /notes", async 
   helpers,
 }) => {
   await using fixture = await helpers.createMobileFixture("mobile-notes");
+  await (fixture.itx.workers.get(notesWorkerRef) as any).configure({
+    model: "intercepted/@cf/meta/llama-4-scout-17b-16e-instruct",
+  });
+
+  using _ai = await fixture.itx.ai.intercept((call) =>
+    call.source === "agent-turn"
+      ? interceptor.codemodeBackticksResponse("async () => {}", call)
+      : Response.json({ response: JSON.stringify({ title: "", tags: [] }) }),
+  );
 
   // The composer is already there on the chat-list screen — no navigation
   // between "I opened the app" and "I captured the thought".
@@ -67,13 +78,22 @@ test("captures a note from the global composer and manages it on /notes", async 
   // Send it. This is the step that makes the platform PARSE the derived agent
   // path (create() + message()), so a path it would reject — the note's
   // filename stamp carries an uppercase T and Z — fails here instead of on a
-  // phone. Only the echo of our own message is asserted; whatever the agent
-  // says back is its own business.
+  // phone. Only the echo of our own message is asserted; the intercepted agent
+  // performs no background edits.
   await page.getByLabel("Send").click();
   await page
     .getByText(/About my note/)
     .first()
     .waitFor();
+
+  const agentPath = new URL(page.url()).searchParams.get("path");
+  expect(agentPath).toMatch(/^\/agents\/mobile\/note-/);
+  const request = await fixture.itx.streams.get(agentPath!).waitForEvent({
+    afterOffset: 0,
+    eventTypes: ["events.iterate.com/agent/llm-request-requested"],
+    timeoutMs: 30_000,
+  });
+  expect(request.payload).toMatchObject({ model: expect.stringMatching(/^intercepted\//) });
 
   // The notes screen stayed mounted underneath the pushed chat — its row is
   // still open.

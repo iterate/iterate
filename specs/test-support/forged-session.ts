@@ -91,14 +91,19 @@ export async function createMobileFixture(
     const emailLoginButton = popup.getByTestId("email-login-button");
     await emailLoginButton.waitFor({ state: "visible", timeout: 15_000 }); // timeout: popup page has no spinner-waiter
     await emailLoginButton.click();
-    await signUpWithEmailOtp(popup, {
-      // A constant prefix, NOT the slug: the signup display name embeds this,
-      // and a slug-containing name makes getByText(projectSlug) ambiguous.
-      email: uniqueSignupEmail(slugPrefix),
-      projectSlug,
-    });
-    // Project selection auto-continues for test identities — consent is next.
-    await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
+    // Consent must be clicked while signup observes OS bootstrap: the phone
+    // cannot start the project until OAuth returns to it.
+    await Promise.all([
+      signUpWithEmailOtp(popup, {
+        // A constant prefix, NOT the slug: the signup display name embeds this,
+        // and a slug-containing name makes getByText(projectSlug) ambiguous.
+        email: uniqueSignupEmail(slugPrefix),
+        osBaseUrl,
+        projectSlug,
+      }),
+      // Project selection auto-continues for test identities — consent is next.
+      popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 }), // timeout: popup page has no spinner-waiter
+    ]);
     await page.getByText("New chat").waitFor();
     (page as any).videoMode?.setStartTime();
   }
@@ -253,7 +258,7 @@ export async function createProjectFixture(
  * stack; a spec's project-connection disposal covers them).
  */
 export function createAgentHelper<
-  Agent extends { create(): Promise<any>; append(event: any): Promise<any> },
+  Agent extends { create(): Promise<any>; append(event: any): Promise<any>; stream: any },
 >(input: {
   baseUrl: string;
   projectId: string;
@@ -283,11 +288,8 @@ export function createAgentHelper<
             `unexpected source: ${call.source}, you will need to register a custom ai interceptor for agent turns`,
           );
         }
-        const interceptor = agentTurnInterceptors.get(call.agentPath);
-        if (!interceptor) {
-          throw new Error(`no interceptor registered for agent path: ${call.agentPath}`);
-        }
-        return await interceptor(call);
+        const handler = agentTurnInterceptors.get(call.agentPath);
+        return handler ? handler(call) : interceptor.noOpAgent(call);
       };
       resources.use(await interceptAi(handler));
     }
@@ -372,6 +374,20 @@ export function createAgentHelper<
 
     const responses = new ResponseQueuer();
     await agent.create();
+    // The fixture's config worker selects intercepted models at birth. Wait for
+    // that ordinary configuration before an explicit real-model exception.
+    if (params?.useRealLlm) {
+      await agent.stream.waitForEvent({
+        afterOffset: 0,
+        eventTypes: ["events.iterate.com/agent/configured"],
+        predicate: (event: any) => event.payload.config.llmRequestDebounceMs === 250,
+        timeoutMs: 30_000,
+      });
+      await agent.append({
+        type: "events.iterate.com/agent/configured",
+        payload: { config: { llm: { model: "openai/gpt-5.6-terra" } } },
+      });
+    }
     if (!params?.useRealLlm) {
       await agent.append({
         type: "events.iterate.com/agent/configured",
@@ -445,7 +461,7 @@ async function createAdminProjectAfterPreviewRollout(input: {
   // lifecycle poll is needed. The shared helper retries the initial admin
   // connection while a preview deployment finishes converging.
   using session = await connectPlaywrightAdminItx(input);
-  using created = await session.projects.get(input.slug).create({});
+  using created = await interceptor.createProject(session.projects.get(input.slug));
   const description = await created.__describe();
   const project = { id: description.projectId, slug: input.slug };
 

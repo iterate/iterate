@@ -10,13 +10,19 @@ import {
 } from "../../sdk.ts";
 import { notesRepoPath, notesWorkspacePath } from "./app-ref.ts";
 import { analyzeNoteText } from "./analysis.ts";
-import { NotesProcessor, type NotesState } from "./processor.ts";
+import { NOTES_ANALYSIS_MODEL, NotesProcessor, type NotesState } from "./processor.ts";
 
 export class NotesApp extends StreamProcessorDurableObject<NotesState> {
   protected readonly streamPath = notesWorkspacePath;
   /** The processor owes background work (analysis attempts, the debounced
    * commit) — an eviction must revive and settle, not drop it. */
   protected readonly recovery = true;
+
+  /** Choose the analysis model; persisted so recovery uses the same model. */
+  async configure(input: { model: string }): Promise<void> {
+    if (!input.model.trim()) throw new Error("Notes analysis model must not be empty");
+    this.ctx.storage.kv.put("analysis-model", input.model);
+  }
 
   protected createProcessor(deps: ProcessorHostDeps) {
     return new NotesProcessor({
@@ -25,7 +31,8 @@ export class NotesApp extends StreamProcessorDurableObject<NotesState> {
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       analyze: async (input) => {
         using project = await this.env.ITX.get();
-        return await analyzeNoteText(project.ai, input);
+        const model = this.ctx.storage.kv.get<string>("analysis-model") || NOTES_ANALYSIS_MODEL;
+        return await analyzeNoteText(project.ai, input, model);
       },
       // Each verb opens its own itx session — a stub must not outlive its
       // RPC turn (the facet alarm-proxy pattern).

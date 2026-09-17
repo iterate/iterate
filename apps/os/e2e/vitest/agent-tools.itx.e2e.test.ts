@@ -29,7 +29,7 @@ test(
 
     const marker = crypto.randomUUID().slice(0, 8);
     using project = handle.itx();
-    using _ai = await project.ai.intercept((call) => {
+    using _ai = await interceptor.intercept(project, (call) => {
       if (call.source !== "agent-turn" || call.agentPath !== "/agents/e2e-tools")
         throw new Error(`Unexpected AI request: ${call.source}`);
       return interceptor.codemodeBackticksResponse(
@@ -122,7 +122,7 @@ test(
     });
 
     using project = handle.itx();
-    using _ai = await project.ai.intercept((call) =>
+    using _ai = await interceptor.intercept(project, (call) =>
       call.source === "agent-turn" && call.agentPath === "/agents/e2e-model"
         ? interceptor.codemodeBackticksResponse(
             'async (itx) => { await itx.chat.sendMessage("Hello"); }',

@@ -2676,6 +2676,8 @@ export type CfMarkdownDocument = {
  * hostname for relative links), image description language, PDF metadata
  * exclusion. */
 export type CfMarkdownConversionOptions = {
+  /** Explicitly select the live converter or an intercepted response. */
+  model?: "cloudflare/to-markdown" | "intercepted/cloudflare/to-markdown";
   conversionOptions?: {
     output?: {
       format?: "markdown" | "text";

@@ -1,6 +1,34 @@
+import { interceptor } from "@iterate-com/test-support";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { expect, test, vi } from "vitest";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
+
+test("Markdown conversion uses its explicitly selected intercepted model", async () => {
+  using session = withItxSession();
+  using root = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await interceptor.createProject(
+    root.projects.get(`markdown-intercept-${crypto.randomUUID()}`),
+  );
+  using _ai = await interceptor.intercept(project, (call) => {
+    expect(call).toMatchObject({ source: "ai-run", model: "intercepted/cloudflare/to-markdown" });
+    const documents = call.request.body.documents;
+    const convert = (document: any) => ({
+      name: document.name,
+      format: "markdown",
+      data: "Scripted document",
+    });
+    return Response.json(Array.isArray(documents) ? documents.map(convert) : convert(documents));
+  });
+  const document = { name: "ticket.png", blob: new Uint8Array([1, 2, 3]) };
+  const options = { model: "intercepted/cloudflare/to-markdown" as const };
+  expect(await project.ai.toMarkdown([document], options)).toEqual([
+    { name: "ticket.png", format: "markdown", data: "Scripted document" },
+  ]);
+  await _ai.release();
+  await expect(project.ai.toMarkdown([document], options)).rejects.toThrow(
+    /No AI interceptor installed/,
+  );
+});
 
 // The intercepted/* namespace's ai-run path from very far away: a live handler installed
 // over capnweb serves itx.ai.run("intercepted/…") with a provider response decoded like a real call,
@@ -12,9 +40,11 @@ test("itx.ai.run('intercepted/…') is served by the live interceptor; releasing
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(`ai-intercept-${crypto.randomUUID()}`).create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(`ai-intercept-${crypto.randomUUID()}`),
+  );
 
-  using interception = await project.ai.intercept(async (input) => {
+  using interception = await interceptor.intercept(project, async (input) => {
     return Response.json({ served: input });
   });
 
@@ -36,8 +66,10 @@ test("itx.ai.run('intercepted/…') is served by the live interceptor; releasing
 test("ai.run decodes JSON, preserves binary/SSE streams and raw responses, and rejects HTTP errors", async () => {
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`ai-response-${crypto.randomUUID()}`).create({});
-  using _interception = await project.ai.intercept(async (call) => {
+  using project = await interceptor.createProject(
+    itx.projects.get(`ai-response-${crypto.randomUUID()}`),
+  );
+  using _interception = await interceptor.intercept(project, async (call) => {
     if (call.source !== "ai-run") throw new Error("Expected ai-run source");
     expect(call.request).toMatchObject({
       kind: "workers-ai",
@@ -227,8 +259,10 @@ createFailing(test, /producer should observe cancellation/)(
 test("an interceptor returning a plain object rejects without losing the session", async () => {
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`ai-invalid-${crypto.randomUUID()}`).create({});
-  using _interception = await project.ai.intercept(async (call) => {
+  using project = await interceptor.createProject(
+    itx.projects.get(`ai-invalid-${crypto.randomUUID()}`),
+  );
+  using _interception = await interceptor.intercept(project, async (call) => {
     if (!call.request.body.invalid) return Response.json({ healthy: true });
     return { body: "invalid" } as any;
   });
@@ -246,8 +280,10 @@ createFailing(
 )("an interceptor returning a consumed body rejects without losing the session", async () => {
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`ai-invalid-${crypto.randomUUID()}`).create({});
-  using _interception = await project.ai.intercept(async (call) => {
+  using project = await interceptor.createProject(
+    itx.projects.get(`ai-invalid-${crypto.randomUUID()}`),
+  );
+  using _interception = await interceptor.intercept(project, async (call) => {
     if (!call.request.body.invalid) return Response.json({ healthy: true });
     const response = Response.json({ value: "test" });
     await response.text();
@@ -267,10 +303,12 @@ createFailing(
 )("an interceptor returning a locked body rejects without losing the session", async () => {
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`ai-invalid-${crypto.randomUUID()}`).create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(`ai-invalid-${crypto.randomUUID()}`),
+  );
   const response = Response.json({ value: "test" });
   const lockedReader = response.body!.getReader();
-  using _interception = await project.ai.intercept(async (call) => {
+  using _interception = await interceptor.intercept(project, async (call) => {
     if (!call.request.body.invalid) return Response.json({ healthy: true });
     return response;
   });
@@ -295,7 +333,9 @@ createFailing(
 test("a root stream DO restart closes the installing session with 4901; reconnect + re-install restores interception", async () => {
   using driver = withItxSession();
   using itx = driver.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`ai-intercept-revival-${crypto.randomUUID()}`).create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(`ai-intercept-revival-${crypto.randomUUID()}`),
+  );
   const description = await project.__describe();
 
   const closes: { code: number; reason: string }[] = [];
@@ -304,7 +344,7 @@ test("a root stream DO restart closes the installing session with 4901; reconnec
     onWebSocketClose: (close) => closes.push(close),
   });
   using interceptorProject = interceptorSession.projects.get(description.projectId);
-  using _interception = await interceptorProject.ai.intercept(async ({ model }) =>
+  using _interception = await interceptor.intercept(interceptorProject, async ({ model }) =>
     Response.json({ servedBy: "first install", model }),
   );
   const consultStart = performance.now();
@@ -338,7 +378,7 @@ test("a root stream DO restart closes the installing session with 4901; reconnec
     auth: { type: "admin-secret", secret: adminSecret() },
   });
   using recoveredProject = recoveredSession.projects.get(description.projectId);
-  using _recovered = await recoveredProject.ai.intercept(async () =>
+  using _recovered = await interceptor.intercept(recoveredProject, async () =>
     Response.json({ servedBy: "re-install" }),
   );
   expect(await race(project.ai.run("intercepted/echo", {}), 2000)).toMatchObject({
@@ -351,18 +391,22 @@ test("a root stream DO restart closes the installing session with 4901; reconnec
 test("a newer intercept() supersedes the older one; the older handle's release cannot evict it", async () => {
   using driver = withItxSession();
   using itx = driver.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects
-    .get(`ai-intercept-supersede-${crypto.randomUUID()}`)
-    .create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(`ai-intercept-supersede-${crypto.randomUUID()}`),
+  );
   const description = await project.__describe();
 
   using firstSession = withItxSession({
     auth: { type: "admin-secret", secret: adminSecret() },
   });
   using firstProject = firstSession.projects.get(description.projectId);
-  using first = await firstProject.ai.intercept(async () => Response.json({ servedBy: "first" }));
+  using first = await interceptor.intercept(firstProject, async () =>
+    Response.json({ servedBy: "first" }),
+  );
 
-  using _second = await project.ai.intercept(async () => Response.json({ servedBy: "second" }));
+  using _second = await interceptor.intercept(project, async () =>
+    Response.json({ servedBy: "second" }),
+  );
   expect(await race(project.ai.run("intercepted/echo", {}), 2000)).toMatchObject({
     servedBy: "second",
   });
@@ -379,7 +423,7 @@ async function createStreamInterception() {
   const session = resources.use(withItxSession());
   const itx = resources.use(session.authenticate({ type: "admin-secret", secret: adminSecret() }));
   const project = resources.use(
-    await itx.projects.get(`ai-stream-${crypto.randomUUID()}`).create({}),
+    await interceptor.createProject(itx.projects.get(`ai-stream-${crypto.randomUUID()}`)),
   );
   const description = await project.__describe();
   const provider = resources.use(
@@ -398,7 +442,8 @@ async function createStreamInterception() {
     },
   });
   resources.use(
-    await providerProject.ai.intercept(
+    await interceptor.intercept(
+      providerProject,
       () => new Response(body, { headers: { "content-type": "text/event-stream" } }),
     ),
   );

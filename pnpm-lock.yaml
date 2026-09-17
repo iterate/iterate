@@ -1855,6 +1855,9 @@ importers:
 
   packages/test-support:
     dependencies:
+      capnweb:
+        specifier: npm:@iterate-com/capnweb@0.10.0
+        version: '@iterate-com/capnweb@0.10.0'
       iterate:
         specifier: workspace:*
         version: link:../iterate

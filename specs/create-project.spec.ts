@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 import { expect } from "@playwright/test";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { spinnerWaiter } from "middlewright";
@@ -29,6 +30,7 @@ test("the config template opens a proactive onboarding conversation for a new pr
   );
   const firstSlug = uniqueFixtureSlug("first-project");
   await signUpWithEmailOtp(page, {
+    osBaseUrl: baseURL,
     email: uniqueSignupEmail("create-project"),
     projectSlug: firstSlug,
   });
@@ -72,7 +74,34 @@ test("the config template opens a proactive onboarding conversation for a new pr
   // then handles project/created in userspace and drives this connected OS tab
   // to its own onboarding agent. Manual timeout: cold build + saga + redirect
   // can outlast spinner-waiter's ceiling.
-  await page.getByRole("button", { name: "Create project" }).click();
+  // Observe registration while the real UI creates the project. Configure the
+  // known onboarding caller during the template build, before its first turn.
+  const interceptionReady = (async () => {
+    await expect
+      .poll(
+        async () => {
+          using candidate = admin.projects.get(slug);
+          return await candidate.identity().catch(() => null);
+        },
+        { timeout: 60_000, intervals: [100] }, // timeout: ITX registration has no spinner-waiter UI
+      )
+      .toMatchObject({ slug });
+    const project = admin.projects.get(slug);
+    await interceptor.configureOnboarding(project);
+    return project.ai.intercept((call) => {
+      if (call.source !== "agent-turn" || call.agentPath !== "/agents/onboarding")
+        return interceptor.noOpAgent(call);
+      return interceptor.codemodeBackticksResponse(
+        'async (itx) => { await itx.chat.sendMessage("Welcome. What would you like to build?"); }',
+        call,
+      );
+    });
+  })();
+  const [, interception] = await Promise.all([
+    page.getByRole("button", { name: "Create project" }).click(),
+    interceptionReady,
+  ]);
+  using _ai = interception;
   await page.getByPlaceholder("Message this agent").waitFor({ timeout: 90_000 }); // timeout: cold build and userspace redirect can outlast spinner-waiter's ceiling
   expect(new URL(page.url())).toMatchObject({
     pathname: `/projects/${slug}/agents/streams/agents/onboarding`,
@@ -126,4 +155,10 @@ test("the config template opens a proactive onboarding conversation for a new pr
     /^github:iterate\/iterate#(?:[0-9a-f]{40}&)?path:configs\/with-voice$/,
   );
   expect(promptEvent?.payload?.content).toContain("# Voice Project Onboarding");
+  const requests = await onboardingAgent.stream.getEvents({
+    eventTypes: ["events.iterate.com/agent/llm-request-requested"],
+  });
+  expect(requests.length).toBeGreaterThanOrEqual(2);
+  for (const request of requests)
+    expect(request.payload).toMatchObject({ model: expect.stringMatching(/^intercepted\//) });
 });

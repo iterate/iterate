@@ -64,7 +64,7 @@ async function attemptAgentSmoke(phases: SmokePhase[]): Promise<void> {
     durationMs: Date.now() - connectionStartedAt,
   });
   const createStartedAt = Date.now();
-  using project = await root.projects.get(`agent-smoke-${marker}`).create({});
+  using project = await interceptor.createProject(root.projects.get(`agent-smoke-${marker}`));
   const createMs = Date.now() - createStartedAt;
   phases.push({ name: "create project", category: "fixture", durationMs: createMs });
   const describeStartedAt = Date.now();
@@ -88,7 +88,7 @@ async function attemptAgentSmoke(phases: SmokePhase[]): Promise<void> {
     category: "runtime",
     durationMs: Date.now() - readyStartedAt,
   });
-  using _ai = await project.ai.intercept((call) =>
+  using _ai = await interceptor.intercept(project, (call) =>
     call.source === "agent-turn" && call.agentPath === "/agents/smoke"
       ? interceptor.codemodeBackticksResponse(
           'async (itx) => { await itx.chat.sendMessage("pong"); }',

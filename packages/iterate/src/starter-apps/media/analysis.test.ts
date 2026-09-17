@@ -4,6 +4,52 @@
 import { expect, test } from "vitest";
 import { analyzeMediaImage } from "./analysis.ts";
 
+test("media analysis selects its configured vision and conversion models", async () => {
+  const calls: unknown[] = [];
+  const session = {
+    files: { get: () => ({ bytes: async () => new Uint8Array([1, 2, 3]) }) },
+    ai: {
+      async toMarkdown(document: any, options: any) {
+        calls.push({ document, options });
+        return { format: "markdown", data: "Train ticket" };
+      },
+      async run(model: string, body: any) {
+        calls.push({ model, body });
+        return {
+          response: JSON.stringify({ title: "Train ticket", transcript: "Florence", tags: [] }),
+        };
+      },
+    },
+    integrations: {
+      cf: {
+        images: {
+          transformBytes: async () => {
+            throw new Error("Small image must not resize");
+          },
+        },
+      },
+    },
+  };
+  const models = {
+    model: "intercepted/@cf/meta/llama-4-scout-17b-16e-instruct",
+    markdownModel: "intercepted/cloudflare/to-markdown" as const,
+  };
+  const result = await analyzeMediaImage(
+    session,
+    { path: "/media/ticket.png", filename: "ticket.png", contentType: "image/png" },
+    models,
+  );
+  expect(calls).toMatchObject([
+    { options: { model: models.markdownModel } },
+    { model: models.model },
+  ]);
+  expect(result).toMatchObject({
+    processedBy: models.model,
+    markdown: "Train ticket",
+    transcript: "Florence",
+  });
+});
+
 test("describes, transcribes, and tags: normalized, deduped, chatter-tolerant", async () => {
   const session = fakeSession({
     toMarkdown: { format: "markdown", data: "A train ticket from Rome to Florence.\n" },
@@ -20,11 +66,15 @@ test("describes, transcribes, and tags: normalized, deduped, chatter-tolerant", 
       ],
     },
   });
-  const result = await analyzeMediaImage(session, {
-    path: "/media/abc123-IMG_0001.PNG",
-    filename: "IMG_0001.PNG",
-    contentType: "image/png",
-  });
+  const result = await analyzeMediaImage(
+    session,
+    {
+      path: "/media/abc123-IMG_0001.PNG",
+      filename: "IMG_0001.PNG",
+      contentType: "image/png",
+    },
+    { model: "@cf/meta/llama-4-scout-17b-16e-instruct", markdownModel: "cloudflare/to-markdown" },
+  );
 
   expect(session.calls.bytesPath).toBe("/media/abc123-IMG_0001.PNG");
   expect(session.calls.visionBody.messages[0].content[1].image_url.url).toMatch(
@@ -48,11 +98,15 @@ test("oversized images are downscaled for the vision call only", async () => {
     },
     fileBytes: new Uint8Array(1_500_000),
   });
-  await analyzeMediaImage(session, {
-    path: "/media/big-tall.png",
-    filename: "tall.png",
-    contentType: "image/png",
-  });
+  await analyzeMediaImage(
+    session,
+    {
+      path: "/media/big-tall.png",
+      filename: "tall.png",
+      contentType: "image/png",
+    },
+    { model: "@cf/meta/llama-4-scout-17b-16e-instruct", markdownModel: "cloudflare/to-markdown" },
+  );
 
   expect(session.calls.transformInput).toMatchObject({
     transforms: [{ width: 1280 }],
@@ -69,11 +123,15 @@ test("unparseable vision output degrades to untagged + empty transcript", async 
     toMarkdown: { format: "markdown", data: "desc" },
     visionAnswer: { choices: [{ message: { content: "I could not decide, sorry!" } }] },
   });
-  const result = await analyzeMediaImage(session, {
-    path: "/media/k2-a.png",
-    filename: "a.png",
-    contentType: "image/png",
-  });
+  const result = await analyzeMediaImage(
+    session,
+    {
+      path: "/media/k2-a.png",
+      filename: "a.png",
+      contentType: "image/png",
+    },
+    { model: "@cf/meta/llama-4-scout-17b-16e-instruct", markdownModel: "cloudflare/to-markdown" },
+  );
   expect(result).toMatchObject({ tags: ["untagged"], transcript: "", markdown: "desc" });
 });
 
@@ -83,11 +141,15 @@ test("a conversion error throws — the obligation attempt owns retry/settlement
     visionAnswer: { choices: [{ message: { content: "{}" } }] },
   });
   await expect(
-    analyzeMediaImage(session, {
-      path: "/media/k3-b.png",
-      filename: "b.png",
-      contentType: "image/png",
-    }),
+    analyzeMediaImage(
+      session,
+      {
+        path: "/media/k3-b.png",
+        filename: "b.png",
+        contentType: "image/png",
+      },
+      { model: "@cf/meta/llama-4-scout-17b-16e-instruct", markdownModel: "cloudflare/to-markdown" },
+    ),
   ).rejects.toThrow(/toMarkdown failed for b.png: unsupported/);
 });
 
@@ -96,11 +158,15 @@ test("empty tags array is preserved — conservative no-tags is a valid answer",
     toMarkdown: { format: "markdown", data: "desc" },
     visionAnswer: { choices: [{ message: { content: '{"transcript": "hi", "tags": []}' } }] },
   });
-  const result = await analyzeMediaImage(session, {
-    path: "/media/k4-a.png",
-    filename: "a.png",
-    contentType: "image/png",
-  });
+  const result = await analyzeMediaImage(
+    session,
+    {
+      path: "/media/k4-a.png",
+      filename: "a.png",
+      contentType: "image/png",
+    },
+    { model: "@cf/meta/llama-4-scout-17b-16e-instruct", markdownModel: "cloudflare/to-markdown" },
+  );
   expect(result).toMatchObject({ tags: [], transcript: "hi" });
 });
 
@@ -109,11 +175,15 @@ test("the bare { response } Workers AI answer shape parses too", async () => {
     toMarkdown: { format: "markdown", data: "desc" },
     visionAnswer: { response: '{"title": "plain response", "transcript": "", "tags": []}' },
   });
-  const result = await analyzeMediaImage(session, {
-    path: "/media/k5-a.png",
-    filename: "a.png",
-    contentType: "image/png",
-  });
+  const result = await analyzeMediaImage(
+    session,
+    {
+      path: "/media/k5-a.png",
+      filename: "a.png",
+      contentType: "image/png",
+    },
+    { model: "@cf/meta/llama-4-scout-17b-16e-instruct", markdownModel: "cloudflare/to-markdown" },
+  );
   expect(result).toMatchObject({ title: "plain response" });
 });
 

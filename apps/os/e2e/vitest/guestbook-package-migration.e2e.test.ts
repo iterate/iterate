@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import type { StatefulDynamicWorkerRef } from "iterate/sdk";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -8,9 +9,9 @@ test("the packaged Guestbook adopts state from its former createApp source", asy
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects
-    .get(`guestbook-package-migration-${crypto.randomUUID().slice(0, 8)}`)
-    .create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(`guestbook-package-migration-${crypto.randomUUID().slice(0, 8)}`),
+  );
 
   // Recreate the pre-packaging world. The seeded project worker forwards
   // every committed event to the Guestbook Durable Object with the PACKAGED

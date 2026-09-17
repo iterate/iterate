@@ -3,13 +3,14 @@
 // {title, tags}. Parse defensively — an unparseable answer degrades to an
 // empty title and ["untagged"] so failures stay visible in the list rather
 // than throwing the obligation into a retry loop.
-import { NOTES_ANALYSIS_MODEL, type NotesAnalysis } from "./processor.ts";
+import { type NotesAnalysis } from "./processor.ts";
 
 export async function analyzeNoteText(
   ai: { run: (model: string, body: Record<string, unknown>) => Promise<unknown> },
   input: { text: string },
+  model: string,
 ): Promise<NotesAnalysis> {
-  const answer: any = await ai.run(NOTES_ANALYSIS_MODEL, {
+  const answer: any = await ai.run(model, {
     messages: [{ role: "user", content: `${notesAnalysisPrompt()}\n\nNote:\n${input.text}` }],
     max_tokens: 256,
   });
@@ -44,7 +45,7 @@ export async function analyzeNoteText(
       }
     } catch {}
   }
-  return { title, tags, processedBy: NOTES_ANALYSIS_MODEL };
+  return { title, tags, processedBy: model };
 }
 
 function notesAnalysisPrompt(): string {

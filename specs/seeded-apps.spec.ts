@@ -60,6 +60,7 @@ test("the seeded todo app authenticates a real project member", async ({ baseURL
 
   const slug = uniqueFixtureSlug("todo-app-auth");
   await signUpWithEmailOtp(page, {
+    osBaseUrl: baseURL,
     email: uniqueSignupEmail("todo-app-auth"),
     projectSlug: slug,
   });
@@ -194,6 +195,7 @@ test("undo keeps a peer's shopping-list edit in the seeded Docs app", async ({ b
   );
   const slug = uniqueFixtureSlug("docs-shopping-list");
   await signUpWithEmailOtp(page, {
+    osBaseUrl: baseURL,
     email: uniqueSignupEmail("docs-shopping-list"),
     projectSlug: slug,
   });
@@ -276,6 +278,7 @@ flake("review a workspace document in the seeded Docs app", async ({ baseURL, pa
 
   const slug = uniqueFixtureSlug("docs-app-review");
   await signUpWithEmailOtp(page, {
+    osBaseUrl: baseURL,
     email: uniqueSignupEmail("docs-app-review"),
     projectSlug: slug,
   });

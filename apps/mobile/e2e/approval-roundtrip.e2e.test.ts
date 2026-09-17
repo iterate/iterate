@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 // Live human-in-the-loop egress approval round trip through the phone's own
 // approver code, from Node — mirrors
 // apps/os/e2e/vitest/egress-approvals.e2e.test.ts's "enrolled key" lane but
@@ -53,7 +54,7 @@ test("phone approver: enrolled key signs a real held request and the door releas
   const echo = await startEgressEcho();
   try {
     const slug = `mobile-approver-e2e-${Date.now().toString(36)}`;
-    const project = await adminSession.projects.get(slug).create({});
+    const project = await interceptor.createProject(adminSession.projects.get(slug));
     const projectId = (await project.__describe()).projectId;
     const stream = project.streams.get("/");
     const echoHost = new URL(echo.url).hostname;
@@ -152,7 +153,7 @@ test("phone approver: a rejection refuses the held request without signing anyth
   const echo = await startEgressEcho();
   try {
     const slug = `mobile-approver-reject-e2e-${Date.now().toString(36)}`;
-    const project = await adminSession.projects.get(slug).create({});
+    const project = await interceptor.createProject(adminSession.projects.get(slug));
     const stream = project.streams.get("/");
     const echoHost = new URL(echo.url).hostname;
 

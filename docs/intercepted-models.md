@@ -86,6 +86,45 @@ interceptor.codemodeBackticksResponse(
 Both helpers emit SSE and estimate token usage unless explicit counts are supplied.
 Production interception always consumes a provider-shaped response.
 
+## Automated test projects
+
+Use `interceptor.createProject(session.projects.get(slug))` from
+`@iterate-com/test-support`. It configures `/agents/onboarding` with an
+`intercepted/*` model during bootstrap, mounts a durable no-op agent response,
+and edits **that test project's** `worker.ts` to select an intercepted model
+in its normal newborn-agent configuration event. Production templates and the
+agent host do not change. A test replacing `worker.ts` must keep that explicit
+model setting or configure its agents itself.
+
+Use `interceptor.intercept(project, handler)` for test-specific responses;
+onboarding gets a no-op without consuming the test's scripted replies. Use
+`project.ai.intercept` directly when onboarding itself is under test. Releasing
+a live handler removes it; it does not restore the previous durable handler.
+
+Notes and media select their own analysis models. Configure the app worker
+before capturing data:
+
+```ts
+await project.workers.get(notesWorkerRef).configure({
+  model: "intercepted/@cf/meta/llama-4-scout-17b-16e-instruct",
+});
+await project.workers.get(mediaWorkerRef).configure({
+  model: "intercepted/@cf/meta/llama-4-scout-17b-16e-instruct",
+  markdownModel: "intercepted/cloudflare/to-markdown",
+});
+```
+
+`ai.toMarkdown(documents, { model: "intercepted/cloudflare/to-markdown" })`
+uses the same `ai-run` interceptor. The handler receives
+`request.body.documents` and `request.body.conversionOptions`, and returns the
+usual conversion result (an array for array input). Omitting the model keeps
+Cloudflare's converter.
+
+The bendy-yellow-fruit browser smoke explicitly selects a real model after
+birth configuration. There is no runtime test-project policy or provider
+allowlist: these are caller settings, and the gateway spending cap remains
+the backstop. The live journal assertions detect calls that escaped setup.
+
 ## The lifetime contract
 
 `intercept(handler)` is sugar over the capability machinery: your handler

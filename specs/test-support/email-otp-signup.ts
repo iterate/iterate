@@ -1,4 +1,7 @@
+import { connectItxReady } from "iterate/node";
+import { interceptor } from "@iterate-com/test-support";
 import type { Page } from "@playwright/test";
+import { readOsPlaywrightAuthConfig } from "./auth-config.ts";
 
 /**
  * Real signup through the apps/auth email-OTP lane. Non-production auth
@@ -41,7 +44,7 @@ export async function startEmailOtpSignIn(page: Page) {
  */
 export async function signUpWithEmailOtp(
   page: Page,
-  input: { email: string; projectSlug: string },
+  input: { email: string; projectSlug: string; osBaseUrl: string | undefined },
 ) {
   await page.getByTestId("email-input").fill(input.email);
   await page.getByTestId("email-submit-button").click();
@@ -60,5 +63,41 @@ export async function signUpWithEmailOtp(
   // so the spinner-waiter rides real product UI the whole way.
   await page.getByLabel("Organization name").fill(`Playwright ${input.email.split("@")[0]}`);
   await page.getByLabel("Project slug").fill(input.projectSlug);
-  await page.getByRole("button", { name: "Get started" }).click();
+  if (!input.osBaseUrl) throw new Error("OS base URL is required for signup fixtures");
+  // Auth creates the real directory record. Configure its known onboarding
+  // caller before returning to OS; the browser still starts the real project
+  // bootstrap with its own signed-in identity.
+  const config = readOsPlaywrightAuthConfig();
+  using session = await connectItxReady({
+    baseUrl: input.osBaseUrl,
+    auth: { type: "admin-secret", secret: config.adminApiSecret },
+  });
+  await page.route(
+    "**/api/orpc/project/create",
+    async (route) => {
+      const response = await route.fetch();
+      if (response.ok()) {
+        const result = (await response.json()).json;
+        using project = session.projects.get(result.id);
+        await interceptor.configureOnboarding(project);
+      }
+      await route.fulfill({ response });
+    },
+    { times: 1 },
+  );
+  const [response] = await Promise.all([
+    // timeout: held RPC setup has no spinner-waiter network tracking; match its 30s ceiling.
+    page.waitForResponse("**/api/orpc/project/create", { timeout: 30_000 }),
+    page.getByRole("button", { name: "Get started" }).click(),
+  ]);
+  if (!response.ok()) throw new Error(`Signup project create failed: ${response.status()}`);
+  const result = (await response.json()).json;
+  using project = session.projects.get(result.id);
+  // Observe birth without nudging the project processor: the browser owns it.
+  await project.streams.get("/").waitForEvent({
+    afterOffset: 0,
+    eventTypes: ["events.iterate.com/project/created"],
+    timeoutMs: 60_000,
+  });
+  await interceptor.configureAgentModels(project);
 }

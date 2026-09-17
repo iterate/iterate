@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 // A project-owned integration, end to end: the project implements "ocado"
 // as ordinary code in its own repo and mounts it into the integrations
 // collection with provideCapability({ path: ["integrations", "ocado"] }) —
@@ -29,7 +30,7 @@ test("a project mounts ocado into the collection; connections + secret confineme
       type: "admin-secret",
       secret: adminSecret(),
     });
-    using project = await itx.projects.get(`ocado-${runSuffix}`).create({});
+    using project = await interceptor.createProject(itx.projects.get(`ocado-${runSuffix}`));
     await project.__describe();
     const integrations = project.integrations as any;
 
@@ -192,7 +193,9 @@ test("builtin waitrose: grammar, __describe, and method-miss stay loud", async (
   const runSuffix = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`waitrose-builtin-${runSuffix}`).create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(`waitrose-builtin-${runSuffix}`),
+  );
   await project.__describe();
   const integrations = project.integrations as any;
 
@@ -246,7 +249,7 @@ test.skipIf(shouldSkipPetshopE2e())(
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects.get(`waitrose-live-${runSuffix}`).create({});
+    using project = await interceptor.createProject(itx.projects.get(`waitrose-live-${runSuffix}`));
     await project.__describe();
 
     // The connection secret: the account credential and NOTHING token-shaped.

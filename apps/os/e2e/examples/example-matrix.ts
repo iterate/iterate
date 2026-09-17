@@ -295,11 +295,15 @@ export default class ItxExampleRunner extends WorkerEntrypoint {
     return await Reflect.apply(handler, receiver, args);
   }
 
-  processEventBatch(batch) {
-    // Every project stream delivers its committed events here; the example
-    // runner has nothing to do with them, but must accept the batch so the
-    // streams' delivery checkpoints keep advancing.
-    void batch;
+  async processEventBatch(batch) {
+    using project = await this.env.ITX.get();
+    for (const event of batch.events) {
+      if (event.type !== "events.iterate.com/agent/created" || event.source?.copiedFrom) continue;
+      await project.agents.get(event.path).append({
+        type: "events.iterate.com/agent/configured",
+        payload: { config: { llm: { model: "intercepted/openai/gpt-5.6-terra" }, llmRequestDebounceMs: 250 } },
+      });
+    }
   }
 
   async runItxExample({ id, vars }) {

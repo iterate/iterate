@@ -1,9 +1,10 @@
+import { interceptor } from "@iterate-com/test-support";
 // Slack agent end-to-end smoke (Phase 12): synthetic human webhook -> webhook
 // route (signature-verified, ACK-200 semantics) -> slack router processor ->
 // routed agent stream -> slack-agent transcription -> LLM -> codemode reply
 // whose Slack Web API side effect goes out through the secret-substituting
 // project egress (asserted via the bot-token secret's audit trail — we stop at
-// the outbound attempt; the token is fake, slack.com rejects it).
+// the outbound attempt; the token and Slack responses are scripted).
 //
 // Needs a deployment with Slack integration config (the signing secret) and an
 // admin API secret — both come from the Doppler config the suite runs under.
@@ -42,8 +43,44 @@ test.skipIf(signingSecret === null)(
 
     using session = withItxSession();
     using root = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await root.projects.get(`slack-agent-e2e-${runSuffix}`).create({});
+    using project = await interceptor.createProject(
+      root.projects.get(`slack-agent-e2e-${runSuffix}`),
+    );
     const { projectId } = await project.__describe();
+    using _ai = await interceptor.intercept(project, (call) => {
+      if (call.source !== "agent-turn" || call.agentPath !== agentStreamPath)
+        return interceptor.noOpAgent(call);
+      return interceptor.codemodeBackticksResponse(
+        `async (itx) => {
+        await itx.integrations.slack.get(${JSON.stringify(CONNECTION)}).chat.postMessage({
+          channel: ${JSON.stringify(channel)}, thread_ts: ${JSON.stringify(threadTs)}, text: "Hello from the intercepted Slack agent"
+        });
+      }`,
+        call,
+      );
+    });
+    const outbound: { url: string; authorization: string | null; body: string }[] = [];
+    using _egress = await project.egress.intercept(async (request) => {
+      if (new URL(request.url).hostname !== "slack.com")
+        throw new Error(`Unexpected Slack test egress: ${request.url}`);
+      outbound.push({
+        url: request.url,
+        authorization: request.headers.get("authorization"),
+        body: await request.text(),
+      });
+      return Response.json({ ok: true, channel, ts: threadTs });
+    });
+
+    // Slack's router has no config-worker birth window. Create and configure
+    // this known caller before the webhook; router setup still installs its
+    // Slack binding and reply processor. First-ever router birth is covered
+    // by slack-processor.test.ts, not by this preconfigured-agent smoke.
+    using slackAgent = project.agents.get(agentStreamPath);
+    await slackAgent.create();
+    await slackAgent.append({
+      type: "events.iterate.com/agent/configured",
+      payload: { config: { llm: { model: "intercepted/openai/gpt-5.6-terra" } } },
+    });
 
     // --- Seed a claimed workspace without OAuth: fake bot token secret +
     // connection stream (router subscription + connected fact) + global team
@@ -161,7 +198,7 @@ test.skipIf(signingSecret === null)(
       120_000,
     );
 
-    // Router-created agents are normal agents through the public handle. Their
+    // Router-bound agents are normal agents through the public handle. Their
     // birth event has a source-lifetime suffix on its retry key, so existence
     // must come from reduced agent state rather than one exact key spelling.
     using routedAgent = project.agents.get(agentStreamPath);
@@ -186,6 +223,11 @@ test.skipIf(signingSecret === null)(
       () => `itx script execution on ${agentStreamPath}`,
       120_000,
     );
+    for (const request of withScript.filter(
+      (event) => event.type === "events.iterate.com/agent/llm-request-requested",
+    )) {
+      expect(request.payload).toMatchObject({ model: expect.stringMatching(/^intercepted\//) });
+    }
     const scripts = withScript.filter(
       (event) => event.type === "events.iterate.com/capability-host/script-run-requested",
     );
@@ -193,18 +235,19 @@ test.skipIf(signingSecret === null)(
       scripts.some((event) => ((event.payload as { code?: string }).code ?? "").includes("slack")),
     ).toBe(true);
 
-    // --- Outbound attempt: the Web API side effects (router eyes-ack and/or
-    // the reply's chat.postMessage) traversed project egress and substituted
-    // the bot token secret — its audit trail records the slack.com attempt.
-    // We assert up to this outbound attempt; the fake token cannot go further.
+    // The egress interceptor observes the bot-token reference before substitution.
+    // Secret substitution itself has separate engine contracts; this test proves the routed reply.
     await waitFor(
-      () => secret.__describe(),
-      (description) =>
-        description.audit.usedCount >= 1 &&
-        (description.audit.lastUsedUrl ?? "").startsWith("https://slack.com/api/"),
-      () => "bot token secret outbound usage audit",
-      120_000,
+      async () => outbound,
+      (requests) =>
+        requests.some(
+          (request) => request.url.endsWith("/chat.postMessage") && request.body.includes("Hello"),
+        ),
+      () => "the scripted Slack reply to reach project egress",
     );
+    expect(outbound.find((request) => request.url.endsWith("/chat.postMessage"))).toMatchObject({
+      authorization: `Bearer getSecret("${SLACK_BOT_TOKEN_SECRET_PATH}")`,
+    });
   },
 );
 

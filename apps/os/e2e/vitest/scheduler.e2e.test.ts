@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 // Scheduler e2e: the full loop through a real deployment — itx.scheduler.set
 // arms a Durable Object alarm, the alarm requests a Trigger, the itx script
 // runs in a dynamic worker with project-root authority, and both the outcome
@@ -21,9 +22,9 @@ test("a near-future schedule triggers, runs its itx script, and records the outc
 
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects
-    .get(`scheduler-e2e-${RUN_SUFFIX}-${marker.slice(0, 8)}`)
-    .create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(`scheduler-e2e-${RUN_SUFFIX}-${marker.slice(0, 8)}`),
+  );
 
   const view = await project.scheduler.set({
     key,
@@ -108,9 +109,9 @@ test("manual trigger runs a far-future schedule now; cancel removes it", async (
 
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects
-    .get(`scheduler-manual-e2e-${RUN_SUFFIX}-${marker.slice(0, 8)}`)
-    .create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(`scheduler-manual-e2e-${RUN_SUFFIX}-${marker.slice(0, 8)}`),
+  );
 
   const definition = {
     key,

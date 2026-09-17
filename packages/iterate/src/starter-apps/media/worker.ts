@@ -8,7 +8,7 @@ import {
   type ProcessorHostDeps,
   type StreamEvent,
 } from "../../sdk.ts";
-import { analyzeMediaImage } from "./analysis.ts";
+import { analyzeMediaImage, MEDIA_VISION_MODEL, type MediaModels } from "./analysis.ts";
 import { mediaStreamPath } from "./app-ref.ts";
 import { MediaProcessor, searchMediaItems, type MediaItem, type MediaState } from "./processor.ts";
 
@@ -22,6 +22,18 @@ export class MediaApp extends StreamProcessorDurableObject<MediaState> {
   /** Analysis obligations must survive eviction: the keepalive revives this
    * DO and the caught-up pass restarts still-open work from reduced state. */
   protected override readonly recovery = true;
+  /** Persist model choices so background retries and eviction keep the same providers. */
+  async configure(models: MediaModels): Promise<void> {
+    if (!models.model.trim()) throw new Error("Media vision model must not be empty");
+    if (
+      !["cloudflare/to-markdown", "intercepted/cloudflare/to-markdown"].includes(
+        models.markdownModel,
+      )
+    )
+      throw new Error("Unknown Markdown conversion model");
+    this.ctx.storage.kv.put("analysis-models", models);
+  }
+
   protected createProcessor(deps: ProcessorHostDeps) {
     return new MediaProcessor({
       ...deps,
@@ -29,7 +41,11 @@ export class MediaApp extends StreamProcessorDurableObject<MediaState> {
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       analyze: async (input) => {
         using project = await this.env.ITX.get();
-        return await analyzeMediaImage(project, input);
+        const models = this.ctx.storage.kv.get<MediaModels>("analysis-models") || {
+          model: MEDIA_VISION_MODEL,
+          markdownModel: "cloudflare/to-markdown",
+        };
+        return await analyzeMediaImage(project, input, models);
       },
     });
   }

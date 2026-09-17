@@ -50,10 +50,21 @@ function createSessionStub() {
   const session = {
     projects: {
       get: () => ({
+        provideCapability: async () => ({}),
         create: () => {
           const projectId = `project-${createdProjectIds.length + 1}`;
           createdProjectIds.push(projectId);
           return {
+            provideCapability: async () => ({}),
+            capabilityHost: { create: async () => {} },
+            agents: { get: () => ({ create: async () => {}, append: async () => {} }) },
+            waitUntilCreated: async () => {},
+            repo: {
+              readFile: async () => ({
+                content:
+                  'payload: { config: { llm: { model: "intercepted/openai/gpt-5.6-terra" }, llmRequestDebounceMs: 250 } },',
+              }),
+            },
             async __describe() {
               return { projectId };
             },

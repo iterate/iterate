@@ -11,6 +11,8 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { notesWorkerRef } from "iterate/starter-apps/notes/ref";
+import { interceptor } from "@iterate-com/test-support";
 import { test } from "../test-support/test.ts";
 
 test("attaches a recent photo to a note through the shared attachment sheet", async ({
@@ -19,6 +21,15 @@ test("attaches a recent photo to a note through the shared attachment sheet", as
 }) => {
   await page.addInitScript(fixturePhotoLibrary());
   await using fixture = await helpers.createMobileFixture("mobile-roll");
+  await (fixture.itx.workers.get(notesWorkerRef) as any).configure({
+    model: "intercepted/@cf/meta/llama-4-scout-17b-16e-instruct",
+  });
+
+  using _ai = await fixture.itx.ai.intercept((call) =>
+    call.source === "agent-turn"
+      ? interceptor.codemodeBackticksResponse("async () => {}", call)
+      : Response.json({ response: JSON.stringify({ title: "", transcript: "", tags: [] }) }),
+  );
 
   // The + on the note composer opens the same attachment sheet chat has.
   await page.getByText(`→ /notes in ${fixture.projectSlug}`).waitFor();

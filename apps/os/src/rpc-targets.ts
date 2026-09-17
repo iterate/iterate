@@ -3527,6 +3527,15 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
       return env.AI.toMarkdown().supported();
     }
     const [documents, options] = args;
+    if (options?.model === "intercepted/cloudflare/to-markdown") {
+      return this.run<CfMarkdownConversionResult | CfMarkdownConversionResult[]>(options.model, {
+        documents,
+        conversionOptions: options.conversionOptions,
+      });
+    }
+    if (options?.model && options.model !== "cloudflare/to-markdown") {
+      throw new Error(`Unknown Markdown conversion model: ${options.model}`);
+    }
     // Blob cannot cross the capnweb hop from script sandboxes, so `blob`
     // accepts the whole FileData union and the Blob is minted here.
     const coerce = async (document: CfMarkdownDocument) => ({
@@ -3541,7 +3550,8 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
     const coerced = Array.isArray(documents)
       ? await Promise.all(documents.map(coerce))
       : await coerce(documents);
-    return env.AI.toMarkdown(coerced as never, options as never) as Promise<
+    const conversionOptions = options && { conversionOptions: options.conversionOptions };
+    return env.AI.toMarkdown(coerced as never, conversionOptions as never) as Promise<
       CfMarkdownConversionResult | CfMarkdownConversionResult[]
     >;
   }

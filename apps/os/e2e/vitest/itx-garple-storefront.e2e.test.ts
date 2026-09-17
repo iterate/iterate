@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { connectItx } from "iterate/node";
@@ -83,14 +84,12 @@ test(
     const slug = uniqueFixtureSlug("garple-storefront");
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects.get(slug).create({});
+    using project = await interceptor.createProject(itx.projects.get(slug));
     await project.__describe();
 
     // 1. The website: Garple's project worker replaces the seeded template's
     //    BEFORE the agent is born, so the template's config worker never
-    //    touches it (it would lower the model debounce and let the deployed
-    //    preview's real provider take turns of its own — this test injects
-    //    every model turn).
+    //    lowers its debounce — this test injects every model turn directly.
     await project.repo.commitFiles({
       changes: [
         { content: serveItxSourceForProjectRepo(), path: "serve-itx.ts" },
@@ -109,7 +108,12 @@ test(
     await agent.append({
       type: "events.iterate.com/agent/configured",
       idempotencyKey: `garple/no-provider-turns:${crypto.randomUUID()}`,
-      payload: { config: { llmRequestDebounceMs: 3_600_000 } },
+      payload: {
+        config: {
+          llm: { model: "intercepted/openai/gpt-5.6-terra" },
+          llmRequestDebounceMs: 3_600_000,
+        },
+      },
     });
     await expect(
       (async () => {

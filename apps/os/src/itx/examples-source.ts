@@ -1758,7 +1758,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     e2eProven: false,
     title: "Search captured media (screenshots/photos) by content",
     description:
-      "The mobile app's Media screen captures screenshots and photos into project file storage and appends events.iterate.com/media/captured onto the /media stream (re-analyses append events.iterate.com/media/processed; the LATEST processed payload per stableKey supersedes the captured one). Each payload carries a vision-model description (markdown), a verbatim OCR transcript (transcript), tags, and the itx.files path holding the bytes — a media file's path is /media/<sha256>-<original-filename>, one flat content-addressed namespace. To answer questions like 'find my train ticket screenshot', FIRST try itx.media.search({ q }) — projects whose config worker mounts the MediaApp get that dotted surface with the same semantics and signed URLs. This script is the fallback when the mount is absent: read the stream, overlay processed results, filter over the text fields, and mint signed URLs with itx.files.get(path).url().",
+      "The mobile app's Media screen captures screenshots and photos into project file storage and appends events.iterate.com/media/uploaded onto the /media stream (analysis appends events.iterate.com/media/processed; the latest processed payload per stableKey supplies its text and tags; older captures use media/captured). Each payload carries a vision-model description (markdown), a verbatim OCR transcript (transcript), tags, and the itx.files path holding the bytes — a media file's path is /media/<sha256>-<original-filename>, one flat content-addressed namespace. To answer questions like 'find my train ticket screenshot', FIRST try itx.media.search({ q }) — projects whose config worker mounts the MediaApp get that dotted surface with the same semantics and signed URLs. This script is the fallback when the mount is absent: read the stream, overlay processed results, filter over the text fields, and mint signed URLs with itx.files.get(path).url().",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { query?: string }) => {
       const query = (vars.query ?? "ticket").toLowerCase();
@@ -1768,7 +1768,11 @@ export default class ProjectWorker extends WorkerEntrypoint {
       while (true) {
         const page = await itx.streams.get("/media").getEvents({
           afterOffset: cursor,
-          eventTypes: ["events.iterate.com/media/captured", "events.iterate.com/media/processed"],
+          eventTypes: [
+            "events.iterate.com/media/uploaded",
+            "events.iterate.com/media/captured",
+            "events.iterate.com/media/processed",
+          ],
         });
         if (page.length === 0) break;
         events.push(...page);
@@ -1785,10 +1789,17 @@ export default class ProjectWorker extends WorkerEntrypoint {
         }
       }
       const items = events
-        .filter((event) => event.type.endsWith("/captured"))
+        .filter((event) => event.type.endsWith("/captured") || event.type.endsWith("/uploaded"))
         .map((event) => {
           const captured = event.payload || {};
-          return { ...captured, ...processed.get(captured.stableKey) };
+          // An upload may still be waiting for analysis. Its filename remains searchable.
+          return {
+            markdown: "",
+            transcript: "",
+            tags: [],
+            ...captured,
+            ...processed.get(captured.stableKey),
+          };
         });
 
       const hits = items.filter((item) =>

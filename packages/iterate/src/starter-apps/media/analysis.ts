@@ -9,7 +9,7 @@
 // MEDIA_TAGS) kept in sync by hand, same convention as search semantics.
 
 /** Sees the pixels: transcribes text verbatim and picks tags. */
-const MEDIA_VISION_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
+export const MEDIA_VISION_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
 
 /**
  * Starter taxonomy — expect churn. Multi-tag with overlap allowed; the model
@@ -40,6 +40,11 @@ export type MediaAnalysisResult = {
   processedBy: string;
 };
 
+export type MediaModels = {
+  model: string;
+  markdownModel: "cloudflare/to-markdown" | "intercepted/cloudflare/to-markdown";
+};
+
 /**
  * The itx slice the pipeline dials — structural on purpose so the real
  * `Project` session satisfies it and tests hand in a plain fake.
@@ -47,10 +52,13 @@ export type MediaAnalysisResult = {
 type MediaAnalysisSession = {
   files: { get(path: string): { bytes(): Promise<Uint8Array> } };
   ai: {
-    toMarkdown(document: {
-      name: string;
-      blob: Uint8Array;
-    }): Promise<{ format: string; data?: string; error?: string }>;
+    toMarkdown(
+      document: {
+        name: string;
+        blob: Uint8Array;
+      },
+      options: { model: MediaModels["markdownModel"] },
+    ): Promise<{ format: string; data?: string; error?: string }>;
     run(model: string, body: unknown): Promise<unknown>;
   };
   integrations: {
@@ -72,14 +80,19 @@ type MediaAnalysisSession = {
  * unparseable vision answer degrades to empty title/transcript and
  * ["untagged"] so failures stay visible instead of hiding an item.
  */
+
 export async function analyzeMediaImage(
   session: MediaAnalysisSession,
   input: { path: string; filename: string; contentType: string },
+  models: MediaModels,
 ): Promise<MediaAnalysisResult> {
   // blob takes raw bytes (a Blob cannot cross the RPC boundary); the
   // extension in `name` picks the converter.
   const bytes = await session.files.get(input.path).bytes();
-  const described = await session.ai.toMarkdown({ name: input.filename, blob: bytes });
+  const described = await session.ai.toMarkdown(
+    { name: input.filename, blob: bytes },
+    { model: models.markdownModel },
+  );
   if (described.format === "error") {
     throw new Error(`toMarkdown failed for ${input.filename}: ${described.error}`);
   }
@@ -110,7 +123,7 @@ export async function analyzeMediaImage(
   for (let i = 0; i < visionBytes.length; i += 32_768) {
     binary += String.fromCharCode(...visionBytes.subarray(i, i + 32_768));
   }
-  const answer = await session.ai.run(MEDIA_VISION_MODEL, {
+  const answer = await session.ai.run(models.model, {
     messages: [
       {
         role: "user",
@@ -125,7 +138,7 @@ export async function analyzeMediaImage(
     ],
     max_tokens: 1024,
   });
-  return { ...parseVisionAnswer(visionAnswerText(answer)), markdown };
+  return { ...parseVisionAnswer(visionAnswerText(answer)), markdown, processedBy: models.model };
 }
 
 /** Both Workers AI answer shapes: `{ response }` and OpenAI-style choices. */
@@ -140,7 +153,7 @@ function visionAnswerText(answer: unknown): string {
 }
 
 /** Extract the JSON object from a chatty model answer, defensively. */
-function parseVisionAnswer(text: string): Omit<MediaAnalysisResult, "markdown"> {
+function parseVisionAnswer(text: string): Omit<MediaAnalysisResult, "markdown" | "processedBy"> {
   let title = "";
   let transcript = "";
   let tags = ["untagged"];
@@ -172,7 +185,7 @@ function parseVisionAnswer(text: string): Omit<MediaAnalysisResult, "markdown"> 
       }
     } catch {}
   }
-  return { title, transcript, tags, processedBy: MEDIA_VISION_MODEL };
+  return { title, transcript, tags };
 }
 
 function mediaVisionPrompt(): string {

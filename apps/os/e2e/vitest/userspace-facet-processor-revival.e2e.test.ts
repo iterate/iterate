@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import type { StreamEventInput } from "iterate/processors";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
@@ -143,9 +144,9 @@ test(
   async () => {
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects
-      .get(`facet-revival-${crypto.randomUUID().slice(0, 8)}`)
-      .create({});
+    using project = await interceptor.createProject(
+      itx.projects.get(`facet-revival-${crypto.randomUUID().slice(0, 8)}`),
+    );
     await project.projectId;
 
     const streamPath = "/slow";

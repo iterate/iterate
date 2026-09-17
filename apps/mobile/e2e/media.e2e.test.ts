@@ -7,13 +7,15 @@
 // IMAGE input to itx.ai.toMarkdown works (the cf-ai-to-markdown example only
 // exercises CSV/HTML and is e2eProven: false). The fixture
 // (e2e/fixtures/ticket.png) renders "Train to Florence / Seat 21A", so the
-// transcript assertion is a real full-text OCR check, not just shape.
+// transcript is scripted: this proves the capture/analysis plumbing, not OCR quality.
 //
 //   doppler run --config dev -- pnpm --dir apps/mobile test:e2e   # local dev (pnpm dev must be running)
 
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { mediaWorkerRef } from "iterate/starter-apps/media/ref";
+import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import { connectItx } from "iterate/node";
 import { mintForgedAccessToken } from "../../../scripts/auth/forge-token.ts";
@@ -34,7 +36,7 @@ test("media upload: bytes → uploaded event → server-side analysis settles a 
     auth: { type: "admin-secret", secret: requireEnv("APP_CONFIG_ADMIN_API_SECRET") },
   });
   const slug = `mobile-media-e2e-${Date.now().toString(36)}`;
-  const created = await adminSession.projects.get(slug).create({});
+  const created = await interceptor.createProject(adminSession.projects.get(slug));
   const { projectId } = await created.__describe();
 
   const token = await mintForgedAccessToken({
@@ -45,6 +47,29 @@ test("media upload: bytes → uploaded event → server-side analysis settles a 
     admin: true,
   });
   using project = connectItx({ baseUrl, auth: { type: "bearer", token }, projectId });
+  await (project.workers.get(mediaWorkerRef) as any).configure({
+    model: "intercepted/@cf/meta/llama-4-scout-17b-16e-instruct",
+    markdownModel: "intercepted/cloudflare/to-markdown",
+  });
+
+  using _ai = await interceptor.intercept(project, (call) => {
+    if (call.source === "agent-turn") return interceptor.noOpAgent(call);
+    if (call.model === "intercepted/cloudflare/to-markdown") {
+      return Response.json({ format: "markdown", data: "A train ticket to Florence." });
+    }
+    expect(call).toMatchObject({
+      source: "ai-run",
+      model: "intercepted/@cf/meta/llama-4-scout-17b-16e-instruct",
+    });
+    expect(JSON.stringify(call.request.body)).toContain("data:image/");
+    return Response.json({
+      response: JSON.stringify({
+        title: "Train ticket",
+        transcript: "Train to Florence Seat 21A",
+        tags: ["logistics"],
+      }),
+    });
+  });
 
   // The screen's exact sequence: hash → put bytes → append uploaded.
   const png = readFileSync(resolve(import.meta.dirname, "fixtures/ticket.png"));
@@ -89,10 +114,9 @@ test("media upload: bytes → uploaded event → server-side analysis settles a 
     stableKey,
     error: null,
     requestOffset: uploaded!.offset,
-    processedBy: expect.stringContaining("@cf/"),
+    processedBy: "intercepted/@cf/meta/llama-4-scout-17b-16e-instruct",
   });
-  // The vision models actually read the image: the description says
-  // SOMETHING, and the transcript contains the rendered ticket text.
+  // Scripted provider output survives parsing, settlement and the public read.
   expect(processed.payload.markdown.length).toBeGreaterThan(0);
   expect(processed.payload.transcript.toLowerCase()).toContain("florence");
   expect(Array.isArray(processed.payload.tags)).toBe(true);
