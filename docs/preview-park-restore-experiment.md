@@ -6,8 +6,8 @@ The experiment works: tests can finish green while the preview is retired and
 restored. The successful run took 18.2s to retire test data and 45.1s to restore
 the apps; its preview check became green 72s before the job finished. Deliberate
 failure and cancellation probes changed an early green check back to non-green.
-The separate repository Test check remains red because of an existing expired
-parked-test review date, described below.
+After merging main at `ca226f195`, all checks passed, including the previously
+blocked repository Test check.
 
 ## Behavior
 
@@ -116,9 +116,8 @@ bounded observation, not a guarantee for every workload or instance type.
 - Scripts: 360 tests passed, including lifecycle order, result identity and
   authoritative lease targeting. Typecheck, lint, knip and formatting passed.
   All packages other than the lint package passed their tests independently.
-- The repository Test check fails because `specs/repo-ide-jsonc.spec.ts` has a
-  parked-test review date of 2026-09-16. It reproduces independently of this
-  change. This experiment neither hides nor extends it.
+- The original expired parked-test failure was fixed on main. All checks on
+  `ca226f195` passed after merging main into this branch.
 - Independent review corrected two safety bugs: restoration checks must follow
   retirement, and deployment config must come from the semaphore lease rather
   than editable PR state. Refused restoration now also publishes a parked notice.
@@ -133,3 +132,21 @@ bounded observation, not a guarantee for every workload or instance type.
   finishes. Existing slot reclamation and reset-on-acquire remain necessary.
 - Retained container namespaces still need the existing cleanup strategy; this
   experiment does not solve their retirement limitation.
+
+## Time to green in traces
+
+The primary trace statistic now measures from the workflow execution's start to
+GitHub acknowledging its early-green update. Workflow wall time remains beside
+it, and the trace still includes the full cleanup/restoration period. The marker
+is an OTLP event on the workflow span, with its evidence and elapsed milliseconds.
+
+For the successful run above, this is **5m 36s to green**, versus **6m 50s total**.
+Historical runs use the measured end of the successful early-green step; here it
+was 20ms after the logged GitHub acknowledgement. Without an early update, a
+successful workflow uses its completion time. Failed/cancelled runs retain any
+observed green milestone and show their final outcome; otherwise no green time
+is recorded. A rerun cannot inherit a milestone from an earlier execution.
+
+This measures the preview workflow, not every check on the commit. Scripts tests
+(369), typecheck, scoped lint and formatting passed. Desktop/mobile browser
+checks of the regenerated trace showed the expected timings and no console errors.

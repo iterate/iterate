@@ -4,64 +4,6 @@ import { z } from "zod";
 
 /** GitHub milestones, guarded by Depot job liveness. Run with trpc-cli. */
 export default class CiStatus {
-  /** Mark this job's GitHub check green while it continues; Depot owns its final outcome. */
-  async setPendingCheckGreen(summary: string) {
-    const workflow = await this.workflow();
-    if (workflow.jobs.find((job) => job.jobId === this.jobId)?.status !== "running")
-      throw new Error("This Depot job is no longer running");
-    if (workflow.jobs.some((job) => job.jobId !== this.jobId && job.status !== "finished"))
-      throw new Error("Cannot publish success before every other job has succeeded");
-    const checks = [];
-    for (let page = 1; ; page++) {
-      const { check_runs } = CheckRuns.parse(
-        await this.request(
-          "github",
-          `/repos/${this.env.GITHUB_REPOSITORY}/commits/${this.env.CI_HEAD_SHA}/check-runs?filter=all&per_page=100&page=${page}`,
-          null,
-        ),
-      );
-      checks.push(...check_runs);
-      if (check_runs.length < 100) break;
-    }
-    const matches = checks.filter((check) => {
-      if (check.app?.slug !== "depot-code-access" || !check.details_url) return false;
-      const url = new URL(check.details_url);
-      return (
-        url.origin === "https://depot.dev" &&
-        url.pathname === `/orgs/${this.org}/workflows/${this.workflowId}` &&
-        url.searchParams.get("job") === this.jobId
-      );
-    });
-    if (matches.length !== 1 || matches[0].status !== "in_progress")
-      throw new Error("Expected one running GitHub check for this exact Depot job");
-    const check = matches[0];
-    const response = await fetch(
-      `https://api.github.com/repos/${this.env.GITHUB_REPOSITORY}/check-runs/${check.id}`,
-      {
-        method: "PATCH",
-        headers: {
-          authorization: `Bearer ${this.env.GITHUB_TOKEN}`,
-          accept: "application/vnd.github+json",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          status: "completed",
-          conclusion: "success",
-          output: {
-            title: "Check marked successful",
-            summary,
-          },
-        }),
-        signal: AbortSignal.any([this.signal, AbortSignal.timeout(15_000)]),
-      },
-    );
-    if (!response.ok) throw new Error(`Updating own GitHub check returned HTTP ${response.status}`);
-    console.log(
-      `[ci:status] check ${check.id} set green at ${new Date().toISOString()}; job continues`,
-    );
-    return { checkId: check.id };
-  }
-
   private env = z
     .object({
       DEPOT_CI_TELEMETRY_TOKEN: z.string().min(1),
@@ -170,6 +112,69 @@ export default class CiStatus {
       }
       await delay(5_000, undefined, { signal: this.signal });
     }
+  }
+
+  /** Mark this job's GitHub check green while it continues; Depot owns its final outcome. */
+  async setPendingCheckGreen(summary: string) {
+    const workflow = await this.workflow();
+    if (workflow.jobs.find((job) => job.jobId === this.jobId)?.status !== "running")
+      throw new Error("This Depot job is no longer running");
+    if (workflow.jobs.some((job) => job.jobId !== this.jobId && job.status !== "finished"))
+      throw new Error("Cannot publish success before every other job has succeeded");
+    const checks = [];
+    for (let page = 1; ; page++) {
+      const { check_runs } = CheckRuns.parse(
+        await this.request(
+          "github",
+          `/repos/${this.env.GITHUB_REPOSITORY}/commits/${this.env.CI_HEAD_SHA}/check-runs?filter=all&per_page=100&page=${page}`,
+          null,
+        ),
+      );
+      checks.push(...check_runs);
+      if (check_runs.length < 100) break;
+    }
+    const matches = checks.filter((check) => {
+      if (check.app?.slug !== "depot-code-access" || !check.details_url) return false;
+      const url = new URL(check.details_url);
+      return (
+        url.origin === "https://depot.dev" &&
+        url.pathname === `/orgs/${this.org}/workflows/${this.workflowId}` &&
+        url.searchParams.get("job") === this.jobId
+      );
+    });
+    if (matches.length !== 1 || matches[0].status !== "in_progress")
+      throw new Error("Expected one running GitHub check for this exact Depot job");
+    const check = matches[0];
+    const response = await fetch(
+      `https://api.github.com/repos/${this.env.GITHUB_REPOSITORY}/check-runs/${check.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          authorization: `Bearer ${this.env.GITHUB_TOKEN}`,
+          accept: "application/vnd.github+json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          status: "completed",
+          conclusion: "success",
+          output: {
+            title: "Check marked successful",
+            summary,
+          },
+        }),
+        signal: AbortSignal.any([this.signal, AbortSignal.timeout(15_000)]),
+      },
+    );
+    if (!response.ok) throw new Error(`Updating own GitHub check returned HTTP ${response.status}`);
+    const greenAt = Date.now();
+    if (process.env.CI_TRACE_ENABLED === "1")
+      console.log(
+        `\n@@ci-trace ${JSON.stringify({ kind: "check-green", time: greenAt, checkId: check.id })}`,
+      );
+    console.log(
+      `[ci:status] check ${check.id} set green at ${new Date(greenAt).toISOString()}; job continues`,
+    );
+    return { checkId: check.id };
   }
 
   private async workflow() {

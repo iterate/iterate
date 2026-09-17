@@ -404,11 +404,13 @@ export const PromptInputActionAddAttachments = ({
 }: PromptInputActionAddAttachmentsProps) => {
   const attachments = usePromptInputAttachments();
 
+  // Base UI menu items fire `onClick` (Radix's `onSelect` is not a prop here). The dialog opens
+  // synchronously inside the click, which mobile browsers require of a file input.
   return (
     <DropdownMenuItem
       {...props}
-      onSelect={(e) => {
-        e.preventDefault();
+      onClick={(event) => {
+        props.onClick?.(event);
         attachments.openFileDialog();
       }}
     >

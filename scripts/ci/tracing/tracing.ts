@@ -94,6 +94,7 @@ export function assembleTrace(
   const spans: Span[] = [];
   const rootStart = Date.parse(execution.createdAt);
   const rootEnd = Date.parse(workflow.workflowFinishedAt);
+  const greenSignals: { time: number; evidence: string }[] = [];
   const add = (
     id: string,
     parentSpanId: string,
@@ -208,6 +209,17 @@ export function assembleTrace(
       const shellEnds = new Map(
         events.filter((event) => event.kind === "shell-end").map((event) => [event.id, event]),
       );
+      const green = events.find((event) => event.kind === "check-green");
+      if (green) {
+        greenSignals.push({ time: green.time, evidence: "GitHub check update acknowledged" });
+      } else if (key === "finish") {
+        // Historical runs predate the explicit marker. A successful end of
+        // the early-green step bounds the acknowledgement a few ms earlier.
+        const publish = shells.find((event) => event.step === "tests_passed");
+        const done = publish && shellEnds.get(publish.id);
+        if (done?.exitCode === 0)
+          greenSignals.push({ time: done.time, evidence: "Successful early-green step end" });
+      }
       const testEnds = new Map(
         events.filter((event) => event.kind === "test-end").map((event) => [event.id, event]),
       );
@@ -338,6 +350,30 @@ export function assembleTrace(
       }
     }
   }
+  const firstGreen = greenSignals
+    .filter((signal) => signal.time >= rootStart && signal.time <= rootEnd)
+    .sort((a, b) => a.time - b.time)[0];
+  // Without early completion, a successful workflow goes green at its end.
+  // Failed/cancelled workflows have no green time unless one was observed.
+  const green =
+    firstGreen ||
+    (workflow.workflowStatus === "finished"
+      ? { time: rootEnd, evidence: "Successful workflow completion" }
+      : null);
+  if (green) {
+    const workflowSpan = spans[0];
+    workflowSpan.attributes.push(
+      { key: "ci.time_to_green_ms", value: { stringValue: String(green.time - rootStart) } },
+      { key: "ci.green.evidence", value: { stringValue: green.evidence } },
+    );
+    workflowSpan.events = [
+      {
+        name: "ci.check.green",
+        timeUnixNano: (BigInt(Math.round(green.time * 1000)) * 1000n).toString(),
+        attributes: [{ key: "ci.evidence", value: { stringValue: green.evidence } }],
+      },
+    ];
+  }
   return {
     resourceSpans: [
       {
@@ -393,6 +429,11 @@ type Span = {
   startTimeUnixNano: string;
   endTimeUnixNano: string;
   attributes: { key: string; value: { stringValue: string } }[];
+  events?: {
+    name: string;
+    timeUnixNano: string;
+    attributes: { key: string; value: { stringValue: string } }[];
+  }[];
   status: { code: number };
 };
 
@@ -431,6 +472,11 @@ export const Workflow = z.object({
 });
 
 const TraceEvent = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("check-green"),
+    time: z.number().finite(),
+    checkId: z.number().int().positive(),
+  }),
   z.object({
     kind: z.literal("span-start"),
     id: z.string(),
