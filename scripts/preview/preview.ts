@@ -84,7 +84,9 @@ type PreviewCommandOptions = {
 // deployment-age gate. Apps still start concurrently; long suites can overlap
 // independent setup with this clock while short DO suites wait at their own
 // boundary, so the gate does not serialize the fleet.
-const previewMinimumDeploymentAgeMs = 90_000;
+// Experiment candidate; fresh-deployment evidence is tracked in
+// tasks/rollout-delay-experiment.md. Keep version checks and smoke unchanged.
+const previewMinimumDeploymentAgeMs = 0;
 const previewRolloutRemainingSecondsEnvironment = "PREVIEW_APP_ROLLOUT_REMAINING_SECONDS";
 
 type DeployCommandOptions = PreviewCommandOptions & {

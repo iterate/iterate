@@ -5,7 +5,8 @@ size: medium
 
 # Find the shortest defensible preview rollout delay
 
-Status: experiment specified; implementation and fresh-deployment trials remain.
+Status: branch and timing instrumentation ready; 90-second control dispatched,
+zero-delay candidate under test. Fresh-deployment evidence remains to collect.
 Five recent main smoke runs averaged 114.7 seconds, including 85.6 seconds
 waiting for the fixed 90-second deployment-age boundary.
 
@@ -54,6 +55,11 @@ permission to claim reliability from a few green smoke tests.
 
 ## Implementation log
 
+- Control revision `758ccc78a`, package build [35264059614](https://github.com/iterate/iterate/actions/runs/35264059614)
+  succeeded; fresh control dispatch `4s9c5w1gmf` uses the unchanged 90-second gate.
+- Zero-delay spec failed as expected (`expected 90 to be 0`) before the constant
+  changed. This candidate removes only the artificial deployment-age delay;
+  exact-version health checks and the agent smoke prerequisite stay enabled.
 - The initial setup dispatch `zl16nw5xv4` used the specification-only commit.
   Feature branches without PRs do not publish their SDK packages automatically,
   so this cannot serve as the control. Added an experiment-only push trigger to
