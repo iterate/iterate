@@ -1,32 +1,34 @@
-// /_auth/account — a control-plane page driven ENTIRELY by the React LiveState hook. No loader
-// re-fetch, no manual refresh: the account view (the user's authentications) is `session.user`'s
+// console/account.tsx — /account: a control-plane page driven ENTIRELY by the React LiveState hook.
+// No re-fetch, no manual refresh: the account view (the user's authentications) is `session.user`'s
 // live facet — a sign-in appears the instant the platform's fact is reduced and the delta streams
 // back. This is the "just use LiveState" proof: the whole page is `useLiveState(session.user, …)`.
-// (_auth is ssr:false, so this is client-only, which is exactly what a live WebSocket view wants.)
 // Access enforcement is deferred — see the control-plane security spec's expected-fails.
-import { createFileRoute } from "@tanstack/react-router";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
+import type { AuthenticatedApp } from "iterate/next/app";
 import { useLiveState } from "iterate/next/react";
-import { useItx } from "../-itx.tsx";
-import { AccountContract, AccountView } from "../../account/contract.ts";
+import { AccountContract, AccountView } from "../account/contract.ts";
 
-export const Route = createFileRoute("/_auth/account")({
+export function AccountPage({ app }: { app: AuthenticatedApp }) {
+  const { api } = app;
+  const userItx = useMemo(() => api.user, [api]);
   // Host the account processor on the user's own context before the page reads its live view. The
   // client installing its own processor is fine for the shape; a platform-owned install path is
-  // deferred with the enforcement.
-  loader: async ({ context }) => {
-    await context.api.user.processors.enable("account", {
-      consumes: [...AccountContract.consumes],
-    });
-  },
-  component: AccountLivePage,
-});
-
-function AccountLivePage() {
-  const { api } = useItx();
-  const userItx = useMemo(() => api.user, [api]);
-  const { value, status, error } = useLiveState<AccountView>(userItx, {
+  // deferred with the enforcement. The hook waits for `itx` (undefined until then).
+  const [hosted, setHosted] = useState(false);
+  const [hostError, setHostError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve(
+      userItx.processors.enable("account", { consumes: [...AccountContract.consumes] }),
+    ).then(
+      () => !cancelled && setHosted(true),
+      (caught: unknown) =>
+        !cancelled && setHostError(caught instanceof Error ? caught.message : String(caught)),
+    );
+    return () => void (cancelled = true);
+  }, [userItx]);
+  const { value, status, error } = useLiveState<AccountView>(hosted ? userItx : undefined, {
     key: "account",
     door: async () =>
       z
@@ -42,7 +44,7 @@ function AccountLivePage() {
       <p style={{ color: "#6b7280", fontSize: "0.85rem" }}>
         Live from <code>session.user</code> — no refresh. Every sign-in appears the instant the
         account processor reduces the platform's fact.{" "}
-        <span data-testid="status">{error || status}</span>
+        <span data-testid="status">{hostError || error || status}</span>
       </p>
 
       <h2 style={{ fontSize: "0.95rem", fontWeight: 600 }}>

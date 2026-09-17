@@ -582,8 +582,8 @@ request's origin: `/authorize` app-owned, `/oauth/token`, `/oauth/register` (DCR
 `global_fetch_strictly_public` flag), `/.well-known/*`; `/mcp` its ONLY protected route and its ONE
 pinned resource, `<origin>/mcp`, this origin the authorization server — every token bound to it, a
 foreign one refused), a D1 directory (`control-plane.sql`: users → orgs via `org_members` →
-projects; access is org membership), THE CONSOLE — a TanStack Start app (`src/routes/**`, SSR'd
-here through the Start server entry; `src/router.tsx`, `routeTree.gen.ts`, `console.css`): `/login`
+projects; access is org membership), THE CONSOLE — React pages in one esbuild bundle (`src/console/**`, served
+as static assets and mounted into the shell rendered here; `console.css`): `/login`
 (the email form; "continue as / switch account" with a session), the `_auth` layout (no session ⇒
 `/login?next=`), the account page at `/` (orgs; projects — a project's hosts, the APEX (the config
 worker's `fetch`, the bundled default's 404 for a project with none of its own) and one per app it

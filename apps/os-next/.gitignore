@@ -1,5 +1,6 @@
-# The Vite build (vite.config.ts): dist/client (the console's bundle) and
-# dist/server (index.js + wrangler.json) — what `pnpm deploy` and the local lanes consume.
+# scripts/build.ts: dist/client (the console bundle the ASSETS binding serves) and the two generated
+# modules (their .d.ts siblings are committed).
 dist/
+/src/generated/*.js
 
 /wrangler.jsonc

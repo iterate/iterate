@@ -4,7 +4,7 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "lib": ["ES2022", "ESNext.Disposable"],
-    "types": ["@cloudflare/workers-types"],
+    "types": ["@cloudflare/workers-types", "node"],
     "strict": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
@@ -13,13 +13,5 @@
     "isolatedModules": true
   },
   "include": ["src"],
-  "exclude": [
-    "src/routes",
-    "src/router.tsx",
-    "src/routeTree.gen.ts",
-    "src/client/demo.tsx",
-    "src/client/browser.ts",
-    "src/client/dashboard.tsx",
-    "src/client/dashboard-data.ts"
-  ]
+  "exclude": ["src/console"]
 }

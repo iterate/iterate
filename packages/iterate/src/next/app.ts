@@ -1,5 +1,4 @@
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import { redirect } from "@tanstack/react-router";
 import type { IterateApi, IterateSessionApi } from "./api.ts";
 import { OAuthScopes } from "./oauth-scopes.ts";
 
@@ -11,8 +10,16 @@ export type AuthenticatedApp = {
 };
 export type IterateClient = { authenticate(next?: string): Promise<AuthenticatedApp> };
 
-/** Create once per TanStack app. Call authenticate in a client-only route's
- * beforeLoad; route loaders and actions share the returned public RPC session. */
+/** The browser leaves for the issuer's login (a document navigation) and this never settles — no
+ *  framework in the loop: a TanStack `beforeLoad` awaiting it ends the way a thrown
+ *  `redirect({ reloadDocument: true })` did, a plain page simply navigates. */
+function leaveForLogin(login: string): Promise<never> {
+  window.location.assign(login);
+  return new Promise<never>(() => {});
+}
+
+/** Create once per app — a TanStack route's client-only `beforeLoad`, or a plain page's entry.
+ * Every loader and action of the page shares the returned public RPC session. */
 export function createIterateClient(options: { scopes?: string[] } = {}): IterateClient {
   const scopes = OAuthScopes.parse(options.scopes || []);
   let connecting: Promise<AuthenticatedApp> | undefined;
@@ -26,7 +33,7 @@ export function createIterateClient(options: { scopes?: string[] } = {}): Iterat
       signal: AbortSignal.timeout(10_000),
     });
     await probe.body?.cancel();
-    if (probe.status === 401) throw redirect({ href: login, reloadDocument: true });
+    if (probe.status === 401) return leaveForLogin(login);
     if (!probe.ok) throw new Error(`Iterate is unavailable (${probe.status}). Please retry.`);
     const url = new URL("/api", window.location.href);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -52,7 +59,7 @@ export function createIterateClient(options: { scopes?: string[] } = {}): Iterat
       const info = await api.info();
       if (!scopes.every((scope) => info.scopes.includes(scope))) {
         dispose();
-        throw redirect({ href: login, reloadDocument: true });
+        return leaveForLogin(login);
       }
       // The pipelined  answer IS the session stub (capnweb: a promise that proxies).
       return { api: api as unknown as RpcStub<IterateSessionApi>, info };

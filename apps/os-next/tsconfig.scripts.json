@@ -11,6 +11,8 @@
     "allowImportingTsExtensions": true
   },
   "include": [
+    "scripts/build.ts",
+    "scripts/dev.ts",
     "scripts/deploy.ts",
     "scripts/ensure-resources.ts",
     "scripts/erase-data.ts",

@@ -3,9 +3,8 @@
 //   • unit    — in-process node, the fast lane (src/**/*.test.ts)
 //   • workers — INSIDE workerd next to the worker via @cloudflare/vitest-plugin, for the hibernation
 //               cases that genuinely need cloudflare:test controls (__workers-tests__/**). The worker
-//               under test is THE BUILT ONE (dist/server/index.js, `vite build`): the console's
-//               Start server entry resolves only inside the Vite build, so the lane drives the bundle
-//               a deploy ships — SELF.fetch, never `import worker from "../src/worker.ts"`.
+//               under test is src/worker.ts, bundled by the plugin — SELF.fetch, never
+//               `import worker from "../src/worker.ts"`.
 //   • e2e     — ONE real worker booted once by e2e/support/global-setup.ts (local workerd by default;
 //               the DEPLOYED worker with `WORKER_BASE_URL=https://os.iterate2.com`,
 //               the proof that counts), every file a capnweb client at /api exactly like a production
@@ -14,13 +13,12 @@
 //   • bench   — vitest's benchmark runner (tinybench) over the same client + worker (`pnpm bench`),
 //               files one at a time so scenarios never share the wire; `BENCH_OUT=<file.json>` writes
 //               the raw samples
-// The injected SDK is a virtual module (scripts/vite-plugin-processor-sdk.ts) every project resolves;
-// the workers and e2e projects also need the Vite build (dist/, gitignored), run once by the root
-// globalSetup — skipped when only the unit project runs. Browser E2E is Playwright (playwright.config.ts + specs/**).
+// Every project runs after THE BUILD (vitest.global-setup.ts → scripts/build.ts): the generated modules
+// the worker imports and the console bundle the e2e worker serves. Browser E2E is Playwright
+// (playwright.config.ts + specs/**).
 
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
-import { processorSdkModules } from "./scripts/vite-plugin-processor-sdk.ts";
 
 /** Teardown/async-transport noise only: disposing a capnweb session whose peer still delivers (a
  *  deliberate move in the reconnect/unsubscribe tests, and pager sockets still parked at teardown)
@@ -35,7 +33,6 @@ export default defineConfig({
     globalSetup: ["./vitest.global-setup.ts"],
     projects: [
       {
-        plugins: [processorSdkModules()],
         test: {
           name: "unit",
           include: ["src/**/*.test.ts", "examples/**/*.test.ts"],
@@ -46,9 +43,8 @@ export default defineConfig({
       },
       {
         plugins: [
-          processorSdkModules(),
           cloudflareTest({
-            main: "./dist/server/index.js", // the Vite build (vitest.global-setup.ts)
+            main: "./src/worker.ts",
             wrangler: { configPath: "./wrangler.test.jsonc" },
           }),
         ],
@@ -63,7 +59,6 @@ export default defineConfig({
         },
       },
       {
-        plugins: [processorSdkModules()],
         test: {
           name: "e2e",
           environment: "node",
@@ -82,7 +77,6 @@ export default defineConfig({
         },
       },
       {
-        plugins: [processorSdkModules()],
         test: {
           name: "bench",
           environment: "node",

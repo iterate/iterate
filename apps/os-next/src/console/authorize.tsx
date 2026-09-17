@@ -1,35 +1,73 @@
-import { useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
-import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
-import type { ConsentView } from "../consent.ts";
-import type { Org, Project } from "../directory.ts";
-import { iterate } from "./-client.ts";
+// console/authorize.tsx — THE CONSENT PAGE of the OAuth authorization server (/authorize): the page
+// only the issuer may render. The client's OAuth query is the page's identity — `key={answer.query}`
+// resets the choices for a new request and keeps them across a directory refresh (a created org or
+// project re-describes the same query). Everything is the session's `consent` capability
+// (src/consent.ts): `describe` reads, `approve` completes the authorization and hands back the
+// client's redirect; a first-time user creates an organization and a project right here.
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type Dispatch,
+  type FormEvent,
+  type SetStateAction,
+} from "react";
+import type { AuthenticatedApp } from "iterate/next/app";
+import type { ConsentAnswer } from "iterate/next/api";
 
-export const Route = createFileRoute("/authorize")({
-  loaderDeps: ({ search }) => search,
-  ssr: false,
-  beforeLoad: () => iterate.authenticate(window.location.pathname + window.location.search),
-  loader: async ({ context }) => {
-    // Preserve the client's OAuth query throughout project selection and onboarding.
-    const answer = await context.api.consent.describe(window.location.search);
-    if (answer.kind === "redirect") throw redirect({ href: answer.location, reloadDocument: true });
-    return answer;
-  },
-  component: function ConsentRoute() {
-    const answer = Route.useLoaderData();
-    if (answer.kind === "invalid")
-      return (
-        <main>
-          <h1>Invalid authorization request</h1>
-          <p>{answer.description}</p>
-        </main>
-      );
-    // A new authorization request resets choices; a directory refresh does not.
-    return <ConsentPage key={answer.query} answer={answer} />;
-  },
-});
+type Consent = Extract<ConsentAnswer, { kind: "consent" }>;
+type Org = Consent["orgs"][number];
+type Api = AuthenticatedApp["api"];
 
-function ConsentPage({ answer }: { answer: Extract<ConsentView, { kind: "consent" }> }) {
-  const { api } = Route.useRouteContext();
+export function AuthorizePage({ app }: { app: AuthenticatedApp }) {
+  const { api } = app;
+  const query = window.location.search;
+  const [answer, setAnswer] = useState<ConsentAnswer | null>(null);
+  const [describeError, setDescribeError] = useState<string | null>(null);
+  // Preserve the client's OAuth query throughout project selection and onboarding.
+  const describe = useCallback(async () => {
+    const described = await api.consent.describe(query);
+    if (described.kind === "redirect") {
+      window.location.replace(described.location);
+      return;
+    }
+    setAnswer(described);
+  }, [api, query]);
+  useEffect(() => {
+    describe().catch((caught: unknown) =>
+      setDescribeError(caught instanceof Error ? caught.message : String(caught)),
+    );
+  }, [describe]);
+
+  if (describeError)
+    return (
+      <main>
+        <h1>Authorization could not be read</h1>
+        <p role="alert">{describeError}</p>
+      </main>
+    );
+  if (!answer) return <main aria-busy="true" />;
+  if (answer.kind === "invalid")
+    return (
+      <main>
+        <h1>Invalid authorization request</h1>
+        <p>{answer.description}</p>
+      </main>
+    );
+  if (answer.kind === "redirect") return <main aria-busy="true" />;
+  // A new authorization request resets choices; a directory refresh does not.
+  return <ConsentPage key={answer.query} answer={answer} api={api} refresh={describe} />;
+}
+
+function ConsentPage({
+  answer,
+  api,
+  refresh,
+}: {
+  answer: Consent;
+  api: Api;
+  refresh: () => Promise<void>;
+}) {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<"idle" | "working" | "approved">("idle");
   const busy = status !== "idle";
@@ -121,7 +159,14 @@ function ConsentPage({ answer }: { answer: Extract<ConsentView, { kind: "consent
         />
       </form>
       {!projectBound && (
-        <ProjectSetup orgs={orgs} hasProjects={projects.length > 0} busy={busy} perform={perform} />
+        <ProjectSetup
+          api={api}
+          orgs={orgs}
+          hasProjects={projects.length > 0}
+          busy={busy}
+          perform={perform}
+          refresh={refresh}
+        />
       )}
       <footer>
         {error && (
@@ -150,18 +195,20 @@ function ConsentPage({ answer }: { answer: Extract<ConsentView, { kind: "consent
 }
 
 function ProjectSetup({
+  api,
   orgs,
   hasProjects,
   busy,
   perform,
+  refresh,
 }: {
+  api: Api;
   orgs: Org[];
   hasProjects: boolean;
   busy: boolean;
   perform: (work: () => Promise<void>) => Promise<void>;
+  refresh: () => Promise<void>;
 }) {
-  const { api } = Route.useRouteContext();
-  const router = useRouter();
   const [orgId, setOrgId] = useState("");
   return (
     <details className="consent-create" open={!hasProjects}>
@@ -179,7 +226,7 @@ function ProjectSetup({
             const org = await api.createOrg(name);
             setOrgId(org.id);
             form.reset();
-            await router.invalidate();
+            await refresh();
           });
         }}
       >
@@ -203,7 +250,7 @@ function ProjectSetup({
                 orgId: String(data.get("org")),
               });
               form.reset();
-              await router.invalidate();
+              await refresh();
             });
           }}
         >
@@ -246,7 +293,7 @@ function ProjectPicker({
   setAllProjects,
 }: {
   orgs: Org[];
-  projects: Project[];
+  projects: Consent["projects"];
   projectBound: boolean;
   excluded: Set<string>;
   allProjects: boolean;

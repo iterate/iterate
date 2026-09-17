@@ -1,4 +1,4 @@
-// client/demo.tsx — THE HOSTED DEMO, the console's `/demo` route (src/routes/demo.tsx). Open it against any deployment: it dials `/api` over capnweb exactly
+// console/demo.tsx — THE HOSTED DEMO, the console's `/demo` page (console/main.tsx). Open it against any deployment: it dials `/api` over capnweb exactly
 // like production, loads the `PresenceProcessor` into a dynamic worker, subscribes to its live state,
 // and renders reduced ⊕ runtime — the `ticks` reduce and the `lastPokeMs` runtime field — updating live
 // as you press the buttons, each of which just appends an event on the stream.
@@ -6,8 +6,8 @@
 import { useEffect, useState } from "react";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import { z } from "zod";
-import PRESENCE_PROCESSOR_SOURCE from "virtual:presence-processor-source";
 import { useLiveState } from "iterate/next/react";
+import PRESENCE_PROCESSOR_SOURCE from "../generated/presence-processor-source.js";
 import type { IterateContextRpcTarget } from "../iterate-context.ts";
 import type { IterateRpcTarget } from "../session.ts";
 
@@ -34,7 +34,6 @@ async function connectAndEnable(): Promise<RpcStub<IterateContextRpcTarget>> {
   return itx;
 }
 
-// oxlint-disable-next-line react/only-export-components -- entry-point bundle: Demo is rendered below, never imported, so fast refresh doesn't apply
 export function Demo() {
   const [itx, setItx] = useState<RpcStub<IterateContextRpcTarget>>();
   const [connectError, setConnectError] = useState<string>();

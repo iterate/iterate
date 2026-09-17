@@ -4,9 +4,9 @@ One Cloudflare Worker, one package: `src/worker.ts` is the stateless edge (capnw
 project-host ingress — `<app>--<project>.<base>`, `<app>.<project>.<base>`, the apex
 `<project>.<base>` — the one HTTP way into a project; the static assets on the platform host) with
 the control plane in-process as its catch-all (`src/control-plane.ts`: OAuth AS + a D1 directory +
-`/mcp`, the ONE MCP server for every project + the console's server half) and THE CONSOLE — a
-TanStack Start app (`src/routes/**`: `/login`, the account page at `/`, the `/authorize` consent),
-SSR'd by the same worker, its server functions calling that server half;
+`/mcp`, the ONE MCP server for every project + the console's server half) and THE CONSOLE — React
+pages in one esbuild bundle (`src/console/**`: the account page at `/`, the `/authorize` consent,
+`/sessions`) mounted into a shell the same worker serves, `/login` rendered by the worker whole;
 `src/iterate-context-durable-object.ts` is THE CONTEXT — one Durable Object per `{ projectId, path }`
 holding the event log, the core reduce, subscription delivery, the facets, the rpc-stub pagers and
 the fetch door. Everything a client does is one dotted expression on `itx`.
@@ -66,7 +66,8 @@ one is warned about at boot and ignored). The two secrets are wrangler secrets o
 
 ## The console
 
-The dashboard, session management and OAuth consent are client-only TanStack Start routes.
+The dashboard, session management and OAuth consent are React pages (`src/console/**`) in one
+esbuild bundle the worker serves as static assets; `/login` is HTML the worker renders whole.
 They share one `createIterateClient` and an ordinary `/api` Cap’n Web session. The dashboard
 component and loader are also used verbatim by the independently hosted Notes app.
 
@@ -93,19 +94,21 @@ authorization contract.
 
 ## Build, run, deploy
 
-The build is Vite's (`vite.config.ts`: the Cloudflare plugin + TanStack Start + React; the processor-SDK Vite plugin, `scripts/vite-plugin-processor-sdk.ts`,
-runs at config load for the processor SDK bundle and the hosted `/demo` page). `vite build` emits
-`dist/client` (the console's bundle + `public/`) and `dist/server` (the worker + `wrangler.json`,
-the config a deploy and both local lanes consume). The Cloudflare Vite plugin's own workerd is older
-than this worker's compatibility date, so local dev is the built worker under this package's wrangler:
+wrangler bundles the worker itself from `src/worker.ts` — `wrangler dev`, `wrangler deploy`, the e2e
+harness and the workers test lane all start there. THE BUILD (`scripts/build.ts`, one esbuild script,
+about a second) writes what the worker cannot import from source: `wrangler.jsonc` from the root
+`envs.ts`, `src/generated/*.js` (the injected processor SDK's text, the demo facet's source — their
+`.d.ts` siblings are committed, so `tsc` and knip need no build) and `dist/client` (the console bundle +
+`console.css`, the `assets` the platform host serves). Every lane runs it first.
 
 ```bash
-pnpm dev -- --port 8788         # vite build, the directory schema into the local D1, wrangler dev on dist/server/wrangler.json
-                                # (project hosts under `<project>.localhost:8788`; dev values for the two secrets — scripts/dev.ts)
-pnpm build                      # dist/client + dist/server
-pnpm run typecheck              # routes:check, then the three tsconfigs (worker · console · tests)
-pnpm test                       # every lane: unit (node), workers (workerd, the BUILT worker), e2e (one real worker), bench
-pnpm e2e                        # the wire lane alone, against a local worker built by `vite build`
+pnpm dev -- --port 8788         # the build (the console kept rebuilding), the directory schema into the local D1,
+                                # wrangler dev on wrangler.jsonc (project hosts under `<project>.localhost:8788`;
+                                # dev values for the secrets — scripts/dev.ts)
+pnpm build                      # scripts/build.ts: wrangler.jsonc + src/generated/*.js + dist/client
+pnpm run typecheck              # the four tsconfigs (worker · console · tests · scripts)
+pnpm test                       # every lane: unit (node), workers (workerd, src/worker.ts), e2e (one real worker), bench
+pnpm e2e                        # the wire lane alone, against a local worker the harness bundles from src
 WORKER_BASE_URL=https://os.iterate2.com ADMIN_API_SECRET=… pnpm e2e   # the proof that counts
-pnpm run deploy                 # vite build, then wrangler deploy --config dist/server/wrangler.json
+pnpm run deploy                 # the build, then wrangler deploy --config wrangler.jsonc --env <name>
 ```

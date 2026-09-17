@@ -17,7 +17,7 @@ Each app runs the same `appAuth` adapter and `BrowserSession` Durable Object.
 The browser holds only an opaque HttpOnly cookie; the DO holds tokens and makes
 public HTTP token exchanges. `/api` proxies those tokens through ordinary
 admission. Same-origin checks protect cookie-backed API calls and logout.
-Authenticated TanStack routes use one shared browser client and Cap’n Web socket.
+Authenticated console pages use one shared browser client and Cap’n Web socket.
 The console and independently hosted Notes dashboard import the same component
 and loader. Project ingress is independent of the fixed console routes.
 

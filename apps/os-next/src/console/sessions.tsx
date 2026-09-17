@@ -1,38 +1,38 @@
-// /_auth/sessions — every OAuth grant the signed-in user holds (browsers, connected apps, personal
-// access tokens), each endable on its own, and the one place a personal access token is minted: a
-// name and the projects it may reach → `session.grants.mint` → the token, shown ONCE (it is a finite
-// provider access token, never stored readable — grants.ts). The list is the loader's; a mint or an
-// end invalidates it, the way the page already reloads after `grants.end`.
-import { useState, type FormEvent } from "react";
-import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
-import { useItx } from "../-itx.tsx";
+// console/sessions.tsx — /sessions: every OAuth grant the signed-in user holds (browsers, connected
+// apps, personal access tokens), each endable on its own, and the one place a personal access token
+// is minted: a name and the projects it may reach → `session.grants.mint` → the token, shown ONCE (it
+// is a finite provider access token, never stored readable — grants.ts). The list is one page of
+// `grants.list(cursor)` (`?cursor=` in the URL); a mint or an end reloads it.
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import type { AuthenticatedApp } from "iterate/next/app";
 
-export const Route = createFileRoute("/_auth/sessions")({
-  validateSearch: (search: Record<string, unknown>) => ({
-    cursor: typeof search.cursor === "string" ? search.cursor : undefined,
-  }),
-  loaderDeps: ({ search }) => ({ cursor: search.cursor }),
-  // RpcPromise is callable; normalize the grant list to a native Promise for the router loader.
-  loader: async ({ deps, context }) => await context.api.grants.list(deps.cursor),
-  component: SessionsPage,
-});
+type GrantsPage = Awaited<ReturnType<AuthenticatedApp["api"]["grants"]["list"]>>;
 
 /** A personal access token as the form just minted it — held only in this page's state, shown
  *  once; a reload forgets it, as the server already has. */
 type MintedPersonalAccessToken = { name: string; token: string; expiresAt: number };
 
-function SessionsPage() {
-  const { items, cursor, projects, canMintToken } = Route.useLoaderData();
-  const router = useRouter();
-  const { api } = useItx();
-  const search = Route.useSearch();
+export function SessionsPage({ app }: { app: AuthenticatedApp }) {
+  const { api } = app;
+  const cursor = new URLSearchParams(window.location.search).get("cursor") ?? undefined;
+  const [page, setPage] = useState<GrantsPage | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    setPage(await api.grants.list(cursor));
+  }, [api, cursor]);
+  useEffect(() => {
+    load().catch((caught: unknown) =>
+      setError(caught instanceof Error ? caught.message : String(caught)),
+    );
+  }, [load]);
 
   const [tokenName, setTokenName] = useState("");
   const [excludedProjectIds, setExcludedProjectIds] = useState<Set<string>>(new Set());
   const [minted, setMinted] = useState<MintedPersonalAccessToken | null>(null);
   const [copied, setCopied] = useState(false);
   const [minting, setMinting] = useState(false);
+  if (!page) return <main aria-busy="true">{error && <p role="alert">{error}</p>}</main>;
+  const { items, cursor: nextCursor, projects, canMintToken } = page;
   const selectedProjectIds = projects
     .filter((project) => !excludedProjectIds.has(project.id))
     .map((project) => project.id);
@@ -47,7 +47,7 @@ function SessionsPage() {
       setMinted({ name, token, expiresAt });
       setCopied(false);
       setTokenName("");
-      await router.invalidate();
+      await load();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -67,7 +67,7 @@ function SessionsPage() {
   return (
     <main>
       <p>
-        <Link to="/">Projects</Link>
+        <a href="/">Projects</a>
       </p>
       <h1>Sessions</h1>
       <p>
@@ -111,7 +111,7 @@ function SessionsPage() {
                     try {
                       await api.grants.end(item.id);
                       if (item.current) window.location.assign("/");
-                      else await router.invalidate();
+                      else await load();
                     } catch (caught) {
                       setError(caught instanceof Error ? caught.message : String(caught));
                     }
@@ -132,16 +132,8 @@ function SessionsPage() {
       </table>
       {!items.length && <p>No sessions on this page.</p>}
       <p>
-        {search.cursor && (
-          <Link to="/sessions" search={{ cursor: undefined }}>
-            First page
-          </Link>
-        )}{" "}
-        {cursor && (
-          <Link to="/sessions" search={{ cursor }}>
-            Next page
-          </Link>
-        )}
+        {cursor && <a href="/sessions">First page</a>}{" "}
+        {nextCursor && <a href={`/sessions?cursor=${encodeURIComponent(nextCursor)}`}>Next page</a>}
       </p>
 
       <h2>Personal access tokens</h2>
