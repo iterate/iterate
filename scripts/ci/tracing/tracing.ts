@@ -113,19 +113,13 @@ export function assembleTrace(
           ? "skipped"
           : "finished";
   }
-  const producerStarts = workflow.jobs
-    .flatMap((job) => job.attempts)
-    .filter((attempt) => attempt.startedAt)
-    .map((attempt) => Date.parse(attempt.startedAt));
   // A collector-only retry creates an execution without new preview work.
   // Keep the original execution identity instead of starting after its jobs ended.
   const execution = [...workflow.executions]
     .sort((a, b) => b.execution - a.execution)
     .find(
       (execution) =>
-        !inlineReport ||
-        !producerStarts.length ||
-        Date.parse(execution.createdAt) <= Math.max(...producerStarts),
+        !inlineReport || Date.parse(execution.createdAt) <= Date.parse(workflow.workflowFinishedAt),
     );
   if (!execution) throw new Error("Depot workflow has no execution for its preview jobs");
   const traceId = hash(`${workflow.workflowId}/${execution.executionId}`, 32);
@@ -187,7 +181,15 @@ export function assembleTrace(
     workflow.workflowStatus === "failed",
   );
   const cancelledBeforeStart =
-    !execution.startedAt && !producerStarts.length && workflow.workflowStatus === "cancelled";
+    !execution.startedAt &&
+    workflow.workflowStatus === "cancelled" &&
+    !workflow.jobs.some((job) =>
+      job.attempts.some(
+        (attempt) =>
+          attempt.startedAt &&
+          Date.parse(attempt.finishedAt || workflow.workflowFinishedAt) >= rootStart,
+      ),
+    );
   const queueEnd = cancelledBeforeStart ? rootEnd : Date.parse(execution.startedAt);
   if (queueEnd > rootStart) {
     add(

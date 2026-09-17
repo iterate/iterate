@@ -65,6 +65,46 @@ test("a workflow cancelled before start shows its wait ending at cancellation", 
   });
 });
 
+test.each([false, true])(
+  "a cancelled rerun does not inherit old runner starts (inline %s)",
+  (inline) => {
+    const workflow = greenWorkflow("cancelled");
+    workflow.jobs[0].attempts[0].finishedAt = at(20);
+    const spans = assembleTrace(
+      {
+        ...workflow,
+        executions: [
+          { ...workflow.executions[0], startedAt: at(1) },
+          { executionId: "cancelled-rerun", execution: 2, createdAt: at(30) },
+        ],
+        jobs: [
+          { ...workflow.jobs[0], finishedAt: at(90) },
+          ...(inline
+            ? [
+                {
+                  jobId: "trace",
+                  jobKey: "preview.yml:preview:trace",
+                  status: "cancelled",
+                  attempts: [],
+                },
+              ]
+            : []),
+        ],
+      },
+      new Map(),
+    ).resourceSpans[0].scopeSpans[0].spans;
+    expect(spans[0]).toMatchObject({
+      attributes: expect.arrayContaining([
+        { key: "ci.execution.id", value: { stringValue: "cancelled-rerun" } },
+      ]),
+    });
+    expect(spans.find((span) => span.name === "Workflow queue (cancelled)")).toMatchObject({
+      startTimeUnixNano: String(BigInt(ms(30)) * 1_000_000n),
+      endTimeUnixNano: String(BigInt(ms(90)) * 1_000_000n),
+    });
+  },
+);
+
 test("missing execution start does not turn unmeasured runner setup into queue time", () => {
   const spans = assembleTrace(greenWorkflow("cancelled"), new Map()).resourceSpans[0].scopeSpans[0]
     .spans;

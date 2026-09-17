@@ -25,7 +25,7 @@ Status: implemented locally. The collector is now a dependent preview job; dispa
 - [x] Upload `public-ci-trace-<workflow>-<execution>`; update the config project’s report-link allowlist. *The name preserves the measured execution on collector-only retries; all 19 route/publication tests pass. Config commit `b3f4e84` is deployed from main.*
 - [ ] Verify success/failure timing, both workflow entry points and the live uploaded report. Cancelled runs may miss a report if Depot cancels the collector too; no scheduled repair is retained.
 
-- Inline follow-up local validation: 416 scripts tests (41 tracing tests), scripts typecheck, focused lint and formatting pass. Config report handler passes strict scoped typecheck and all 19 tests. Independent review found a collector-only retry timing bug; a regression now proves it retains the original measured execution, and follow-up review found no blockers.
+- Inline follow-up local validation: 418 scripts tests (43 tracing tests), scripts typecheck, focused lint and formatting pass. Config report handler passes strict scoped typecheck and all 19 tests. Independent review found a collector-only retry timing bug; a regression now proves it retains the original measured execution, and follow-up review found no blockers.
 
 - First inline run caught the early-green guard treating the queued report job as unfinished test work. `setPendingCheckGreen` now excludes the downstream trace job while requiring every other producer to succeed. The failed run remains useful evidence that collection runs after a failed cleanup job.
 
@@ -34,3 +34,5 @@ Status: implemented locally. The collector is now a dependent preview job; dispa
 - [x] Show the selected execution's creation-to-start interval as a striped queue span before Plan, preserving elapsed time. *Uses Depot execution timestamps; both regular reruns and collector-only retries retain the selected execution.*
 - [x] Show cancellation before start honestly and avoid labelling runner setup/checkout as queue time. *No execution start is invented; missing metadata with started runners creates no queue span.*
 - [x] Replay main workflow `6hjqmht0vr` and verify its known 40s wait in the browser. *The striped top-level queue is exactly 40s; 9m9s total and 7m36s to green remain unchanged. Evidence from startup investigation task `01a0adf1-7f20-7cd0-a45b-72757db41c43`.*
+
+- Queue review added regular and inline cancelled-rerun regressions. Execution selection uses producer completion evidence; old completed runners no longer hide a rerun cancelled before startup. All 418 scripts tests pass.
