@@ -16,21 +16,27 @@ import {
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { Spinner } from "@iterate-com/ui/components/spinner";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { Event } from "@iterate-com/ui/components/events/types";
+import type {
+  AgentUiActivity,
+  AgentUiLlmStep,
+} from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { sliceText, type StreamText } from "@iterate-com/shared/chunked-text";
 import {
   formatClockTime,
   formatDateTime,
   formatSeconds,
   isRecord,
   llmTrace,
-  looksLikeCode,
   scriptTrace,
   shortEventType,
   type LlmTrace,
 } from "../lib/agent-events.ts";
+import { StreamingCursor, StreamingText } from "./streaming-text.tsx";
 
 /** Which trace the sheet shows — at most one; the route's search params carry it. */
 export type Inspected =
@@ -41,13 +47,27 @@ export type Inspected =
 
 export function InspectorSheet({
   events,
+  live,
   inspected,
   onInspect,
 }: {
   events: readonly Event[];
+  /** The reduced live activity, so an in-flight request's trace streams its raw response. */
+  live: AgentUiActivity | null;
   inspected: Inspected;
   onInspect: (next: Inspected) => void;
 }) {
+  // The running llm step for the inspected request (if it is the one in flight): its responseText
+  // and thinkingText are the chunk windows folded, i.e. the raw model output as it streams.
+  const liveStep =
+    inspected?.kind === "llmRequest"
+      ? live?.steps.find(
+          (step): step is AgentUiLlmStep =>
+            step.kind === "llm" &&
+            step.status === "running" &&
+            step.llmRequestOffset === inspected.llmRequestOffset,
+        )
+      : undefined;
   return (
     <Sheet open={!!inspected} onOpenChange={(open) => !open && onInspect(null)}>
       <SheetContent
@@ -58,6 +78,7 @@ export function InspectorSheet({
           <LlmTraceContent
             events={events}
             llmRequestOffset={inspected.llmRequestOffset}
+            liveStep={liveStep}
             onInspect={onInspect}
           />
         ) : inspected?.kind === "scriptExecution" ? (
@@ -75,10 +96,12 @@ export function InspectorSheet({
 function LlmTraceContent({
   events,
   llmRequestOffset,
+  liveStep,
   onInspect,
 }: {
   events: readonly Event[];
   llmRequestOffset: number;
+  liveStep: AgentUiLlmStep | undefined;
   onInspect: (next: Inspected) => void;
 }) {
   const trace = llmTrace(events, llmRequestOffset);
@@ -152,38 +175,12 @@ function LlmTraceContent({
             <Body text={message.content} renderMode={renderMode} />
           </section>
         ))}
-        <section className="border-b border-border/60 bg-muted/20 px-5 py-3">
-          <div className="mb-2 flex items-baseline gap-2">
-            <RoleChip name="response" />
-            {trace.outcome.status === "succeeded" ? (
-              <span className="font-mono text-[10px] text-muted-foreground/60">
-                {trace.outcome.text.length.toLocaleString()} chars
-              </span>
-            ) : null}
-          </div>
-          {trace.outcome.status === "succeeded" ? (
-            looksLikeCode(trace.outcome.text) && renderMode === "markdown" ? (
-              <SourceCodeBlock
-                code={trace.outcome.text}
-                language="markdown"
-                showLineNumbers={false}
-                plainChrome
-              />
-            ) : (
-              <Body text={trace.outcome.text} renderMode={renderMode} />
-            )
-          ) : trace.outcome.status === "failed" ? (
-            <pre className="overflow-x-auto rounded-xl bg-destructive/5 px-4 py-2.5 font-mono text-xs leading-relaxed text-destructive">
-              {trace.outcome.errorMessage}
-            </pre>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              {trace.outcome.status === "cancelled"
-                ? `Cancelled${trace.outcome.reason ? ` — ${trace.outcome.reason}` : ""}`
-                : "In flight…"}
-            </p>
-          )}
-        </section>
+        <ResponseView
+          liveStep={liveStep}
+          outcome={trace.outcome}
+          onInspect={onInspect}
+          scriptExecutionId={trace.derived.scriptExecutionId}
+        />
         {trace.derived.prose || trace.derived.scriptExecutionId ? (
           <section className="px-5 py-3">
             <div className="mb-2 flex items-baseline gap-2">
@@ -226,6 +223,118 @@ function LlmTraceContent({
         ) : null}
       </div>
     </>
+  );
+}
+
+/** The `<codemode>` body of a raw model answer — the script the loop extracts and runs. Slices the
+ *  streamed text live too, so the parsed script forms as the answer arrives. */
+const CODEMODE_BLOCK = /<codemode[^>]*>[ \t]*\n?([\s\S]*?)\n?[ \t]*<\/codemode>/;
+function extractScript(raw: string): string | null {
+  const code = CODEMODE_BLOCK.exec(raw)?.[1]?.trim();
+  return code ? code : null;
+}
+
+/** The trace's response half: the model's RAW output (streamed live from the chunk windows, or the
+ *  settled text after the fact) syntax-highlighted, and the parsed script highlighted as TypeScript
+ *  beside it — the two a person debugging a turn reads. Reasoning ("thinking") streams above while it
+ *  is in flight; it is ephemeral, so it is gone once the turn settles. */
+function ResponseView({
+  liveStep,
+  outcome,
+  onInspect,
+  scriptExecutionId,
+}: {
+  liveStep: AgentUiLlmStep | undefined;
+  outcome: LlmTrace["outcome"];
+  onInspect: (next: Inspected) => void;
+  scriptExecutionId: string | undefined;
+}) {
+  const streaming = Boolean(liveStep);
+  const thinking: StreamText | null =
+    liveStep && liveStep.thinkingText.length > 0 ? liveStep.thinkingText : null;
+  const raw = liveStep
+    ? sliceText(liveStep.responseText)
+    : outcome.status === "succeeded"
+      ? outcome.text
+      : null;
+  const hasRaw = Boolean(raw);
+  const script = raw ? extractScript(raw) : null;
+  return (
+    <section className="flex flex-col gap-3 border-b border-border/60 bg-muted/20 px-5 py-3">
+      <div className="flex items-baseline gap-2">
+        <RoleChip name="response" />
+        {streaming ? (
+          <span className="inline-flex items-center gap-1 font-mono text-[10px] text-muted-foreground/60">
+            <Spinner className="size-2.5" /> streaming
+          </span>
+        ) : hasRaw ? (
+          <span className="font-mono text-[10px] text-muted-foreground/60">
+            {raw!.length.toLocaleString()} chars
+          </span>
+        ) : null}
+      </div>
+      {thinking ? (
+        <div>
+          <p className="mb-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground/60">
+            reasoning
+          </p>
+          <div className="max-w-full whitespace-pre-wrap text-sm italic leading-relaxed text-muted-foreground">
+            <StreamingText text={thinking} />
+            {hasRaw ? null : <StreamingCursor />}
+          </div>
+        </div>
+      ) : null}
+      {hasRaw ? (
+        <div>
+          <p className="mb-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground/60">
+            raw response
+          </p>
+          <div className="max-h-96 overflow-y-auto rounded-lg">
+            <SourceCodeBlock code={raw!} language="markdown" showLineNumbers={false} />
+          </div>
+        </div>
+      ) : null}
+      {script ? (
+        <div>
+          <div className="mb-1 flex items-center gap-2">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+              parsed script
+            </p>
+            {scriptExecutionId ? (
+              <Button
+                variant="ghost"
+                size="xs"
+                className="font-normal text-muted-foreground"
+                onClick={() =>
+                  onInspect({ kind: "scriptExecution", executionId: scriptExecutionId })
+                }
+              >
+                Execution trace
+                <ChevronRightIcon data-icon="inline-end" className="text-muted-foreground/50" />
+              </Button>
+            ) : null}
+          </div>
+          <div className="max-h-96 overflow-y-auto rounded-lg">
+            <SourceCodeBlock code={script} language="typescript" showLineNumbers={false} />
+          </div>
+        </div>
+      ) : null}
+      {outcome.status === "failed" ? (
+        <pre className="overflow-x-auto rounded-xl bg-destructive/5 px-4 py-2.5 font-mono text-xs leading-relaxed text-destructive">
+          {outcome.errorMessage}
+        </pre>
+      ) : outcome.status === "cancelled" && !streaming ? (
+        <p className="text-sm text-muted-foreground">
+          Cancelled{outcome.reason ? ` — ${outcome.reason}` : ""}
+          {hasRaw ? " (partial output above)" : ""}
+        </p>
+      ) : null}
+      {streaming && !hasRaw && !thinking ? (
+        <p className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Spinner className="size-3" /> Waiting for the first tokens…
+        </p>
+      ) : null}
+    </section>
   );
 }
 
