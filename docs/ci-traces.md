@@ -12,6 +12,16 @@ workflow completion supplies a labelled upper bound. An earlier green milestone
 remains visible if cleanup later fails. Planning appears first in the waterfall,
 followed by preparation, app tests, Playwright shards and cleanup.
 
+Elapsed metrics start at the selected execution's creation, so they include time
+waiting to start. A striped **Workflow queue** row appears before Plan, measured
+from Depot execution `createdAt` to `startedAt`. Main previews serialize in the
+`preview-main` concurrency group: a prior preview can account for this wait, but
+Depot does not provide its reason, so the span keeps a generic label. Cancellation
+before any recorded start ends the queue at the recorded cancellation time; it
+does not invent a workflow start. Missing start metadata on a run that has runner
+attempts does not create a queue span. Runner startup and checkout remain inside
+their jobs, separate from workflow queuing.
+
 Expand a **Wait** phase, then select its wait step (click/tap, or focus its bar
 and press Enter) to show curved arrows from its prerequisites. Selection shows
 only that span's own links, never links belonging to its children. The details list lets you reveal either

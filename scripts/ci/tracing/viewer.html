@@ -410,15 +410,17 @@
             .sort((a, b) => {
               if (s === root) {
                 const rank = (span) =>
-                  span.a["ci.job.key"]?.endsWith(":plan")
-                    ? 0
-                    : span.name === "Prepare"
-                      ? 1
-                      : span.name === "App tests"
-                        ? 2
-                        : span.name.startsWith("Playwright ")
-                          ? 3
-                          : 4;
+                  span.a["ci.kind"] === "queue"
+                    ? -1
+                    : span.a["ci.job.key"]?.endsWith(":plan")
+                      ? 0
+                      : span.name === "Prepare"
+                        ? 1
+                        : span.name === "App tests"
+                          ? 2
+                          : span.name.startsWith("Playwright ")
+                            ? 3
+                            : 4;
                 return (
                   rank(a) - rank(b) || a.name.localeCompare(b.name, undefined, { numeric: true })
                 );
@@ -487,6 +489,7 @@
               ? "Time to green covers this preview workflow; cleanup can continue afterwards."
               : `This preview went green, then ${root.a["ci.status"]}. Time to green records that earlier milestone.`;
       }
+      outcomeNote += " Elapsed time starts at execution creation, including workflow queuing.";
       if (root.a["ci.report.scope"])
         outcomeNote += " Report generation is excluded from these timings.";
       document.getElementById("outcome-note").textContent = outcomeNote;

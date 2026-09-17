@@ -186,6 +186,27 @@ export function assembleTrace(
     },
     workflow.workflowStatus === "failed",
   );
+  const cancelledBeforeStart =
+    !execution.startedAt && !producerStarts.length && workflow.workflowStatus === "cancelled";
+  const queueEnd = cancelledBeforeStart ? rootEnd : Date.parse(execution.startedAt);
+  if (queueEnd > rootStart) {
+    add(
+      "workflow-queue",
+      root,
+      cancelledBeforeStart ? "Workflow queue (cancelled)" : "Workflow queue",
+      rootStart,
+      queueEnd,
+      {
+        "ci.kind": "queue",
+        "ci.phase": "wait",
+        "ci.status": cancelledBeforeStart ? "cancelled" : "finished",
+        "ci.evidence": cancelledBeforeStart
+          ? "No execution or runner start recorded; wait ended at workflow cancellation"
+          : "Depot execution createdAt to startedAt; queue reason is not supplied",
+      },
+      false,
+    );
+  }
   for (const job of workflow.jobs) {
     const key = job.jobKey.replace(/^.*:preview:/, "");
     const labels: Record<string, string> = {
@@ -587,7 +608,12 @@ export const Workflow = z.object({
   workflowCreatedAt: z.string(),
   workflowFinishedAt: z.string().default(""),
   executions: z.array(
-    z.object({ executionId: z.string(), execution: z.number(), createdAt: z.string() }),
+    z.object({
+      executionId: z.string(),
+      execution: z.number(),
+      createdAt: z.string(),
+      startedAt: z.string().default(""),
+    }),
   ),
   jobs: z.array(
     z.object({

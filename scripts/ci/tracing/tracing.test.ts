@@ -4,6 +4,73 @@ import { promisify } from "node:util";
 import { expect, test } from "vitest";
 import { assembleTrace, renderTrace, stepCommands } from "./tracing.ts";
 
+test("workflow queue is visible without removing it from elapsed time", () => {
+  const workflow = greenWorkflow("finished");
+  const spans = assembleTrace(
+    {
+      ...workflow,
+      workflowPath: "preview-main.yml",
+      workflowStartedAt: at(40),
+      executions: [{ ...workflow.executions[0], startedAt: at(40) }],
+      jobs: [],
+    },
+    new Map(),
+  ).resourceSpans[0].scopeSpans[0].spans;
+  expect(spans[0]).toMatchObject({
+    startTimeUnixNano: String(BigInt(ms(0)) * 1_000_000n),
+    endTimeUnixNano: String(BigInt(ms(90)) * 1_000_000n),
+  });
+  expect(spans.find((span) => span.name === "Workflow queue")).toMatchObject({
+    parentSpanId: spans[0].spanId,
+    startTimeUnixNano: String(BigInt(ms(0)) * 1_000_000n),
+    endTimeUnixNano: String(BigInt(ms(40)) * 1_000_000n),
+    attributes: expect.arrayContaining([{ key: "ci.phase", value: { stringValue: "wait" } }]),
+  });
+});
+
+test("queue timing uses the selected rerun, not the original workflow start", () => {
+  const workflow = greenWorkflow("finished");
+  const spans = assembleTrace(
+    {
+      ...workflow,
+      workflowStartedAt: at(2),
+      executions: [
+        { ...workflow.executions[0], startedAt: at(2) },
+        { executionId: "rerun", execution: 2, createdAt: at(30), startedAt: at(35) },
+      ],
+    },
+    new Map(),
+  ).resourceSpans[0].scopeSpans[0].spans;
+  expect(spans.find((span) => span.name === "Workflow queue")).toMatchObject({
+    startTimeUnixNano: String(BigInt(ms(30)) * 1_000_000n),
+    endTimeUnixNano: String(BigInt(ms(35)) * 1_000_000n),
+  });
+});
+
+test("a workflow cancelled before start shows its wait ending at cancellation", () => {
+  const spans = assembleTrace({ ...greenWorkflow("cancelled"), jobs: [] }, new Map())
+    .resourceSpans[0].scopeSpans[0].spans;
+  expect(spans.find((span) => span.name === "Workflow queue (cancelled)")).toMatchObject({
+    startTimeUnixNano: String(BigInt(ms(0)) * 1_000_000n),
+    endTimeUnixNano: String(BigInt(ms(90)) * 1_000_000n),
+    attributes: expect.arrayContaining([
+      { key: "ci.status", value: { stringValue: "cancelled" } },
+      {
+        key: "ci.evidence",
+        value: {
+          stringValue: "No execution or runner start recorded; wait ended at workflow cancellation",
+        },
+      },
+    ]),
+  });
+});
+
+test("missing execution start does not turn unmeasured runner setup into queue time", () => {
+  const spans = assembleTrace(greenWorkflow("cancelled"), new Map()).resourceSpans[0].scopeSpans[0]
+    .spans;
+  expect(spans.some((span) => span.name.startsWith("Workflow queue"))).toBe(false);
+});
+
 test.each(["finished", "failed", "cancelled"])(
   "inline collection reports %s preview jobs while the collector is still running",
   (status) => {
@@ -803,7 +870,7 @@ test("cancelling before runner startup does not invent an attempt duration", () 
     },
     new Map(),
   );
-  const job = trace.resourceSpans[0].scopeSpans[0].spans[1];
+  const job = trace.resourceSpans[0].scopeSpans[0].spans.find((span) => span.name === "Prepare")!;
   expect(job.startTimeUnixNano).toBe(job.endTimeUnixNano);
   expect(job.attributes).toContainEqual({
     key: "ci.evidence",
