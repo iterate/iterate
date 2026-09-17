@@ -24,8 +24,7 @@ on:
     inputs:
       image-tag:
         description: Destination tag (override for isolated experiments)
-        default: node24-pnpm10-worktree
-        required: true
+        required: false
 
 env:
   PREVIEW_CI_IMAGE: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:${{ inputs.image-tag || 'node24-pnpm10-worktree' }}
