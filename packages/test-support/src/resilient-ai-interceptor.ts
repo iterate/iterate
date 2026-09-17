@@ -206,7 +206,7 @@ export function noOpAgent(call: ProjectAiInterceptor.Input): Response {
   return codemodeBackticksResponse("async () => {}", call);
 }
 
-export { createProject } from "./test-project.ts";
+export { createProject, installNoOpAgent } from "./test-project.ts";
 
 /** Keep template onboarding from consuming a test's unrelated scripted responses. */
 export function intercept(

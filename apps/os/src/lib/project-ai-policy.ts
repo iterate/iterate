@@ -19,16 +19,13 @@ export function projectAiModel(
   return `intercepted/${model}`;
 }
 
-/** Only the browser suite's explicit identity prefix opts signup into test AI. */
+/** Explicit fixture identity or slug; mobile OAuth tokens may omit the login email. */
 export function signupTestAiPolicy(
   email: string | undefined,
+  slug: string,
   environmentName: string | undefined,
 ): ProjectAiPolicy | undefined {
-  if (
-    environmentName === "prd" ||
-    !email?.startsWith("intercepted-e2e-") ||
-    !email.endsWith("+test@nustom.com")
-  )
-    return undefined;
-  return { liveAgentPaths: [] };
+  if (environmentName === "prd") return undefined;
+  const testIdentity = email?.startsWith("intercepted-e2e-") && email.endsWith("+test@nustom.com");
+  return testIdentity || slug.startsWith("intercepted-e2e-") ? { liveAgentPaths: [] } : undefined;
 }

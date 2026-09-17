@@ -42,8 +42,8 @@ export function createTestProjectPool(opts: { size: number; slugPrefix: string }
       let projectId: string;
       try {
         projectId = await slot.getProjectId(session);
-        // Each lease has a new session; the previous borrower may have closed its interceptor.
-        await session.projects.get(projectId).ai.intercept(interceptor.noOpAgent);
+        // Replace any scripted responder left by the previous borrower.
+        await interceptor.installNoOpAgent(session.projects.get(projectId));
       } catch (error) {
         releaseSlot(state, slot);
         throw error;

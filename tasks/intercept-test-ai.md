@@ -5,7 +5,7 @@ size: large
 
 # Intercept test AI, except the bendy yellow fruit smoke test
 
-Status: strawman implemented and pushed. Local checks and live API proofs pass; deployed preview/browser validation is still running.
+Status: strawman implemented; first preview run passed every browser shard but exposed three API-fixture regressions. Local fixes pass; deployed revalidation of the API fixtures and mobile signup spending gap is pending. The PR now explains each core runtime change and its tradeoffs separately.
 
 ## Ask
 
@@ -41,3 +41,11 @@ The spend audit found $14.60 in 24 hours: example-message tests $8.41, Slack tes
 - Live local worker: both agent-tools tests passed; Slack reply/egress and three project-pool tests passed; the project-policy proof passed, including background onboarding isolation and failure after handler release. Proof project: `prj_ba20a229c70d4002b35da40bb31661fc`.
 - Local browser startup failed before test execution (`config.webServer exited early`); deployed preview browser jobs are the remaining acceptance check.
 - Fixture interceptors ignore template onboarding so its concurrent turn cannot consume a test-specific response. The onboarding spec uses the raw interceptor explicitly.
+
+- Preview `3867f6a`: core CI and all six Playwright shards passed. OS had 215 passing tests, ten expected failures, four skips, and three failures: the default live interceptor caused 4901 socket closes in two restart tests; the protocol test still expected empty create arguments. Typecheck also found an optional event-payload access.
+- Replace the default live callback with a worker-backed `itx-call` responder. Its mount survives stream restart without a live pager on the test's socket; the creating session still owns its lifetime. Custom scripted interceptors retain their existing live lifecycle.
+- Gateway telemetry for preview_3 at 14:45–14:48 UTC found four paid direct note/media requests totaling $0.00037559 plus twelve cached onboarding requests (and the permitted cached fruit request). Mobile OAuth access tokens omit email, so signup's email-only policy opt-in missed them. Mobile fixtures now use an explicit `intercepted-e2e-` project slug and assert the stored policy before test actions; the camera-roll note spec also scripts its note/media analysis.
+- Added live proofs for default-responder survival across stream restart and signup interception without an email claim. These and the existing journal/direct-call/handler-release proof pass locally (three tests); four pure policy cases pass. OS and browser-spec typechecks and scoped lint pass.
+- At the user's request, expanded the PR's Change / Purpose table with a separate rationale for each core file. It calls out why fixture-only model overrides miss app-created agents, why selection precedes journaling, production host wiring, and the extra Project DO lookup even in ordinary projects.
+
+- The original wire-format test and parked-egress restart test both pass locally after the fixes. The literal array in the Cap’n Web wire assertion needs its encoded `[[]]` representation. The oversized-event restart case requires deployed preview.

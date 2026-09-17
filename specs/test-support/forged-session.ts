@@ -1,4 +1,4 @@
-import { test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import type {
   IterateAuthAccessTokenOrganizationClaim,
   IterateAuthProjectClaim,
@@ -36,7 +36,7 @@ export async function createMobileFixture(
   const resources = new AsyncDisposableStack();
   const osBaseUrl = await resolveOsBaseUrl();
 
-  const projectSlug = uniqueFixtureSlug(slugPrefix);
+  const projectSlug = uniqueFixtureSlug(`intercepted-e2e-${slugPrefix}`, { maxPrefixLength: 40 });
 
   await signUpToProject();
 
@@ -50,7 +50,10 @@ export async function createMobileFixture(
     }),
   );
 
-  resources.use(await interceptor.intercept(itx, interceptor.noOpAgent));
+  expect((await itx.processor.snapshot()).state.createRequest?.config.aiPolicy).toEqual({
+    liveAgentPaths: [],
+  });
+  await interceptor.installNoOpAgent(itx);
 
   const agentHelper = resources.use(
     createAgentHelper({

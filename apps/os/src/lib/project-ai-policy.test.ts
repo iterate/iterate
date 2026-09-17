@@ -33,14 +33,36 @@ test("ordinary project models are unchanged", () => {
 });
 
 test("automatic signup policy is restricted to the browser suite, never ordinary test logins or production", () => {
-  expect(signupTestAiPolicy("intercepted-e2e-notes-123+test@nustom.com", "preview-1")).toEqual({
+  expect(
+    signupTestAiPolicy(
+      "intercepted-e2e-notes-123+test@nustom.com",
+      "ordinary-project",
+      "preview-1",
+    ),
+  ).toEqual({
     liveAgentPaths: [],
   });
-  expect(signupTestAiPolicy("intercepted-e2e-notes-123+test@nustom.com", "dev")).toEqual({
+  expect(
+    signupTestAiPolicy("intercepted-e2e-notes-123+test@nustom.com", "ordinary-project", "dev"),
+  ).toEqual({
     liveAgentPaths: [],
   });
-  expect(signupTestAiPolicy("alice+test@nustom.com", "preview-1")).toBeUndefined();
-  expect(signupTestAiPolicy("intercepted-e2e-notes-123+test@nustom.com", "prd")).toBeUndefined();
-  expect(signupTestAiPolicy("intercepted-e2e-notes-123+test@different.com", "dev")).toBeUndefined();
-  expect(signupTestAiPolicy(undefined, "dev")).toBeUndefined();
+  expect(
+    signupTestAiPolicy("alice+test@nustom.com", "ordinary-project", "preview-1"),
+  ).toBeUndefined();
+  expect(
+    signupTestAiPolicy("intercepted-e2e-notes-123+test@nustom.com", "ordinary-project", "prd"),
+  ).toBeUndefined();
+  expect(
+    signupTestAiPolicy("intercepted-e2e-notes-123+test@different.com", "ordinary-project", "dev"),
+  ).toBeUndefined();
+  expect(signupTestAiPolicy(undefined, "ordinary-project", "dev")).toBeUndefined();
+});
+
+test("the mobile fixture slug selects interception without an email claim", () => {
+  expect(signupTestAiPolicy(undefined, "intercepted-e2e-mobile-notes-123", "preview_3")).toEqual({
+    liveAgentPaths: [],
+  });
+  expect(signupTestAiPolicy(undefined, "intercepted-e2e-mobile-notes-123", "prd")).toBeUndefined();
+  expect(signupTestAiPolicy(undefined, "mobile-notes-123", "preview_3")).toBeUndefined();
 });

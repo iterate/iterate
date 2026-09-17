@@ -84,7 +84,15 @@ test("Authenticated internal auth itx can create project and append to stream", 
         "out",
         ["push", ["pipeline", expect.any(Number), ["projects", "get"], [projectSlug]]],
       ],
-      [expect.any(Number), "out", ["push", ["pipeline", expect.any(Number), ["create"], [{}]]]],
+      [
+        expect.any(Number),
+        "out",
+        [
+          "push",
+          // Cap'n Web wraps literal arrays to distinguish them from wire instructions.
+          ["pipeline", expect.any(Number), ["create"], [{ aiPolicy: { liveAgentPaths: [[]] } }]],
+        ],
+      ],
     ]),
   );
 

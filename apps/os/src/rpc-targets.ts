@@ -6972,7 +6972,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     // Select the suite's policy before onboarding can request AI; ordinary
     // +test logins remain usable for manual preview sessions.
     const aiPolicy =
-      args.aiPolicy || signupTestAiPolicy(creatorEmail, parseConfig(env).environmentName);
+      args.aiPolicy ||
+      signupTestAiPolicy(creatorEmail, registered.slug, parseConfig(env).environmentName);
     // Every birth event carries an idempotency key, so the keyed-append door
     // retry in StreamRpcTarget.append is the single deploy-reset recovery.
     // Platform lane: the root batch arms the facet-placed project and

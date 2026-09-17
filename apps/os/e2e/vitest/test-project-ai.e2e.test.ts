@@ -2,6 +2,42 @@ import { expect, test } from "vitest";
 import { interceptor } from "@iterate-com/test-support";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
+test("the default test responder survives stream restart without closing the test session", async () => {
+  const slug = `durable-test-ai-${crypto.randomUUID()}`;
+  using session = withItxSession({ auth: { type: "admin-secret", secret: adminSecret() } });
+  using project = await interceptor.createProject(session.projects.get(slug));
+  using root = project.streams.get("/");
+  await expect(root.kill()).rejects.toThrow(/kill requested/i);
+
+  using agent = project.agents.get("/agents/mobile/note-after-restart");
+  await agent.create();
+  const message = await agent.message("An unasserted background message");
+  const settled = await agent.stream.waitForEvent({
+    afterOffset: message.offset,
+    eventTypes: ["events.iterate.com/agent/llm-request-settled"],
+    timeoutMs: 30_000,
+  });
+  expect(settled.payload).toMatchObject({ result: { status: "succeeded" } });
+  await expect(
+    project.ai.run("@cf/meta/llama-4-scout-17b-16e-instruct", { prompt: "hi" }),
+  ).rejects.toThrow("Test must script its ai-run response");
+});
+
+test("a signup fixture without an email claim is intercepted from project birth", async () => {
+  using session = withItxSession({ auth: { type: "admin-secret", secret: adminSecret() } });
+  // No explicit policy: mobile OAuth's access token has no email claim.
+  using project = await session.projects
+    .get(`intercepted-e2e-mobile-${crypto.randomUUID()}`)
+    .create({});
+  expect((await project.processor.snapshot()).state.createRequest?.config.aiPolicy).toEqual({
+    liveAgentPaths: [],
+  });
+  using _ai = await interceptor.intercept(project, () => Response.json({ response: "scripted" }));
+  expect(await project.ai.run("@cf/meta/llama-4-scout-17b-16e-instruct", { prompt: "hi" })).toEqual(
+    { response: "scripted" },
+  );
+});
+
 test("a test project's unconfigured agents and direct AI calls stay intercepted after handler release", async () => {
   using session = withItxSession({ auth: { type: "admin-secret", secret: adminSecret() } });
   using project = await interceptor.createProject(
@@ -25,7 +61,7 @@ test("a test project's unconfigured agents and direct AI calls stay intercepted 
   await background.stream.waitForEvent({
     afterOffset: backgroundMessage.offset,
     eventTypes: ["events.iterate.com/agent/llm-request-settled"],
-    predicate: (event) => (event.payload.result as any)?.status === "succeeded",
+    predicate: (event) => (event.payload?.result as any)?.status === "succeeded",
     timeoutMs: 30_000,
   });
   expect(seen).toEqual([]);
