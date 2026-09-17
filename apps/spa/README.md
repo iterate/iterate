@@ -1,6 +1,6 @@
 # Static SPA
 
-The pure-client archetype: three files — `index.html`, `app.js`, `oauth.js` — served from any
+The pure-client archetype: three files in `public/` — `index.html`, `app.js`, `oauth.js` — served from any
 static host, no build, no server of their own. The page runs the OAuth dance itself (discovery,
 a one-time public-client registration, PKCE, refresh), then opens one WebSocket to the platform's
 `/api` bare and presents the access token IN the `authenticate` call — capnweb's own pattern:

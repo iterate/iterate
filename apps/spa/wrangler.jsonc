@@ -3,6 +3,6 @@
   // the proof has a public URL on workers.dev. There is no worker code.
   "name": "iterate-spa",
   "compatibility_date": "2026-09-01",
-  "assets": { "directory": "./", "not_found_handling": "single-page-application" },
+  "assets": { "directory": "./public", "not_found_handling": "single-page-application" },
   "workers_dev": true,
 }
