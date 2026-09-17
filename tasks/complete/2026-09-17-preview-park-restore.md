@@ -7,8 +7,9 @@ size: medium
 
 Experiment complete: full preview passed, showed green 72s before cleanup ended,
 and restored fresh namespaces. Failure/cancellation, application use and recovery
-were verified. The draft PR records provider/container limits and an unrelated
-expired-test CI failure. No merge is authorized.
+were verified. The PR records provider/container limits; merging main resolved
+the unrelated expired-test failure. Traces now lead with Time to green. No merge
+is authorized.
 
 ## Request and decisions
 
@@ -45,7 +46,7 @@ expired-test CI failure. No merge is authorized.
 - [x] Implement and test honest early-green/final-failure reporting. *`status.ts set-pending-check-green`; live checks 105090329542 and 105090616821 changed from success to failure/cancelled.*
 - [x] Run preview experiments, including an injected cleanup failure and recovery. *First full run restored successfully; dirty-checkout guard refused only after retirement, then clean recovery passed.*
 - [x] Validate resulting namespaces, fresh application behavior and activity. *Ten namespaces replaced; fresh project, schedule and login worked. Retained containers were quiet in the measured window; ordinary OS analytics lacked a positive control.*
-- [x] Complete local checks, independent review and CI/review follow-up. *360 scripts tests and all preview jobs passed; only the unrelated expired-test check remains red. Global PR monitor retains follow-up ownership.*
+- [x] Complete local checks, independent review and CI/review follow-up. *360 scripts tests and all preview jobs passed; merging main at `ca226f195` later brought all checks green. Global PR monitor retains follow-up ownership.*
 - [x] Publish report, update PR and mark task complete. *`docs/preview-park-restore-experiment.md` records successful/failed traces, timing, state, telemetry and limitations.*
 
 ## Implementation log
@@ -94,3 +95,9 @@ expired-test CI failure. No merge is authorized.
 - Removed the successful-restoration notice at the user's request. Successful
   PR bodies return to their ordinary appearance; version details stay in the
   restoration receipt.
+
+- Added Time to green as the primary CI trace statistic, retaining workflow wall
+  time and the full cleanup timeline. New runs record GitHub's acknowledgement
+  as an OTLP event; historical runs use the successful early-green step end.
+  The screenshot's run renders 5m 36s versus 6m 50s. Verified 369 scripts tests,
+  typecheck, lint, formatting and desktop/mobile browser rendering.
