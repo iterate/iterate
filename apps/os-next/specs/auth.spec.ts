@@ -65,7 +65,7 @@ async function mcp(origin: string, token: string, name: string, args = {}) {
   return JSON.parse(message ? message.slice(6) : body);
 }
 
-test("first Claude consent creates the organization and project in the SPA before granting MCP access", async ({
+test("first Claude consent creates the organization and project on the consent page before granting MCP access", async ({
   page,
   context,
   baseURL,
@@ -75,6 +75,7 @@ test("first Claude consent creates the organization and project in the SPA befor
   const email = `consent-${stamp()}@example.com`;
   const project = `consent-${stamp()}`;
   const otherProject = `unselected-${stamp()}`;
+  const thirdProject = `third-${stamp()}`;
   let receiveCallback!: (url: URL) => void;
   const callback = new Promise<URL>((resolve) => {
     receiveCallback = resolve;
@@ -99,7 +100,7 @@ test("first Claude consent creates the organization and project in the SPA befor
     resources: [resource, `${origin}/api`],
     scopes: ["iterate", "account"],
   });
-  // Repeated resource keys and '+' form encoding must survive the TanStack SPA.
+  // Repeated resource keys and '+' form encoding must survive the page's form round trips.
   const expectedState = `${flow.state} + OAuth state`;
   flow.url.searchParams.set("state", expectedState);
   const sockets: string[] = [];
@@ -121,6 +122,20 @@ test("first Claude consent creates the organization and project in the SPA befor
       .getByRole("heading", { name: "Create your first organization", exact: true })
       .waitFor();
     expect(new URL(page.url()).search).toBe(flow.url.search);
+    // Task-based consent: `iterate` is fixed, the account permission is optional — untick it; the
+    // choice survives every round trip below and the grant carries `iterate` alone.
+    const projectAccess = page.getByRole("checkbox", {
+      name: "Read and make changes in the projects you grant it",
+      exact: true,
+    });
+    expect(await projectAccess.isChecked()).toBe(true);
+    expect(await projectAccess.isDisabled()).toBe(true);
+    const accountAccess = page.getByRole("checkbox", {
+      name: "See and end your sessions, and mint personal access tokens",
+      exact: true,
+    });
+    expect(await accountAccess.isChecked()).toBe(true);
+    await accountAccess.uncheck();
     await page
       .getByRole("textbox", { name: "Organization name", exact: true })
       .fill("First consent studio");
@@ -177,15 +192,38 @@ test("first Claude consent creates the organization and project in the SPA befor
     expect(await choice.isChecked()).toBe(true);
     expect(await otherChoice.isChecked()).toBe(true);
     expect(await otherChoice.isDisabled()).toBe(true);
+    // A create while "every project" is ticked re-renders the parked list; the new project goes
+    // into the FIRST organization, so the boxes' order (grouped by organization) differs from the
+    // projects' creation order — the ticks must come back to the right boxes.
+    await page
+      .getByRole("combobox", { name: "Organization", exact: true })
+      .selectOption({ label: "First consent studio" });
+    await page.getByRole("textbox", { name: "Project name", exact: true }).fill(thirdProject);
+    await page.getByRole("button", { name: "Create project", exact: true }).click();
+    const thirdChoice = page.getByRole("checkbox", {
+      name: `${thirdProject} in First consent studio`,
+      exact: true,
+    });
+    await thirdChoice.waitFor();
+    expect(await thirdChoice.isChecked()).toBe(true);
+    expect(await thirdChoice.isDisabled()).toBe(true);
     await future.uncheck();
     expect(await choice.isChecked()).toBe(true);
+    expect(await thirdChoice.isChecked()).toBe(true);
     expect(await otherChoice.isChecked()).toBe(false);
+    await page
+      .getByRole("status")
+      .filter({ hasText: /^2 selected$/ })
+      .waitFor();
+    await thirdChoice.uncheck();
     await page
       .getByRole("status")
       .filter({ hasText: /^1 selected$/ })
       .waitFor();
     expect(new URL(page.url()).search).toBe(flow.url.search);
-    expect(sockets.filter((url) => new URL(url).pathname === "/api")).toHaveLength(1);
+    expect(await accountAccess.isChecked()).toBe(false);
+    // The consent page opens no socket — it posts JSON, and its session is built in the worker.
+    expect(sockets.filter((url) => new URL(url).pathname === "/api")).toHaveLength(0);
     await page.screenshot({ path: test.info().outputPath("first-consent.png"), fullPage: true });
     await page.getByRole("button", { name: "Approve", exact: true }).click();
     await page

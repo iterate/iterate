@@ -2,9 +2,10 @@ import { AuthorizationError, CimdFetchError } from "@cloudflare/workers-oauth-pr
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
 import { codedError } from "iterate/next/lib";
+import { OAuthScope, OAuthScopes } from "iterate/next/oauth-scopes";
 import type { Env } from "./control-plane.ts";
 import { directory, type Org, type Project } from "./directory.ts";
-import { projectHostOf } from "./hosts.ts";
+import { customProjectHostOf, projectHostOf } from "./hosts.ts";
 import { appConfigOf } from "./app-config.ts";
 import {
   authorizationOf,
@@ -30,13 +31,17 @@ export type ConsentView =
   | { kind: "redirect"; location: string }
   | { kind: "invalid"; description: string };
 
-/** A platform-served project CIMD client can receive only that project's authority. */
+/** A platform-served project CIMD client can receive only that project's authority — on a host
+ *  under the project hostname base or on a project's custom apex (the same two hostname checks
+ *  worker.ts admits a project host with). */
 async function projectsForClient(env: Env, clientId: string, userId: string) {
   const projects = await directory(env.DB).listProjects(userId);
   const url = URL.canParse(clientId) ? new URL(clientId) : null;
+  const config = appConfigOf(env);
   const host =
     url?.pathname === "/.auth/client.json"
-      ? projectHostOf(url.hostname, appConfigOf(env).projectHostnameBase)
+      ? (projectHostOf(url.hostname, config.projectHostnameBase) ??
+        customProjectHostOf(url.hostname, config.projectCustomHostnames))
       : null;
   if (!host) return { projects, projectBound: false };
   const project = await directory(env.DB).getProject(host.project);
@@ -108,12 +113,23 @@ export class Consent extends RpcTarget {
       return authorizationFailure(error);
     }
   }
+  /** Approve: the projects ticked (`["*"]` = every current and future project) and, task-based
+   *  consent, the scopes left ticked — `iterate` always, never one the request did not ask for; the
+   *  grant and its tokens carry exactly that set (`session.info().scopes` tells the app). Without
+   *  `scopes`, the request's whole set. */
   async approve(input: {
     query: string;
     projects: string[];
+    scopes?: string[];
   }): Promise<{ redirectTo: string } | { error: string }> {
     const env = this.#env;
-    const data = z.object({ query: z.string(), projects: z.array(z.string()) }).parse(input);
+    const data = z
+      .object({
+        query: z.string(),
+        projects: z.array(z.string()),
+        scopes: z.array(z.string()).optional(),
+      })
+      .parse(input);
     try {
       const request = await this.#request(data.query);
       const client = await oauthHelpers(env).lookupClient(request.clientId);
@@ -127,11 +143,17 @@ export class Consent extends RpcTarget {
       const allProjects = !projectBound && checked.has("*");
       if (!allProjects && !granted.length)
         return { error: "Choose at least one project you can access." };
+      const scope = OAuthScopes.parse(
+        (data.scopes || request.scope).filter(
+          (candidate) =>
+            request.scope.includes(candidate) && OAuthScope.safeParse(candidate).success,
+        ),
+      );
       return await oauthHelpers(env).completeAuthorization({
         request,
         userId: this.#grant.userId,
         metadata: { clientName: client?.clientName ?? request.clientId },
-        scope: request.scope,
+        scope,
         revokeExistingGrants: false,
         props: {
           kind: "app",

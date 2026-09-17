@@ -1,0 +1,10 @@
+# public/_headers — the headers wrangler's static assets attach to the issuer's files (login.html,
+# authorize.html and the stylesheet and scripts beside them). The pages load only their own files,
+# talk only to their own origin, and never render inside a frame.
+/*
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src data:; base-uri 'none'; frame-ancestors 'none'
+  X-Frame-Options: DENY
+/login
+  Cache-Control: no-store
+/authorize
+  Cache-Control: no-store

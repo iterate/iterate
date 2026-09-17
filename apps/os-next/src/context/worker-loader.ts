@@ -22,13 +22,13 @@
 // `DurableObject` class): there is NO host-injected wrapper and no bare-lambda door — the code the
 // author wrote IS what runs, and it always enters through an EXPORTED entrypoint.
 
-import PROCESSOR_SDK_MODULE from "virtual:processor-sdk";
 import { codedError } from "iterate/next/lib";
 import {
   normalizedItxExpression,
   type ItxExpression,
   type ItxExpressionInput,
 } from "iterate/next/expression";
+import PROCESSOR_SDK_MODULE from "../generated/processor-sdk.js";
 
 /** Compose the loader cacheKey `owner` (context + a discriminator: a processor slug or a stateful
  *  className) COLLISION-FREE. The naive `${context}:${discriminator}` aliased across a different

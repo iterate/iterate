@@ -9,9 +9,16 @@ import { oauthAddresses, oauthHelpers, parseAuthorization, type GrantProps } fro
  * exchange, admission, expiry and revocation. No separate identity cookie. */
 export async function startIssuerSession(env: Env, user: User, next: string) {
   const { issuer, api } = oauthAddresses(env);
+  // The issuer's own session holds every scope: it is the person at the issuer, and the consent
+  // page creates organizations and projects through it.
   const flow = await startAppSession(
     env.BROWSER_SESSION,
-    { origin: issuer, issuer, resource: api, scopes: ["iterate", "account"] },
+    {
+      origin: issuer,
+      issuer,
+      resource: api,
+      scopes: ["iterate", "account", "organizations:write"],
+    },
     sameOriginPath(next, issuer),
   );
   const helpers = oauthHelpers(env);

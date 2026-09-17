@@ -15,6 +15,18 @@ export function hostnameLabelsUnderBase(hostname: string, base: string): string[
   return host.endsWith(suffix) ? host.slice(0, -suffix.length).split(".") : null;
 }
 
+/** A CUSTOM HOSTNAME — one of the deployment's own that IS a project's apex (`APP_CONFIG_PROJECT_CUSTOM_HOSTNAMES`,
+ *  `iterate2.com=iterate`): the apex shape, `app: null`, so the project's config worker
+ *  `fetch` answers exactly as it does on `<project>.<base>`. Null for a hostname the map does not
+ *  name. Pure. */
+export function customProjectHostOf(
+  hostname: string,
+  hostnames: Record<string, string>,
+): { app: null; project: ProjectIdOrSlug } | null {
+  const project = hostnames[hostname.toLowerCase().replace(/\.$/, "")];
+  return project ? { app: null, project } : null;
+}
+
 /** The app + project a host names, or null when `hostname` is not a project host under `base` (a
  *  blank `base` ⇒ no project-host ingress at all). `<app>--<project>.<base>` and
  *  `<app>.<project>.<base>` name the app `<app>`; the apex `<project>.<base>` names none (`app:

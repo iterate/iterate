@@ -15,6 +15,7 @@ import {
   deployedOnly,
   fetchProjectHost,
   freshDnsSafeProjectId,
+  localOnly,
   projectHostnameBase,
   projectHostsAreLocal,
   registerProject,
@@ -127,6 +128,34 @@ test("an app is served at / on its project host — URL verbatim, relative asset
   const missing = await fetchProjectHost(`other--${projectId}.${base}`, "/");
   expect(missing.status, missing.text).toBe(404);
 });
+
+// A CUSTOM HOSTNAME (`APP_CONFIG_PROJECT_CUSTOM_HOSTNAMES`, worker-config.ts: `custom-apex.test` ⇒
+// `custom-apex-project`) is that project's apex outside the base: the config worker's `fetch`
+// answers, the same row a `<project>.<base>` apex lands on. LOCAL ONLY: the deployed map is prd's
+// (`iterate2.com` ⇒ the `iterate` project), proven by hand against iterate2.com.
+localOnly(
+  "a custom hostname is a project's apex: the config worker's fetch answers it",
+  async () => {
+    const projectId = "custom-apex-project";
+    await registerProject(projectId);
+    const itx = openItx(projectId);
+    await itx.provide("itx.apps.site", siteRule());
+    // the bundled default config worker: 404 — the request reached the project, nothing answered
+    const bare = await fetchProjectHost("custom-apex.test", "/");
+    expect(bare.status, bare.text).toBe(404);
+    await itx.provide("itx.worker", [
+      "itx",
+      "workers",
+      ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:custom-apex" }],
+    ]);
+    const apex = await fetchProjectHost("custom-apex.test", "/echo");
+    expect(apex.status, apex.text).toBe(200);
+    expect((JSON.parse(apex.text) as { url: string }).url).toContain("//custom-apex.test/echo");
+    // a hostname the map does not name is not a project host (nor the platform origin): 421
+    const unknown = await fetchProjectHost("other-apex.test", "/");
+    expect(unknown.status, unknown.text).toBe(421);
+  },
+);
 
 test("a project host verifies an OAuth bearer, strips credentials and rejects a grant for another project", async () => {
   const projectId = freshDnsSafeProjectId("ingress-who");
