@@ -141,7 +141,7 @@ export function assembleTrace(
       "ci.source.ref": workflow.ref,
       "ci.url": `https://depot.dev/orgs/0p91s0lz49/workflows/${workflow.workflowId}`,
       "ci.evidence":
-        "Depot timestamps; shell and Playwright lifecycle markers. Uninstrumented action time remains in its enclosing job/phase.",
+        "Depot timestamps; shell and test lifecycle markers. Uninstrumented action time remains in its enclosing job/phase.",
     },
     workflow.workflowStatus === "failed",
   );
@@ -359,26 +359,40 @@ export function assembleTrace(
       }
       for (const test of events.filter((event) => event.kind === "test-start")) {
         const done = testEnds.get(test.id);
+        const aggregate = test.framework === "vitest";
+        const retryCount = done?.retryCount || 0;
+        const suffix = aggregate
+          ? retryCount
+            ? ` · ${retryCount} ${retryCount === 1 ? "retry" : "retries"}`
+            : ""
+          : test.retry
+            ? ` · retry ${test.retry}`
+            : "";
         add(
           `${attempt.attemptId}/test/${test.id}`,
           stepParents.get(test.stepKey) || jobSpan,
-          `${test.title}${test.retry ? ` · retry ${test.retry}` : ""}`,
+          `${test.title}${suffix}`,
           test.time,
           done?.time || Math.max(test.time, end),
           {
             "ci.kind": "test",
             "ci.status": done?.status || "incomplete",
             "ci.evidence": done
-              ? "Playwright startTime + duration"
+              ? aggregate
+                ? "Vitest startTime + duration; includes hooks and all retries"
+                : "Playwright startTime + duration"
               : test.time > end
                 ? "incomplete; enclosing finish precedes start"
                 : "incomplete; end bounded by job finish",
+            "test.framework": test.framework,
+            "test.attempt_detail": aggregate ? "aggregate-only" : "complete",
+            ...(aggregate && done && { "test.retry_count": String(retryCount) }),
             "test.file": test.file,
             "test.line": String(test.line),
             "test.project": test.project,
             "test.retry": String(test.retry),
             "test.expected_status": done?.expectedStatus || "unknown",
-            "test.worker": done ? String(done.worker) : "unknown",
+            "test.worker": typeof done?.worker === "number" ? String(done.worker) : "unknown",
           },
           !!done && done.status !== done.expectedStatus && done.status !== "skipped",
         );
@@ -585,6 +599,8 @@ const TraceEvent = z.discriminatedUnion("kind", [
     id: z.string(),
     time: z.number().finite(),
     title: z.string(),
+    // Historical markers were emitted only by Playwright.
+    framework: z.enum(["playwright", "vitest"]).default("playwright"),
     file: z.string(),
     line: z.number(),
     project: z.string(),
@@ -596,7 +612,8 @@ const TraceEvent = z.discriminatedUnion("kind", [
     time: z.number().finite(),
     status: z.string(),
     expectedStatus: z.string(),
-    worker: z.number(),
+    worker: z.number().optional(),
+    retryCount: z.number().int().nonnegative().optional(),
   }),
 ]);
 

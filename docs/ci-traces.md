@@ -2,7 +2,7 @@
 
 Preview runs get a **CI trace** commit status after the workflow finishes.
 Its **Details** link opens the report for that tested commit. The report shows
-jobs, setup/wait/test/finish phases, measured shell steps and individual Playwright attempts. Expand rows, search for a test,
+jobs, setup/wait/test/finish phases, measured shell steps and individual Playwright attempts and Vitest tests. Expand rows, search for a test,
 click a bar, or zoom to a selected span. Download the same trace as OTLP JSON.
 
 Expand a **Wait** phase, then select its wait step (click/tap, or focus its bar
@@ -126,6 +126,13 @@ pnpm exec trpc-cli scripts/ci/tracing/cli.ts render <workflow-id> /tmp/ci-trace
   can fall just after that timestamp: preserve both recorded times and give the
   synthetic trailing Finish phase zero duration rather than a negative interval.
 - Playwright durations include fixtures. Retries appear as separate attempts.
-  Vitest test internals and deployed request spans are outside this report.
+- Vitest emits test lifecycle markers through the existing retry telemetry reporter
+  when `CI_TRACE_ENABLED=1`. Each span uses the runner's start time and duration,
+  covering hooks and all retries together. Retried tests show their retry count;
+  separate attempt timings are unavailable. Expected failures use Vitest's
+  normalized outcome. Static skips have no span because they never ran. Missing
+  completion markers remain incomplete, as with Playwright. Reporter callbacks
+  are buffered by Vitest, so a hard kill can lose markers not yet delivered.
+  Nested test operations and deployed request spans remain outside this report.
 - This is valid OTLP/JSON assembled after completion, not live SDK export. It
   can feed a collector later without changing the browser report's data model.
