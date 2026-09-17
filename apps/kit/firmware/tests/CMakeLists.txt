@@ -181,6 +181,22 @@ if(APPLE)
   iterate_kit_add_test(
     iterate-kit-darwin-audio-codec-test darwin_audio_codec_test.c
     STD 11 OPTIONS -Wconversion -Wshadow LINK iterate-kit-darwin)
+
+  iterate_kit_add_test(
+    iterate-kit-darwin-audio-input-test darwin_audio_input_test.c
+    STD 11 OPTIONS -Wconversion -Wshadow LINK iterate-kit-darwin)
+
+  iterate_kit_add_test(
+    iterate-kit-darwin-audio-output-test darwin_audio_output_test.c
+    STD 11 OPTIONS -Wconversion -Wshadow LINK iterate-kit-darwin)
+
+  iterate_kit_add_test(iterate-kit-posix-websocket-test posix_websocket_test.c
+    LINK iterate-kit-darwin)
+
+  iterate_kit_add_test(iterate-kit-darwin-itx-transport-test
+    darwin_itx_transport_test.c fakes/fake_posix_websocket.c
+    ../platforms/darwin/itx_transport.c
+    INCLUDES fakes ../platforms/darwin/include LINK iterate-kit-darwin)
 endif()
 
 # HAVPE's adopted pure hardware policy: byte-exact register/wire vectors and

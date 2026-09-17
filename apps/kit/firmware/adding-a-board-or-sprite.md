@@ -52,6 +52,8 @@ remote visemes are an existing optional Waveshare overlay.
 ## Bench proof
 
 Run the focused host tests, build the target, provision it with a real project
-and use `voicelab boards --only <device-name-or-client-path>` only on an idle
-board. Read health before changing audio code. A serial monitor reboots many
-boards; the stream health capability is the in-call instrument.
+and run `apps/os-next/scripts/voice-board.ts --device <device_name>` only on an
+idle board. Read health before changing audio code. A serial monitor reboots
+many boards; the stream health capability is the in-call instrument. A loop
+change that is not about the hardware can be tried first on the Mac target
+(`iterate-kit-mac`, see the [firmware guide](README.md)).

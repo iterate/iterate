@@ -12,8 +12,11 @@
  *   iterate-kit-mac --config cfg.bin [--name mac] [--no-aec]
  *
  * `cfg.bin` is the ITERKIT1 image tools/make-config-image.py writes for a
- * board. Space or return presses the button; q leaves. Remote presses reach
- * the `button.press` capability like every other board's.
+ * board. Space or return presses the button; q leaves. Over the wire the
+ * device is `itx.clients.<name>` like every board — scripts/voice-board.ts
+ * starts its conversation and speaks to it. VoiceProcessingIO cancels what
+ * this Mac plays through its own speaker, so a scripted proof that speaks
+ * through that speaker runs with --no-aec; a person talking keeps it on.
  */
 #include <signal.h>
 #include <stdbool.h>
@@ -117,7 +120,7 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
   }
 }
 
-/** The button, over the wire: what scripts/voice-board.ts presses. */
+/** The button, over the wire — the same `button.press` every board lends. */
 static enum capnweb_status button_press(
     void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
   (void)context;
