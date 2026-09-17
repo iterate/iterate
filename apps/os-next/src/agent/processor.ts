@@ -186,6 +186,8 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
             maxAutonomousTurns: patch.maxAutonomousTurns ?? state.config.maxAutonomousTurns,
             llmRequestExpiryMs: patch.llmRequestExpiryMs ?? state.config.llmRequestExpiryMs,
             llmRequestDebounceMs: patch.llmRequestDebounceMs ?? state.config.llmRequestDebounceMs,
+            // oxlint-disable-next-line iterate/simple-truthiness-check -- an explicit "" is a PRESENT value that disables the plain-response handler (an agent that only acts), distinct from an absent patch that keeps the current expression
+            plainResponse: patch.plainResponse ?? state.config.plainResponse,
             llmRequestRetryPolicy: {
               maxAttempts:
                 patch.llmRequestRetryPolicy?.maxAttempts ??
@@ -404,11 +406,26 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
           },
         });
       }
-      if ((outcome.kind === "script" || outcome.kind === "none") && outcome.prose)
+      // A tag's accompanying prose is the message, sent directly. A response with NO tag is a plain
+      // reply: it becomes a `<codemode>` script that invokes the agent's configured `plainResponse`
+      // expression with the text (`itx.chat.sendMessage` by default) — so the agent's whole output
+      // is code, one turn is one activity, and where a reply GOES is per-agent (web, Slack, ...).
+      if (outcome.kind === "script" && outcome.prose)
         consequences.push({
           type: "events.iterate.com/agents/web-message-sent",
           idempotencyKey: this.idempotencyKey("codemode-prose", event),
           payload: { message: outcome.prose, llmRequestOffset },
+        });
+      if (outcome.kind === "none" && outcome.prose && state.config.plainResponse)
+        consequences.push({
+          type: "events.iterate.com/capability-host/script-run-requested",
+          idempotencyKey: this.idempotencyKey("plain-response", event),
+          payload: {
+            // The configured expression is trusted config, not model output: baked in as the callable.
+            code: `async (itx) => { await ${state.config.plainResponse}(${JSON.stringify(outcome.prose)}); }`,
+            executionId: `reply:${String(event.offset)}`,
+            expiresAt: Date.parse(event.createdAt) + state.config.llmRequestExpiryMs,
+          },
         });
       if (consequences.length > 0) blockProcessorWhile(() => append(...consequences));
     }

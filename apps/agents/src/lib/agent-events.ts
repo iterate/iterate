@@ -70,6 +70,16 @@ export function reduceAgentFeed(
     state = reduced.endState;
     items.push(...reduced.items);
   }
+  // A bare reply runs as a `reply:` script (the plain-response handler) — its message shows as a
+  // normal bubble, so the redundant activity card is dropped from the feed (the trace still has it).
+  const shown = items.filter(
+    (item) =>
+      item.kind !== "activity" ||
+      !item.steps.some((step) => step.kind === "code") ||
+      item.steps.some((step) => step.kind === "code" && !step.executionId.startsWith("reply:")),
+  );
+  items.length = 0;
+  items.push(...shown);
   const last = events.at(-1);
   if (idle && last && state.live && !state.live.steps.some((step) => step.status === "running")) {
     const reduced = reduceAgentUiRuntime(state, {
@@ -205,12 +215,18 @@ export function llmTrace(events: readonly Event[], llmRequestOffset: number): Ll
     const p = isRecord(event.payload) ? event.payload : {};
     return p.llmRequestOffset === llmRequestOffset;
   });
-  const scriptExecutionId = assistant ? `agent-output:${String(assistant.offset)}` : undefined;
-  const ran = events.some((event) => {
-    if (event.type !== "events.iterate.com/capability-host/script-run-requested") return false;
-    const p = isRecord(event.payload) ? event.payload : {};
-    return p.executionId === scriptExecutionId;
-  });
+  // The script a response produced: a codemode action (`agent-output:`) or, for a bare reply, the
+  // plain-response handler the platform ran (`reply:`). Both key off the assistant event's offset.
+  const scriptExecutionId = assistant
+    ? [`agent-output:${String(assistant.offset)}`, `reply:${String(assistant.offset)}`].find((id) =>
+        events.some((event) => {
+          if (event.type !== "events.iterate.com/capability-host/script-run-requested")
+            return false;
+          const p = isRecord(event.payload) ? event.payload : {};
+          return p.executionId === id;
+        }),
+      )
+    : undefined;
   return {
     llmRequestOffset,
     model: typeof payload.model === "string" ? payload.model : "?",
@@ -222,7 +238,7 @@ export function llmTrace(events: readonly Event[], llmRequestOffset: number): Ll
         prose && isRecord(prose.payload) && typeof prose.payload.message === "string"
           ? prose.payload.message
           : undefined,
-      scriptExecutionId: ran ? scriptExecutionId : undefined,
+      scriptExecutionId,
     },
   };
 }
