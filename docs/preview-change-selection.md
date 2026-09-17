@@ -120,8 +120,8 @@ semicolons or newlines. The waiter converts semicolon separators into output
 lines directly. `options.values || { milestone }` supplies a `milestone` output
 only when no values are provided.
 
-The context is `ci/<milestone>/<jobId>/<attemptId>`, with the milestone visible
-first. Depot's unique job and attempt IDs identify the producer; workflow and
+The context is `ci/<milestone>/<attemptId>`, with the milestone visible
+first. Depot's unique attempt ID identifies the producer; job, workflow and
 execution IDs add no disambiguation. Both sides still validate membership in
 the current workflow, checkout and repository, and reject retried workflows.
 Its `success` means **decision available**, including an inherited red decision:

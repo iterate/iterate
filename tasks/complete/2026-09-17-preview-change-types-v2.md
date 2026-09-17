@@ -151,7 +151,7 @@ No runs were interrupted. Based on main after #2695.
   the existing dependency-install test's five-second timeout; unchanged tests
   will run again with the finalizer follow-up. No run was interrupted.
 - Format follow-up: use `options.values || { milestone }` for signal values,
-  with the milestone first in `ci/<milestone>/<jobId>/<attemptId>` contexts.
-  Unique job/attempt IDs suffice; workflow membership and retry guards remain.
+  with the milestone first in `ci/<milestone>/<attemptId>` contexts.
+  Unique attempt IDs suffice; workflow membership and retry guards remain.
   Validate names and reserve semicolons/newlines in values before publication;
   the waiter can append the description as output lines without JSON decoding.
