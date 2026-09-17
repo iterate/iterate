@@ -507,6 +507,9 @@ export class ProcessorEngine<State> {
     if (this.#backgroundWorkInFlight === 0) return;
     this.#revivesWhileBusy += 1;
     this.#claim(Math.min(REVIVE_AFTER_MS * 2 ** this.#revivesWhileBusy, REVIVE_AFTER_MAX_MS));
+    // Awaited: the pass that called this derives its next deadline as soon as it returns, so the
+    // claim must have landed by then — one alarm write, not a delete and a set.
+    await this.#claimChain;
   }
 
   /** THE GUARDED REDUCE, shared by the live flow and the version replay. A reducer that throws on an
