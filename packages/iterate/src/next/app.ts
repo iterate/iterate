@@ -69,12 +69,13 @@ export function createIterateClient(options: { scopes?: string[] } = {}): Iterat
     return connection;
   }
   // Every property read goes to the live connection — or to a fresh one when the last socket
-  // closed (a new WebSocket, no wait: capnweb queues the call until it opens).
+  // closed (a new WebSocket, no wait: capnweb queues the call until it opens). What comes back is
+  // capnweb's own stub for that property — a method stub carries its path, so it is returned as
+  // is, never bound or otherwise touched (a capnweb stub answers `.bind` with another stub).
   const api = new Proxy({} as RpcStub<IterateSessionApi>, {
     get(_target, property) {
       const connection = live || adopt(new WebSocket(socketUrl()));
-      const value = Reflect.get(connection.api as object, property, connection.api);
-      return typeof value === "function" ? value.bind(connection.api) : value;
+      return Reflect.get(connection.api as object, property);
     },
   });
   async function connect(next: string): Promise<AuthenticatedApp> {
