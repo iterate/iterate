@@ -154,5 +154,5 @@ pnpm --dir apps/os exec vitest run scripts/voicelab/voice-agent.test.ts
 For a project integration check:
 
 ```bash
-doppler run --config prd -- pnpm cli voicelab talk --project <slug> --setup-only
+doppler run --config prd -- pnpm cli voicelab setup --project <slug>
 ```

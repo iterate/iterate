@@ -152,6 +152,12 @@ const AgentConfig = z.object({
   /** apps/os's window: a request waits this long after its trigger for more content — a second
    *  message inside the window moves the trigger and ONE request answers both. */
   llmRequestDebounceMs: z.number().int().nonnegative().default(250),
+  /** THE PLAIN-RESPONSE HANDLER: an itx expression (a callable, dotted) invoked with a response that
+   *  carries no `<codemode>` block — the whole point being that the agent only ever writes code, and
+   *  a bare-prose reply is sugar for `<codemode>await <this>(<the prose>)</codemode>`. The default
+   *  sends the text to web chat; a Slack-connected agent points it at its Slack reply instead. Blank
+   *  drops a bare reply (an agent that only acts). */
+  plainResponse: z.string().default("itx.chat.sendMessage"),
   /** Consecutive model failures before the loop pauses; between attempts, apps/os's backoff —
    *  `backoffBaseMs · 2^(failures−1)`, capped at `backoffMaxMs` — folded into the debounce window. */
   llmRequestRetryPolicy: z
@@ -165,6 +171,16 @@ const AgentConfig = z.object({
 
 /** Where a request's trigger came from: a person (`external`) or the loop's own consequences. */
 const TriggerSource = z.enum(["external", "agent-loop"]);
+
+/** What a model call cost, normalized (apps/os's `AgentLlmUsage`): the provider's totals, and the
+ *  cached/reasoning breakdowns when it reports them. */
+const LlmUsage = z.object({
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  cachedInputTokens: z.number().int().nonnegative().optional(),
+  reasoningOutputTokens: z.number().int().nonnegative().optional(),
+});
+export type LlmUsage = z.infer<typeof LlmUsage>;
 
 export const AgentView = z.object({
   /** The agent's context path, from the certificate; null until it is born — nothing runs before. */
@@ -239,6 +255,7 @@ export const AgentContract = defineProcessorContract({
         config: z.object({
           llm: z.object({ model: z.string().min(1).optional() }).optional(),
           maxAutonomousTurns: z.number().int().positive().optional(),
+          plainResponse: z.string().optional(),
           llmRequestExpiryMs: z.number().int().positive().optional(),
           llmRequestDebounceMs: z.number().int().nonnegative().optional(),
           llmRequestRetryPolicy: z
@@ -260,8 +277,17 @@ export const AgentContract = defineProcessorContract({
         actor: Actor.optional(),
         /** What rides with the words: files stored under this agent's path (`message()` stores them). */
         files: z.array(FileAttachment).optional(),
+        /** apps/os's policies: `dont-trigger-request` (words that raise no turn), `after-current-request`
+         *  (the default: the next turn), `interrupt-current-request` (cut the running answer short —
+         *  the request settles cancelled with what streamed so far, and these words start the next). */
         llmRequestPolicy: z
-          .object({ behaviour: z.enum(["dont-trigger-request", "after-current-request"]) })
+          .object({
+            behaviour: z.enum([
+              "dont-trigger-request",
+              "after-current-request",
+              "interrupt-current-request",
+            ]),
+          })
           .optional(),
         llmRequestOffset: z.number().int().positive().optional(),
       }),
@@ -288,16 +314,49 @@ export const AgentContract = defineProcessorContract({
         triggerOffset: z.number().int().positive(),
       }),
     },
+    "events.iterate.com/agent/llm-response-chunks": {
+      description:
+        "EPHEMERAL, never stored: one coalescing window of the provider's streamed events for the request it names — what a feed renders as the answer being written. The settled event carries the durable text.",
+      payloadSchema: z.object({
+        llmRequestOffset: z.number().int().positive(),
+        chunks: z.array(z.unknown()).min(1),
+        /** The window's ordinal within the response — a redelivered window is told from a new one. */
+        sequence: z.number().int().nonnegative(),
+      }),
+    },
     "events.iterate.com/agent/llm-request-settled": {
-      description: "The request's terminal fact: the model's text, its failure, or its expiry.",
+      description:
+        "The request's terminal fact: the model's text (and what it cost), its failure, its expiry, or the person's interruption — the two last with whatever streamed before.",
       payloadSchema: z.object({
         requestOffset: z.number().int().positive(),
         durationMs: z.number().nonnegative().optional(),
         result: z.discriminatedUnion("status", [
-          z.object({ status: z.literal("succeeded"), text: z.string() }),
-          z.object({ status: z.literal("failed"), errorMessage: z.string() }),
-          z.object({ status: z.literal("cancelled"), reason: z.literal("expired") }),
+          z.object({
+            status: z.literal("succeeded"),
+            text: z.string(),
+            usage: LlmUsage.optional(),
+          }),
+          z.object({
+            status: z.literal("failed"),
+            errorMessage: z.string(),
+            partialText: z.string().optional(),
+          }),
+          z.object({
+            status: z.literal("cancelled"),
+            reason: z.enum(["expired", "interrupted-by-user-input"]),
+            partialText: z.string().optional(),
+          }),
         ]),
+      }),
+    },
+    "events.iterate.com/agent/token-usage-reported": {
+      description:
+        "What the last successful request cost against the model's context window (apps/os's vocabulary; a feed shows the context's fullness).",
+      payloadSchema: z.object({
+        model: z.string().min(1),
+        maxContextTokens: z.number().int().positive(),
+        inputTokens: z.number().int().nonnegative(),
+        outputTokens: z.number().int().nonnegative(),
       }),
     },
     "events.iterate.com/agent/paused": {
@@ -353,7 +412,9 @@ export const AgentContract = defineProcessorContract({
     "events.iterate.com/agents/web-message-sent",
     "events.iterate.com/agent/summary-updated",
     "events.iterate.com/agent/llm-request-requested",
+    "events.iterate.com/agent/llm-response-chunks",
     "events.iterate.com/agent/llm-request-settled",
+    "events.iterate.com/agent/token-usage-reported",
     "events.iterate.com/agent/paused",
     "events.iterate.com/agent/resumed",
     "events.iterate.com/capability-host/script-run-requested",

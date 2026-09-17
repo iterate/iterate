@@ -6,7 +6,7 @@
 // a `ProcessorEngine` drives it, and a test keeps the author handle where it reads a field. The
 // rule-by-rule spec under slow blockers, failing batches and version bumps is
 // processor-rules.test.ts.
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { applyPatch, type PatchOp } from "iterate/next/lib";
 import {
@@ -351,6 +351,7 @@ const caughtUpProbe = (readFails?: Error) => {
         readFails
           ? Promise.reject(readFails)
           : Promise.resolve({ events: [], scannedThroughOffset: 0, atHead: true }),
+      claim: () => Promise.reject(new Error("the probe runs no background work")),
     },
     storage: memoryStorage(),
   });
@@ -921,7 +922,7 @@ describe("eviction honors the persisted cursor", () => {
   test("a caught-up EFFECT-ONLY processor does not replay effects across an eviction", async () => {
     // The engine constructor accepts the persisted cursor whenever the version matches, materializing
     // initialState() when the state key is absent — a processor that never changed state must not
-    // fall back to offset 0 and re-drive the whole log WITH effects on every idle quiesce.
+    // fall back to offset 0 and re-drive the whole log WITH effects on every release.
     const mem = memoryStream();
     const storage = memoryStorage();
     const p1 = new EffectOnlyProcessor();
@@ -1339,4 +1340,118 @@ test("a throwing sink is contained (lossy notification, value still adopted, the
   await expect(live.deltasSettled()).resolves.toBeUndefined(); // the chain's .catch swallowed it — no wedge, no unhandled rejection
   // the value and the rev both advanced — the lost emission is a chain gap, not lost state
   expect(live.snapshot()).toEqual({ rev: epoch + 1, state: { n: 1 } });
+});
+
+// ── rule 3's other half: an attempt in flight holds a CLAIM on the context's alarm ──
+
+describe("rule 3 — the claim: work in flight ⇒ the context owes this processor a revive", () => {
+  const AttemptsContract = defineProcessorContract({
+    slug: "attempts",
+    version: "1",
+    description: "every consumed event starts one attempt; the test ends each by hand",
+    stateSchema: z.object({}),
+    consumes: ["e"],
+    emits: [],
+  });
+  class AttemptsProcessor extends StreamProcessor<object> {
+    readonly contract = AttemptsContract;
+    readonly trace: string[] = [];
+    readonly endings: (() => void)[] = [];
+    override processEvent(args: ProcessEventArgs<object>): undefined {
+      if (!args.event) {
+        this.trace.push("at-head");
+        return;
+      }
+      args.runInBackground(async () => {
+        this.trace.push(`attempt ${args.event!.offset} started`);
+        await new Promise<void>((end) => this.endings.push(end));
+      });
+    }
+  }
+  const T = Date.UTC(2035, 0, 1);
+
+  test("CLAIMED RIGHT BEHIND THE FIRST ATTEMPT'S START (20 s out; the attempt never waits on it), RELEASED WHEN THE LAST SETTLES: one claim however many attempts are in flight", async () => {
+    vi.useFakeTimers({ now: T, toFake: ["Date"] });
+    try {
+      const mem = memoryStream();
+      const attempts = new AttemptsProcessor();
+      const claimed = mem.stream.claim;
+      mem.stream.claim = (at) => {
+        attempts.trace.push(`claimed ${at === null ? "nothing" : String(at - T)}`);
+        return claimed(at);
+      };
+      mem.engines.push(
+        new ProcessorEngine(attempts, { stream: mem.stream, storage: memoryStorage() }),
+      );
+      mem.stream.append({ type: "e" }, { type: "e" });
+      await settle();
+      // The claim rides the chain one microtask behind the first attempt's start — between the
+      // batch's two events — and the second attempt, in flight already, claims nothing new.
+      expect(attempts.trace).toEqual(["attempt 1 started", "claimed 20000", "attempt 2 started"]);
+      expect(mem.claims).toEqual([T + 20_000]);
+      attempts.endings[0]!();
+      await settle();
+      expect(mem.claims).toEqual([T + 20_000]); // one attempt still in flight: the claim stands
+      attempts.endings[1]!();
+      await settle();
+      expect(mem.claims).toEqual([T + 20_000, null]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("A REVIVE catches up and runs the at-head pass; an attempt still in flight claims again, later each time (40 s, 80 s, …); idle, a revive claims nothing", async () => {
+    vi.useFakeTimers({ now: T, toFake: ["Date"] });
+    try {
+      const mem = memoryStream();
+      const attempts = new AttemptsProcessor();
+      const engine = new ProcessorEngine(attempts, {
+        stream: mem.stream,
+        storage: memoryStorage(),
+      });
+      mem.engines.push(engine);
+      mem.stream.append({ type: "e" });
+      await settle();
+      expect(mem.claims).toEqual([T + 20_000]);
+      // The pass spent the claim and calls revive(): the at-head pass runs, the attempt is found
+      // still in flight, the next claim is twice as far out.
+      await engine.revive();
+      expect(attempts.trace).toEqual(["attempt 1 started", "at-head"]);
+      expect(mem.claims).toEqual([T + 20_000, T + 40_000]);
+      await engine.revive();
+      expect(mem.claims).toEqual([T + 20_000, T + 40_000, T + 80_000]);
+      attempts.endings[0]!();
+      await settle();
+      expect(mem.claims.at(-1)).toBeNull(); // released — and the backoff starts over
+      await engine.revive();
+      expect(attempts.trace.at(-1)).toBe("at-head"); // the pass ran…
+      expect(mem.claims.at(-1)).toBeNull(); // …and nothing in flight claims nothing
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("A RELEASE NEVER OVERTAKES THE NEXT CLAIM: claims are sent one after another, so a slow release lands before the claim of the attempt that followed it", async () => {
+    const mem = memoryStream();
+    const attempts = new AttemptsProcessor();
+    const landed: (number | null)[] = [];
+    mem.stream.claim = async (at) => {
+      await new Promise((r) => setTimeout(r, at === null ? 30 : 0)); // the release is the slow one
+      landed.push(at);
+    };
+    mem.engines.push(
+      new ProcessorEngine(attempts, { stream: mem.stream, storage: memoryStorage() }),
+    );
+    mem.stream.append({ type: "e" });
+    await settle();
+    attempts.endings[0]!(); // settles: a release is sent…
+    await settle(1);
+    mem.stream.append({ type: "e" }); // …and a new attempt claims right behind it
+    await settle(60);
+    expect(landed.map((at) => (at === null ? "release" : "claim"))).toEqual([
+      "claim",
+      "release",
+      "claim",
+    ]);
+  });
 });

@@ -14,7 +14,12 @@
 //   2. ONE EVENT AT A TIME inside a batch: this event's `blockProcessorWhile` work completes
 //      before the next event's `processEvent` starts (a FIFO chain, awaited per event).
 //   3. `runInBackground` work is deliberately NOT awaited — it may overtake later events; it is
-//      a droppable attempt whose outcome must be recoverable from state at the next at-head pass.
+//      a droppable attempt whose outcome must be recoverable from state at the next at-head pass —
+//      and that pass is OWED: while any attempt is in flight the engine holds a CLAIM on its
+//      context's alarm ("come back by T"), released when the last attempt settles; a host that dies
+//      mid-attempt is revived by the alarm (`revive()`: catch up, run the at-head pass), and an
+//      attempt still in flight at a revive claims again, later each time, so a hung attempt costs a
+//      few wakes an hour and never a loop.
 //   4. ONE DURABLE COMMIT PER BATCH, after every event's blocking work settled — persist BEFORE
 //      advancing past the last DURABLE offset. A failed batch persists nothing, retried whole.
 //   5. The at-head pass: the last consumable event of a batch that reaches the stream head
@@ -67,7 +72,15 @@ export type ProcessorStream = {
     afterOffset?: number,
     limit?: number,
   ): Promise<{ events: StreamEvent[]; scannedThroughOffset: number; atHead: boolean }>;
+  /** This processor's claim on its context's alarm: "come back by `at`" (the context's alarm pass
+   *  then calls `revive()`), or `null` to release it. Durable on the context, never a log event. */
+  claim(at: number | null): Promise<unknown>;
 };
+
+/** How long after an attempt starts a dead host is revived: the recovery bound. A revive that finds
+ *  the attempt still in flight claims again with the delay doubled, up to `REVIVE_AFTER_MAX_MS`. */
+export const REVIVE_AFTER_MS = 20_000;
+export const REVIVE_AFTER_MAX_MS = 30 * 60_000;
 
 /** The contiguity proof a delivery carries: the half-open offset window `(after, through]`. A chain
  *  of these (each `after` === the previous `through`) is how a subscriber proves it missed nothing. */
@@ -94,9 +107,7 @@ export type ProcessEventArgs<State, Event = StreamEvent> = {
  *  (a subscriber's default). "*" = every durable event. A NAMED type opts that type in, INCLUDING
  *  ephemerals ("*" NEVER sweeps ephemerals) — so a live-state watcher spells
  *  `consumes: ["events.iterate.com/live-state/changed"]` and filters `payload.key` itself. The wake
- *  record (`stream/woken`) is a durable event like any other: a "*" row receives every incarnation's.
- *  That a wake makes no LOOP is the delivery loop's and the alarm's to keep (subscription-delivery.ts,
- *  alarm-coordinator.ts) — never a carve-out here. */
+ *  record (`stream/woken`) is a durable event like any other: a "*" row receives every incarnation's. */
 export function consumesEvent(
   consumes: readonly string[] | undefined,
   event: { type: string; ephemeral?: boolean },
@@ -173,6 +184,15 @@ export class ProcessorEngine<State> {
   readonly #waitUntilProcessedWaiters: { offset: number; resolve: () => void }[] = [];
   /** Born with the engine, so its epoch is minted once per incarnation. */
   readonly #liveState: LiveState<unknown>;
+  /** Rule 3's claim: attempts in flight, and how many revives found one still in flight (the
+   *  backoff of the next claim; reset when the last attempt settles). The claim calls ride ONE
+   *  chain, so a release never overtakes the claim of the attempt that followed it. */
+  #backgroundWorkInFlight = 0;
+  #revivesWhileBusy = 0;
+  #claimChain: Promise<unknown> = Promise.resolve();
+  /** Whether the last batch this engine ran carried the at-head pass (rule 5) — what `revive()`
+   *  reads to know if its catch-up already ran one. */
+  #lastBatchAtHead = false;
 
   constructor(
     processor: StreamProcessor<State>,
@@ -434,11 +454,62 @@ export class ProcessorEngine<State> {
       );
     this.#reducedState = state;
     this.#reducedThroughOffset = reducedThroughOffset;
+    this.#lastBatchAtHead = atHead;
     this.#resolveWaitUntilProcessedWaiters(reducedThroughOffset);
     // Persist FIRST, emit the live-state delta second: a crash between loses only a notification,
     // healed by the chain gap, never state. Re-projected after EVERY batch, not only when the reduce
     // moved, so a runtime field bumped inside `processEvent` publishes on its own.
     this.publishLiveState();
+  }
+
+  // ── rule 3's claim: work in flight ⇒ a claim on the context's alarm ──
+
+  /** Start an attempt: the first in flight claims the alarm (not awaited — a claim that has not
+   *  landed when the host dies revives nothing either way, and the attempt must not wait on it);
+   *  the last to settle releases the claim. */
+  #runInBackground(work: () => Promise<unknown>): void {
+    this.#backgroundWorkInFlight += 1;
+    if (this.#backgroundWorkInFlight === 1) this.#claim(REVIVE_AFTER_MS);
+    void work()
+      .catch((error) => reportIssue("processor.background", error, { slug: this.#contract.slug }))
+      .finally(() => {
+        this.#backgroundWorkInFlight -= 1;
+        if (this.#backgroundWorkInFlight === 0) {
+          this.#revivesWhileBusy = 0;
+          this.#claim(null);
+        }
+      });
+  }
+
+  #claim(afterMs: number | null): void {
+    const at = afterMs === null ? null : Date.now() + afterMs;
+    this.#claimChain = this.#claimChain
+      .then(() => this.#stream.claim(at))
+      .catch((error) => reportIssue("processor.claim", error, { slug: this.#contract.slug }));
+  }
+
+  /** THE REVIVE — the context's alarm pass calls this for a due claim (spent by then): catch up
+   *  from the log and run the at-head pass, so a processor restarts what state says is still owed
+   *  (rule 3). A fresh incarnation finds nothing in flight and starts it; an attempt still in flight
+   *  here claims again, later each time (20 s, 40 s, … `REVIVE_AFTER_MAX_MS`). */
+  async revive(): Promise<void> {
+    this.#lastBatchAtHead = false;
+    await this.catchUpFromLog();
+    // A catch-up that reached the head already ran the at-head pass (rule 5); one that found
+    // nothing to read runs it here, once.
+    if (!this.#lastBatchAtHead)
+      await this.#runOnSerialChain(async () => {
+        this.#reducedState = (
+          await this.#reduceAndProcessEvent(null, this.#reducedState, true)
+        ).state;
+        this.publishLiveState();
+      });
+    if (this.#backgroundWorkInFlight === 0) return;
+    this.#revivesWhileBusy += 1;
+    this.#claim(Math.min(REVIVE_AFTER_MS * 2 ** this.#revivesWhileBusy, REVIVE_AFTER_MAX_MS));
+    // Awaited: the pass that called this derives its next deadline as soon as it returns, so the
+    // claim must have landed by then — one alarm write, not a delete and a set.
+    await this.#claimChain;
   }
 
   /** THE GUARDED REDUCE, shared by the live flow and the version replay. A reducer that throws on an
@@ -532,9 +603,7 @@ export class ProcessorEngine<State> {
       blockProcessorWhile: (work) => {
         blockers = blockers.then(() => work());
       },
-      runInBackground: (work) => {
-        void work().catch((error) => reportIssue("processor.background", error, { slug }));
-      },
+      runInBackground: (work) => this.#runInBackground(work),
       delivery: { caughtUp },
     });
     // STRICT PER-EVENT ORDERING (rule 2): drain the blocker chain to a FIXED POINT. A

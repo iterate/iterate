@@ -43,9 +43,9 @@ the only place capnweb terminates. It reaches the DO over Workers RPC. Loaded
 userspace code runs in Worker Loader isolates or as facets of the DO, and its
 entire world is one binding, `env.ITX`. The control plane — an OAuth AS, the D1
 directory of users, orgs and projects (a project's id IS its DNS-safe name),
-`/mcp`, the console's server half — runs IN-PROCESS as the same worker's
-catch-all (`src/control-plane.ts`), and the console itself is a TanStack Start
-app (`src/routes/**`) the same worker SSRs; a project host
+`/mcp`, the issuer's two pages — runs IN-PROCESS as the same worker's
+catch-all (`src/control-plane.ts`): `/login` and the `/authorize` consent, files in `public/`
+served by the assets binding (no framework, no build); a project host
 (`<app>--<project>.<base>`, `<app>.<project>.<base>`, the apex `<project>.<base>` — the one
 HTTP way into a project) is admitted by one directory read before any DO is
 dialled. Egress is terminal: secrets substituted, then `fetch`.
@@ -99,30 +99,21 @@ packages/v3/project-worker/
   wrangler.jsonc                 bindings: ITERATE_CONTEXT (DO), SECRET (DO, one per secret), LOADER, AI, ARTIFACTS, ITX_KV,
                                  OAUTH_KV, DB (D1: the directory), CF_VERSION_METADATA; the APP_CONFIG_* vars;
                                  the *.project-worker.iterate.com route (project hosts)
-  wrangler.test.jsonc            the workers lane's config (no AI; fresh local D1 + OAuth KV; its worker is the
-                                 BUILT one, dist/server/index.js)
-  vite.config.ts                 THE BUILD: the Cloudflare plugin + TanStack Start + React — `vite build` emits
-                                 dist/client (the console's bundle + public/) and dist/server (the worker +
-                                 wrangler.json, what `pnpm deploy` and both local lanes consume); runs build-sdk.mjs
+  wrangler.test.jsonc            the workers lane's config (no AI; fresh local D1 + OAuth KV; its worker is
+                                 src/worker.ts, bundled by the plugin)
   vitest.config.ts               THE ONE test config: four projects — unit · workers · e2e · bench
-  build-sdk.mjs                  bundles src/sdk/index.ts → generated/processor-sdk.ts (processor.js),
-                                 client/demo.tsx → public/demo.html (the hosted /demo page, a static asset)
-  scripts/                       dev.ts (`pnpm dev`: vite build → the schema into the local D1 → wrangler dev on
-                                 dist/server/wrangler.json), generate-route-tree.ts (`routes:generate` / `routes:check`)
+  scripts/                       build.ts (THE BUILD, one esbuild script: wrangler.jsonc, src/generated/*.js — the
+                                 injected SDK's text and the presence fixture's source), dev.ts (`pnpm dev`: the
+                                 build, then wrangler dev on wrangler.jsonc, which bundles src/worker.ts itself)
+  public/                        the issuer's two pages as files — login.html, authorize.html, issuer.css, login.js,
+                                 authorize.js, _headers (their CSP) — served by the assets binding (no framework, no build).
+                                 The dash — sessions, projects, organizations — is apps/dash on dash.iterate2.com, an
+                                 ordinary OAuth client of this issuer; agents and notes are apps of the same shape.
   src/
-    routes/                      THE CONSOLE, a TanStack Start app (file routes, SSR'd by the worker):
-                                 __root.tsx (the shell + console.css) · login.tsx (/login: the email form,
-                                 "continue as / switch account") · _auth.tsx (no session ⇒ /login?next=) ·
-                                 _auth/index.tsx (/: the account page — orgs, projects with an `open` link per
-                                 host, create a project, log out) · _auth/authorize.tsx (/authorize: the OAuth
-                                 consent and THE PROJECT SELECTION); -session.ts (the one session read) and
-                                 -console-context.ts (the one typed door to the worker's env + request for every
-                                 server function). router.tsx · routeTree.gen.ts (generated, checked in) · console.css
     worker.ts                    THE EDGE and the front door. default fetch: project-host ingress (the three
                                  host shapes, admission, x-iterate-app, the OAuth bearer or the app's
                                  /.auth/* session, the principal stamp —
-                                 the one HTTP way into a project), /api, /version, the static assets (the
-                                 platform host's alone); everything else on the worker's hostname is the
+                                 the one HTTP way into a project), /api, /version, everything else on the worker's hostname is the
                                  in-process control plane.
                                  Exports ItxEntrypoint, IterateContextDurableObject.
     session.ts                   IterateRpcTarget → SessionRpcTarget (whoami, projects, grants) → ProjectCollection
@@ -230,7 +221,7 @@ imported as `capnweb`). There is no client SDK. The session shape is apps/os's.
 import { newWebSocketRpcSession, newHttpBatchRpcSession } from "capnweb";
 
 using api = newWebSocketRpcSession("wss://<worker>/api");
-const session = api.authenticate({ type: "from-server-cookie" }); // the console's login cookie rode the handshake
+const session = api.authenticate({ type: "from-server-cookie" }); // the issuer's login cookie rode the handshake
 const itx = session.projects.get("prj_demo"); // the project ROOT, path "/"
 const agent = itx.cd("/agents/x"); // a context within the project
 const inbox = agent.cd("../inbox"); // relative resolves; absolute by convention
@@ -503,7 +494,7 @@ function rewriteRuleConfiguredEvent(
 ): StreamEventInput;
 ```
 
-`src/stream/processor.ts`
+`packages/iterate/src/next/stream/processor.ts`
 
 ```ts
 type StreamEventInput = {
@@ -551,7 +542,7 @@ refused before the write (`REDUCE_CHECKPOINT_TOO_LARGE`); an unreadable row surf
 bytes and drops a stalled client's pushes; every SQL statement the stream runs lives in ONE typed
 module, `src/stream/stream.ts`.
 
-`src/stream/processor.ts`
+`packages/iterate/src/next/stream/processor.ts`
 
 ```ts
 /** The contiguity proof a delivery carries: the half-open offset window (after, through]. */
@@ -744,7 +735,7 @@ reachable the same way, and a terminal `.fetch(request)` is an ordinary call on
 the facet's own fetch — plain HTTP only. A facet never answers a WebSocket
 (`FACET_NO_UPGRADE`): a socket terminates at the edge — a session's `/api`
 socket, a project host's lent-stub upgrade — and the facet behind it is reached
-by itx expression, so the idle quiesce can abort an idle facet with nothing to lose.
+by itx expression, so a facet can be aborted at any time with nothing to lose.
 
 One reduce-only processor is always on and runs **inline** in the commit
 transaction: the core reduce (`src/stream/core-processor.ts`, slug `core`,
@@ -897,9 +888,10 @@ await itx.counter.bump(); // 3
 A facet keeps its storage across restarts; a source change restarts it in
 place (the `facet:<name>:loader-id` marker — the loader id the class came from, so a deploy or a
 recovered load restarts it too). The class is minted with `props: { iterateContextName, name }`,
-readable as `this.ctx.props`. A busy stateful facet pins its context DO awake,
-an accepted trade. Facets have no alarms (workerd#6810); a future "append at
-this time" primitive on the context is the planned replacement, not a proxy.
+readable as `this.ctx.props`. A facet is not a pin: on the edge a live facet does not keep the
+actor resident and dies with it, and its next call re-materializes it from its startup memo,
+storage intact. Facets have no alarms (workerd#6810); a facet that needs a timer schedules an
+append (`itx.schedules`, docs/scheduled-appends.md) — the processor engine's own revive is one.
 
 ### 5.3 A stream processor
 
@@ -922,7 +914,7 @@ export { applyPatch, diff, type PatchOp };
 export { LiveState, type LiveStateSink };
 ```
 
-The author class, `src/stream/processor.ts`:
+The author class, `packages/iterate/src/next/stream/processor.ts`:
 
 ```ts
 abstract class StreamProcessor<State> {
@@ -969,7 +961,7 @@ abstract class StreamProcessorDurableObject<
 }
 ```
 
-The engine underneath — `ProcessorEngine` in `src/stream/processor.ts` — is
+The engine underneath — `ProcessorEngine` in `packages/iterate/src/next/stream/processor.ts` — is
 built by the host on first use over the facet's kv and `env.ITX`, and by a test
 over the in-memory stand-ins in `src/stream/test-support.ts`
 (`new ProcessorEngine(new PresenceProcessor(), { stream, storage })`). Its types:
@@ -1224,19 +1216,19 @@ the held rev triggers one single-flight re-read of the door.
   reduce, and **costs no write**: an ephemeral-only append does no transaction
   and does not move the high-water mark. The contract that buys this: an
   ephemeral's offset is unique within an incarnation; a later incarnation
-  resumes from the last durable mark, and `stream/woken` (durable, appended by
-  each incarnation's constructor) marks the boundary. Every persisted checkpoint
+  resumes from the last durable mark, and `stream/woken` (durable, the first event of
+  each incarnation — appended by the first door that opens on it) marks the boundary. Every persisted checkpoint
   in the package advances only on a batch that carried a durable.
 - The wake record: the DO's constructor calls `Stream.appendBirthRecord()` synchronously (a
   store with rows records its wake at the first door that opens, `appendWakeRecord` — the alarm
   handler says `"alarm"`, every other door `"request"`),
   before any door opens. The first incarnation appends
-  `stream/created { projectId, path }` at offset 1 and `stream/woken { incarnation }`
-  at offset 2; every later incarnation appends its `woken` first. So the first
-  user append lands at offset 4 (core's live-state delta, an ephemeral, took 3), and any door —
-  a read, a snapshot, a facet call —
-  materializes a never-touched context. The quiet-clock alarm arms only once a
-  facet is live or a stub is borrowed.
+  `stream/created { projectId, path }` at offset 1 and `stream/woken { incarnation, reason }`
+  at offset 2; every later incarnation's first door appends its `woken` first. The `config` row
+  lands at 4 (core's live-state deltas, ephemeral, take 3 and 5) and the first user append at 6, and
+  any door — a read, a snapshot, a facet call —
+  materializes a never-touched context. The idle alarm arms only while a stub is borrowed or a
+  library socket is open; a live facet arms nothing.
 - Stream control is ordinary events read by the core reduce (inline). A paused
   stream refuses every non-control append with `STREAM_PAUSED`; the control
   events (`created`, `woken`, `paused`, `resumed`) are exempt, so a paused stream
@@ -1252,18 +1244,20 @@ await itx.append({ type: "events.iterate.com/stream/resumed" });
   (the verbs build exactly these; appending one by hand is the durable
   spelling):
 
-| Event                                                           | Payload                                             | Written by                                                                                                                                    |
-| --------------------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `events.iterate.com/itx/rewrite-rule-configured`                | `{ match, target \| null }` (both strings)          | `provide` (a live stub or an expression); `null` on dispose / session end, or by the DO when the key's last pager closes                      |
-| `events.iterate.com/stream/subscription-configured`             | `{ name, target \| null, consumes?, afterOffset? }` | `subscribe` / `processors.enable`; `null` from `processors.disable`, dispose, session end, or the DO when a lent callback's last pager closes |
-| `events.iterate.com/secrets/changed`                            | `{ name, origin? }` / `{ name, deleted: true }`     | `itx.secrets.set` / `.delete` — the name, never the value                                                                                     |
-| `events.iterate.com/stream/subscription-delivery-halted`        | `{ name, afterOffset, attempts, error? }`           | the delivery loop, after the ladder                                                                                                           |
-| `events.iterate.com/stream/subscription-delivery-resumed`       | `{ name, afterOffset? }`                            | you, to un-halt and optionally seek                                                                                                           |
-| `events.iterate.com/rpc-stub/attached` / `detached` (ephemeral) | `{ rpcStubKey }`                                    | the rpc-stub directory, first/last pager of a key                                                                                             |
-| `events.iterate.com/live-state/changed` (ephemeral)             | `{ key, from, to, patch }`                          | `LiveState.set`                                                                                                                               |
-| `events.iterate.com/stream/created`                             | `{ projectId, path }`                               | the DO constructor (`Stream.appendBirthRecord`), offset 1, once                                                                               |
-| `events.iterate.com/stream/woken`                               | `{ incarnation, reason }`                           | the first door of every incarnation (`Stream.appendWakeRecord`; the alarm handler says `"alarm"`)                                             |
-| `events.iterate.com/stream/paused` / `resumed`                  | `{ reason }` / `{}`                                 | you, or a policy facet such as `BreakerProcessor`                                                                                             |
+| Event                                                                                         | Payload                                             | Written by                                                                                                                                    |
+| --------------------------------------------------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `events.iterate.com/itx/rewrite-rule-configured`                                              | `{ match, target \| null }` (both strings)          | `provide` (a live stub or an expression); `null` on dispose / session end, or by the DO when the key's last pager closes                      |
+| `events.iterate.com/stream/subscription-configured`                                           | `{ name, target \| null, consumes?, afterOffset? }` | `subscribe` / `processors.enable`; `null` from `processors.disable`, dispose, session end, or the DO when a lent callback's last pager closes |
+| `events.iterate.com/secrets/changed`                                                          | `{ name, origin? }` / `{ name, deleted: true }`     | `itx.secrets.set` / `.delete` — the name, never the value                                                                                     |
+| `events.iterate.com/stream/subscription-delivery-halted`                                      | `{ name, afterOffset, attempts, error? }`           | the delivery loop, after the ladder                                                                                                           |
+| `events.iterate.com/stream/subscription-delivery-resumed`                                     | `{ name, afterOffset? }`                            | you, to un-halt and optionally seek                                                                                                           |
+| `events.iterate.com/rpc-stub/attached` / `detached` (ephemeral)                               | `{ rpcStubKey }`                                    | the rpc-stub directory, first/last pager of a key                                                                                             |
+| `events.iterate.com/live-state/changed` (ephemeral)                                           | `{ key, from, to, patch }`                          | `LiveState.set`                                                                                                                               |
+| `events.iterate.com/stream/created`                                                           | `{ projectId, path }`                               | the DO constructor (`Stream.appendBirthRecord`), offset 1, once                                                                               |
+| `events.iterate.com/stream/woken`                                                             | `{ incarnation, reason }`                           | the first door of every incarnation (`Stream.appendWakeRecord`; the alarm handler says `"alarm"`)                                             |
+| `events.iterate.com/stream/paused` / `resumed`                                                | `{ reason }` / `{}`                                 | you, or a policy facet such as `BreakerProcessor`                                                                                             |
+| `events.iterate.com/stream/append-scheduled` · `append-schedule-{cancelled,completed,failed}` | docs/scheduled-appends.md                           | `itx.schedules` / the alarm pass                                                                                                              |
+| `events.iterate.com/stream/trace/alarm` (ephemeral)                                           | `AlarmTrace`                                        | the DO's alarm pass — `alarm-fired` / `quiesce` / `alarm-pass` / `alarm-abandoned`; never subscription input                                  |
 
 Refusals surface as coded errors (`src/lib.ts`): `STREAM_PAUSED`,
 `IDEMPOTENCY_CONFLICT`, `OFFSET_CONFLICT`, `NO_ITX_EXPRESSION_MATCH`, `NO_FACET`,
@@ -1299,8 +1293,8 @@ stream's post-commit hook. For every subscription it filters the batch by
   Retries ride the DO's own alarm, with a 20 s watchdog per attempt. The cursor
   is born where the row asked (`afterOffset`; 0 = the whole log) else at the
   subscription's `configuredAtOffset`, lives in memory, and is
-  written to kv only at durable boundaries: a delivered batch that held a
-  durable event, a ladder step, a halt, a resume. An ephemeral-only advance
+  written to the `subscription_cursors` table only at durable boundaries: the claim before an
+  awaited durable call, a delivered batch that held a durable event, a ladder step, a halt, a resume. An ephemeral-only advance
   touches no storage.
 
 Nothing reads a "kind" off an event: the kind is the evaluated value's brand,
@@ -1359,13 +1353,13 @@ clamped to the stream head. Every subscription made through `subscribe` is
 removed when its handle is disposed or the session ends (capnweb disposes the
 exported handle); `processors.enable` returns no handle, so a processor's row
 stays until `processors.disable`. The DO's
-idle quiesce is 30 s from the last use of a pin (a
-borrowed stub called, an open capnweb socket used — a request moves nothing): the
-alarm then aborts every live facet and returns every borrowed
-stub; the next call re-materializes them (a facet delete — `processors.disable`'s
+pins are released 30 s after the last use of one (a
+borrowed stub called, an open capnweb socket used — a request, an append, a facet call move nothing)
+by a plain timer, never the alarm: it returns every borrowed stub and closes every library
+connection — a live facet is not a pin, it dies with the actor; the next call re-borrows them (a facet delete — `processors.disable`'s
 one effect — that lands while a facet's source is loading wins: the load refuses with `NO_FACET` instead of
-resurrecting an orphan), and a context with no live facet and no borrowed stub
-arms no alarm at all. Configuring a subscription drops whatever the loop remembered under
+resurrecting an orphan), and no pin ever arms an alarm: the alarm serves durable obligations only
+(schedules, and the claims of cursor rows and hosted processors). Configuring a subscription drops whatever the loop remembered under
 that name (the old target's cursor included) and wakes a facet target at once,
 as the head of that name's push chain. Re-subscribing a HALTED row with the same
 target un-halts it and restarts from now; to replay from the halt point, append
@@ -1423,8 +1417,12 @@ class IterateContextDurableObject extends DurableObject<Env> {
    *  the URL and headers inside the secret's cell, `SecretDurableObject` (a missing secret, or one pinned to other origins, is a
    *  502 — ProjectSecretRefused — to the caller), then the terminal fetch. */
   fetch(request: Request): Promise<Response>;
-  /** The cursor retry pump, then idle quiesce (aborts idle facets, returns borrowed stubs). */
+  /** THE ALARM PASS: the wake record (`"alarm"`), the due schedules, every cursor row's owed delivery,
+   *  then every due claim of a hosted processor (spent, and the facet's `revive()` called); the next
+   *  deadline is derived once, when the pass ends. Pins are released by a timer, not here. */
   alarm(): Promise<void>;
+  /** DO-only, for the workers lane: the pins' release, plus every live facet aborted. */
+  releasePins(): void;
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void;
   webSocketClose(ws: WebSocket, code: number, reason: string): void;
   webSocketError(ws: WebSocket): void;
@@ -1470,12 +1468,10 @@ origin — the provider wants its one resource as an absolute URL) owning `/oaut
 `/oauth/register` (DCR; CIMD for clients that self-describe by URL), `/.well-known/*` and the bearer
 check on `/mcp` (its ONLY protected route, and its ONE resource: `<origin>/mcp`, this origin the
 authorization server — every token is bound to it, a foreign one refused); everything else falls
-through to THE CONSOLE — a TanStack Start app (`src/routes/**`: `/login`, the account page at `/`,
-the `/authorize` consent), SSR'd through the Start server entry with the worker's env and the
-request as every server function's `context`; the routes' `createServerFn`s call this file's
-console half (`signIn`, `accountOf`, `createProjectFor`, `consentOf`, `approveConsent`), and the
-machine doors beside them (`consoleDoor`) are the same actions as plain form POSTs (the console's own
-forms post there until the page hydrates) — `POST /login`,
+through to THE ISSUER'S PAGES — `/login` and `/authorize`, files in public/ the assets binding serves;
+the consent page's script asks `/authorize.json` what to show and posts approve / create an
+organization / create a project to `/authorize`, answered by a session built the way `/api` builds one (`consentDoor`); the one
+machine endpoint beside them (`loginFormPost`) is the sign-in form's plain POST — `POST /login`,
 `/logout` (the session is the signed `__Host-itx-control-plane-session` cookie, `signClaims` under
 `APP_CONFIG_SESSION_SECRET`), `POST /projects` (a program creates projects over `/api`,
 `projects.create`), `POST /authorize`. The `/authorize` consent is THE PROJECT SELECTION: the user's
@@ -1488,7 +1484,7 @@ the bearer's principal, `project` optional when the grant reaches exactly one,
 required for the admin secret, refused outside the grant (apps/os's `resolveToolProject`) and refused
 as a context name (the
 expression `cd`s); an expression error is an `isError` result led by its code. No tool creates a
-project: a project is created on the console or over `/api` (`projects.create`). One more bearer
+project: a project is created on the OS, in consent, or over `/api` (`projects.create`). One more bearer
 rides the provider's `resolveExternalToken`: the admin secret (`{ actor: "admin" }`, every project);
 what any bearer reaches is its grant's `Reach` (`authorizationOf`, `src/oauth.ts`) — the projects
 the consent chose (a personal access token's, the ones named at mint), else the user's membership —
@@ -1513,7 +1509,7 @@ Bindings (`wrangler.jsonc`):
 | `APP_CONFIG_*` vars   | configuration (`src/app-config.ts`)          | parsed once per isolate into one typed object, an unknown var warned about at boot and ignored: `ENVIRONMENT_NAME`, `PLATFORM_ORIGIN`, `MCP_ORIGIN`, `PROJECT_HOSTNAME_BASE`, `ARTIFACTS_ACCOUNT_ID`, `ARTIFACTS_NAMESPACE`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `TEST_EMAIL_LOGIN`, `SESSION_SECRET` and `ADMIN_API_SECRET` (both required; wrangler secrets on a deployment) |
 
 The route `*.project-worker.iterate.com/*` (a wildcard DNS record in the zone) is the project hosts;
-`public/` is served as static assets (`/demo`). The e2e lane boots this same config, patched
+The e2e lane boots this same config, patched
 (`e2e/support/worker-config.ts`: absolute paths, `APP_CONFIG_ENVIRONMENT_NAME=e2e`,
 `APP_CONFIG_PROJECT_HOSTNAME_BASE=localhost`, vars for the three secrets); the workers lane runs
 `wrangler.test.jsonc` (no build block, no `AI`).
@@ -1584,7 +1580,7 @@ sequenceDiagram
   D->>E: stub.invoke([["move", 10]])
   E->>C: robotObject.move(10)   (capnweb, same session)
   C-->>D: result
-  Note over D: stub kept BORROWED while traffic flows,<br/>RETURNED at idle quiesce; a page borrows it back
+  Note over D: stub kept BORROWED while traffic flows,<br/>RETURNED by the pins' 30 s timer; a page borrows it back
 ```
 
 The DO never holds a client stub across idle, so any number of connected
@@ -1697,16 +1693,16 @@ itself.
 | session-scoped handle | what `provide` / `subscribe` return (`RewriteRuleHandle`, `SubscriptionHandle`): disposable; disposing — or the session ending — undoes the act; the durable spelling is the raw event                                                                                                                                                                                                                                                               |
 | subscription          | a named row `{ target, consumes? }` in the subscriptions table; delivered every commit by the one loop                                                                                                                                                                                                                                                                                                                                               |
 | push                  | delivery to a target that owns its progress: `(events, range)`, fire-and-forget to a lent stub, awaited to a facet                                                                                                                                                                                                                                                                                                                                   |
-| stream-kept cursor    | delivery to a target that cannot own progress: at-least-once from a kv cursor, retry ladder, halt fact                                                                                                                                                                                                                                                                                                                                               |
+| stream-kept cursor    | delivery to a target that cannot own progress: at-least-once from a row in the `subscription_cursors` table, retry ladder, halt fact                                                                                                                                                                                                                                                                                                                 |
 | processor             | a pure `StreamProcessor` (contract + reduce, optional effects) inside a `StreamProcessorDurableObject` host, hosted as a facet and subscribed to `processEventBatch`; durable configuration; the core reduce is one hosted inline instead                                                                                                                                                                                                            |
 | core reduce           | the ONE reduce-only processor run inside the commit transaction: `core` (identity, wake, pause, rewrite rules, subscriptions, the secrets catalog), owned by the `Stream`                                                                                                                                                                                                                                                                            |
 | facet                 | a workerd `ctx.facets` child of the DO with its own storage; hosts loaded `DurableObject` classes, processors included                                                                                                                                                                                                                                                                                                                               |
 | scanned range         | `{ after, through }` delivered with each batch; the contiguity proof subscribers chain                                                                                                                                                                                                                                                                                                                                                               |
 | ephemeral             | an event that takes an offset but is never stored and costs no write; delivered only to subscribers that name its type                                                                                                                                                                                                                                                                                                                               |
-| incarnation           | one life of the DO between evictions; the constructor's `stream/woken` opens each (offset 1 is the first one's `stream/created`); ephemeral offsets are unique within one                                                                                                                                                                                                                                                                            |
+| incarnation           | one life of the DO between evictions; the first door's `stream/woken` (`appendWakeRecord`, `reason: "alarm"` when that door is the alarm handler) opens each (offset 1 is the first one's `stream/created`); ephemeral offsets are unique within one                                                                                                                                                                                                 |
 | live state            | a `LiveState` holder's `{ rev, state }` plus `live-state/changed` deltas; clients chain revs and re-seed on a gap                                                                                                                                                                                                                                                                                                                                    |
 | egress                | any fetch leaving project code: `getSecret("/secrets/NAME")` (and `{ field: "a.b" }`) substituted in the DO (URL + headers; a missing or origin-bound secret is a 502), then the terminal `fetch` — no next door                                                                                                                                                                                                                                     |
-| control plane         | the in-process catch-all of the one worker (`src/control-plane.ts`): the OAuth AS, the D1 directory (users → orgs → projects; a project's id IS its slug), `/mcp`, the console's server half + the Start entry that SSRs the console (`src/routes/**`); what admits a project host and answers membership                                                                                                                                            |
+| control plane         | the in-process catch-all of the one worker (`src/control-plane.ts`): the OAuth AS, the D1 directory (users → orgs → projects; a project's id IS its slug), `/mcp`, the issuer's pages — `/login` and the `/authorize` consent form, rendered whole; what admits a project host and answers membership                                                                                                                                                |
 | project host          | the one HTTP way into a project: `<app>--<project>.<base>` and `<app>.<project>.<base>` are the app `itx.apps.<app>` of the project's root context, the apex `<project>.<base>` its config worker's `fetch`; the Request verbatim, `x-iterate-app` the host's label; admitted by one directory read (421 otherwise); an OAuth grant — the app's `/.auth/*` browser session, or an access token as `Authorization: Bearer` — stamps `x-itx-principal` |
 | fetch lane            | the DO's `x-itx-expression` door: a project host from outside, a terminal `itx.x.fetch(request)` from inside a session, `env.ITX.fetch` from loaded code                                                                                                                                                                                                                                                                                             |
 

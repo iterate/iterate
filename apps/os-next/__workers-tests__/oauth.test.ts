@@ -182,7 +182,8 @@ test("discovery advertises CIMD AND DCR: the registration endpoint is published 
     ).toMatchObject({
       resource: `${ORIGIN}/${protocol}`,
       authorization_servers: [ORIGIN],
-      scopes_supported: protocol === "mcp" ? ["iterate"] : ["iterate", "account"],
+      scopes_supported:
+        protocol === "mcp" ? ["iterate"] : ["iterate", "account", "organizations:write"],
     });
     const challenge = await call(`/${protocol}`);
     expect(challenge.status).toBe(401);
@@ -445,10 +446,12 @@ test("console and project browsers use the same CIMD flow and independent grants
       expect((await root.projects.list()).map((p: { id: string }) => p.id).sort()).toEqual(
         origin === ORIGIN ? ["browser-a", "browser-b"] : ["browser-a"],
       );
+      // The cookie's authority is same-origin only: a cross-site request goes on BARE and meets the
+      // OAuth gate's 401 (a bare WebSocket would authenticate in-band instead — e2e/session).
       expect(
         (await SELF.fetch(`${origin}/api`, { headers: { cookie, Origin: "https://evil.test" } }))
           .status,
-      ).toBe(403);
+      ).toBe(401);
       logins.push({ origin, cookie, root });
     }
     const upgrade = await SELF.fetch(`${logins[1]!.origin}/.auth/login?scope=iterate%20account`, {

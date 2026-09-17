@@ -88,12 +88,100 @@ export function assembleTrace(
   >,
 ) {
   const workflow = Workflow.parse(input);
-  const execution = [...workflow.executions].sort((a, b) => b.execution - a.execution)[0];
-  if (!execution) throw new Error("Depot workflow has no execution");
+  const finish = workflow.jobs.find((job) => job.jobKey.endsWith(":finish"));
+  workflow.jobs = workflow.jobs.filter(
+    (job) => !job.jobKey.endsWith(":finish") && !job.jobKey.endsWith(":trace"),
+  );
+  if (
+    workflow.jobs.some(
+      (job) => !["finished", "failed", "cancelled", "skipped"].includes(job.status),
+    )
+  )
+    throw new Error("Preview jobs have not settled");
+  const ends = workflow.jobs
+    .flatMap((job) => [job.finishedAt, ...job.attempts.map((attempt) => attempt.finishedAt)])
+    .filter(Boolean)
+    .map((time) => Date.parse(time));
+  const producerEnd = ends.length ? Math.max(...ends) : Date.parse(workflow.workflowFinishedAt);
+  // Retrying only cleanup/reporting must not create a new test execution.
+  const executions = [...workflow.executions].sort((a, b) => b.execution - a.execution);
+  const execution = executions.find((execution) => Date.parse(execution.createdAt) <= producerEnd);
+  if (!execution) throw new Error("Depot workflow has no execution for its preview jobs");
+  const nextExecution = executions[executions.indexOf(execution) - 1];
+  const rootStart = Date.parse(execution.createdAt);
+  const executionEnd = nextExecution ? Date.parse(nextExecution.createdAt) : Infinity;
+  const eventsByAttempt = new Map(
+    [...logs].map(([id, lines]) => [
+      id,
+      lines.flatMap((line) => {
+        if (!line.body.startsWith("@@ci-trace ")) return [];
+        const event = TraceEvent.parse(JSON.parse(line.body.slice("@@ci-trace ".length)));
+        return [
+          {
+            ...event,
+            ...(event.kind === "shell-start" && { step: line.stepId || event.step }),
+            stepKey: line.stepKey,
+            stepId: line.stepId || "",
+            stepName: line.stepName || "",
+            command: line.command || "",
+          },
+        ];
+      }),
+    ]),
+  );
+  // Read only the test verdict from finish. Its setup, reporting and cleanup are
+  // deliberately outside this trace, even when they later fail the Depot job.
+  const verdictEvents = (finish?.attempts || [])
+    .flatMap((attempt) => eventsByAttempt.get(attempt.attemptId) || [])
+    .filter((event) => "time" in event && event.time >= rootStart && event.time < executionEnd);
+  const greenMarker = verdictEvents.find((event) => event.kind === "check-green");
+  const greenStep = verdictEvents.find(
+    (event) => event.kind === "shell-start" && event.step === "tests_passed",
+  );
+  const greenEnd =
+    greenStep?.kind === "shell-start"
+      ? verdictEvents.find(
+          (event) =>
+            event.kind === "shell-end" && event.id === greenStep.id && event.exitCode === 0,
+        )
+      : undefined;
+  const observedGreen =
+    greenMarker?.kind === "check-green"
+      ? { time: greenMarker.time, evidence: "GitHub check update acknowledged" }
+      : greenEnd?.kind === "shell-end"
+        ? { time: greenEnd.time, evidence: "Successful early-green step end" }
+        : null;
+  const verdictFailure = observedGreen
+    ? undefined
+    : verdictEvents
+        .flatMap((event) => {
+          if (event.kind !== "shell-end" || event.exitCode === 0) return [];
+          const start = verdictEvents.find(
+            (item) => item.kind === "shell-start" && item.id === event.id,
+          );
+          const step = event.stepId || (start?.kind === "shell-start" ? start.step : "");
+          return ["consumers", "merge_reports", "tests_passed"].includes(step)
+            ? [{ time: event.time, evidence: `Failed test-result validation (${step})` }]
+            : [];
+        })
+        .sort((a, b) => a.time - b.time)[0];
+  const rootEnd = Math.max(
+    producerEnd,
+    observedGreen?.time || producerEnd,
+    verdictFailure?.time || producerEnd,
+  );
+  workflow.workflowFinishedAt = new Date(rootEnd).toISOString();
+  if (verdictFailure || workflow.jobs.some((job) => job.status === "failed"))
+    workflow.workflowStatus = "failed";
+  else if (workflow.jobs.some((job) => job.status === "cancelled"))
+    workflow.workflowStatus = "cancelled";
+  else if (workflow.jobs.length && workflow.jobs.every((job) => job.status === "skipped"))
+    workflow.workflowStatus = "skipped";
+  else if (finish) workflow.workflowStatus = observedGreen ? "finished" : "incomplete";
+  else if (workflow.jobs.length) workflow.workflowStatus = "finished";
   const traceId = hash(`${workflow.workflowId}/${execution.executionId}`, 32);
   const spans: Span[] = [];
-  const rootStart = Date.parse(execution.createdAt);
-  const rootEnd = Date.parse(workflow.workflowFinishedAt);
+  const dependencies: { sourceId: string; targetId: string; milestone: string }[] = [];
   const add = (
     id: string,
     parentSpanId: string,
@@ -118,6 +206,7 @@ export function assembleTrace(
         value: { stringValue },
       })),
       status: { code: failed ? 2 : 0 },
+      links: [],
     };
     spans.push(span);
     return span.spanId;
@@ -130,6 +219,7 @@ export function assembleTrace(
     rootEnd,
     {
       "ci.kind": "workflow",
+      "ci.report.scope": "Preparation and tests; reporting and cleanup excluded",
       "ci.status": workflow.workflowStatus,
       "ci.workflow.id": workflow.workflowId,
       "ci.execution.id": execution.executionId,
@@ -138,16 +228,45 @@ export function assembleTrace(
       "ci.source.ref": workflow.ref,
       "ci.url": `https://depot.dev/orgs/0p91s0lz49/workflows/${workflow.workflowId}`,
       "ci.evidence":
-        "Depot timestamps; shell and Playwright lifecycle markers. Uninstrumented action time remains in its enclosing job/phase.",
+        "Depot timestamps; shell and test lifecycle markers. Uninstrumented action time remains in its enclosing job/phase.",
     },
     workflow.workflowStatus === "failed",
   );
+  const cancelledBeforeStart =
+    !execution.startedAt &&
+    workflow.workflowStatus === "cancelled" &&
+    !workflow.jobs.some((job) =>
+      job.attempts.some(
+        (attempt) =>
+          attempt.startedAt &&
+          Date.parse(attempt.finishedAt || workflow.workflowFinishedAt) >= rootStart,
+      ),
+    );
+  const queueEnd = cancelledBeforeStart ? rootEnd : Date.parse(execution.startedAt);
+  if (queueEnd > rootStart) {
+    add(
+      "workflow-queue",
+      root,
+      cancelledBeforeStart ? "Workflow queue (cancelled)" : "Workflow queue",
+      rootStart,
+      queueEnd,
+      {
+        "ci.kind": "queue",
+        "ci.phase": "wait",
+        "ci.status": cancelledBeforeStart ? "cancelled" : "finished",
+        "ci.evidence": cancelledBeforeStart
+          ? "No execution or runner start recorded; wait ended at workflow cancellation"
+          : "Depot execution createdAt to startedAt; queue reason is not supplied",
+      },
+      false,
+    );
+  }
   for (const job of workflow.jobs) {
     const key = job.jobKey.replace(/^.*:preview:/, "");
     const labels: Record<string, string> = {
+      plan: "Plan",
       prepare: "Prepare",
       apps: "App tests",
-      finish: "Reports & cleanup",
     };
     const name =
       labels[key] ||
@@ -191,19 +310,7 @@ export function assembleTrace(
         },
         attempt.status === "failed",
       );
-      const events = (logs.get(attempt.attemptId) || []).flatMap((line) => {
-        if (!line.body.startsWith("@@ci-trace ")) return [];
-        const event = TraceEvent.parse(JSON.parse(line.body.slice("@@ci-trace ".length)));
-        return [
-          {
-            ...event,
-            ...(event.kind === "shell-start" && { step: line.stepId || event.step }),
-            stepKey: line.stepKey,
-            stepName: line.stepName || "",
-            command: line.command || "",
-          },
-        ];
-      });
+      const events = eventsByAttempt.get(attempt.attemptId) || [];
       const shells = events.filter((event) => event.kind === "shell-start");
       const shellEnds = new Map(
         events.filter((event) => event.kind === "shell-end").map((event) => [event.id, event]),
@@ -258,29 +365,56 @@ export function assembleTrace(
       const stepEnds = new Map<string, number>();
       for (const shell of shells) {
         const done = shellEnds.get(shell.id);
+        // Cancellation can record a job finish before always() cleanup starts.
+        // With no exit marker, keep it incomplete at its start instead of
+        // inventing a negative duration. Measured intervals still validate below.
+        const shellEnd = done?.time || Math.max(shell.time, end);
         const parent =
           phases.findLast((phase) => shell.time >= phase.start && shell.time < phase.end)?.id ||
           jobSpan;
         const id = add(
           `${attempt.attemptId}/shell/${shell.id}`,
           parent,
-          shell.command || shell.stepName || shell.step.replaceAll("_", " "),
+          shell.stepName || shell.stepId || shell.command || shell.step,
           shell.time,
-          done?.time || end,
+          shellEnd,
           {
             "ci.kind": "step",
             "ci.step.key": shell.stepKey,
+            "ci.step.id": shell.stepId,
             "ci.step.name": shell.stepName,
             "ci.command": shell.command,
             "ci.status": done ? (done.exitCode ? "failed" : "passed") : "incomplete",
             "ci.evidence": done
               ? "Measured shell start/exit"
-              : "incomplete; end bounded by job finish",
+              : shell.time > end
+                ? "incomplete; enclosing finish precedes start"
+                : "incomplete; end bounded by job finish",
           },
           !!done?.exitCode,
         );
         stepParents.set(shell.stepKey, id);
-        stepEnds.set(shell.stepKey, done?.time || end);
+        stepEnds.set(shell.stepKey, shellEnd);
+      }
+      for (const event of events) {
+        if (event.kind === "milestone") {
+          add(
+            `${attempt.attemptId}/milestone/${event.name}`,
+            stepParents.get(event.stepKey) || jobSpan,
+            event.name,
+            event.time,
+            event.time,
+            { "ci.kind": "milestone", "ci.evidence": "Status publication succeeded" },
+            false,
+          );
+        }
+        if (event.kind === "dependency") {
+          dependencies.push({
+            sourceId: stepParents.get(event.stepKey) || jobSpan,
+            targetId: event.targetId,
+            milestone: event.milestone,
+          });
+        }
       }
       const operations = events.filter((event) => event.kind === "span-start");
       const operationIds = new Map(
@@ -294,6 +428,7 @@ export function assembleTrace(
       );
       for (const operation of operations) {
         const done = operationEnds.get(operation.id);
+        const enclosingEnd = stepEnds.get(operation.stepKey) || end;
         if (operation.parentId && !operationIds.has(operation.parentId))
           throw new Error(`Missing parent for CI operation: ${operation.name}`);
         add(
@@ -301,42 +436,143 @@ export function assembleTrace(
           operationIds.get(operation.parentId) || stepParents.get(operation.stepKey) || jobSpan,
           operation.name,
           operation.time,
-          done?.time || stepEnds.get(operation.stepKey) || end,
+          done?.time || Math.max(operation.time, enclosingEnd),
           {
             "ci.kind": "operation",
             "ci.status": done?.status || "incomplete",
             "ci.evidence": done
               ? "Measured operation start/end"
-              : "incomplete; end bounded by enclosing step/job finish",
+              : operation.time > enclosingEnd
+                ? "incomplete; enclosing finish precedes start"
+                : "incomplete; end bounded by enclosing step/job finish",
           },
           done?.status === "failed",
         );
       }
       for (const test of events.filter((event) => event.kind === "test-start")) {
         const done = testEnds.get(test.id);
+        const aggregate = test.framework === "vitest";
+        const retryCount = done?.retryCount || 0;
+        const suffix = aggregate
+          ? retryCount
+            ? ` · ${retryCount} ${retryCount === 1 ? "retry" : "retries"}`
+            : ""
+          : test.retry
+            ? ` · retry ${test.retry}`
+            : "";
         add(
           `${attempt.attemptId}/test/${test.id}`,
           stepParents.get(test.stepKey) || jobSpan,
-          `${test.title}${test.retry ? ` · retry ${test.retry}` : ""}`,
+          `${test.title}${suffix}`,
           test.time,
-          done?.time || end,
+          done?.time || Math.max(test.time, end),
           {
             "ci.kind": "test",
             "ci.status": done?.status || "incomplete",
             "ci.evidence": done
-              ? "Playwright startTime + duration"
-              : "incomplete; end bounded by job finish",
+              ? aggregate
+                ? "Vitest startTime + duration; includes hooks and all retries"
+                : "Playwright startTime + duration"
+              : test.time > end
+                ? "incomplete; enclosing finish precedes start"
+                : "incomplete; end bounded by job finish",
+            "test.framework": test.framework,
+            "test.attempt_detail": aggregate ? "aggregate-only" : "complete",
+            ...(aggregate && done && { "test.retry_count": String(retryCount) }),
             "test.file": test.file,
             "test.line": String(test.line),
             "test.project": test.project,
             "test.retry": String(test.retry),
             "test.expected_status": done?.expectedStatus || "unknown",
-            "test.worker": done ? String(done.worker) : "unknown",
+            "test.worker": typeof done?.worker === "number" ? String(done.worker) : "unknown",
           },
           !!done && done.status !== done.expectedStatus && done.status !== "skipped",
         );
       }
     }
+  }
+  // Resolve after collecting every job; Depot need not return producers first.
+  const byId = new Map(spans.map((span) => [span.spanId, span]));
+  for (const dependency of dependencies) {
+    const source = byId.get(dependency.sourceId)!;
+    const milestone =
+      dependency.milestone &&
+      byId.get(hash(`${traceId}/${dependency.targetId}/milestone/${dependency.milestone}`, 16));
+    // Cancelled runners can have an attempt ID without ever starting. Their
+    // evidence is the zero-duration job placeholder, not an invented attempt.
+    const unstartedJob = workflow.jobs.find((job) =>
+      job.attempts.some(
+        (attempt) => attempt.attemptId === dependency.targetId && !attempt.startedAt,
+      ),
+    );
+    const target =
+      milestone || byId.get(hash(`${traceId}/${unstartedJob?.jobId || dependency.targetId}`, 16));
+    if (!target) throw new Error(`Missing CI dependency target: ${dependency.targetId}`);
+    source.links.push({
+      traceId,
+      spanId: target.spanId,
+      attributes: [
+        {
+          key: "ci.link.label",
+          value: {
+            stringValue: dependency.milestone
+              ? `Requires ${dependency.milestone}${milestone ? "" : " (not observed)"}`
+              : "Waits for job to settle",
+          },
+        },
+      ],
+    });
+  }
+  const green =
+    workflow.workflowStatus === "finished"
+      ? observedGreen || { time: rootEnd, evidence: "Successful preview completion" }
+      : null;
+  if (green) {
+    const workflowSpan = spans[0];
+    workflowSpan.attributes.push(
+      { key: "ci.time_to_green_ms", value: { stringValue: String(green.time - rootStart) } },
+      { key: "ci.green.evidence", value: { stringValue: green.evidence } },
+    );
+    workflowSpan.events = [
+      {
+        name: "ci.check.green",
+        timeUnixNano: (BigInt(Math.round(green.time * 1000)) * 1000n).toString(),
+        attributes: [{ key: "ci.evidence", value: { stringValue: green.evidence } }],
+      },
+    ];
+  }
+  if (workflow.workflowStatus === "failed") {
+    // Job outcomes, not test/step failures that may recover on retry. Ignore
+    // failed attempts of recovered jobs and timestamps from previous executions.
+    const failedAt = workflow.jobs
+      .filter((job) => job.status === "failed")
+      .flatMap((job) => job.attempts)
+      .filter((attempt) => attempt.status === "failed" && attempt.finishedAt)
+      .map((attempt) => Date.parse(attempt.finishedAt))
+      .filter((time) => time >= rootStart && time <= rootEnd)
+      .sort((a, b) => a - b)[0];
+    const failure = [
+      ...(failedAt === undefined
+        ? []
+        : [{ time: failedAt, evidence: "First failed job completion (Depot)" }]),
+      ...(verdictFailure ? [verdictFailure] : []),
+    ].sort((a, b) => a.time - b.time)[0];
+    const red = failure ? failure.time : rootEnd;
+    const evidence = failure
+      ? failure.evidence
+      : "Preview completion (upper bound; no failed job completion recorded)";
+    spans[0].attributes.push(
+      { key: "ci.time_to_red_ms", value: { stringValue: String(red - rootStart) } },
+      { key: "ci.red.evidence", value: { stringValue: evidence } },
+    );
+    spans[0].events = [
+      ...(spans[0].events || []),
+      {
+        name: "ci.check.red",
+        timeUnixNano: (BigInt(red) * 1_000_000n).toString(),
+        attributes: [{ key: "ci.evidence", value: { stringValue: evidence } }],
+      },
+    ];
   }
   return {
     resourceSpans: [
@@ -393,7 +629,13 @@ type Span = {
   startTimeUnixNano: string;
   endTimeUnixNano: string;
   attributes: { key: string; value: { stringValue: string } }[];
+  events?: {
+    name: string;
+    timeUnixNano: string;
+    attributes: { key: string; value: { stringValue: string } }[];
+  }[];
   status: { code: number };
+  links: { traceId: string; spanId: string; attributes: Span["attributes"] }[];
 };
 
 export const Workflow = z.object({
@@ -406,15 +648,21 @@ export const Workflow = z.object({
   ref: z.string(),
   workflowStatus: z.string(),
   workflowCreatedAt: z.string(),
-  workflowFinishedAt: z.string(),
+  workflowFinishedAt: z.string().default(""),
   executions: z.array(
-    z.object({ executionId: z.string(), execution: z.number(), createdAt: z.string() }),
+    z.object({
+      executionId: z.string(),
+      execution: z.number(),
+      createdAt: z.string(),
+      startedAt: z.string().default(""),
+    }),
   ),
   jobs: z.array(
     z.object({
       jobId: z.string(),
       jobKey: z.string(),
       status: z.string(),
+      finishedAt: z.string().default(""),
       attempts: z
         .array(
           z.object({
@@ -431,6 +679,21 @@ export const Workflow = z.object({
 });
 
 const TraceEvent = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("dependency"),
+    targetId: z.string().min(1),
+    milestone: z.string(),
+  }),
+  z.object({
+    kind: z.literal("milestone"),
+    name: z.string().min(1),
+    time: z.number().finite(),
+  }),
+  z.object({
+    kind: z.literal("check-green"),
+    time: z.number().finite(),
+    checkId: z.number().int().positive(),
+  }),
   z.object({
     kind: z.literal("span-start"),
     id: z.string(),
@@ -461,6 +724,8 @@ const TraceEvent = z.discriminatedUnion("kind", [
     id: z.string(),
     time: z.number().finite(),
     title: z.string(),
+    // Historical markers were emitted only by Playwright.
+    framework: z.enum(["playwright", "vitest"]).default("playwright"),
     file: z.string(),
     line: z.number(),
     project: z.string(),
@@ -472,7 +737,8 @@ const TraceEvent = z.discriminatedUnion("kind", [
     time: z.number().finite(),
     status: z.string(),
     expectedStatus: z.string(),
-    worker: z.number(),
+    worker: z.number().optional(),
+    retryCount: z.number().int().nonnegative().optional(),
   }),
 ]);
 

@@ -1,0 +1,404 @@
+/* public/issuer.css — the one stylesheet of the issuer's two pages (login.html, authorize.html),
+ * a file the assets binding serves. The plain rules first (the login page); the consent page after. */
+:root {
+  color-scheme: light dark;
+}
+body {
+  font:
+    15px/1.5 ui-sans-serif,
+    system-ui,
+    sans-serif;
+  max-width: 56rem;
+  margin: 4rem auto;
+  padding: 0 1.25rem;
+}
+h1 {
+  font-size: 1.25rem;
+  margin: 0 0 1rem;
+}
+h2 {
+  font-size: 1rem;
+  margin: 1.4rem 0 0.4rem;
+}
+form {
+  margin: 1rem 0;
+}
+fieldset {
+  border: 1px solid color-mix(in oklab, currentColor 25%, transparent);
+  border-radius: 6px;
+  margin: 0.8rem 0;
+}
+legend {
+  padding: 0 0.4rem;
+  opacity: 0.7;
+  font-size: 0.85em;
+}
+input[type="email"],
+input[type="text"] {
+  font: inherit;
+  padding: 0.5rem 0.6rem;
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 0.6rem;
+}
+label {
+  display: block;
+  margin: 0.25rem 0;
+}
+button {
+  font: inherit;
+  padding: 0.5rem 0.9rem;
+  cursor: pointer;
+}
+.muted {
+  opacity: 0.6;
+  font-size: 0.85em;
+}
+ul {
+  padding-left: 1.1rem;
+}
+code {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+[role="alert"] {
+  color: color-mix(in oklab, currentColor 70%, red);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+th,
+td {
+  padding: 0.65rem 0.4rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid color-mix(in oklab, currentColor 20%, transparent);
+  overflow-wrap: anywhere;
+}
+td form {
+  margin: 0;
+}
+textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.6rem;
+  font: inherit;
+}
+
+/* The consent page: one column, phone-first — the hero (iterate ⇄ the client), the title, who is
+   signed in (the one card), the permissions, the projects as a flat list under the either/or, the
+   two buttons. */
+body:has(.consent-card) {
+  max-width: none;
+  min-height: 100dvh;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 3rem 1rem;
+  display: grid;
+  place-items: start center;
+  background: light-dark(#fff, #111113);
+}
+.consent-card {
+  --line: light-dark(#e4e4e7, #343438);
+  --soft: light-dark(#f6f6f7, #232326);
+  --ink: light-dark(#18181b, #f4f4f5);
+  --quiet: light-dark(#71717a, #a1a1aa);
+  width: min(100%, 34rem);
+  color: var(--ink);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+
+  > header,
+  > footer,
+  > form {
+    padding: 0 0 1.5rem;
+  }
+  h1 {
+    font-size: 1.5rem;
+    margin: 0;
+    text-align: center;
+  }
+  h2 {
+    font-size: 0.9rem;
+    margin: 0;
+  }
+  p {
+    margin: 0.5rem 0 0;
+  }
+  form {
+    margin: 0;
+  }
+  strong {
+    font-weight: 600;
+  }
+  .muted {
+    opacity: 1;
+    color: var(--quiet);
+    font-size: 0.85em;
+  }
+  button,
+  .consent-actions a {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    text-decoration: none;
+    text-align: center;
+    font-weight: 500;
+    padding: 0.5rem 0.8rem;
+  }
+  button:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  button:not(:disabled):hover,
+  .consent-actions a:hover {
+    background: var(--soft);
+  }
+  .consent-quiet,
+  .consent-add {
+    border-color: transparent;
+    padding: 0.4rem 0.5rem;
+  }
+  :focus-visible {
+    outline: 2px solid #3b82f6;
+    outline-offset: 3px;
+  }
+  input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--ink);
+    flex-shrink: 0;
+  }
+  input[type="text"],
+  select {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    padding: 0.5rem;
+    margin: 0.3rem 0 0.6rem;
+    box-sizing: border-box;
+    width: 100%;
+  }
+}
+/* The hero: iterate ⇄ the client, two tiles and an arrow, centred above the title. */
+.consent-hero {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin: 0 0 1.25rem;
+}
+.consent-tile {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--soft);
+  font-weight: 600;
+  font-size: 20px;
+  overflow: hidden;
+}
+.consent-tile img,
+.consent-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.consent-arrow {
+  color: var(--quiet);
+  font-size: 22px;
+}
+/* Who is signed in: the one card — the person's picture (or initial), the address, switch. */
+.consent-account {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin: 0 0 1.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--soft);
+
+  > div {
+    flex: 1;
+    min-width: 0;
+  }
+  strong {
+    display: block;
+  }
+  button {
+    font-size: 12px;
+  }
+}
+.consent-avatar {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: light-dark(#fff, #18181b);
+  font-weight: 600;
+  overflow: hidden;
+}
+/* The permissions the app asked for: `iterate` fixed, every other scope tickable. */
+.consent-permissions {
+  margin: 0 0 1.25rem;
+}
+.consent-scope {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  margin: 0.6rem 0 0;
+  cursor: pointer;
+}
+.consent-scope .muted {
+  display: block;
+  margin-top: 0.15rem;
+}
+.consent-scope input:disabled {
+  opacity: 0.6;
+}
+/* Projects: the heading with the count and "+ New project", the either/or, the flat list. */
+.consent-project-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.consent-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.consent-add span {
+  font-size: 17px;
+  line-height: 1;
+}
+.consent-modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  padding: 3px;
+  margin: 0.75rem 0 0.25rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--soft);
+}
+.consent-mode {
+  position: relative;
+  margin: 0;
+  padding: 0.45rem 0.5rem;
+  border-radius: 7px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--quiet);
+  cursor: pointer;
+}
+.consent-mode input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.consent-mode:has(input:checked) {
+  background: light-dark(#fff, #18181b);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.consent-mode:has(input:focus-visible) {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+.consent-projects {
+  padding: 0;
+  margin: 0.5rem 0 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+.consent-projects:disabled {
+  opacity: 0.55;
+}
+.consent-org h3 {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--quiet);
+  margin: 0;
+  padding: 0.9rem 0 0.35rem;
+}
+.consent-project {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.7rem 0;
+  margin: 0;
+  border-top: 1px solid var(--line);
+  cursor: pointer;
+}
+/* New project: a small panel under the list — the name, the organization (or a new one's name). */
+.consent-create {
+  margin: 1rem 0 0;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--soft);
+
+  label {
+    font-size: 13px;
+    margin: 0.6rem 0 0;
+  }
+  input[type="text"],
+  select {
+    background: light-dark(#fff, #18181b);
+  }
+  button {
+    margin-top: 0.4rem;
+  }
+}
+.consent-card footer {
+  padding-top: 1.5rem;
+}
+.consent-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+.consent-actions > * {
+  flex: 1;
+}
+.consent-card .consent-actions button {
+  background: var(--ink);
+  color: light-dark(#fff, #18181b);
+}
+.consent-card footer p {
+  margin: 0 0 1rem;
+}
+@media (max-width: 420px) {
+  body:has(.consent-card) {
+    padding: 1.5rem 1rem;
+  }
+  .consent-card > header,
+  .consent-card > form,
+  .consent-card > footer {
+    padding: 0 0 1.25rem;
+  }
+  .consent-account {
+    gap: 0.5rem;
+  }
+}

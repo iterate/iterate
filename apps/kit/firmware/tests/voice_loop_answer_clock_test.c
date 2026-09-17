@@ -19,7 +19,7 @@
  * accepted, which is the only thing a listener can hear.
  */
 
-#include "fake_esp_idf.h"
+#include "esp_idf.h"
 #include "fake_esp_idf_platform.h"
 
 #include "iterate/kit/voice/loop.h"
@@ -28,7 +28,7 @@
 
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/voice_device_profile.h"
-#include "iterate/kit/voicelab_stream.h"
+#include "iterate/kit/voice_stream.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -276,7 +276,7 @@ static void pump(void) {
         answered_any = true;
       }
     }
-    iterate_kit_fake_esp_idf_advance_ms(50U);
+    iterate_kit_host_esp_idf_advance_ms(50U);
     step();
     if (!answered_any && round > 3) break;
   }
@@ -310,7 +310,7 @@ static const char *frames_b64(size_t frames) {
   static char encoded[8192];
   static const char alphabet[] =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  const size_t byte_count = frames * (size_t)ITERATE_KIT_VOICELAB_FRAME_BYTES;
+  const size_t byte_count = frames * (size_t)ITERATE_KIT_VOICE_STREAM_FRAME_BYTES;
   const uint8_t fill = speaker_pcm_byte;
   size_t at = 0U;
   size_t out = 0U;
@@ -371,9 +371,9 @@ static void start_local_call(void) {
   assert(iterate_kit_itx_connection_receive_text(
       connection, message, strlen(message)) == CAPNWEB_OK);
   if (esp_timer_get_time() < 2000000) {
-    iterate_kit_fake_esp_idf_set_now_us(2000000);
+    iterate_kit_host_esp_idf_set_now_us(2000000);
   } else {
-    iterate_kit_fake_esp_idf_advance_ms(25U);
+    iterate_kit_host_esp_idf_advance_ms(25U);
   }
   step();
 }
@@ -486,7 +486,7 @@ static void a_mid_answer_dry_read_keeps_the_starvation_ledger_armed(void) {
 
   deliver_chunk(true, false, CHUNK_FRAMES);
   playback();
-  iterate_kit_fake_esp_idf_advance_ms(
+  iterate_kit_host_esp_idf_advance_ms(
       (uint32_t)ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS);
   for (pass = 0; pass < CHUNK_FRAMES; ++pass) playback();
   assert(frames_written == written_before + (uint32_t)CHUNK_FRAMES);
@@ -535,7 +535,7 @@ static void the_first_answer_plays_whole(void) {
 static void a_short_answer_without_a_marker_plays_at_the_prime_wait(void) {
   const uint32_t written_before = frames_written;
   int pass;
-  iterate_kit_fake_esp_idf_advance_ms(5000U);
+  iterate_kit_host_esp_idf_advance_ms(5000U);
   deliver_chunk(true, false, CHUNK_FRAMES);
   /*
    * A priming pass sleeps 5 ms of fake time, so `play_out()`'s 400 passes
@@ -544,10 +544,10 @@ static void a_short_answer_without_a_marker_plays_at_the_prime_wait(void) {
   for (pass = 0; pass < 10; ++pass) playback();
   assert(frames_written == written_before);
   /* A 100 ms gap plus earlier poll time is still below the deadline. */
-  iterate_kit_fake_esp_idf_advance_ms(100U);
+  iterate_kit_host_esp_idf_advance_ms(100U);
   for (pass = 0; pass < 5; ++pass) playback();
   assert(frames_written == written_before);
-  iterate_kit_fake_esp_idf_advance_ms(
+  iterate_kit_host_esp_idf_advance_ms(
       (uint32_t)ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS);
   play_out();
   assert(frames_written == written_before + (uint32_t)CHUNK_FRAMES);
@@ -561,14 +561,14 @@ static void a_short_answer_without_a_marker_plays_at_the_prime_wait(void) {
 static void a_short_answer_with_a_marker_plays_at_the_prime_wait_too(void) {
   const uint32_t written_before = frames_written;
   int pass;
-  iterate_kit_fake_esp_idf_advance_ms(5000U);
+  iterate_kit_host_esp_idf_advance_ms(5000U);
   deliver_chunk(true, true, CHUNK_FRAMES);
   for (pass = 0; pass < 10; ++pass) playback();
   assert(frames_written == written_before);
-  iterate_kit_fake_esp_idf_advance_ms(100U);
+  iterate_kit_host_esp_idf_advance_ms(100U);
   for (pass = 0; pass < 5; ++pass) playback();
   assert(frames_written == written_before);
-  iterate_kit_fake_esp_idf_advance_ms(
+  iterate_kit_host_esp_idf_advance_ms(
       (uint32_t)ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS);
   play_out();
   assert(frames_written == written_before + (uint32_t)CHUNK_FRAMES);
@@ -581,7 +581,7 @@ static void a_later_answer_plays_whole_too(void) {
   /* 5000 ms clears the deleted barge-in module's 600 ms evidence window
    * with room; the surviving bound below is the one that still moves. */
   assert(ITERATE_KIT_VOICE_SPEAKER_LAG_CATCHUP_MS < 5000);
-  iterate_kit_fake_esp_idf_advance_ms(5000U);
+  iterate_kit_host_esp_idf_advance_ms(5000U);
   playback(); /* the device notices it is dry and settles back to priming */
 
   deliver_answer();
@@ -613,7 +613,7 @@ static void a_live_answer_superseded_after_a_stall(void) {
   const uint32_t written_before = frames_written;
   int pass;
 
-  iterate_kit_fake_esp_idf_advance_ms(5000U);
+  iterate_kit_host_esp_idf_advance_ms(5000U);
   playback();
 
   /*
@@ -621,7 +621,7 @@ static void a_live_answer_superseded_after_a_stall(void) {
    */
   deliver_answer();
   playback();
-  iterate_kit_fake_esp_idf_advance_ms(
+  iterate_kit_host_esp_idf_advance_ms(
       (uint32_t)ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS);
   for (pass = 0; pass < 5; ++pass) playback();
   assert(frames_written > written_before);
@@ -638,7 +638,7 @@ static void a_live_answer_superseded_after_a_stall(void) {
      * flush restarts that timeline the replacement inherits the debt and the
      * catch-up rule spends the new answer paying it.
      */
-    iterate_kit_fake_esp_idf_advance_ms(5000U);
+    iterate_kit_host_esp_idf_advance_ms(5000U);
 
     deliver_answer();
     play_out();
@@ -673,7 +673,7 @@ static void a_live_answer_superseded_after_a_stall(void) {
 static void audio_with_no_clear_at_all_still_plays(void) {
   const uint32_t written_before = frames_written;
 
-  iterate_kit_fake_esp_idf_advance_ms(5000U);
+  iterate_kit_host_esp_idf_advance_ms(5000U);
   playback(); /* dry, past the conceal limit: back to priming */
 
   deliver_chunk(false, false, CHUNK_FRAMES);
@@ -689,14 +689,14 @@ static void speaker_peak_is_fresh_only_while_local_playout_is_feeding(void) {
   speaker_pcm_byte = 0x20U;
   deliver_chunk(true, false, CHUNK_FRAMES);
   playback();
-  iterate_kit_fake_esp_idf_advance_ms(
+  iterate_kit_host_esp_idf_advance_ms(
       (uint32_t)ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS);
   playback();
   assert(frames_written > written_before);
   step();
   assert(board.last_view.speaker_peak == 0x2020U);
 
-  iterate_kit_fake_esp_idf_advance_ms((uint32_t)ITERATE_KIT_VOICE_FRAME_MS + 1U);
+  iterate_kit_host_esp_idf_advance_ms((uint32_t)ITERATE_KIT_VOICE_FRAME_MS + 1U);
   step();
   assert(board.last_view.speaker_peak == 0U);
 
@@ -717,7 +717,7 @@ static void ending_a_call_discards_queued_audio_before_the_next_call(void) {
   end_local_call();
   assert(board.last_view.speaker_peak == 0U);
   assert(!board.last_view.listening && !board.last_view.wants_call);
-  iterate_kit_fake_esp_idf_advance_ms(
+  iterate_kit_host_esp_idf_advance_ms(
       (uint32_t)ITERATE_KIT_VOICE_SPEAKER_PRIME_WAIT_MS + 100U);
   play_out();
   assert(frames_written == written_before);
@@ -746,12 +746,12 @@ static void local_end_rejects_late_acceptance_and_speaker_audio(void) {
 }
 
 int main(void) {
-  iterate_kit_fake_esp_idf_reset();
+  iterate_kit_host_esp_idf_reset();
   iterate_kit_fake_platform_reset();
   memset(&board, 0, sizeof(board));
-  iterate_kit_fake_esp_idf_set_now_us(1000000);
+  iterate_kit_host_esp_idf_set_now_us(1000000);
   assert(iterate_kit_voice_loop_init(&board_ops, &open_mic_facts, &board));
-  assert(!iterate_kit_fake_esp_idf_restart_requested());
+  assert(!iterate_kit_host_esp_idf_restart_requested());
   assert(board.started);
   iterate_kit_fake_platform_connect();
   pump();
@@ -771,6 +771,6 @@ int main(void) {
   ending_a_call_discards_queued_audio_before_the_next_call();
   local_end_rejects_late_acceptance_and_speaker_audio();
 
-  assert(!iterate_kit_fake_esp_idf_restart_requested());
+  assert(!iterate_kit_host_esp_idf_restart_requested());
   return 0;
 }

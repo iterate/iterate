@@ -68,7 +68,11 @@ export { LiveState, type LiveStateSink } from "../stream/processor.ts";
 // dotted call.
 //
 // NEVER define alarm(): facets have none (workerd#6810 — the runtime answers "Facets currently
-// cannot set alarms."); a timer, when one is needed, is a scheduled append on the context.
+// cannot set alarms."); a timer, when one is needed, is a scheduled append on the context. The
+// engine's own recovery is a CLAIM on the context's alarm (processor.ts, rule 3): while a
+// `runInBackground` attempt is in flight the context owes this facet a `revive()`, so a host that
+// dies mid-attempt is re-materialized and runs its at-head pass again
+// (__workers-tests__/agent-revive.test.ts: an LLM call survives its context's death).
 
 /** What the parent mints the class with — the whole identity. */
 export type StreamProcessorProps = { iterateContextName: string; name: string };
@@ -86,6 +90,8 @@ export type ProcessorScope = {
   builtins: {
     append(...events: StreamEventInput[]): Promise<unknown>;
     readEvents(afterOffset?: number, limit?: number): Promise<unknown>;
+    /** The engine's claim on the context's alarm (processor.ts rule 3): "come back by `at`", or null. */
+    processors: { claim(name: string, at: number | null): Promise<unknown> };
   };
 };
 
@@ -114,6 +120,11 @@ export abstract class StreamProcessorDurableObject<
   /** Catch up from the log (the read-your-writes entry after an eviction). */
   catchUpFromLog(): Promise<void> {
     return this.#engine.catchUpFromLog();
+  }
+  /** THE REVIVE: the context's alarm pass calls it for a due claim — catch up, then run the
+   *  at-head pass, so an attempt the last incarnation was running is started again from state. */
+  revive(): Promise<void> {
+    return this.#engine.revive();
   }
   /** Caught up through the log, then `{ offset, state }`. */
   snapshot(): Promise<{ offset: number; state: State }> {
@@ -159,6 +170,8 @@ export abstract class StreamProcessorDurableObject<
           this.withItx((itx) => itx.builtins.append(...events)) as Promise<StreamEvent[]>,
         read: (after, limit) =>
           this.withItx((itx) => itx.builtins.readEvents(after, limit)) as Promise<StreamPage>,
+        claim: (at) =>
+          this.withItx((itx) => itx.builtins.processors.claim(this.ctx.props.name, at)),
       },
       storage: new ReduceCheckpointTable(this.ctx.storage.sql),
     }));
@@ -296,8 +309,19 @@ export abstract class ConfigWorker<
 
   /** THE WEB ROOT — the Request a project host with no app label rode in on (`x-iterate-app` absent;
    *  the edge's `itx.worker` dispatch). Route by hostname to `this.env.ITX.get().apps.<x>.fetch(request)`
-   *  or answer it here. Default: not found. */
-  override fetch(_request: Request): Response | Promise<Response> {
-    return new Response("Not found\n", { status: 404 });
+   *  or answer it here. Default: the project's bare homepage, so a fresh project's host answers
+   *  with its own name instead of a 404. */
+  override async fetch(_request: Request): Promise<Response> {
+    const itx = this.env.ITX.get();
+    try {
+      const { projectId } = await itx.whoami();
+      return new Response(`Homepage of project ${projectId}\n`, {
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      });
+    } finally {
+      // The scope is a capnweb RPC stub, which implements `Symbol.dispose` at runtime while its type
+      // does not say so; disposing it ends this one pipelined round trip (as `processEventBatch` does).
+      (itx as unknown as Disposable)[Symbol.dispose]?.();
+    }
   }
 }

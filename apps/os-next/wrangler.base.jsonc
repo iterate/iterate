@@ -1,16 +1,19 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "os-next",
-  // THE BUILD IS VITE's (vite.config.ts): this file is the Cloudflare Vite plugin's input — `vite dev`
-  // runs the worker in workerd, `vite build` bundles it (with the console's routes and their server
-  // functions) to dist/server/index.js beside a resolved copy of this config,
-  // dist/server/wrangler.json, which `pnpm deploy` and the local lanes consume. The processor
-  // The injected SDK is a virtual module of the Vite build (scripts/vite-plugin-processor-sdk.ts).
-  // config load.
+  // WRANGLER BUNDLES THE WORKER ITSELF from this entry — `wrangler dev`, `wrangler deploy`, the e2e
+  // harness and the workers test lane all start from src/worker.ts. What the worker cannot import
+  // from source, scripts/build.ts writes first: the generated modules (the injected SDK's text, the
+  // demo facet's source). This template becomes wrangler.jsonc (gitignored) through
+  // scripts/generate-wrangler-config.ts: the top-level block is local dev, one `env` block per
+  // deployment from the root envs.ts.
   "main": "src/worker.ts",
-  // nodejs_compat, spelled out: the DO's AsyncLocalStorage (node:async_hooks) and the console's Start
-  // server (node:async_hooks, node:stream) need it, and the Vite plugin externalizes `node:*` for
-  // workerd only when it sees the flag (the default-on date is newer than its wrangler). Loaded
+  // THE ISSUER'S PAGES are files in public/ (login.html, authorize.html, their stylesheet and
+  // scripts, public/_headers for their CSP) — the assets binding serves them. `run_worker_first`:
+  // every request reaches src/worker.ts first, which asks the binding only for the issuer's paths
+  // on the platform host — no asset ever answers on a project host.
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
+  // nodejs_compat, spelled out: the DO's AsyncLocalStorage (node:async_hooks) needs it. Loaded
   // userspace isolates are the pure-play half — context/worker-loader.ts mints them with
   // no_nodejs_compat, so what runs inside a context stays portable across workerd builds.
   "compatibility_date": "2026-09-01",
@@ -40,15 +43,6 @@
   // is CPU-bound on the DO's single thread; 5 min (the paid max) gives 10x the 30 s default before a
   // CPU-limit abort. Neither is billed until used.
   "limits": { "subrequests": 1000000, "cpu_ms": 300000 },
-
-  // THE STATIC ASSETS: the console's client bundle (Vite's dist/client) plus public/ verbatim — the
-  // console's /demo route renders the demo (src/routes/demo.tsx). The
-  // Vite plugin sets the directory. `run_worker_first: true`, on purpose: the patterns are paths, never
-  // hostnames, and a project host (`<app>--<project>.<base>`) must never answer with a platform asset —
-  // so src/worker.ts asks the ASSETS binding itself, on the platform host only, after the project
-  // hosts; a miss falls through to the console's SSR (`not_found_handling: "none"` — the SSR is the
-  // fallback, not an index.html: the Start build emits none).
-  "assets": { "binding": "ASSETS", "not_found_handling": "none", "run_worker_first": true },
 
   // The Worker Loader that runs each project's confined config worker / agents.
   "worker_loaders": [{ "binding": "LOADER" }],

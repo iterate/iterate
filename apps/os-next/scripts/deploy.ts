@@ -4,6 +4,7 @@ import { createCli } from "trpc-cli";
 import { osNextEnvs } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import { removeWorkerSecrets } from "../../../scripts/lib/deploy-helpers.ts";
+import { build } from "./build.ts";
 
 /** Worker secrets earlier deploys wrote that this code no longer reads. `wrangler deploy
  *  --secrets-file` preserves a secret it does not name, so a deploy removes these from the live
@@ -32,7 +33,12 @@ export default async function deploy(options: { env?: string } = {}) {
       "APP_CONFIG_SECRETS_KEY",
     ],
     optionalSecrets: ["APP_CONFIG_GOOGLE_CLIENT_ID", "APP_CONFIG_GOOGLE_CLIENT_SECRET"],
+    // wrangler bundles src/worker.ts itself: the deploy is `wrangler deploy --config wrangler.jsonc
+    // --env <name>` on the generated config's env block; `prepare` writes that config, the generated
+    // modules and the console bundle (scripts/build.ts) first.
+    build: "checked-in-config",
     async prepare(ctx) {
+      await build();
       const sql = readFileSync(new URL("../src/control-plane.sql", import.meta.url), "utf8");
       await ctx.cf(`/d1/database/${ctx.env.resources.directoryDbId}/query`, {
         method: "POST",

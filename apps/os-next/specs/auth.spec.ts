@@ -65,7 +65,7 @@ async function mcp(origin: string, token: string, name: string, args = {}) {
   return JSON.parse(message ? message.slice(6) : body);
 }
 
-test("first Claude consent creates the organization and project in the SPA before granting MCP access", async ({
+test("first Claude consent creates the organization and project on the consent page before granting MCP access", async ({
   page,
   context,
   baseURL,
@@ -75,6 +75,7 @@ test("first Claude consent creates the organization and project in the SPA befor
   const email = `consent-${stamp()}@example.com`;
   const project = `consent-${stamp()}`;
   const otherProject = `unselected-${stamp()}`;
+  const thirdProject = `third-${stamp()}`;
   let receiveCallback!: (url: URL) => void;
   const callback = new Promise<URL>((resolve) => {
     receiveCallback = resolve;
@@ -99,7 +100,7 @@ test("first Claude consent creates the organization and project in the SPA befor
     resources: [resource, `${origin}/api`],
     scopes: ["iterate", "account"],
   });
-  // Repeated resource keys and '+' form encoding must survive the TanStack SPA.
+  // Repeated resource keys and '+' form encoding must survive the page's form round trips.
   const expectedState = `${flow.state} + OAuth state`;
   flow.url.searchParams.set("state", expectedState);
   const sockets: string[] = [];
@@ -117,15 +118,31 @@ test("first Claude consent creates the organization and project in the SPA befor
         );
       }),
     ]);
-    await page
-      .getByRole("heading", { name: "Create your first organization", exact: true })
-      .waitFor();
+    await page.getByRole("heading", { name: "Create your first project", exact: true }).waitFor();
     expect(new URL(page.url()).search).toBe(flow.url.search);
+    // the page with no projects has optional parts left out — none may render as the text "null"
+    expect(await page.getByText("null", { exact: true }).count()).toBe(0);
+    // nothing to approve yet: the first project (and its organization) is created right here
+    const approve = page.getByRole("button", { name: "Approve", exact: true });
+    expect(await approve.isDisabled()).toBe(true);
+    // Task-based consent: `iterate` is fixed, the account permission is optional — untick it; the
+    // choice survives every round trip below and the grant carries `iterate` alone.
+    const projectAccess = page.getByRole("checkbox", {
+      name: "Read and make changes in the projects you grant it",
+      exact: true,
+    });
+    expect(await projectAccess.isChecked()).toBe(true);
+    expect(await projectAccess.isDisabled()).toBe(true);
+    const accountAccess = page.getByRole("checkbox", {
+      name: "See and end your sessions, and mint personal access tokens",
+      exact: true,
+    });
+    expect(await accountAccess.isChecked()).toBe(true);
+    await accountAccess.uncheck();
+    await page.getByRole("textbox", { name: "Project name", exact: true }).fill(project);
     await page
       .getByRole("textbox", { name: "Organization name", exact: true })
       .fill("First consent studio");
-    await page.getByRole("button", { name: "Create organization", exact: true }).click();
-    await page.getByRole("textbox", { name: "Project name", exact: true }).fill(project);
     await page.getByRole("button", { name: "Create project", exact: true }).click();
     const choice = page.getByRole("checkbox", {
       name: `${project} in First consent studio`,
@@ -133,22 +150,27 @@ test("first Claude consent creates the organization and project in the SPA befor
     });
     await choice.waitFor();
     expect(await choice.isChecked()).toBe(true);
-    const future = page.getByRole("checkbox", {
-      name: "All my current and future projects",
+    // The either/or: the projects ticked, or every project now and later — a Claude grant starts
+    // with the ticked ones.
+    const chosen = page.getByRole("radio", { name: "Chosen projects", exact: true });
+    const future = page.getByRole("radio", {
+      name: "All my projects, now and future",
       exact: true,
     });
+    expect(await chosen.isChecked()).toBe(true);
     expect(await future.isChecked()).toBe(false);
     await choice.uncheck();
-    expect(await page.getByRole("button", { name: "Approve", exact: true }).isDisabled()).toBe(
-      true,
-    );
-    // Refreshing the directory during onboarding must preserve the user's choices.
-    await page.locator("summary").filter({ hasText: "Create a project or organization" }).click();
+    expect(await approve.isDisabled()).toBe(true);
+    // A second project in a NEW organization, named inside "New project" — the one place the
+    // consent flow creates one. Refreshing the directory must preserve the choices made so far.
+    await page.getByRole("button", { name: "New project", exact: true }).click();
+    await page.getByRole("textbox", { name: "Project name", exact: true }).fill(otherProject);
+    await page
+      .getByRole("combobox", { name: "Organization", exact: true })
+      .selectOption({ label: "New organization…" });
     await page
       .getByRole("textbox", { name: "Organization name", exact: true })
       .fill("Second studio");
-    await page.getByRole("button", { name: "Create organization", exact: true }).click();
-    await page.getByRole("textbox", { name: "Project name", exact: true }).fill(otherProject);
     await page.getByRole("button", { name: "Create project", exact: true }).click();
     const otherChoice = page.getByRole("checkbox", {
       name: `${otherProject} in Second studio`,
@@ -159,35 +181,55 @@ test("first Claude consent creates the organization and project in the SPA befor
     expect(await choice.isChecked()).toBe(false);
     await page.getByRole("region", { name: "First consent studio", exact: true }).waitFor();
     await page.getByRole("region", { name: "Second studio", exact: true }).waitFor();
-    await page.getByRole("button", { name: "Clear", exact: true }).click();
     await page
       .getByRole("status")
-      .filter({ hasText: /^0 selected$/ })
+      .filter({ hasText: /^1 selected$/ })
       .waitFor();
-    expect(await page.getByRole("button", { name: "Approve", exact: true }).isDisabled()).toBe(
-      true,
-    );
-    await page.getByRole("button", { name: "Select all", exact: true }).click();
-    await page
-      .getByRole("status")
-      .filter({ hasText: /^2 selected$/ })
-      .waitFor();
+    await choice.check();
     await otherChoice.uncheck();
     await future.check();
     expect(await choice.isChecked()).toBe(true);
     expect(await otherChoice.isChecked()).toBe(true);
     expect(await otherChoice.isDisabled()).toBe(true);
-    await future.uncheck();
+    await page
+      .getByRole("status")
+      .filter({ hasText: /^All current and future projects$/ })
+      .waitFor();
+    // A create while "all" is chosen re-renders the parked list; the new project goes into the
+    // FIRST organization, so the boxes' order (grouped by organization) differs from the projects'
+    // creation order — the ticks must come back to the right boxes.
+    await page.getByRole("button", { name: "New project", exact: true }).click();
+    await page.getByRole("textbox", { name: "Project name", exact: true }).fill(thirdProject);
+    await page
+      .getByRole("combobox", { name: "Organization", exact: true })
+      .selectOption({ label: "First consent studio" });
+    await page.getByRole("button", { name: "Create project", exact: true }).click();
+    const thirdChoice = page.getByRole("checkbox", {
+      name: `${thirdProject} in First consent studio`,
+      exact: true,
+    });
+    await thirdChoice.waitFor();
+    expect(await thirdChoice.isChecked()).toBe(true);
+    expect(await thirdChoice.isDisabled()).toBe(true);
+    await chosen.check();
     expect(await choice.isChecked()).toBe(true);
+    expect(await thirdChoice.isChecked()).toBe(true);
     expect(await otherChoice.isChecked()).toBe(false);
+    await page
+      .getByRole("status")
+      .filter({ hasText: /^2 selected$/ })
+      .waitFor();
+    await thirdChoice.uncheck();
     await page
       .getByRole("status")
       .filter({ hasText: /^1 selected$/ })
       .waitFor();
     expect(new URL(page.url()).search).toBe(flow.url.search);
-    expect(sockets.filter((url) => new URL(url).pathname === "/api")).toHaveLength(1);
+    expect(await accountAccess.isChecked()).toBe(false);
+    // The consent page opens no socket — it posts JSON, and its session is built in the worker.
+    expect(sockets.filter((url) => new URL(url).pathname === "/api")).toHaveLength(0);
     await page.screenshot({ path: test.info().outputPath("first-consent.png"), fullPage: true });
-    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await approve.click();
     await page
       .getByRole("heading", { name: "Claude authorization completed", exact: true })
       .waitFor();

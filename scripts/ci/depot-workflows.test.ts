@@ -222,7 +222,12 @@ describe("Depot credential boundaries", () => {
     },
     {
       file: ".depot/workflows/preview.yml",
-      permissions: { contents: "read", "pull-requests": "write", statuses: "write" },
+      permissions: {
+        contents: "read",
+        checks: "write",
+        "pull-requests": "write",
+        statuses: "write",
+      },
     },
     {
       file: ".depot/workflows/deploy-os.yml",
@@ -276,6 +281,10 @@ describe("Depot validation capacity", () => {
         "**/package.json",
         "pnpm-lock.yaml",
         "pnpm-workspace.yaml",
+        "**/.npmrc",
+        ".pnpmfile.cjs",
+        "patches/**",
+        "scripts/depot-ci/dependencies.mjs",
         "scripts/depot-ci/bake-preview-ci-image.sh",
         ".depot/workflows/build-preview-ci-image.yml",
       ]),
@@ -295,7 +304,7 @@ describe("Depot validation capacity", () => {
     expect(checkout?.with).toMatchObject({ clean: false });
 
     const reconcile = job.steps?.find((step) => step.name === "Reconcile dependencies (baked)");
-    expect(reconcile?.run).toBe("pnpm install --frozen-lockfile --prefer-offline");
+    expect(reconcile?.run).toBe("node scripts/depot-ci/dependencies.mjs install");
     expect(job.steps?.map((step) => step.name)).not.toEqual(
       expect.arrayContaining(["Setup pnpm", "Setup Node", "Install Doppler CLI"]),
     );
@@ -384,20 +393,18 @@ describe("Depot validation capacity", () => {
   });
 
   it.each([
-    { file: ".depot/workflows/test.yml", jobId: "test" },
-    { file: ".depot/workflows/preview-run.yml", jobId: "finish" },
-  ])("$file always finalizes and retains test telemetry", ({ file, jobId }) => {
+    { file: ".depot/workflows/test.yml", jobId: "test", artifactPath: "test-results/ci-telemetry" },
+    { file: ".depot/workflows/preview-run.yml", jobId: "finish", artifactPath: "test-results" },
+  ])("$file always finalizes and retains test telemetry", ({ file, jobId, artifactPath }) => {
     const steps = loadWorkflow(file).jobs[jobId]?.steps ?? [];
     const finalizer = steps.find((step) =>
       step.run?.includes("scripts/ci/upload-test-telemetry.ts"),
     );
-    // Select by payload, not position: the flake-records upload (a sibling
-    // artifact step with laxer if-no-files-found semantics) is not the
-    // telemetry retention step this guard is about.
+    // Other uploads include trace HTML, browser reports and individual flakes.
+    // Select the complete test-results directory this retention guard is about.
     const upload = steps.find(
       (step) =>
-        step.uses === "actions/upload-artifact@v4" &&
-        !String((step.with as any)?.name).startsWith("flake-records"),
+        step.uses === "actions/upload-artifact@v4" && (step.with as any)?.path === artifactPath,
     );
 
     expect(finalizer, `${file} must normalize and send telemetry`).toMatchObject({
@@ -429,8 +436,8 @@ describe("Depot validation capacity", () => {
   });
 
   it.each([
-    { file: ".depot/workflows/test.yml", jobId: "test" },
-    { file: ".depot/workflows/preview-run.yml", jobId: "finish" },
+    { file: ".depot/workflows/test.yml", jobId: "test", artifactPath: "test-results/ci-telemetry" },
+    { file: ".depot/workflows/preview-run.yml", jobId: "finish", artifactPath: "test-results" },
   ])("$file sends finalized test telemetry to the canonical PostHog project", ({ file, jobId }) => {
     const finalizer = loadWorkflow(file).jobs[jobId]?.steps?.find((step) =>
       step.run?.includes("scripts/ci/upload-test-telemetry.ts"),

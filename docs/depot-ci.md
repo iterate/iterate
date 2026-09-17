@@ -311,10 +311,11 @@ browser. A snapshot is independent of sandbox size: choose `2x8`, `4x16`,
 `8x32`, or `16x64` from measured workload demand. Preview deploy/e2e retains
 `16x64` for its overlapping browser and Vitest pools. The image rebuilds when
 dependency manifests or its bake inputs land on `main`, with a weekly scheduled
-rebuild as drift repair. Consumers still run
-`pnpm install --frozen-lockfile --prefer-offline`; that reconcile is the
-correctness check and safely handles a stale image. Jobs that consume it must
-keep the image and checkout behavior:
+rebuild as drift repair. Preview jobs run `node scripts/depot-ci/dependencies.mjs install`: an exact
+baked fingerprint reuses the installed tree without starting pnpm. A mismatch
+or missing receipt runs `pnpm install --frozen-lockfile --prefer-offline`.
+Other workflows still always run that pnpm command. Jobs that consume the
+image must keep the image and checkout behavior:
 
 ```yaml
 runs-on:
@@ -329,6 +330,35 @@ steps:
 `clean: false` matters because the image contains a preinstalled workspace. A
 clean checkout would delete the baked `node_modules` before `pnpm install` can
 reuse it.
+
+### Preview dependency fingerprints
+
+The image bake uses a frozen install and takes pnpm's version from the root
+`packageManager`. After setup succeeds it seals `node_modules` with a receipt.
+Snapshots publish both the normal image tag and `deps-<fingerprint>`; the
+receipt inside the image is authoritative, so moving a tag cannot create a
+false hit. The `image-tag` dispatch input allows isolated experiment images.
+
+The fingerprint includes the lockfile, manifests (including new/deleted ones),
+workspace config, pnpm hook, npm config, patches, local file dependency sources,
+bake script, verifier, checkout path, Node version, OS/architecture and install
+configuration environment. Reuse also checks pnpm's installed metadata and the
+workspace module directory listings. New workspace lifecycle scripts disable
+reuse; the current root `is-ci || husky` prepare is a no-op in CI.
+
+This receipt is for a pristine Depot filesystem snapshot, consumed immediately
+after `checkout` with `clean: false`. It is not a general cache-integrity checker:
+verifying every installed file would recreate the filesystem cost being removed.
+Do not mutate dependencies before the verification step. Missing or changed
+inputs run the normal frozen install, and invalidate the old receipt before
+installing. An image without a matching fingerprint is a cache miss even if the
+previous PR commit had the same lockfile. Only successful image bakes publish
+reusable state; misses are deliberately not optimized here.
+
+Normal CI still uses the rolling image tag so selecting it adds no preliminary
+job. The fingerprint tag makes the exact snapshot addressable and inspectable;
+consumers validate its receipt rather than trusting the tag's spelling. No
+package-manager migration is needed to bypass installation on a match.
 
 ## Trigger Gotchas
 
@@ -367,8 +397,8 @@ releases consumers even while the producer continues collecting artifacts.
 The finalizer needs only preparation. Its setup overlaps the tests, then one
 `wait-for-jobs` call polls all seven consumers together. Only a confirmed terminal
 state for every consumer authorizes cleanup; failed consumers are collected and
-fail the final result. Report download/merge and environment erase run in parallel
-with fail-fast disabled. The caller holds the preview lifecycle lock throughout.
+fail the final result. Report download/merge validates the full test result before the early-green
+update. Trace collection/upload then precede environment erase. The caller holds the preview lifecycle lock throughout.
 
 Coordination reads Depot's API with the existing Doppler-managed
 `DEPOT_CI_TELEMETRY_TOKEN` from `_shared/preview`; it does not introduce a Depot
@@ -380,7 +410,7 @@ must not be accepted. Normal Playwright/Vitest test retries are unchanged.
 
 ## Interactive trace reports
 
-Preview workflows publish a **CI trace** commit status after completion; its
+Preview workflows publish a **CI trace** commit status after cleanup and report upload; its
 **Details** link opens the report:
 workflow → jobs → setup/wait/test/finish → shell steps → Playwright attempts.
 See [CI traces](./ci-traces.md) for the timing model, publishing, replay commands
@@ -406,7 +436,7 @@ and service workers without sharing the project's origin.
 
 Additional artifacts opt into public serving with a `public-` name prefix.
 The viewer only accepts artifacts from `iterate/iterate`; existing `ci-trace-*`
-artifacts remain supported. Only `public-playwright-report` and the named CI
+artifacts remain supported. Only `public-playwright-report`, `public-ci-trace-<workflow>-<execution>` and the legacy named CI
 trace artifacts automatically get commit statuses; other `public-*` artifacts
 remain browsable without adding checks. Upload only files intended to be public. Append
 `?download` to a file link to download it instead of displaying it.

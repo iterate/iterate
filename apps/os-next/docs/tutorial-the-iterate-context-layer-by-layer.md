@@ -222,7 +222,7 @@ the log as one event. Chapter 3 is the rule; for now, the log records the rule a
 The client's capnweb stub lives in the stateless worker that terminates its session and cannot be
 moved, and the Durable Object must hibernate with any number of clients attached. So the directory
 has two layers: the BORROWED table (a stub lent under an opaque key, kept while traffic flows,
-returned at the idle quiesce) and the PAGERS (one hibernatable WebSocket per key, the edge's standing
+returned by the pins' 30 s timer) and the PAGERS (one hibernatable WebSocket per key, the edge's standing
 offer to lend the key back on demand):
 
 ```ts
@@ -830,7 +830,9 @@ can name an offset a later incarnation could reuse (`e2e/stream.e2e.test.ts`).
 
 The DO's constructor appends the platform's own records before any door opens, so ANY door
 materializes a context — a bare read included. The first incarnation writes `stream/created {
-projectId, path }` at offset 1 and `stream/woken { incarnation }` at 2; the config-worker funnel
+projectId, path }` at offset 1 and `stream/woken { incarnation, reason: "request" }` at 2 (a later
+incarnation's wake record is appended by the first door that opens on it — `"alarm"` when that door
+is the alarm handler); the config-worker funnel
 (chapter 7) subscribes `config` at 4; offsets 3 and 5 are ephemeral live-state deltas; the first user
 append lands at 6:
 
@@ -1045,7 +1047,7 @@ await until(async () => (await digested(itx)) === 5); // the whole log: all four
 
 `consumes` absent means every durable event and never an ephemeral. `"*"` means every durable event
 — and never an ephemeral. NAMING a type opts that type in, ephemerals included. One function
-(`consumesEvent` in `src/stream/processor.ts`) serves the delivery loop, the processor engine and the
+(`consumesEvent` in `iterate/next/stream/processor`, `packages/iterate/src/next/stream/processor.ts`) serves the delivery loop, the processor engine and the
 inline reduces; there is no second copy to drift.
 
 ```ts
@@ -1416,14 +1418,16 @@ no-op ConfigWorker>, cacheKey: 'config:default' })`, shown by `itx.rewriteRules.
 
 ```ts
 // iterate-context-durable-object.ts — the constructor, abridged
-this.#stream.appendBirthRecord(); // created + woken on a fresh store; a store with rows records its wake at its first door
-this.#stream.append({
-  ...subscriptionConfiguredEvent({
-    name: "config",
-    target: "itx.cd('/').worker.processEventBatch",
-    consumes: ["*"],
-  }),
-  idempotencyKey: "config-subscription", // one row per context whatever the incarnation
+this.ctx.blockConcurrencyWhile(async () => {
+  this.#alarms.restore(await this.ctx.storage.getAlarm()); // the dedupe seed only — null while an alarm is firing
+  this.#stream.appendBirthRecord(); // created + woken on a fresh store; a store with rows records its wake at its first door
+  this.#stream.append(
+    normalizeControlEvent({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: { name: "config", target: "itx.cd('/').worker.processEventBatch", consumes: ["*"] },
+      idempotencyKey: "config-subscription", // one row per context whatever the incarnation
+    }),
+  );
 });
 ```
 
@@ -1816,7 +1820,7 @@ name, and let the library move to userspace without a rename. Not decided.
 A connector reached THROUGH a rule is a connect per call as an expression — a fresh MCP session, an
 open WebSocket that no intermediate holder disposes. So the library keeps every connection it opened,
 by `(verb, url, options)`, hands the same one back while it lives, and releases them all at the
-context's idle quiesce — a held connection pins the context awake exactly like a borrowed stub
+context's pins' release — an open capnweb socket pins the context awake exactly like a borrowed stub
 (`buildLibrary` in `src/library.ts`: a `Map` from the key-sorted JSON of `(verb, url, options)`
 to the connection promise, a failed connect not kept, and `releaseConnections()` calling `close()`
 where there is one, else the disposer). A connection closed by a holder or broken by the far side
@@ -2078,31 +2082,38 @@ hibernatable WebSocket per lent key instead and pages the edge for a key not bor
 30 s keepalive is answered by a WebSocket auto-response set once in the constructor, without waking
 the DO. Losing the borrowed stubs at idle costs exactly one page on the next call — that is the deal.
 
-### The idle quiesce
+### The pins' release
 
 Two things pin a context awake: a borrowed stub and an open capnweb socket. A materialized facet
 does not — on the edge it does not keep the actor resident and dies with it, so nothing arms an alarm
-for one. The pins carry the clock: thirty seconds after the last use of one — a borrowed stub called,
-an open socket used; a request, an append, a delivery or a facet call moves nothing — the
-alarm returns every borrowed stub, releases every connection and aborts every live facet, so the
-actor can hibernate:
+for one. The pins carry their own clock, in memory: thirty seconds after the last use of one — a
+borrowed stub called, an open socket used; a request, an append, a delivery or a facet call moves
+nothing — a timer returns every borrowed stub and closes every connection, so the actor can
+hibernate. No alarm is involved, and no facet is touched. The alarm pass, meanwhile, serves the
+durable obligations:
 
 ```ts
-// iterate-context-durable-object.ts — alarm(), abridged
-const IDLE_QUIESCE_AFTER_MS = 30_000;
+// iterate-context-durable-object.ts — alarm(), abridged: one pass under the coordinator's hold
 async alarm(): Promise<void> {
-  await this.#subscriptionDelivery.deliverEveryCursorSubscription(); // 1. due retries — AWAITED, so the deadline it leaves is the one derived after
-  const lastPinUseMs = this.#lastPinUseMs(); // null with nothing pinned (a borrowed stub, a library connection)
-  if (lastPinUseMs !== null && Date.now() - lastPinUseMs >= IDLE_QUIESCE_AFTER_MS) { // 2. the idle QUIESCE
-    for (const facetName of this.#liveFacetNames) this.#abortFacetIfRunning(facetName, "idle quiesce");
-    this.#liveFacetNames.clear(); // aborted facets re-materialize on their next call
-    this.#rpcStubs.returnBorrowedRpcStubs();
-    this.#library.releaseConnections();
-  } // …else, with something still to quiesce, look again when the quiet period would end — never in the past
+  const { armedAt: fired } = this.#alarms.snapshot();
+  await this.#alarms.pass(async () => {
+    this.#stream.appendWakeRecord("alarm"); // 0. an alarm-woken incarnation names its wake here
+    /* 1. the due schedules: up to 32, each appended with its append-schedule-completed in ONE commit */
+    await this.#subscriptionDelivery.deliverEveryCursorSubscription(); // 2. every cursor row's owed delivery — AWAITED
+    for (const [name, at] of [...this.#facetClaims]) { // 3. the due claims of hosted processors
+      if (at > Date.now()) continue;
+      this.#claimFacetAlarm(name, null); // spent: a facet still busy claims again from its revive
+      await this.#invokeFacet(name, undefined, [["revive"]]); // materialize if dead, catch up, run the at-head pass
+    }
+  }); // the pass end derives the next deadline from what is left — or deletes the alarm
 }
 ```
 
-An aborted facet re-materializes from its durable startup memo on the next call, its storage having
+The pins — a borrowed stub, the library's open capnweb socket — are not the alarm's: a 30 s timer
+after a pin's last use (`#pinCallEnded`) returns the stubs and closes the sockets, memory releasing memory.
+A facet is never released at all: on the edge it is not a pin and dies with the actor, and one
+may be mid-attempt (an LLM call in its background). A facet the watchdog or a source change aborted
+re-materializes from its durable startup memo on the next call, its storage having
 survived. A facet's answer arrives as a Workers-RPC result carrying a disposer that holds a reference
 on the facet until disposed or GC'd — GC is too late for the quiesce — so the DO copies the data out
 and disposes the result at once; the SDK host releases its `env.ITX.get()` capability after every
@@ -2110,13 +2121,18 @@ append and read for the same reason.
 
 ### Alarms only while something is owed
 
-The idle deadline exists only while something is pinned — a live facet, a borrowed stub, an open
-connection — so a bare probe never pays a storage write plus a billed wake for nothing. A cursor
-row's claim is derived, never remembered: the row is owed while its cursor sits behind the durable
-mark (20 s from when it was first seen so), and before every awaited call it is written with the
-attempt and a time to come back by, so an eviction mid-call leaves both the alarm and the claim
-behind for the next incarnation. The wake record itself is an ordinary durable event every `*` row
-receives; a wake makes no loop because delivering it creates no reason to wake again.
+The alarm exists only for a durable obligation — one a fresh incarnation would find and owe again —
+so a bare probe never pays a storage write plus a billed wake for nothing, and nothing in memory
+is a reason to wake. Two kinds: a scheduled append, and a CLAIM ("come back by T") held for a
+cursor row or a hosted processor. A cursor row's claim is exactly the time its persisted cursor
+carries: written the instant its loop starts on a row behind the durable mark — inside the commit's
+own hook, before any read or call, as "an attempt begins: come back by now + 20 s" — written by the
+retry ladder as the rung, cleared by the ack; an eviction anywhere in a delivery leaves the claim
+for the next incarnation, and fifteen attempts without an ack or a failure halt the row. A hosted
+processor's claim is its engine's, held while a `runInBackground` attempt is in flight
+(`processors.claim`, a kv row on the context): the pass spends a due claim and calls the facet's
+`revive()`. The wake record itself is an ordinary durable event every `*` row receives; a wake
+makes no loop because delivering it creates no reason to wake again.
 
 ### The watchdog on facet calls
 
@@ -2126,7 +2142,7 @@ concurrent alarm's quiesce never aborts a facet mid-call), loads the class from 
 memo (aborting a running facet whose loaded identity changed, so a new source restarts it in place
 with its storage surviving), runs the call under `withTimeout(call, FACET_CALL_WATCHDOG_MS = 60_000,
 …)`, and on `TIMEOUT` aborts the facet — the pending call rejects, the counter drains, the next call
-re-materializes it. A finished call earns a fresh quiet period. A cursor delivery's awaited call is
+re-materializes it. A finished call moves no clock: a facet is not a pin. A cursor delivery's awaited call is
 bounded by its own 20 s watchdog, and a push subscriber that stops reading is not buffered past 8 MiB
 pending across all rows and 8 MiB in flight per context — the oldest events are dropped and the
 push's `after` moves up, the span the subscriber heals from the log.
@@ -2134,9 +2150,9 @@ push's `after` moves up, the span the subscriber heals from the log.
 ### The one alarm
 
 The alarm itself is DERIVED, never requested: `src/alarm-coordinator.ts` arms the earliest of three
-deadlines — the next scheduled append (core state), the earliest owed cursor delivery
-(`subscription-delivery.ts` `deadlines()`), the idle quiesce — and deletes it when there is none, so
-a context with nothing owed never wakes itself. Every alarm pass is traced as ephemeral `stream/trace/alarm`
+durable deadlines — the next scheduled append (core state), the earliest cursor-row claim
+(`subscription-delivery.ts` `deadlines()`), the earliest hosted processor's claim (the DO's
+`#facetClaims`) — and deletes it when there is none, so a context with nothing owed never wakes itself. Every alarm pass is traced as ephemeral `stream/trace/alarm`
 events (live through `waitForEvent`, after the fact through `readEvents(…, { includeEphemeral })`),
 and `stream/woken { reason }` says what woke each incarnation; `docs/scheduled-appends.md`
 has the model.
@@ -2145,10 +2161,11 @@ has the model.
 
 The hibernation property at scale — hundreds of clients providing into one context, the DO evicted,
 every value still callable on wake — is deterministic inside workerd
-(`__workers-tests__/hibernation-at-scale.test.ts`); the alarm's two duties in order are
-`__workers-tests__/alarm-quiesce.test.ts`. Both use `cloudflare:test`'s eviction, which times out on
-a warm DO exactly as production refuses to evict a pinned one. Isolate limits are measured deployed
-only, in `e2e/isolate-ceilings-deployed.e2e.test.ts` and `e2e/isolate-ceilings-deployed.e2e.test.ts`.
+(`__workers-tests__/hibernation-at-scale.test.ts`); the alarm pass — the wake record, the cursor pump,
+the quiesce, and that a wake makes no loop — is `__workers-tests__/alarm-quiesce.test.ts`, its
+schedules half `__workers-tests__/scheduled-appends.test.ts`. Both use `cloudflare:test`'s eviction,
+which times out on a warm DO exactly as production refuses to evict a pinned one. Isolate limits are
+measured deployed only, in `e2e/isolate-ceilings-deployed.e2e.test.ts`.
 
 **What this brick leaves on the table:** nothing to build. What is left is the map.
 
@@ -2156,20 +2173,20 @@ only, in `e2e/isolate-ceilings-deployed.e2e.test.ts` and `e2e/isolate-ceilings-d
 
 ## 12. The map
 
-| Chapter | What it built                                                                  | Where it lives                                                                                               |
-| ------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| 0       | the session, `/api`, `whoami`, the dotted hop                                  | `src/worker.ts`, `src/session.ts`, `src/iterate-context.ts`, `src/context/expression.ts` (the prototype hop) |
-| 1       | rpc stubs: lend, borrow, page, recall, presence                                | `src/context/rpc-stubs.ts`, `src/session.ts`                                                                 |
-| 2       | itx expressions, the codec, `cd`                                               | `src/context/expression.ts`, `src/iterate-context.ts`                                                        |
-| 3       | rewrite rules, the seven rules, `itx.builtins`, masks, `@`                     | `src/context/itx-expression-rewriting.ts`, `src/context/built-ins.ts`                                        |
-| 4       | the stream, offsets, idempotency, ephemerals, the core reduce                  | `src/stream/stream.ts`, `src/stream/processor.ts`, `src/stream/core-processor.ts`                            |
-| 5       | subscriptions, push vs cursor, the ladder, `consumes`                          | `src/stream/core-processor.ts`, `src/stream/subscription-delivery.ts`                                        |
-| 6       | facets, processors, live state                                                 | the DO's `#invokeFacet`, `src/stream/processor.ts`, `src/sdk/index.ts`, `src/client/`                        |
-| 7       | loaded workers, `env.ITX`, the loader, the config worker, repos                | `src/context/worker-loader.ts`, `src/iterate-context.ts`, `src/sdk/index.ts`, `src/context/repos.ts`         |
-| 8       | fetch in the context of this project (secrets), project hosts, the upgrade leg | `src/iterate-context-durable-object.ts`, `src/context/rpc-stubs.ts`, `src/worker.ts`                         |
-| 9       | the library                                                                    | `src/library.ts`                                                                                             |
-| 10      | identity, OAuth grants, personal access tokens, the control plane              | `src/principal.ts`, `src/session.ts`, `src/oauth.ts`, `src/grants.ts`, `src/control-plane.ts`                |
-| 11      | pagers, the quiesce, the one alarm, the watchdog                               | `src/iterate-context-durable-object.ts`, `src/stream/stream.ts`                                              |
+| Chapter | What it built                                                                  | Where it lives                                                                                                                     |
+| ------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| 0       | the session, `/api`, `whoami`, the dotted hop                                  | `src/worker.ts`, `src/session.ts`, `src/iterate-context.ts`, `src/context/expression.ts` (the prototype hop)                       |
+| 1       | rpc stubs: lend, borrow, page, recall, presence                                | `src/context/rpc-stubs.ts`, `src/session.ts`                                                                                       |
+| 2       | itx expressions, the codec, `cd`                                               | `src/context/expression.ts`, `src/iterate-context.ts`                                                                              |
+| 3       | rewrite rules, the seven rules, `itx.builtins`, masks, `@`                     | `src/context/itx-expression-rewriting.ts`, `src/context/built-ins.ts`                                                              |
+| 4       | the stream, offsets, idempotency, ephemerals, the core reduce                  | `src/stream/stream.ts`, `packages/iterate/src/next/stream/processor.ts`, `src/stream/core-processor.ts`                            |
+| 5       | subscriptions, push vs cursor, the ladder, `consumes`                          | `src/stream/core-processor.ts`, `src/stream/subscription-delivery.ts`                                                              |
+| 6       | facets, processors, live state                                                 | the DO's `#invokeFacet`, `packages/iterate/src/next/stream/processor.ts`, `src/sdk/index.ts`, `src/client/`                        |
+| 7       | loaded workers, `env.ITX`, the loader, the config worker, repos                | `src/context/worker-loader.ts`, `src/iterate-context.ts`, `src/sdk/index.ts`, `src/context/repos.ts`                               |
+| 8       | fetch in the context of this project (secrets), project hosts, the upgrade leg | `src/iterate-context-durable-object.ts`, `src/context/rpc-stubs.ts`, `src/worker.ts`                                               |
+| 9       | the library                                                                    | `src/library.ts`                                                                                                                   |
+| 10      | identity, OAuth grants, personal access tokens, the control plane              | `src/principal.ts`, `src/session.ts`, `src/oauth.ts`, `src/grants.ts`, `src/control-plane.ts`                                      |
+| 11      | pagers, the quiesce, the one alarm, the watchdog                               | `src/iterate-context-durable-object.ts`, `src/alarm-coordinator.ts`, `src/stream/subscription-delivery.ts`, `src/stream/stream.ts` |
 
 The invariants a reader should now be able to state:
 
@@ -2245,5 +2262,5 @@ table of chapter 3 was checked by running `src/context/itx-expression-rewriting.
   the dynamic-worker-provider half `test.fails`; the workerd-provider half is
   `__workers-tests__/ws-fetch-live-101.test.ts`.
 - **The one alarm's hold** (nothing written during a pass; the alarm read at construction is only
-  the dedupe seed) is stated from `src/alarm-coordinator.ts` and its table test; the e2e wake
+  the dedupe seed) is stated from `src/alarm-coordinator.ts` and its tests; the e2e wake
   observation is opt-in and deployed only.

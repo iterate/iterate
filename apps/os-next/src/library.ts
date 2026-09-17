@@ -54,16 +54,16 @@ import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 // (`provide('itx.tools', "itx.connectToMcp(url)")`, the documented composition) is a connect per
 // call as an expression — a fresh MCP session, an open WebSocket, that no intermediate holder ever
 // disposes. So `buildLibrary` keeps every connection it opened, by (verb, url, options), hands the
-// same one back while it lives, and `releaseConnections()` closes them all — the context's idle
-// quiesce calls it beside returning its borrowed stubs, since a held connection pins the context
-// awake exactly like a borrowed stub. A connection closed by a holder or broken by the far side
+// same one back while it lives, and `releaseConnections()` closes them all — the context's pins'
+// release calls it beside returning its borrowed stubs (only an open capnweb socket pins the actor:
+// `holdsOpenSocket`). A connection closed by a holder or broken by the far side
 // reopens itself on its next use (the mcp and capnweb sections), so a memoized one is never dead.
 
 /** What a library module is handed: the itx handle (the record's own dotted surface), narrowed to
  *  what the library uses today — `fetch`, the connectors' HTTP; `workers`, the host `run` loads
  *  into; `cd`, the sibling a repo or workspace facet is hosted on. Widen it HERE when a module needs
  *  more of itx — never by importing something else. */
-export type LibraryItx = Pick<BuiltInScope, "fetch" | "workers" | "cd" | "r2">;
+export type LibraryItx = Pick<BuiltInScope, "append" | "fetch" | "workers" | "cd" | "r2">;
 
 /** The library's roots, exactly as the built-ins record spreads them in: each verb closed over ONE
  *  `itx`. `BuiltInScope` (context/built-ins.ts) extends this, so the typed surface has them once. */
@@ -76,6 +76,10 @@ export interface LibraryRoots {
    *  A script bakes in its own values — an agent writes it whole (an alternative to a tool call), so
    *  `run` takes no arguments. */
   run(script: string): Promise<unknown>;
+  /** THE AGENT'S VOICE: `itx.chat.sendMessage(text)` appends a web-message-sent to THIS context —
+   *  the visible chat message. It is the default `plainResponse` handler, and an agent may call it
+   *  from inside a script for a mid-run update. Returns once the message is on the stream. */
+  chat: { sendMessage(message: string): Promise<{ ok: true }> };
   /** An MCP server over Streamable HTTP: `callTool(name, args)`, `listTools()`, and one method per
    *  tool whose name is a legal identifier. */
   connectToMcp(url: string, options?: McpConnectOptions): Promise<McpConnection>;
@@ -181,10 +185,10 @@ export type WorkspaceFacet = Pick<
 export function buildLibrary(itx: LibraryItx): {
   roots: LibraryRoots;
   /** Whether the library holds an open SOCKET — a capnweb WebSocket session — the one kind of
-   *  connection that keeps this actor resident (measured: like a borrowed stub), so the idle quiesce
+   *  connection that keeps this actor resident (measured: like a borrowed stub), so the pins' release
    *  arms for it. An MCP or OpenAPI client is HTTP handshakes: it holds nothing and pins nothing. */
   holdsOpenSocket(): boolean;
-  /** Close every connection the library holds (the idle quiesce's call); the next use reopens. */
+  /** Close every connection the library holds (the pins' release's call); the next use reopens. */
   releaseConnections(): void;
 } {
   const liveConnections = new Map<string, { connection: Promise<unknown>; holdsSocket: boolean }>();
@@ -206,6 +210,15 @@ export function buildLibrary(itx: LibraryItx): {
   return {
     roots: {
       run: (script) => runScript(itx, script),
+      chat: {
+        sendMessage: async (message) => {
+          await itx.append({
+            type: "events.iterate.com/agents/web-message-sent",
+            payload: { message },
+          });
+          return { ok: true as const };
+        },
+      },
       connectToMcp: (url, options) =>
         memoized(["mcp", url, options], false, () => connectToMcp(itx, url, options)),
       connectToOpenApi: (specOrUrl, options) =>
@@ -551,7 +564,7 @@ export async function connectToCapnweb(
       () => undefined,
     );
   // The WebSocket session is opened NOW (a connect that cannot reach the far side fails here) and
-  // REOPENED on the next call after it is gone — disposed (the context's idle quiesce releases every
+  // REOPENED on the next call after it is gone — disposed (the context's pins' release closes every
   // library connection, index.ts) or broken by the far side — so a held or memoized connection is
   // never a dead socket.
   type SessionStub = RemoteMain & { onRpcBroken?: (cb: () => void) => void };
@@ -616,7 +629,7 @@ export class CapnwebConnection extends InvokeHandle {
   }
   /** Close the WebSocket session (the next call reopens it); a batch connection holds nothing. A
    *  DECLARED member on purpose: the dotted fallback beneath `InvokeHandle` answers every unknown
-   *  name with a REMOTE path, so a probe for `close` (`releaseConnections`, index.ts) must find this
+   *  name with a REMOTE path, so a probe for `close` (`releaseConnections`, the DO's release) must find this
    *  one — else it would call `close()` on the remote main and leave the local socket open. */
   close(): void {
     this.#closeSession();
@@ -808,9 +821,9 @@ function mcpResultToValue(name: string, result: MCPToolResult): unknown {
 type JsonRpcResponse = { id?: unknown; result?: unknown; error?: { message?: string } };
 
 /** The JSON-RPC half: one endpoint, an id counter, the session id the server may hand out. A client
- *  closed by a holder (the context's idle quiesce releases the library's memoized connections,
- *  index.ts) re-runs the handshake on its next request, so a held or memoized connection is never
- *  a dead session. */
+ *  closed by a holder (the context's pins' release closes the library's memoized connections)
+ *  re-runs the handshake on its next request, so a held or memoized connection is never a dead
+ *  session. */
 class McpJsonRpcClient {
   readonly #itx: LibraryItx;
   readonly #url: string;

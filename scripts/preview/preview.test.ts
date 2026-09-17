@@ -288,6 +288,7 @@ describe("preview deploy ordering", () => {
 describe("preview workflow scope", () => {
   test("includes shared preview orchestration paths", () => {
     expect(cloudflarePreviewSharedPaths).toContain("scripts/preview/**");
+    expect(cloudflarePreviewSharedPaths).toContain("scripts/depot-ci/**");
     expect(cloudflarePreviewSharedPaths).toContain("packages/ui/**");
     expect(cloudflarePreviewAdditionalTriggerPaths).toContain("apps/auth-example/**");
     // The preview deploy + e2e lifecycle is one Depot CI workflow; a change to
@@ -2141,14 +2142,25 @@ describe("eraseHeldSlotAfterRun", () => {
         ]),
       });
 
+      const target = previewTarget(holder, "abc1234");
+      // A report is editable display state, not authority for the next deployment.
+      await target.report.update((state) => ({
+        ...state,
+        environmentConfigLease: { slug: "preview-2", dopplerConfig: "preview_3" },
+      }));
       const result = await eraseHeldSlotAfterRun({
-        target: previewTarget(holder, "abc1234"),
+        target,
         eraseSlotData,
         ranHeadSha: "abc1234",
         semaphore,
       });
 
-      expect(result).toEqual({ erased: true, reason: null, slug: "preview-2" });
+      expect(result).toEqual({
+        erased: true,
+        reason: null,
+        slug: "preview-2",
+        dopplerConfig: "preview_2",
+      });
       expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
         dopplerConfig: "preview_2",
         slug: "preview-2",

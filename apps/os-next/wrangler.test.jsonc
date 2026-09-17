@@ -3,8 +3,8 @@
   // INSIDE workerd via @cloudflare/vitest-plugin; `pnpm test`). wrangler.jsonc stays the deploy
   // truth. The divergences, each deliberate and test-only:
   //
-  //  1. no "build" block: the plugin imports the worker through Vite (same isolate as the tests).
-  //     The injected SDK is a virtual module of the Vite build (scripts/vite-plugin-processor-sdk.ts).
+  //  1. the two generated modules the worker imports are written by scripts/build.ts
+  //     (vitest.global-setup.ts) — the same way for every lane.
   //  2. no `ai` / `browser` binding (see the note by the bindings below); the in-process control plane's D1 +
   //     OAuth KV are fresh local namespaces with no schema — control-plane.test.ts applies
   //     control-plane.sql itself (the e2e lane does the same in its global-setup).
@@ -22,6 +22,8 @@
     "global_fetch_strictly_public",
   ],
   "worker_loaders": [{ "binding": "LOADER" }],
+  // The issuer's pages, the same files (issuer-bootstrap.test.ts fetches /authorize).
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   // NO `ai` or `browser` binding here, on purpose: Workers AI and Browser Run are REMOTE-ONLY in
   // local dev, and vitest-pool-workers starts a remote proxy session for them at boot (an account to
   // pick, a network to reach). The workers lane never calls `itx.ai` / `itx.browser`; the e2e lane
@@ -68,6 +70,8 @@
     "APP_CONFIG_GOOGLE_CLIENT_ID": "google-test-client",
     "APP_CONFIG_GOOGLE_CLIENT_SECRET": "google-test-secret",
     "APP_CONFIG_PROJECT_HOSTNAME_BASE": "projects.test",
+    // one custom apex, for the consent test that binds a client on it to its project
+    "APP_CONFIG_PROJECT_CUSTOM_HOSTNAMES": "custom-apex.test=custom-apex-project",
     "APP_CONFIG_SESSION_SECRET": "test-session-secret",
     "APP_CONFIG_SECRETS_KEY": "test-secrets-key",
     "APP_CONFIG_ADMIN_API_SECRET": "test-admin-api-secret",

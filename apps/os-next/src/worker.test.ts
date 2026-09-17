@@ -15,7 +15,7 @@ vi.mock("cloudflare:workers", () => ({
 }));
 import worker from "./worker.ts";
 import { appConfigOf, parseAppConfig, type AppConfig } from "./app-config.ts";
-import { projectHostOf } from "./hosts.ts";
+import { customProjectHostOf, projectHostOf } from "./hosts.ts";
 import type { Env } from "./control-plane.ts";
 
 // ── app config ── THE TABLE for the app config: what the vars become, what is refused (by name),
@@ -38,8 +38,10 @@ const MINIMAL_CONFIG = {
   mcpOrigin: "",
   environmentName: "poc",
   projectHostnameBase: "",
+  projectCustomHostnames: {},
   artifactsAccountId: "",
   artifactsNamespace: "",
+  aiGatewayId: "default",
   recentEphemeralsBudgetChars: 1024 * 1024,
   sessionSecret: "cookie-secret",
   adminApiSecret: "admin-secret",
@@ -102,6 +104,21 @@ describe("parseAppConfig", () => {
         artifactsAccountId: "acct",
         artifactsNamespace: "repos",
       },
+    },
+    // custom hostnames: `hostname=project` pairs, hostnames lowercased; a pair without its project refused
+    {
+      vars: {
+        ...MINIMAL,
+        APP_CONFIG_PROJECT_CUSTOM_HOSTNAMES: "Iterate2.com=iterate, docs.acme.com=acme",
+      },
+      becomes: {
+        ...MINIMAL_CONFIG,
+        projectCustomHostnames: { "iterate2.com": "iterate", "docs.acme.com": "acme" },
+      },
+    },
+    {
+      vars: { ...MINIMAL, APP_CONFIG_PROJECT_CUSTOM_HOSTNAMES: "iterate2.com" },
+      throws: /^APP_CONFIG_PROJECT_CUSTOM_HOSTNAMES: a comma-separated list of hostname=project/,
     },
     // refusals, each naming the variable and the shape
     { vars: {}, throws: /^APP_CONFIG_ENVIRONMENT_NAME: required, but unset or blank$/ },
@@ -280,4 +297,19 @@ const rows: { hostname: string; base: string; becomes: ReturnType<typeof project
 for (const { hostname, base, becomes } of rows)
   test(`${hostname} under ${JSON.stringify(base)} ⇒ ${JSON.stringify(becomes)}`, () => {
     expect(projectHostOf(hostname, base)).toEqual(becomes);
+  });
+
+// ── custom hostname ── a deployment's own hostname that IS a project's apex (`app: null`, the config
+// worker's fetch): the map's spelling, case and a trailing dot forgiven, anything else null.
+const customHostnames = { "iterate2.com": "iterate" };
+const customRows: { hostname: string; becomes: ReturnType<typeof customProjectHostOf> }[] = [
+  { hostname: "iterate2.com", becomes: { app: null, project: "iterate" } },
+  { hostname: "Iterate2.COM.", becomes: { app: null, project: "iterate" } },
+  { hostname: "www.iterate2.com", becomes: null }, // only the hostnames named — no wildcard under them
+  { hostname: "iterate.iterate2.app", becomes: null }, // the base's shapes are projectHostOf's
+  { hostname: "os.iterate2.com", becomes: null },
+];
+for (const { hostname, becomes } of customRows)
+  test(`custom hostname ${hostname} ⇒ ${JSON.stringify(becomes)}`, () => {
+    expect(customProjectHostOf(hostname, customHostnames)).toEqual(becomes);
   });

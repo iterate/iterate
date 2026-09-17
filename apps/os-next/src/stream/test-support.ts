@@ -62,9 +62,16 @@ export function memoryStream(path = "/") {
   const pushedEvents: StreamEvent[] = []; // every committed event, ephemerals included (the pump's view)
   const eventsByIdempotencyKey = new Map<string, StreamEvent>();
   const engines: ProcessorEngine<any>[] = []; // the pump only needs `processEventBatch`
+  // The engine's claims on the context's alarm, RECORDED in order (a time, or null = released); a
+  // test that wants the revive calls `engine.revive()` itself.
+  const claims: (number | null)[] = [];
   let maxAssigned = 0;
   let reads = 0;
   const stream: ProcessorStream = {
+    claim: (at) => {
+      claims.push(at);
+      return Promise.resolve();
+    },
     append: (...events: StreamEventInput[]) => {
       const scannedAfterOffset = maxAssigned;
       const committedEvents = events.map((event) => {
@@ -116,6 +123,7 @@ export function memoryStream(path = "/") {
     events: durableEvents,
     pushedEvents,
     engines,
+    claims,
     get reads() {
       return reads;
     },

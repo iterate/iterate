@@ -80,9 +80,9 @@ iterate_kit_add_core_test(iterate-kit-itx-mount-test itx_mount_test.c)
 iterate_kit_add_core_test(iterate-kit-microphone-flush-test microphone_flush_test.c)
 
 iterate_kit_add_core_test(iterate-kit-retry-gate-test retry_gate_test.c)
-# The one session grammar all four boards drive: both postures, the tap-end
-# grace, hold-is-the-wake, the single end-chime edge, and ENDING absorbing
-# every control. Board tests keep only their gesture wiring.
+# The one session grammar all four boards drive: a press starts a session
+# (with the wake chime), a press or an end-press ends it, and leaving a
+# session is the one end-chime edge. Board tests keep only their gesture wiring.
 iterate_kit_add_core_test(
   iterate-kit-session-grammar-test session_grammar_test.c)
 iterate_kit_add_core_test(iterate-kit-spsc-ring-test spsc_ring_test.c)
@@ -92,7 +92,7 @@ iterate_kit_add_core_test(
 # THE STEP BOTH TARGETS RUN, against a ring that is an array and a sink that
 # counts: every branch the board's and the CLI's playback share, asserted once.
 iterate_kit_add_core_test(iterate-kit-voice-playout-test voice_playout_test.c)
-iterate_kit_add_core_test(iterate-kit-voicelab-stream-test voicelab_stream_test.c)
+iterate_kit_add_core_test(iterate-kit-voice-stream-test voice_stream_test.c)
 iterate_kit_add_core_test(
   iterate-kit-websocket-frame-writer-test websocket_frame_writer_test.c)
 iterate_kit_add_core_test(iterate-kit-websocket-rx-test websocket_rx_test.c)
@@ -103,13 +103,23 @@ iterate_kit_add_core_test(iterate-kit-websocket-tx-test websocket_tx_test.c)
 # exact PING queue policy without recreating ESP-TLS or a radio.
 iterate_kit_add_test(
   iterate-kit-esp-websocket-keepalive-test websocket_keepalive_test.c
-  INCLUDES fakes/esp_idf ../platforms/iterate_esp_idf/include
-  LINK iterate-kit-core)
+  INCLUDES ../platforms/iterate_esp_idf/include
+  LINK iterate-kit-core iterate-kit-host-esp-idf)
+
+# The platform half a loop test needs: a scriptable transport and a
+# provisioned board (tests/fakes/esp_idf), ESP-shaped like the loop it links.
+add_library(iterate-kit-esp-idf-fakes STATIC fakes/esp_idf/fake_esp_idf_platform.c)
+target_include_directories(iterate-kit-esp-idf-fakes PUBLIC
+  fakes/esp_idf ../platforms/iterate_esp_idf/include)
+target_link_libraries(iterate-kit-esp-idf-fakes PUBLIC
+  iterate-kit-core iterate-kit-host-esp-idf)
+target_compile_features(iterate-kit-esp-idf-fakes PUBLIC c_std_11)
+target_compile_options(iterate-kit-esp-idf-fakes PRIVATE -Wall -Wextra -Werror)
 
 # THE SHARED LOOP, ON A LAPTOP. Four boards run components/voice and nothing
 # outside a flash had ever compiled it, so the mapping from a press to an
 # intent was verified only by diffing against the device files it replaced.
-# The pretend ESP-IDF it links is tests/fakes/esp_idf; see the README there.
+# The ESP-IDF it links is the host one (platforms/host/esp_idf), clock pinned.
 iterate_kit_add_test(
   iterate-kit-voice-loop-intent-test voice_loop_intent_test.c
   STD 11 LINK iterate-kit-voice iterate-kit-esp-idf-fakes)
@@ -168,70 +178,9 @@ iterate_kit_add_avatar_test(
   ../components/avatar/tests/face_viseme_queue_test.c)
 
 if(APPLE)
-  function(iterate_kit_add_cli_test NAME)
-    iterate_kit_add_test(${NAME} ${ARGN} STD 11
-      INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/../targets/host_cli"
-      OPTIONS -Wconversion -Wshadow
-      LINK iterate-kit-core)
-  endfunction()
-
   iterate_kit_add_test(
     iterate-kit-darwin-audio-codec-test darwin_audio_codec_test.c
     STD 11 OPTIONS -Wconversion -Wshadow LINK iterate-kit-darwin)
-
-  iterate_kit_add_test(iterate-kit-cli-device-controls-test
-    ../targets/host_cli/cli_device_controls.c cli_device_controls_test.c
-    STD 11 INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/../targets/host_cli"
-    OPTIONS -Wconversion -Wshadow
-    LINK iterate-kit-capabilities iterate-kit-darwin)
-
-  iterate_kit_add_test(iterate-kit-cli-hangup-test
-    cli_hangup_test.c
-    ../targets/host_cli/cli_capabilities.c
-    ../targets/host_cli/cli_conversation.c
-    ../targets/host_cli/cli_device_controls.c
-    ../targets/host_cli/cli_keyboard.c
-    ../targets/host_cli/cli_microphone.c
-    ../targets/host_cli/cli_options.c
-    ../targets/host_cli/cli_report.c
-    ../targets/host_cli/cli_screen.c
-    ../targets/host_cli/cli_speaker.c
-    ../targets/host_cli/cli_wav.c
-    ../targets/host_cli/main.c
-    STD 11
-    INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/../targets/host_cli"
-    DEFINES ITERATE_KIT_CLI_MAIN_TEST
-    OPTIONS -Wconversion -Wshadow -Wno-unused-function -Wno-unused-variable
-    LINK iterate-kit-capabilities iterate-kit-darwin)
-
-  iterate_kit_add_cli_test(
-    iterate-kit-cli-keyboard-test
-    ../targets/host_cli/cli_keyboard.c
-    cli_keyboard_test.c)
-  iterate_kit_add_cli_test(
-    iterate-kit-cli-microphone-test
-    ../targets/host_cli/cli_microphone.c
-    cli_microphone_test.c)
-  iterate_kit_add_cli_test(
-    iterate-kit-cli-options-test
-    ../targets/host_cli/cli_options.c
-    cli_options_test.c)
-  iterate_kit_add_cli_test(
-    iterate-kit-cli-screen-test
-    ../targets/host_cli/cli_screen.c
-    cli_screen_test.c)
-  iterate_kit_add_cli_test(
-    iterate-kit-cli-report-test
-    ../targets/host_cli/cli_report.c
-    cli_report_test.c)
-  iterate_kit_add_cli_test(
-    iterate-kit-cli-speaker-test
-    ../targets/host_cli/cli_speaker.c
-    cli_speaker_test.c)
-  iterate_kit_add_cli_test(
-    iterate-kit-cli-wav-test
-    ../targets/host_cli/cli_wav.c
-    cli_wav_test.c)
 
   iterate_kit_add_test(
     iterate-kit-darwin-audio-input-test darwin_audio_input_test.c
@@ -244,9 +193,9 @@ if(APPLE)
   iterate_kit_add_test(iterate-kit-posix-websocket-test posix_websocket_test.c
     LINK iterate-kit-darwin)
 
-  iterate_kit_add_test(iterate-kit-posix-itx-transport-test
-    posix_itx_transport_test.c fakes/fake_posix_websocket.c
-    ../platforms/darwin/posix_itx_transport.c
+  iterate_kit_add_test(iterate-kit-darwin-itx-transport-test
+    darwin_itx_transport_test.c fakes/fake_posix_websocket.c
+    ../platforms/darwin/itx_transport.c
     INCLUDES fakes ../platforms/darwin/include LINK iterate-kit-darwin)
 endif()
 

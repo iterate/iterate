@@ -133,7 +133,9 @@ export default defineConfig({
     {
       command: `pnpm --dir apps/mobile start:web --port ${mobileWebPort}`,
       url: mobileWebUrl,
-      reuseExistingServer: false,
+      // Preview CI starts Metro before waiting for the backend deployment.
+      // Only reuse that explicitly managed server; local runs still own theirs.
+      reuseExistingServer: process.env.PLAYWRIGHT_MOBILE_WEB_PRESTARTED === "1",
       timeout: 120_000,
       stdout: "pipe",
       stderr: "pipe",

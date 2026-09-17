@@ -12,14 +12,14 @@
 //     operator's `subscription-delivery-resumed` un-halts and may seek. Retries ride the DO's own
 //     alarm (facets have none, workerd#6810 — which is why this is kernel code, not a facet processor).
 //
-// AT-LEAST-ONCE survives an eviction because everything the alarm needs is DERIVED, never remembered:
-// a cursor row is owed while its cursor sits behind the stream's durable mark, and that is its claim
-// on the DO's alarm (`deadlines()`, which alarm-coordinator.ts reconciles against) — 20 s from when
-// it was first seen behind; and before every awaited call the row is written, durably, with the
-// attempt and a time to come back by, so a death mid-call is retried by the next incarnation within
-// 30 s and a batch that keeps killing its caller halts after fifteen, as fifteen refusals would.
-// A row on its retry ladder is covered by the cursor's own `nextAttemptAtMs` the same way. Nothing
-// in memory is a reason to wake.
+// AT-LEAST-ONCE survives an eviction because a cursor row's claim on the DO's alarm is EXACTLY the
+// time its persisted cursor carries (`nextAttemptAtMs`; `deadlines()`, which alarm-coordinator.ts
+// reconciles against): written the instant its loop starts on a row behind the durable mark — inside
+// the commit's own hook, before any read or call — as "an attempt begins: come back by now + 20 s",
+// with the attempt counted; written by the retry ladder as the rung; cleared by the ack; spent when
+// the loop finds nothing owed or a target nothing resolves. So a death anywhere in a delivery is
+// retried by the next incarnation within 20 s, a batch that keeps killing its caller halts after
+// fifteen attempts, as fifteen refusals would, and NOTHING IN MEMORY IS A REASON TO WAKE.
 //
 // Nothing here reads a "kind" off an event: the kind is the evaluated value's brand, minted by the
 // built-in that produced it. Every delivery carries `{ after, through }`; per subscription the loop
@@ -77,13 +77,12 @@ const PENDING_PUSHES_TOTAL_BUDGET_CHARS = 8 * 1024 * 1024;
 
 /** A failure that can only repeat — halt the row now, not after the ladder: the flag workerd itself
  *  stamps (`retryable: false`, processor.ts's ReduceCheckpointTable stamps it too) or one of OUR codes that a
- *  retry cannot change (a target that is not callable, nothing matching the target's expression,
- *  a checkpoint or an event over its ceiling). */
+ *  retry cannot change (a target that is not callable, a checkpoint or an event over its ceiling).
+ *  Never NO_ITX_EXPRESSION_MATCH: a target nothing resolves DANGLES (`danglingUnder`), it is not halted. */
 const deterministicFailure = (error: unknown): boolean =>
   (error as { retryable?: unknown } | null)?.retryable === false ||
   [
     "NOT_A_METHOD",
-    "NO_ITX_EXPRESSION_MATCH",
     "REDUCE_CHECKPOINT_TOO_LARGE",
     "EVENT_TOO_LARGE",
     "FORBIDDEN", // a target this context may not reach (a global path that is not its own): a retry cannot change who the caller is
@@ -121,17 +120,6 @@ type SubscriptionDeliveryRecord = {
    *  the last durable boundary and durables are redelivered from there, which at-least-once allows).
    *  Absent for a push target. */
   cursor?: SubscriptionCursor;
-  /** When `deadlines()` first saw this cursor row behind the durable mark — its claim on the alarm
-   *  is 20 s from here. Cleared when the row is caught up, and at the end of every alarm pass: A
-   *  PASS RENEWS WHAT IT COULD NOT SETTLE, so a row held in a long call or a budget wait is claimed
-   *  afresh from then, never from a time now past. */
-  behindSince?: number;
-  /** The row DANGLES: its target evaluated to NO_ITX_EXPRESSION_MATCH under this rule table (a
-   *  `subscribe` before its `provide`, a rule since removed). Discovered by evaluating, never
-   *  statically — a name only a rule can resolve looks the same as one nothing resolves. A dangling
-   *  row claims nothing and is never halted for it: it waits for its rule, and the commit that
-   *  lands the rule replaces the table, so the memo lapses and the row (behind since) is delivered. */
-  danglingUnder?: object;
   /** The evaluated target head, reused across pushes: a row delivered every commit (a PCM stream,
    *  an audio call) would otherwise re-walk its target and re-mint a Facet/RpcStub handle on EVERY
    *  push. Valid while the row's identity (`configuredAtOffset`) AND the rewrite-rule table (its
@@ -190,18 +178,9 @@ type SubscriptionDeliveryDeps = {
   reconcileAlarm: () => void;
 };
 
-/** One cursor row's claim on the DO's alarm, for `deadlines()`: `at` is the row's ladder or call
- *  claim when it has one, else 20 s from when it was first seen behind; the rest is what a trace
- *  shows about the row. */
-export type DeliveryDeadline = {
-  name: string;
-  at: number;
-  nextAttemptAtMs?: number;
-  attempt: number;
-  confirmedOffset: number;
-  /** A `#deliverFromCursor` loop holds the row: a call or a budget wait is in progress. */
-  inFlight: boolean;
-};
+/** One cursor row's claim on the DO's alarm, for `deadlines()` and the trace: the persisted
+ *  `nextAttemptAtMs` and the attempt it belongs to. */
+export type DeliveryDeadline = { name: string; at: number; attempt: number };
 
 export class SubscriptionDelivery {
   readonly #stream: Stream;
@@ -246,45 +225,21 @@ export class SubscriptionDelivery {
     return record;
   }
 
-  /** Every cursor row with a claim on the alarm, earliest first: the delivery loop's deadline is
-   *  `[0]?.at`. DERIVED, so a fresh incarnation reports the same claims its predecessor did. A row
-   *  NOBODY HOLDS claims the time its cursor carries — a ladder rung, or the claim a death mid-call
-   *  left — ahead or due alike (a due one keeps the alarm armed until its pass runs); without one it
-   *  is owed while its cursor sits behind the durable mark (`row.afterOffset ?? configuredAtOffset`
-   *  before its first write) and claims 20 s from when it was first seen so. A row A LOOP HOLDS (a
-   *  call or a budget wait in progress) claims the same 20 s — the time written before its call is
-   *  for the next incarnation, not this one, so a commit mid-call moves no alarm and a pass never
-   *  re-arms a claim now past (`behindSince`). A HALTED row owes nothing (its persisted cursor may
-   *  still carry the retry time of the attempt that halted it), and a target that owns its progress
-   *  claims nothing — a facet's checkpoint is its own. */
+  /** Every cursor row's claim on the alarm, earliest first (the loop's deadline is `[0]?.at`):
+   *  EXACTLY the persisted `nextAttemptAtMs` of a row not halted — the claim its loop wrote as it
+   *  started, a ladder rung, or the claim a death left, ahead or due alike (a due one keeps the alarm
+   *  armed until its pass runs). A fresh incarnation reports the same claims its predecessor did,
+   *  because nothing in memory is one: a caught-up row, a dangling row and a halted row (whose
+   *  persisted cursor may still carry the time that halted it) carry none the alarm reads, and a
+   *  target that owns its progress has no cursor at all. */
   deadlines(): DeliveryDeadline[] {
     const state = this.#stream.coreReducedState;
-    const durableMark = this.#stream.highestDurableOffset();
-    const now = Date.now();
     const deadlines: DeliveryDeadline[] = [];
-    for (const [name, row] of Object.entries(state.subscriptions)) {
-      if (row.halted || targetOwnsProgress(state, row)) continue;
-      const record = this.#deliveryRecordFor(name);
-      if (record.danglingUnder === state.itxExpressionRewriteRules) continue;
-      const { cursor } = record;
-      const inFlight = this.#cursorDeliveryRunning.has(name);
-      const confirmedOffset = cursor?.confirmedOffset ?? row.afterOffset ?? row.configuredAtOffset;
-      let at: number;
-      if (!inFlight && cursor?.nextAttemptAtMs !== undefined) at = cursor.nextAttemptAtMs;
-      else if (confirmedOffset < durableMark)
-        at = (record.behindSince ??= now) + CURSOR_DELIVERY_CALL_WATCHDOG_MS;
-      else {
-        record.behindSince = undefined;
-        continue;
-      }
-      deadlines.push({
-        name,
-        at,
-        nextAttemptAtMs: cursor?.nextAttemptAtMs,
-        attempt: cursor?.attempt ?? 0,
-        confirmedOffset,
-        inFlight,
-      });
+    for (const [name, record] of this.#deliveryRecordByName) {
+      const at = record.cursor?.nextAttemptAtMs;
+      const row = state.subscriptions[name];
+      if (at === undefined || !row || row.halted) continue;
+      deadlines.push({ name, at, attempt: record.cursor!.attempt });
     }
     return deadlines.sort((a, b) => a.at - b.at);
   }
@@ -299,7 +254,7 @@ export class SubscriptionDelivery {
         case "events.iterate.com/stream/subscription-delivery-resumed": {
           // An operator's resume is itself the wake: deliver that name NOW, whatever its `consumes`
           // says (the resumed fact is rarely a type the subscriber asked for, and a halted row has no
-          // retry armed — without this it would wait for the next matching commit or the quiet clock).
+          // retry armed — without this it would wait for the next matching commit).
           // A halted FACET row resumes by catching up from the log itself; a cursor row from its cursor.
           const name = (event.payload as { name: string }).name;
           const row = rows[name];
@@ -370,9 +325,9 @@ export class SubscriptionDelivery {
         record.lastDeliveredThroughOffset = throughOffset;
       } else {
         if (!durable) continue;
-        // A durable batch this row does not consume: nothing to deliver, and the row must not read
-        // as behind (a claim, an alarm) for it — a row that was caught up and is idle is moved
-        // along NOW, as an ack would move it; any other row's loop pages past it.
+        // A durable batch this row does not consume: a caught-up idle row is moved along HERE,
+        // as an ack would move it, without the loop's page read (the loop would advance it the same
+        // way, one read later); any other row's loop pages past it.
         const cursor = record.cursor || {
           confirmedOffset: row.afterOffset ?? row.configuredAtOffset,
           attempt: 0,
@@ -492,7 +447,8 @@ export class SubscriptionDelivery {
 
   /** The alarm's half: every cursor row — a due retry, a claim an eviction left mid-delivery, or a
    *  row behind the mark. ROW-driven (the header says why); cheap when nothing is due: one read per
-   *  cursor row, nothing for a row that owns its progress. */
+   *  cursor row, nothing for a row that owns its progress. A row a loop already holds is JOINED
+   *  and awaited: the pass ends with every loop drained, so no claim leaves a pass due. */
   async deliverEveryCursorSubscription(): Promise<void> {
     const state = this.#stream.coreReducedState;
     await Promise.all(
@@ -504,8 +460,6 @@ export class SubscriptionDelivery {
           ),
         ),
     );
-    // A PASS RENEWS WHAT IT COULD NOT SETTLE (`behindSince` says why): no claim leaves a pass due.
-    for (const record of this.#deliveryRecordByName.values()) record.behindSince = undefined;
   }
 
   /** The cursor of a subscription the stream delivers at-least-once — absent for a push target. */
@@ -640,10 +594,7 @@ export class SubscriptionDelivery {
     error: unknown,
   ): void {
     const current = this.#stream.coreReducedState.subscriptions[name];
-    if (current?.configuredAtOffset !== configuredAtOffset || current.halted) {
-      this.#reconcileAlarm(); // the failed attempt's claim may have been this row's last
-      return;
-    }
+    if (current?.configuredAtOffset !== configuredAtOffset || current.halted) return;
     // A halted row owes nothing; the fact's own commit reconciles the alarm.
     this.#stream.append({
       type: "events.iterate.com/stream/subscription-delivery-halted",
@@ -759,6 +710,36 @@ export class SubscriptionDelivery {
         // A rung (or a claim an eviction left) not yet due: its time is the row's claim, and
         // whatever kicked this loop (a commit's tail, a pass's end) reconciles the alarm to it.
         if (cursor.nextAttemptAtMs !== undefined && Date.now() < cursor.nextAttemptAtMs) return;
+        // THE CLAIM, the instant an attempt begins on a row behind the durable mark — SYNCHRONOUS
+        // with the commit that kicked this loop, before any read, evaluation or call: die anywhere
+        // from here and the next incarnation reads it from the cursor table — the attempt this is,
+        // and when to come back. Fifteen attempts with neither an ack nor a failure halt the row, as
+        // fifteen refusals would (a batch that kills its caller is a refusal that can only repeat).
+        // A row at the mark is owed nothing durable (an ephemeral-only push rides in memory).
+        const cursorBeforeAttempt = cursor;
+        if (cursor.confirmedOffset < this.#stream.highestDurableOffset()) {
+          const attempt = cursor.attempt + 1;
+          if (attempt > 15) {
+            const { nextAttemptAtMs: _spent, ...settled } = cursor;
+            this.#adoptCursor(name, { ...settled, attempt: 0 }, true);
+            this.#haltRow(
+              name,
+              row.configuredAtOffset,
+              cursor.confirmedOffset,
+              cursor.attempt,
+              new Error(
+                `${cursor.attempt} deliveries of this batch ended without an ack or a failure (the context died mid-call)`,
+              ),
+            );
+            return;
+          }
+          cursor = {
+            ...cursor,
+            attempt,
+            nextAttemptAtMs: Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS,
+          };
+          this.#adoptCursor(name, cursor, true);
+        }
         // The batch: the pushed one when contiguous (ephemerals ride it); else a page of the log, read
         // only UP TO the pushed batch's start, so that once the durables before it are delivered the
         // cursor IS contiguous with it and takes it. A pushed batch the cursor has already passed is
@@ -789,7 +770,7 @@ export class SubscriptionDelivery {
                 name,
                 row.configuredAtOffset,
                 cursor.confirmedOffset,
-                cursor.attempt + 1,
+                cursorBeforeAttempt.attempt + 1,
                 error,
               );
               return;
@@ -799,8 +780,9 @@ export class SubscriptionDelivery {
               : page.scannedThroughOffset;
             if (ceiling <= cursor.confirmedOffset) {
               // CAUGHT UP: nothing owed, no claim (the finally releases the room). This is the
-              // row's normal end — a wake that found nothing to do must not arm another. A ladder
-              // still set (its batch was ephemeral, and is gone) is spent with it.
+              // row's normal end — a wake that found nothing to do must not arm another. A claim
+              // or a ladder still set (its batch was ephemeral, and is gone) is spent with it; an
+              // attempt that found nothing to deliver was no death.
               if (cursor.nextAttemptAtMs !== undefined) {
                 const { nextAttemptAtMs: _spent, ...settled } = cursor;
                 this.#adoptCursor(name, { ...settled, attempt: 0 }, true);
@@ -845,50 +827,19 @@ export class SubscriptionDelivery {
             continue;
           if (eventBatch.events.length === 0) {
             // A log page the filter emptied (or the span up to a pushed batch): durable ground,
-            // advanced without a call; the loop goes on to whatever is owed. A due ladder time that
-            // reached here is spent — kept, it would be a past claim.
+            // advanced without a call, no attempt spent; the loop goes on to whatever is owed. A
+            // claim or a due ladder time that reached here is spent — kept, it would be a past claim.
             const { nextAttemptAtMs: _spent, ...settled } = cursor;
-            this.#adoptCursor(name, { ...settled, confirmedOffset: range.through }, true);
+            this.#adoptCursor(
+              name,
+              { ...settled, attempt: cursorBeforeAttempt.attempt, confirmedOffset: range.through },
+              true,
+            );
             continue;
           }
           try {
             const { call } = await this.#evaluateTargetHeadForRow(name, row);
             if (!this.cursor(name)) continue; // replaced while the target was evaluated
-            if (durable) {
-              // THE CLAIM, durable, before the call: die mid-call and the next incarnation reads it
-              // from the cursor table — the attempt this is, and when to come back: THE SAME INSTANT
-              // the alarm already holds for this row (its commit's claim, `behindSince` + 20 s), so
-              // one wake delivers, never one to find the claim not yet due and a second for it.
-              // Fifteen claims with neither an ack nor a failure halt the row, as fifteen refusals
-              // would (a batch that kills its caller is a refusal that can only repeat) — a sixteenth
-              // is never claimed. The row is written, not re-armed: the ack, a failure or a pass
-              // re-arms from what the row says then.
-              const attempt = cursor.attempt + 1;
-              if (attempt > 15) {
-                const { nextAttemptAtMs: _spent, ...settled } = cursor;
-                this.#adoptCursor(name, { ...settled, attempt: 0 }, true);
-                this.#haltRow(
-                  name,
-                  row.configuredAtOffset,
-                  cursor.confirmedOffset,
-                  cursor.attempt,
-                  new Error(
-                    `${cursor.attempt} deliveries of this batch ended without an ack or a failure (the context died mid-call)`,
-                  ),
-                );
-                return;
-              }
-              this.#adoptCursor(
-                name,
-                {
-                  ...cursor,
-                  attempt,
-                  nextAttemptAtMs:
-                    (record.behindSince ?? Date.now()) + CURSOR_DELIVERY_CALL_WATCHDOG_MS,
-                },
-                true,
-              );
-            }
             await withTimeout(
               call([eventBatch.events, range]),
               CURSOR_DELIVERY_CALL_WATCHDOG_MS,
@@ -910,12 +861,13 @@ export class SubscriptionDelivery {
             );
           } catch (error) {
             if (!this.cursor(name)) continue; // replaced mid-flight: re-evaluated for the new row
-            // The target DANGLES (`danglingUnder` says what follows): no rung, no halt, no claim —
-            // and no attempt spent: a claim written before a CALL that was then refused as
-            // unresolvable (a sibling context's rule missing) is withdrawn.
+            // The target DANGLES: nothing resolves it under this rule table (a `subscribe` before
+            // its `provide`, a rule since removed; a sibling context's rule missing at the call).
+            // No rung, no halt, no claim, no attempt spent: the row waits for its rule — the commit
+            // that lands it kicks every cursor row, and this loop evaluates the target anew then.
             if (errorCode(error) === "NO_ITX_EXPRESSION_MATCH") {
-              this.#adoptCursor(name, cursor, durable);
-              record.danglingUnder = this.#stream.coreReducedState.itxExpressionRewriteRules;
+              const { nextAttemptAtMs: _spent, ...settled } = cursorBeforeAttempt;
+              this.#adoptCursor(name, settled, true);
               return;
             }
             // A delivery-resumed that landed DURING this attempt is not yet applied: loop back and apply
@@ -924,7 +876,7 @@ export class SubscriptionDelivery {
             if (latest?.resumed && latest.resumed.atOffset !== cursor.resumeAppliedAtOffset)
               continue;
             // The rung is written on the SAME attempt the claim was (one bump per attempt).
-            const attempt = cursor.attempt + 1;
+            const attempt = cursorBeforeAttempt.attempt + 1;
             // A failure that can only repeat halts now, not in half an hour.
             if (deterministicFailure(error) || attempt >= 15) {
               // The halted cursor claims no retry time: a resume starts a fresh ladder.

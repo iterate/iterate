@@ -11,7 +11,7 @@ import { parseCodemodeResponse } from "./codemode-format.ts";
 
 const processor = () =>
   new AgentProcessor({
-    chat: () => Promise.reject(new Error("the reduce never calls the model")),
+    stream: () => Promise.reject(new Error("the reduce never calls the model")),
     runScript: () => Promise.reject(new Error("the reduce never runs a script")),
     readFile: () => Promise.reject(new Error("the reduce never reads a file")),
     now: () => 0,
@@ -232,6 +232,7 @@ describe("AgentProcessor — the reduce", () => {
         config: {
           llm: { model: "@cf/x" },
           maxAutonomousTurns: 2,
+          plainResponse: "itx.chat.sendMessage",
           llmRequestExpiryMs: 600_000,
           llmRequestDebounceMs: 250,
           llmRequestRetryPolicy: { maxAttempts: 3, backoffBaseMs: 10_000, backoffMaxMs: 60_000 },

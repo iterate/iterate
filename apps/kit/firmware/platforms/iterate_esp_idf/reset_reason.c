@@ -1,8 +1,8 @@
-#include "iterate/kit/platforms/esp_idf_reset_reason.h"
+#include "iterate/kit/platforms/reset_reason.h"
 
 #include "esp_system.h"
 
-const char *iterate_kit_esp_reset_reason_name(void) {
+const char *iterate_kit_platform_reset_reason_name(void) {
   switch (esp_reset_reason()) {
     case ESP_RST_POWERON:
       return "poweron";

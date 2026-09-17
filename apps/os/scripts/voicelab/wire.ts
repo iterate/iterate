@@ -3,14 +3,11 @@
 //   pnpm cli voicelab wire --upstream https://os.iterate-preview-3.com --port 8899
 //   pnpm cli voicelab wire --schedule /tmp/sched.json --port 8899
 //
-// Then point the C at it:
-//   ITERATE_OS_BASE_URL=https://127.0.0.1:8899  iterate-kit-cli --insecure ...
+// Then point a C client at https://127.0.0.1:8899 instead of the upstream.
 //
 // It serves TLS, because the client's transport always speaks TLS and always
 // will: that adapter's value is that it is the code that ships, so the proxy
-// bends to it rather than the other way round. The client already has an
-// --insecure flag for exactly this, and it parses host:port, so nothing in
-// the shipped C changes to put this in the path.
+// bends to it rather than the other way round.
 //
 // WHY OUTSIDE THE PROCESS. The one seam whose adversary genuinely belongs to
 // somebody else. `iterate_kit_posix_tls_stream` is a one-owner nonblocking
@@ -24,9 +21,9 @@
 // application frame: by the time bytes reach the adapter they are ordered,
 // retransmitted and MAC-protected, so loss on the wire manifests as DELAY and
 // never as a missing frame. Frame loss is the sender's behaviour and lives at
-// the delivery boundary inside the client (`cli_delivery_fault`). Conflating
-// the two is how a rig ends up "testing packet loss" while proving nothing
-// about the only kind of loss this system actually suffers.
+// the delivery boundary inside the client. Conflating the two is how a rig
+// ends up "testing packet loss" while proving nothing about the only kind of
+// loss this system actually suffers.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";

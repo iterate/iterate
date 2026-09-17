@@ -768,7 +768,7 @@ describe("a superseded evaluation can neither classify nor invoke its replacemen
   });
 });
 
-describe("the delivery loop's claim on the DO's alarm (`deadlines()`): derived from the cursor and the durable mark, and from the claim written before every call", () => {
+describe("the delivery loop's claim on the DO's alarm (`deadlines()`): exactly the persisted time — the claim written as an attempt begins, a ladder rung, a claim a death left", () => {
   /** A cursor row `s` on `itx.sink.push`, whose pushes park until released (each call resolves in
    *  order); `durable` commits one `demo/ping`. */
   function parkedSinkRig(previous?: { storage: DurableObjectStorageSlice }) {
@@ -809,7 +809,7 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): derived f
     expect(rig.alarms).toHaveLength(1);
     await settled();
     rig.stream.append({ type: "demo/ping", payload: { n: 2 } }); // lands while n=1 is in flight
-    expect(rig.alarms).toHaveLength(1); // the insurance already stands: no second write
+    expect(rig.alarms).toHaveLength(1); // the claim already stands: no second write
     await rig.release(); // acks n=1; the loop takes n=2
     await rig.release(); // acks n=2; caught up
     expect(rig.pushes).toEqual([[1], [2]]);
@@ -843,7 +843,7 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): derived f
     rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
     await settled();
     const [claim] = rig.delivery.deadlines();
-    expect(claim.inFlight).toBe(true);
+    expect(claim).toMatchObject({ name: "s", attempt: 1 }); // the row a loop holds claims its time
     vi.useFakeTimers({ now: claim.at + 5_000, toFake: ["Date"] });
     try {
       let passed = false;
@@ -886,7 +886,7 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): derived f
     // behind, and the claim's time is when to come back.
     const second = parkedSinkRig(first);
     expect(second.delivery.deadlines()).toMatchObject([
-      { name: "s", at: claim[1].nextAttemptAtMs, attempt: 1, inFlight: false },
+      { name: "s", at: claim[1].nextAttemptAtMs, attempt: 1 },
     ]);
     expect(second.alarms).toEqual([claim[1].nextAttemptAtMs]);
     vi.useFakeTimers({ now: claim[1].nextAttemptAtMs! + 1, toFake: ["Date"] });
@@ -1089,7 +1089,7 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): derived f
       mode = "park";
       rig.stream.append({ type: "demo/ping", payload: { n: 2 } }); // the retry starts, and parks
       await settled();
-      expect(rig.delivery.deadlines()[0]).toMatchObject({ inFlight: true });
+      expect(rig.delivery.deadlines()[0]).toMatchObject({ name: "s" });
       let passed = false;
       const pass = rig.pass().then(() => (passed = true));
       await settled();

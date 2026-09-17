@@ -1,0 +1,301 @@
+// /sessions: every OAuth grant the signed-in user holds (browsers, connected apps, personal access
+// tokens), each endable on its own, and the one place a personal access token is minted: a name and
+// the projects it may reach → `api.grants.mint` → the token, shown ONCE (it is a finite provider
+// access token, never stored readable). The list is one page of `grants.list(cursor)` — the route's
+// loader, `?cursor=` in the URL; a mint or an end invalidates the router, which reloads it. Ported
+// from apps/os-next's console page: every string, role and test id is the same.
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
+import { useRef, useState, type FormEvent } from "react";
+import { z } from "zod";
+import { Badge } from "@iterate-com/ui/components/badge";
+import { Button, buttonVariants } from "@iterate-com/ui/components/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@iterate-com/ui/components/card";
+import { Checkbox } from "@iterate-com/ui/components/checkbox";
+import { Input } from "@iterate-com/ui/components/input";
+import { Label } from "@iterate-com/ui/components/label";
+import { cn } from "@iterate-com/ui/lib/utils";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@iterate-com/ui/components/table";
+
+export const Route = createFileRoute("/_auth/sessions")({
+  validateSearch: z.object({ cursor: z.string().optional() }),
+  loaderDeps: ({ search }) => ({ cursor: search.cursor }),
+  staticData: { page: "Sessions" },
+  // `account` is optional at consent: without it there is no list to load — the page offers the
+  // step-up instead of the error the API would answer with.
+  loader: async ({ context, deps }) =>
+    context.info.scopes.includes("account") ? await context.api.grants.list(deps.cursor) : null,
+  component: SessionsPage,
+});
+
+/** The dash asked for `account` and the person unticked it: `/.auth/login` with the scopes asked
+ *  for again re-consents (`/.auth/login` bounces a session that already holds them). */
+function AllowAccount() {
+  const stepUp = `/.auth/login?${new URLSearchParams({
+    next: "/sessions",
+    scope: "iterate account organizations:write",
+  })}`;
+  return (
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 md:p-8">
+      <h1 className="text-2xl font-semibold tracking-tight">Sessions</h1>
+      <Card>
+        <CardHeader>
+          <CardTitle>Account permission</CardTitle>
+          <CardDescription>
+            This session may not manage your sessions and personal access tokens.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <a href={stepUp} className={cn(buttonVariants({ variant: "outline" }))}>
+            Allow the dash to manage them
+          </a>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/** A personal access token as the form just minted it — held only in this page's state, shown
+ *  once; a reload forgets it, as the server already has. */
+type MintedPersonalAccessToken = { name: string; token: string; expiresAt: number };
+
+function SessionsPage() {
+  const data = Route.useLoaderData();
+  const { cursor } = Route.useSearch();
+  const { api } = Route.useRouteContext();
+  const router = useRouter();
+  const [error, setError] = useState<string | null>(null);
+  const [tokenName, setTokenName] = useState("");
+  const [excludedProjectIds, setExcludedProjectIds] = useState<Set<string>>(new Set());
+  const [minted, setMinted] = useState<MintedPersonalAccessToken | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [minting, setMinting] = useState(false);
+  // Ending THIS browser's grant is a sign-out: the app's own logout clears the session and its
+  // cookie too (a bare redirect to `/` would bounce a still-cached token back into /projects).
+  const logout = useRef<HTMLFormElement>(null);
+  if (!data) return <AllowAccount />;
+  const { items, cursor: nextCursor, projects, canMintToken } = data;
+  const selectedProjectIds = projects
+    .filter((project) => !excludedProjectIds.has(project.id))
+    .map((project) => project.id);
+
+  const mintPersonalAccessToken = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const name = tokenName.trim();
+    setError(null);
+    setMinting(true);
+    try {
+      const { token, expiresAt } = await api.grants.mint({ name, projects: selectedProjectIds });
+      setMinted({ name, token, expiresAt });
+      setCopied(false);
+      setTokenName("");
+      await router.invalidate();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setMinting(false);
+    }
+  };
+  const copyMintedToken = async () => {
+    if (!minted) return;
+    try {
+      await navigator.clipboard.writeText(minted.token);
+      setCopied(true);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  return (
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
+      <form ref={logout} method="post" action="/.auth/logout" hidden />
+      <h1 className="text-2xl font-semibold tracking-tight">Sessions</h1>
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+      <div className="overflow-x-auto rounded-lg border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Name</TableHead>
+              <TableHead>Type</TableHead>
+              <TableHead>Last used</TableHead>
+              <TableHead>Expires</TableHead>
+              <TableHead>Action</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {items.map((item) => (
+              <TableRow key={item.id}>
+                <TableCell className="font-medium">
+                  {item.name}
+                  {item.current && (
+                    <Badge variant="secondary" className="ml-2">
+                      this browser
+                    </Badge>
+                  )}
+                </TableCell>
+                <TableCell>{item.kind}</TableCell>
+                <TableCell className="text-muted-foreground">
+                  {item.lastUsedAt ? new Date(item.lastUsedAt).toISOString() : "Not used yet"}
+                </TableCell>
+                <TableCell className="text-muted-foreground">
+                  {item.cleanupPending
+                    ? "Access revoked; cleanup pending"
+                    : item.expired
+                      ? "Expired"
+                      : item.expiresAt
+                        ? new Date(item.expiresAt).toISOString()
+                        : "—"}
+                </TableCell>
+                <TableCell>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={async () => {
+                      setError(null);
+                      try {
+                        await api.grants.end(item.id);
+                        if (item.current) logout.current?.requestSubmit();
+                        else await router.invalidate();
+                      } catch (caught) {
+                        setError(caught instanceof Error ? caught.message : String(caught));
+                      }
+                    }}
+                  >
+                    {item.cleanupPending
+                      ? "Retry cleanup"
+                      : item.expired
+                        ? "Remove"
+                        : item.kind === "Personal access token"
+                          ? "Revoke"
+                          : "Log out"}
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+      {!items.length && <p className="text-sm text-muted-foreground">No sessions on this page.</p>}
+      <p className="flex gap-3 text-sm">
+        {cursor && (
+          <Link to="/sessions" search={{}} className="underline-offset-4 hover:underline">
+            First page
+          </Link>
+        )}
+        {nextCursor && (
+          <Link
+            to="/sessions"
+            search={{ cursor: nextCursor }}
+            className="underline-offset-4 hover:underline"
+          >
+            Next page
+          </Link>
+        )}
+      </p>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Personal access tokens</CardTitle>
+          <CardDescription>
+            A personal access token is one OAuth grant: it acts as you, for the projects you choose,
+            for 30 days, and is shown once. Send it as <code>Authorization: Bearer</code> on{" "}
+            <code>/api</code>, <code>/mcp</code> or a project host; revoke it from the list above.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {minted && (
+            <p
+              role="status"
+              data-testid="minted"
+              className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/40 p-3 text-sm"
+            >
+              <strong>{minted.name}</strong> — copy it now; it is not shown again. Expires{" "}
+              {new Date(minted.expiresAt).toISOString()}.{" "}
+              <code data-testid="minted-token" className="break-all">
+                {minted.token}
+              </code>
+              <Button type="button" size="sm" variant="outline" onClick={copyMintedToken}>
+                {copied ? "Copied" : "Copy"}
+              </Button>
+              <Button type="button" size="sm" variant="ghost" onClick={() => setMinted(null)}>
+                Dismiss
+              </Button>
+            </p>
+          )}
+          {canMintToken ? (
+            <form onSubmit={mintPersonalAccessToken} className="flex flex-col gap-4">
+              <Label className="flex flex-col items-start gap-2">
+                Name
+                <Input
+                  aria-label="Token name"
+                  value={tokenName}
+                  onChange={(event) => setTokenName(event.target.value)}
+                  maxLength={100}
+                  placeholder="My script"
+                  required
+                  className="max-w-sm"
+                />
+              </Label>
+              <div
+                aria-label="Projects the token may reach"
+                className="flex flex-wrap gap-x-5 gap-y-2 text-sm"
+              >
+                {projects.length > 0
+                  ? projects.map((project) => (
+                      <Label key={project.id} className="gap-2 font-mono font-normal">
+                        <Checkbox
+                          aria-label={project.id}
+                          checked={!excludedProjectIds.has(project.id)}
+                          disabled={minting}
+                          onCheckedChange={(checked) => {
+                            setExcludedProjectIds((current) => {
+                              const next = new Set(current);
+                              if (checked) next.delete(project.id);
+                              else next.add(project.id);
+                              return next;
+                            });
+                          }}
+                        />
+                        {project.id}
+                      </Label>
+                    ))
+                  : "Create a project first — a token is scoped to the projects it may reach."}
+              </div>
+              <div>
+                <Button
+                  type="submit"
+                  disabled={
+                    minting || selectedProjectIds.length === 0 || tokenName.trim().length === 0
+                  }
+                >
+                  {minting ? "Creating…" : "Create personal access token"}
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Personal access tokens require an HTTPS deployment.
+            </p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

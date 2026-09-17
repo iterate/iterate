@@ -80,7 +80,7 @@ static bool create_engine(int mode) {
      * This was AEC_MODE_VOIP_HIGH_PERF. VOIP mode brings its own aggressive
      * residual suppressor, and measured on this board it does not merely
      * attenuate the near end during double-talk — it destroys it. Same words,
-     * same distance, same microphone (`voicelab aec`, 2026-08-11):
+     * same distance, same microphone (`voice_stream aec`, 2026-08-11):
      *
      *   board silent    whisper reads "Stop talking right now, please stop."
      *   board playing   whisper reads nothing at all
@@ -133,7 +133,7 @@ static bool create_engine(int mode) {
  * FAILING CLOSED TOOK THE WHOLE BOARD WITH IT. `AEC_MODE_FD_HIGH_PERF` was
  * tried here on 2026-08-11 for its double-talk behaviour; it did not create,
  * `create_engine` correctly refused, and the consequence of refusing was a
- * device that never mounted anything at all — no capability host, no voicelab
+ * device that never mounted anything at all — no capability host, no voice_stream
  * lane, and a USB console that says nothing on this board, so no way to see
  * why from the outside. Recovering it needed a reflash of the previous
  * firmware.

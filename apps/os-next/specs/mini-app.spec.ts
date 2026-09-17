@@ -30,14 +30,20 @@ test("a no-build mini-app served by a project persists a note through its own ca
   });
   expect(login.status(), await login.text().catch(() => "")).toBe(302);
 
-  // Create the project from the dashboard and read its host off the "open" link.
-  await page.goto("/");
-  await page.getByRole("textbox", { name: "New project" }).fill(project);
-  await page.getByRole("button", { name: "Create project", exact: true }).click();
-  await page.getByRole("link", { name: "open", exact: true }).waitFor();
-  const projectOrigin = new URL(
-    (await page.getByRole("link", { name: "open", exact: true }).getAttribute("href"))!,
-  );
+  // Create the project as that user, over the platform's operator endpoint (/internal/rpc) (the platform has no
+  // dashboard: creating a project is the OS app's or a script's — here the fixture's).
+  // eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
+  using owner = newHttpBatchRpcSession<IterateRpcTarget>(`${origin}/internal/rpc`);
+  using _created = await owner
+    .authenticate({ type: "admin-secret", secret: adminSecret, as: { email } })
+    .projects.create({ project });
+  // The project's host: `<project>.<base>` — `localhost` under the local worker (scripts/dev.ts), the
+  // deployment's base otherwise (PROJECT_HOSTNAME_BASE, as the e2e suite spells it).
+  const base =
+    new URL(origin).hostname === "localhost" ? "localhost" : process.env.PROJECT_HOSTNAME_BASE;
+  if (!base) throw new Error("PROJECT_HOSTNAME_BASE is required against a deployed worker");
+  const projectOrigin = new URL(origin);
+  projectOrigin.hostname = `${project}.${base}`;
 
   // Install the mini-app as an app label — ONE rewrite rule. (An operator fixture here; a project
   // owner would run the same provide() through their own session.)
@@ -53,7 +59,7 @@ test("a no-build mini-app served by a project persists a note through its own ca
     .provide("itx.apps.notes", ["itx", "workers", ["get", { source: { "cap.js": source } }]]);
 
   // Open the app on notes--<project>.<base> and prove a note round-trips through /rpc.
-  projectOrigin.hostname = projectOrigin.hostname.replace(project, `notes--${project}`);
+  projectOrigin.hostname = `notes--${project}.${base}`;
   await page.goto(projectOrigin.origin);
   await expect(page.getByRole("heading", { name: "Mini Notes" })).toBeVisible();
   await expect(page.getByTestId("status")).toHaveText("live");

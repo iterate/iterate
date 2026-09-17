@@ -183,7 +183,7 @@ ever opened, so the call only says "hand me that session"; a transport that carr
 (`verifyAdminSecret`, both SHA-256 hashed) — `{ actor: "admin" }` on every project, or with
 `as: { email }` that user's session without a login (the directory row upserted as `/login` does —
 its id, `user_<email>`, is the actor); a wrong secret is `INVALID_CREDENTIALS`. OAuth grants are the
-ONE credential for every other principal (`src/oauth.ts` `GrantProps`: `issuer` — the console's own
+ONE credential for every other principal (`src/oauth.ts` `GrantProps`: `issuer` — the issuer's own
 login, `app` — a connected client, `personal` — a PERSONAL ACCESS TOKEN): `session.grants.mint({
 name, projects })` (`src/grants.ts`) mints one finite `personal` grant of the user's — 30 days, scoped
 to the projects named (each one the user reaches), no refresh credential, its access token answered
@@ -257,7 +257,7 @@ no hop. That signature is the litmus test ("could this be written in a userspace
 whole layering: a library module could move to userspace unchanged, and the surface shows no level.
 `src/library.test.ts` pins it — no runtime import from the stream, the DO, the fetch module
 or `context/` except `invoke-handle.ts`. A held capnweb WebSocket connection pins the context awake
-like a busy facet; a batch connection and the two HTTP connectors hold nothing. `connectToGraphql`
+(a facet does not); a batch connection and the two HTTP connectors hold nothing. `connectToGraphql`
 is the obvious next member of the family and does not exist yet.
 
 `WorkerSource` is the worker's modules, literally (`Record<string, string>`, module name → code,
@@ -286,7 +286,7 @@ Two layers, in the order the tutorial builds them.
 
 **Layer 1, the borrowed table.** Anyone with a Workers-RPC route to the DO can
 `lendRpcStub({ rpcStubKey, stub })`. The DO keeps it in `#borrowedRpcStubs`, every call on that
-key rides it, and `returnBorrowedRpcStubs()` at the 60 s idle quiesce, because a held stub
+key rides it, and `returnBorrowedRpcStubs()` by the pins' timer (30 s after their last use), because a held stub
 pins the DO awake. A lender with no pager is one-shot.
 
 **Layer 2, the pagers.** One hibernatable WebSocket per key, opened by the edge relay in ONE
@@ -412,7 +412,7 @@ session ending) restores the platform row.
 
 ---
 
-## 8. The stream and the core reduce (`src/stream/stream.ts` · `core-processor.ts` · `stream-storage.ts`)
+## 8. The stream and the core reduce (`src/stream/stream.ts` · `core-processor.ts`)
 
 One append-only log per context. Offsets shared by durable and ephemeral events (an
 ephemeral consumes an offset, never a row). Idempotency at the door. `waitForEvent`.
@@ -452,7 +452,7 @@ the stream by appending `stream/paused`. Runtime state IS reduced state:
 `itx.facets.get('core').snapshot()`. The whole state is plain JSON (hand-written types — no zod on this script — records and arrays),
 so the checkpoint and the live-state snapshot carry it as is.
 
-Event envelope (`src/stream/processor.ts`, plain TS types):
+Event envelope (`packages/iterate/src/next/stream/processor.ts`, plain TS types):
 `{ type, payload?, metadata?, source?, idempotencyKey?, offset?, ephemeral? }` in;
 `+ offset, createdAt, path` out.
 
@@ -573,16 +573,15 @@ is stripped with every inbound `x-itx-*`. The admin secret as the bearer is `{ a
 any project. Who signs in is the issuer's (`/login`, the OAuth AS); the ingress only verifies.
 
 **The control plane** (`src/control-plane.ts`, IN-PROCESS: everything on the worker's hostname that
-is not `/api`, `/version` or a static asset (`dist/client`: the console's bundle, the hosted `/demo`
-page — asked for on the platform host only, `run_worker_first: true`) is its catch-all — one worker,
+is not `/api` or `/version` is its catch-all — one worker,
 one front door).
 An OAuth 2.1 Authorization Server (`@cloudflare/workers-oauth-provider`, built per request from the
 request's origin: `/authorize` app-owned, `/oauth/token`, `/oauth/register` (DCR; CIMD on, with the
 `global_fetch_strictly_public` flag), `/.well-known/*`; `/mcp` its ONLY protected route and its ONE
 pinned resource, `<origin>/mcp`, this origin the authorization server — every token bound to it, a
 foreign one refused), a D1 directory (`control-plane.sql`: users → orgs via `org_members` →
-projects; access is org membership), THE CONSOLE — a TanStack Start app (`src/routes/**`, SSR'd
-here through the Start server entry; `src/router.tsx`, `routeTree.gen.ts`, `console.css`): `/login`
+projects; access is org membership), THE ISSUER'S PAGES (`/login` and the `/authorize` consent, files in `public/` the assets
+binding serves, each asking its JSON sibling here what to show): `/login`
 (the email form; "continue as / switch account" with a session), the `_auth` layout (no session ⇒
 `/login?next=`), the account page at `/` (orgs; projects — a project's hosts, the APEX (the config
 worker's `fetch`, the bundled default's 404 for a project with none of its own) and one per app it
@@ -607,7 +606,7 @@ bearer's principal; `project` optional when the grant reaches exactly one, requi
 for the admin secret, refused outside the grant (apps/os `resolveToolProject`) and refused as a
 context name (the expression reaches the project's other contexts through `itx.cd(path)`); an
 expression error an `isError` result led by its code. No tool creates a project: a project is
-created on the console or over `/api` (`projects.create`). The provider's `resolveExternalToken`
+created on the OS, in consent, or over `/api` (`projects.create`). The provider's `resolveExternalToken`
 admits one more bearer: the admin secret (`{ actor: "admin" }`, every project). What a bearer
 reaches is its grant's `Reach` (`authorizationOf`, `src/oauth.ts`), THE CEILING FIRST: a grant that
 chose projects — a consent's selection, a personal access token's `projects` — reaches exactly those
@@ -661,24 +660,24 @@ and nowhere else in this document. Recount rather than trust it.
 Tests (2026-09-04): unit + workers 431 (13 expected fails); e2e 176 passed, 2 expected fails, 11
 skipped on 45 files (the deployed-only ones run against the deployed worker).
 
-| Layer                    | Files (raw lines, comments included)                                                                                                                                                                    | Lines |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----: |
-| the edge                 | `worker.ts` · `session.ts` · `iterate-context.ts` · `principal.ts` · `types.ts`                                                                                                                         | 1,250 |
-| the control plane        | `control-plane.ts` · `control-plane.sql`                                                                                                                                                                | ≈ 830 |
-| the console              | `routes/__root.tsx` · `login.tsx` · `_auth.tsx` · `_auth/index.tsx` · `_auth/authorize.tsx` · `-session.ts` · `-console-context.ts` · `router.tsx` · `console.css` (+ the generated `routeTree.gen.ts`) | ≈ 480 |
-| the DO                   | `iterate-context-durable-object.ts`                                                                                                                                                                     |   949 |
-| expressions + dispatch   | `context/expression.ts` · `dispatch.ts` · `invoke-handle.ts`                                                                                                                                            |   623 |
-| built-ins + loader       | `context/built-ins.ts` · `worker-loader.ts` · `durable-object-names.ts`                                                                                                                                 |   859 |
-| artifacts + repos        | `context/repos.ts` · `git-wire.ts`                                                                                                                                                                      |   820 |
-| (a) rpc stubs            | `context/rpc-stubs.ts` · `rpc-stub-relay.ts`                                                                                                                                                            |   654 |
-| (b) rewrite rules        | `context/itx-expression-rewriting.ts` · `built-in-roots.ts`                                                                                                                                             |   525 |
-| the stream + core        | `stream/stream.ts` · `stream-storage.ts` · `node-sqlite-durable-object-storage.ts` · `core-processor.ts` · `events.ts` · `reduce-checkpoint.ts` · `test-support.ts`                                     | 1,708 |
-| the library              | `library.ts` · `mcp.ts` · `openapi.ts` · `capnweb.ts` · `mcp-server.ts`                                                                                                                                 |   898 |
-| configuration            | `worker.ts`                                                                                                                                                                                             |   104 |
-| subscriptions + delivery | `stream/core-processor.ts` · `subscription-delivery.ts`                                                                                                                                                 |   819 |
-| processors + live state  | `stream/processor.ts` · `live-state.ts` · `sdk/*`                                                                                                                                                       | 1,002 |
-| fetch (parked) + egress  | `context/rpc-stubs.ts` · `iterate-context-durable-object.ts`                                                                                                                                            |   339 |
-| lib, client demo         | `lib/*` · `client/*` (the generated bundles excluded)                                                                                                                                                   |   679 |
+| Layer                    | Files (raw lines, comments included)                                                                                                                                | Lines |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----: |
+| the edge                 | `worker.ts` · `session.ts` · `iterate-context.ts` · `principal.ts` · `types.ts`                                                                                     | 1,250 |
+| the control plane        | `control-plane.ts` · `control-plane.sql`                                                                                                                            | ≈ 830 |
+| the issuer's pages       | `control-plane.ts` (`loginState`, `authorizeHandler`) · `public/` (login.html, authorize.html, issuer.css, login.js, authorize.js, \_headers)                       | ≈ 500 |
+| the DO                   | `iterate-context-durable-object.ts`                                                                                                                                 |   949 |
+| expressions + dispatch   | `context/expression.ts` · `dispatch.ts` · `invoke-handle.ts`                                                                                                        |   623 |
+| built-ins + loader       | `context/built-ins.ts` · `worker-loader.ts` · `durable-object-names.ts`                                                                                             |   859 |
+| artifacts + repos        | `context/repos.ts` · `git-wire.ts`                                                                                                                                  |   820 |
+| (a) rpc stubs            | `context/rpc-stubs.ts` · `rpc-stub-relay.ts`                                                                                                                        |   654 |
+| (b) rewrite rules        | `context/itx-expression-rewriting.ts` · `built-in-roots.ts`                                                                                                         |   525 |
+| the stream + core        | `stream/stream.ts` · `stream-storage.ts` · `node-sqlite-durable-object-storage.ts` · `core-processor.ts` · `events.ts` · `reduce-checkpoint.ts` · `test-support.ts` | 1,708 |
+| the library              | `library.ts` · `mcp.ts` · `openapi.ts` · `capnweb.ts` · `mcp-server.ts`                                                                                             |   898 |
+| configuration            | `worker.ts`                                                                                                                                                         |   104 |
+| subscriptions + delivery | `stream/core-processor.ts` · `subscription-delivery.ts`                                                                                                             |   819 |
+| processors + live state  | `stream/processor.ts` · `live-state.ts` · `sdk/*`                                                                                                                   | 1,002 |
+| fetch (parked) + egress  | `context/rpc-stubs.ts` · `iterate-context-durable-object.ts`                                                                                                        |   339 |
+| lib, client demo         | `lib/*` · `client/*` (the generated bundles excluded)                                                                                                               |   679 |
 
 Error codes (`src/lib.ts`): `NO_ITX_EXPRESSION_MATCH`, `RPC_STUB_OFFLINE`,
 `IDEMPOTENCY_CONFLICT`, `OFFSET_CONFLICT`, `STREAM_PAUSED`, `NOT_A_METHOD`, `NO_FACET`,

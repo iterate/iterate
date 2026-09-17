@@ -1,8 +1,8 @@
 # Voice agent project configuration
 
 A project that runs the GPT-Live voice agent — the server side the ESP32
-boards, the voicelab host CLI, and the mobile app talk to — as a guest worker
-beside its own `worker.ts`.
+boards and the mobile app talk to — as a guest worker beside its own
+`worker.ts`.
 
 Three files carry it, and they are the whole install for any project:
 

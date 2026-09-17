@@ -15,13 +15,17 @@ import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { Event } from "@iterate-com/ui/components/events/types";
+import type { AgentUiLlmStep } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
 import { EventsList, InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
 import { AgentsSidebar } from "../../components/agents-sidebar.tsx";
-import { Composer, type OutgoingFile } from "../../components/composer.tsx";
-import { reduceAgentFeed, toAgentEvent } from "../../lib/agent-events.ts";
+import { CloseMobileSidebarOnNavigate } from "../../components/close-mobile-sidebar-on-navigate.tsx";
+import { AgentComposer, type StreamInterrupt } from "../../components/composer.tsx";
+import { QueuedMessagesPanel } from "../../components/queued-messages.tsx";
+import { reduceAgentFeed, toAgentEvent, traceOffsetByMessage } from "../../lib/agent-events.ts";
+import { newWebAgentPath } from "../../lib/web-agent.ts";
 
-// An agent is a conversation on its own path (`/agents/<name>`); everything it does is an event
+// An agent is a conversation on its own path (`/agents/...`); everything it does is an event
 // there. This page is a window onto that log — apps/os's agent view at the size os-next carries:
 // the CHAT (the shared agent-UI reducer's items: messages, and the activities that open into
 // rounds of script + result), the EVENTS (the raw log), and the TRACES (one sheet, URL-backed: an
@@ -32,6 +36,11 @@ type Project = Awaited<ReturnType<AuthenticatedApp["api"]["projects"]["get"]>>;
 type Context = Awaited<ReturnType<Project["cd"]>>;
 
 const AgentList = z.array(z.object({ path: z.string(), createdAt: z.string() }));
+
+/** What the page's subscription receives: every durable event (the Events view is the whole log)
+ *  and, named — a wildcard never sweeps an ephemeral — the streamed chunk windows the feed folds
+ *  into the answer being written. */
+const FEED_SUBSCRIPTION = ["*", "events.iterate.com/agent/llm-response-chunks"];
 
 export const Route = createFileRoute("/_auth/agents")({
   validateSearch: z.object({
@@ -79,21 +88,19 @@ function AgentsPage() {
   const project = data.project.id;
   return (
     <SidebarProvider className="h-svh">
+      {/* outside <Sidebar>: on a phone its children live in a Sheet that remounts when opened */}
+      <CloseMobileSidebarOnNavigate />
       <AgentsSidebar
         projects={data.projects}
         project={project}
         agents={data.agents}
         agent={data.agent}
         account={info.principal.email || info.principal.actor}
-        onCreate={async (name, systemPrompt) => {
-          const path = `/agents/${name}`;
+        onCreate={async () => {
+          // an agent is its path; a new one is born at the moment's path, as in apps/os
+          const path = newWebAgentPath(new Date());
           using itx = await api.projects.get(project);
-          await itx.invoke([
-            "itx",
-            "agents",
-            ["get", path],
-            ["create", systemPrompt ? { systemPrompt } : {}],
-          ]);
+          await itx.invoke(["itx", "agents", ["get", path], ["create", {}]]);
           await router.invalidate();
           await navigate({ to: "/agents", search: { project, agent: path } });
         }}
@@ -159,9 +166,9 @@ function useAgentLog(api: AuthenticatedApp["api"], project: string, path: string
       // for an updater and CALL it (an empty method call the server refuses).
       setContext(() => agent);
       // Subscribe BEFORE the catch-up read, so nothing lands between the two; a push is a batch of
-      // committed events, deduped into the map by offset. No `consumes`: the Events view is the
-      // whole log, and the reducer keeps what it renders.
+      // committed events (and the ephemeral chunk windows), deduped into the map by offset.
       held.subscription = await agent.subscribe({
+        consumes: FEED_SUBSCRIPTION,
         target: (batch: unknown[]) => !disposed && merge(batch),
       });
       for (let after = 0; ; ) {
@@ -182,6 +189,41 @@ function useAgentLog(api: AuthenticatedApp["api"], project: string, path: string
   }, [api, project, path]);
   const sorted = useMemo(() => [...events.values()].sort((a, b) => a.offset - b.offset), [events]);
   return { context, events: sorted, caughtUp, error };
+}
+
+/** apps/os's interrupt affordance for the running turn, shared by the composer and the queued
+ *  panel. Null while nothing is running, so consumers gate on existence. */
+function useAgentInterrupt(args: {
+  onInterrupt: (() => Promise<void>) | undefined;
+  runningLlmRequestId: number | undefined;
+}): StreamInterrupt | null {
+  const [isInterrupting, setIsInterrupting] = useState(false);
+  const [error, setError] = useState<string | undefined>();
+  const { onInterrupt, runningLlmRequestId } = args;
+  // An interrupt error belongs to the turn it failed against; without this a stale error would
+  // resurface on the NEXT turn. State-adjust-during-render per react.dev — no effect.
+  const [errorRequestId, setErrorRequestId] = useState(runningLlmRequestId);
+  if (errorRequestId !== runningLlmRequestId) {
+    setErrorRequestId(runningLlmRequestId);
+    setError(undefined);
+  }
+  if (!onInterrupt || runningLlmRequestId === undefined) return null;
+  return {
+    isInterrupting,
+    error,
+    run: async () => {
+      if (isInterrupting) return;
+      setIsInterrupting(true);
+      setError(undefined);
+      try {
+        await onInterrupt();
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      } finally {
+        setIsInterrupting(false);
+      }
+    },
+  };
 }
 
 /** The agent facet's live state, the fields the header reads. */
@@ -214,6 +256,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
       Object.keys(facet.data.activeScriptExecutions).length === 0
     : live.status === "error";
   const feed = useMemo(() => reduceAgentFeed(events, idle), [events, idle]);
+  const traceOffsets = useMemo(() => traceOffsetByMessage(events), [events]);
   const [toggled, setToggled] = useState<ReadonlySet<string>>(() => new Set());
   const onToggle = useCallback(
     (id: string) =>
@@ -262,6 +305,28 @@ function AgentConversation({ project, path }: { project: string; path: string })
     [context],
   );
   const view = search.view || "chat";
+  // THE INTERRUPT (apps/os's): cancellation is a property of new input, never a command — a
+  // developer item that tells the model why its answer stopped, marked as the person's so it
+  // counts as external input; the agent settles the open request as cancelled when it lands.
+  const runningLlmRequestId = feed.state.live?.steps.findLast(
+    (step): step is AgentUiLlmStep => step.kind === "llm" && step.status === "running",
+  )?.llmRequestOffset;
+  const interrupt = useAgentInterrupt({
+    runningLlmRequestId,
+    onInterrupt: context
+      ? async () => {
+          await context.append({
+            type: "events.iterate.com/agents/context-added",
+            payload: {
+              role: "developer",
+              content: "The user interrupted the in-progress response from the web chat.",
+              actor: { type: "user" },
+              llmRequestPolicy: { behaviour: "interrupt-current-request" },
+            },
+          });
+        }
+      : undefined,
+  });
   const status = !facet.success
     ? {
         text: live.status === "error" ? "Live state unavailable" : "Connecting…",
@@ -354,24 +419,57 @@ function AgentConversation({ project, path }: { project: string; path: string })
                   expanded={toggled.has(item.id)}
                   onToggle={onToggle}
                   inspect={inspect}
+                  traceOffset={item.kind === "assistant" ? traceOffsets.get(item.id) : undefined}
                   signedUrl={signedUrl}
                 />
               ))}
-              <AgentLiveActivity state={feed.state} inspect={inspect} />
+              <AgentLiveActivity
+                state={feed.state}
+                toggledIds={toggled}
+                onToggle={onToggle}
+                inspect={inspect}
+              />
             </ConversationContent>
             <ConversationScrollButton />
           </Conversation>
           <div className="shrink-0 px-4 pb-4 pt-2 md:px-6">
-            <Composer
-              onSend={async (message, files: OutgoingFile[]) => {
-                using itx = await api.projects.get(project);
-                await itx.invoke(["itx", "agents", ["get", path], ["message", { message, files }]]);
-              }}
-            />
+            <div className="mx-auto w-full max-w-3xl">
+              {/* Queued input grows the composer column; the feed follows on resize. */}
+              <QueuedMessagesPanel
+                messages={feed.state.queuedUserMessages}
+                isInterrupting={interrupt?.isInterrupting || false}
+                onInterrupt={interrupt?.run}
+                signedUrl={signedUrl}
+              />
+              <AgentComposer
+                autoFocusMessage
+                interrupt={interrupt}
+                onSubmit={async ({ message, files }) => {
+                  using itx = await api.projects.get(project);
+                  await itx.invoke([
+                    "itx",
+                    "agents",
+                    ["get", path],
+                    ["message", { message, files }],
+                  ]);
+                }}
+                onAppendRaw={async (events) => {
+                  if (!context) throw new Error("not connected");
+                  // The raw editor parsed each event with the stream's own input schema; `append` is
+                  // typed as the SDK's tuple of inputs, a shape a parsed array cannot spell.
+                  await context.append(...(events as Parameters<Context["append"]>));
+                }}
+              />
+            </div>
           </div>
         </>
       )}
-      <InspectorSheet events={events} inspected={inspected} onInspect={onInspect} />
+      <InspectorSheet
+        events={events}
+        live={feed.state.live}
+        inspected={inspected}
+        onInspect={onInspect}
+      />
     </div>
   );
 }

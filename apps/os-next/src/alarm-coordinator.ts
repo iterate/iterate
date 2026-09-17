@@ -1,14 +1,14 @@
 // alarm-coordinator.ts — THE ONE NATIVE ALARM of a context, derived: it holds no deadline of its
 // own. `reconcile()` asks the deadline sources — the earliest pending schedule (core state), the
-// earliest cursor-row claim (subscription-delivery.ts), the idle quiesce of the pins (the DO) — and
+// earliest cursor-row claim (subscription-delivery.ts), the claims of hosted processors (the DO) — and
 // arms the earliest, or deletes the alarm when they report none. Every reason is derivable at
 // construction (a schedule is durable, a cursor row is durable and the log is, a pin is in memory
 // and known), so the alarm read from storage is only the DEDUPE SEED: the constructor's first
 // reconcile derives the same time (no write) or supersedes it — and a stored time no source still
-// wants (a dead incarnation's idle deadline) is rightly superseded, even though workerd then cancels
+// wants (one a dead incarnation left) is rightly superseded, even though workerd then cancels
 // the run it would have started (nothing durable was due).
-// ONE HOLD: nothing is written while `alarm()` runs — the pass's own alarm stays stored, so a pass
-// that dies is retried by the runtime, and the next deadline is set ONCE when the pass completes.
+// ONE HOLD: nothing is written while the pass's WORK runs — its own alarm stays stored, so a pass
+// that dies is retried by the runtime, and the next deadline is set ONCE, at the pass's end.
 // No clamp: the runtime clamps a past time to now. Every `setAlarm` call bills a write unit, so the
 // only dedupe is `wanted === armedAt`; a fired alarm is forgotten (workerd deletes it after a completed
 // handler, and after exhausting its retries) so the same time can be armed again.
@@ -34,8 +34,7 @@ export class AlarmCoordinator {
     return { armedAt: this.#armedAt, passInProgress: this.#passInProgress };
   }
 
-  /** Seed from storage once, before the first append can reconcile: the dedupe seed, and what the
-   *  wake record reports as the alarm that woke this incarnation. */
+  /** Seed from storage once, before the first commit can reconcile: the dedupe seed. */
   restore(at: number | null) {
     this.#armedAt = at;
   }

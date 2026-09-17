@@ -22,13 +22,13 @@
 // `DurableObject` class): there is NO host-injected wrapper and no bare-lambda door — the code the
 // author wrote IS what runs, and it always enters through an EXPORTED entrypoint.
 
-import PROCESSOR_SDK_MODULE from "virtual:processor-sdk";
 import { codedError } from "iterate/next/lib";
 import {
   normalizedItxExpression,
   type ItxExpression,
   type ItxExpressionInput,
 } from "iterate/next/expression";
+import PROCESSOR_SDK_MODULE from "../generated/processor-sdk.js";
 
 /** Compose the loader cacheKey `owner` (context + a discriminator: a processor slug or a stateful
  *  className) COLLISION-FREE. The naive `${context}:${discriminator}` aliased across a different
@@ -169,7 +169,7 @@ type PrepareConfinedWorkerOptions = {
  */
 export async function prepareConfinedWorker(
   opts: PrepareConfinedWorkerOptions,
-): Promise<{ loaderId: string; load: () => WorkerStub }> {
+): Promise<{ loaderId: string; load: () => WorkerStub; retire: () => void }> {
   const { where, source, cacheKey } = opts;
   const requireMainModule = (modules: unknown): WorkerModules => {
     if (!isWorkerModules(modules) || typeof modules["cap.js"] !== "string")
@@ -232,7 +232,7 @@ export async function prepareConfinedWorker(
         // `allow_irrevocable_stub_storage` (experimental) lets loaded code store its `env.ITX` stub
         // and replay it (workers-and-facets.e2e pins it) — every worker in the chain needs it, so
         // the parent config carries it too. No `limits`: trusted clients. The platform bounds a DO to
-        // 10 distinct dynamic workers with in-flight requests — the idle quiesce keeps a context under it.
+        // 10 distinct dynamic workers with in-flight requests — the pins' release keeps a context under it.
         compatibilityDate: "2026-09-01",
         compatibilityFlags: [
           "no_nodejs_compat",
@@ -247,5 +247,12 @@ export async function prepareConfinedWorker(
         globalOutbound: opts.itxEntrypoint,
       };
     });
-  return { loaderId, load };
+  return {
+    loaderId,
+    load,
+    /** Mark this identity DEAD: the next `prepareConfinedWorker` for the same base loads under the
+     *  next generation — a genuinely fresh isolate. The recovery for a cached isolate that can no
+     *  longer be called (the clone-version failure the DO's facet call names). */
+    retire: () => loaderIdGenerations.set(loaderIdBase, { generation, dead: true }),
+  };
 }

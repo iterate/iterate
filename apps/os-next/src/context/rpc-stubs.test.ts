@@ -103,7 +103,7 @@ describe("a borrowed stub after a rejected call", () => {
 
 // ── rpc stub relay ── a regression pin on the relay: it registers `onRpcBroken` on
 // the session's provider stub ONCE per session, never once per page. The DO borrows the stub on
-// every burst of traffic and returns it at each idle quiesce, so a long-lived device pages many
+// every burst of traffic and returns it at each pins' release, so a long-lived device pages many
 // times, and each page lends a fresh `LentRpcStub` over the SAME session stub. capnweb has no
 // `offRpcBroken`, so a registration per lend would accumulate a listener per page for the session's
 // life — worst on the longest-lived, most active devices. The ONE registration lives in

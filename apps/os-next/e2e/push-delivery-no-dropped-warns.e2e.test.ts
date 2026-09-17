@@ -1,6 +1,6 @@
 // push-delivery-no-dropped-warns.e2e.test.ts — the three pins that read the WORKER'S CONSOLE: the
 // delivery loop emits `delivery.push.dropped` for a push that fails with anything but
-// RPC_STUB_OFFLINE and `subscription-delivery.dispatch` for a dispatch failure; these tests assert
+// RPC_STUB_OFFLINE and `subscription-delivery.deliver` / `.cursor` for a delivery that threw; these tests assert
 // those lines do NOT appear — a property no client-side observation can stand in for (a facet's
 // cold catch-up would heal a dropped push before a snapshot could tell). Logs are worker-global, so
 // this file boots its OWN worker (support/log-harness.ts) and runs its tests sequentially; every
@@ -36,7 +36,7 @@ afterAll(async () => {
 
 const countMatches = (text: string, re: RegExp) => (text.match(re) ?? []).length;
 /** Every delivery-side error line the loop can emit: a dropped push, a dispatch issue. */
-const DELIVERY_ERRORS = /delivery\.push\.dropped|subscription-delivery\.dispatch|NO_FACET/g;
+const DELIVERY_ERRORS = /delivery\.push\.dropped|subscription-delivery\.(deliver|cursor)|NO_FACET/g;
 const deliveryErrors = () => countMatches(worker.logs(), DELIVERY_ERRORS);
 const tallySnapshot = async (itx: any): Promise<any> =>
   itx.invoke("itx.facets.get('tally').snapshot()");

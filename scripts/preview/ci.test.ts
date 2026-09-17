@@ -59,11 +59,30 @@ test("the lifecycle owner encloses every fixed shard and cleanup waits for their
     needs: "prepare",
     if: "always()",
   });
-  expect(
-    workflow.jobs.finish.steps
-      .flatMap((step: any) => step.parallel || [])
-      .find((step: any) => step.name === "Erase slot data after all tests"),
-  ).toMatchObject({ if: "always() && steps.consumers.outputs.settled == 'true'" });
+  const steps = workflow.jobs.finish.steps;
+  const green = steps.findIndex((step: any) => step.id === "tests_passed");
+  const trace = steps.findIndex((step: any) => step.id === "trace");
+  const cleanup = steps.findIndex((step: any) => step.id === "erase");
+  expect(green).toBeGreaterThan(steps.findIndex((step: any) => step.id === "merge_reports"));
+  expect(trace).toBeGreaterThan(green);
+  expect(cleanup).toBeGreaterThan(trace);
+  expect(workflow.jobs.trace).toBeUndefined();
+  expect(steps[trace]).toMatchObject({
+    if: "always() && steps.consumers.outputs.settled == 'true'",
+    "timeout-minutes": 5,
+    env: {
+      CI_TRACE_GREEN: "${{ steps.tests_passed.outputs.ci-trace-green }}",
+      CI_TRACE_VALIDATION_END: "${{ steps.merge_reports.outputs.ci-trace-end }}",
+      CI_TRACE_GREEN_END: "${{ steps.tests_passed.outputs.ci-trace-end }}",
+    },
+  });
+  expect(steps[green]).toMatchObject({
+    if: "success() && needs.prepare.result == 'success' && steps.consumers.outputs.succeeded == 'true' && steps.merge_reports.outcome == 'success'",
+  });
+  expect(steps[cleanup]).toMatchObject({
+    if: "always() && steps.consumers.outputs.settled == 'true'",
+  });
+  expect(steps[cleanup].run).toContain("--restore");
 });
 
 test("result collection retains failures and rejects missing or foreign shard receipts", async () => {

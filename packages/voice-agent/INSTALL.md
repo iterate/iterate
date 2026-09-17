@@ -42,5 +42,5 @@ terminal event and may be sent before call acceptance.
 Verify from an Iterate checkout:
 
 ```bash
-doppler run --config prd -- pnpm cli voicelab talk --project <slug> --setup-only
+doppler run --config prd -- pnpm cli voicelab setup --project <slug>
 ```

@@ -47,10 +47,10 @@ test("the host shapes: `<app>--<project>` and `<app>.<project>` reach the same a
     expect(seen.status, await seen.clone().text()).toBe(200);
     expect(await seen.json()).toEqual({ principal: null, authorization: null, app: "echo" });
   }
-  // the apex: the bundled ConfigWorker's fetch — not found
+  // the apex: the bundled ConfigWorker's fetch — the project's bare homepage
   const apex = await call("https://doors-shapes.projects.test/", forged);
-  expect(apex.status).toBe(404);
-  expect(await apex.text()).toContain("Not found");
+  expect(apex.status).toBe(200);
+  expect(await apex.text()).toContain("Homepage of project doors-shapes");
   // a project's own config worker routes the apex; the label a visitor sent is gone
   await itx.provide("itx.worker", [
     "itx",

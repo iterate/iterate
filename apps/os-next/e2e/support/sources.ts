@@ -3,7 +3,7 @@
 // there is no producer to fetch it. Each test names the fixture it uses:
 //   ...source: SOURCES.site...
 
-import PRESENCE_PROCESSOR_SOURCE from "virtual:presence-processor-source";
+import PRESENCE_PROCESSOR_SOURCE from "../../src/generated/presence-processor-source.js";
 import type { WorkerSource } from "../../src/context/worker-loader.ts";
 
 /** THE fixture sources, keyed by fixture NAME — each value is the worker's modules, handed over

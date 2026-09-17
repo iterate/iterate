@@ -13,7 +13,7 @@
  * the same transport seam a real socket delivers on.
  */
 
-#include "fake_esp_idf.h"
+#include "esp_idf.h"
 #include "fake_esp_idf_platform.h"
 
 #include "iterate/kit/voice/loop.h"
@@ -169,22 +169,22 @@ static struct board board;
  * starts by putting the intent back down, exactly as a person hanging up does.
  */
 static void boot(void) {
-  iterate_kit_fake_esp_idf_reset();
+  iterate_kit_host_esp_idf_reset();
   iterate_kit_fake_platform_reset();
   memset(&board, 0, sizeof(board));
-  iterate_kit_fake_esp_idf_set_now_us(1000000);
+  iterate_kit_host_esp_idf_set_now_us(1000000);
   assert(
       iterate_kit_voice_loop_init(
           &board_ops, &voice_facts, &board));
   /* Boot ran to the end rather than parking: both audio tasks were asked for. */
-  assert(iterate_kit_fake_esp_idf_tasks_created() == 2U);
-  assert(!iterate_kit_fake_esp_idf_restart_requested());
+  assert(iterate_kit_host_esp_idf_tasks_created() == 2U);
+  assert(!iterate_kit_host_esp_idf_restart_requested());
   assert(board.started);
   iterate_kit_fake_platform_connect();
 }
 
 static void step(void) {
-  iterate_kit_fake_esp_idf_advance_ms(50U);
+  iterate_kit_host_esp_idf_advance_ms(50U);
   iterate_kit_voice_loop_step((uint64_t)(esp_timer_get_time() / 1000));
 }
 
@@ -768,7 +768,7 @@ static void conversation_control_opens_and_ends_a_call(void) {
  */
 static void nothing_physical_was_involved(void) {
   assert(!board.microphone_muted);
-  assert(!iterate_kit_fake_esp_idf_restart_requested());
+  assert(!iterate_kit_host_esp_idf_restart_requested());
   assert(board.presented > 0U);
 }
 
@@ -849,7 +849,7 @@ static void terminal_waits_for_outbox_headroom(void) {
   step();
   assert(sent_after_contains(
       before, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\""));
-  assert(!iterate_kit_fake_esp_idf_restart_requested());
+  assert(!iterate_kit_host_esp_idf_restart_requested());
   quiescent();
 }
 
@@ -1311,7 +1311,7 @@ static void an_unaccepted_activation_times_out_once(void) {
  * has to be reached from the loop's own clock while NOTHING else is happening.
  *
  * PINNED BECAUSE THE FIRST ATTEMPT GOT IT WRONG. The probe was first put beside
- * the call keepalive, inside a block that runs only while a voicelab is bound
+ * the call keepalive, inside a block that runs only while a voice_stream is bound
  * and ready — that is, only while the socket was busy anyway. It would have
  * passed every conversation test and kept exactly the connections that did not
  * need keeping.
@@ -1350,7 +1350,7 @@ static void answered_probes_are_liveness_without_any_pong(void) {
     pump();
   }
   assert(sent_after_count(before, "[\"whoami\"]") >= 7U);
-  assert(!iterate_kit_fake_esp_idf_restart_requested());
+  assert(!iterate_kit_host_esp_idf_restart_requested());
 }
 
 int main(void) {

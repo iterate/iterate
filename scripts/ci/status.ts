@@ -45,11 +45,16 @@ export default class CiStatus {
       },
     );
     console.log(`[ci:status] reached ${context}`);
+    if (process.env.CI_TRACE_ENABLED === "1")
+      console.log(
+        `@@ci-trace ${JSON.stringify({ kind: "milestone", name: milestone, time: Date.now() })}`,
+      );
   }
 
   /** Wait for a producer milestone, failing if its job stops without signaling. */
   async waitFor(producer: string, milestone: string) {
     console.log(`[ci:status] waiting for ${producer}/${milestone}`);
+    let linked = false;
     while (true) {
       const workflow = await this.workflow();
       const jobs = workflow.jobs.filter((job) => job.jobKey.endsWith(`:${producer}`));
@@ -58,6 +63,12 @@ export default class CiStatus {
       const job = jobs[0];
       const attempt = job.attempts[0];
       if (attempt) {
+        if (!linked && process.env.CI_TRACE_ENABLED === "1") {
+          console.log(
+            `@@ci-trace ${JSON.stringify({ kind: "dependency", targetId: attempt.attemptId, milestone })}`,
+          );
+          linked = true;
+        }
         const context = `ci/${this.workflowId}/${workflow.executions[0].executionId}/${job.jobId}/${attempt.attemptId}/${milestone}`;
         // Read the signal AFTER liveness. A final status write followed by job
         // termination must not be mistaken for a producer that forgot to signal.
@@ -93,6 +104,7 @@ export default class CiStatus {
       throw new Error("Specify a nonempty, unique set of consumer jobs");
     console.log(`[ci:status] waiting for all consumers: ${producers.join(", ")}`);
     let previous = "";
+    const linked = new Set<string>();
     while (true) {
       const workflow = await this.workflow();
       const jobs = producers.map((producer) => {
@@ -102,6 +114,19 @@ export default class CiStatus {
         if (matches[0].jobId === this.jobId) throw new Error("A job cannot wait for itself");
         return matches[0];
       });
+      if (process.env.CI_TRACE_ENABLED === "1") {
+        for (const job of jobs) {
+          const attempt = job.attempts[0];
+          // A queued job has no trace span yet. A skipped/cancelled job may never run.
+          if (!attempt && !terminal.has(job.status)) continue;
+          const targetId = attempt?.attemptId || job.jobId;
+          if (linked.has(targetId)) continue;
+          console.log(
+            `@@ci-trace ${JSON.stringify({ kind: "dependency", targetId, milestone: "" })}`,
+          );
+          linked.add(targetId);
+        }
+      }
       const summary = jobs.map((job) => `${job.jobKey}: ${job.status}`).join("; ");
       if (summary !== previous) console.log(`[ci:status] ${summary}`);
       previous = summary;
@@ -112,6 +137,68 @@ export default class CiStatus {
       }
       await delay(5_000, undefined, { signal: this.signal });
     }
+  }
+
+  /** Mark this job's GitHub check green while it continues; Depot owns its final outcome. */
+  async setPendingCheckGreen(summary: string) {
+    const workflow = await this.workflow();
+    if (workflow.jobs.find((job) => job.jobId === this.jobId)?.status !== "running")
+      throw new Error("This Depot job is no longer running");
+    if (workflow.jobs.some((job) => job.jobId !== this.jobId && job.status !== "finished"))
+      throw new Error("Cannot publish success before every preview producer has succeeded");
+    const checks = [];
+    for (let page = 1; ; page++) {
+      const { check_runs } = CheckRuns.parse(
+        await this.request(
+          "github",
+          `/repos/${this.env.GITHUB_REPOSITORY}/commits/${this.env.CI_HEAD_SHA}/check-runs?filter=all&per_page=100&page=${page}`,
+          null,
+        ),
+      );
+      checks.push(...check_runs);
+      if (check_runs.length < 100) break;
+    }
+    const matches = checks.filter((check) => {
+      if (check.app?.slug !== "depot-code-access" || !check.details_url) return false;
+      const url = new URL(check.details_url);
+      return (
+        url.origin === "https://depot.dev" &&
+        url.pathname === `/orgs/${this.org}/workflows/${this.workflowId}` &&
+        url.searchParams.get("job") === this.jobId
+      );
+    });
+    if (matches.length !== 1 || matches[0].status !== "in_progress")
+      throw new Error("Expected one running GitHub check for this exact Depot job");
+    const check = matches[0];
+    const response = await fetch(
+      `https://api.github.com/repos/${this.env.GITHUB_REPOSITORY}/check-runs/${check.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          authorization: `Bearer ${this.env.GITHUB_TOKEN}`,
+          accept: "application/vnd.github+json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          status: "completed",
+          conclusion: "success",
+          output: {
+            title: "Preview test summary",
+            summary,
+          },
+        }),
+        signal: AbortSignal.any([this.signal, AbortSignal.timeout(15_000)]),
+      },
+    );
+    if (!response.ok) throw new Error(`Updating own GitHub check returned HTTP ${response.status}`);
+    const greenAt = Date.now();
+    const marker = JSON.stringify({ kind: "check-green", time: greenAt, checkId: check.id });
+    await appendFile(this.env.GITHUB_OUTPUT, `ci-trace-green=${marker}\n`);
+    if (process.env.CI_TRACE_ENABLED === "1") console.log(`\n@@ci-trace ${marker}`);
+    console.log(
+      `[ci:status] check ${check.id} set green at ${new Date(greenAt).toISOString()}; job continues`,
+    );
+    return { checkId: check.id };
   }
 
   private async workflow() {
@@ -200,3 +287,14 @@ const Statuses = z.object({
   ),
 });
 const terminal = new Set(["finished", "failed", "cancelled", "skipped"]);
+
+const CheckRuns = z.object({
+  check_runs: z.array(
+    z.object({
+      id: z.number(),
+      status: z.string(),
+      details_url: z.url().nullable(),
+      app: z.object({ slug: z.string() }).nullable(),
+    }),
+  ),
+});

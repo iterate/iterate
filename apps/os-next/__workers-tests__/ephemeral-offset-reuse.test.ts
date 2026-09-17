@@ -77,14 +77,12 @@ test("stream-kept cursor: an alarm pump with ephemerals at head leaves the curso
   // An alarm pass, run directly (a caught-up cursor row and a live facet arm nothing, so there is
   // no alarm to fire): deliverEveryCursorSubscription → read(mark) proves only through the mark →
   // `dig` is caught up, nothing written.
-  await s.invoke([...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "armer"), ["snapshot"]]);
   await runInDurableObject(s, (instance) => instance.alarm());
   const row1 = (await s.invoke("itx.subscriptions.get('dig')")) as {
     cursor?: { confirmedOffset: number };
   };
   expect(row1.cursor!.confirmedOffset).toBe(highestDurableOffset); // the cursor never leaves durable ground
 
-  await sleep(400); // let the armer facet's fire-and-forget live-state delta land before the clock jumps
   await quiesce(ctx);
   await evictDurableObject(s);
   const rowKv = (await s.invoke("itx.subscriptions.get('dig')")) as {

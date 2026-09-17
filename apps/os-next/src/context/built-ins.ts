@@ -306,6 +306,10 @@ export interface BuiltInScope extends LibraryRoots {
     ): Promise<{ name: string }>;
     disable(name: string): Promise<void>;
     list(): SubscriptionListEntry[];
+    /** A hosted processor's claim on this context's alarm: "revive me by `at`" — the engine holds
+     *  one while a `runInBackground` attempt is in flight (packages/iterate stream/processor.ts rule
+     *  3) — or `null` to release it. Durable on the context (a kv row), never a log event. */
+    claim(name: string, at: number | null): Promise<void>;
   };
   /** The stateless host: `get({ source, cacheKey?, className?, props? })` → a `WorkerEntrypoint` in
    *  its own confined isolate (no DO, no storage) — ANY method it exports, reached by name (`run`,
@@ -415,6 +419,8 @@ interface BuildBuiltInsDeps {
   waitForEvent: BuiltInScope["waitForEvent"];
   /** The facet door, verbatim (accepted trade: a busy stateful facet pins its stream). */
   facets: BuiltInScope["facets"];
+  /** The DO's claim table for hosted processors (`processors.claim`). */
+  claimFacetAlarm: (name: string, at: number | null) => void;
   /** The `ItxEntrypoint` stub a loaded worker gets as `env.ITX` and `globalOutbound` — the loopback
    *  minted once for this context (the DO's `#itxEntrypoint`; iterate-context.ts's `ItxEntrypoint` for why it is never a
    *  raw getByName stub). */
@@ -735,6 +741,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         });
       },
       list: () => deps.subscriptions.list().filter((row) => row.hostedFacet),
+      claim: async (name, at) => deps.claimFacetAlarm(name, at),
     },
     rewriteRules: deps.rewriteRules,
     // A genuine InvokeHandle so `workers.get(spec).run()` pipelines on every lane (workerd#6873). A

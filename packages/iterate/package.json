@@ -287,7 +287,6 @@
     "@orpc/client": "1.13.14",
     "@orpc/server": "1.13.14",
     "@tanstack/react-query": "^5.101.2",
-    "@tanstack/react-router": "1.168.3",
     "capnweb": "npm:@iterate-com/capnweb@0.12.2",
     "json5": "^2.2.3",
     "oauth4webapi": "^3.8.5",

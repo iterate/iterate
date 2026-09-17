@@ -8,20 +8,25 @@
 // deployed lane runs ONE real turn through Workers AI.
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { freshCtx, openItx, readAll, sleep, until } from "./support/client.ts";
-import { deployedOnly, projectHostsAreLocal } from "./support/project-host.ts";
+import { collector, freshCtx, openItx, readAll, sleep, until } from "./support/client.ts";
+import { deployedOnly } from "./support/project-host.ts";
 
-/** A model that answers from a script of replies, in order, recording what it was asked. */
+/** A model that answers from a script of replies, in order, recording what it was asked. A reply
+ *  may take its time (`{ text, afterMs }`): the request stays in flight that long — what an
+ *  interruption needs to have something to cut short. The fake answers WHOLE (a lent stub carries
+ *  no stream), so the loop journals its one chunk window; streaming proper is the deployed story. */
 class ScriptedAi extends RpcTarget {
   readonly calls: { model: string; messages: { role: string; content: string }[] }[] = [];
-  constructor(private readonly replies: (string | Error)[]) {
+  constructor(private readonly replies: (string | Error | { text: string; afterMs: number })[]) {
     super();
   }
-  run(model: string, inputs: { messages: { role: string; content: string }[] }) {
+  async run(model: string, inputs: { messages: { role: string; content: string }[] }) {
     this.calls.push({ model, messages: inputs.messages });
     const reply = this.replies[Math.min(this.calls.length, this.replies.length) - 1];
     if (reply instanceof Error) throw reply;
-    return { response: reply };
+    if (typeof reply === "string") return { response: reply };
+    await sleep(reply.afterMs);
+    return { response: reply.text };
   }
 }
 
@@ -39,10 +44,6 @@ const onWorkersAi = (
     type: "events.iterate.com/agent/configured",
     payload: { config: { llm: { model } } },
   });
-/** A deployed story that speaks to OpenAI: the run's key becomes the project's `openai` secret. */
-const openaiKey = (): string => process.env.OPENAI_API_KEY || "";
-const withOpenAi = (itx: { secrets: { set: (...a: unknown[]) => Promise<unknown> } }) =>
-  itx.secrets.set("openai", openaiKey(), { urls: ["https://api.openai.com"] });
 
 const assistantWords = (log: { type: string; payload?: unknown }[]) =>
   log
@@ -133,13 +134,17 @@ test("the loop: a person's words → the model → a script run against itx → 
     "agents/context-added", // the developer: the script's result
     "agent/llm-request-requested",
     "agent/llm-request-settled",
-    "agents/context-added", // the assistant: prose alone
-    "agents/web-message-sent",
+    "agents/context-added", // the assistant: a bare reply (no tag)
+    "capability-host/script-run-requested", // the plain-response handler (itx.chat.sendMessage)
+    "agents/web-message-sent", // its sendMessage
+    "capability-host/script-run-settled",
   ]);
   const said = (type: string) => log.filter((e) => e.type === type).map((e) => e.payload);
   expect(said("events.iterate.com/agents/web-message-sent")).toEqual([
+    // The tag's prose is sent directly (with the request it came from); the bare reply is sent by
+    // the plain-response handler's sendMessage — a plain message, no request offset.
     { message: "Let me store that.", llmRequestOffset: expect.any(Number) },
-    { message: "Stored 42 under answer.", llmRequestOffset: expect.any(Number) },
+    { message: "Stored 42 under answer." },
   ]);
   expect(said("events.iterate.com/agent/summary-updated")).toEqual([
     { activity: "Storing the answer" },
@@ -390,35 +395,156 @@ test("an attached image is stored under the agent's path and SHOWN to the model 
   });
 });
 
-/** The deployed stories that speak to the real default model need the run's OpenAI key. */
-const deployedWithOpenAi = test.skipIf(projectHostsAreLocal() || !openaiKey());
+test("streamed: the answer reaches a live subscriber as ephemeral chunk windows before it settles — never a stored row", async () => {
+  const itx = openItx(freshCtx("agent-chunks"));
+  const support = itx.cd("/agents/support");
+  const ai = new ScriptedAi(["Four words, no code."]);
+  await support.provide("itx.ai", ai);
+  const windows = collector();
+  await support.subscribe({
+    name: "chunks",
+    consumes: ["events.iterate.com/agent/llm-response-chunks"],
+    target: windows.fn,
+  });
+  const agent = itx.agents.get("/agents/support");
+  await agent.create();
+  await onWorkersAi(support);
+  await agent.message("Say four words.");
+  const log = await until("the settled request", async () => {
+    const all = await readAll(support);
+    return all.some((e) => e.type === "events.iterate.com/agent/llm-request-settled")
+      ? all
+      : undefined;
+  });
+  const requested = log.find((e) => e.type === "events.iterate.com/agent/llm-request-requested");
+  await until("the chunk window", () => windows.invocations.length >= 1);
+  // The fake answers whole, so its answer is ONE window: the request it belongs to, the provider's
+  // chunk verbatim (Workers AI's `{ response }`), the first sequence number.
+  expect(windows.types()).toEqual(["events.iterate.com/agent/llm-response-chunks"]);
+  expect(windows.invocations[0]!.events[0]!.payload).toEqual({
+    llmRequestOffset: requested.offset,
+    chunks: [{ response: "Four words, no code." }],
+    sequence: 0,
+  });
+  // Ephemeral: the durable log holds no chunk row, and the settlement carries the text.
+  expect(log.filter((e) => e.type === "events.iterate.com/agent/llm-response-chunks")).toEqual([]);
+  expect(
+    log.find((e) => e.type === "events.iterate.com/agent/llm-request-settled")!.payload.result,
+  ).toEqual({ status: "succeeded", text: "Four words, no code." });
+});
 
-deployedWithOpenAi(
-  "DEPLOYED: one real turn through the default model, OpenAI's astra read fast — a person answered in prose",
+test("interrupted: the person's next words cut the running answer short — settled cancelled, and those words start the next turn", async () => {
+  const itx = openItx(freshCtx("agent-interrupt"));
+  const support = itx.cd("/agents/support");
+  // The first answer takes long enough to be cut short; the second is what the person gets.
+  const ai = new ScriptedAi([{ text: "A long answer that never lands.", afterMs: 8_000 }, "Sure."]);
+  await support.provide("itx.ai", ai);
+  const agent = itx.agents.get("/agents/support");
+  await agent.create({ systemPrompt: "Be terse." });
+  await onWorkersAi(support);
+  await agent.message("Tell me everything.");
+  await until("the request is in flight", async () =>
+    (await readAll(support)).some(
+      (e) => e.type === "events.iterate.com/agent/llm-request-requested",
+    ),
+  );
+  await sleep(500); // the runner has dialed the model
+  // apps/os's interrupt: a developer item from the person, its policy the cancellation.
+  await support.append({
+    type: "events.iterate.com/agents/context-added",
+    payload: {
+      role: "developer",
+      content: "The user interrupted the in-progress response from the web chat.",
+      actor: { type: "user" },
+      llmRequestPolicy: { behaviour: "interrupt-current-request" },
+    },
+  });
+  const log = await until(
+    "the interruption's settlement, then the next turn's answer",
+    async () => {
+      const all = await readAll(support);
+      return all.filter((e) => e.type === "events.iterate.com/agent/llm-request-settled").length ===
+        2
+        ? all
+        : undefined;
+    },
+    30_000,
+  );
+  const settled = log
+    .filter((e) => e.type === "events.iterate.com/agent/llm-request-settled")
+    .map((e) => e.payload.result);
+  // The fake streams nothing, so no partial text rides the cancellation.
+  expect(settled).toEqual([
+    { status: "cancelled", reason: "interrupted-by-user-input" },
+    { status: "succeeded", text: "Sure." },
+  ]);
+  // The cut-short answer never became the assistant's words; the second request saw the
+  // interruption as the newest words.
+  expect(assistantWords(log)).toEqual(["Sure."]);
+  expect(ai.calls).toHaveLength(2);
+  expect(ai.calls[1]!.messages.at(-1)!.content).toContain("interrupted the in-progress response");
+  expect((await support.facets.get("agent").snapshot()).state).toMatchObject({
+    openRequest: null,
+    pendingLlmRequestTrigger: null,
+    paused: null,
+  });
+});
+
+deployedOnly(
+  "DEPLOYED: one real turn through the default model, OpenAI's astra streamed from the Responses API on Cloudflare's billing — chunk windows fly, the settlement carries the usage",
   async () => {
     const itx = openItx(freshCtx("agent-real"));
-    await withOpenAi(itx);
+    const support = itx.cd("/agents/support");
+    const windows = collector();
+    await support.subscribe({
+      name: "chunks",
+      consumes: ["events.iterate.com/agent/llm-response-chunks"],
+      target: windows.fn,
+    });
     const agent = itx.agents.get("/agents/support");
     await agent.create();
-    await agent.message("Reply with the single word: pong. No code block.");
-    const words = await until(
+    await agent.message(
+      "Reply with the single word: pong, then one sentence about what a pong is. No code block.",
+    );
+    const log = await until(
       "the assistant's prose",
       async () => {
-        const said = assistantWords(await readAll(itx.cd("/agents/support")));
-        return said.length > 0 ? said : undefined;
+        const all = await readAll(support);
+        return assistantWords(all).length > 0 ? all : undefined;
       },
       120_000,
     );
-    expect(words.join("\n")).toMatch(/pong/i);
+    expect(assistantWords(log).join("\n")).toMatch(/pong/i);
+    // The stream: at least one window of Responses API events, in order, for this request.
+    const requested = log.find((e) => e.type === "events.iterate.com/agent/llm-request-requested");
+    await until("the chunk windows", () => windows.invocations.length >= 1);
+    const chunkEvents = windows.invocations.flatMap((i) => i.events);
+    expect(chunkEvents.every((e) => e.payload.llmRequestOffset === requested.offset)).toBe(true);
+    expect(chunkEvents.map((e) => e.payload.sequence)).toEqual(
+      chunkEvents.map((_, index) => index),
+    );
+    const deltas = chunkEvents.flatMap((e) =>
+      e.payload.chunks.filter((c: { type?: string }) => c.type === "response.output_text.delta"),
+    );
+    expect(deltas.length).toBeGreaterThan(0);
+    expect(deltas.map((c: { delta: string }) => c.delta).join("")).toMatch(/pong/i);
+    // The cost, twice: on the settlement and as the report a feed shows the context's fullness by.
+    const settled = log.find((e) => e.type === "events.iterate.com/agent/llm-request-settled");
+    expect(settled.payload.result).toMatchObject({
+      status: "succeeded",
+      usage: { inputTokens: expect.any(Number), outputTokens: expect.any(Number) },
+    });
+    expect(
+      log.find((e) => e.type === "events.iterate.com/agent/token-usage-reported")?.payload,
+    ).toMatchObject({ model: "gpt-6-astra", maxContextTokens: 272_000 });
   },
   150_000,
 );
 
-deployedWithOpenAi(
+deployedOnly(
   "DEPLOYED: the default model SEES an attached image — a red square is called red",
   async () => {
     const itx = openItx(freshCtx("agent-vision-real"));
-    await withOpenAi(itx);
     const agent = itx.agents.get("/agents/support");
     await agent.create();
     await agent.message({

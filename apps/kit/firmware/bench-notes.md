@@ -58,9 +58,10 @@ not only by ASR text.
 
 Every counter must move and have a reader. `heapFree` includes PSRAM; inspect
 `internalFree`, `internalMin` and `internalLargest` when TLS, Wi-Fi or DMA fail.
-Use `health()` before and after an air-path proof. `voicelab boards` speaks via
-the Mac speaker, checks board microphone uplink, playout and transcript, then
-hangs up; never run it on a board in use.
+Use `health()` before and after an air-path proof.
+`apps/os-next/scripts/voice-board.ts --device <device_name>` speaks via the Mac
+speaker, checks board microphone uplink, playout and transcript, then hangs up;
+never run it on a board in use.
 
 The legacy `spkDrops` counter counts response-start controls, even when no PCM
 is queued. Use `spkDiscarded` for discarded PCM, `spkSupersededMidplay` for
@@ -76,7 +77,8 @@ the delta alongside actual speaker writes, discards, playback failures, and
 starvation. A counter increment alone does not establish audible data loss.
 
 Opening a serial monitor reboots many boards. Resolve MAC to USB port passively
-with `ioreg`; `esptool read_mac` resets the board. Any early return after
+with `tools/port-for-mac.sh <ROM MAC>` (it reads `ioreg`); `esptool read_mac`
+resets the board. Any early return after
 `esp_task_wdt_add(NULL)` causes an unobserved watchdog reboot: park and expose
 the fault instead.
 
