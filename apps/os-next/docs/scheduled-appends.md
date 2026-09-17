@@ -1,7 +1,7 @@
 # Scheduled appends
 
 A userspace facet can ask its context to append durable events in the future. The context shares
-its one native alarm between schedules, subscription delivery and idle cleanup. The facet consumes
+its one native alarm between schedules, subscription delivery and hosted processors' claims. The facet consumes
 scheduled events through its ordinary processor, including after disconnection and eviction.
 
 ```ts
@@ -90,22 +90,27 @@ business event, use `at: new Date(Date.parse(event.createdAt) + delayMs).toISOSt
 
 ## The one alarm
 
-A context has one native alarm and three reasons to want it. None of them is stored as an alarm
-request: each source answers "when next?" from state it already keeps, and `AlarmCoordinator`
-(`src/alarm-coordinator.ts`) arms the earliest answer or deletes the alarm when there is
-none. Reconciliation runs after every commit, every pin use and every delivery change.
+A context has one native alarm, and only a DURABLE OBLIGATION wants it — something a fresh
+incarnation would find and owe again: a schedule, or a claim ("come back by T") held for a cursor
+row or a hosted processor. None is stored as an alarm request: each source answers "when next?"
+from state it already keeps, and `AlarmCoordinator` (`src/alarm-coordinator.ts`) arms the earliest
+answer or deletes the alarm when there is none. Reconciliation runs after every commit, every claim
+and every delivery change. Pins — a borrowed rpc stub, the library's open capnweb socket, the two
+things that keep an actor resident on the edge — are memory, and memory releases them: a 30 s timer
+after the pin's last use returns the stubs and closes the sockets (`#pinUsed`). Nothing in memory
+is ever a reason to wake.
 
-| Source                | Its deadline                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Scheduled appends     | the earliest pending `nextAt` in core state (none while paused or when every definition is parked)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| Subscription delivery | per cursor row (a target that, through the rules, resolves to neither a facet nor a lent rpc stub — decided statically, never by evaluating it): the time its cursor carries — a ladder rung, or the claim written before every awaited durable call (attempt + 1, the same 20 s instant the row already claims, durable: a death mid-call is retried by the next incarnation, fifteen deaths halt the row) — else, while the cursor sits behind the durable mark, 20 s from when it was first seen behind; a row a loop holds claims that 20 s, renewed at every pass end; a halted row owes nothing, nor does a dangling one (no rule resolves its target — it waits for the rule) |
-| Idle quiesce          | the pins' last use + 30 s, rounded up to the next 10 s — a borrowed rpc stub called, an open capnweb socket used (the two things that keep an actor resident, both measured; an HTTP client holds nothing); nothing else moves it, and none while nothing is pinned. A facet is not a pin: on the edge it does not keep the actor resident (it dies with the actor within seconds), so nothing arms an alarm for it, and a release never aborts one                                                                                                                                                                                                                                  |
+| Source                | Its deadline                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Scheduled appends     | the earliest pending `nextAt` in core state (none while paused or when every definition is parked)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Subscription delivery | per cursor row (a target that, through the rules, resolves to neither a facet nor a lent rpc stub — decided statically, never by evaluating it): EXACTLY the time its persisted cursor carries — written the instant its loop starts on a row behind the durable mark, inside the commit's own hook ("an attempt begins: come back by now + 20 s", the attempt counted; fifteen without an ack or a failure halt the row), written by the retry ladder as the rung, cleared by the ack, spent when the loop finds nothing owed or a target nothing resolves; a halted row owes nothing |
+| Hosted processors     | per facet row: the claim its engine holds while a `runInBackground` attempt is in flight (`processors.claim`, a kv row: "revive me by T", 20 s out); the pass spends a due claim and calls the facet's `revive()` — catch up, run the at-head pass — and an attempt still in flight claims again, later each time (40 s, 80 s, … 30 min), so a hung attempt costs a few wakes an hour and a settled one releases the claim                                                                                                                                                             |
 
 A wake makes no loop: `stream/woken` is a durable event like any other, and every `*` subscription
 receives it (`consumesEvent`, the one consumes rule, has no carve-out). What keeps it from looping is
 that delivering it creates no reason to wake again: the config row's delivery is claimed only while
-owed and acked at once; a request — a loaded worker's `env.ITX` loopback included — moves no clock;
-only a pin's own use keeps the idle deadline. The alarm handler records the wake itself
+owed and acked at once; a request — a loaded worker's `env.ITX` loopback included — claims
+nothing. The alarm handler records the wake itself
 (`stream/woken { reason: "alarm" }`, inside its pass — workerd hides a firing alarm from `getAlarm()`
 for the whole run, so no constructor can tell; every other door records `"request"`), and its
 delivery acks within the pass, so an alarm wake that finds nothing else owed writes no alarm at all.
@@ -114,26 +119,25 @@ seconds like any other, and the facet dies with it — so nothing arms an alarm 
 alarm could only construct the next incarnation, whose wake record would materialize the facet again,
 a wake per quiet period. A `*` processor facet therefore costs a wake nothing beyond its own
 materialization. Only a borrowed rpc stub or an open capnweb socket (measured: both keep the actor
-resident; an HTTP client does not) arms the idle deadline, and the release that runs for them aborts live facets too — which is
-what un-pins a facet-hosting actor where the runtime does keep it resident (workerd's harness).
+resident; an HTTP client does not) is ever released, by a 30 s timer after its last use — no alarm.
+Where the runtime does keep a facet-hosting actor resident (workerd's harness) a test releases the
+facets too, through the DO-only door (`releasePins`).
 
 One hold keeps the alarm from being moved under a handler: nothing is written while `alarm()` runs —
 its alarm stays stored, so a pass that throws is retried by the runtime (2s·2ⁿ, six tries), and a
 completed pass sets the next deadline once. The alarm read at construction is only the dedupe seed:
 every reason is derived again by the constructor's first reconcile — a due schedule or claim derives
-the same time (no write), and a stale idle deadline of a dead incarnation is superseded, which
-cancels a run nothing durable wanted. No past delivery claim leaves a pass: a pass renews what it
-could not settle (a row a loop still holds is claimed 20 s from the pass end), and a row an
-unreadable event stops is halted. There is no clamp (the
+the same time (no write). No past delivery claim leaves a pass: a pass joins and awaits every loop
+it finds running, and a row an unreadable event stops is halted. There is no clamp (the
 runtime clamps a past time to now and refuses one at or before the epoch, which schedule validation
 rejects) and no keep-earlier rule; every `setAlarm` is a billed write, so the only dedupe is "the
 wanted time is what we last wrote".
 
 Every alarm pass is traced as ephemeral `events.iterate.com/stream/trace/alarm` events whose
 payload is an `AlarmTrace` (`src/iterate-context-durable-object.ts`): `alarm-fired` with what was
-armed and every deadline the pass found (each source's, with the claiming delivery rows), `quiesce`
-when it releases the idle context, `alarm-pass` with what it armed next or `alarm-abandoned` with
-what it threw — plus the durable head, the pins' last use, and what is pinned. Only a pass traces:
+armed and every deadline the pass found (each source's, with the claiming delivery rows and
+processors), `alarm-pass` with what it armed next or `alarm-abandoned` with what it threw — plus
+the durable head and what is pinned. Only a pass traces:
 a reconcile outside one consumes no offset. `waitForEvent({ type })`
 sees a trace live; `itx.readEvents(afterOffset, limit, { includeEphemeral: true })` reads it back
 afterwards, merged in offset order with the durable rows — the stream keeps the current
@@ -158,7 +162,7 @@ schedules leave the projection; history remains in the log.
 ## Executable examples
 
 - `e2e/scheduled-appends.e2e.test.ts`: eleven deployed tests covering facet timeout batches, replacement,
-  versioned cancellation, processor intent, pause/resume, validation, disconnection past idle cleanup,
+  versioned cancellation, processor intent, pause/resume, validation, disconnection past the pins' release,
   two facet instances sharing a local key, recurring events, idempotent receipts after completion, and cancellation using inspection rows.
 - `e2e/support/scheduled-append-facet.ts`: complete userspace sources with no alarm handler or native
   alarm storage. `start(job, when)` supports both deadlines and intervals; `finish(receipt)` cancels.

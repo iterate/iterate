@@ -12,11 +12,11 @@
 // append boundary (stream/core-processor.ts `normalizeControlEvent`) validates + canonicalizes the
 // literal; no event-builder helper stands between the caller and the event. The pins:
 //
-//   • the idle deadline's reason to exist: a probe (`itx.facets.get('core').snapshot()`) on a
+//   • the alarm serves durable obligations only: a probe (`itx.facets.get('core').snapshot()`) on a
 //     never-touched ctx MATERIALIZES it (the constructor's `Stream.appendBirthRecord()` writes
-//     created + woken before any door opens) yet arms NO alarm — #lastPinUseMs
-//     arms only when there is something to release (a borrowed rpc stub, an open socket); only
-//     storage.getAlarm() can see that (the e2e lane pins the records but cannot read the alarm);
+//     created + woken before any door opens) yet arms NO alarm — a pin (a borrowed rpc stub, an
+//     open socket) is released by a timer, never the alarm; only storage.getAlarm() can see that
+//     (the e2e lane pins the records but cannot read the alarm);
 //   • the doors themselves: the four deleted configuration verbs are gone; the rewrite-rule EVENT's
 //     match is canonicalized at the append BOUNDARY (a Workers-RPC caller bypasses the edge, appends a
 //     literal, and the DO normalizes it — no builder in between); and a table row is

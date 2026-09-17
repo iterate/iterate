@@ -619,9 +619,9 @@ probe(
         .map(
           (t) =>
             `  ${new Date(t.at).toISOString()} ${t.reason} ` +
-            `${t.alarm.before}→${t.alarm.after} idle=${t.deadlines.idle} ` +
+            `${t.alarm.before}→${t.alarm.after} ` +
             `delivery=${JSON.stringify(t.deadlines.delivery.map((d) => [d.name, d.at, d.attempt]))} ` +
-            `facets=${JSON.stringify(t.liveFacets)} lastPinUse=${t.lastPinUseMs}`,
+            `claims=${JSON.stringify(t.deadlines.claims)} facets=${JSON.stringify(t.liveFacets)}`,
         )
         .join("\n");
     let itx = openItx(ctx);

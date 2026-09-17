@@ -102,16 +102,18 @@ function parseIterateContextDurableObjectName(name: string | undefined) {
 }
 
 /** How long a context's PINS stay unused — no borrowed rpc stub called, no open socket used —
- *  before the alarm returns the stubs and closes the sockets so the actor can hibernate. */
+ *  before a timer returns the stubs and closes the sockets so the actor can hibernate. A pin lives
+ *  and dies in memory, so its release needs no durable alarm: the timer dies with the actor, and so
+ *  do the pins. */
 const IDLE_QUIESCE_AFTER_MS = 30_000;
 /** How long one facet call may take before the facet is aborted (a call that never answers would
  *  hold the quiesce, and with it this actor, forever). */
 const FACET_CALL_WATCHDOG_MS = 60_000;
 /** ONE ALARM PASS, as the DO saw it — the payload of the ephemeral `stream/trace/alarm` event,
- *  appended as the pass starts (`alarm-fired`, with what was armed and every deadline it found),
- *  when it releases the idle context (`quiesce`), and as it ends (`alarm-pass` with what it armed
- *  next, or `alarm-abandoned` with what it threw). Only a pass traces: a reconcile outside one —
- *  a commit, a pin's use, a delivery settling — consumes no offset, so an incarnation that never
+ *  appended as the pass starts (`alarm-fired`, with what was armed and every deadline it found)
+ *  and as it ends (`alarm-pass` with what it armed next, or `alarm-abandoned` with what it threw).
+ *  Only a pass traces: a reconcile outside one — a commit, a claim, a delivery settling —
+ *  consumes no offset, so an incarnation that never
  *  wakes by alarm leaves offsets exactly as its own events placed them. An ordinary ephemeral:
  *  `waitForEvent` sees it live, `readEvents(…, { includeEphemeral: true })` reads it back from the
  *  stream's recent-ephemerals ring. NEVER an input: the DO's commit
@@ -120,7 +122,7 @@ const FACET_CALL_WATCHDOG_MS = 60_000;
  *  the incarnation). */
 export type AlarmTrace = {
   at: number;
-  reason: "alarm-fired" | "quiesce" | "alarm-pass" | "alarm-abandoned";
+  reason: "alarm-fired" | "alarm-pass" | "alarm-abandoned";
   /** What an abandoned pass threw. */
   error?: string;
   /** The physical alarm as this incarnation knew it when the pass started (`before` — null when
@@ -128,16 +130,15 @@ export type AlarmTrace = {
   alarm: { before: number | null; after: number | null };
   deadlines: {
     schedule: number | null;
-    idle: number | null;
-    /** The rows holding a claim, earliest first, at most 32. */
+    /** The cursor rows holding a claim, earliest first, at most 32. */
     delivery: DeliveryDeadline[];
     deliveryOmitted: number;
+    /** The hosted processors holding a claim (`processors.claim`): a revive owed by `at`. */
+    claims: { name: string; at: number }[];
   };
   durableHead: number;
   /** On `alarm-fired`: how many schedules this pass will append. */
   dueSchedules?: number;
-  /** When a pin was last used — null when nothing is pinned (`#lastPinUseMs`). */
-  lastPinUseMs: number | null;
   facetWorkInFlight: number;
   /** Names, at most 32. */
   liveFacets: string[];
@@ -280,6 +281,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // here: the first door to open names the wake (`appendWakeRecord` — `alarm()` says "alarm").
     this.ctx.blockConcurrencyWhile(async () => {
       this.#alarms.restore(await this.ctx.storage.getAlarm());
+      for (const [key, at] of this.ctx.storage.kv.list({ prefix: "facet-claim:" }))
+        this.#facetClaims.set(key.slice("facet-claim:".length), at as number);
       // Initialize the log before accepting requests. The root config worker subscribes once; its
       // idempotency key preserves that subscription across incarnations.
       this.#stream.appendBirthRecord();
@@ -441,17 +444,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** THE LIBRARY (library.ts): its verbs closed over a genuine InvokeHandle over `invoke`, so a
    *  library call's `itx.fetch(...)` resolves through THIS context's rules (a test may shadow
-   *  `itx.fetch`) with zero hops. An open capnweb socket it holds pins this actor awake; the idle quiesce releases it. */
+   *  `itx.fetch`) with zero hops. An open capnweb socket it holds pins this actor awake; the idle
+   *  release (`#pinUsed`) closes it. */
   readonly #library = buildLibrary(
     // Every call the library makes (a connection opening, a call through it) is a use of the
-    // library's pin: the idle clock (`#lastPinUseMs`) runs from the last one.
-    new InvokeHandle((steps) => {
-      this.#libraryLastUsedMs = Date.now();
-      return this.invoke(["itx", ...steps]).finally(() => {
-        this.#libraryLastUsedMs = Date.now();
-        this.#alarms.reconcile();
-      });
-    }) as unknown as LibraryItx,
+    // library's pin: the quiet period runs from the call's end.
+    new InvokeHandle((steps) =>
+      this.invoke(["itx", ...steps]).finally(() => this.#pinUsed()),
+    ) as unknown as LibraryItx,
   );
 
   /** The own-context adapter used by built-ins: a loopback (`itx.cd(<own path>)`, the config
@@ -503,24 +503,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // `.hello()` on every lane (workerd's classifier rejects a Proxy, #6873), branded RpcStubHandle
     // for the delivery loop.
     rpcStubs: {
-      // A BORROW IS A USE: stamped BEFORE the call (the borrow lands while the call is in flight,
-      // and a reconcile meanwhile must read a fresh use, never an epoch one) and AFTER it (this
-      // invoke may have borrowed the stub, and a borrowed stub is exactly what the idle clock exists
-      // to return — the arm must not wait for the next call).
+      // A BORROW IS A USE: the quiet period runs from the call's end (this invoke may have borrowed
+      // the stub, and a borrowed stub is exactly what the release exists to return).
       get: (rpcStubKey) =>
-        new RpcStubHandle(async (itxExpressionSteps) => {
-          this.#rpcStubsLastUsedMs = Date.now();
-          try {
-            return await this.#rpcStubs.invokeRpcStub(rpcStubKey, itxExpressionSteps);
-          } finally {
-            this.#rpcStubsLastUsedMs = Date.now();
-            this.#alarms.reconcile();
-          }
-        }),
+        new RpcStubHandle((itxExpressionSteps) =>
+          this.#rpcStubs
+            .invokeRpcStub(rpcStubKey, itxExpressionSteps)
+            .finally(() => this.#pinUsed()),
+        ),
       list: () => this.#rpcStubs.listRpcStubKeys(),
     },
     // The facets view is PARENT-LOCAL — the facets live here and can never move (workerd#6702:
     // sockets never leave the parent). Branded FacetHandle for the delivery loop.
+    claimFacetAlarm: (name, at) => this.#claimFacetAlarm(name, at),
     facets: {
       get: (name, spec) =>
         new FacetHandle((itxExpressionSteps) => this.#invokeFacet(name, spec, itxExpressionSteps)),
@@ -578,9 +573,24 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     deadlines: () => [
       this.#stream.nextScheduledAppendAt(),
       this.#subscriptionDelivery.deadlines()[0]?.at ?? null,
-      this.#idleDeadlineAt(),
+      this.#facetClaims.size === 0 ? null : Math.min(...this.#facetClaims.values()),
     ],
   });
+
+  /** THE CLAIMS of hosted processors on this context's alarm (`processors.claim`): name → the time
+   *  a `revive()` is owed by. A kv row each, so a claim outlives the incarnation that made it —
+   *  that is the whole point. Restored in the constructor; spent by the pass that serves it. */
+  readonly #facetClaims = new Map<string, number>();
+  #claimFacetAlarm(name: string, at: number | null): void {
+    if (at === null) {
+      this.#facetClaims.delete(name);
+      this.ctx.storage.kv.delete(`facet-claim:${name}`);
+    } else {
+      this.#facetClaims.set(name, at);
+      this.ctx.storage.kv.put(`facet-claim:${name}`, at);
+    }
+    this.#alarms.reconcile();
+  }
 
   #traceAlarm(
     reason: AlarmTrace["reason"],
@@ -595,12 +605,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       alarm: { before, after: this.#alarms.snapshot().armedAt },
       deadlines: {
         schedule: this.#stream.nextScheduledAppendAt(),
-        idle: this.#idleDeadlineAt(),
         delivery: delivery.slice(0, 32),
         deliveryOmitted: Math.max(0, delivery.length - 32),
+        claims: [...this.#facetClaims].map(([name, at]) => ({ name, at })),
       },
       durableHead: this.#stream.highestDurableOffset(),
-      lastPinUseMs: this.#lastPinUseMs(),
       facetWorkInFlight: this.#facetWorkInFlight,
       liveFacets: [...this.#liveFacetNames].slice(0, 32),
       borrowedRpcStubs: this.#rpcStubs.hasBorrowedRpcStubs(),
@@ -647,31 +656,23 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   // ── the #6800 quiesce: idle facets un-pinned so this actor can hibernate ──
 
-  /** When a borrowed rpc stub was last called (any of them: the quiesce returns them all at once). */
-  #rpcStubsLastUsedMs = 0;
-  /** When the library last made a call — a socket opening, or a call through one. */
-  #libraryLastUsedMs = 0;
-
-  /** THE PINS' CLOCK: when a pin was last used — a borrowed stub called, an open capnweb socket
-   *  used (the two things that keep an actor resident on the edge, both measured). Null with
-   *  nothing pinned, so a bare probe arms nothing (one storage write and one billed wake for
-   *  nothing). A live facet is not a pin: on the edge it dies with the actor, so nothing arms an
-   *  alarm for one. */
-  #lastPinUseMs(): number | null {
-    const lastUsedMs = Math.max(
-      this.#rpcStubs.hasBorrowedRpcStubs() ? this.#rpcStubsLastUsedMs : -Infinity,
-      this.#library.holdsOpenSocket() ? this.#libraryLastUsedMs : -Infinity,
-    );
-    return lastUsedMs === -Infinity ? null : lastUsedMs;
-  }
-
-  /** THE IDLE DEADLINE: the end of the pins' quiet period, rounded UP to the next 10 s: a flood of
-   *  stub calls on a pinned context then moves the alarm six times a minute at most (every
-   *  `setAlarm` is a billed write). */
-  #idleDeadlineAt(): number | null {
-    const lastPinUseMs = this.#lastPinUseMs();
-    if (lastPinUseMs === null) return null;
-    return Math.ceil((lastPinUseMs + IDLE_QUIESCE_AFTER_MS) / 10_000) * 10_000;
+  /** THE PINS' TIMER: a pin's use — a borrowed stub called, the library's socket used (the two
+   *  things that keep an actor resident on the edge, both measured) — starts the quiet period over;
+   *  its end releases every pin (`#releasePins`). In memory on purpose: the pins are, and the pin
+   *  itself keeps the actor resident until the timer fires (a pending timer holds off hibernation,
+   *  not eviction — and nothing pinned means nothing to release). A live facet is not a pin: on the
+   *  edge it dies with the actor. */
+  #pinReleaseTimer: ReturnType<typeof setTimeout> | undefined;
+  #pinUsed(): void {
+    clearTimeout(this.#pinReleaseTimer);
+    this.#pinReleaseTimer = undefined;
+    // A call that ends with nothing pinned (an HTTP client's, a stub returned mid-call) starts no
+    // timer: a pending timer holds off hibernation, and there would be nothing to release.
+    if (!this.#rpcStubs.hasBorrowedRpcStubs() && !this.#library.holdsOpenSocket()) return;
+    this.#pinReleaseTimer = setTimeout(() => {
+      this.#pinReleaseTimer = undefined;
+      this.#releasePins();
+    }, IDLE_QUIESCE_AFTER_MS);
   }
 
   /** EVERY facet materialized this incarnation — what a release aborts. In memory on purpose:
@@ -686,8 +687,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #facetWorkInFlight = 0;
 
   /** THE ALARM PASS, three jobs in order, under the coordinator's hold (nothing re-arms until it
-   *  completes; a pass that dies is retried by the runtime): the due schedules, the stream-kept cursors'
-   *  owed deliveries, the idle quiesce. Then the next deadline is derived from what is left. */
+   *  completes; a pass that dies is retried by the runtime): the due schedules, the stream-kept
+   *  cursors' owed deliveries, the due claims of hosted processors (each spent, then the facet's
+   *  `revive()` — a facet still busy claims again from there). Then the next deadline is derived
+   *  from what is left. */
   async alarm(): Promise<void> {
     const { armedAt: fired } = this.#alarms.snapshot();
     try {
@@ -768,14 +771,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // The stream-kept cursors' due retries, and anything an eviction left mid-delivery — AWAITED so
         // the deadline it leaves is the one derived below.
         await this.#subscriptionDelivery.deliverEveryCursorSubscription();
-        // THE QUIET BOUNDARY (the #6800 quiesce): nothing pinned, nothing to release; a pin used
-        // within the quiet period keeps everything, and the next deadline derived below is a full
-        // quiet period after that use.
-        const lastPinUseMs = this.#lastPinUseMs();
-        if (lastPinUseMs === null) return;
-        if (Date.now() - lastPinUseMs < IDLE_QUIESCE_AFTER_MS) return;
-        this.#releasePins();
-        this.#traceAlarm("quiesce", fired);
+        // THE DUE CLAIMS: each is spent first (a claim is one revive, never a standing order — a
+        // facet with an attempt still in flight claims again from its revive, later each time),
+        // then the facet is revived: materialized if the last incarnation died with it, caught up,
+        // its at-head pass run. AWAITED, so the claim it may make is the one derived below.
+        for (const [name, at] of [...this.#facetClaims]) {
+          if (at > Date.now()) continue;
+          this.#claimFacetAlarm(name, null);
+          try {
+            await this.#invokeFacet(name, undefined, [["revive"]]);
+          } catch (error) {
+            reportIssue("iterate-context.revive", error, { name });
+          }
+        }
       });
     } catch (error) {
       this.#traceAlarm("alarm-abandoned", fired, { error: String(error).slice(0, 256) });
@@ -784,9 +792,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#traceAlarm("alarm-pass", fired);
   }
 
-  /** THE RELEASE: every borrowed stub returned, every library connection closed — the pins. Never a
-   *  facet: on the edge a facet is not a pin (it dies with the actor), and one may be mid-attempt — an
-   *  LLM call in its background — that an abort would kill for nothing. */
+  /** THE RELEASE (the pins' timer, `#pinUsed`): every borrowed stub returned, every library
+   *  connection closed — the pins. Never a facet: on the edge a facet is not a pin (it dies with the
+   *  actor), and one may be mid-attempt — an LLM call in its background — that an abort would kill
+   *  for nothing. */
   #releasePins(): void {
     this.#rpcStubs.returnBorrowedRpcStubs();
     this.#library.releaseConnections();
@@ -801,11 +810,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   releasePins(): void {
     if (this.#facetWorkInFlight === 0) {
       for (const facetName of this.#liveFacetNames)
-        this.#abortFacetIfRunning(facetName, "idle quiesce");
+        this.#abortFacetIfRunning(facetName, "released by the test door");
       this.#liveFacetNames.clear();
     }
+    clearTimeout(this.#pinReleaseTimer);
+    this.#pinReleaseTimer = undefined;
     this.#releasePins();
-    this.#alarms.reconcile(); // what a pass end does: nothing pinned, nothing armed for it
   }
 
   // ── FACETS: loaded DurableObject classes hosted here ──
@@ -829,7 +839,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     if (itxExpressionSteps.length === 0) throw new Error(`facet: name a method`);
     // A FACET ANSWERS RPC AND PLAIN HTTP — NEVER A WEBSOCKET. A socket terminates at the edge (a
     // session's /api pager socket on this DO, a project host's lent-stub upgrade leg), and the
-    // facet behind it is reached by itx expression; so the idle quiesce (alarm) aborts an idle
+    // facet behind it is reached by itx expression; so the workers lane's release aborts an idle
     // facet with nothing to lose, and no socket is ever held by a facet the parent cannot see.
     // Refused BEFORE the memo: an upgrade aimed at a facet materializes nothing.
     const [first] = itxExpressionSteps;
@@ -1061,6 +1071,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     if (name === CoreContract.slug)
       throw new Error(`"${name}" is the core reduce — always on, never a facet`);
     this.ctx.facets.delete(name);
+    this.#claimFacetAlarm(name, null);
     this.ctx.storage.kv.delete(`facet:${name}`);
     this.ctx.storage.kv.delete(`facet:${name}:loader-id`);
     this.#facetStartupMemoByName.delete(name);

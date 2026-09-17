@@ -26,12 +26,11 @@
 //       stubs is pinned non-hibernatable (workerd#6800, the reason the quiesce alarm exists). So
 //       each eviction here reproduces the production sequence first: quiesce (return the stubs) →
 //       evict — see quiesceLikeProduction().
-//   (c) runDurableObjectAlarm() to fire the quiesce — NOT VIABLE as the eviction ITSELF: the
-//       alarm's quiesce runs only when the pins were last used IDLE_QUIESCE_AFTER_MS (30 s) ago
-//       (alarm() checks Date.now() - #lastPinUseMs), and even then it only returns the borrowed
-//       stubs and closes library connections — the weaker assertion, subsumed by (b). support.ts's
-//       `quiesce` runs that release directly, which is how (b)'s precondition is met above — no
-//       Date faking needed.
+//   (c) waiting for the pins' release — NOT VIABLE as the eviction ITSELF: the release is a timer
+//       IDLE_QUIESCE_AFTER_MS (30 s) after the pins' last use (`#pinUsed`), and it only returns the
+//       borrowed stubs and closes library connections — the weaker assertion, subsumed by (b).
+//       support.ts's `quiesce` runs that release directly, which is how (b)'s precondition is met
+//       above — no waiting needed.
 
 import { evictDurableObject } from "cloudflare:test";
 import { beforeAll, expect, test } from "vitest";
@@ -65,7 +64,7 @@ async function incarnationNow(): Promise<number> {
 
 let callerItx: any; // a SEPARATE caller session (it lends nothing of its own)
 
-/** The production idle quiesce's release on demand (support.ts's `quiesce`), then the two facts this
+/** The production pins' release on demand (support.ts's `quiesce`), then the two facts this
  *  file leans on: every borrowed stub returned, the DO dormant — evictDurableObject's de-facto
  *  precondition (see mechanism note (b) in the header: evicting a warm DO times out on "active
  *  references", exactly the production #6800 pin). */

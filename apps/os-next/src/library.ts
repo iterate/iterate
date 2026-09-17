@@ -54,8 +54,8 @@ import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 // (`provide('itx.tools', "itx.connectToMcp(url)")`, the documented composition) is a connect per
 // call as an expression — a fresh MCP session, an open WebSocket, that no intermediate holder ever
 // disposes. So `buildLibrary` keeps every connection it opened, by (verb, url, options), hands the
-// same one back while it lives, and `releaseConnections()` closes them all — the context's idle
-// quiesce calls it beside returning its borrowed stubs (only an open capnweb socket pins the actor:
+// same one back while it lives, and `releaseConnections()` closes them all — the context's pins'
+// release calls it beside returning its borrowed stubs (only an open capnweb socket pins the actor:
 // `holdsOpenSocket`). A connection closed by a holder or broken by the far side
 // reopens itself on its next use (the mcp and capnweb sections), so a memoized one is never dead.
 
@@ -181,10 +181,10 @@ export type WorkspaceFacet = Pick<
 export function buildLibrary(itx: LibraryItx): {
   roots: LibraryRoots;
   /** Whether the library holds an open SOCKET — a capnweb WebSocket session — the one kind of
-   *  connection that keeps this actor resident (measured: like a borrowed stub), so the idle quiesce
+   *  connection that keeps this actor resident (measured: like a borrowed stub), so the pins' release
    *  arms for it. An MCP or OpenAPI client is HTTP handshakes: it holds nothing and pins nothing. */
   holdsOpenSocket(): boolean;
-  /** Close every connection the library holds (the idle quiesce's call); the next use reopens. */
+  /** Close every connection the library holds (the pins' release's call); the next use reopens. */
   releaseConnections(): void;
 } {
   const liveConnections = new Map<string, { connection: Promise<unknown>; holdsSocket: boolean }>();
@@ -551,7 +551,7 @@ export async function connectToCapnweb(
       () => undefined,
     );
   // The WebSocket session is opened NOW (a connect that cannot reach the far side fails here) and
-  // REOPENED on the next call after it is gone — disposed (the context's idle quiesce releases every
+  // REOPENED on the next call after it is gone — disposed (the context's pins' release closes every
   // library connection, index.ts) or broken by the far side — so a held or memoized connection is
   // never a dead socket.
   type SessionStub = RemoteMain & { onRpcBroken?: (cb: () => void) => void };
@@ -808,7 +808,7 @@ function mcpResultToValue(name: string, result: MCPToolResult): unknown {
 type JsonRpcResponse = { id?: unknown; result?: unknown; error?: { message?: string } };
 
 /** The JSON-RPC half: one endpoint, an id counter, the session id the server may hand out. A client
- *  closed by a holder (the context's idle quiesce releases the library's memoized connections)
+ *  closed by a holder (the context's pins' release closes the library's memoized connections)
  *  re-runs the handshake on its next request, so a held or memoized connection is never a dead
  *  session. */
 class McpJsonRpcClient {

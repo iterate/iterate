@@ -6,7 +6,7 @@
 // a `ProcessorEngine` drives it, and a test keeps the author handle where it reads a field. The
 // rule-by-rule spec under slow blockers, failing batches and version bumps is
 // processor-rules.test.ts.
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { applyPatch, type PatchOp } from "iterate/next/lib";
 import {
@@ -351,8 +351,7 @@ const caughtUpProbe = (readFails?: Error) => {
         readFails
           ? Promise.reject(readFails)
           : Promise.resolve({ events: [], scannedThroughOffset: 0, atHead: true }),
-      schedule: () => Promise.reject(new Error("the probe runs no background work")),
-      cancelSchedule: () => Promise.reject(new Error("the probe runs no background work")),
+      claim: () => Promise.reject(new Error("the probe runs no background work")),
     },
     storage: memoryStorage(),
   });
@@ -923,7 +922,7 @@ describe("eviction honors the persisted cursor", () => {
   test("a caught-up EFFECT-ONLY processor does not replay effects across an eviction", async () => {
     // The engine constructor accepts the persisted cursor whenever the version matches, materializing
     // initialState() when the state key is absent — a processor that never changed state must not
-    // fall back to offset 0 and re-drive the whole log WITH effects on every idle quiesce.
+    // fall back to offset 0 and re-drive the whole log WITH effects on every release.
     const mem = memoryStream();
     const storage = memoryStorage();
     const p1 = new EffectOnlyProcessor();
@@ -1343,9 +1342,9 @@ test("a throwing sink is contained (lossy notification, value still adopted, the
   expect(live.snapshot()).toEqual({ rev: epoch + 1, state: { n: 1 } });
 });
 
-// ── rule 3's other half: the revive — an attempt in flight holds a one-shot wake of the context ──
+// ── rule 3's other half: an attempt in flight holds a CLAIM on the context's alarm ──
 
-describe("rule 3 — the revive: work in flight ⇒ a one-shot wake of the context armed", () => {
+describe("rule 3 — the claim: work in flight ⇒ the context owes this processor a revive", () => {
   const AttemptsContract = defineProcessorContract({
     slug: "attempts",
     version: "1",
@@ -1359,101 +1358,74 @@ describe("rule 3 — the revive: work in flight ⇒ a one-shot wake of the conte
     readonly trace: string[] = [];
     readonly endings: (() => void)[] = [];
     override processEvent(args: ProcessEventArgs<object>): undefined {
-      if (!args.event) return;
+      if (!args.event) {
+        this.trace.push("at-head");
+        return;
+      }
       args.runInBackground(async () => {
         this.trace.push(`attempt ${args.event!.offset} started`);
         await new Promise<void>((end) => this.endings.push(end));
       });
     }
   }
-  const TICK = "events.iterate.com/processor/revived";
-  const revive = (name: string) => ({
-    key: ["revive", name],
-    when: { afterMs: 20_000 },
-    events: [{ type: TICK, payload: { name } }],
+  const T = Date.UTC(2035, 0, 1);
+
+  test("CLAIMED AS THE FIRST ATTEMPT STARTS (20 s out, without waiting for the claim to land), RELEASED WHEN THE LAST SETTLES: one claim however many attempts are in flight", async () => {
+    vi.useFakeTimers({ now: T, toFake: ["Date"] });
+    try {
+      const mem = memoryStream();
+      const attempts = new AttemptsProcessor();
+      const claimed = mem.stream.claim;
+      mem.stream.claim = (at) => {
+        attempts.trace.push(`claimed ${at === null ? "nothing" : String(at - T)}`);
+        return claimed(at);
+      };
+      mem.engines.push(
+        new ProcessorEngine(attempts, { stream: mem.stream, storage: memoryStorage() }),
+      );
+      mem.stream.append({ type: "e" }, { type: "e" });
+      await settle();
+      expect(attempts.trace).toEqual(["claimed 20000", "attempt 1 started", "attempt 2 started"]);
+      expect(mem.claims).toEqual([T + 20_000]);
+      attempts.endings[0]!();
+      await settle();
+      expect(mem.claims).toEqual([T + 20_000]); // one attempt still in flight: the claim stands
+      attempts.endings[1]!();
+      await settle();
+      expect(mem.claims).toEqual([T + 20_000, null]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  test("ARMED BEFORE THE ATTEMPT, RETRACTED AFTER THE LAST: one schedule however many attempts are in flight; the retraction names the receipt; the key is the slug when the host names no row", async () => {
-    const mem = memoryStream();
-    const attempts = new AttemptsProcessor();
-    const armed = mem.stream.schedule;
-    mem.stream.schedule = (input) => {
-      attempts.trace.push("armed");
-      return armed(input);
-    };
-    mem.engines.push(
-      new ProcessorEngine(attempts, { stream: mem.stream, storage: memoryStorage() }),
-    );
-    mem.stream.append({ type: "e" }, { type: "e" });
-    await settle();
-    // The schedule is asked for BEFORE either attempt's first line runs: a death anywhere in an
-    // attempt is a death with the wake armed.
-    expect(attempts.trace).toEqual(["armed", "attempt 1 started", "attempt 2 started"]);
-    expect(mem.scheduled).toEqual([revive("attempts")]);
-    attempts.endings[0]!();
-    await settle();
-    expect(mem.cancelled).toEqual([]); // one attempt still in flight: the wake stays armed
-    attempts.endings[1]!();
-    await settle();
-    expect(mem.cancelled).toEqual([
-      { key: JSON.stringify(["revive", "attempts"]), scheduledAtOffset: 1 },
-    ]);
-  });
-
-  test("A TICK IS THE ONE-SHOT SPENT: with an attempt in flight it is armed again; idle, a tick arms nothing — a one-shot never re-arms itself, so a dead incarnation's stale tick lands once", async () => {
-    const mem = memoryStream();
-    const attempts = new AttemptsProcessor();
-    mem.engines.push(
-      new ProcessorEngine(attempts, {
+  test("A REVIVE catches up and runs the at-head pass; an attempt still in flight claims again, later each time (40 s, 80 s, …); idle, a revive claims nothing", async () => {
+    vi.useFakeTimers({ now: T, toFake: ["Date"] });
+    try {
+      const mem = memoryStream();
+      const attempts = new AttemptsProcessor();
+      const engine = new ProcessorEngine(attempts, {
         stream: mem.stream,
         storage: memoryStorage(),
-        name: "worker",
-      }),
-    );
-    mem.stream.append({ type: "e" });
-    await settle();
-    expect(mem.scheduled).toEqual([revive("worker")]);
-    // Another row's tick is not this one's: nothing changes.
-    mem.stream.append({ type: TICK, payload: { name: "other" } });
-    await settle();
-    expect(mem.scheduled).toHaveLength(1);
-    // Its own tick, the attempt still in flight: spent, and armed again — never retracted (there
-    // is nothing left to cancel).
-    mem.stream.append({ type: TICK, payload: { name: "worker" } });
-    await settle();
-    expect(mem.scheduled).toEqual([revive("worker"), revive("worker")]);
-    expect(mem.cancelled).toEqual([]);
-    attempts.endings[0]!();
-    await settle();
-    expect(mem.cancelled).toEqual([
-      { key: JSON.stringify(["revive", "worker"]), scheduledAtOffset: 2 },
-    ]);
-    // Idle: a stale tick lands once and arms nothing.
-    mem.stream.append({ type: TICK, payload: { name: "worker" } });
-    await settle();
-    expect(mem.scheduled).toHaveLength(2);
-    expect(mem.cancelled).toHaveLength(1);
-  });
-
-  test("A REFUSED ARM IS NOT AN ARM: the attempt still runs, and the batch's end asks again", async () => {
-    const mem = memoryStream();
-    const attempts = new AttemptsProcessor();
-    const armed = mem.stream.schedule;
-    let asked = 0;
-    mem.stream.schedule = (input) =>
-      ++asked === 1 ? Promise.reject(new Error("storage refused the schedule")) : armed(input);
-    mem.engines.push(
-      new ProcessorEngine(attempts, { stream: mem.stream, storage: memoryStorage() }),
-    );
-    mem.stream.append({ type: "e" });
-    await settle();
-    expect(attempts.trace).toEqual(["attempt 1 started"]); // the refusal never blocks the attempt
-    expect(asked).toBe(2); // refused at the attempt's start; asked again at the batch's end, armed
-    expect(mem.scheduled).toEqual([revive("attempts")]);
-    attempts.endings[0]!();
-    await settle();
-    expect(mem.cancelled).toEqual([
-      { key: JSON.stringify(["revive", "attempts"]), scheduledAtOffset: 1 },
-    ]);
+      });
+      mem.engines.push(engine);
+      mem.stream.append({ type: "e" });
+      await settle();
+      expect(mem.claims).toEqual([T + 20_000]);
+      // The pass spent the claim and calls revive(): the at-head pass runs, the attempt is found
+      // still in flight, the next claim is twice as far out.
+      await engine.revive();
+      expect(attempts.trace).toEqual(["attempt 1 started", "at-head"]);
+      expect(mem.claims).toEqual([T + 20_000, T + 40_000]);
+      await engine.revive();
+      expect(mem.claims).toEqual([T + 20_000, T + 40_000, T + 80_000]);
+      attempts.endings[0]!();
+      await settle();
+      expect(mem.claims.at(-1)).toBeNull(); // released — and the backoff starts over
+      await engine.revive();
+      expect(attempts.trace.at(-1)).toBe("at-head"); // the pass ran…
+      expect(mem.claims.at(-1)).toBeNull(); // …and nothing in flight claims nothing
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
