@@ -1,8 +1,8 @@
 # CI trace dependencies and waiting appearance
 
-Status: implementation complete; browser and scripts checks pass. Real preview
-validation and review remain. The broad test run found an unrelated expired
-quarantine date in `specs/repo-ide-jsonc.spec.ts`.
+Status: implementation and acceptance checks complete. A real preview passed all
+nine jobs and published a report with 14 validated dependency links. Broader CI
+is blocked by an unrelated expired quarantine in `specs/repo-ide-jsonc.spec.ts`.
 
 Show the explicit dependencies behind CI waits without changing scheduling or
 coordination. Keep the existing self-contained viewer and standard OTLP data.
@@ -12,7 +12,7 @@ coordination. Keep the existing self-contained viewer and standard OTLP data.
 - [x] Show labelled curved dependency arrows on selection/tap, with useful detail links and keyboard access. Avoid permanently drawing a graph over the waterfall. _Selection draws an SVG overlay; detail buttons reveal the original endpoints._
 - [x] Render waiting spans and their legend with diagonal yellow stripes; keep incomplete evidence visually distinct. _Yellow waiting stripes and grey incomplete stripes have separate legend/help text._
 - [x] Test dependency assembly, including failed/missing milestones and attempt identity; browser-check selection, collapsed rows, zoom and narrow screens. _11 tracing tests pass; desktop/390px browser checks cover selection, keyboard navigation, endpoint reveal and older data without links._
-- [ ] Validate a real preview trace, add visual evidence and the Change / Purpose table to the PR, and address review feedback.
+- [x] Validate a real preview trace, add visual evidence and the Change / Purpose table to the PR, and address review feedback. _Preview `48dppx2ct3` passed all nine jobs; the public artifact has 209 spans and 14 links. PR #2697 includes the screenshot/table; independent review found no blockers and its zoom suggestion is fixed._
 
 Assumptions: only explicit cross-job waits are in scope. Parent/child nesting
 stays unchanged. No scheduling, polling interval, retry or timeout changes; no
@@ -24,3 +24,12 @@ readable.
 - Initial scope from the CI tracing follow-up conversation. The status CLI already
   resolves the producer identity, so record that rather than infer dependencies
   from adjacent bars or job names.
+
+- Validation: 363 scripts tests (11 tracing tests), repository typecheck/lint,
+  Knip and scoped formatting pass. Browser checks cover desktop and 390px
+  layouts, keyboard/name selection, collapse/search, zoom restoration and old
+  reports without links. Public report:
+  https://depot-01a0ae0f-99ce-730f-b70d-29f9939d23d5--iterate.iterate.app/
+- Full `pnpm test` and Depot's Test job fail on the existing quarantine date
+  (2026-09-16) in `specs/repo-ide-jsonc.spec.ts:19`. No quarantine, test
+  expectation, retry or timeout was changed.
