@@ -5,11 +5,11 @@ size: medium
 
 # Find the shortest defensible preview rollout delay
 
-Status: zero delay rejected: the second trial recorded a code-update reset
-8.4 seconds after deploy during smoke project creation, despite passing all
-tests without retries. Testing 30 seconds next; repeated evidence remains.
-Five recent main smoke runs averaged 114.7 seconds, including 85.6 seconds
-waiting for the fixed 90-second deployment-age boundary.
+Status: zero delay rejected. Three 30-second repeats passed all suites without
+test retries or code-update resets (42.7–48.6s smoke). The first 30s run
+had 11 retries, and an incomplete repeat had two storage/migration retries.
+All completed deployments were cleaned up. Now probing 15s; no default recommendation yet. Historical main averaged 114.7s
+smoke, including 85.6s waiting for the 90s deployment-age boundary.
 
 ## Request and assumptions
 
@@ -109,3 +109,87 @@ Codex task: `01a0b054-bdd8-7d52-9c01-30d9b92576c8`.
   first (red: expected 30, received 0), then the constant. All 216 preview
   tests, scripts typecheck and changed-file lint passed. No retries,
   watchdogs, worker counts or suite selection changed.
+
+- 2026-09-17 20:00 UTC: 30-second revision `f6018b024` pushed; exact-head
+  package publication [35267841382](https://github.com/iterate/iterate/actions/runs/35267841382)
+  succeeded. Fresh trial `q0vdpttdl5` is running in the bounded batch. If 30
+  holds up, probe 15 seconds before selecting the final candidate. No PR.
+- Further trace inspection places Zero 2's late repo callback failure inside
+  config-repo Artifact creation for a newly created `subscriptions-*` project
+  (creation starts at OS age 114.94s). It is not an intentional rebuild or
+  cleanup. Whether the reset originated in our Repo DO or the external
+  Artifacts service remains unproven; retain that uncertainty. The earlier
+  smoke Scheduler reset is independently sufficient to reject zero.
+
+- 2026-09-17 20:10 UTC: first 30s trial `q0vdpttdl5` completed; smoke
+  55.764s (29.276s wait), first project at age 31.067s. Eleven tests retried:
+  nine WebSocket 1006 failures, one Docs live-state timeout and one REPL
+  workspace-edit timeout. No code-update reset or initial connection retry.
+  One Streams storage-reset reference was also retained; causality is not
+  established. This is not accepted reliability evidence.
+- Interleaved 90s control `s8l2d2x7n5` uses the original published control
+  revision through temporary branch `codex/rollout-delay-control`. Candidate
+  branch remains unchanged at 30s. The batch stops after this one control.
+  Compare its retries before choosing whether to repeat30 or test60.
+
+- The 30s trial's platform-outcome query showed only the expected OS Worker
+  version, with `ok`, `aborted` and `responseStreamDisconnected` outcomes.
+  The focused platform-log memory query returned zero records; there is no
+  positive memory-limit evidence for the WebSocket failures. Do not label
+  the failure wave as either OOM or rollout without further evidence.
+
+- 2026-09-17 20:19 UTC: interleaved 90s control `s8l2d2x7n5` finished
+  without test retries, code-update resets or initial-connection recoveries.
+  Smoke took 111.449s including 87.837s waiting; first project age 91.518s.
+  Cleanup succeeded. Three fresh repeats of unchanged 30s revision `f6018b024`
+  are now running to test whether the first trial's retry wave recurs.
+
+- 2026-09-17 20:40 UTC: 30s repeat `hnm33kz377` passed all suites with zero
+  retries, code-update resets or initial-connection recoveries. Smoke 48.566s,
+  wait 27.252s, first project age 31.215s; erase and restore succeeded.
+- The following repeat `vjw0tw5t7f` lost Playwright matrix-3 before tests:
+  `scripts/ci/status.ts wait-for prepare preview-ready` exited at 20:36:48
+  with `TimeoutError: The operation was aborted due to timeout`. Browser and
+  Metro setup had succeeded. This is incomplete suite coverage, not an
+  accepted delay trial. Wait for all jobs/cleanup, then deploy afresh.
+
+- 2026-09-17 20:53 UTC: incomplete `vjw0tw5t7f` finished with all remaining
+  suites passing after two real test retries. Interceptor reset coverage saw
+  an internal DO storage error; conditional-edit coverage saw a DO moved to
+  another machine. Retain these failures despite the unrelated missing
+  browser shard. Smoke 47.187s, wait 27.160s, first project age 31.778s.
+  No code-update resets. Erase and restoration both succeeded.
+- Started two fresh 30s trials on unchanged `f6018b024` via
+  `thirty-repeat-2.log`; these replace incomplete coverage and finish the
+  planned repeats. The full existing 90s controls also contain generic
+  storage-reset telemetry, so do not equate it with code propagation.
+
+- Replacement dispatch `3hz60tlhhq` was cancelled while queued: all nine
+  jobs have zero attempts, so it supplies no deployment/test evidence.
+  The local experiment dispatcher now waits for the existing Preview Main
+  queue to empty before starting a trial, respecting main's ordinary runs
+  and avoiding pending-run replacement. It does not cancel jobs, alter
+  workflow concurrency or touch leases. Two replacements remain queued in
+  the local controller (`thirty-idle-guard.log`).
+
+- 2026-09-17 21:16 UTC: `sd606x6w9v` passed all suites without test retries,
+  code-update resets or initial-connection recoveries. Smoke 42.662s, wait
+  21.530s, first project age 31.063s. Erase and restore succeeded. CF did
+  record an absorbed memory-limit reset at OS age 86.158s: trace
+  `cff181db335e24d7ee92f051607d81a0` identifies `oversized-reset-fa8d8ac8`,
+  the regression test that journals 84MB and evicts its stream. That test
+  passed; retain this runtime failure separately from rollout evidence.
+  Streams also recorded storage reset `h5q5p84ug96i489cj8ubphuo` at OS age
+  92.748s. One final 30s repeat awaits the shared main queue in the same
+  bounded batch; then probe 15s before choosing the final candidate.
+
+- 2026-09-17 21:25 UTC: `8gr4b2p5ld` completed all suites without test
+  retries, code-update resets or initial-connection recoveries. Smoke 46.510s,
+  wait 28.141s, first project age 31.006s; erase and restoration succeeded.
+  One Streams storage-reset reference remains recorded. This completes four
+  full 30s trials (11, 0, 0, 0 retries), plus the incomplete trial with two
+  retries. Three repeats do not erase the first retry wave. Probe 15s next.
+- Changed the deployment-age spec first: it failed with `expected 30 to be 15`,
+  then changed the constant. No retry, timeout, concurrency or suite change.
+- 15s candidate: all 216 preview tests, scripts typecheck and changed-file lint
+  passed. Fresh canonical previews will begin after its SDK publication.

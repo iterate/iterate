@@ -86,7 +86,7 @@ type PreviewCommandOptions = {
 // boundary, so the gate does not serialize the fleet.
 // Experiment candidate; fresh-deployment evidence is tracked in
 // tasks/rollout-delay-experiment.md. Keep version checks and smoke unchanged.
-const previewMinimumDeploymentAgeMs = 30_000;
+const previewMinimumDeploymentAgeMs = 15_000;
 const previewRolloutRemainingSecondsEnvironment = "PREVIEW_APP_ROLLOUT_REMAINING_SECONDS";
 
 type DeployCommandOptions = PreviewCommandOptions & {
