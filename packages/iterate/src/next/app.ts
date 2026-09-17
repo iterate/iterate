@@ -1,5 +1,6 @@
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import type { IterateApi, IterateSessionApi } from "./api.ts";
+import { openSocketWithRetry } from "./client/socket.ts";
 import { OAuthScopes } from "./oauth-scopes.ts";
 
 /** What `authenticate` resolves to: the session as a capnweb stub (pipelined; disposable) and the
@@ -18,11 +19,64 @@ function leaveForLogin(login: string): Promise<never> {
   return new Promise<never>(() => {});
 }
 
+/** One socket to `/api` with the session the OAuth gate resolved from the cookie. The `api` is
+ *  capnweb's pipelined `authenticate(...)` answer: usable before the socket has even opened, calls
+ *  queue until it has. */
+type Connection = { api: RpcStub<IterateSessionApi>; socket: WebSocket; dispose(): void };
+function connectionOn(socket: WebSocket): Connection {
+  const iterate = newWebSocketRpcSession<IterateApi>(socket);
+  const api = iterate.authenticate({
+    type: "from-server-cookie",
+  }) as unknown as RpcStub<IterateSessionApi>;
+  return { api, socket, dispose: () => iterate[Symbol.dispose]() };
+}
+
 /** Create once per app — a TanStack route's client-only `beforeLoad`, or a plain page's entry.
- * Every loader and action of the page shares the returned public RPC session. */
+ *  Every loader and action of the page shares the returned public RPC session.
+ *
+ *  Connecting tries for a while (client/socket.ts: ≈16 s of attempts) before an error reaches the
+ *  page — a phone waking up or a flapping tunnel is not a reason to show "connection failed". And
+ *  the `api` the page holds is a proxy to the CURRENT connection: when the socket closes, the next
+ *  call opens a fresh one and pipelines onto it, so a dropped connection costs a reconnect, not the
+ *  page. A reconnect the platform refuses (the session ended elsewhere) rejects that call; the
+ *  page's retry runs `authenticate` again, whose probe sends the browser to log in. */
 export function createIterateClient(options: { scopes?: string[] } = {}): IterateClient {
   const scopes = OAuthScopes.parse(options.scopes || []);
+  let live: Connection | null = null;
   let connecting: Promise<AuthenticatedApp> | undefined;
+  const socketUrl = () => {
+    const url = new URL("/api", window.location.href);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return url;
+  };
+  /** Adopt a connection as the live one until its socket closes. */
+  function adopt(socket: WebSocket): Connection {
+    const connection = connectionOn(socket);
+    live = connection;
+    const dispose = () => {
+      if (live === connection) live = null;
+      connection.dispose();
+    };
+    socket.addEventListener(
+      "close",
+      () => {
+        if (live === connection) live = null;
+        window.removeEventListener("pagehide", dispose);
+      },
+      { once: true },
+    );
+    window.addEventListener("pagehide", dispose, { once: true });
+    return connection;
+  }
+  // Every property read goes to the live connection — or to a fresh one when the last socket
+  // closed (a new WebSocket, no wait: capnweb queues the call until it opens).
+  const api = new Proxy({} as RpcStub<IterateSessionApi>, {
+    get(_target, property) {
+      const connection = live || adopt(new WebSocket(socketUrl()));
+      const value = Reflect.get(connection.api as object, property, connection.api);
+      return typeof value === "function" ? value.bind(connection.api) : value;
+    },
+  });
   async function connect(next: string): Promise<AuthenticatedApp> {
     const login = `/.auth/login?${new URLSearchParams({ next, scope: scopes.join(" ") })}`;
     // HTTP distinguishes 401 from outages; a failed WebSocket is not evidence
@@ -35,38 +89,13 @@ export function createIterateClient(options: { scopes?: string[] } = {}): Iterat
     await probe.body?.cancel();
     if (probe.status === 401) return leaveForLogin(login);
     if (!probe.ok) throw new Error(`Iterate is unavailable (${probe.status}). Please retry.`);
-    const url = new URL("/api", window.location.href);
-    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(url);
-    // The public root is the IterateApi (os-next's IterateRpcTarget satisfies it); `authenticate({ from-server-cookie })` vends the
-    // session the OAuth gate already resolved. capnweb pipelines, so `api` is usable immediately.
-    const iterate = newWebSocketRpcSession<IterateApi>(socket);
-    const api = iterate.authenticate({ type: "from-server-cookie" });
-    const dispose = () => {
-      iterate[Symbol.dispose]();
-      connecting = undefined;
-    };
-    socket.addEventListener(
-      "close",
-      () => {
-        connecting = undefined;
-        window.removeEventListener("pagehide", dispose);
-      },
-      { once: true },
-    );
-    window.addEventListener("pagehide", dispose, { once: true });
-    try {
-      // Consent is task-based: the person may have granted fewer scopes than the app asked for
-      // (every scope but `iterate` is optional on the consent page). The granted set is
-      // `info.scopes` — an app reads it and offers a step-up link (`/.auth/login?scope=…`) for what
-      // it lacks; it is never bounced back to consent for a permission the person declined.
-      const info = await api.info();
-      // The pipelined  answer IS the session stub (capnweb: a promise that proxies).
-      return { api: api as unknown as RpcStub<IterateSessionApi>, info };
-    } catch (error) {
-      dispose();
-      throw error;
-    }
+    if (!live) adopt(await openSocketWithRetry(socketUrl()));
+    // Consent is task-based: the person may have granted fewer scopes than the app asked for
+    // (every scope but `iterate` is optional on the consent page). The granted set is
+    // `info.scopes` — an app reads it and offers a step-up link (`/.auth/login?scope=…`) for what
+    // it lacks; it is never bounced back to consent for a permission the person declined.
+    const info = await api.info();
+    return { api, info };
   }
   return {
     authenticate(next = "/") {
