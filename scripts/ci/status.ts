@@ -33,15 +33,9 @@ export default class CiStatus {
   /** Publish a milestone and optional step outputs for this exact job attempt. */
   async set(milestone: string, options: { values?: Record<string, string> } = {}) {
     const values = Values.parse(options.values || { milestone });
+    const lines = Object.entries(values).map(([name, value]) => `${name}=${value}`);
     // Keep coordination data small; artifact identities and full reasons belong elsewhere.
-    const description = z
-      .string()
-      .max(140)
-      .parse(
-        Object.entries(values)
-          .map(([name, value]) => `${name}=${value}`)
-          .join("; "),
-      );
+    const description = z.string().max(140).parse(lines.join("; "));
     await this.workflow();
     const context = `${milestone} ${this.attemptId}`;
     await this.request(
