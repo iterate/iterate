@@ -58,13 +58,17 @@ const hash = createHash("sha256");
 // Include this implementation, including the validity policy, even outside this repo (tests).
 hash.update(readFileSync(new URL(import.meta.url)));
 for (const file of [...new Set(files)].sort()) {
-  hash.update(JSON.stringify([file, existsSync(file) ? readFileSync(file, "utf8") : null]));
+  hash.update(
+    JSON.stringify([file, existsSync(file) ? readFileSync(file).toString("base64") : null]),
+  );
 }
 for (const file of [
   join(homedir(), ".npmrc"),
   join(dirname(dirname(process.execPath)), "etc/npmrc"),
 ]) {
-  hash.update(JSON.stringify([file, existsSync(file) ? readFileSync(file, "utf8") : null]));
+  hash.update(
+    JSON.stringify([file, existsSync(file) ? readFileSync(file).toString("base64") : null]),
+  );
 }
 hash.update(
   JSON.stringify({

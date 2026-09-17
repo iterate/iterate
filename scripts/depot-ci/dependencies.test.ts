@@ -74,6 +74,23 @@ test("new workspace lifecycle scripts cannot silently be skipped", () => {
   expect(workspace.run("install")).toContain("lifecycle ran");
 });
 
+test("local dependency fingerprints distinguish binary contents", () => {
+  using workspace = fixture();
+  const file = join(workspace.cwd, "external/asset.bin");
+  writeFileSync(file, Buffer.from([0x80]));
+  const before = workspace.run("fingerprint");
+  writeFileSync(file, Buffer.from([0x81]));
+  expect(workspace.run("fingerprint")).not.toBe(before);
+});
+
+test("a different install environment does not reuse the baked tree", () => {
+  using workspace = fixture();
+  workspace.run("seal");
+  expect(workspace.exec("env", ["NODE_ENV=production", "node", command, "install"])).toContain(
+    "install required: dependency inputs changed",
+  );
+});
+
 function fixture() {
   const cwd = mkdtempSync(join(tmpdir(), "iterate-baked-deps-"));
   const env = { ...process.env, CI: "true" };
