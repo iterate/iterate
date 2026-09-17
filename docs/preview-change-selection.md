@@ -120,10 +120,35 @@ deployment version parsing and workflow wiring. Read-only live checks recognized
 successful and failed PR runs, a successful main run, and the current Cloudflare
 deployment response. The earlier CLI inherited PR #2693's successful result; that historical run now
 lacks the required settlement marker and is intentionally inconclusive.
-**Live acceptance is in progress:** let a full PR run settle, push a test-only
-change and verify deployment reuse, then push a docs-only change and verify
-result inheritance. Wait for each entire run, including cleanup/restoration,
-before the next push.
+
+## Live acceptance
+
+[PR #2712](https://github.com/iterate/iterate/pull/2712) exercises separate pushes,
+waiting for each entire run, including cleanup/restoration, before the next:
+
+| Change                    | Observed preview behavior                                                                                                                                                        |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Full run at `e1a5838dc`   | Deployed all six apps, passed deployed tests, restored the preview and published `tests=success`. [Run](https://depot.dev/orgs/0p91s0lz49/workflows/hwk5nxq2x4).                 |
+| Tests only at `0dcb04c42` | Selected `reuse` of `75951cc06`, skipped preparation deployment, passed deployed tests and restored all six apps. [Run](https://depot.dev/orgs/0p91s0lz49/workflows/bzhzzvxxwn). |
+
+The downloaded preparation artifact proves that the tests-only run used the
+parent's six exact restored Worker versions while running tests from the new
+head. The preparation log contains no provision/deploy operation. Restoration
+after tests still deploys; reuse removes the deployment before tests.
+
+The intervening `75951cc06` run also reused the baseline, but an extra health
+probe added for acceptance hit Playwright's one-second request budget. That
+probe was removed; the deployment artifacts already provide stronger evidence.
+Its cleanup succeeded and published `tests=failure`, which let `0dcb04c42` prove
+that test changes can reuse a clean deployment even after a failed test run.
+An earlier native Node import failure and an overly broad CLI regression test
+were fixed; the focused native-module test and subsequent unit CI passed.
+
+This documentation-only follow-up exercises result inheritance. The PR records
+its run after publication. Expected: `action: inherit`, `tests: false`,
+`deploy: false`, and no prepare, app-test, Playwright or cleanup job attempts.
+Other workflows, such as unit tests and lint, remain independent of preview
+selection and still run.
 
 ## Restoration after deployment reuse
 
