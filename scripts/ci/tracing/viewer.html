@@ -240,6 +240,7 @@
         its timing and evidence.
       </p>
       <div class="stats" id="stats"></div>
+      <p id="green-note"></p>
       <p id="notice"></p>
       <div class="tools">
         <input
@@ -269,6 +270,12 @@
       </section>
       <details>
         <summary>Where these timings come from</summary>
+        <p>
+          Time to green measures this preview workflow from its start to the first successful check
+          update. Older runs use the successful early-green step’s end, or workflow completion when
+          there was no early-green step. It does not include other workflows on the commit. Cleanup
+          may continue afterwards and can still turn the check red.
+        </p>
         <p>
           Workflow and runner attempt times come from Depot. Shell steps have explicit start/exit
           markers. Playwright supplies each attempt’s start time and duration, including fixtures.
@@ -341,7 +348,9 @@
       document.getElementById("subtitle").textContent =
         `${root.a["ci.source.sha"].slice(0, 12)} · ${new Date(root.start).toISOString()} · ${root.a["ci.workflow.id"]}`;
       const tests = spans.filter((s) => s.a["ci.kind"] === "test");
+      const greenMs = root.a["ci.time_to_green_ms"];
       const stats = [
+        [greenMs === undefined ? "Not recorded" : duration(Number(greenMs)), "Time to green"],
         [duration(root.end - root.start), "workflow wall time"],
         [spans.filter((s) => s.a["ci.attempt.id"]).length, "runner attempts"],
         [tests.length, "test attempts"],
@@ -357,6 +366,12 @@
         el.append(strong, small);
         document.getElementById("stats").append(el);
       }
+      document.getElementById("green-note").textContent =
+        greenMs === undefined
+          ? "No successful check update was recorded for this preview workflow."
+          : root.a["ci.status"] === "finished"
+            ? "Time to green covers this preview workflow; cleanup can continue afterwards."
+            : `This preview went green, then ${root.a["ci.status"]}. Time to green records that earlier milestone.`;
       const incomplete = spans.filter((s) => s.a["ci.status"] === "incomplete").length;
       if (incomplete || !tests.length)
         document.getElementById("notice").textContent =

@@ -2141,14 +2141,25 @@ describe("eraseHeldSlotAfterRun", () => {
         ]),
       });
 
+      const target = previewTarget(holder, "abc1234");
+      // A report is editable display state, not authority for the next deployment.
+      await target.report.update((state) => ({
+        ...state,
+        environmentConfigLease: { slug: "preview-2", dopplerConfig: "preview_3" },
+      }));
       const result = await eraseHeldSlotAfterRun({
-        target: previewTarget(holder, "abc1234"),
+        target,
         eraseSlotData,
         ranHeadSha: "abc1234",
         semaphore,
       });
 
-      expect(result).toEqual({ erased: true, reason: null, slug: "preview-2" });
+      expect(result).toEqual({
+        erased: true,
+        reason: null,
+        slug: "preview-2",
+        dopplerConfig: "preview_2",
+      });
       expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
         dopplerConfig: "preview_2",
         slug: "preview-2",
