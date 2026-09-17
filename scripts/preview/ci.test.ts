@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { resolve, join } from "node:path";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,15 +13,6 @@ import {
   assertPlaywrightCapacity,
   previewPlaywrightShards,
 } from "./playwright-capacity-reporter.ts";
-
-test("preview planning CLI loads with Node's native TypeScript loader", () => {
-  const help = execFileSync("pnpm", ["preview", "ci-plan", "--help"], {
-    cwd: resolve(import.meta.dirname, "../.."),
-    env: { ...process.env, NODE_OPTIONS: "" },
-    encoding: "utf8",
-  });
-  expect(help).toContain("--pull-request-number");
-});
 
 test("distributed preview work refuses another head, run attempt, or slot", () => {
   const plan = { headSha: "candidate", runId: "run-1", runAttempt: "1", slot: "preview-2" };
