@@ -49,10 +49,12 @@ event log with monotonic offsets shared by durable AND ephemeral events (an ephe
 offset, never a row — and an ephemeral-only batch costs NO write at all: no transaction, not even
 the high-water mark; its offsets are unique within the incarnation, and every persisted checkpoint
 in the package advances only on a batch that carried a durable), idempotency at the door, the wake record, `waitForEvent`,
-`read` with the scanned-offset-range proof, and the alarm armer. `iterate-context-durable-object.ts`
+`read` with the scanned-offset-range proof, and the schedules' deadline (`nextScheduledAppendAt`) for the
+DO's one derived alarm (`alarm-coordinator.ts`). `iterate-context-durable-object.ts`
 (`IterateContextDurableObject`, one DO per `{projectId, path}` context) holds a Stream and drives
-it — its constructor calls `Stream.appendCreatedAndWokenEvents()` before any door opens (the first incarnation appends
-`stream/created { projectId, path }` at offset 1, every incarnation `stream/woken { incarnation, reason }`,
+it — its constructor calls `Stream.appendBirthRecord()` before any door opens (a fresh store gets
+`stream/created { projectId, path }` at offset 1 and its first wake record; a store with rows gets
+`stream/woken { incarnation, reason }` from the first door that opens — `appendWakeRecord`, `"alarm"` from the alarm handler —
 so any door materializes a context), its injected callbacks run the core reduce in-transaction and
 the post-commit fan-out, and the pause check is one `if` in `Stream.append` reading the reduce's
 `paused` slice (control events — created/woken/paused/resumed — are exempt). Identity is
@@ -118,7 +120,7 @@ evaluate the target and ASK THE VALUE what it is:
   `(events, { after, through })`, serialized per subscription (fire-and-forget to a stub, awaited
   to a facet), zero server state;
 - anything else (a Worker-Loader entrypoint's `processEventBatch`, a sibling context, a remote)
-  cannot, so THE STREAM KEEPS A CURSOR — in memory, written to kv only at durable boundaries — and
+  cannot, so THE STREAM KEEPS A CURSOR — in memory, written to the `subscription_cursors` table only at durable boundaries — and
   delivers at-least-once (the awaited call is the ack; one retry ladder; halt fact; retries on the
   DO's own alarm).
 
