@@ -8,10 +8,10 @@ export async function planPreview(
   evidence: PreviewEvidence,
 ): Promise<PreviewDecision> {
   const changes = classifyChanges(history.changedFiles(history.head));
-  const actions = actionsForChanges(changes);
-  if (actions.deploy)
+  const actionsNeeded = getActionsNeeded(changes);
+  if (actionsNeeded.deploy)
     return { action: "deploy", changes, reason: "The head needs deployment and tests." };
-  if (actions.test) return planTests(history, evidence, changes);
+  if (actionsNeeded.test) return planTests(history, evidence, changes);
 
   for (const commit of history.throughMergeBase()) {
     const result = await evidence.findPreviewResult(commit);
@@ -23,7 +23,7 @@ export async function planPreview(
         reason: `Inherit ${result.conclusion} from ${commit}.`,
       };
 
-    const untested = actionsForChanges(classifyChanges(history.changedFiles(commit)));
+    const untested = getActionsNeeded(classifyChanges(history.changedFiles(commit)));
     if (untested.deploy)
       return {
         action: "deploy",
@@ -50,7 +50,7 @@ async function planTests(
         deployment,
         reason: `Run head tests against the preview at ${commit}.`,
       };
-    if (actionsForChanges(classifyChanges(history.changedFiles(commit))).deploy) {
+    if (getActionsNeeded(classifyChanges(history.changedFiles(commit))).deploy) {
       return {
         action: "deploy",
         changes,
@@ -85,7 +85,7 @@ export function classifyChanges(paths: string[]) {
   return changes;
 }
 
-function actionsForChanges(changes: Partial<Record<ChangeType, string[]>>) {
+function getActionsNeeded(changes: Partial<Record<ChangeType, string[]>>) {
   const types = Object.keys(changes);
   return {
     test: types.some((type) => type !== "Docs"),
