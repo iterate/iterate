@@ -8,7 +8,7 @@ import { z } from "zod";
 
 import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
 import { sleep, synthesizeFrames } from "./probe-audio.ts";
-import { talk } from "./talk.ts";
+import { setup } from "./setup.ts";
 import { openWireCall } from "./wire-call.ts";
 
 export interface AskOptions extends VoicelabConnectOptions {
@@ -37,13 +37,7 @@ export async function ask(options: AskOptions): Promise<void> {
   const settleMs = options.settleMs ?? 4_000;
 
   if (options.setup === true) {
-    await talk({
-      project: options.project,
-      baseUrl: options.baseUrl,
-      streamPath,
-      setupOnly: true,
-      auto: true,
-    });
+    await setup({ project: options.project, baseUrl: options.baseUrl, streamPath });
   }
 
   const directory = mkdtempSync(path.join(tmpdir(), "ask-"));

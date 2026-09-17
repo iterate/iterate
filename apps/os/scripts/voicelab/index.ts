@@ -8,7 +8,7 @@ export { device } from "./device.ts";
 export { loudness } from "./loudness.ts";
 export { reveal } from "./reveal.ts";
 export { reliability } from "./reliability.ts";
-export { talk } from "./talk.ts";
+export { setup } from "./setup.ts";
 export { tap } from "./tap.ts";
 export { liveProbe } from "./live-probe.ts";
 export { duplex } from "./duplex.ts";
