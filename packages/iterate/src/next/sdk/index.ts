@@ -309,8 +309,17 @@ export abstract class ConfigWorker<
 
   /** THE WEB ROOT — the Request a project host with no app label rode in on (`x-iterate-app` absent;
    *  the edge's `itx.worker` dispatch). Route by hostname to `this.env.ITX.get().apps.<x>.fetch(request)`
-   *  or answer it here. Default: not found. */
-  override fetch(_request: Request): Response | Promise<Response> {
-    return new Response("Not found\n", { status: 404 });
+   *  or answer it here. Default: the project's bare homepage, so a fresh project's host answers
+   *  with its own name instead of a 404. */
+  override async fetch(_request: Request): Promise<Response> {
+    const itx = this.env.ITX.get();
+    try {
+      const { projectId } = await itx.whoami();
+      return new Response(`Homepage of project ${projectId}\n`, {
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      });
+    } finally {
+      (itx as unknown as Disposable)[Symbol.dispose]?.();
+    }
   }
 }
