@@ -2,6 +2,7 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { Dashboard } from "iterate/next/dashboard";
 import { loadDashboard } from "iterate/next/dashboard-data";
+import { APPS } from "../../apps.ts";
 
 export const Route = createFileRoute("/_auth/dashboard")({
   loader: ({ context }) => loadDashboard(context),
@@ -24,7 +25,23 @@ function DashboardPage() {
         }}
       />
       <CreateOrganization />
+      <Apps />
     </>
+  );
+}
+/** The first-party apps, each independently deployed on its own origin (src/apps.ts). */
+function Apps() {
+  return (
+    <section className="account" aria-label="Apps">
+      <h2>Apps</h2>
+      <ul>
+        {APPS.map((app) => (
+          <li key={app.url}>
+            <a href={app.url}>{app.name}</a> <span className="muted">{app.blurb}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 /** One organization per submit: `api.createOrg(name)`, then the router reloads the dashboard. */
