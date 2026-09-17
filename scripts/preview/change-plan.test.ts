@@ -135,6 +135,29 @@ test("tests reuse the nearest live deployment before inspecting that commit's pr
   expect(lookedUp).toEqual([head, docs, product]);
 });
 
+test("untested ancestor tests can reuse a newer docs commit's deployment", async () => {
+  using repo = repository();
+  repo.commit({ "apps/os/index.ts": "product" });
+  repo.git("switch", "-c", "feature");
+  repo.commit({ "specs/new.spec.ts": "untested tests" });
+  const head = repo.commit({ "README.md": "docs" });
+
+  const plan = await planPreview(repo.history(), {
+    findPreviewResult: async (commit) =>
+      commit === head
+        ? { commit, conclusion: "success", url: "https://depot.dev/previous-head-preview" }
+        : null,
+    findPreviewDeployment: async (commit) =>
+      commit === head ? { commit, slot: "preview-2" } : null,
+  });
+
+  expect(plan).toMatchObject({
+    action: "reuse",
+    changes: { Docs: ["README.md"] },
+    deployment: { commit: head, slot: "preview-2" },
+  });
+});
+
 test("tests stop at an undeployed product commit rather than use an older backend", async () => {
   using repo = repository();
   const main = repo.commit({ "apps/os/index.ts": "main" });
@@ -151,6 +174,24 @@ test("tests stop at an undeployed product commit rather than use an older backen
   });
   expect(plan).toMatchObject({ action: "deploy", reason: expect.stringContaining(product) });
   expect(lookedUp).not.toContain(main);
+});
+
+test("new tests cannot inherit an older green when no deployment remains usable", async () => {
+  using repo = repository();
+  repo.commit({ "apps/os/index.ts": "product" });
+  const main = repo.commit({ "README.md": "tested documentation change" });
+  repo.git("switch", "-c", "feature");
+  repo.commit({ "specs/new.spec.ts": "new tests" });
+
+  const plan = await planPreview(repo.history(), {
+    findPreviewResult: async (commit) =>
+      commit === main
+        ? { commit, conclusion: "success", url: "https://depot.dev/older-green-preview" }
+        : null,
+    findPreviewDeployment: async () => null,
+  });
+
+  expect(plan).toMatchObject({ action: "deploy" });
 });
 
 test.each([true, false])(

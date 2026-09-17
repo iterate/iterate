@@ -8,58 +8,54 @@ export async function planPreview(
   evidence: PreviewEvidence,
 ): Promise<PreviewDecision> {
   const changes = classifyChanges(history.changedFiles(history.head));
-  const actionsNeeded = getActionsNeeded(changes);
-  if (actionsNeeded.deploy)
-    return { action: "deploy", changes, reason: "The head needs deployment and tests." };
-  if (actionsNeeded.test) return planTests(history, evidence, changes);
+  const commits = history.throughMergeBase();
 
-  for (const commit of history.throughMergeBase()) {
-    const result = await evidence.findPreviewResult(commit);
-    if (result)
-      return {
-        action: "inherit",
-        changes,
-        result,
-        reason: `Inherit ${result.conclusion} from ${commit}.`,
-      };
+  for (const commit of commits) {
+    const result = commit === history.head ? null : await evidence.findPreviewResult(commit);
+    if (result) {
+      // hooray, we landed on a commit with a result we can just inherit, no need to deploy or test.
+      const reason = `Inherit ${result.conclusion} from ${commit}.`;
+      return { action: "inherit", changes, result, reason };
+    }
 
-    const untested = getActionsNeeded(classifyChanges(history.changedFiles(commit)));
-    if (untested.deploy)
-      return {
-        action: "deploy",
-        changes,
-        reason: `${commit} changed product behavior without a conclusive result.`,
-      };
-    if (untested.test) return planTests(history, evidence, changes);
-  }
-  return { action: "deploy", changes, reason: "No conclusive result through the merge-base." };
-}
+    const actionsNeeded = getActionsNeeded(classifyChanges(history.changedFiles(commit)));
 
-/** A live deployment is usable before its commit's changed paths become a barrier. */
-async function planTests(
-  history: CommitHistory,
-  evidence: PreviewEvidence,
-  changes: Partial<Record<ChangeType, string[]>>,
-): Promise<PreviewDecision> {
-  for (const commit of history.throughMergeBase()) {
-    const deployment = await evidence.findPreviewDeployment(commit);
-    if (deployment)
-      return {
-        action: "reuse",
-        changes,
-        deployment,
-        reason: `Run head tests against the preview at ${commit}.`,
-      };
-    if (getActionsNeeded(classifyChanges(history.changedFiles(commit))).deploy) {
-      return {
-        action: "deploy",
-        changes,
-        reason: `${commit} needs deployment but has no usable preview.`,
-      };
+    if (actionsNeeded.deploy) {
+      return { action: "deploy", changes, reason: `${commit} changed product behavior.` };
+    }
+
+    if (actionsNeeded.test) {
+      // Tests must run. Search from head: a newer commit may have a usable
+      // deployment, even though we have already passed it while looking for results.
+      for (const candidate of commits) {
+        const deployment = await evidence.findPreviewDeployment(candidate);
+        if (deployment)
+          return {
+            action: "reuse",
+            changes,
+            deployment,
+            reason: `Run head tests against the preview at ${candidate}.`,
+          };
+        if (getActionsNeeded(classifyChanges(history.changedFiles(candidate))).deploy) {
+          return {
+            action: "deploy",
+            changes,
+            reason: `${candidate} needs deployment but has no usable preview.`,
+          };
+        }
+      }
+
+      // The tests still need to run; never resume inheriting older results.
+      return { action: "deploy", changes, reason: "No usable deployment through the merge-base." };
     }
   }
-  return { action: "deploy", changes, reason: "No usable deployment through the merge-base." };
+  return { action: "deploy", changes, reason: "No usable result up to merge-base." };
 }
+
+type PreviewEvidence = {
+  findPreviewDeployment(commit: string): Promise<PreviewDeployment | null>;
+  findPreviewResult(commit: string): Promise<PreviewResult | null>;
+};
 
 type PreviewDecision = { changes: Partial<Record<ChangeType, string[]>>; reason: string } & (
   | { action: "deploy" }
@@ -68,11 +64,6 @@ type PreviewDecision = { changes: Partial<Record<ChangeType, string[]>>; reason:
 );
 export type PreviewDeployment = { commit: string; slot: string };
 export type PreviewResult = { commit: string; conclusion: "success" | "failure"; url: string };
-type PreviewEvidence = {
-  findPreviewDeployment(commit: string): Promise<PreviewDeployment | null>;
-  findPreviewResult(commit: string): Promise<PreviewResult | null>;
-};
-
 /** A file has one type: the last matching entry in change-types.ts. */
 export function classifyChanges(paths: string[]) {
   const changes: Partial<Record<ChangeType, string[]>> = {};
