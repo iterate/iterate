@@ -4,8 +4,66 @@ import { promisify } from "node:util";
 import { expect, test } from "vitest";
 import { assembleTrace, renderTrace, stepCommands } from "./tracing.ts";
 
+test("the test trace ends at green and excludes cleanup, even if cleanup later fails", () => {
+  const workflow = previewWorkflow("failed");
+  const spans = assembleTrace(
+    workflow,
+    new Map([
+      [
+        "finish-attempt",
+        [
+          line("tests_passed", { kind: "check-green", time: ms(25), checkId: 123 }),
+          line("erase", { kind: "shell-start", id: "erase", step: "erase", time: ms(26) }),
+          line("erase", { kind: "shell-end", id: "erase", time: ms(85), exitCode: 1 }),
+        ],
+      ],
+    ]),
+  ).resourceSpans[0].scopeSpans[0].spans;
+  expect(spans[0]).toMatchObject({
+    endTimeUnixNano: String(BigInt(ms(25)) * 1_000_000n),
+    attributes: expect.arrayContaining([
+      { key: "ci.status", value: { stringValue: "finished" } },
+      { key: "ci.time_to_green_ms", value: { stringValue: "25000" } },
+    ]),
+  });
+  expect(spans.map((span) => span.name)).toEqual(["Preview", "Prepare"]);
+});
+
+test("a failed result validation is red even when every test job passed", () => {
+  const workflow = previewWorkflow("failed");
+  const spans = assembleTrace(
+    workflow,
+    new Map([
+      [
+        "finish-attempt",
+        [
+          line("merge_reports", {
+            kind: "shell-start",
+            step: "merge_reports",
+            id: "merge",
+            time: ms(21),
+          }),
+          line("merge_reports", { kind: "shell-end", id: "merge", time: ms(24), exitCode: 1 }),
+        ],
+      ],
+    ]),
+  ).resourceSpans[0].scopeSpans[0].spans;
+  expect(spans[0]).toMatchObject({
+    endTimeUnixNano: String(BigInt(ms(24)) * 1_000_000n),
+    attributes: expect.arrayContaining([
+      { key: "ci.status", value: { stringValue: "failed" } },
+      { key: "ci.time_to_red_ms", value: { stringValue: "24000" } },
+      {
+        key: "ci.red.evidence",
+        value: { stringValue: "Failed test-result validation (merge_reports)" },
+      },
+    ]),
+  });
+  expect(spans.map((span) => span.name)).toEqual(["Preview", "Prepare"]);
+});
+
 test("workflow queue is visible without removing it from elapsed time", () => {
-  const workflow = greenWorkflow("finished");
+  const workflow = producerWorkflow("finished");
   const spans = assembleTrace(
     {
       ...workflow,
@@ -29,7 +87,7 @@ test("workflow queue is visible without removing it from elapsed time", () => {
 });
 
 test("queue timing uses the selected rerun, not the original workflow start", () => {
-  const workflow = greenWorkflow("finished");
+  const workflow = producerWorkflow("finished");
   const spans = assembleTrace(
     {
       ...workflow,
@@ -48,7 +106,7 @@ test("queue timing uses the selected rerun, not the original workflow start", ()
 });
 
 test("a workflow cancelled before start shows its wait ending at cancellation", () => {
-  const spans = assembleTrace({ ...greenWorkflow("cancelled"), jobs: [] }, new Map())
+  const spans = assembleTrace({ ...producerWorkflow("cancelled"), jobs: [] }, new Map())
     .resourceSpans[0].scopeSpans[0].spans;
   expect(spans.find((span) => span.name === "Workflow queue (cancelled)")).toMatchObject({
     startTimeUnixNano: String(BigInt(ms(0)) * 1_000_000n),
@@ -68,7 +126,7 @@ test("a workflow cancelled before start shows its wait ending at cancellation", 
 test.each([false, true])(
   "a cancelled rerun does not inherit old runner starts (inline %s)",
   (inline) => {
-    const workflow = greenWorkflow("cancelled");
+    const workflow = producerWorkflow("cancelled");
     workflow.jobs[0].attempts[0].finishedAt = at(20);
     const spans = assembleTrace(
       {
@@ -106,15 +164,15 @@ test.each([false, true])(
 );
 
 test("missing execution start does not turn unmeasured runner setup into queue time", () => {
-  const spans = assembleTrace(greenWorkflow("cancelled"), new Map()).resourceSpans[0].scopeSpans[0]
-    .spans;
+  const spans = assembleTrace(producerWorkflow("cancelled"), new Map()).resourceSpans[0]
+    .scopeSpans[0].spans;
   expect(spans.some((span) => span.name.startsWith("Workflow queue"))).toBe(false);
 });
 
 test.each(["finished", "failed", "cancelled"])(
   "inline collection reports %s preview jobs while the collector is still running",
   (status) => {
-    const workflow = greenWorkflow(status);
+    const workflow = producerWorkflow(status);
     workflow.workflowStatus = "running";
     workflow.workflowFinishedAt = "";
     workflow.jobs.push({
@@ -138,7 +196,7 @@ test.each(["finished", "failed", "cancelled"])(
         { key: "ci.status", value: { stringValue: status } },
         {
           key: "ci.report.scope",
-          value: { stringValue: "Preview jobs through cleanup; report generation excluded" },
+          value: { stringValue: "Preparation and tests; reporting and cleanup excluded" },
         },
       ]),
     });
@@ -153,7 +211,7 @@ test.each(["finished", "failed", "cancelled"])(
 );
 
 test("replaying an inline report excludes a failed collector from the preview outcome", () => {
-  const workflow = greenWorkflow("finished");
+  const workflow = producerWorkflow("finished");
   workflow.workflowStatus = "failed";
   workflow.workflowFinishedAt = at(100);
   workflow.jobs.push({
@@ -177,7 +235,7 @@ test("replaying an inline report excludes a failed collector from the preview ou
 });
 
 test("retrying only the collector retains the execution that ran the preview", () => {
-  const workflow = greenWorkflow("running");
+  const workflow = producerWorkflow("running");
   workflow.workflowFinishedAt = "";
   workflow.jobs[0].status = "finished";
   workflow.jobs[0].attempts[0].status = "finished";
@@ -206,7 +264,7 @@ test("retrying only the collector retains the execution that ran the preview", (
 });
 
 test("inline collection refuses to label still-running preview jobs as finished", () => {
-  const workflow = greenWorkflow("running");
+  const workflow = producerWorkflow("running");
   workflow.jobs.push({
     jobId: "trace",
     jobKey: "preview.yml:preview:trace",
@@ -216,48 +274,88 @@ test("inline collection refuses to label still-running preview jobs as finished"
   expect(() => assembleTrace(workflow, new Map())).toThrow("Preview jobs have not settled");
 });
 
-test.each(["finished", "failed", "cancelled"])(
-  "time to green retains the observed milestone when the workflow later %s",
+test.each(["running", "finished", "failed", "cancelled"])(
+  "cleanup status %s cannot change an observed green test result",
   (status) => {
-    const trace = assembleTrace(
-      greenWorkflow(status),
+    const workflow = previewWorkflow(status);
+    const spans = assembleTrace(
+      workflow,
       new Map([
         [
           "finish-attempt",
-          [
-            line("tests_passed", { kind: "check-green", time: ms(25), checkId: 123 }),
-            line("erase", { kind: "shell-start", step: "erase", id: "erase", time: ms(26) }),
-            line("erase", {
-              kind: "shell-end",
-              id: "erase",
-              time: ms(85),
-              exitCode: status === "finished" ? 0 : 1,
-            }),
-          ],
+          [line("tests_passed", { kind: "check-green", time: ms(25), checkId: 123 })],
         ],
       ]),
-    );
-    const root = trace.resourceSpans[0].scopeSpans[0].spans[0];
-    expect(root).toMatchObject({
-      endTimeUnixNano: String(BigInt(ms(90)) * 1_000_000n),
+    ).resourceSpans[0].scopeSpans[0].spans;
+    expect(spans[0]).toMatchObject({
+      endTimeUnixNano: String(BigInt(ms(25)) * 1_000_000n),
       attributes: expect.arrayContaining([
         { key: "ci.time_to_green_ms", value: { stringValue: "25000" } },
-        { key: "ci.status", value: { stringValue: status } },
+        { key: "ci.status", value: { stringValue: "finished" } },
       ]),
-      events: expect.arrayContaining([
-        expect.objectContaining({
-          name: "ci.check.green",
-          timeUnixNano: String(BigInt(ms(25)) * 1_000_000n),
-        }),
-      ]),
+      events: [expect.objectContaining({ name: "ci.check.green" })],
     });
-    if (status === "failed")
-      expect(root.events).toContainEqual(expect.objectContaining({ name: "ci.check.red" }));
+    expect(spans.map((span) => span.name)).toEqual(["Preview", "Prepare"]);
   },
 );
 
+test("passing producers without a recorded verdict do not invent green", () => {
+  const root = assembleTrace(previewWorkflow("running"), new Map()).resourceSpans[0].scopeSpans[0]
+    .spans[0];
+  expect(root.attributes).toContainEqual({
+    key: "ci.status",
+    value: { stringValue: "incomplete" },
+  });
+  expect(root.attributes.some((a) => a.key === "ci.time_to_green_ms")).toBe(false);
+});
+
+test("a finish-only retry cannot extend or relabel the original test result", () => {
+  const workflow = previewWorkflow("running");
+  workflow.executions.push({ executionId: "finish-retry", execution: 3, createdAt: at(120) });
+  workflow.jobs[1].attempts.push({
+    attemptId: "finish-retry-attempt",
+    attempt: 2,
+    status: "running",
+    startedAt: at(125),
+    finishedAt: "",
+  });
+  const root = assembleTrace(
+    workflow,
+    new Map([
+      [
+        "finish-attempt",
+        [line("tests_passed", { kind: "check-green", time: ms(25), checkId: 123 })],
+      ],
+      [
+        "finish-retry-attempt",
+        [line("tests_passed", { kind: "check-green", time: ms(130), checkId: 456 })],
+      ],
+    ]),
+  ).resourceSpans[0].scopeSpans[0].spans[0];
+  expect(root).toMatchObject({
+    endTimeUnixNano: String(BigInt(ms(25)) * 1_000_000n),
+    attributes: expect.arrayContaining([
+      { key: "ci.execution.id", value: { stringValue: "execution" } },
+      { key: "ci.time_to_green_ms", value: { stringValue: "25000" } },
+    ]),
+  });
+  // If the original acknowledgement is missing, the retry's must not fill it in.
+  const missing = assembleTrace(
+    workflow,
+    new Map([
+      [
+        "finish-retry-attempt",
+        [line("tests_passed", { kind: "check-green", time: ms(130), checkId: 456 })],
+      ],
+    ]),
+  ).resourceSpans[0].scopeSpans[0].spans[0];
+  expect(missing.attributes.some((attribute) => attribute.key === "ci.time_to_green_ms")).toBe(
+    false,
+  );
+});
+
 test("time to red uses the first failed job, ignoring a recovered job attempt", () => {
-  const workflow = greenWorkflow("failed");
+  const workflow = producerWorkflow("failed");
   workflow.jobs.push(
     {
       jobId: "recovered",
@@ -299,9 +397,7 @@ test("time to red uses the first failed job, ignoring a recovered job attempt", 
 });
 
 test.each(["finished", "cancelled"])("%s workflows do not acquire a time to red", (status) => {
-  const workflow = greenWorkflow(status);
-  workflow.jobs[0].status = "failed";
-  workflow.jobs[0].attempts[0].status = "failed";
+  const workflow = producerWorkflow(status);
   const trace = assembleTrace(workflow, new Map());
   expect(
     trace.resourceSpans[0].scopeSpans[0].spans[0].attributes.find(
@@ -313,8 +409,9 @@ test.each(["finished", "cancelled"])("%s workflows do not acquire a time to red"
 test.each(["missing", "previous execution"])(
   "a rerun without a current failed job timestamp uses workflow completion (%s)",
   (timing) => {
-    const workflow = greenWorkflow("failed");
+    const workflow = producerWorkflow("failed");
     workflow.executions.push({ executionId: "rerun", execution: 2, createdAt: at(30) });
+    workflow.jobs[0] = { ...workflow.jobs[0], finishedAt: at(90) } as any;
     workflow.jobs[0].attempts[0].finishedAt = timing === "missing" ? "" : at(20);
     const trace = assembleTrace(workflow, new Map());
     expect(trace.resourceSpans[0].scopeSpans[0].spans[0].attributes).toEqual(
@@ -323,8 +420,7 @@ test.each(["missing", "previous execution"])(
         {
           key: "ci.red.evidence",
           value: {
-            stringValue:
-              "Failed workflow completion (upper bound; no failed job completion recorded)",
+            stringValue: "Preview completion (upper bound; no failed job completion recorded)",
           },
         },
       ]),
@@ -336,7 +432,7 @@ test.each([0, 1])(
   "historical runs use the early-green step only when it succeeds (exit %s)",
   (exitCode) => {
     const trace = assembleTrace(
-      greenWorkflow("failed"),
+      previewWorkflow("failed"),
       new Map([
         [
           "finish-attempt",
@@ -361,7 +457,7 @@ test.each([0, 1])(
 test.each(["finished", "failed", "cancelled"])(
   "without an early signal, only successful completion establishes green (%s)",
   (status) => {
-    const trace = assembleTrace(greenWorkflow(status), new Map());
+    const trace = assembleTrace(producerWorkflow(status), new Map());
     const root = trace.resourceSpans[0].scopeSpans[0].spans[0];
     const green = root.attributes.find((attribute) => attribute.key === "ci.time_to_green_ms");
     expect(green?.value.stringValue).toBe(status === "finished" ? "90000" : undefined);
@@ -369,7 +465,8 @@ test.each(["finished", "failed", "cancelled"])(
 );
 
 test("a rerun does not inherit green from a previous execution", () => {
-  const workflow = greenWorkflow("failed");
+  const workflow = previewWorkflow("failed");
+  workflow.jobs[0].attempts[0].finishedAt = at(60);
   workflow.executions.push({ executionId: "rerun", execution: 2, createdAt: at(30) });
   const trace = assembleTrace(
     workflow,
@@ -684,15 +781,15 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
   ).toBe(true);
 });
 
-test("cleanup starting after Depot records cancellation stays incomplete", () => {
+test("a step starting after Depot records cancellation stays incomplete", () => {
   // Preview 9dsvdkskfv: Depot finished the job at 08:22:19, but erase
   // started at 08:22:21.311 without an exit marker.
-  const workflow = greenWorkflow("cancelled");
+  const workflow = producerWorkflow("cancelled");
   const report = assembleTrace(
     workflow,
     new Map([
       [
-        "finish-attempt",
+        "prepare-attempt",
         [line("erase", { kind: "shell-start", id: "erase", step: "erase", time: ms(92.311) })],
       ],
     ]),
@@ -706,7 +803,7 @@ test("cleanup starting after Depot records cancellation stays incomplete", () =>
       { key: "ci.evidence", value: { stringValue: "incomplete; enclosing finish precedes start" } },
     ]),
   });
-  for (const name of ["Preview", "Reports & cleanup"]) {
+  for (const name of ["Preview", "Prepare"]) {
     expect(spans.find((span) => span.name === name)).toMatchObject({
       endTimeUnixNano: String(BigInt(ms(90)) * 1_000_000n),
       attributes: expect.arrayContaining([
@@ -735,10 +832,10 @@ test.for([
   },
 ])("unfinished $kind after cancellation keeps its start and unknown outcome", ({ kind, event }) => {
   const report = assembleTrace(
-    greenWorkflow("cancelled"),
+    producerWorkflow("cancelled"),
     new Map([
       [
-        "finish-attempt",
+        "prepare-attempt",
         [
           line("erase", { kind: "shell-start", id: "erase", step: "erase", time: ms(89) }),
           line("erase", { ...event, time: ms(92.311) }),
@@ -789,12 +886,12 @@ test.for([
 ])(
   "$name keeps measured times after cancellation and rejects reversed endpoints",
   ({ start, end, name }) => {
-    const workflow = greenWorkflow("cancelled");
+    const workflow = producerWorkflow("cancelled");
     const report = assembleTrace(
       workflow,
       new Map([
         [
-          "finish-attempt",
+          "prepare-attempt",
           [line("erase", { ...start, time: ms(92.311) }), line("erase", { ...end, time: ms(94) })],
         ],
       ]),
@@ -811,7 +908,7 @@ test.for([
         workflow,
         new Map([
           [
-            "finish-attempt",
+            "prepare-attempt",
             [
               line("erase", { ...start, time: ms(92.311) }),
               line("erase", { ...end, time: ms(91) }),
@@ -951,7 +1048,7 @@ test.each([true, false])(
   (ready) => {
     const jobs = [
       ["shard", "playwright:matrix-0", "shard-attempt"],
-      ["finish", "finish", "finish-attempt"],
+      ["app", "apps", "app-attempt"],
       ["prepare", "prepare", "prepare-attempt"],
     ].map(([jobId, key, attemptId]) => ({
       jobId,
@@ -1008,7 +1105,7 @@ test.each([true, false])(
           ],
         ],
         [
-          "finish-attempt",
+          "app-attempt",
           [
             line("consumers", { kind: "shell-start", id: "wait", step: "consumers", time: ms(50) }),
             line("consumers", { kind: "dependency", targetId: "shard-attempt", milestone: "" }),
@@ -1093,12 +1190,12 @@ test("a wait can link to a cancelled consumer whose runner never started", () =>
           ],
         },
         {
-          jobId: "finish",
-          jobKey: "preview.yml:preview:finish",
+          jobId: "shard",
+          jobKey: "preview.yml:preview:playwright:matrix-0",
           status: "finished",
           attempts: [
             {
-              attemptId: "finish-attempt",
+              attemptId: "app-attempt",
               attempt: 1,
               status: "finished",
               startedAt: at(50),
@@ -1110,7 +1207,7 @@ test("a wait can link to a cancelled consumer whose runner never started", () =>
     },
     new Map([
       [
-        "finish-attempt",
+        "app-attempt",
         [
           line("consumers", { kind: "shell-start", id: "wait", step: "consumers", time: ms(51) }),
           line("consumers", { kind: "dependency", targetId: "never-started", milestone: "" }),
@@ -1159,7 +1256,7 @@ function markers(stdout: string) {
     .map((line) => JSON.parse(line.slice(11)));
 }
 
-function greenWorkflow(status: string) {
+function producerWorkflow(status: string) {
   return {
     workflowId: "green-workflow",
     workflowName: "Preview",
@@ -1174,12 +1271,12 @@ function greenWorkflow(status: string) {
     executions: [{ executionId: "execution", execution: 1, createdAt: at(0) }],
     jobs: [
       {
-        jobId: "finish",
-        jobKey: "preview.yml:preview:finish",
+        jobId: "prepare",
+        jobKey: "preview.yml:preview:prepare",
         status,
         attempts: [
           {
-            attemptId: "finish-attempt",
+            attemptId: "prepare-attempt",
             attempt: 1,
             status,
             startedAt: at(10),
@@ -1189,6 +1286,28 @@ function greenWorkflow(status: string) {
       },
     ],
   };
+}
+
+function previewWorkflow(cleanupStatus: string) {
+  const workflow = producerWorkflow("finished");
+  workflow.workflowStatus = cleanupStatus;
+  workflow.workflowFinishedAt = cleanupStatus === "running" ? "" : at(90);
+  workflow.jobs[0].attempts[0].finishedAt = at(20);
+  workflow.jobs.push({
+    jobId: "finish",
+    jobKey: "preview.yml:preview:finish",
+    status: cleanupStatus,
+    attempts: [
+      {
+        attemptId: "finish-attempt",
+        attempt: 1,
+        status: cleanupStatus,
+        startedAt: at(10),
+        finishedAt: cleanupStatus === "running" ? "" : at(90),
+      },
+    ],
+  });
+  return workflow;
 }
 
 const ms = (seconds: number) => Date.parse("2026-09-16T12:00:00Z") + seconds * 1000;

@@ -144,13 +144,7 @@ export default class CiStatus {
     const workflow = await this.workflow();
     if (workflow.jobs.find((job) => job.jobId === this.jobId)?.status !== "running")
       throw new Error("This Depot job is no longer running");
-    // Trace collection runs after this job; it cannot gate the tests-passed signal.
-    if (
-      workflow.jobs.some(
-        (job) =>
-          job.jobId !== this.jobId && !job.jobKey.endsWith(":trace") && job.status !== "finished",
-      )
-    )
+    if (workflow.jobs.some((job) => job.jobId !== this.jobId && job.status !== "finished"))
       throw new Error("Cannot publish success before every preview producer has succeeded");
     const checks = [];
     for (let page = 1; ; page++) {
@@ -189,7 +183,7 @@ export default class CiStatus {
           status: "completed",
           conclusion: "success",
           output: {
-            title: "Check marked successful",
+            title: "Preview test summary",
             summary,
           },
         }),

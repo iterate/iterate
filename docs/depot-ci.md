@@ -397,8 +397,8 @@ releases consumers even while the producer continues collecting artifacts.
 The finalizer needs only preparation. Its setup overlaps the tests, then one
 `wait-for-jobs` call polls all seven consumers together. Only a confirmed terminal
 state for every consumer authorizes cleanup; failed consumers are collected and
-fail the final result. Report download/merge and environment erase run in parallel
-with fail-fast disabled. The caller holds the preview lifecycle lock throughout.
+fail the final result. Report download/merge validates the full test result before the early-green
+update. Trace collection/upload then precede environment erase. The caller holds the preview lifecycle lock throughout.
 
 Coordination reads Depot's API with the existing Doppler-managed
 `DEPOT_CI_TELEMETRY_TOKEN` from `_shared/preview`; it does not introduce a Depot

@@ -282,6 +282,23 @@ jobs:
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
           pnpm exec trpc-cli scripts/ci/status.ts set-pending-check-green
           "All preview tests passed. Cleanup and restoration run afterwards; their final outcome is reflected in this check. See Depot for current cleanup progress."
+      - name: Collect preparation and test trace
+        id: trace
+        if: always() && steps.consumers.outputs.settled == 'true'
+        timeout-minutes: 5
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: >-
+          doppler run --project _shared --config preview --
+          pnpm exec trpc-cli scripts/ci/tracing/cli.ts current ci-trace.ignoreme
+      - name: Upload public CI trace
+        if: always() && steps.trace.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.trace.outputs.artifact-name }}
+          path: ci-trace.ignoreme/trace.*
+          if-no-files-found: error
+          retention-days: 30
       - name: Retire test data and restore the preview
         id: erase
         if: always() && steps.consumers.outputs.settled == 'true'
@@ -344,34 +361,3 @@ jobs:
           test "$PREPARE_RESULT" = success
           test "$CONSUMERS_SETTLED" = true
           test "$CONSUMERS_SUCCEEDED" = true
-
-  trace:
-    name: CI trace
-    # Cleanup normally waits for the tests. Explicit needs also cover a cleanup
-    # job that fails before it reaches that wait.
-    needs: [prepare, apps, playwright, finish]
-    if: always()
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          clean: false
-          ref: ${{ inputs.head-sha }}
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
-      - name: Collect trace through cleanup
-        id: trace
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: >-
-          doppler run --project _shared --config preview --
-          pnpm exec trpc-cli scripts/ci/tracing/cli.ts current ci-trace.ignoreme
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.trace.outputs.artifact-name }}
-          path: ci-trace.ignoreme/trace.*
-          if-no-files-found: error
-          retention-days: 30

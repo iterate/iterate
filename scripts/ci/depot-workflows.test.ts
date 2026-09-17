@@ -393,20 +393,18 @@ describe("Depot validation capacity", () => {
   });
 
   it.each([
-    { file: ".depot/workflows/test.yml", jobId: "test" },
-    { file: ".depot/workflows/preview-run.yml", jobId: "finish" },
-  ])("$file always finalizes and retains test telemetry", ({ file, jobId }) => {
+    { file: ".depot/workflows/test.yml", jobId: "test", artifactPath: "test-results/ci-telemetry" },
+    { file: ".depot/workflows/preview-run.yml", jobId: "finish", artifactPath: "test-results" },
+  ])("$file always finalizes and retains test telemetry", ({ file, jobId, artifactPath }) => {
     const steps = loadWorkflow(file).jobs[jobId]?.steps ?? [];
     const finalizer = steps.find((step) =>
       step.run?.includes("scripts/ci/upload-test-telemetry.ts"),
     );
-    // Select by payload, not position: the flake-records upload (a sibling
-    // artifact step with laxer if-no-files-found semantics) is not the
-    // telemetry retention step this guard is about.
+    // Other uploads include trace HTML, browser reports and individual flakes.
+    // Select the complete test-results directory this retention guard is about.
     const upload = steps.find(
       (step) =>
-        step.uses === "actions/upload-artifact@v4" &&
-        !String((step.with as any)?.name).startsWith("flake-records"),
+        step.uses === "actions/upload-artifact@v4" && (step.with as any)?.path === artifactPath,
     );
 
     expect(finalizer, `${file} must normalize and send telemetry`).toMatchObject({
@@ -438,8 +436,8 @@ describe("Depot validation capacity", () => {
   });
 
   it.each([
-    { file: ".depot/workflows/test.yml", jobId: "test" },
-    { file: ".depot/workflows/preview-run.yml", jobId: "finish" },
+    { file: ".depot/workflows/test.yml", jobId: "test", artifactPath: "test-results/ci-telemetry" },
+    { file: ".depot/workflows/preview-run.yml", jobId: "finish", artifactPath: "test-results" },
   ])("$file sends finalized test telemetry to the canonical PostHog project", ({ file, jobId }) => {
     const finalizer = loadWorkflow(file).jobs[jobId]?.steps?.find((step) =>
       step.run?.includes("scripts/ci/upload-test-telemetry.ts"),

@@ -333,17 +333,15 @@
       <details>
         <summary>Where these timings come from</summary>
         <p>
-          Time to green measures this preview workflow from its start to the first successful check
-          update. Older runs use the successful early-green step’s end, or workflow completion when
-          there was no early-green step. It does not include other workflows on the commit. Cleanup
-          may continue afterwards and can still turn the check red.
+          Time to green runs from execution creation to the acknowledged test-result check update,
+          including workflow queuing and result validation. Older runs use the successful
+          early-green step’s end. Cleanup and report generation are excluded; their outcome remains
+          in Depot. Other workflows on the commit are outside this report.
         </p>
         <p>
-          Failed workflows show Time to red: the first failed job completion in this execution,
-          using Depot timestamps. Failed test attempts that recover on retry do not count, nor do
-          failed attempts of jobs that later pass. If no failed job completion was recorded, the
-          failed workflow’s completion provides an upper bound, labelled in the summary. Any earlier
-          green milestone remains in the trace and summary. Both metrics cover only this workflow.
+          Time to red uses the first failed producer job or test-result validation in this
+          execution. Failed attempts that recover on retry do not count. If failure timing is
+          missing, the preview’s end provides an upper bound, labelled in the summary.
         </p>
         <p>
           Workflow and runner attempt times come from Depot. Shell steps have explicit start/exit
@@ -455,10 +453,6 @@
           outcomeMs === undefined ? "Not recorded" : duration(Number(outcomeMs)),
           failed ? "Time to red" : "Time to green",
         ],
-        [
-          duration(root.end - root.start),
-          root.a["ci.report.scope"] ? "preview wall time" : "workflow wall time",
-        ],
         [spans.filter((s) => s.a["ci.attempt.id"]).length, "runner attempts"],
         [tests.length, "test attempts"],
         [tests.filter((s) => Number(s.a["test.retry"]) > 0).length, "retries"],
@@ -478,20 +472,14 @@
         outcomeNote =
           outcomeMs === undefined
             ? "Failure timing was not recorded in this report. Regenerate it to measure time to red."
-            : `Time to red: ${root.a["ci.red.evidence"]}. Other jobs and cleanup can continue afterwards.`;
-        if (greenMs !== undefined)
-          outcomeNote += ` This preview first went green at ${duration(Number(greenMs))}, then failed.`;
+            : `Time to red: ${root.a["ci.red.evidence"]}. Other test jobs can continue afterwards.`;
       } else {
         outcomeNote =
           greenMs === undefined
-            ? "No successful check update was recorded for this preview workflow."
-            : root.a["ci.status"] === "finished"
-              ? "Time to green covers this preview workflow; cleanup can continue afterwards."
-              : `This preview went green, then ${root.a["ci.status"]}. Time to green records that earlier milestone.`;
+            ? "No successful test-result check update was recorded."
+            : "Time to green includes preparation, tests and result validation.";
       }
-      outcomeNote += " Elapsed time starts at execution creation, including workflow queuing.";
-      if (root.a["ci.report.scope"])
-        outcomeNote += " Report generation is excluded from these timings.";
+      outcomeNote += " Includes workflow queuing; excludes cleanup and report generation.";
       document.getElementById("outcome-note").textContent = outcomeNote;
       const incomplete = spans.filter((s) => s.a["ci.status"] === "incomplete").length;
       if (incomplete || !tests.length)

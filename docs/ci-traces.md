@@ -5,12 +5,17 @@ Its **Details** link opens the report for that tested commit. The report shows
 jobs, setup/wait/test/finish phases, measured shell steps and individual Playwright attempts. Expand rows, search for a test,
 click a bar, or zoom to a selected span. Download the same trace as OTLP JSON.
 
-The summary shows **Time to green** for successful runs and **Time to red** for
-failed runs. Red uses the first failed job completion in the current execution;
-recovered test or job attempts do not count. Without a failed job timestamp,
-workflow completion supplies a labelled upper bound. An earlier green milestone
-remains visible if cleanup later fails. Planning appears first in the waterfall,
-followed by preparation, app tests, Playwright shards and cleanup.
+The summary shows **Time to green** for successful tests and **Time to red** for
+failed tests or preparation. Green requires the acknowledged test-result check
+update, after merged results and the expected test count have been validated.
+Red uses the first failed producer job or failed result validation in the current
+execution; recovered test or job attempts do not count. Missing failure timing
+uses a labelled upper bound. Missing verdict evidence never invents green.
+
+Planning appears first, followed by preparation, app tests and Playwright shards.
+The entire `finish` job is excluded: there are no reporting or cleanup spans and
+no separate wall-time statistic. Cleanup can still fail its GitHub check later;
+this report preserves the earlier test result, not the final cleanup outcome.
 
 Elapsed metrics start at the selected execution's creation, so they include time
 waiting to start. A striped **Workflow queue** row appears before Plan, measured
@@ -32,8 +37,7 @@ timing arrow.
 
 The status CLI records exact producer attempt IDs and successful milestone
 publication. The collector exports standard OTLP `links` with a `ci.link.label`
-attribute: preview waits require `preview-ready`; cleanup waits for consumer jobs
-to settle, including failures. Missing milestone evidence links to the recorded
+attribute: preview waits require `preview-ready`. Missing milestone evidence links to the recorded
 producer attempt with “not observed”, never to a later replacement attempt.
 Links supplement the existing parent tree. They describe explicit prerequisites,
 not an inferred critical path; old runs without these records have no links.
@@ -62,19 +66,23 @@ never expanded runner logs. `wait_for_preview`, `consumers`,
 preserves exit codes and ignores nested shells. It requires only the Node
 already installed in the runner image, so it measures `pnpm install` too.
 
-The `trace` job in `preview-run.yml` runs after preparation, app tests, browser
-shards and cleanup, with `if: always()`. It reads their completed Depot timings
-and lifecycle records, then uploads the report. The trace excludes this report
-job: **preview wall time** ends when the last producer job settles, while the
-outer workflow remains active for collection/upload. Test/cleanup failures remain
-visible; a collector failure fails its own check without changing the measured
-preview outcome.
+The `finish` job waits for every producer, downloads the results and runs
+`ci-finish` to validate shard receipts and the expected test count. Only then
+can `tests_passed` mark its check green. Trace collection and upload run next,
+before cleanup, reusing the same runner and installed dependencies. Collection
+also runs after failed tests, once all producers have settled; it has a five-minute
+step limit. Cleanup uses `always()` so a report failure does not skip retirement.
 
-There is no dispatcher or scheduled repair. A workflow cancellation can prevent
-the report job from completing; such runs can be rendered manually. The explicit
-producer dependencies also handle cleanup failing before it waits for tests.
-Rerunning only the collector retains the execution that ran the preview, including
-in the artifact name, so collection retries cannot relabel old results as new work.
+The collector reads completed producer timings and lifecycle records. From
+`finish` it uses only the green acknowledgement or failed test-result validation;
+none of that job's spans appear. The workflow bar ends at the test verdict (or
+last producer completion), not at cleanup/report completion. A report failure
+can still fail the finalizer's GitHub check, without changing the recorded tests.
+
+There is no separate collector job, dispatcher or scheduled repair. Cancellation
+or a finalizer failure before its wait can prevent a report; those runs can be
+rendered manually. Retrying only cleanup/reporting retains the execution that ran
+the preview, including in the artifact name, so it cannot relabel old tests as new work.
 
 Reports are Depot artifacts containing `trace.html` and `trace.json`, uploaded
 with `actions/upload-artifact`. No generated files or per-run commits go into Git.
@@ -130,13 +138,10 @@ pnpm exec trpc-cli scripts/ci/tracing/cli.ts render <workflow-id> /tmp/ci-trace
   their individual start/end timestamps are not exposed by Depot's public API.
   Quiet shell commands have measured start/exit times, not stdout estimates.
 - A missing completion marker produces a striped incomplete span bounded by the
-  runner finish. After cancellation, cleanup can start after Depot's recorded
-  finish; an unfinished span then ends at its own start, with evidence that the
-  enclosing finish precedes it. This zero duration means the end is unknown,
-  not that the work completed instantly. Recorded Depot and lifecycle timestamps
-  remain unchanged; invalid measured intervals still fail rendering. The chart's
-  full range includes cleanup after cancellation; workflow wall time still uses
-  Depot's recorded finish.
+  runner finish. An `always()` step can start after Depot records cancellation;
+  an unfinished span then ends at its own start, with evidence that the enclosing
+  finish precedes it. This means the end is unknown, not that the work was instant.
+  Measured timestamps remain unchanged; invalid intervals still fail rendering.
 - Depot job-finish timestamps have whole-second precision. A millisecond marker
   can fall just after that timestamp: preserve both recorded times and give the
   synthetic trailing Finish phase zero duration rather than a negative interval.

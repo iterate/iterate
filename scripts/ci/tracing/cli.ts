@@ -4,7 +4,7 @@ import { assembleTrace, Workflow, renderTrace, stepCommands } from "./tracing.ts
 
 /** Completed-run CI traces. Invoke with `pnpm exec trpc-cli scripts/ci/tracing/cli.ts`. */
 export default class CiTrace {
-  /** Collect this preview's finished jobs after cleanup, excluding this report job. */
+  /** Collect preparation and tests before cleanup, excluding the finish job. */
   async current(directory: string) {
     const source = new URL(z.string().url().parse(process.env.DEPOT_JOB_URL));
     const workflowId = z
