@@ -126,7 +126,7 @@ semicolons or newlines. The waiter converts semicolon separators into output
 lines directly. `options.values || { milestone }` supplies a `milestone` output
 only when no values are provided.
 
-The context is `<milestone words> <attemptId>`, for example `preview plan hlb267st2d`.
+The context is `<milestone> <attemptId>`, for example `preview-plan hlb267st2d`.
 Depot's unique attempt ID identifies the producer; job, workflow and
 execution IDs add no disambiguation. Both sides still validate membership in
 the current workflow, checkout and repository, and reject retried workflows.
