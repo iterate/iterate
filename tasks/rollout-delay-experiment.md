@@ -5,11 +5,11 @@ size: medium
 
 # Find the shortest defensible preview rollout delay
 
-Status: zero delay rejected. Three 30-second repeats passed all suites without
-test retries or code-update resets (42.7–48.6s smoke). The first 30s run
-had 11 retries, and an incomplete repeat had two storage/migration retries.
-All completed deployments were cleaned up. Now probing 15s; no default recommendation yet. Historical main averaged 114.7s
-smoke, including 85.6s waiting for the 90s deployment-age boundary.
+Status: 30 seconds selected for broader validation; six more fresh full runs
+will bring its sample to ten. Zero is rejected. Fifteen-second probes were
+faster but noisy; the original 90s control also retried after overload.
+All failures and absorbed errors remain in the evidence. Cleanup succeeded
+for every completed deployment. Final checks/report and recommendation remain.
 
 ## Request and assumptions
 
@@ -193,3 +193,53 @@ Codex task: `01a0b054-bdd8-7d52-9c01-30d9b92576c8`.
   then changed the constant. No retry, timeout, concurrency or suite change.
 - 15s candidate: all 216 preview tests, scripts typecheck and changed-file lint
   passed. Fresh canonical previews will begin after its SDK publication.
+- 15s revision `b13344b705` pushed. Controller session 67002 waits for package
+  build [35276735533](https://github.com/iterate/iterate/actions/runs/35276735533)
+  to succeed, then runs three fresh canonical trials. It waits for the shared
+  queue and stops on real test retries or code-update reset evidence. Do not
+  move the branch while this batch is alive; raw log is `fifteen-probe.log`.
+
+- 2026-09-17 21:45 UTC: first 15s trial `424l7btjqk` finished all suites but
+  failed. Smoke 32.494s, wait 7.106s, project age 16.098s. One repo-edit-file CLI
+  retry follows storage reference `skidcm22lmtkao06e0urfq1e` at OS age 77.713s.
+  A real source-version wrapper failure matches storage reference
+  `jrki45tjuhfhvkc7d188u0ci` at age 77.393s. No code-update reset; erase and
+  restore succeeded. An absorbed memory reset at age 74.132s belongs to the
+  oversized-journal test. Timing alone cannot establish a shared cause.
+- The local collector now exposes wrapper `unexpected-error` records
+  separately, including whether a later known outcome recovered. Regression
+  checks against saved raw results confirmed the failed 15s wrapper and a
+  previously uncounted internal recovery in Thirty1 (WebSocket 1006 then pinned
+  failure). Framework retry count remains 11; the extra recovery stays visible.
+  No tests or retry settings changed. Repeat 15 twice, retaining this failed run.
+
+- 2026-09-17 21:59 UTC: 15s repeat `11l285tklj` passed all suites without
+  test retries, unexpected wrapper errors, initial-connection recoveries or
+  code-update resets. Smoke 31.567s, wait 12.423s, first project 16.067s.
+  Five memory-limit records across two traces remain: oversized-journal
+  test at age 71.136s; ProcessorFacet at 102.856s (victim project unidentified).
+  Cleanup succeeded. Third 15s trial `7q8x9g7hk2` finished its workflow;
+  the controller is collecting artifacts and telemetry.
+
+- Third 15s trial `7q8x9g7hk2` passed after one browser retry for the cache badge
+  while the test intentionally stalled live traffic. Smoke 35.573s,
+  wait 12.592s, project age 16.030s. No code-update reset or unexpected wrapper
+  error; two memory-limit records remain. Cleanup succeeded. Because all
+  three 15s trials show resource errors (and one 30s run did), interleave a fresh
+  original 90s control to compare current platform behavior before selecting
+  the candidate for 10+ deployments. Candidate branch stays at b13344b705.
+
+- 2026-09-17 22:15 UTC: third 90s control `pb4hf6lzfh` passed after one
+  disposable-project test retried following DO overload. No code-update or
+  memory-limit reset was observed; Streams storage-reset telemetry remains.
+  Smoke 108.172s, wait 88.111s, project age 91.837s; erase/restore succeeded.
+- Selected 30s for broader validation before collecting its next six full
+  trials: it removes 60s of waiting, while 15s had resource errors in all three
+  probes and two had test failures/retries. This does not prove delay causality.
+  Retain all 30s results including the initial retry wave; ten full trials is
+  not ten cherry-picked clean ones. A confirmed rollout reset rejects 30s.
+- Changed the spec first (red: expected 30, received 15), then restored 30s.
+  Runtime source is the same as the earlier 30s candidate; pending report
+  changes preserve the additional controls, failed 15s trial and recoveries.
+- Expanded 30s candidate validation: all 216 preview tests, scripts typecheck
+  and changed-file lint passed.

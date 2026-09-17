@@ -1,10 +1,12 @@
 # Preview rollout-delay experiment
 
-Status: **zero delay rejected**. The first 30-second trial had 11 test retries;
-an interleaved 90-second control passed without retries or code-update resets.
-Three 30-second repeats also passed with zero retries/code-update resets.
-Another trial lost a shard to a CI polling timeout before tests and retained
-two other storage/migration test retries. Now probing 15 seconds; no default recommendation yet.
+Status: **30 seconds selected for broader validation**, with six more fresh
+full-workflow trials planned. It saves 60 seconds of the original age gate.
+Zero delay caused a confirmed code-update reset. Three 15-second probes ran
+faster but all logged memory errors; two also had test failures or retries.
+That is not proof of delay causality. The latest 90-second control also
+retried after a Durable Object overload. All failures remain in the ledger;
+there is no default recommendation yet.
 
 The first zero-delay smoke took **28.70s**, versus **115.43s** for the fresh
 90-second control. The control spent 87.05s waiting. Both full workflows
@@ -15,7 +17,7 @@ have missed it.
 
 ## What changes
 
-Only the minimum deployment age changes: 90 seconds → 0 seconds → 30 seconds → 15 seconds. Smoke also
+Only the minimum deployment age changes: 90 seconds → 0 seconds → 30 seconds → 15 seconds → 30 seconds. Smoke also
 records the wait as its own phase, so waiting and useful work are separate.
 Exact-version health checks, version-override headers, smoke, all six app
 suites, six OS browser shards, concurrency, retries and watchdogs stay intact.
@@ -41,6 +43,10 @@ the successful OS deploy command to the start of smoke project creation.
 | [Thirty 3 — incomplete](https://depot.dev/orgs/0p91s0lz49/workflows/1nrprknscl) (`vjw0tw5t7f`) |         30s |  47.19s | 27.16s |            31.78s |            2 |                           0 |
 | [Thirty 4](https://depot.dev/orgs/0p91s0lz49/workflows/ttgj606pct) (`sd606x6w9v`)              |         30s |  42.66s | 21.53s |            31.06s |            0 |                           0 |
 | [Thirty 5](https://depot.dev/orgs/0p91s0lz49/workflows/75rnq4s9b7) (`8gr4b2p5ld`)              |         30s |  46.51s | 28.14s |            31.01s |            0 |                           0 |
+| [Fifteen 1 — failed](https://depot.dev/orgs/0p91s0lz49/workflows/n4brv1xt5p) (`424l7btjqk`)    |         15s |  32.49s |  7.11s |            16.10s |            1 |                           0 |
+| [Fifteen 2](https://depot.dev/orgs/0p91s0lz49/workflows/x9x4bldsz0) (`11l285tklj`)             |         15s |  31.57s | 12.42s |            16.07s |            0 |                           0 |
+| [Fifteen 3](https://depot.dev/orgs/0p91s0lz49/workflows/fxzn6p1t92) (`7q8x9g7hk2`)             |         15s |  35.57s | 12.59s |            16.03s |            1 |                           0 |
+| [Control 3](https://depot.dev/orgs/0p91s0lz49/workflows/kk3mg5pkq2) (`pb4hf6lzfh`)             |         90s | 108.17s | 88.11s |            91.84s |            1 |                           0 |
 
 The control revision is `758ccc78a266c3ca16b5f1eda609086fa537e792`; both zero
 trials used `22ac6998f4a28f03a5a406cedc7161c12d727c9c`. All used preview-11.
@@ -48,7 +54,7 @@ The OS versions were `c929d8f6-ce11-438e-8079-15f306ac4bdf` (control),
 `645a90e7-c3de-4f9f-a7d4-de9be45356e6` (Zero 1), and
 `343289ac-6d13-4943-aa7c-ecc7882d2b69` (Zero 2).
 
-All eight completed full-suite runs produced 16 raw telemetry artifacts, with 532 passed tests, nine
+All eleven successful full-suite runs produced 16 raw telemetry artifacts, with 532 passed tests, nine
 skipped and three expected failures emitted by the known-flake wrappers.
 Expected failures and known-flake records are retained separately from real
 test retries. Cleanup reported both `erased: true` and `restored: true`.
@@ -71,6 +77,10 @@ not isolated estimates of savings from the age gate.
 | `vjw0tw5t7f` (30s gate / incomplete) |       5m 59.4s |          7m 57.0s |
 | `sd606x6w9v` (30s gate)              |       5m 46.0s |          7m 11.0s |
 | `8gr4b2p5ld` (30s gate)              |        5m 6.8s |          6m 32.4s |
+| `424l7btjqk` (15s gate / failed)     |       4m 54.1s |          6m 25.5s |
+| `11l285tklj` (15s gate)              |       4m 36.9s |          6m 12.1s |
+| `7q8x9g7hk2` (15s gate)              |       4m 26.8s |          6m 13.0s |
+| `pb4hf6lzfh` (90s gate)              |       5m 44.1s |          7m 40.4s |
 
 [Sanitized measurements](ci-rollout-delay-evidence.json) retain every app's
 version, test retries, known-failure outcomes, timing and cleanup evidence.
@@ -139,6 +149,62 @@ stream. The reset occurred while reading its persisted bodies; the test
 still passed. It remains a real runtime recovery, with no code-update
 signature. Streams also had one storage-reset reference at OS age 92.748s.
 Neither event makes this an error-free run.
+
+### Fifteen-second first trial failed
+
+`424l7btjqk` ran the full 544-test record set but failed: 531 passed, nine
+skipped, three expected failures and one real failure. The source-version
+known-flake wrapper hit storage error `jrki45tjuhfhvkc7d188u0ci` at OS age
+77.393s, outside its allowed `SAME-BOOT STALENESS` pattern. Trace
+`d7d350ab9ca59c2532a6b2bd2234e507` matches the test's exact error reference.
+The repo-edit-file CLI test also retried: its truncated JSON followed storage
+error `skidcm22lmtkao06e0urfq1e`, confirmed in the CLI stderr and callback
+trace `5037b5ecee5df881ce8ae26f0280e6c5` at OS age 77.713s.
+
+An absorbed memory-limit reset at age 74.132s belongs to the oversized-journal
+regression project `oversized-reset-b30f4fcf`, trace
+`8777bb134446412d12007c02a1780999`. The nearby timestamps do not prove these
+errors share a cause. No code-update reset was observed. Smoke passed in
+32.49s and cleanup succeeded. Retain this failed trial while repeating 15s;
+it is not reliability acceptance evidence.
+
+The next 15s repeat (`11l285tklj`) passed all suites with no test retries,
+unexpected wrapper errors, initial-connection recoveries or code-update
+resets; smoke took 31.57s. It still recorded five memory-limit error records
+across two traces: oversized-journal coverage at OS age 71.136s, and a
+ProcessorFacet at102.856s whose project remains unidentified. Cleanup succeeded.
+These absorbed errors remain distinct from code propagation and test retries.
+
+The third 15s trial (`7q8x9g7hk2`) passed after one browser retry: the cache
+status badge did not appear within 1s while its test deliberately stalled the
+live WebSocket. Cached rows had already rendered. Smoke took 35.57s; no
+code-update reset or unexpected wrapper error was observed. Two memory-limit
+records appeared at ages 67.903s and69.652s. These resource errors now occur
+in all three 15s trials, versus one of the five 30s deployments. A new 90s
+control will test whether they also recur at the original delay. This small,
+time-ordered comparison does not establish that a shorter delay causes them.
+
+The interleaved 90s control (`pb4hf6lzfh`) passed after one disposable-project
+test retried: `Durable Object is overloaded. Requests queued for too long.`
+OS recovery logs contain overloads at deployment ages 137–143s. No code-update
+or memory-limit reset was observed. One Streams storage-reset reference also
+remains. Cleanup succeeded; smoke took 108.17s, including 88.11s waiting.
+
+We selected 30s for broader validation before starting its next six trials.
+It removes a minute of waiting and has three full repeats without test retries
+or code-update resets. The first retry wave remains unexplained. Fifteen
+seconds is not rejected as a proven rollout failure, but its resource-error
+pattern makes the extra 15s saving less persuasive. Ten total full 30s trials
+will include the first noisy run; this is not a search for a cherry-picked
+clean streak. A confirmed rollout reset would reject 30s and trigger a 60s probe.
+
+The raw reporter marks known-failing tests with static expected-failure
+metadata. The experiment collector now also checks wrapper records for
+`unexpected-error`, preserving the actual error separately. This exposed one
+additional recovery in Thirty 1: disposed-project coverage first hit
+WebSocket 1006, then recovered to its ordinary pinned failure. That recovery
+is absent from the framework's count of 11 test retries. Both records remain
+in the sanitized evidence, with the later known outcome identified.
 
 ### Incomplete trial retained
 
