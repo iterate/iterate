@@ -1,36 +1,54 @@
-// /projects — every project the session reaches, by organization, with a way to create one; the
-// organization form when the grant holds `organizations:write`, a step-up link otherwise.
+// /projects — every project the session reaches, by organization, and the one way to make one: the
+// "New project" sheet (`?new=1`, so the switcher and a shared link open it too). An organization is
+// made with its first project — "New organization…" inside the sheet when the grant holds
+// `organizations:write`, a step-up link in its place otherwise.
 import { useState, type FormEvent } from "react";
-import { createFileRoute, getRouteApi, Link, useRouter } from "@tanstack/react-router";
+import { createFileRoute, getRouteApi, Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { ArrowUpRight, Building2, Plus } from "lucide-react";
-import { Button, buttonVariants } from "@iterate-com/ui/components/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@iterate-com/ui/components/card";
+import { z } from "zod";
+import { Button } from "@iterate-com/ui/components/button";
+import { Card, CardDescription, CardHeader, CardTitle } from "@iterate-com/ui/components/card";
+import { Field, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
-import { cn } from "@iterate-com/ui/lib/utils";
-import { projectsByOrg } from "../../../lib/projects.ts";
+import {
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@iterate-com/ui/components/sheet";
+import { Spinner } from "@iterate-com/ui/components/spinner";
+import { projectsByOrg, type Org } from "../../../lib/projects.ts";
 import { projectHostOf } from "../../_auth.tsx";
 
 const shell = getRouteApi("/_auth");
 
 export const Route = createFileRoute("/_auth/projects/")({
+  validateSearch: z.object({ new: z.literal(1).optional() }),
   component: ProjectsPage,
 });
 
 function ProjectsPage() {
   const { orgs, projects } = shell.useLoaderData();
   const { info } = shell.useRouteContext();
+  const search = Route.useSearch();
+  const navigate = useNavigate();
+  const [pending, setPending] = useState(false);
   const groups = projectsByOrg(orgs, projects);
   const hostOf = (projectId: string) => projectHostOf(info, projectId);
+  const closeSheet = () => navigate({ to: "/projects", search: {}, replace: true });
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
-      <h1 className="text-2xl font-semibold tracking-tight">Projects</h1>
+      <div className="flex items-center justify-between gap-4">
+        <h1 className="text-2xl font-semibold tracking-tight">Projects</h1>
+        <Button onClick={() => navigate({ to: "/projects", search: { new: 1 } })}>
+          <Plus data-icon="inline-start" />
+          New project
+        </Button>
+      </div>
       {groups.length ? (
         groups.map((group) => (
           <section key={group.org.id || "other"} className="flex flex-col gap-3">
@@ -77,39 +95,72 @@ function ProjectsPage() {
           </section>
         ))
       ) : (
-        <p className="text-sm text-muted-foreground">No projects yet — create the first below.</p>
+        <p className="text-sm text-muted-foreground">
+          No projects yet — “New project” creates the first.
+        </p>
       )}
-      <div className="grid gap-4 md:grid-cols-2" id="new">
-        <CreateProject orgs={orgs} />
-        {info.scopes.includes("organizations:write") ? (
-          <CreateOrganization />
-        ) : (
-          <AllowOrganizations />
-        )}
-      </div>
+      {/* apps/os's create-project sheet: the right edge, full width on a phone, dismiss refused
+          while the create is in flight so Escape and the backdrop cannot race it */}
+      <Sheet
+        open={search.new === 1}
+        onOpenChange={(open) => {
+          if (open || pending) return;
+          void closeSheet();
+        }}
+      >
+        <SheetContent
+          side="right"
+          showCloseButton={!pending}
+          className="overflow-y-auto data-[side=right]:sm:max-w-md"
+        >
+          <NewProjectForm
+            orgs={orgs}
+            canCreateOrg={info.scopes.includes("organizations:write")}
+            pending={pending}
+            setPending={setPending}
+            onCreated={closeSheet}
+          />
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
 
-function CreateProject({ orgs }: { orgs: { id: string; name: string }[] }) {
+/** The sheet's body — mounted with the sheet, so every opening starts blank. */
+function NewProjectForm({
+  orgs,
+  canCreateOrg,
+  pending,
+  setPending,
+  onCreated,
+}: {
+  orgs: Org[];
+  canCreateOrg: boolean;
+  pending: boolean;
+  setPending: (pending: boolean) => void;
+  onCreated: () => Promise<void>;
+}) {
   const { api } = shell.useRouteContext();
   const router = useRouter();
   const [name, setName] = useState("");
-  const [orgId, setOrgId] = useState(orgs[0]?.id ?? "");
+  // an org id (`org_…`), or "new" — the select's last option, the organization named below
+  const [orgId, setOrgId] = useState(orgs[0]?.id ?? "new");
+  const [orgName, setOrgName] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
+  const creatingOrg = canCreateOrg && orgId === "new";
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
     setPending(true);
     try {
-      // no organization chosen (none to choose from): the platform picks the person's default
-      using _created = await api.projects.create({
-        project: name.trim(),
-        orgId: orgId || undefined,
-      });
-      setName("");
+      // the organization just named, or the one chosen; neither (none to choose from, none
+      // allowed): the platform picks the person's default
+      const org = creatingOrg
+        ? await api.createOrg(orgName.trim())
+        : orgs.find((candidate) => candidate.id === orgId);
+      using _created = await api.projects.create({ project: name.trim(), orgId: org?.id });
       await router.invalidate();
+      await onCreated();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -117,22 +168,32 @@ function CreateProject({ orgs }: { orgs: { id: string; name: string }[] }) {
     }
   }
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>New project</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={create} className="flex flex-col gap-3">
+    <form onSubmit={create} className="flex h-full flex-col">
+      <SheetHeader className="border-b">
+        <SheetTitle>New project</SheetTitle>
+        <SheetDescription>
+          A project is a workspace of its own — its site, repos and agents. An organization is made
+          with its first project.
+        </SheetDescription>
+      </SheetHeader>
+      <FieldGroup className="flex-1 p-4">
+        <Field>
+          <FieldLabel htmlFor="project-name">Project name</FieldLabel>
           <Input
-            aria-label="New project"
+            id="project-name"
             placeholder="new-project-slug"
+            autoComplete="off"
             value={name}
             onChange={(event) => setName(event.target.value)}
             required
           />
-          {orgs.length > 1 ? (
+        </Field>
+        {orgs.length ? (
+          <Field>
+            <FieldLabel htmlFor="project-organization">Organization</FieldLabel>
             <NativeSelect
-              aria-label="Organization"
+              id="project-organization"
+              className="w-full"
               value={orgId}
               onChange={(event) => setOrgId(event.target.value)}
             >
@@ -141,95 +202,62 @@ function CreateProject({ orgs }: { orgs: { id: string; name: string }[] }) {
                   {org.name}
                 </NativeSelectOption>
               ))}
+              {canCreateOrg ? (
+                <NativeSelectOption value="new">New organization…</NativeSelectOption>
+              ) : null}
             </NativeSelect>
-          ) : null}
-          <div>
-            <Button type="submit" disabled={pending || !name.trim()}>
-              <Plus />
-              {pending ? "Creating…" : "Create project"}
-            </Button>
-          </div>
-          {error ? (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          ) : null}
-        </form>
-      </CardContent>
-    </Card>
-  );
-}
-
-function CreateOrganization() {
-  const { api } = shell.useRouteContext();
-  const router = useRouter();
-  const [name, setName] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-  async function create(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError(null);
-    setPending(true);
-    try {
-      await api.createOrg(name.trim());
-      setName("");
-      await router.invalidate();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setPending(false);
-    }
-  }
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>New organization</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={create} className="flex flex-col gap-3">
-          <Input
-            id="organization-name"
-            aria-label="Organization name"
-            placeholder="Acme"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            required
-          />
-          <div>
-            <Button type="submit" variant="outline" disabled={pending || !name.trim()}>
-              <Building2 />
-              {pending ? "Creating…" : "Create organization"}
-            </Button>
-          </div>
-          {error ? (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          ) : null}
-        </form>
-      </CardContent>
-    </Card>
+          </Field>
+        ) : null}
+        {creatingOrg ? (
+          <Field>
+            <FieldLabel htmlFor="organization-name">Organization name</FieldLabel>
+            <Input
+              id="organization-name"
+              placeholder="Acme"
+              autoComplete="organization"
+              value={orgName}
+              onChange={(event) => setOrgName(event.target.value)}
+              required
+            />
+          </Field>
+        ) : null}
+        {canCreateOrg ? null : <AllowOrganizations />}
+        {error ? (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        ) : null}
+      </FieldGroup>
+      <SheetFooter className="border-t sm:flex-row sm:justify-end">
+        <SheetClose disabled={pending} render={<Button type="button" variant="outline" />}>
+          Cancel
+        </SheetClose>
+        <Button
+          type="submit"
+          disabled={pending || !name.trim() || (creatingOrg && !orgName.trim())}
+        >
+          {pending ? <Spinner data-icon="inline-start" /> : <Plus data-icon="inline-start" />}
+          Create project
+        </Button>
+      </SheetFooter>
+    </form>
   );
 }
 
 /** The dash asked for `organizations:write` and the person unticked it at consent: `/.auth/login`
- *  with the scope asked for again re-consents; the granted set is what `info.scopes` says. */
+ *  with the scope asked for again re-consents and lands back in this sheet; the granted set is what
+ *  `info.scopes` says. */
 function AllowOrganizations() {
   const stepUp = `/.auth/login?${new URLSearchParams({
-    next: "/projects",
+    next: "/projects?new=1",
     scope: "iterate account organizations:write",
   })}`;
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Organizations</CardTitle>
-        <CardDescription>This session may not create organizations.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <a href={stepUp} className={cn(buttonVariants({ variant: "outline" }))}>
-          Allow the dash to create organizations
-        </a>
-      </CardContent>
-    </Card>
+    <p className="text-sm text-muted-foreground">
+      This session may not create organizations.{" "}
+      <a href={stepUp} className="underline underline-offset-4 hover:text-foreground">
+        Allow the dash to create organizations
+      </a>
+    </p>
   );
 }
