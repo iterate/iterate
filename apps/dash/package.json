@@ -13,25 +13,29 @@
     "routes:generate": "node scripts/generate-route-tree.ts"
   },
   "dependencies": {
+    "@iterate-com/ui": "workspace:*",
     "@tanstack/react-router": "1.168.3",
     "@tanstack/react-start": "1.167.5",
     "iterate": "workspace:*",
+    "lucide-react": "^0.553.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "tailwindcss": "^4.3.2",
     "zod": "^4.1.5"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.54.8",
     "@cloudflare/workers-types": "^5.20260831.1",
+    "@tailwindcss/vite": "^4.3.2",
+    "@tanstack/router-generator": "1.166.17",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
     "trpc-cli": "0.15.1",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vite": "^8.0.0",
     "vitest": "^4.1.7",
-    "wrangler": "4.131.1",
-    "@tanstack/router-generator": "1.166.17",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.1"
+    "wrangler": "4.131.1"
   }
 }

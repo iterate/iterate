@@ -66,8 +66,11 @@ export async function signIn(
 // ── the issuer's pages ──
 
 /** The paths the issuer's pages own on the platform origin, open to a browser that is not signed in
- *  (worker.ts lets them through without a bearer): the two pages, their JSON, their files. */
+ *  (worker.ts lets them through without a bearer): the two pages, their JSON, their files — and `/`,
+ *  one static page (public/index.html) telling a browser this origin is deliberately headless and
+ *  where the dash is. */
 export const issuerPagePaths = [
+  "/",
   "/login",
   "/login.json",
   "/login.js",

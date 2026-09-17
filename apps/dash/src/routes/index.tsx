@@ -1,22 +1,23 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { APPS } from "../apps.ts";
+import { buttonVariants } from "@iterate-com/ui/components/button";
+import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
+
+/** The landing page, for a browser without a session (a signed-in one is sent to /home by the
+ *  worker): one button, centred — the way in. Everything else lives behind the sidebar. */
 export const Route = createFileRoute("/")({
   component: () => (
-    <main>
-      <p className="eyebrow">DASH</p>
-      <h1>Your sessions, projects and organizations.</h1>
-      <p>Sign in, see everything your Iterate account reaches, and manage it from one place.</p>
-      <a href="/.auth/login?next=/dashboard&scope=iterate%20account%20organizations%3Awrite">
-        Log in with Iterate
+    <main className="flex min-h-svh items-center justify-center p-6">
+      <a
+        href="/.auth/login?next=/home&scope=iterate%20account%20organizations%3Awrite"
+        className={buttonVariants({
+          variant: "outline",
+          size: "lg",
+          className: "h-12 gap-3 px-6 text-base",
+        })}
+      >
+        <IterateLogo className="size-6" />
+        Sign in
       </a>
-      <h2>Apps</h2>
-      <ul>
-        {APPS.map((app) => (
-          <li key={app.url}>
-            <a href={app.url}>{app.name}</a> <span className="muted">{app.blurb}</span>
-          </li>
-        ))}
-      </ul>
     </main>
   ),
 });

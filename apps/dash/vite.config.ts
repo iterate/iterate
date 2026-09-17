@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { defineConfig } from "vite";
 import { cloudflare } from "@cloudflare/vite-plugin";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
+import tailwindcss from "@tailwindcss/vite";
 import viteReact from "@vitejs/plugin-react";
 import { writeWranglerConfig } from "./scripts/generate-wrangler-config.ts";
 
@@ -24,5 +25,6 @@ export default defineConfig({
       importProtection: { behavior: "error" },
     }),
     viteReact(),
+    tailwindcss(),
   ],
 });

@@ -3,14 +3,18 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": ["ES2022", "ESNext.Disposable", "DOM", "DOM.Iterable"],
+    "lib": ["ES2023", "ESNext.Disposable", "DOM", "DOM.Iterable"],
     "types": ["@cloudflare/workers-types", "node", "vite/client", "react", "react-dom"],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
     "esModuleInterop": true,
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    "paths": {
+      "@iterate-com/ui/*": ["../../packages/ui/src/*"]
+    },
+    "baseUrl": "."
   },
   "include": ["src"]
 }

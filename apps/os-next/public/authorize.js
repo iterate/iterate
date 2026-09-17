@@ -76,6 +76,11 @@
       location.assign(data.view.location);
       return;
     }
+    // The first view sets the projects default: an app that asked to manage the person's
+    // organizations (the dash) is an account app — every current and future project, unless the
+    // client is bound to one project. Other apps start with the listed projects ticked one by one.
+    if (!state.view && data.view.kind === "consent")
+      state.all = !data.view.projectBound && data.view.scopes.includes("organizations:write");
     state.view = data.view;
   }
   /** One action at a time: the buttons go quiet for the round trip (no re-render — what the person
@@ -314,7 +319,8 @@
     // parked ticks are in the boxes' own (organization-grouped) order, never the projects array's
     let parked = state.all ? boxes().map((box) => !state.excluded.has(box.value)) : null;
     const sync = () => {
-      const every = Boolean(all && all.checked);
+      // no "every project" box yet (no projects yet): the default stands until one appears
+      const every = all ? all.checked : state.all;
       if (every && !parked) {
         parked = boxes().map((box) => box.checked);
         for (const box of boxes()) box.checked = true;

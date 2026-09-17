@@ -1,17 +1,15 @@
-// The sidebar, apps/os's app shell at this page's size: the project, its agents, a form that births
-// one, and the account row with the theme switcher.
+// The sidebar, apps/os's app shell at this page's size: the project, "New agent", the project's
+// agents by path, and the account row. An agent IS its path (`/agents/...`); "New agent" births one
+// at a generated path and the page opens it — no name to type.
 import { Link } from "@tanstack/react-router";
-import { useState, type FormEvent } from "react";
-import { BotIcon, ChevronsUpDownIcon, LogOutIcon, PlusIcon } from "lucide-react";
-import { Button } from "@iterate-com/ui/components/button";
+import { useState } from "react";
+import { BotIcon, ChevronsUpDownIcon, LogOutIcon, SquarePenIcon } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@iterate-com/ui/components/dropdown-menu";
-import { Field, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
-import { Input } from "@iterate-com/ui/components/input";
 import { IterateMark } from "@iterate-com/ui/components/iterate-mark";
 import {
   Sidebar,
@@ -25,7 +23,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@iterate-com/ui/components/sidebar";
-import { SidebarThemeSwitcher } from "@iterate-com/ui/components/sidebar-theme-switcher";
 import { toast } from "@iterate-com/ui/components/sonner";
 
 export function AgentsSidebar({
@@ -41,18 +38,15 @@ export function AgentsSidebar({
   agents: { path: string }[];
   agent: string | undefined;
   account: string;
-  /** Births the agent at `/agents/<name>`; the page navigates to it once it exists. */
-  onCreate: (name: string, systemPrompt: string) => Promise<void>;
+  /** Births an agent at a fresh path; the page navigates to it once it exists. */
+  onCreate: () => Promise<void>;
 }) {
   const [creating, setCreating] = useState(false);
-  async function create(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const data = new FormData(form);
+  async function create() {
+    if (creating) return;
     setCreating(true);
     try {
-      await onCreate(String(data.get("name")).trim(), String(data.get("prompt")).trim());
-      form.reset();
+      await onCreate();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
@@ -103,6 +97,23 @@ export function AgentsSidebar({
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  type="button"
+                  onClick={() => void create()}
+                  disabled={creating}
+                  tooltip="New agent"
+                >
+                  <SquarePenIcon />
+                  <span>{creating ? "Creating…" : "New agent"}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+        <SidebarGroup>
           <SidebarGroupLabel>Agents</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
@@ -113,64 +124,20 @@ export function AgentsSidebar({
                 <SidebarMenuItem key={item.path}>
                   <SidebarMenuButton
                     isActive={item.path === agent}
+                    tooltip={item.path}
                     render={<Link to="/agents" search={{ project, agent: item.path }} />}
                   >
                     <BotIcon />
-                    <span className="truncate">{item.path.replace(/^\/agents\//, "")}</span>
+                    <span className="truncate font-mono text-xs">{item.path}</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
-        <SidebarGroup>
-          <SidebarGroupLabel>New agent</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <form onSubmit={create} className="px-2">
-              <FieldGroup className="gap-3">
-                <Field>
-                  <FieldLabel htmlFor="new-agent-name" className="text-xs">
-                    Name
-                  </FieldLabel>
-                  <Input
-                    id="new-agent-name"
-                    name="name"
-                    placeholder="support"
-                    pattern="[a-z0-9\-]+"
-                    title="lowercase letters, digits and dashes"
-                    required
-                    className="h-8"
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="new-agent-prompt" className="text-xs">
-                    Instructions (optional)
-                  </FieldLabel>
-                  <Input
-                    id="new-agent-prompt"
-                    name="prompt"
-                    placeholder="Be terse."
-                    className="h-8"
-                  />
-                </Field>
-                <Button
-                  type="submit"
-                  size="sm"
-                  variant="outline"
-                  disabled={creating}
-                  className="self-start"
-                >
-                  <PlusIcon data-icon="inline-start" />
-                  {creating ? "Creating…" : "Create"}
-                </Button>
-              </FieldGroup>
-            </form>
-          </SidebarGroupContent>
-        </SidebarGroup>
       </SidebarContent>
       <SidebarFooter>
         <SidebarMenu>
-          <SidebarThemeSwitcher />
           <SidebarMenuItem>
             <form method="post" action="/.auth/logout">
               <SidebarMenuButton type="submit" tooltip="Log out">

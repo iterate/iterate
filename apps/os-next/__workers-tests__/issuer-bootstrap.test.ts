@@ -231,6 +231,15 @@ test("an issuer session minted before a scope existed still holds every scope â€
   expect((await old.orgs()).map((candidate) => candidate.id)).toContain(org.id);
 });
 
+test("a browser landing on the platform origin is told it is headless and where the dash is", async () => {
+  const page = await SELF.fetch(`${origin}/`);
+  expect(page.status).toBe(200);
+  expect(page.headers.get("content-type")).toContain("text/html");
+  const html = await page.text();
+  expect(html).toContain("deliberately headless");
+  expect(html).toContain("https://dash.iterate2.com/");
+});
+
 test("a client on a project's custom apex is bound to that project at consent, like one under the hostname base", async () => {
   const user = await directory(bindings.DB).upsertUser("custom-apex@example.com");
   await directory(bindings.DB).createProject({ userId: user.id }, "custom-apex-project");

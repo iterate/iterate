@@ -5,12 +5,33 @@
 // loader, `?cursor=` in the URL; a mint or an end invalidates the router, which reloads it. Ported
 // from apps/os-next's console page: every string, role and test id is the same.
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { z } from "zod";
+import { Badge } from "@iterate-com/ui/components/badge";
+import { Button, buttonVariants } from "@iterate-com/ui/components/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@iterate-com/ui/components/card";
+import { Checkbox } from "@iterate-com/ui/components/checkbox";
+import { Input } from "@iterate-com/ui/components/input";
+import { Label } from "@iterate-com/ui/components/label";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@iterate-com/ui/components/table";
 
 export const Route = createFileRoute("/_auth/sessions")({
   validateSearch: z.object({ cursor: z.string().optional() }),
   loaderDeps: ({ search }) => ({ cursor: search.cursor }),
+  staticData: { page: "Sessions" },
   // `account` is optional at consent: without it there is no list to load — the page offers the
   // step-up instead of the error the API would answer with.
   loader: async ({ context, deps }) =>
@@ -26,16 +47,22 @@ function AllowAccount() {
     scope: "iterate account organizations:write",
   })}`;
   return (
-    <main>
-      <p>
-        <Link to="/dashboard">Projects</Link>
-      </p>
-      <h1>Sessions</h1>
-      <p className="muted">
-        This session may not manage your sessions and personal access tokens.{" "}
-        <a href={stepUp}>Allow the dash to manage them</a>
-      </p>
-    </main>
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 md:p-8">
+      <h1 className="text-2xl font-semibold tracking-tight">Sessions</h1>
+      <Card>
+        <CardHeader>
+          <CardTitle>Account permission</CardTitle>
+          <CardDescription>
+            This session may not manage your sessions and personal access tokens.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <a href={stepUp} className={buttonVariants({ variant: "outline" })}>
+            Allow the dash to manage them
+          </a>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
@@ -54,6 +81,9 @@ function SessionsPage() {
   const [minted, setMinted] = useState<MintedPersonalAccessToken | null>(null);
   const [copied, setCopied] = useState(false);
   const [minting, setMinting] = useState(false);
+  // Ending THIS browser's grant is a sign-out: the app's own logout clears the session and its
+  // cookie too (a bare redirect to `/` would bounce a still-cached token back into /projects).
+  const logout = useRef<HTMLFormElement>(null);
   if (!data) return <AllowAccount />;
   const { items, cursor: nextCursor, projects, canMintToken } = data;
   const selectedProjectIds = projects
@@ -88,153 +118,183 @@ function SessionsPage() {
   };
 
   return (
-    <main>
-      <p>
-        <Link to="/dashboard">Projects</Link>
-      </p>
-      <h1>Sessions</h1>
-      <p className="muted">
-        Each browser, connected client, and personal access token can be signed out independently.
-        Existing connections end within a minute.
-      </p>
-      {error && <p role="alert">{error}</p>}
-      <table>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Type</th>
-            <th>Last used</th>
-            <th>Expires</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((item) => (
-            <tr key={item.id}>
-              <td>
-                {item.name}
-                {item.current && " (this browser)"}
-              </td>
-              <td>{item.kind}</td>
-              <td>{item.lastUsedAt ? new Date(item.lastUsedAt).toISOString() : "Not used yet"}</td>
-              <td>
-                {item.cleanupPending
-                  ? "Access revoked; cleanup pending"
-                  : item.expired
-                    ? "Expired"
-                    : item.expiresAt
-                      ? new Date(item.expiresAt).toISOString()
-                      : "—"}
-              </td>
-              <td>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    setError(null);
-                    try {
-                      await api.grants.end(item.id);
-                      if (item.current) window.location.assign("/");
-                      else await router.invalidate();
-                    } catch (caught) {
-                      setError(caught instanceof Error ? caught.message : String(caught));
-                    }
-                  }}
-                >
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
+      <form ref={logout} method="post" action="/.auth/logout" hidden />
+      <h1 className="text-2xl font-semibold tracking-tight">Sessions</h1>
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+      <div className="overflow-x-auto rounded-lg border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Name</TableHead>
+              <TableHead>Type</TableHead>
+              <TableHead>Last used</TableHead>
+              <TableHead>Expires</TableHead>
+              <TableHead>Action</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {items.map((item) => (
+              <TableRow key={item.id}>
+                <TableCell className="font-medium">
+                  {item.name}
+                  {item.current && (
+                    <Badge variant="secondary" className="ml-2">
+                      this browser
+                    </Badge>
+                  )}
+                </TableCell>
+                <TableCell>{item.kind}</TableCell>
+                <TableCell className="text-muted-foreground">
+                  {item.lastUsedAt ? new Date(item.lastUsedAt).toISOString() : "Not used yet"}
+                </TableCell>
+                <TableCell className="text-muted-foreground">
                   {item.cleanupPending
-                    ? "Retry cleanup"
+                    ? "Access revoked; cleanup pending"
                     : item.expired
-                      ? "Remove"
-                      : item.kind === "Personal access token"
-                        ? "Revoke"
-                        : "Log out"}
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {!items.length && <p className="muted">No sessions on this page.</p>}
-      <p>
+                      ? "Expired"
+                      : item.expiresAt
+                        ? new Date(item.expiresAt).toISOString()
+                        : "—"}
+                </TableCell>
+                <TableCell>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={async () => {
+                      setError(null);
+                      try {
+                        await api.grants.end(item.id);
+                        if (item.current) logout.current?.requestSubmit();
+                        else await router.invalidate();
+                      } catch (caught) {
+                        setError(caught instanceof Error ? caught.message : String(caught));
+                      }
+                    }}
+                  >
+                    {item.cleanupPending
+                      ? "Retry cleanup"
+                      : item.expired
+                        ? "Remove"
+                        : item.kind === "Personal access token"
+                          ? "Revoke"
+                          : "Log out"}
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+      {!items.length && <p className="text-sm text-muted-foreground">No sessions on this page.</p>}
+      <p className="flex gap-3 text-sm">
         {cursor && (
-          <Link to="/sessions" search={{}}>
+          <Link to="/sessions" search={{}} className="underline-offset-4 hover:underline">
             First page
           </Link>
-        )}{" "}
+        )}
         {nextCursor && (
-          <Link to="/sessions" search={{ cursor: nextCursor }}>
+          <Link
+            to="/sessions"
+            search={{ cursor: nextCursor }}
+            className="underline-offset-4 hover:underline"
+          >
             Next page
           </Link>
         )}
       </p>
 
-      <h2>Personal access tokens</h2>
-      <p className="muted">
-        A personal access token is one OAuth grant: it acts as you, for the projects you choose, for
-        30 days, and is shown once. Send it as <code>Authorization: Bearer</code> on{" "}
-        <code>/api</code>, <code>/mcp</code> or a project host; revoke it from the list above.
-      </p>
-      {minted && (
-        <p role="status" data-testid="minted">
-          <strong>{minted.name}</strong> — copy it now; it is not shown again. Expires{" "}
-          {new Date(minted.expiresAt).toISOString()}.{" "}
-          <code data-testid="minted-token">{minted.token}</code>{" "}
-          <button type="button" onClick={copyMintedToken}>
-            {copied ? "Copied" : "Copy"}
-          </button>{" "}
-          <button type="button" onClick={() => setMinted(null)}>
-            Dismiss
-          </button>
-        </p>
-      )}
-      {canMintToken ? (
-        <form onSubmit={mintPersonalAccessToken}>
-          <label>
-            Name{" "}
-            <input
-              aria-label="Token name"
-              value={tokenName}
-              onChange={(event) => setTokenName(event.target.value)}
-              maxLength={100}
-              placeholder="My script"
-              required
-            />
-          </label>
-          <p aria-label="Projects the token may reach">
-            {projects.length > 0
-              ? projects.map((project) => (
-                  <label key={project.id}>
-                    <input
-                      type="checkbox"
-                      aria-label={project.id}
-                      checked={!excludedProjectIds.has(project.id)}
-                      disabled={minting}
-                      onChange={(event) => {
-                        const checked = event.target.checked;
-                        setExcludedProjectIds((current) => {
-                          const next = new Set(current);
-                          if (checked) next.delete(project.id);
-                          else next.add(project.id);
-                          return next;
-                        });
-                      }}
-                    />{" "}
-                    {project.id}{" "}
-                  </label>
-                ))
-              : "Create a project first — a token is scoped to the projects it may reach."}
-          </p>
-          <div className="actions">
-            <button
-              type="submit"
-              disabled={minting || selectedProjectIds.length === 0 || tokenName.trim().length === 0}
+      <Card>
+        <CardHeader>
+          <CardTitle>Personal access tokens</CardTitle>
+          <CardDescription>
+            A personal access token is one OAuth grant: it acts as you, for the projects you choose,
+            for 30 days, and is shown once. Send it as <code>Authorization: Bearer</code> on{" "}
+            <code>/api</code>, <code>/mcp</code> or a project host; revoke it from the list above.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {minted && (
+            <p
+              role="status"
+              data-testid="minted"
+              className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/40 p-3 text-sm"
             >
-              {minting ? "Creating…" : "Create personal access token"}
-            </button>
-          </div>
-        </form>
-      ) : (
-        <p className="muted">Personal access tokens require an HTTPS deployment.</p>
-      )}
-    </main>
+              <strong>{minted.name}</strong> — copy it now; it is not shown again. Expires{" "}
+              {new Date(minted.expiresAt).toISOString()}.{" "}
+              <code data-testid="minted-token" className="break-all">
+                {minted.token}
+              </code>
+              <Button type="button" size="sm" variant="outline" onClick={copyMintedToken}>
+                {copied ? "Copied" : "Copy"}
+              </Button>
+              <Button type="button" size="sm" variant="ghost" onClick={() => setMinted(null)}>
+                Dismiss
+              </Button>
+            </p>
+          )}
+          {canMintToken ? (
+            <form onSubmit={mintPersonalAccessToken} className="flex flex-col gap-4">
+              <Label className="flex flex-col items-start gap-2">
+                Name
+                <Input
+                  aria-label="Token name"
+                  value={tokenName}
+                  onChange={(event) => setTokenName(event.target.value)}
+                  maxLength={100}
+                  placeholder="My script"
+                  required
+                  className="max-w-sm"
+                />
+              </Label>
+              <div
+                aria-label="Projects the token may reach"
+                className="flex flex-wrap gap-x-5 gap-y-2 text-sm"
+              >
+                {projects.length > 0
+                  ? projects.map((project) => (
+                      <Label key={project.id} className="gap-2 font-mono font-normal">
+                        <Checkbox
+                          aria-label={project.id}
+                          checked={!excludedProjectIds.has(project.id)}
+                          disabled={minting}
+                          onCheckedChange={(checked) => {
+                            setExcludedProjectIds((current) => {
+                              const next = new Set(current);
+                              if (checked) next.delete(project.id);
+                              else next.add(project.id);
+                              return next;
+                            });
+                          }}
+                        />
+                        {project.id}
+                      </Label>
+                    ))
+                  : "Create a project first — a token is scoped to the projects it may reach."}
+              </div>
+              <div>
+                <Button
+                  type="submit"
+                  disabled={
+                    minting || selectedProjectIds.length === 0 || tokenName.trim().length === 0
+                  }
+                >
+                  {minting ? "Creating…" : "Create personal access token"}
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Personal access tokens require an HTTPS deployment.
+            </p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }

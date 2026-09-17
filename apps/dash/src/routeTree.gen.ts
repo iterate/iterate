@@ -12,7 +12,10 @@ import { Route as rootRouteImport } from "./routes/__root.tsx";
 import { Route as AuthRouteImport } from "./routes/_auth.tsx";
 import { Route as IndexRouteImport } from "./routes/index.tsx";
 import { Route as AuthSessionsRouteImport } from "./routes/_auth/sessions.tsx";
-import { Route as AuthDashboardRouteImport } from "./routes/_auth/dashboard.tsx";
+import { Route as AuthHomeRouteImport } from "./routes/_auth/home.tsx";
+import { Route as AuthProjectsIndexRouteImport } from "./routes/_auth/projects/index.tsx";
+import { Route as AuthProjectsProjectIdRouteRouteImport } from "./routes/_auth/projects/$projectId/route.tsx";
+import { Route as AuthProjectsProjectIdIndexRouteImport } from "./routes/_auth/projects/$projectId/index.tsx";
 
 const AuthRoute = AuthRouteImport.update({
   id: "/_auth",
@@ -28,35 +31,74 @@ const AuthSessionsRoute = AuthSessionsRouteImport.update({
   path: "/sessions",
   getParentRoute: () => AuthRoute,
 } as any);
-const AuthDashboardRoute = AuthDashboardRouteImport.update({
-  id: "/dashboard",
-  path: "/dashboard",
+const AuthHomeRoute = AuthHomeRouteImport.update({
+  id: "/home",
+  path: "/home",
   getParentRoute: () => AuthRoute,
 } as any);
+const AuthProjectsIndexRoute = AuthProjectsIndexRouteImport.update({
+  id: "/projects/",
+  path: "/projects/",
+  getParentRoute: () => AuthRoute,
+} as any);
+const AuthProjectsProjectIdRouteRoute =
+  AuthProjectsProjectIdRouteRouteImport.update({
+    id: "/projects/$projectId",
+    path: "/projects/$projectId",
+    getParentRoute: () => AuthRoute,
+  } as any);
+const AuthProjectsProjectIdIndexRoute =
+  AuthProjectsProjectIdIndexRouteImport.update({
+    id: "/",
+    path: "/",
+    getParentRoute: () => AuthProjectsProjectIdRouteRoute,
+  } as any);
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute;
-  "/dashboard": typeof AuthDashboardRoute;
+  "/home": typeof AuthHomeRoute;
   "/sessions": typeof AuthSessionsRoute;
+  "/projects/$projectId": typeof AuthProjectsProjectIdRouteRouteWithChildren;
+  "/projects/": typeof AuthProjectsIndexRoute;
+  "/projects/$projectId/": typeof AuthProjectsProjectIdIndexRoute;
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute;
-  "/dashboard": typeof AuthDashboardRoute;
+  "/home": typeof AuthHomeRoute;
   "/sessions": typeof AuthSessionsRoute;
+  "/projects": typeof AuthProjectsIndexRoute;
+  "/projects/$projectId": typeof AuthProjectsProjectIdIndexRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/": typeof IndexRoute;
   "/_auth": typeof AuthRouteWithChildren;
-  "/_auth/dashboard": typeof AuthDashboardRoute;
+  "/_auth/home": typeof AuthHomeRoute;
   "/_auth/sessions": typeof AuthSessionsRoute;
+  "/_auth/projects/$projectId": typeof AuthProjectsProjectIdRouteRouteWithChildren;
+  "/_auth/projects/": typeof AuthProjectsIndexRoute;
+  "/_auth/projects/$projectId/": typeof AuthProjectsProjectIdIndexRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: "/" | "/dashboard" | "/sessions";
+  fullPaths:
+    | "/"
+    | "/home"
+    | "/sessions"
+    | "/projects/$projectId"
+    | "/projects/"
+    | "/projects/$projectId/";
   fileRoutesByTo: FileRoutesByTo;
-  to: "/" | "/dashboard" | "/sessions";
-  id: "__root__" | "/" | "/_auth" | "/_auth/dashboard" | "/_auth/sessions";
+  to: "/" | "/home" | "/sessions" | "/projects" | "/projects/$projectId";
+  id:
+    | "__root__"
+    | "/"
+    | "/_auth"
+    | "/_auth/home"
+    | "/_auth/sessions"
+    | "/_auth/projects/$projectId"
+    | "/_auth/projects/"
+    | "/_auth/projects/$projectId/";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -87,24 +129,63 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthSessionsRouteImport;
       parentRoute: typeof AuthRoute;
     };
-    "/_auth/dashboard": {
-      id: "/_auth/dashboard";
-      path: "/dashboard";
-      fullPath: "/dashboard";
-      preLoaderRoute: typeof AuthDashboardRouteImport;
+    "/_auth/home": {
+      id: "/_auth/home";
+      path: "/home";
+      fullPath: "/home";
+      preLoaderRoute: typeof AuthHomeRouteImport;
       parentRoute: typeof AuthRoute;
+    };
+    "/_auth/projects/": {
+      id: "/_auth/projects/";
+      path: "/projects";
+      fullPath: "/projects/";
+      preLoaderRoute: typeof AuthProjectsIndexRouteImport;
+      parentRoute: typeof AuthRoute;
+    };
+    "/_auth/projects/$projectId": {
+      id: "/_auth/projects/$projectId";
+      path: "/projects/$projectId";
+      fullPath: "/projects/$projectId";
+      preLoaderRoute: typeof AuthProjectsProjectIdRouteRouteImport;
+      parentRoute: typeof AuthRoute;
+    };
+    "/_auth/projects/$projectId/": {
+      id: "/_auth/projects/$projectId/";
+      path: "/";
+      fullPath: "/projects/$projectId/";
+      preLoaderRoute: typeof AuthProjectsProjectIdIndexRouteImport;
+      parentRoute: typeof AuthProjectsProjectIdRouteRoute;
     };
   }
 }
 
+interface AuthProjectsProjectIdRouteRouteChildren {
+  AuthProjectsProjectIdIndexRoute: typeof AuthProjectsProjectIdIndexRoute;
+}
+
+const AuthProjectsProjectIdRouteRouteChildren: AuthProjectsProjectIdRouteRouteChildren =
+  {
+    AuthProjectsProjectIdIndexRoute: AuthProjectsProjectIdIndexRoute,
+  };
+
+const AuthProjectsProjectIdRouteRouteWithChildren =
+  AuthProjectsProjectIdRouteRoute._addFileChildren(
+    AuthProjectsProjectIdRouteRouteChildren,
+  );
+
 interface AuthRouteChildren {
-  AuthDashboardRoute: typeof AuthDashboardRoute;
+  AuthHomeRoute: typeof AuthHomeRoute;
   AuthSessionsRoute: typeof AuthSessionsRoute;
+  AuthProjectsProjectIdRouteRoute: typeof AuthProjectsProjectIdRouteRouteWithChildren;
+  AuthProjectsIndexRoute: typeof AuthProjectsIndexRoute;
 }
 
 const AuthRouteChildren: AuthRouteChildren = {
-  AuthDashboardRoute: AuthDashboardRoute,
+  AuthHomeRoute: AuthHomeRoute,
   AuthSessionsRoute: AuthSessionsRoute,
+  AuthProjectsProjectIdRouteRoute: AuthProjectsProjectIdRouteRouteWithChildren,
+  AuthProjectsIndexRoute: AuthProjectsIndexRoute,
 };
 
 const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren);
