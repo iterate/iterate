@@ -79,6 +79,12 @@ none of that job's spans appear. The workflow bar ends at the test verdict (or
 last producer completion), not at cleanup/report completion. A report failure
 can still fail the finalizer's GitHub check, without changing the recorded tests.
 
+The same-runner verdict is passed through step outputs: `ci-trace-green` carries
+the acknowledged check timestamp; `ci-trace-end` carries the measured shell exit.
+The collector binds these records to its exact finish attempt. Depot's log API can
+lag while that job is running, so waiting for it would add delay or lose the verdict.
+Completed producer timings still come from Depot; manual replays use retained logs.
+
 There is no separate collector job, dispatcher or scheduled repair. Cancellation
 or a finalizer failure before its wait can prevent a report; those runs can be
 rendered manually. Retrying only cleanup/reporting retains the execution that ran

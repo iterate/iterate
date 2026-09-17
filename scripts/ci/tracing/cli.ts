@@ -11,18 +11,36 @@ export default class CiTrace {
       .string()
       .regex(/^[a-z0-9]+$/)
       .parse(source.pathname.split("/").at(-1));
-    return this.render(workflowId, directory);
+    const attemptId = z.string().min(1).parse(source.searchParams.get("attempt"));
+    // Depot's log API can lag behind this still-running job. Step outputs carry
+    // our own verdict immediately; completed producer logs still come from Depot.
+    const lines = [
+      { stepId: "tests_passed", marker: process.env.CI_TRACE_GREEN },
+      { stepId: "merge_reports", marker: process.env.CI_TRACE_VALIDATION_END },
+      { stepId: "tests_passed", marker: process.env.CI_TRACE_GREEN_END },
+    ].flatMap(({ stepId, marker }) =>
+      marker ? [{ stepKey: stepId, stepId, stepName: "", body: `@@ci-trace ${marker}` }] : [],
+    );
+    return this.write(workflowId, directory, new Map([[attemptId, lines]]));
   }
 
   /** Build local HTML/OTLP files without publishing or changing a commit status. */
   async render(workflowId: string, directory: string) {
+    return this.write(workflowId, directory, new Map());
+  }
+
+  private async write(
+    workflowId: string,
+    directory: string,
+    local: Map<string, z.infer<typeof LogPage>["lines"]>,
+  ) {
     const workflow = Workflow.parse(await this.depot("GetWorkflow", { workflowId }));
     if (
       workflow.repo !== repository ||
       !["preview.yml", "preview-main.yml"].includes(workflow.workflowPath)
     )
       throw new Error("Only Iterate preview/main workflows can publish CI traces");
-    const report = await this.collect(workflow);
+    const report = await this.collect(workflow, local);
     await mkdir(directory, { recursive: true });
     await writeFile(`${directory}/trace.json`, JSON.stringify(report, null, 2));
     await writeFile(`${directory}/trace.html`, await renderTrace(report));
@@ -40,7 +58,10 @@ export default class CiTrace {
     return { directory, name };
   }
 
-  private async collect(workflow: z.infer<typeof Workflow>) {
+  private async collect(
+    workflow: z.infer<typeof Workflow>,
+    local: Map<string, z.infer<typeof LogPage>["lines"]>,
+  ) {
     const source = await fetch(
       `https://raw.githubusercontent.com/${repository}/${workflow.sha}/.depot/workflows/preview-run.yml`,
       { signal: AbortSignal.timeout(30_000) },
@@ -81,7 +102,22 @@ export default class CiTrace {
         ] as const;
       }),
     );
-    return assembleTrace(workflow, new Map(entries));
+    const logs = new Map(entries);
+    for (const [attemptId, lines] of local) {
+      if (
+        !workflow.jobs.some(
+          (job) =>
+            job.jobKey.endsWith(":finish") &&
+            job.attempts.some((attempt) => attempt.attemptId === attemptId),
+        )
+      )
+        throw new Error("Local verdict does not belong to this workflow's finish attempt");
+      logs.set(attemptId, [
+        ...(logs.get(attemptId) || []),
+        ...lines.map((line) => ({ ...line, command: "" })),
+      ]);
+    }
+    return assembleTrace(workflow, logs);
   }
 
   private async depot(method: string, body: object) {

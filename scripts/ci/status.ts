@@ -192,10 +192,9 @@ export default class CiStatus {
     );
     if (!response.ok) throw new Error(`Updating own GitHub check returned HTTP ${response.status}`);
     const greenAt = Date.now();
-    if (process.env.CI_TRACE_ENABLED === "1")
-      console.log(
-        `\n@@ci-trace ${JSON.stringify({ kind: "check-green", time: greenAt, checkId: check.id })}`,
-      );
+    const marker = JSON.stringify({ kind: "check-green", time: greenAt, checkId: check.id });
+    await appendFile(this.env.GITHUB_OUTPUT, `ci-trace-green=${marker}\n`);
+    if (process.env.CI_TRACE_ENABLED === "1") console.log(`\n@@ci-trace ${marker}`);
     console.log(
       `[ci:status] check ${check.id} set green at ${new Date(greenAt).toISOString()}; job continues`,
     );

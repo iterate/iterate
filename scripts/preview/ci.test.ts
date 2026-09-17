@@ -70,6 +70,11 @@ test("the lifecycle owner encloses every fixed shard and cleanup waits for their
   expect(steps[trace]).toMatchObject({
     if: "always() && steps.consumers.outputs.settled == 'true'",
     "timeout-minutes": 5,
+    env: {
+      CI_TRACE_GREEN: "${{ steps.tests_passed.outputs.ci-trace-green }}",
+      CI_TRACE_VALIDATION_END: "${{ steps.merge_reports.outputs.ci-trace-end }}",
+      CI_TRACE_GREEN_END: "${{ steps.tests_passed.outputs.ci-trace-end }}",
+    },
   });
   expect(steps[green]).toMatchObject({
     if: "success() && needs.prepare.result == 'success' && steps.consumers.outputs.succeeded == 'true' && steps.merge_reports.outcome == 'success'",

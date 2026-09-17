@@ -288,6 +288,9 @@ jobs:
         timeout-minutes: 5
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          CI_TRACE_GREEN: ${{ steps.tests_passed.outputs.ci-trace-green }}
+          CI_TRACE_VALIDATION_END: ${{ steps.merge_reports.outputs.ci-trace-end }}
+          CI_TRACE_GREEN_END: ${{ steps.tests_passed.outputs.ci-trace-end }}
         run: >-
           doppler run --project _shared --config preview --
           pnpm exec trpc-cli scripts/ci/tracing/cli.ts current ci-trace.ignoreme

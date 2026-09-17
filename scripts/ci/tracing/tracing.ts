@@ -155,16 +155,13 @@ export function assembleTrace(
     ? undefined
     : verdictEvents
         .flatMap((event) => {
-          if (
-            event.kind !== "shell-start" ||
-            !["consumers", "merge_reports", "tests_passed"].includes(event.step)
-          )
-            return [];
-          const end = verdictEvents.find(
-            (item) => item.kind === "shell-end" && item.id === event.id && item.exitCode !== 0,
+          if (event.kind !== "shell-end" || event.exitCode === 0) return [];
+          const start = verdictEvents.find(
+            (item) => item.kind === "shell-start" && item.id === event.id,
           );
-          return end?.kind === "shell-end"
-            ? [{ time: end.time, evidence: `Failed test-result validation (${event.step})` }]
+          const step = event.stepId || (start?.kind === "shell-start" ? start.step : "");
+          return ["consumers", "merge_reports", "tests_passed"].includes(step)
+            ? [{ time: event.time, evidence: `Failed test-result validation (${step})` }]
             : [];
         })
         .sort((a, b) => a.time - b.time)[0];

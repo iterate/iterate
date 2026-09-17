@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { expect, test } from "vitest";
@@ -29,22 +31,14 @@ test("the test trace ends at green and excludes cleanup, even if cleanup later f
   expect(spans.map((span) => span.name)).toEqual(["Preview", "Prepare"]);
 });
 
-test("a failed result validation is red even when every test job passed", () => {
+test("a local validation exit is red even before Depot exposes its shell start", () => {
   const workflow = previewWorkflow("failed");
   const spans = assembleTrace(
     workflow,
     new Map([
       [
         "finish-attempt",
-        [
-          line("merge_reports", {
-            kind: "shell-start",
-            step: "merge_reports",
-            id: "merge",
-            time: ms(21),
-          }),
-          line("merge_reports", { kind: "shell-end", id: "merge", time: ms(24), exitCode: 1 }),
-        ],
+        [line("merge_reports", { kind: "shell-end", id: "merge", time: ms(24), exitCode: 1 })],
       ],
     ]),
   ).resourceSpans[0].scopeSpans[0].spans;
@@ -490,6 +484,7 @@ test("the shell hook preserves failures and does not double-count nested bash", 
       ...process.env,
       BASH_ENV: resolve("ci/tracing/shell.sh"),
       GITHUB_ACTION: "install_dependencies",
+      GITHUB_OUTPUT: "",
     },
   }).catch((error) => error);
   expect(result.code).toBe(7);
@@ -500,6 +495,30 @@ test("the shell hook preserves failures and does not double-count nested bash", 
   ]);
   expect(events[1].time).toBeGreaterThanOrEqual(events[0].time);
 });
+
+test.each([0, 7])(
+  "the shell hook makes exit %s available to the next step without Depot logs",
+  async (exitCode) => {
+    const directory = await mkdtemp(resolve(tmpdir(), "ci-verdict-"));
+    try {
+      const output = resolve(directory, "step-output");
+      const result = await promisify(execFile)("bash", ["-c", `exit ${exitCode}`], {
+        env: {
+          ...process.env,
+          BASH_ENV: resolve("ci/tracing/shell.sh"),
+          CI_TRACE_SHELL: "",
+          GITHUB_OUTPUT: output,
+        },
+      }).catch((error) => error);
+      expect(result.code || 0).toBe(exitCode);
+      const record = JSON.parse((await readFile(output, "utf8")).trim().split("ci-trace-end=")[1]);
+      expect(record).toEqual(markers(result.stdout).at(-1));
+      expect(record).toMatchObject({ kind: "shell-end", exitCode, time: expect.any(Number) });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 test("reporter lifecycle records retain both retry attempts without exception payloads", async () => {
   // Exercise the public reporter interface in its own process: no global console
