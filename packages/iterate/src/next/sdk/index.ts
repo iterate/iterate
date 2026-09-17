@@ -319,6 +319,8 @@ export abstract class ConfigWorker<
         headers: { "content-type": "text/plain; charset=utf-8" },
       });
     } finally {
+      // The scope is a capnweb RPC stub, which implements `Symbol.dispose` at runtime while its type
+      // does not say so; disposing it ends this one pipelined round trip (as `processEventBatch` does).
       (itx as unknown as Disposable)[Symbol.dispose]?.();
     }
   }

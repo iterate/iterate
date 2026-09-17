@@ -141,9 +141,10 @@ localOnly(
     await registerProject(projectId);
     const itx = openItx(projectId);
     await itx.provide("itx.apps.site", siteRule());
-    // the bundled default config worker: 404 — the request reached the project, nothing answered
+    // the bundled default config worker: the project's bare homepage — the request reached the project
     const bare = await fetchProjectHost("custom-apex.test", "/");
-    expect(bare.status, bare.text).toBe(404);
+    expect(bare.status, bare.text).toBe(200);
+    expect(bare.text).toContain(`Homepage of project ${projectId}`);
     await itx.provide("itx.worker", [
       "itx",
       "workers",
