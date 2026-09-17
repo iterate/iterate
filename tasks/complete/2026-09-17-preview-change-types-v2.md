@@ -8,9 +8,9 @@ base: main
 
 Implementation and live acceptance are complete in draft PR #2712. Prepare
 starts alongside planning and reads milestone values as step outputs; both the
-full run and setup-only inheritance passed. Follow-up fixes near-expiry lease
-reuse and exposes action/source in milestone values; fresh live verification is
-in progress. No runs were interrupted. Based on main after #2695.
+full run and setup-only inheritance passed. Near-expiry lease renewal and richer
+milestone values are implemented; follow-up live evidence is recorded in draft
+PR #2712. No runs were interrupted. Based on main after #2695.
 
 ## Request and decisions
 
@@ -161,10 +161,11 @@ in progress. No runs were interrupted. Based on main after #2695.
   dependency tests. Keep ancestry gates and publish settlement after restoration.
   Select only the four plan values for the signal: the new shell tracer also
   appends `ci-trace-end`, which must not enter the 140-character description.
-- Docs-only CI probe after merging main and simplifying milestone contexts.
 
 - Near-expiry reuse: planning accepts an unexpired lease, then Prepare renews
   only the chosen slot without erasing it and revalidates the deployed fleet.
   Removed the one-hour admission rule which rejected `69fbd65c5` with 17 minutes
   left. Milestone values now include action, source commit and inherited outcome;
-  irrelevant fields are absent. Live full → docs-only → tests-only proof pending.
+  irrelevant fields are absent. Full run `197cfc655` / `n6l8q95pm1` passed all
+  workflows, tests and restoration. Live docs-only and tests-only acceptance
+  (including a deliberately shortened lease) is recorded in PR #2712.
