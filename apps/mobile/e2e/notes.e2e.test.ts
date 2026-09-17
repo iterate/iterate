@@ -45,7 +45,7 @@ test(
     });
     using project = connectItx({ baseUrl, auth: { type: "bearer", token }, projectId });
 
-    using _ai = await project.ai.intercept((call) => {
+    using _ai = await interceptor.intercept(project, (call) => {
       if (call.source === "agent-turn") return interceptor.noOpAgent(call);
       expect(call).toMatchObject({
         source: "ai-run",

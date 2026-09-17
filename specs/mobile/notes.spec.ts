@@ -17,7 +17,7 @@ test("captures a note from the global composer and manages it on /notes", async 
 }) => {
   await using fixture = await helpers.createMobileFixture("mobile-notes");
 
-  using _ai = await fixture.itx.ai.intercept((call) =>
+  using _ai = await interceptor.intercept(fixture.itx, (call) =>
     call.source === "agent-turn"
       ? interceptor.noOpAgent(call)
       : Response.json({ response: JSON.stringify({ title: "", tags: [] }) }),

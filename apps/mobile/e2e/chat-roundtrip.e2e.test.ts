@@ -74,7 +74,7 @@ test("phone client seam: new mobile chat gets a live agent reply", async () => {
   // mutation (chat.tsx).
   const agent = project.agents.get(agentPath) as RpcStub<Agent>;
   await agent.create();
-  using _ai = await project.ai.intercept((call) =>
+  using _ai = await interceptor.intercept(project, (call) =>
     call.source === "agent-turn" && call.agentPath === agentPath
       ? interceptor.codemodeBackticksResponse(
           'async (itx) => { await itx.chat.sendMessage("Hello from the intercepted mobile model"); }',

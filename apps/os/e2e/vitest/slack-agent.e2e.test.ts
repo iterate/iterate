@@ -47,7 +47,7 @@ test.skipIf(signingSecret === null)(
       root.projects.get(`slack-agent-e2e-${runSuffix}`),
     );
     const { projectId } = await project.__describe();
-    using _ai = await project.ai.intercept((call) => {
+    using _ai = await interceptor.intercept(project, (call) => {
       if (call.source !== "agent-turn" || call.agentPath !== agentStreamPath)
         return interceptor.noOpAgent(call);
       return interceptor.codemodeBackticksResponse(

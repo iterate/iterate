@@ -84,7 +84,7 @@ async function attemptAgentSmoke(phases: SmokePhase[]): Promise<void> {
     category: "runtime",
     durationMs: Date.now() - readyStartedAt,
   });
-  using _ai = await project.ai.intercept((call) =>
+  using _ai = await interceptor.intercept(project, (call) =>
     call.source === "agent-turn" && call.agentPath === "/agents/smoke"
       ? interceptor.codemodeBackticksResponse(
           'async (itx) => { await itx.chat.sendMessage("pong"); }',

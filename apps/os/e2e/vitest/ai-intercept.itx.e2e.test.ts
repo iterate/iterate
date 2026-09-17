@@ -17,7 +17,7 @@ test("itx.ai.run('intercepted/…') is served by the live interceptor; releasing
     itx.projects.get(`ai-intercept-${crypto.randomUUID()}`),
   );
 
-  using interception = await project.ai.intercept(async (input) => {
+  using interception = await interceptor.intercept(project, async (input) => {
     return Response.json({ served: input });
   });
 
@@ -42,7 +42,7 @@ test("ai.run decodes JSON, preserves binary/SSE streams and raw responses, and r
   using project = await interceptor.createProject(
     itx.projects.get(`ai-response-${crypto.randomUUID()}`),
   );
-  using _interception = await project.ai.intercept(async (call) => {
+  using _interception = await interceptor.intercept(project, async (call) => {
     if (call.source !== "ai-run") throw new Error("Expected ai-run source");
     expect(call.request).toMatchObject({
       kind: "workers-ai",
@@ -235,7 +235,7 @@ test("an interceptor returning a plain object rejects without losing the session
   using project = await interceptor.createProject(
     itx.projects.get(`ai-invalid-${crypto.randomUUID()}`),
   );
-  using _interception = await project.ai.intercept(async (call) => {
+  using _interception = await interceptor.intercept(project, async (call) => {
     if (!call.request.body.invalid) return Response.json({ healthy: true });
     return { body: "invalid" } as any;
   });
@@ -256,7 +256,7 @@ createFailing(
   using project = await interceptor.createProject(
     itx.projects.get(`ai-invalid-${crypto.randomUUID()}`),
   );
-  using _interception = await project.ai.intercept(async (call) => {
+  using _interception = await interceptor.intercept(project, async (call) => {
     if (!call.request.body.invalid) return Response.json({ healthy: true });
     const response = Response.json({ value: "test" });
     await response.text();
@@ -281,7 +281,7 @@ createFailing(
   );
   const response = Response.json({ value: "test" });
   const lockedReader = response.body!.getReader();
-  using _interception = await project.ai.intercept(async (call) => {
+  using _interception = await interceptor.intercept(project, async (call) => {
     if (!call.request.body.invalid) return Response.json({ healthy: true });
     return response;
   });
@@ -317,7 +317,7 @@ test("a root stream DO restart closes the installing session with 4901; reconnec
     onWebSocketClose: (close) => closes.push(close),
   });
   using interceptorProject = interceptorSession.projects.get(description.projectId);
-  using _interception = await interceptorProject.ai.intercept(async ({ model }) =>
+  using _interception = await interceptor.intercept(interceptorProject, async ({ model }) =>
     Response.json({ servedBy: "first install", model }),
   );
   const consultStart = performance.now();
@@ -351,7 +351,7 @@ test("a root stream DO restart closes the installing session with 4901; reconnec
     auth: { type: "admin-secret", secret: adminSecret() },
   });
   using recoveredProject = recoveredSession.projects.get(description.projectId);
-  using _recovered = await recoveredProject.ai.intercept(async () =>
+  using _recovered = await interceptor.intercept(recoveredProject, async () =>
     Response.json({ servedBy: "re-install" }),
   );
   expect(await race(project.ai.run("intercepted/echo", {}), 2000)).toMatchObject({
@@ -373,9 +373,13 @@ test("a newer intercept() supersedes the older one; the older handle's release c
     auth: { type: "admin-secret", secret: adminSecret() },
   });
   using firstProject = firstSession.projects.get(description.projectId);
-  using first = await firstProject.ai.intercept(async () => Response.json({ servedBy: "first" }));
+  using first = await interceptor.intercept(firstProject, async () =>
+    Response.json({ servedBy: "first" }),
+  );
 
-  using _second = await project.ai.intercept(async () => Response.json({ servedBy: "second" }));
+  using _second = await interceptor.intercept(project, async () =>
+    Response.json({ servedBy: "second" }),
+  );
   expect(await race(project.ai.run("intercepted/echo", {}), 2000)).toMatchObject({
     servedBy: "second",
   });
@@ -411,7 +415,8 @@ async function createStreamInterception() {
     },
   });
   resources.use(
-    await providerProject.ai.intercept(
+    await interceptor.intercept(
+      providerProject,
       () => new Response(body, { headers: { "content-type": "text/event-stream" } }),
     ),
   );

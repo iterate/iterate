@@ -5,7 +5,7 @@ size: large
 
 # Intercept test AI, except the bendy yellow fruit smoke test
 
-Status: project policy and test conversions implemented; validation and preview evidence in progress.
+Status: strawman implemented and pushed. Local checks and live API proofs pass; deployed preview/browser validation is still running.
 
 ## Ask
 
@@ -26,7 +26,7 @@ The spend audit found $14.60 in 24 hours: example-message tests $8.41, Slack tes
 - [x] Inventory real AI paths and establish how fixture-created and application-created agents select models. *The leak was indirect births bypassing `createAgent`.*
 - [x] Add regression coverage for intercepted defaults and the explicit real-model exception. *Policy unit cases, journal/dispatch regression, and deployed `test-project-ai` proof.*
 - [x] Convert examples, mobile notes, Slack, agent tools, onboarding and remaining automated AI requests. *Test projects select intercepted models before journaling; fixtures script required replies.*
-- [ ] Preserve meaningful assertions with explicit scripted model output and controlled external responses.
+- [x] Preserve meaningful assertions with explicit scripted model output and controlled external responses. *Tool and Slack API proofs pass locally; media checks explicitly cover plumbing rather than model quality.*
 - [ ] Run required local checks and deployed preview tests; inspect gateway evidence for unwanted real calls.
 - [ ] Handle submitted reviews, update the PR description and complete this task on the branch.
 
@@ -36,3 +36,8 @@ The spend audit found $14.60 in 24 hours: example-message tests $8.41, Slack tes
 
 - Strawman tradeoff: remove the paid Gateway-cache probe (cache unit contracts remain); disable optional live Codex/voice probes until they have scripted WebSocket providers. Media tests assert plumbing with scripted output, not model quality.
 - Initial signup onboarding can request before the test installs its handler. The birth policy prevents spending; normal bounded model retries cover the connection gap. Preview evidence must check whether this causes visible failures.
+
+- Validation: full workspace `pnpm test`, typecheck, lint, knip and format passed. OS unit suite: 3,183 passed, 20 expected failures, one existing skip; the added signup-scope regression subsequently passed its targeted run.
+- Live local worker: both agent-tools tests passed; Slack reply/egress and three project-pool tests passed; the project-policy proof passed, including background onboarding isolation and failure after handler release. Proof project: `prj_ba20a229c70d4002b35da40bb31661fc`.
+- Local browser startup failed before test execution (`config.webServer exited early`); deployed preview browser jobs are the remaining acceptance check.
+- Fixture interceptors ignore template onboarding so its concurrent turn cannot consume a test-specific response. The onboarding spec uses the raw interceptor explicitly.

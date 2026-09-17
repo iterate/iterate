@@ -48,7 +48,7 @@ test("an agent-style media-search run finds the swimming lesson among decoys", a
     "decoy-receipt.png": "Coffee receipt: paid £4",
     "decoy-code.png": "Terminal: pnpm test passed",
   };
-  using _ai = await project.ai.intercept((call) => {
+  using _ai = await interceptor.intercept(project, (call) => {
     if (call.source === "agent-turn") return interceptor.noOpAgent(call);
     const transcript = transcripts[analyzing];
     if (!transcript) throw new Error(`No scripted media response for ${analyzing}`);

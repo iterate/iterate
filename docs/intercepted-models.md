@@ -25,7 +25,9 @@ paid dispatch. Projects without the policy keep their normal models.
 
 Tests use `interceptor.createProject(session.projects.get(slug))` from
 `@iterate-com/test-support`. It installs a no-op agent response on the caller's
-session. Tests that assert a reply or an AI result install a specific handler;
+session. Tests that assert a reply or an AI result use `interceptor.intercept(project, handler)`,
+which keeps template onboarding on a no-op responder. The onboarding spec uses
+the raw `project.ai.intercept` to script that agent explicitly;
 unscripted direct calls fail loudly. Keep that session open until test teardown.
 Browser signup's explicit `intercepted-e2e-…+test@nustom.com` identities in non-production also
 record the policy at birth, before their onboarding agent starts.

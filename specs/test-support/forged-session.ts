@@ -50,7 +50,7 @@ export async function createMobileFixture(
     }),
   );
 
-  resources.use(await itx.ai.intercept(interceptor.noOpAgent));
+  resources.use(await interceptor.intercept(itx, interceptor.noOpAgent));
 
   const agentHelper = resources.use(
     createAgentHelper({
