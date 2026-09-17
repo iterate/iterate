@@ -2217,6 +2217,7 @@ export type ItxAuthToken =
   | { type: "admin"; principal?: string }
   | { type: "user"; principal: string; projectScopes: string[] };
 
+/** Project-wide intercepted model selection, except the listed exact agent paths. */
 export type ProjectAiPolicy = { liveAgentPaths: string[] };
 
 /**

@@ -21,7 +21,7 @@ import type { Page } from "@playwright/test";
 
 export function uniqueSignupEmail(prefix: string) {
   const random = `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
-  return `${prefix}-${random}+test@nustom.com`.toLowerCase();
+  return `intercepted-e2e-${prefix}-${random}+test@nustom.com`.toLowerCase();
 }
 
 /**

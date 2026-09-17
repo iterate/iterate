@@ -27,7 +27,7 @@ Tests use `interceptor.createProject(session.projects.get(slug))` from
 `@iterate-com/test-support`. It installs a no-op agent response on the caller's
 session. Tests that assert a reply or an AI result install a specific handler;
 unscripted direct calls fail loudly. Keep that session open until test teardown.
-Browser signup's reserved non-production `+test@nustom.com` identities also
+Browser signup's explicit `intercepted-e2e-…+test@nustom.com` identities in non-production also
 record the policy at birth, before their onboarding agent starts.
 
 The sole live-model test is `specs/agent-chat.spec.ts`: its project allows exactly

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { projectAiModel } from "./project-ai-policy.ts";
+import { projectAiModel, signupTestAiPolicy } from "./project-ai-policy.ts";
 
 test("test projects intercept indirect agents and direct calls, with one exact live-agent exception", () => {
   const policy = { liveAgentPaths: ["/agents/bendy-yellow-fruit"] };
@@ -30,4 +30,17 @@ test("ordinary project models are unchanged", () => {
   expect(projectAiModel("openai/gpt-5.6-terra", undefined, "/agents/mobile/note-123")).toBe(
     "openai/gpt-5.6-terra",
   );
+});
+
+test("automatic signup policy is restricted to the browser suite, never ordinary test logins or production", () => {
+  expect(signupTestAiPolicy("intercepted-e2e-notes-123+test@nustom.com", "preview-1")).toEqual({
+    liveAgentPaths: [],
+  });
+  expect(signupTestAiPolicy("intercepted-e2e-notes-123+test@nustom.com", "dev")).toEqual({
+    liveAgentPaths: [],
+  });
+  expect(signupTestAiPolicy("alice+test@nustom.com", "preview-1")).toBeUndefined();
+  expect(signupTestAiPolicy("intercepted-e2e-notes-123+test@nustom.com", "prd")).toBeUndefined();
+  expect(signupTestAiPolicy("intercepted-e2e-notes-123+test@different.com", "dev")).toBeUndefined();
+  expect(signupTestAiPolicy(undefined, "dev")).toBeUndefined();
 });

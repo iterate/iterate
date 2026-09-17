@@ -1210,8 +1210,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
   {
     name: "ProjectAiPolicy",
     kind: "typeAlias",
-    sourceText: "export type ProjectAiPolicy = { liveAgentPaths: string[] };",
-    summary: "",
+    sourceText:
+      "/** Project-wide intercepted model selection, except the listed exact agent paths. */\nexport type ProjectAiPolicy = { liveAgentPaths: string[] };",
+    summary: "Project-wide intercepted model selection, except the listed exact agent paths.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

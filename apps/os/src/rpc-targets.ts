@@ -63,7 +63,7 @@ import type {
 } from "@iterate-com/auth-contract/worker";
 import { decodeMessageMentions, type Message } from "@iterate-com/shared/message";
 import type { AppConfig } from "./config.ts";
-import { ProjectAiPolicy } from "./lib/project-ai-policy.ts";
+import { ProjectAiPolicy, signupTestAiPolicy } from "./lib/project-ai-policy.ts";
 import { parseConfig } from "./config.ts";
 import { closeItxSessionTransport } from "./session-transport.ts";
 import {
@@ -6969,13 +6969,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
     const timing = { projectId: registered.projectId };
     const creatorEmail = userPrincipalOf(this.#props.auth)?.email;
-    // The reserved non-production OTP identities are automated signup tests.
-    // Record their policy in the birth batch before onboarding can request AI.
+    // Select the suite's policy before onboarding can request AI; ordinary
+    // +test logins remain usable for manual preview sessions.
     const aiPolicy =
-      args.aiPolicy ||
-      (parseConfig(env).environmentName !== "prd" && creatorEmail?.endsWith("+test@nustom.com")
-        ? { liveAgentPaths: [] }
-        : undefined);
+      args.aiPolicy || signupTestAiPolicy(creatorEmail, parseConfig(env).environmentName);
     // Every birth event carries an idempotency key, so the keyed-append door
     // retry in StreamRpcTarget.append is the single deploy-reset recovery.
     // Platform lane: the root batch arms the facet-placed project and
