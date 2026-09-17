@@ -105,6 +105,9 @@ function LlmTraceContent({
   onInspect: (next: Inspected) => void;
 }) {
   const trace = llmTrace(events, llmRequestOffset);
+  const derivedScriptCode = trace?.derived.scriptExecutionId
+    ? scriptTrace(events, trace.derived.scriptExecutionId)?.code
+    : undefined;
   const [renderMode, setRenderMode] = useState<"markdown" | "plain">("markdown");
   const [copied, setCopied] = useState(false);
   if (!trace)
@@ -180,6 +183,7 @@ function LlmTraceContent({
           outcome={trace.outcome}
           onInspect={onInspect}
           scriptExecutionId={trace.derived.scriptExecutionId}
+          derivedScriptCode={derivedScriptCode}
         />
         {trace.derived.prose || trace.derived.scriptExecutionId ? (
           <section className="px-5 py-3">
@@ -243,11 +247,15 @@ function ResponseView({
   outcome,
   onInspect,
   scriptExecutionId,
+  derivedScriptCode,
 }: {
   liveStep: AgentUiLlmStep | undefined;
   outcome: LlmTrace["outcome"];
   onInspect: (next: Inspected) => void;
   scriptExecutionId: string | undefined;
+  /** The script the loop ran from this response — a codemode action, or the plain-response handler
+   *  (`itx.chat.sendMessage(...)`) for a bare reply. Shown when the raw text carries no tag of its own. */
+  derivedScriptCode: string | undefined;
 }) {
   const streaming = Boolean(liveStep);
   const thinking: StreamText | null =
@@ -258,7 +266,7 @@ function ResponseView({
       ? outcome.text
       : null;
   const hasRaw = Boolean(raw);
-  const script = raw ? extractScript(raw) : null;
+  const script = (raw ? extractScript(raw) : null) || derivedScriptCode || null;
   return (
     <section className="flex flex-col gap-3 border-b border-border/60 bg-muted/20 px-5 py-3">
       <div className="flex items-baseline gap-2">

@@ -1032,7 +1032,7 @@ function reduceAgentUiEvent(
       // A script extracted from an assistant response (`agent-output:<offset>`)
       // marks that response's llm step interpreted: the Script tab now carries
       // the code, so pretty rendering can fold the raw response away.
-      const extractedFromAssistantOffset = /^agent-output:(\d+)$/.exec(executionId);
+      const extractedFromAssistantOffset = /^(?:agent-output|reply):(\d+)$/.exec(executionId);
       const interpretedState =
         extractedFromAssistantOffset === null
           ? state

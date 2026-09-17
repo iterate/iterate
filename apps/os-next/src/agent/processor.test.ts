@@ -232,6 +232,7 @@ describe("AgentProcessor — the reduce", () => {
         config: {
           llm: { model: "@cf/x" },
           maxAutonomousTurns: 2,
+          plainResponse: "itx.chat.sendMessage",
           llmRequestExpiryMs: 600_000,
           llmRequestDebounceMs: 250,
           llmRequestRetryPolicy: { maxAttempts: 3, backoffBaseMs: 10_000, backoffMaxMs: 60_000 },

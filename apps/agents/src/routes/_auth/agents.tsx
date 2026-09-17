@@ -21,7 +21,7 @@ import { EventsList, InspectorSheet, type Inspected } from "../../components/age
 import { AgentsSidebar } from "../../components/agents-sidebar.tsx";
 import { AgentComposer, type StreamInterrupt } from "../../components/composer.tsx";
 import { QueuedMessagesPanel } from "../../components/queued-messages.tsx";
-import { reduceAgentFeed, toAgentEvent } from "../../lib/agent-events.ts";
+import { reduceAgentFeed, toAgentEvent, traceOffsetByMessage } from "../../lib/agent-events.ts";
 
 // An agent is a conversation on its own path (`/agents/<name>`); everything it does is an event
 // there. This page is a window onto that log — apps/os's agent view at the size os-next carries:
@@ -256,6 +256,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
       Object.keys(facet.data.activeScriptExecutions).length === 0
     : live.status === "error";
   const feed = useMemo(() => reduceAgentFeed(events, idle), [events, idle]);
+  const traceOffsets = useMemo(() => traceOffsetByMessage(events), [events]);
   const [toggled, setToggled] = useState<ReadonlySet<string>>(() => new Set());
   const onToggle = useCallback(
     (id: string) =>
@@ -418,6 +419,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
                   expanded={toggled.has(item.id)}
                   onToggle={onToggle}
                   inspect={inspect}
+                  traceOffset={item.kind === "assistant" ? traceOffsets.get(item.id) : undefined}
                   signedUrl={signedUrl}
                 />
               ))}

@@ -63,7 +63,7 @@ import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
  *  what the library uses today — `fetch`, the connectors' HTTP; `workers`, the host `run` loads
  *  into; `cd`, the sibling a repo or workspace facet is hosted on. Widen it HERE when a module needs
  *  more of itx — never by importing something else. */
-export type LibraryItx = Pick<BuiltInScope, "fetch" | "workers" | "cd" | "r2">;
+export type LibraryItx = Pick<BuiltInScope, "append" | "fetch" | "workers" | "cd" | "r2">;
 
 /** The library's roots, exactly as the built-ins record spreads them in: each verb closed over ONE
  *  `itx`. `BuiltInScope` (context/built-ins.ts) extends this, so the typed surface has them once. */
@@ -76,6 +76,10 @@ export interface LibraryRoots {
    *  A script bakes in its own values — an agent writes it whole (an alternative to a tool call), so
    *  `run` takes no arguments. */
   run(script: string): Promise<unknown>;
+  /** THE AGENT'S VOICE: `itx.chat.sendMessage(text)` appends a web-message-sent to THIS context —
+   *  the visible chat message. It is the default `plainResponse` handler, and an agent may call it
+   *  from inside a script for a mid-run update. Returns once the message is on the stream. */
+  chat: { sendMessage(message: string): Promise<{ ok: true }> };
   /** An MCP server over Streamable HTTP: `callTool(name, args)`, `listTools()`, and one method per
    *  tool whose name is a legal identifier. */
   connectToMcp(url: string, options?: McpConnectOptions): Promise<McpConnection>;
@@ -206,6 +210,15 @@ export function buildLibrary(itx: LibraryItx): {
   return {
     roots: {
       run: (script) => runScript(itx, script),
+      chat: {
+        sendMessage: async (message) => {
+          await itx.append({
+            type: "events.iterate.com/agents/web-message-sent",
+            payload: { message },
+          });
+          return { ok: true as const };
+        },
+      },
       connectToMcp: (url, options) =>
         memoized(["mcp", url, options], false, () => connectToMcp(itx, url, options)),
       connectToOpenApi: (specOrUrl, options) =>
