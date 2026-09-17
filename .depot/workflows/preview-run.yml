@@ -170,6 +170,11 @@ jobs:
 
   playwright:
     name: Playwright ${{ matrix.shard }}/6
+    env:
+      # Each shard has its own runner, so the early server can use a fixed port.
+      PLAYWRIGHT_MOBILE_WEB_PORT: "8081"
+      PLAYWRIGHT_MOBILE_WEB_PRESTARTED: "1"
+      MOBILE_WEB_LOG: test-results/playwright-shard-${{ matrix.shard }}/mobile-web.log
     strategy:
       fail-fast: false
       matrix:
@@ -191,6 +196,29 @@ jobs:
       - name: Reset test artifacts
         id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
+      - name: Start mobile web server
+        id: start_mobile_web
+        env:
+          CI: "true"
+          PLAYWRIGHT_TEST: "1"
+        # TODO: use Playwright --list --shard to start only where mobile tests
+        # are selected. Per-project webServer support was reverted before release:
+        # https://github.com/microsoft/playwright/pull/41167
+        # Start on every shard for now; backend deployment is already running.
+        run: |-
+          set -euo pipefail
+          mkdir -p "$(dirname "$MOBILE_WEB_LOG")"
+          nohup setsid pnpm --dir apps/mobile start:web --port "$PLAYWRIGHT_MOBILE_WEB_PORT" \
+            > "$MOBILE_WEB_LOG" 2>&1 < /dev/null &
+          export MOBILE_WEB_PID="$!"
+          echo "pid=$MOBILE_WEB_PID" >> "$GITHUB_OUTPUT"
+          # Keep the existing 120s startup budget; failures include the server log below.
+          timeout 120 bash -c '
+            until curl --fail --silent --max-time 2 "http://127.0.0.1:$PLAYWRIGHT_MOBILE_WEB_PORT/" > /dev/null; do
+              kill -0 "$MOBILE_WEB_PID" || exit 1
+              sleep 0.2
+            done
+          '
       - name: Reconcile browser installation
         id: install_browser
         run: pnpm exec playwright install chromium
@@ -216,6 +244,18 @@ jobs:
           doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
           pnpm preview ci-test $PREVIEW_TARGET_ARGS
           --shard ${{ matrix.shard }}
+      - name: Stop mobile web server and print logs
+        id: stop_mobile_web
+        if: always()
+        env:
+          MOBILE_WEB_PID: ${{ steps.start_mobile_web.outputs.pid }}
+        run: |-
+          if [ -n "$MOBILE_WEB_PID" ]; then
+            # Stop the whole pnpm/Expo process group, as Playwright does for its servers.
+            # It may already have exited after a startup failure.
+            kill -KILL -- "-$MOBILE_WEB_PID" 2>/dev/null || true
+            cat "$MOBILE_WEB_LOG"
+          fi
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
