@@ -5,11 +5,10 @@ size: medium
 
 # Find the shortest defensible preview rollout delay
 
-Status: 30 seconds selected for broader validation; six more fresh full runs
-will bring its sample to ten. Zero is rejected. Fifteen-second probes were
-faster but noisy; the original 90s control also retried after overload.
-All failures and absorbed errors remain in the evidence. Cleanup succeeded
-for every completed deployment. Final checks/report and recommendation remain.
+Status: ten full 30s trials are complete. Median smoke46.6s versus111.4s in
+90s controls; all ten workflows passed, three with retries. Memory errors
+appeared in3/10 at30s versus0/2 queried90s controls. Comparing60s next before
+recommending a default. All19 completed deployments erased/restored. No PR.
 
 ## Request and assumptions
 
@@ -243,3 +242,64 @@ Codex task: `01a0b054-bdd8-7d52-9c01-30d9b92576c8`.
   changes preserve the additional controls, failed 15s trial and recoveries.
 - Expanded 30s candidate validation: all 216 preview tests, scripts typecheck
   and changed-file lint passed.
+
+- Expanded 30s revision `5cd027543` pushed. Session 26715 waits for package
+  publication [35281259275](https://github.com/iterate/iterate/actions/runs/35281259275),
+  then starts six fresh canonical trials. Runtime source matches `f6018b024`;
+  only the report/specification history differs. Keep the revision fixed until
+  the batch exits; log: `thirty-expanded.log`. This is the final-candidate
+  sample expansion, not six warm reruns. No PR.
+
+- 2026-09-17 22:29 UTC: expanded trial1 `3265trd5m5` passed all suites,
+  no framework retries, unexpected wrapper errors, initial-connection
+  recoveries, code-update or memory-limit resets. Smoke54.230s, wait27.551s,
+  first project31.290s. Three absorbed storage references remain recorded.
+  Erase/restore succeeded. Five full30s trials now collected including the
+  first noisy one; second expanded trial `6whwknjr01` is running.
+
+- 2026-09-17 22:41 UTC: expanded trial2 `6whwknjr01` passed after three
+  retries: two object-moved errors (matching CF ages77.678/77.690s), plus a
+  browser tab-disconnection timeout whose cause remains unresolved. No
+  code-update or memory-limit reset; no unexpected wrapper errors. Smoke38.860s,
+  wait20.505s, project age31.169s; erase/restore succeeded. The controller
+  stopped as designed. Resume four more fresh30s trials after retaining this
+  sixth full result. Candidate revision remains5cd027543.
+
+- 2026-09-17 22:55 UTC: `09967hf2pc` passed with four retries: Docs navigation,
+  an orphaned mobile approval script, and internal errors in two Vitest cases.
+  Their causes remain unproven. One memory-limit reset at OS age78.753s
+  matches oversized-reset-341596f5, traceb7eb8f80e797d13012f00ce169df8f90.
+  No explicit code-update reset, initial-connection or wrapper recovery.
+  Smoke46.638s, wait28.009s, project31.071s; erase/restore succeeded.
+  Seven full30s trials collected (11,0,0,0,0,3,4 retries). Resume finalthree
+  while retaining all failures; no reliability recommendation yet.
+
+- 2026-09-17 23:07 UTC: `mbph95cv0d` passed all suites without framework
+  retries, unexpected wrapper errors, initial-connection recoveries,
+  code-update or memory-limit reset records. Smoke 47.792s, wait 28.207s,
+  first project age 30.890s. Streams storage-reset telemetry remains; cleanup
+  succeeded. Eight full 30s trials collected; ninth `3kqx2pr9gv` is running.
+
+- 2026-09-17 23:14 UTC: ninth full30s trial `3kqx2pr9gv` passed without test
+  retries, unexpected wrapper errors or code-update resets. Smoke45.125s,
+  wait28.078s, project30.972s. Two memory-limit records in one trace match
+  oversized-reset-58b1325c at86.601/86.656s; generic Streams storage telemetry
+  remains. Cleanup succeeded. Tenth fulltrial `ds35cnqskh` is running on
+  unchanged5cd027543, then assess the complete sample before finalizing.
+
+- Tenth full30s trial `ds35cnqskh` passed without framework retries, unexpected
+  wrapper errors, initial-connection recoveries, code-update or memory-limit
+  reset records. Smoke46.128s, wait28.117s, project31.146s; cleanup succeeded.
+- Complete30s sample:10 full workflows passed,3 had18 reported retries total,
+  one additional wrapper-internal recovery, and3 had memory-limit records.
+  Median smoke46.574s; median wholeworkflow402.297s, excluding queue.90s
+  controls: median111.449s/516.056s, two of three retried, zero memory records
+  in two queried controls. These are small, nonrandom single-slot samples.
+- 2026-09-17 23:24 UTC: do the planned60s comparison before recommending a
+  default. A speedup is established; mixed resource/retry evidence does not
+  justify dismissing unexplained errors (docs/engineering-invariants.md).
+  Changed existing spec first (red: expected60, received30), then the constant.
+  Start three fresh60s probes; if selected, collect10+ at that candidate too.
+
+- 60s candidate validation passed: all 216 preview tests, scripts typecheck,
+  and changed-file lint. Publishing a fresh revision before three full trials.

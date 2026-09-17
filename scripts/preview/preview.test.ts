@@ -993,12 +993,12 @@ describe("preview test commands", () => {
     );
   });
 
-  test("waits only for the remaining 30-second deployment age", () => {
+  test("waits only for the remaining 60-second deployment age", () => {
     const deployedAt = "2026-07-22T23:05:30.000Z";
     const now = Date.parse(deployedAt);
 
     expect(resolvePreviewRolloutRemainingSeconds({ appSlug: "os", deployedAt, nowMs: now })).toBe(
-      30,
+      60,
     );
     expect(
       resolvePreviewRolloutRemainingSeconds({
@@ -1006,23 +1006,23 @@ describe("preview test commands", () => {
         deployedAt,
         nowMs: now + 20_001,
       }),
-    ).toBe(10);
+    ).toBe(40);
     expect(
       resolvePreviewRolloutRemainingSeconds({
         appSlug: "os",
         deployedAt,
-        nowMs: now + 30_000,
+        nowMs: now + 60_000,
       }),
     ).toBe(0);
     for (const appSlug of ["semaphore", "streams-example-app", "dummy-petshop"] as const) {
-      expect(resolvePreviewRolloutRemainingSeconds({ appSlug, deployedAt, nowMs: now })).toBe(30);
-      expect(resolvePreviewRolloutReadyAtMs({ appSlug, deployedAt })).toBe(now + 30_000);
+      expect(resolvePreviewRolloutRemainingSeconds({ appSlug, deployedAt, nowMs: now })).toBe(60);
+      expect(resolvePreviewRolloutReadyAtMs({ appSlug, deployedAt })).toBe(now + 60_000);
     }
     expect(resolvePreviewRolloutRemainingSeconds({ appSlug: "auth", deployedAt, nowMs: now })).toBe(
       0,
     );
     expect(resolvePreviewRolloutRemainingSeconds({ appSlug: "os", nowMs: now })).toBe(0);
-    expect(resolvePreviewRolloutReadyAtMs({ appSlug: "os", deployedAt })).toBe(now + 30_000);
+    expect(resolvePreviewRolloutReadyAtMs({ appSlug: "os", deployedAt })).toBe(now + 60_000);
     expect(resolvePreviewRolloutReadyAtMs({ appSlug: "auth", deployedAt })).toBe(0);
     expect(() =>
       resolvePreviewRolloutRemainingSeconds({
