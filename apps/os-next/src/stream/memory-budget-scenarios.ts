@@ -34,7 +34,7 @@ import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 import { SubscriptionDelivery } from "./subscription-delivery.ts";
 
 /** These workloads run no background work, so the engine's revive is never armed: the stream's
- *  timer doors are stubs that must never be reached. */
+ *  schedule calls are stubs that must never be reached. */
 const neverScheduled = {
   schedule: () => Promise.reject(new Error("no workload here schedules a revive")),
   cancelSchedule: () => Promise.reject(new Error("no workload here schedules a revive")),

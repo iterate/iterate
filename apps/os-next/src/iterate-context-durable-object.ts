@@ -796,9 +796,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#library.releaseConnections();
   }
 
-  /** DO-only, for the workers lane: the release, plus every live facet aborted — workerd's harness
-   *  keeps a facet-pinned actor resident (workerd#6800), so a test that must evict a facet-hosting
-   *  context runs this first (`quiesce` in __workers-tests__/support.ts). Never a facet mid-call (a
+  /** DO-only, for the tests that run inside workerd (`__workers-tests__`): the release, plus every
+   *  live facet aborted — workerd's harness keeps a facet-pinned actor resident (workerd#6800), so
+   *  a test that must evict a facet-hosting context runs this first (`quiesce` in
+   *  __workers-tests__/support.ts). Never a facet mid-call (a
    *  reduce aborted midway is the stall its gap repair would have to heal). Aborted facets
    *  re-materialize from their startup memo on their next call. */
   releasePins(): void {

@@ -492,20 +492,26 @@ export class ProcessorEngine<State> {
   }
 
   /** The invariant, restored wherever it can have lapsed (an attempt started, a tick spent the
-   *  one-shot): work in flight ⇒ a revive armed. A refused schedule (a paused stream) is reported
-   *  and the attempt runs unrevivable — a stream that refuses a schedule refuses its settle too. */
+   *  one-shot): work in flight ⇒ a revive armed. A refused schedule (a paused stream, a storage
+   *  refusal) is reported and is NOT an arm: the attempt runs, and the next attempt start or batch
+   *  end asks again. */
   #ensureReviveArmed(): Promise<unknown> {
     if (this.#backgroundWorkInFlight === 0) return Promise.resolve();
-    return (this.#reviveArmed ??= this.#stream
-      .schedule({
-        key: ["revive", this.#name],
-        when: { afterMs: REVIVE_AFTER_MS },
-        events: [{ type: PROCESSOR_REVIVED_EVENT, payload: { name: this.#name } }],
-      })
-      .catch((error) => {
-        reportIssue("processor.revive", error, { slug: this.#contract.slug });
-        return null;
-      }));
+    if (!this.#reviveArmed) {
+      const armed: Promise<ScheduleReceipt | null> = this.#stream
+        .schedule({
+          key: ["revive", this.#name],
+          when: { afterMs: REVIVE_AFTER_MS },
+          events: [{ type: PROCESSOR_REVIVED_EVENT, payload: { name: this.#name } }],
+        })
+        .catch((error) => {
+          reportIssue("processor.revive", error, { slug: this.#contract.slug });
+          if (this.#reviveArmed === armed) this.#reviveArmed = null;
+          return null;
+        });
+      this.#reviveArmed = armed;
+    }
+    return this.#reviveArmed;
   }
 
   #retractRevive(): void {
@@ -516,6 +522,8 @@ export class ProcessorEngine<State> {
       .catch((error) => reportIssue("processor.revive", error, { slug: this.#contract.slug }));
   }
 
+  /** The tick this engine scheduled carries `{ name }` (above); the type is read off the wire, so
+   *  the payload is viewed as a maybe-name-bearing object and compared, never trusted. */
   #isOwnReviveTick(event: StreamEvent): boolean {
     return (
       event.type === PROCESSOR_REVIVED_EVENT &&

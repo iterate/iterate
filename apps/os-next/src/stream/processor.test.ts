@@ -1434,4 +1434,26 @@ describe("rule 3 — the revive: work in flight ⇒ a one-shot wake of the conte
     expect(mem.scheduled).toHaveLength(2);
     expect(mem.cancelled).toHaveLength(1);
   });
+
+  test("A REFUSED ARM IS NOT AN ARM: the attempt still runs, and the batch's end asks again", async () => {
+    const mem = memoryStream();
+    const attempts = new AttemptsProcessor();
+    const armed = mem.stream.schedule;
+    let asked = 0;
+    mem.stream.schedule = (input) =>
+      ++asked === 1 ? Promise.reject(new Error("storage refused the schedule")) : armed(input);
+    mem.engines.push(
+      new ProcessorEngine(attempts, { stream: mem.stream, storage: memoryStorage() }),
+    );
+    mem.stream.append({ type: "e" });
+    await settle();
+    expect(attempts.trace).toEqual(["attempt 1 started"]); // the refusal never blocks the attempt
+    expect(asked).toBe(2); // refused at the attempt's start; asked again at the batch's end, armed
+    expect(mem.scheduled).toEqual([revive("attempts")]);
+    attempts.endings[0]!();
+    await settle();
+    expect(mem.cancelled).toEqual([
+      { key: JSON.stringify(["revive", "attempts"]), scheduledAtOffset: 1 },
+    ]);
+  });
 });
