@@ -95,7 +95,15 @@ const safeLifecycle =
     .filter((file) => /(^|\/)package\.json$/.test(file) && existsSync(file))
     .every((file) => {
       const { scripts = {} } = JSON.parse(readFileSync(file, "utf8"));
-      return ["preinstall", "install", "postinstall", "prepare"].every(
+      return [
+        "pnpm:devPreinstall",
+        "preinstall",
+        "install",
+        "postinstall",
+        "preprepare",
+        "prepare",
+        "postprepare",
+      ].every(
         (hook) =>
           !scripts[hook] ||
           (file === "package.json" && hook === "prepare" && scripts[hook] === "is-ci || husky"),

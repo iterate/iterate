@@ -27,6 +27,7 @@ Assumptions: scope is `.depot/workflows/preview.yml` and its reusable `preview-r
 - Third normal push (`fe82a9497`, [workflow `gw3t5fc5p2`](https://depot.dev/orgs/0p91s0lz49/workflows/gw3t5fc5p2)): 9/9 hits against the final verifier; 552–938ms inside the verifier. Across all three pushes: 27/27 successful complete shell steps, 58–985ms, median 782ms.
 - Published the validated recipe to the normal image tag (`node24-pnpm10-worktree`) and `deps-9a7e762691fb69aed32a6189bde85a73a8af71003b8ec36ed25bda13e33c60e5`. [Build `pmt7ddhbh1`](https://depot.dev/orgs/0p91s0lz49/workflows/pmt7ddhbh1) produced digest `sha256:c565cb5f7acb7d74c6e05e36f640435262985a4514b4ec2b9389abc48d5740f2`.
 - Restored every downstream preview step and the normal image tag. Full scripts suite: 371 tests pass. `pnpm install`, typecheck, lint, knip and format pass. Root `pnpm test` encounters the pre-existing expired-skip policy failure at `specs/repo-ide-jsonc.spec.ts:19`; no skip was renewed or hidden.
+- Review follow-up: real pnpm 10.24.0 frozen installs with `CI=true` confirmed that root `pnpm:devPreinstall` and root/workspace `preprepare` and `postprepare` execute. Five regression cases initially allowed sealing; the lifecycle guard now rejects all seven hook names. The expanded 23 dependency tests and full 392-test scripts suite pass, along with scripts typecheck, focused lint and formatting. Main's merged changes have separately fixed the expired-skip failure above.
 
 ## Evidence and scope
 

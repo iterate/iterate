@@ -60,16 +60,32 @@ test("an unsealed image follows the existing install path", () => {
   expect(workspace.run("install")).toContain("install required: no baked fingerprint");
 });
 
-test("new workspace lifecycle scripts cannot silently be skipped", () => {
+test.each([
+  ["package.json", "pnpm:devPreinstall"],
+  ["package.json", "preinstall"],
+  ["package.json", "install"],
+  ["package.json", "postinstall"],
+  ["package.json", "preprepare"],
+  ["package.json", "prepare"],
+  ["package.json", "postprepare"],
+  ["app/package.json", "preinstall"],
+  ["app/package.json", "install"],
+  ["app/package.json", "postinstall"],
+  ["app/package.json", "preprepare"],
+  ["app/package.json", "prepare"],
+  ["app/package.json", "postprepare"],
+])("%s %s cannot silently be skipped", (file, hook) => {
   using workspace = fixture();
+  const manifest = JSON.parse(readFileSync(join(workspace.cwd, file), "utf8"));
   workspace.write(
-    "app/package.json",
+    file,
     JSON.stringify({
-      name: "local-dependency",
-      version: "1.0.0",
-      scripts: { prepare: "node -e \"console.log('lifecycle ran')\"" },
+      ...manifest,
+      scripts: { [hook]: "node -e \"console.log('lifecycle ran')\"" },
     }),
   );
+  // Establish which hooks the real frozen install runs, including with CI=true.
+  expect(workspace.exec("pnpm", ["install", "--frozen-lockfile"])).toContain("lifecycle ran");
   expect(() => workspace.run("seal")).toThrow("Cannot seal dependencies");
   expect(workspace.run("install")).toContain("lifecycle ran");
 });
