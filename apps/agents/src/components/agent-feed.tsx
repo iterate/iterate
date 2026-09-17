@@ -390,7 +390,8 @@ function RoundTabs({
   inspect: Inspect;
 }) {
   const [selected, setSelected] = useState("script");
-  const hasResult = code.status === "done" && (code.result !== undefined || !!code.errorMessage);
+  // Every settled script has a result pane — a `return;` that ended the turn says so there.
+  const hasResult = code.status === "done";
   const active = selected === "result" && !hasResult ? "script" : selected;
   return (
     <Tabs

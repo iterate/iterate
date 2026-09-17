@@ -205,12 +205,14 @@ function AgentConversation({ project, path }: { project: string; path: string })
         .parse(await context!.invoke("itx.facets.get('agent').liveSnapshot()")),
   });
   const facet = AgentLive.safeParse(live.value);
-  const idle =
-    facet.success &&
-    !facet.data.paused &&
-    !facet.data.openRequest &&
-    !facet.data.pendingLlmRequestTrigger &&
-    Object.keys(facet.data.activeScriptExecutions).length === 0;
+  // The turn is over when the facet holds no obligation — a pause included (a paused loop owes no
+  // follow-up round). Without live state at all (the door failed), the log alone decides: the
+  // reducer settles only once no step is running, and a follow-up round reopens an activity.
+  const idle = facet.success
+    ? !facet.data.openRequest &&
+      !facet.data.pendingLlmRequestTrigger &&
+      Object.keys(facet.data.activeScriptExecutions).length === 0
+    : live.status === "error";
   const feed = useMemo(() => reduceAgentFeed(events, idle), [events, idle]);
   const [toggled, setToggled] = useState<ReadonlySet<string>>(() => new Set());
   const onToggle = useCallback(
