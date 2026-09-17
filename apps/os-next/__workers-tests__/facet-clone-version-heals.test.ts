@@ -77,7 +77,9 @@ test("a facet call that rejects with the clone-version error is retried once on 
     return snap.state.n === durable ? snap : undefined;
   });
   const tries = (await s.invoke("itx.facets.get('flaky').tries()")) as { seq: number }[];
-  expect(tries).toHaveLength(3); // the rejected push, its retry, the appended event's push
+  // The rejected push and its retry at least; the appended event rides the retry when its commit
+  // landed while the first push was in flight (a pending push folds), or comes as a third push.
+  expect(tries.length).toBeGreaterThanOrEqual(2);
   const snap = (await s.invoke("itx.facets.get('flaky').snapshot()")) as { state: { n: number } };
   expect(snap.state.n).toBe(durable); // every durable event counted once — no double, no loss
   const loaderIdAfter = await runInDurableObject(
