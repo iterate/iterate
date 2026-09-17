@@ -8,8 +8,9 @@ base: main
 
 Implementation and live acceptance are complete in draft PR #2712. Prepare
 starts alongside planning and reads milestone values as step outputs; both the
-full run and setup-only inheritance passed. Tests-only reuse was verified earlier.
-No runs were interrupted. Based on main after #2695.
+full run and setup-only inheritance passed. Follow-up fixes near-expiry lease
+reuse and exposes action/source in milestone values; fresh live verification is
+in progress. No runs were interrupted. Based on main after #2695.
 
 ## Request and decisions
 
@@ -161,3 +162,9 @@ No runs were interrupted. Based on main after #2695.
   Select only the four plan values for the signal: the new shell tracer also
   appends `ci-trace-end`, which must not enter the 140-character description.
 - Docs-only CI probe after merging main and simplifying milestone contexts.
+
+- Near-expiry reuse: planning accepts an unexpired lease, then Prepare renews
+  only the chosen slot without erasing it and revalidates the deployed fleet.
+  Removed the one-hour admission rule which rejected `69fbd65c5` with 17 minutes
+  left. Milestone values now include action, source commit and inherited outcome;
+  irrelevant fields are absent. Live full → docs-only → tests-only proof pending.

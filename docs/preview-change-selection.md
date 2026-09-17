@@ -76,14 +76,17 @@ runs without the signal also fall back. Inherited planning results never publish
 it; later docs walk to the original full-run evidence.
 
 A **deployment** also requires that settled evidence, then must be this PR's
-currently recorded fleet, still owned by
-the PR in the semaphore, with at least an hour left on its lease. Every app's
+currently recorded fleet, with an unexpired lease still owned by the PR in the
+semaphore. Every app's
 recorded SHA, URL and Worker name must match; Cloudflare must still route 100%
 of traffic to its recorded version. Public readiness must succeed, including
 version headers where supported. Missing/unhealthy/replaced deployments are
 unusable; inventory or authentication errors fail visibly. No lease is renewed
-or borrowed during this lookup. Prepare checks again before reuse and falls
-back to deploying head if the candidate became unusable.
+or borrowed during planning. Prepare renews only the selected slot for three
+hours using the existing same-holder adoption, without erasing it. It then
+rechecks ownership, serving versions and readiness. A short remaining lease
+therefore does not require deployment; a missing/unusable candidate still falls
+back to deploying head.
 
 PR #2695 retires old DO classes and then restores usable Workers. The planner
 checks the restored version IDs, never the earlier versions from before cleanup.
@@ -114,10 +117,17 @@ Shards start Metro during setup, before waiting for the backend. The finalizer
 collects preparation and test traces before cleanup, including individual Vitest
 tests. `preview-settled` still waits for successful cleanup and restoration.
 
-The plan publishes `tests`, `deploy`, `commit`, and `slot` as string values in the
-`preview-plan` milestone's description (`tests=true; deploy=true; commit=…; slot=…`).
-The workflow selects these four outputs explicitly; the shell tracer's
-`ci-trace-end` JSON stays out of the size-limited status description.
+The plan publishes `action`, `commit`, `tests` and `deploy`, plus `conclusion`
+for inheritance or `slot` for reuse. For example:
+
+```text
+action=inherit; conclusion=success; commit=<ancestor SHA>; tests=false; deploy=false
+action=reuse; commit=<deployment SHA>; slot=preview-16; tests=true; deploy=false
+action=deploy; commit=<head SHA>; tests=true; deploy=true
+```
+
+The planner writes these values as one JSON step output; the workflow publishes
+that payload, excluding the shell tracer's unrelated `ci-trace-end` output.
 `status.ts wait-for` writes those values to step outputs, so `prepare` reads `steps.plan.outputs.tests` and the
 reuse identity. Milestone descriptions accept small, single-line values (140
 characters total); reasons and artifacts stay in their existing logs/storage.

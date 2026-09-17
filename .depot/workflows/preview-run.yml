@@ -67,13 +67,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
           # The shell tracer also writes step outputs; only these belong in the signal.
-          PLAN_VALUES: |
-            {
-              "tests": "${{ steps.plan.outputs.tests }}",
-              "deploy": "${{ steps.plan.outputs.deploy }}",
-              "commit": "${{ steps.plan.outputs.commit }}",
-              "slot": "${{ steps.plan.outputs.slot }}"
-            }
+          PLAN_VALUES: ${{ steps.plan.outputs.values }}
         run: >-
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
           pnpm exec trpc-cli scripts/ci/status.ts set preview-plan --values "$PLAN_VALUES"

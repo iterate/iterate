@@ -400,17 +400,24 @@ export async function ciPlan(options: DeployCommandOptions = {}) {
           },
         });
   const outputs = {
+    action: decision.action,
+    ...(decision.action === "inherit"
+      ? { conclusion: decision.result.conclusion, commit: decision.result.commit }
+      : decision.action === "reuse"
+        ? { commit: decision.deployment.commit, slot: decision.deployment.slot }
+        : { commit: history.head }),
     tests: decision.action !== "inherit",
     deploy: decision.action === "deploy",
-    commit: decision.action === "reuse" ? decision.deployment.commit : "",
-    slot: decision.action === "reuse" ? decision.deployment.slot : "",
   };
   if (process.env.GITHUB_OUTPUT) {
+    const values = Object.fromEntries(
+      Object.entries(outputs).map(([key, value]) => [key, String(value)]),
+    );
     await appendFile(
       process.env.GITHUB_OUTPUT,
       Object.entries(outputs)
         .map(([key, value]) => `${key}=${value}\n`)
-        .join(""),
+        .join("") + `values=${JSON.stringify(values)}\n`,
     );
   }
   const result = { head: history.head, ...decision, ...outputs };
@@ -454,6 +461,22 @@ export async function ciPrepare(
       ? await findPreviewDeployment(options.reuseCommit, target, runtime)
       : null;
     if (state?.environmentConfigLease?.slug !== options.reuseSlot) state = null;
+    if (state && options.reuseCommit && options.reuseSlot) {
+      const lease = await adoptLeaseHeldBySemaphore({
+        holder: run.holder,
+        leaseMs: defaultPreviewLeaseMs,
+        preferSlug: options.reuseSlot,
+        allowedSlugs: [options.reuseSlot],
+        semaphore: runtime.createPreviewSemaphoreResourceClient(),
+      });
+      // Renewal must not erase the restored fleet. Recheck ownership and every
+      // serving version after renewal, before publishing the plan to consumers.
+      state = lease ? await findPreviewDeployment(options.reuseCommit, target, runtime) : null;
+      if (state)
+        logPreview(
+          `Reusing preview ${options.reuseSlot} from ${options.reuseCommit} after lease renewal.`,
+        );
+    }
     if (options.reuseCommit && !state)
       logPreview("Selected preview is no longer usable; deploying the head instead.");
     if (!state) {
@@ -794,15 +817,19 @@ async function findPreviewDeployment(
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   });
   const resource = resources.find((item) => item.slug === slot.slug);
-  // No force-renewal: only borrow our own lease with enough remaining time
-  // for the 20-minute prepare + 25-minute finish watchdogs, with headroom.
+  // Planning only reads ownership. Prepare renews the selected lease before
+  // reuse, so a nearly expired lease is still a candidate; an expired one is not.
   if (
     resource?.leaseState !== "leased" ||
     resource.holder !== target.run.holder ||
     !resource.leasedUntil ||
-    resource.leasedUntil < Date.now() + 60 * 60_000
-  )
+    resource.leasedUntil <= Date.now()
+  ) {
+    logPreview(
+      `Cannot reuse ${commit}: ${slot.slug} has no live lease owned by ${target.run.holder}.`,
+    );
     return null;
+  }
   // Every preview app lives in this slot's account. Consult deployment
   // metadata too: auth, semaphore and dummy-petshop do not expose version headers.
   const account = await resolveEnvContext({ envs, dopplerProject: "os", env: slot.dopplerConfig });
@@ -6093,19 +6120,23 @@ async function listSlotsLeasedToHolder(semaphore: PreviewSemaphoreResourceClient
  * slots there); returning false moves on to the holder's next slot, if any.
  */
 async function adoptLeaseHeldBySemaphore(input: {
+  /** Reuse must renew only the selected deployment's slot, never another hold. */
+  allowedSlugs?: string[];
   holder: string;
   leaseMs: number;
   onAdopted?: (lease: PreviewSemaphoreLease) => Promise<boolean>;
   preferSlug: string | null;
   semaphore: PreviewSemaphoreResourceClient;
 }): Promise<EnvironmentConfigLease | null> {
-  const held = (await listSlotsLeasedToHolder(input.semaphore, input.holder)).sort(
-    (left, right) =>
-      Number(right.slug === input.preferSlug) - Number(left.slug === input.preferSlug),
-  );
+  const held = (await listSlotsLeasedToHolder(input.semaphore, input.holder))
+    .filter((resource) => !input.allowedSlugs || input.allowedSlugs.includes(resource.slug))
+    .sort(
+      (left, right) =>
+        Number(right.slug === input.preferSlug) - Number(left.slug === input.preferSlug),
+    );
   for (const resource of held) {
     const reissued = await input.semaphore.acquireSpecific({
-      allowedSlugs: previewEnvironmentSlugs,
+      allowedSlugs: input.allowedSlugs || previewEnvironmentSlugs,
       type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
       slug: resource.slug,
       leaseMs: input.leaseMs,

@@ -94,12 +94,7 @@ test("the lifecycle owner encloses every fixed shard and cleanup waits for their
   });
   // The shell tracer adds ci-trace-end to every step's outputs. Publish only
   // the small planning payload, not that JSON marker or future step metadata.
-  expect(JSON.parse(workflow.jobs.plan.steps.at(-1).env.PLAN_VALUES)).toEqual({
-    tests: "${{ steps.plan.outputs.tests }}",
-    deploy: "${{ steps.plan.outputs.deploy }}",
-    commit: "${{ steps.plan.outputs.commit }}",
-    slot: "${{ steps.plan.outputs.slot }}",
-  });
+  expect(workflow.jobs.plan.steps.at(-1).env.PLAN_VALUES).toBe("${{ steps.plan.outputs.values }}");
   expect(workflow.jobs.prepare.steps.find((step: any) => step.id === "prepare").run).toContain(
     "--reuse-commit {0} --reuse-slot {1}",
   );

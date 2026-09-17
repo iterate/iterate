@@ -2522,6 +2522,38 @@ describe("acquireAnyEnvironmentConfigLease", () => {
 });
 
 describe("adoptLeaseHeldBySemaphore", () => {
+  test("reuse renews only the selected slot, even with less than an hour left", async () => {
+    const selected = leasedResource("preview-2", "pr-1600");
+    const semaphore = fakeSemaphore({
+      list: async () => [selected, leasedResource("preview-3", "pr-1600")],
+      acquireSpecific: async (input: { slug: string; leaseMs: number }) => {
+        selected.leasedUntil = Date.now() + input.leaseMs;
+        return fakeLease({ slug: input.slug, expiresAt: selected.leasedUntil });
+      },
+    });
+    const lease = await adoptLeaseHeldBySemaphore({
+      holder: "pr-1600",
+      leaseMs: 3 * 60 * 60_000,
+      preferSlug: "preview-2",
+      allowedSlugs: ["preview-2"],
+      semaphore,
+    });
+    expect(lease).toMatchObject({ slug: "preview-2", leasedUntil: selected.leasedUntil });
+    expect(selected.leasedUntil).toBeGreaterThan(Date.now() + 2 * 60 * 60_000);
+
+    // Losing the selected slot must not renew another slot owned by this PR.
+    selected.holder = "pr-1601";
+    expect(
+      await adoptLeaseHeldBySemaphore({
+        holder: "pr-1600",
+        leaseMs: 3 * 60 * 60_000,
+        preferSlug: "preview-2",
+        allowedSlugs: ["preview-2"],
+        semaphore,
+      }),
+    ).toBeNull();
+  });
+
   test("re-issues the holder's lease under a fresh leaseId — no stored leaseId is ever consulted", async () => {
     const acquireSpecific = vi.fn(async (input: { force?: boolean }) =>
       input.force ? fakeLease({ leaseId: "1197a5b3-a705-4380-9958-6a0dbead16b7" }) : null,
