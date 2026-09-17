@@ -1,3 +1,4 @@
+import { relative } from "node:path";
 import { appendFlakeRecord, unknownFlakeRecordFromTelemetry } from "../flake-record.ts";
 import {
   ciTelemetrySourceFromEnvironment,
@@ -50,6 +51,13 @@ interface ReportedTestCase {
     | undefined;
   result(): { state: string; errors?: readonly unknown[] };
   annotations?(): ReadonlyArray<{ type: string; message: string }>;
+}
+
+// Structural types keep this reporter compatible across workspace Vitest versions.
+interface TracedTestCase extends ReportedTestCase {
+  id: string;
+  module: { moduleId: string };
+  project: { name: string };
 }
 
 interface ReportedTestModule {
@@ -127,6 +135,45 @@ export class RetryTelemetryReporter {
       ci: this.ci,
       context: this.context,
     });
+  }
+
+  onTestCaseReady(test: TracedTestCase): void {
+    if (process.env.CI_TRACE_ENABLED !== "1") return;
+    const diagnostic = test.diagnostic();
+    // Static skips have no execution timing. Fast tests may already be finished
+    // when this callback arrives: always use runner timestamps, not receipt time.
+    if (!diagnostic?.startTime) return;
+    console.log(
+      `\n@@ci-trace ${JSON.stringify({
+        kind: "test-start",
+        id: `${this.artifactId}/${test.id}`,
+        framework: "vitest",
+        time: diagnostic.startTime,
+        title: test.fullName,
+        file: relative(process.env.GITHUB_WORKSPACE || process.cwd(), test.module.moduleId),
+        line: test.location?.line || 0,
+        project: this.workspace + (test.project.name ? ` / ${test.project.name}` : ""),
+        retry: 0,
+      })}`,
+    );
+  }
+
+  onTestCaseResult(test: TracedTestCase): void {
+    if (process.env.CI_TRACE_ENABLED !== "1") return;
+    const diagnostic = test.diagnostic();
+    if (!diagnostic?.startTime) return;
+    // Vitest reports once after all retries and already normalizes test.fails.
+    // Do not publish error payloads or pretend these are per-attempt timings.
+    console.log(
+      `\n@@ci-trace ${JSON.stringify({
+        kind: "test-end",
+        id: `${this.artifactId}/${test.id}`,
+        time: diagnostic.startTime + diagnostic.duration,
+        status: test.result().state,
+        expectedStatus: "passed",
+        retryCount: diagnostic.retryCount,
+      })}`,
+    );
   }
 
   onTestModuleQueued(testModule: ReportedTestModule): void {

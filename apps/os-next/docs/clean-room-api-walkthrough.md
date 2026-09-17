@@ -735,7 +735,7 @@ reachable the same way, and a terminal `.fetch(request)` is an ordinary call on
 the facet's own fetch — plain HTTP only. A facet never answers a WebSocket
 (`FACET_NO_UPGRADE`): a socket terminates at the edge — a session's `/api`
 socket, a project host's lent-stub upgrade — and the facet behind it is reached
-by itx expression, so the idle quiesce can abort an idle facet with nothing to lose.
+by itx expression, so a facet can be aborted at any time with nothing to lose.
 
 One reduce-only processor is always on and runs **inline** in the commit
 transaction: the core reduce (`src/stream/core-processor.ts`, slug `core`,
@@ -1353,13 +1353,13 @@ clamped to the stream head. Every subscription made through `subscribe` is
 removed when its handle is disposed or the session ends (capnweb disposes the
 exported handle); `processors.enable` returns no handle, so a processor's row
 stays until `processors.disable`. The DO's
-idle quiesce is 30 s from the last use of a pin (a
-borrowed stub called, an open capnweb socket used — a request, an append, a facet call move nothing),
-rounded up to the next 10 s: the alarm then returns every borrowed stub and closes every library
+pins are released 30 s after the last use of one (a
+borrowed stub called, an open capnweb socket used — a request, an append, a facet call move nothing)
+by a plain timer, never the alarm: it returns every borrowed stub and closes every library
 connection — a live facet is not a pin, it dies with the actor; the next call re-borrows them (a facet delete — `processors.disable`'s
 one effect — that lands while a facet's source is loading wins: the load refuses with `NO_FACET` instead of
-resurrecting an orphan), and a context with nothing pinned
-arms no idle alarm at all. Configuring a subscription drops whatever the loop remembered under
+resurrecting an orphan), and no pin ever arms an alarm: the alarm serves durable obligations only
+(schedules, and the claims of cursor rows and hosted processors). Configuring a subscription drops whatever the loop remembered under
 that name (the old target's cursor included) and wakes a facet target at once,
 as the head of that name's push chain. Re-subscribing a HALTED row with the same
 target un-halts it and restarts from now; to replay from the halt point, append
@@ -1418,10 +1418,10 @@ class IterateContextDurableObject extends DurableObject<Env> {
    *  502 — ProjectSecretRefused — to the caller), then the terminal fetch. */
   fetch(request: Request): Promise<Response>;
   /** THE ALARM PASS: the wake record (`"alarm"`), the due schedules, every cursor row's owed delivery,
-   *  then the idle quiesce (returns borrowed stubs, closes library connections); the next deadline
-   *  is derived once, when the pass ends. */
+   *  then every due claim of a hosted processor (spent, and the facet's `revive()` called); the next
+   *  deadline is derived once, when the pass ends. Pins are released by a timer, not here. */
   alarm(): Promise<void>;
-  /** DO-only, for the workers lane: the quiesce's release, plus every live facet aborted. */
+  /** DO-only, for the workers lane: the pins' release, plus every live facet aborted. */
   releasePins(): void;
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void;
   webSocketClose(ws: WebSocket, code: number, reason: string): void;
@@ -1580,7 +1580,7 @@ sequenceDiagram
   D->>E: stub.invoke([["move", 10]])
   E->>C: robotObject.move(10)   (capnweb, same session)
   C-->>D: result
-  Note over D: stub kept BORROWED while traffic flows,<br/>RETURNED at idle quiesce; a page borrows it back
+  Note over D: stub kept BORROWED while traffic flows,<br/>RETURNED by the pins' 30 s timer; a page borrows it back
 ```
 
 The DO never holds a client stub across idle, so any number of connected

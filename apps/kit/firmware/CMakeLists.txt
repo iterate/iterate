@@ -33,14 +33,15 @@ add_subdirectory(components/core)
 add_subdirectory(components/audio)
 add_subdirectory(components/capabilities)
 add_subdirectory(components/avatar)
-# The shared voice loop, built against the pretend ESP-IDF in
-# tests/fakes/esp_idf. Four boards run this file; before it was here, nothing
-# outside a flash had ever compiled it.
+# The host ESP-IDF, then the shared voice loop built against it. Four boards
+# run that loop; on a laptop the tests drive it with a pinned clock and
+# targets/mac runs it as a device.
+add_subdirectory(platforms/host)
 add_subdirectory(components/voice)
 
 if(APPLE)
   add_subdirectory(platforms/darwin)
-  add_subdirectory(targets/host_cli)
+  add_subdirectory(targets/mac)
 endif()
 
 add_subdirectory(tests)

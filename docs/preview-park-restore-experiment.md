@@ -135,17 +135,16 @@ bounded observation, not a guarantee for every workload or instance type.
 
 ## Time to green in traces
 
-The primary trace statistic now measures from the workflow execution's start to
-GitHub acknowledging its early-green update. Workflow wall time remains beside
-it, and the trace still includes the full cleanup/restoration period. The marker
-is an OTLP event on the workflow span, with its evidence and elapsed milliseconds.
+The primary trace statistic measures from execution creation to GitHub acknowledging
+its early-green update. Preparation, tests and result validation contribute to this
+metric; reporting and cleanup/restoration are excluded. There is no separate
+workflow wall-time statistic. The marker is an OTLP event on the workflow span.
 
-For the successful run above, this is **5m 36s to green**, versus **6m 50s total**.
-Historical runs use the measured end of the successful early-green step; here it
-was 20ms after the logged GitHub acknowledgement. Without an early update, a
-successful workflow uses its completion time. Failed/cancelled runs retain any
-observed green milestone and show their final outcome; otherwise no green time
-is recorded. A rerun cannot inherit a milestone from an earlier execution.
+For the successful run above, this is **5m 36s to green**; cleanup continued until
+**6m 50s**. Historical runs can use the successful early-green step's end. Test or
+preparation failures show Time to red; cleanup failures remain in Depot and its
+GitHub check without changing the earlier test result in the trace. A rerun cannot
+inherit a milestone from an earlier execution.
 
 This measures the preview workflow, not every check on the commit. Scripts tests
 (369), typecheck, scoped lint and formatting passed. Desktop/mobile browser

@@ -17,7 +17,7 @@ extern "C" {
 
 enum {
   ITERATE_KIT_POSIX_WEBSOCKET_PATH_CAPACITY = 160,
-  ITERATE_KIT_POSIX_WEBSOCKET_REQUEST_CAPACITY = 512,
+  ITERATE_KIT_POSIX_WEBSOCKET_REQUEST_CAPACITY = 768,
   ITERATE_KIT_POSIX_WEBSOCKET_RESPONSE_CAPACITY = 4096,
   ITERATE_KIT_POSIX_WEBSOCKET_ACCEPT_CAPACITY = 29,
 };
@@ -54,6 +54,9 @@ struct iterate_kit_posix_websocket_client_options {
   uint8_t *transmit_storage;
   size_t transmit_storage_capacity;
   bool DANGEROUS_disable_certificate_verification;
+  /** Sent as `Authorization: Bearer <token>` on the upgrade when set: os-next
+   * gates `/api` with its OAuth provider before the first frame exists. */
+  const char *bearer_token;
 };
 
 /**
@@ -86,6 +89,8 @@ struct iterate_kit_posix_websocket_client {
    */
   int64_t last_inbound_us;
   int64_t last_outbound_us;
+  /** Pongs answering this client's own pings: the loop's hop liveness. */
+  uint32_t pongs_received;
   int last_error;
   bool request_built;
   bool upgraded;

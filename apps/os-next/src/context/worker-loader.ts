@@ -232,7 +232,7 @@ export async function prepareConfinedWorker(
         // `allow_irrevocable_stub_storage` (experimental) lets loaded code store its `env.ITX` stub
         // and replay it (workers-and-facets.e2e pins it) — every worker in the chain needs it, so
         // the parent config carries it too. No `limits`: trusted clients. The platform bounds a DO to
-        // 10 distinct dynamic workers with in-flight requests — the idle quiesce keeps a context under it.
+        // 10 distinct dynamic workers with in-flight requests — the pins' release keeps a context under it.
         compatibilityDate: "2026-09-01",
         compatibilityFlags: [
           "no_nodejs_compat",

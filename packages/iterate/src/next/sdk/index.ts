@@ -17,8 +17,6 @@ import {
   ReduceCheckpointTable,
   type StreamEvent,
   type StreamEventInput,
-  type ReviveSchedule,
-  type ScheduleReceipt,
 } from "../stream/processor.ts";
 import { auth } from "./auth.ts";
 export { auth };
@@ -70,10 +68,11 @@ export { LiveState, type LiveStateSink } from "../stream/processor.ts";
 // dotted call.
 //
 // NEVER define alarm(): facets have none (workerd#6810 — the runtime answers "Facets currently
-// cannot set alarms."); a timer, when one is needed, is a scheduled append on the context — the
-// engine's own REVIVE is one (processor.ts, rule 3): while a `runInBackground` attempt is in flight
-// the context holds a one-shot wake, so a host that dies mid-attempt is pushed and runs its at-head
-// pass again (__workers-tests__/agent-revive.test.ts: an LLM call survives its context's death).
+// cannot set alarms."); a timer, when one is needed, is a scheduled append on the context. The
+// engine's own recovery is a CLAIM on the context's alarm (processor.ts, rule 3): while a
+// `runInBackground` attempt is in flight the context owes this facet a `revive()`, so a host that
+// dies mid-attempt is re-materialized and runs its at-head pass again
+// (__workers-tests__/agent-revive.test.ts: an LLM call survives its context's death).
 
 /** What the parent mints the class with — the whole identity. */
 export type StreamProcessorProps = { iterateContextName: string; name: string };
@@ -91,11 +90,8 @@ export type ProcessorScope = {
   builtins: {
     append(...events: StreamEventInput[]): Promise<unknown>;
     readEvents(afterOffset?: number, limit?: number): Promise<unknown>;
-    /** The revive's timer (processor.ts rule 3): a one-shot scheduled append, retracted by receipt. */
-    schedules: {
-      set(input: ReviveSchedule): Promise<unknown>;
-      cancel(receipt: ScheduleReceipt): Promise<unknown>;
-    };
+    /** The engine's claim on the context's alarm (processor.ts rule 3): "come back by `at`", or null. */
+    processors: { claim(name: string, at: number | null): Promise<unknown> };
   };
 };
 
@@ -124,6 +120,11 @@ export abstract class StreamProcessorDurableObject<
   /** Catch up from the log (the read-your-writes entry after an eviction). */
   catchUpFromLog(): Promise<void> {
     return this.#engine.catchUpFromLog();
+  }
+  /** THE REVIVE: the context's alarm pass calls it for a due claim — catch up, then run the
+   *  at-head pass, so an attempt the last incarnation was running is started again from state. */
+  revive(): Promise<void> {
+    return this.#engine.revive();
   }
   /** Caught up through the log, then `{ offset, state }`. */
   snapshot(): Promise<{ offset: number; state: State }> {
@@ -169,12 +170,10 @@ export abstract class StreamProcessorDurableObject<
           this.withItx((itx) => itx.builtins.append(...events)) as Promise<StreamEvent[]>,
         read: (after, limit) =>
           this.withItx((itx) => itx.builtins.readEvents(after, limit)) as Promise<StreamPage>,
-        schedule: (input) =>
-          this.withItx((itx) => itx.builtins.schedules.set(input)) as Promise<ScheduleReceipt>,
-        cancelSchedule: (receipt) => this.withItx((itx) => itx.builtins.schedules.cancel(receipt)),
+        claim: (at) =>
+          this.withItx((itx) => itx.builtins.processors.claim(this.ctx.props.name, at)),
       },
       storage: new ReduceCheckpointTable(this.ctx.storage.sql),
-      name: this.ctx.props.name,
     }));
   }
 

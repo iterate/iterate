@@ -8,7 +8,7 @@ import process from "node:process";
 import { type VoicelabConnectOptions } from "./connect.ts";
 import { gapStatsOfGaps } from "./live-probe.ts";
 import { sleep, synthesizeFrames } from "./probe-audio.ts";
-import { talk } from "./talk.ts";
+import { setup } from "./setup.ts";
 import { openWireCall } from "./wire-call.ts";
 
 export interface DuplexOptions extends VoicelabConnectOptions {
@@ -32,13 +32,7 @@ export async function duplex(options: DuplexOptions): Promise<void> {
   const bargeAfterMs = options.bargeAfterMs ?? 4_000;
   const delegationTimeoutMs = options.delegationTimeoutMs ?? 150_000;
   if (options.setup === true) {
-    await talk({
-      project: options.project,
-      baseUrl: options.baseUrl,
-      streamPath,
-      setupOnly: true,
-      auto: true,
-    });
+    await setup({ project: options.project, baseUrl: options.baseUrl, streamPath });
   }
 
   const directory = mkdtempSync(path.join(tmpdir(), "duplex-"));

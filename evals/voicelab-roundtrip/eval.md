@@ -18,7 +18,7 @@ the reconnected session had no memory of the conversation.
 ## Setup
 
 Use the project slug `voicelab-eval` (NOT a fresh default-template project —
-this eval needs the voice agent, which `talk` installs itself, and a stable
+this eval needs the voice agent, which `voicelab setup` installs, and a stable
 slug keeps prod tidy; the project is created on first run). Everything runs
 from `apps/os` inside `doppler run --config prd -- …`.
 
@@ -32,8 +32,9 @@ from `apps/os` inside `doppler run --config prd -- …`.
      "return await itx.repo.commitFiles({ changes: [{ path: 'codeword.txt', content: 'walrus trumpet' }], message: 'voicelab eval codeword' })"
    ```
 
-   (If the project does not exist yet, run step 2 once first — `talk` creates
-   it — then come back.)
+   (If the project does not exist yet, run
+   `doppler run --config prd -- pnpm cli voicelab setup --project voicelab-eval`
+   once first — it creates the project — then come back.)
 
 2. Generate the utterances (16 kHz mono PCM16 WAVs) into a scratch dir:
    - `01-ask.wav`: "Hello. Please ask your notes assistant to read the file
@@ -45,23 +46,19 @@ from `apps/os` inside `doppler run --config prd -- …`.
    say -o 01-ask.wav --data-format=LEI16@16000 --channels=1 "<text>"
    ```
 
-3. Phase A — the roundtrip. Run an unattended conversation on a fresh
-   timestamped stream (`--stream-path /agents/voice/eval-<stamp>`):
+3. Phase A — the roundtrip. Run the conversation on the board firmware's Mac
+   target: from `apps/kit`, `pnpm firmware:build:host` then
+   `firmware/.build/host/iterate-kit-mac --config <image> --name <name>`, and
+   speak each utterance with
+   `apps/os-next/scripts/voice-board.ts --device <name> --prompt "<text>"`.
 
-   ```
-   doppler run --config prd -- pnpm cli voicelab talk --project voicelab-eval \
-     --stream-path /agents/voice/eval-<stamp> --converse 3 \
-     --utterance-dir <dir> --pretend-speaker <dir>/speaker.wav
-   ```
-
-   The driver speaks the ask, then keeps nudging, which both keeps the call
-   alive across the colleague's thinking time and mirrors a real impatient
-   human.
+   Speak the ask, then keep nudging, which both keeps the call alive across
+   the colleague's thinking time and mirrors a real impatient human.
 
 4. Phase B — the reconnect. Wait 90 seconds after the run ends (the idle
    deadline buries the call), then run one more short conversation on the
    SAME stream path with a single utterance: "What was that codeword again?"
-   (`--converse 1`, an utterance dir containing only that WAV).
+   (`voice-board.ts --device <name> --prompt "What was that codeword again?"`).
 
 ## Success criteria (all four must hold)
 
@@ -80,11 +77,11 @@ Read the durable record with
    `events.iterate.com/agent/created`, and the voice stream
    `/agents/voice/eval-<stamp>` has **zero** — no rogue agent minted on the
    call.
-4. **Clean run**: the Phase A `talk` process exits 0 and its speaker
-   continuity block reports zero sequence gaps.
+4. **Clean run**: every Phase A `voice-board.ts` run exits 0; its verdict is
+   the words the device said back.
 
 Include the transcript output and both stream URLs in the result. Timing
-note: the colleague's first turn takes 60–120 s in prod; Phase A's 3 minutes
-absorbs that. If Phase A fails only because the reply had not arrived before
-the run ended, rerun Phase A once with `--converse 5` before calling it a
+note: the colleague's first turn takes 60–120 s in prod; keep nudging
+through it. If Phase A fails only because the reply had not arrived before
+the run ended, rerun Phase A once with more nudges before calling it a
 failure.

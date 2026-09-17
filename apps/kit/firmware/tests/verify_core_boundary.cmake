@@ -40,7 +40,7 @@ list(JOIN ITERATE_KIT_PLATFORM_HEADER_NAMES "|"
 # not compile. The source check makes the intended dependency direction visible
 # in a fast host test instead of waiting for a particular board build.
 set(ITERATE_KIT_FORBIDDEN_INCLUDE
-    "^[ \t]*#[ \t]*include[ \t]*[<\"][^>\"]*(audio\\.h|audio_codec\\.h|audio_processor\\.h|components/audio|iterate/kit/audio/|\\.\\./audio|platforms/|iterate/kit/platforms|\\.\\./platforms|${ITERATE_KIT_PLATFORM_HEADER_PATTERN})[^>\"]*[>\"]")
+    "^[ \t]*#[ \t]*include[ \t]*[<\"][^>\"]*(audio\\.h|audio_codec\\.h|audio_processor\\.h|aec_capture_bridge\\.h|aec_reference_scaler\\.h|aec_uplink_selector\\.h|pcm_format\\.h|pcm_high_pass\\.h|starvation_ledger\\.h|components/audio|iterate/kit/audio/|\\.\\./audio|platforms/|iterate/kit/platforms|\\.\\./platforms|${ITERATE_KIT_PLATFORM_HEADER_PATTERN})[^>\"]*[>\"]")
 
 foreach(ITERATE_KIT_CORE_FILE IN LISTS ITERATE_KIT_CORE_FILES)
   file(STRINGS "${ITERATE_KIT_CORE_FILE}" ITERATE_KIT_BOUNDARY_VIOLATIONS
