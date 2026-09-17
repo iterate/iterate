@@ -19,6 +19,7 @@ import type { AgentUiLlmStep } from "@iterate-com/ui/components/events/agent-ui-
 import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
 import { EventsList, InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
 import { AgentsSidebar } from "../../components/agents-sidebar.tsx";
+import { CloseMobileSidebarOnNavigate } from "../../components/close-mobile-sidebar-on-navigate.tsx";
 import { AgentComposer, type StreamInterrupt } from "../../components/composer.tsx";
 import { QueuedMessagesPanel } from "../../components/queued-messages.tsx";
 import { reduceAgentFeed, toAgentEvent, traceOffsetByMessage } from "../../lib/agent-events.ts";
@@ -87,6 +88,8 @@ function AgentsPage() {
   const project = data.project.id;
   return (
     <SidebarProvider className="h-svh">
+      {/* outside <Sidebar>: on a phone its children live in a Sheet that remounts when opened */}
+      <CloseMobileSidebarOnNavigate />
       <AgentsSidebar
         projects={data.projects}
         project={project}

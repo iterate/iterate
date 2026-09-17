@@ -23,13 +23,14 @@ export default {
       api: (request) => fetch(request),
     });
     if (auth) return auth;
-    // A signed-in browser landing on `/` goes to its projects; the landing page is for signing in.
+    // A signed-in browser landing on `/` goes home (routes/_auth/home.tsx: its only project, or the
+    // list); the landing page is for signing in.
     if (url.pathname === "/" && request.method === "GET") {
       const bearer = await appSession(env.BROWSER_SESSION, request)?.bearer();
       if (bearer)
         return new Response(null, {
           status: 302,
-          headers: { Location: "/projects", "Cache-Control": "no-store" },
+          headers: { Location: "/home", "Cache-Control": "no-store" },
         });
     }
     const asset = await env.ASSETS.fetch(request);

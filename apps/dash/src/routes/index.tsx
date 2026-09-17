@@ -18,7 +18,7 @@ export const Route = createFileRoute("/")({
           </p>
         </div>
         <a
-          href="/.auth/login?next=/projects&scope=iterate%20account%20organizations%3Awrite"
+          href="/.auth/login?next=/home&scope=iterate%20account%20organizations%3Awrite"
           className={buttonVariants({ size: "lg" })}
         >
           Log in with Iterate

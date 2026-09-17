@@ -5,7 +5,7 @@
 // loader, `?cursor=` in the URL; a mint or an end invalidates the router, which reloads it. Ported
 // from apps/os-next's console page: every string, role and test id is the same.
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { z } from "zod";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button, buttonVariants } from "@iterate-com/ui/components/button";
@@ -81,6 +81,9 @@ function SessionsPage() {
   const [minted, setMinted] = useState<MintedPersonalAccessToken | null>(null);
   const [copied, setCopied] = useState(false);
   const [minting, setMinting] = useState(false);
+  // Ending THIS browser's grant is a sign-out: the app's own logout clears the session and its
+  // cookie too (a bare redirect to `/` would bounce a still-cached token back into /projects).
+  const logout = useRef<HTMLFormElement>(null);
   if (!data) return <AllowAccount />;
   const { items, cursor: nextCursor, projects, canMintToken } = data;
   const selectedProjectIds = projects
@@ -116,6 +119,7 @@ function SessionsPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
+      <form ref={logout} method="post" action="/.auth/logout" hidden />
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">Sessions</h1>
         <p className="text-sm text-muted-foreground">
@@ -172,7 +176,7 @@ function SessionsPage() {
                       setError(null);
                       try {
                         await api.grants.end(item.id);
-                        if (item.current) window.location.assign("/");
+                        if (item.current) logout.current?.requestSubmit();
                         else await router.invalidate();
                       } catch (caught) {
                         setError(caught instanceof Error ? caught.message : String(caught));
