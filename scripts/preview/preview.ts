@@ -1618,6 +1618,8 @@ export async function cleanup(options: PreviewCommandOptions = {}) {
 type EraseOptions = PreviewCommandOptions & {
   /** The head this run tested. Skip if the target has moved on: erasing would race its newer deployment. Omit to erase regardless. */
   ranHeadSha?: string;
+  /** After post-test retirement, redeploy the tested apps so this preview can be used again. */
+  restore?: boolean;
 };
 
 /**
@@ -1628,12 +1630,125 @@ export async function erase(options: EraseOptions = {}) {
     ...options,
     requireCleanCheckout: false,
   });
-  return await eraseHeldSlotAfterRun({
+  const result = await eraseHeldSlotAfterRun({
     target,
     eraseSlotData: makePreviewSlotDataEraser(runtime, "reset"),
     ranHeadSha: options.ranHeadSha || null,
     semaphore: runtime.createPreviewSemaphoreResourceClient(),
   });
+  if (!options.restore || !result.erased) return result;
+
+  // Missing restoration provenance must never prevent retiring test workloads.
+  const checkedOut = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: runtime.repositoryRoot,
+    encoding: "utf8",
+  }).trim();
+  if (!options.ranHeadSha || checkedOut !== options.ranHeadSha)
+    throw new Error("Restoration requires --ran-head-sha matching the exact checkout.");
+  if (
+    execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], {
+      cwd: runtime.repositoryRoot,
+      encoding: "utf8",
+    }).trim()
+  )
+    throw new Error("Restoration requires a clean checkout of the tested revision.");
+  for (const slug of ["auth", "os", "streams-example-app"]) {
+    const entry = target.report.state.apps[slug];
+    if (!entry?.deployedWorkerVersion || entry.headSha !== options.ranHeadSha)
+      throw new Error(`Cannot restore ${slug}: no deployment recorded for this tested head.`);
+  }
+  const { run, report } = target;
+  // Deployment authority comes from the semaphore, never the editable PR report.
+  const slot = CloudflarePreviewSlotDisplay.parse(result);
+  const before = structuredClone(report.state.apps);
+  const startedAt = new Date().toISOString();
+  // OS reset also wipes Auth's OAuth client records. Use the ordinary deploy
+  // commands to reseed Auth and restore all code, secrets, assets and bindings.
+  const apps = [cloudflarePreviewApps.auth, ...selectPreviewCleanupApps([])];
+  await report.update((state) => ({
+    ...state,
+    notice: "Tests finished; restoring the clean preview.",
+    environmentConfigLease: slot,
+  }));
+  for (const batch of orderPreviewDeployBatches(apps)) {
+    const holder = await findEnvironmentConfigLeaseHolder(
+      runtime.createPreviewSemaphoreResourceClient(),
+      slot.slug,
+    );
+    if (holder !== run.holder) throw new Error("Preview lease changed during restoration.");
+    if (run.pullRequestNumber) {
+      const latest = await readPreviewPullRequest({
+        ...run,
+        pullRequestNumber: run.pullRequestNumber,
+      });
+      if (latest.headSha !== options.ranHeadSha)
+        throw new Error("PR head changed during restoration; the next run will reset its slot.");
+    }
+    const entries = await Promise.all(
+      batch.map(async (app) => {
+        const restored = await traceOperation(`Restore ${app.slug}`, () =>
+          deployPreviewAppWithStatus({
+            app,
+            commandEnvironment: {
+              ...runtime.commandEnvironment,
+              PLATFORM_DEPLOY_HEAD_SHA: run.headSha,
+              // Same checkout and retained container classes; no image rollout is needed.
+              OS_CONTAINERS_ROLLOUT: "none",
+            },
+            dopplerConfig: slot.dopplerConfig,
+            existingEntry: null,
+            mainWorkerSize: null,
+            headSha: run.headSha,
+            repositoryRoot: runtime.repositoryRoot,
+            runUrl: run.workflowRunUrl,
+            signal: runtime.signal,
+          }),
+        );
+        return CloudflarePreviewAppEntry.parse({
+          ...before[app.slug],
+          ...restored,
+          deployedWorkerVersion: restored.deployedWorkerVersion,
+          deployedAt: restored.deployedAt,
+          status: restored.status === "awaiting-tests" ? before[app.slug].status : "cleanup-failed",
+          message: restored.message || before[app.slug].message,
+        });
+      }),
+    );
+    await report.update((state) => ({
+      ...state,
+      apps: {
+        ...state.apps,
+        ...Object.fromEntries(entries.map((entry) => [entry.appSlug, entry])),
+      },
+    }));
+    if (entries.some((entry) => entry.status === "cleanup-failed"))
+      throw new Error("Preview restoration failed; see the per-app deployment errors.");
+  }
+  await mkdir(resolve(runtime.repositoryRoot, "test-results"), { recursive: true });
+  await writeFile(
+    resolve(runtime.repositoryRoot, "test-results/preview-restoration.json"),
+    JSON.stringify(
+      {
+        headSha: run.headSha,
+        slot: slot.slug,
+        startedAt,
+        completedAt: new Date().toISOString(),
+        apps: apps.map(({ slug }) => ({
+          app: slug,
+          testedVersion: before[slug].deployedWorkerVersion,
+          restoredVersion: report.state.apps[slug].deployedWorkerVersion,
+        })),
+      },
+      null,
+      2,
+    ),
+  );
+  await report.update((state) => ({
+    ...state,
+    notice:
+      "Preview restored after retiring test data. Test results describe the run before restoration; app versions below describe the restored deployment.",
+  }));
+  return { ...result, restored: true };
 }
 
 async function eraseHeldSlotAfterRun(input: {
@@ -1663,7 +1778,7 @@ async function eraseHeldSlotAfterRun(input: {
   logPreview(
     `erased ${lease.slug} after the run; ${run.holder} keeps the lease until ${formatUntil(lease.leasedUntil)}`,
   );
-  return { erased: true, reason: null, slug: lease.slug };
+  return { erased: true, reason: null, slug: lease.slug, dopplerConfig: lease.dopplerConfig };
 }
 
 /**

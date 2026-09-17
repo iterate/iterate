@@ -5,9 +5,9 @@ size: medium
 
 # Retire preview DOs, then restore the tested deployment
 
-Specification committed first. This experiment replaces post-test parking with
-park-then-restore, and tests whether GitHub can show green after tests pass while
-the cleanup job continues. No merge is authorized.
+Implementation ready for its first full preview run. Live Depot probes proved
+early green is replaced by both later failure and cancellation. Restoration
+usability and resource activity still need live evidence. No merge is authorized.
 
 ## Request and decisions
 
@@ -39,9 +39,9 @@ the cleanup job continues. No merge is authorized.
 
 ## Work
 
-- [ ] Research current restore machinery and GitHub/Depot check ownership.
-- [ ] Implement and test the smallest post-test park/restore path.
-- [ ] Implement and test honest early-green/final-failure reporting.
+- [x] Research current restore machinery and GitHub/Depot check ownership. *Reuse app deploy commands; job token can update its exact Depot check.*
+- [x] Implement and test the smallest post-test park/restore path. *`preview erase --restore` retires first, then restores Auth, OS and Streams from the tested checkout.*
+- [x] Implement and test honest early-green/final-failure reporting. *`status.ts tests-passed`; live checks 105090329542 and 105090616821 changed from success to failure/cancelled.*
 - [ ] Run preview experiments, including an injected cleanup failure and recovery.
 - [ ] Validate resulting namespaces, fresh application behavior and activity.
 - [ ] Complete local checks, independent review and CI/review follow-up.
@@ -53,3 +53,14 @@ the cleanup job continues. No merge is authorized.
   planner branch is preserved separately and is not part of this experiment.
 - Acceptance distinguishes GitHub's check status from Depot's real job state;
   advancing the former must not release locks or start consumers early.
+- GitHub Check Run 105090329542 was completed/success at 05:41:59Z while Depot
+  workflow `gkjq471vd3` remained running, then failure at 05:43:00Z. Check
+  105090616821 was success at 05:44:26Z, then cancelled at 05:46:19Z. Both
+  synthetic probes used no preview resources and intentionally ended non-green.
+- Independent review caught and fixed two safety issues: restoration validation
+  must follow ordinary retirement, and its deployment config must come from the
+  semaphore lease rather than editable PR state.
+- Local typecheck, lint and knip passed before the final review adjustments;
+  the scripts suite passed all 360 tests. Full tests reveal an existing expired
+  parked test in `specs/repo-ide-jsonc.spec.ts` (revisit by 2026-09-16); this
+  experiment does not hide or renew it.
