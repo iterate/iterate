@@ -33,6 +33,11 @@ interface AllowedUndated {
 }
 
 const ALLOWED_UNDATED: AllowedUndated[] = [
+  {
+    file: "scripts/ci/tracing/vitest.test.ts",
+    match: 'test.skip("never ran", () => {});',
+    note: "child-runner fixture: proves a static skip emits no execution span, not parked coverage",
+  },
   // -- Structural (env-gated): legitimately undated — the gate describes the
   // deployment under test, not a parked bug.
   {

@@ -4,7 +4,7 @@ size: small
 ---
 # Per-test Vitest CI traces
 
-Status: reporter and trace rendering implemented; focused integration checks pass. Required repository checks and live preview evidence remain.
+Status: reporter and trace rendering implemented; focused integration checks pass. Full local checks pass; live preview/report evidence and CI review remain.
 
 ## Request and scope
 
@@ -29,3 +29,5 @@ Worktreeify the minimal tracing change investigated in Codex task `01a0b018-29cc
 - First real-run integration spec failed with no trace markers; after implementing reporter callbacks and assembler support it passed alongside all 26 existing tracing tests.
 
 - Full typecheck caught nominal Vitest class incompatibility between workspaces; retained the reporter’s structural type boundary. The first full test run overloaded nested child runs, so interruption assertions now reuse the real-run fixture instead of launching redundant runners.
+
+- Local install, typecheck, lint, knip, format and full test suite passed. CI’s tracked-file skip guard then correctly required classifying the deliberately skipped child-runner fixture; added an explicit structural-fixture allowlist entry rather than disguising the skip.
