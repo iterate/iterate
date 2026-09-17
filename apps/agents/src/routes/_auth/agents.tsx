@@ -453,6 +453,8 @@ function AgentConversation({ project, path }: { project: string; path: string })
                 }}
                 onAppendRaw={async (events) => {
                   if (!context) throw new Error("not connected");
+                  // The raw editor parsed each event with the stream's own input schema; `append` is
+                  // typed as the SDK's tuple of inputs, a shape a parsed array cannot spell.
                   await context.append(...(events as Parameters<Context["append"]>));
                 }}
               />

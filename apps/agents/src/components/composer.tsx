@@ -108,6 +108,8 @@ export function AgentPillComposer({
   }
 
   function onDragLeave(event: DragEvent<HTMLDivElement>) {
+    // `relatedTarget` is the element the pointer moved on to, or null once it left the window; the
+    // DOM types it as a bare EventTarget, while for drags it is always a node — what `contains` reads.
     if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
     setIsDragging(false);
   }

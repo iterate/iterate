@@ -114,6 +114,18 @@ async function drainSse(
   if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
 }
 
+/** Race an un-abortable dial against the caller's signal (apps/os's `raceAbort`): the caller regains
+ *  control the moment it aborts — an interruption, the expiry, the idle watchdog — while the orphaned
+ *  dial finishes into the void; a stream already open is cancelled by `drainSse` itself. */
+function raceAbort<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason || new Error("aborted"));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason || new Error("aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
 /** The conversation as the Responses API takes it: `input` items with text and image parts. */
 function responsesInput(messages: ChatMessage[]) {
   return messages.map((message) =>
@@ -143,10 +155,16 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
       // — no key, ours or a project's — the FAST reading of a reasoning model: low effort, with its
       // summary streamed.
       if (model.startsWith("@cf/")) {
-        const raw: unknown = await this.withItx((itx) =>
-          (itx.ai as unknown as { run(model: string, inputs: unknown): Promise<unknown> }).run(
-            model,
-            { messages, stream: true },
+        // workers-types keys `run`'s inputs and outputs by model-name literal; the model is
+        // configuration here (any name the account can reach), so the call is made through the
+        // binding's runtime shape and the answer is validated below rather than trusted from a type.
+        const raw: unknown = await raceAbort(
+          signal,
+          this.withItx((itx) =>
+            (itx.ai as unknown as { run(model: string, inputs: unknown): Promise<unknown> }).run(
+              model,
+              { messages, stream: true },
+            ),
           ),
         );
         if (raw instanceof ReadableStream) {
@@ -161,6 +179,7 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
             if (reported.success && reported.data.usage !== undefined)
               usage = normalizeUsage(reported.data.usage) ?? usage;
           });
+          if (text.trim() === "") throw new Error("the model answered with no text");
           return { text: text.trim(), usage };
         }
         // A binding (or a lent fake) that answered whole: the one chunk there is.
@@ -173,33 +192,41 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
         return { text };
       }
       // No key of ours rides this request: an `openai/…` model is a Workers AI PARTNER model, billed
-      // by Cloudflare through the binding (apps/os's `unified` lane) — the Responses API shape,
+      // by Cloudflare through the binding (apps/os's `unified` transport) — the Responses API shape,
       // streamed, the raw Response asked for so the SSE body is ours to read. The gateway option
       // routes it through the account's AI Gateway; its metadata is what the gateway's spend limits
       // partition on (apps/os's: environment, project, stream), so a runaway agent hits ITS ceiling.
+      // Two casts, both because workers-types spells Workers AI's OWN catalog as literals: a partner
+      // model's name (`openai/…`) is not among them though the binding takes any model the account
+      // can reach, and a partner model takes the PROVIDER's request body (here the Responses API's),
+      // which no catalog input type names. Nothing is trusted from either: the answer is a Response
+      // checked for status and parsed event by event below.
       const config = appConfigOf(this.env);
       const { projectId, path } = await this.#identity();
-      const raw: unknown = await this.env.AI.run(
-        `openai/${model}` as Parameters<Ai["run"]>[0],
-        {
-          input: responsesInput(messages),
-          stream: true,
-          store: false,
-          reasoning: { effort: "low", summary: "auto" },
-        } as never,
-        {
-          returnRawResponse: true,
-          gateway: {
-            id: config.aiGatewayId,
-            skipCache: true,
-            metadata: {
-              environment: config.environmentName,
-              projectId,
-              streamPath: path,
-              context: "agent-turn",
+      const raw: unknown = await raceAbort(
+        signal,
+        this.env.AI.run(
+          `openai/${model}` as Parameters<Ai["run"]>[0],
+          {
+            input: responsesInput(messages),
+            stream: true,
+            store: false,
+            reasoning: { effort: "low", summary: "auto" },
+          } as never,
+          {
+            returnRawResponse: true,
+            gateway: {
+              id: config.aiGatewayId,
+              skipCache: true,
+              metadata: {
+                environment: config.environmentName,
+                projectId,
+                streamPath: path,
+                context: "agent-turn",
+              },
             },
           },
-        },
+        ),
       );
       if (!(raw instanceof Response))
         throw new Error(`model ${model}: Workers AI did not answer with the raw response`);
