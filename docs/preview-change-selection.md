@@ -14,7 +14,7 @@ contains only ancestry selection; the closed storage-wipe experiment is excluded
 | Tests, optionally with docs   | Run head's tests against a usable ancestor deployment, or deploy head. |
 | Anything else                 | Deploy the full preview fleet and run tests.                           |
 
-[`change-types.yml`](../scripts/preview/change-types.yml) assigns each changed
+[`change-types.ts`](../scripts/preview/change-types.ts) assigns each changed
 path one type: **last match wins**. Changes mean head versus its first parent,
 including both paths of a rename. Docs is an explicit allowlist, so markdown
 inside a prompt or config template still needs deployment. Mixed commits take

@@ -1,8 +1,6 @@
-import { readFileSync } from "node:fs";
 import { matchesGlob } from "node:path";
-import { parse } from "yaml";
-import { z } from "zod";
 import { CommitHistory } from "./commit-history.ts";
+import CHANGE_TYPES, { type ChangeType } from "./change-types.ts";
 
 /** Head paths decide new work; docs inherit a result only across unchanged behavior. */
 export async function planPreview(
@@ -41,7 +39,7 @@ export async function planPreview(
 async function planTests(
   history: CommitHistory,
   evidence: PreviewEvidence,
-  changes: Record<string, string[]>,
+  changes: Partial<Record<ChangeType, string[]>>,
 ): Promise<PreviewDecision> {
   for (const commit of history.throughMergeBase()) {
     const deployment = await evidence.findPreviewDeployment(commit);
@@ -63,7 +61,7 @@ async function planTests(
   return { action: "deploy", changes, reason: "No usable deployment through the merge-base." };
 }
 
-type PreviewDecision = { changes: Record<string, string[]>; reason: string } & (
+type PreviewDecision = { changes: Partial<Record<ChangeType, string[]>>; reason: string } & (
   | { action: "deploy" }
   | { action: "reuse"; deployment: PreviewDeployment }
   | { action: "inherit"; result: PreviewResult }
@@ -75,19 +73,19 @@ type PreviewEvidence = {
   findPreviewResult(commit: string): Promise<PreviewResult | null>;
 };
 
-/** A file has one type: the last matching entry in change-types.yml. */
+/** A file has one type: the last matching entry in change-types.ts. */
 export function classifyChanges(paths: string[]) {
-  const changes: Record<string, string[]> = {};
+  const changes: Partial<Record<ChangeType, string[]>> = {};
   for (const path of paths) {
     const type =
-      changeTypes.findLast(({ globs }) => globs.some((glob) => matchesGlob(path, glob)))?.type ||
+      changeTypes.findLast((type) => CHANGE_TYPES[type].some((glob) => matchesGlob(path, glob))) ||
       "Default";
     (changes[type] ||= []).push(path);
   }
   return changes;
 }
 
-function actionsForChanges(changes: Record<string, string[]>) {
+function actionsForChanges(changes: Partial<Record<ChangeType, string[]>>) {
   const types = Object.keys(changes);
   return {
     test: types.some((type) => type !== "Docs"),
@@ -95,8 +93,5 @@ function actionsForChanges(changes: Record<string, string[]>) {
   };
 }
 
-const changeTypes = Object.entries(
-  z
-    .record(z.string(), z.union([z.string(), z.array(z.string())]))
-    .parse(parse(readFileSync(new URL("./change-types.yml", import.meta.url), "utf8"))),
-).map(([type, globs]) => ({ type, globs: Array.isArray(globs) ? globs : [globs] }));
+// Object.keys widens to string[]; this closed, local definition has exactly ChangeType keys.
+const changeTypes = Object.keys(CHANGE_TYPES) as ChangeType[];

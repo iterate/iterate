@@ -97,3 +97,8 @@ before rollout; see `docs/preview-change-selection.md`.
 - Restack validation: 385 scripts tests across 32 files, scripts typecheck, scoped
   lint, formatting and diff checks passed on the new base. No live deployment
   or PR was created for this transfer.
+
+- Review follow-up: moved the ordered globs into `change-types.ts` and derive
+  `ChangeType` from its keys. Planner change maps use that union; unmatched types
+  remain absent. Removed YAML parsing and filesystem reads without changing policy.
+  All 14 planner tests, scripts typecheck, scoped lint and formatting passed.
