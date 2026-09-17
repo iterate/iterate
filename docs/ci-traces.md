@@ -5,8 +5,9 @@ Its **Details** link opens the report for that tested commit. The report shows
 jobs, setup/wait/test/finish phases, measured shell steps and individual Playwright attempts. Expand rows, search for a test,
 click a bar, or zoom to a selected span. Download the same trace as OTLP JSON.
 
-Select a **Wait** phase (click/tap, or focus its bar and press Enter) to show
-curved arrows from its prerequisites. The details list lets you reveal either
+Expand a **Wait** phase, then select its wait step (click/tap, or focus its bar
+and press Enter) to show curved arrows from its prerequisites. Selection shows
+only that span's own links, never links belonging to its children. The details list lets you reveal either
 endpoint, even when collapsed, filtered out or outside the current zoom range. Yellow diagonal stripes indicate
 waiting; grey stripes still mean incomplete evidence. A consumer whose runner
 never started has no measured endpoint: its dependency is listed without a

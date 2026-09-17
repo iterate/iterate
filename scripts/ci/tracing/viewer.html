@@ -296,8 +296,8 @@
       <p id="subtitle"></p>
       <p>
         Expand a job’s phases, then a step, to see individual tests and retries. Click any bar for
-        its timing and evidence. Select a wait to see labelled dependency arrows; tap a linked span
-        below to reveal it.
+        its timing and evidence. Expand a Wait phase and select its wait step to see labelled
+        dependency arrows; tap a linked span below to reveal it.
       </p>
       <div class="stats" id="stats"></div>
       <p id="notice"></p>
@@ -346,10 +346,10 @@
         <p>
           The download is an OpenTelemetry ExportTraceServiceRequest JSON object: one trace, stable
           span IDs, parent IDs, nanosecond timestamps, attributes and span links. Dependency arrows
-          point from a prerequisite to the wait that requires it. They represent explicit waits, not
-          inferred critical paths. A missing milestone is labelled “not observed”; older runs have
-          no dependency records. This page is self-contained and can be saved or shared without a
-          tracing service.
+          point from a prerequisite to the wait that requires it. Selecting a span shows only its
+          own links, not its children's. They represent explicit waits, not inferred critical paths.
+          A missing milestone is labelled “not observed”; older runs have no dependency records.
+          This page is self-contained and can be saved or shared without a tracing service.
         </p>
       </details>
     </main>
@@ -379,18 +379,8 @@
         }),
       );
       const rows = new Map();
-      function contains(ancestor, span) {
-        while (span) {
-          if (span === ancestor) return true;
-          span = byId.get(span.parentSpanId);
-        }
-        return false;
-      }
       function related(span) {
-        if (span === root) return [];
-        return dependencies.filter(
-          (edge) => contains(span, edge.source) || contains(span, edge.target),
-        );
+        return dependencies.filter((edge) => edge.source === span || edge.target === span);
       }
       function spanLabel(span) {
         let job = span;

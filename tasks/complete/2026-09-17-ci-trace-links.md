@@ -1,8 +1,8 @@
 # CI trace dependencies and waiting appearance
 
 Status: implementation and acceptance checks complete. A real preview passed all
-nine jobs and published a report with 14 validated dependency links. Broader CI
-is blocked by an unrelated expired quarantine in `specs/repo-ide-jsonc.spec.ts`.
+nine jobs and published a report with 14 validated dependency links. The unrelated
+expired quarantine was fixed upstream in #2700 and is included in the main merge.
 
 Show the explicit dependencies behind CI waits without changing scheduling or
 coordination. Keep the existing self-contained viewer and standard OTLP data.
@@ -33,3 +33,7 @@ readable.
 - Full `pnpm test` and Depot's Test job fail on the existing quarantine date
   (2026-09-16) in `specs/repo-ide-jsonc.spec.ts:19`. No quarantine, test
   expectation, retry or timeout was changed.
+- Review follow-up: selecting a parent no longer includes its descendants'
+  dependency arrows or detail links. Expand a Wait phase and select the measured
+  wait step to see its own links. Browser checks verify empty parent selections,
+  readiness on the wait step and cleanup's direct link to the job; 11 tracing tests pass.
