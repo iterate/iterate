@@ -39,7 +39,8 @@ function connectionOn(socket: WebSocket): Connection {
  *  the `api` the page holds is a proxy to the CURRENT connection: when the socket closes, the next
  *  call opens a fresh one and pipelines onto it, so a dropped connection costs a reconnect, not the
  *  page. A reconnect the platform refuses (the session ended elsewhere) rejects that call; the
- *  page's retry runs `authenticate` again, whose probe sends the browser to log in. */
+ *  page's retry runs `authenticate` again — a fresh one, the socket's close forgot the last — whose
+ *  probe sends the browser to log in. */
 export function createIterateClient(options: { scopes?: string[] } = {}): IterateClient {
   const scopes = OAuthScopes.parse(options.scopes || []);
   let live: Connection | null = null;
@@ -49,18 +50,25 @@ export function createIterateClient(options: { scopes?: string[] } = {}): Iterat
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     return url;
   };
-  /** Adopt a connection as the live one until its socket closes. */
+  /** Adopt a connection as the live one until its socket closes. A close also forgets the settled
+   *  `authenticate` — the next one probes `/api` again, so a session that ended elsewhere sends the
+   *  browser to log in instead of a retry that can only fail. */
   function adopt(socket: WebSocket): Connection {
     const connection = connectionOn(socket);
     live = connection;
+    const forget = () => {
+      if (live !== connection) return;
+      live = null;
+      connecting = undefined;
+    };
     const dispose = () => {
-      if (live === connection) live = null;
+      forget();
       connection.dispose();
     };
     socket.addEventListener(
       "close",
       () => {
-        if (live === connection) live = null;
+        forget();
         window.removeEventListener("pagehide", dispose);
       },
       { once: true },

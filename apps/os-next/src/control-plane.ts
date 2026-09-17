@@ -98,8 +98,18 @@ const brandMarks: [RegExp, string][] = [
  *  origin — a CIMD client's id is a URL). Fetched here rather than by the browser: a client's origin
  *  may forbid embedding across origins (claude.ai's favicon answers with
  *  `Cross-Origin-Resource-Policy: same-origin`), and the pages' CSP stays `img-src 'self'`. Only a
- *  client the provider knows, and only an image; anything else is a 404, on which the page keeps
- *  the client's initials. */
+ *  client the provider knows, and only a RASTER image — a client's SVG could carry script, and this
+ *  answer is on the issuer's origin — served with no script allowed and sandboxed besides; anything
+ *  else is a 404, on which the page keeps the client's initials. */
+const rasterImageTypes = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+  "image/x-icon",
+  "image/vnd.microsoft.icon",
+];
 async function clientIcon(request: Request, env: Env): Promise<Response> {
   const clientId = new URL(request.url).searchParams.get("client_id") || "";
   const client = await oauthHelpers(env)
@@ -116,11 +126,16 @@ async function clientIcon(request: Request, env: Env): Promise<Response> {
     headers: { accept: "image/*" },
     signal: AbortSignal.timeout(5_000),
   }).catch(() => null);
-  const type = upstream?.headers.get("content-type") || "";
-  if (!upstream?.ok || !type.startsWith("image/"))
+  const type = (upstream?.headers.get("content-type") || "").split(";")[0]!.trim().toLowerCase();
+  if (!upstream?.ok || !rasterImageTypes.includes(type))
     return new Response("Not found", { status: 404 });
   return new Response(upstream.body, {
-    headers: { "content-type": type, "cache-control": "public, max-age=86400" },
+    headers: {
+      "content-type": type,
+      "cache-control": "public, max-age=86400",
+      "content-security-policy": "default-src 'none'; sandbox",
+      "x-content-type-options": "nosniff",
+    },
   });
 }
 

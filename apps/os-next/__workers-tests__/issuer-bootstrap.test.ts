@@ -235,9 +235,33 @@ test("an issuer session minted before a scope existed still holds every scope �
   expect((await old.orgs()).map((candidate) => candidate.id)).toContain(org.id);
 });
 
-test("the consent page's client picture is a 404 for a client the provider does not know — the page keeps the initials", async () => {
-  const icon = await SELF.fetch(`${origin}/client-icon?client_id=nobody-registered-this`);
-  expect(icon.status).toBe(404);
+test("the consent page's client picture: a shipped mark for a client we know by name, never a client's own SVG, a 404 for a client the provider does not know", async () => {
+  const helpers = oauthHelpers(bindings);
+  const registration = {
+    redirectUris: ["http://127.0.0.1/callback"],
+    tokenEndpointAuthMethod: "none",
+    grantTypes: ["authorization_code"],
+    responseTypes: ["code"],
+  };
+  // "Claude …" → the Claude mark we ship, whatever its metadata says about pictures
+  const claude = await helpers.createClient({ ...registration, clientName: "Claude fixture" });
+  const mark = await SELF.fetch(`${origin}/client-icon?client_id=${claude.clientId}`);
+  expect(mark.status).toBe(200);
+  expect(mark.headers.get("content-type")).toContain("image/svg+xml");
+  expect(await mark.text()).toContain("<title>Claude</title>");
+  // a client's own logo_uri is fetched by the worker (fetch reaches SELF here) — and refused when
+  // it is not a raster image: an SVG on the issuer's origin could carry script
+  const svgLogo = await helpers.createClient({
+    ...registration,
+    clientName: "Nobody in particular",
+    logoUri: `${origin}/iterate-logo.svg`,
+  });
+  expect((await SELF.fetch(`${origin}/client-icon?client_id=${svgLogo.clientId}`)).status).toBe(
+    404,
+  );
+  expect((await SELF.fetch(`${origin}/client-icon?client_id=nobody-registered-this`)).status).toBe(
+    404,
+  );
 });
 
 test("a browser landing on the platform origin is told it is headless and where the dash is", async () => {
