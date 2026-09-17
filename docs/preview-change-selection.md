@@ -176,6 +176,13 @@ by `preview-settled`. The independent unit job hit the existing dependency-test
 case `changed pnpm-lock.yaml runs a frozen install`'s five-second limit; that
 test is unchanged by this work.
 
+The finalizer follow-up at `8f4df71e3`
+([run](https://depot.dev/orgs/0p91s0lz49/workflows/czk85wphzh)) passed all workflows,
+including all 441 scripts tests without changing the timed-out test. Deployment,
+both deployed suites and restoration passed; settlement recorded `tests=success`
+at 15:24:46 UTC. The next docs-only push exercises the signal's `tests=false`
+branch after this complete lifecycle.
+
 ## Restoration after deployment reuse
 
 CI restoration verifies the immutable preparation artifact's run, attempt, head,
