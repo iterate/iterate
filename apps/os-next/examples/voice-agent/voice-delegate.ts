@@ -54,7 +54,7 @@ const AgentState = z.object({
 });
 
 const AgentContract = defineProcessorContract({
-  slug: "agent",
+  slug: "voice-delegate",
   version: "1.0.0",
   description:
     "Answers the voice relay's delegations with one chat-model turn, on the conversation context beside it.",
@@ -235,8 +235,8 @@ class AgentProcessor extends StreamProcessor<AgentState, ConsumedEvent<AgentCont
   }
 }
 
-/** The class the loader hosts: `facets.get("agent", { source, className: "AgentDurableObject" })`. */
-export class AgentDurableObject extends StreamProcessorDurableObject<AgentState> {
+/** The class the loader hosts: `facets.get("voice-delegate", { source, className: "VoiceDelegateDurableObject" })`. */
+export class VoiceDelegateDurableObject extends StreamProcessorDurableObject<AgentState> {
   processor = new AgentProcessor({
     complete: completeWithOpenAi,
     contextPath: async () => (await this.withItx((itx) => itx.whoami())).path,
