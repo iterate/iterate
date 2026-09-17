@@ -270,6 +270,10 @@ export function assembleTrace(
       const stepEnds = new Map<string, number>();
       for (const shell of shells) {
         const done = shellEnds.get(shell.id);
+        // Cancellation can record a job finish before always() cleanup starts.
+        // With no exit marker, keep it incomplete at its start instead of
+        // inventing a negative duration. Measured intervals still validate below.
+        const shellEnd = done?.time || Math.max(shell.time, end);
         const parent =
           phases.findLast((phase) => shell.time >= phase.start && shell.time < phase.end)?.id ||
           jobSpan;
@@ -278,7 +282,7 @@ export function assembleTrace(
           parent,
           shell.command || shell.stepName || shell.step.replaceAll("_", " "),
           shell.time,
-          done?.time || end,
+          shellEnd,
           {
             "ci.kind": "step",
             "ci.step.key": shell.stepKey,
@@ -287,12 +291,14 @@ export function assembleTrace(
             "ci.status": done ? (done.exitCode ? "failed" : "passed") : "incomplete",
             "ci.evidence": done
               ? "Measured shell start/exit"
-              : "incomplete; end bounded by job finish",
+              : shell.time > end
+                ? "incomplete; enclosing finish precedes start"
+                : "incomplete; end bounded by job finish",
           },
           !!done?.exitCode,
         );
         stepParents.set(shell.stepKey, id);
-        stepEnds.set(shell.stepKey, done?.time || end);
+        stepEnds.set(shell.stepKey, shellEnd);
       }
       const operations = events.filter((event) => event.kind === "span-start");
       const operationIds = new Map(
@@ -306,6 +312,7 @@ export function assembleTrace(
       );
       for (const operation of operations) {
         const done = operationEnds.get(operation.id);
+        const enclosingEnd = stepEnds.get(operation.stepKey) || end;
         if (operation.parentId && !operationIds.has(operation.parentId))
           throw new Error(`Missing parent for CI operation: ${operation.name}`);
         add(
@@ -313,13 +320,15 @@ export function assembleTrace(
           operationIds.get(operation.parentId) || stepParents.get(operation.stepKey) || jobSpan,
           operation.name,
           operation.time,
-          done?.time || stepEnds.get(operation.stepKey) || end,
+          done?.time || Math.max(operation.time, enclosingEnd),
           {
             "ci.kind": "operation",
             "ci.status": done?.status || "incomplete",
             "ci.evidence": done
               ? "Measured operation start/end"
-              : "incomplete; end bounded by enclosing step/job finish",
+              : operation.time > enclosingEnd
+                ? "incomplete; enclosing finish precedes start"
+                : "incomplete; end bounded by enclosing step/job finish",
           },
           done?.status === "failed",
         );
@@ -331,13 +340,15 @@ export function assembleTrace(
           stepParents.get(test.stepKey) || jobSpan,
           `${test.title}${test.retry ? ` · retry ${test.retry}` : ""}`,
           test.time,
-          done?.time || end,
+          done?.time || Math.max(test.time, end),
           {
             "ci.kind": "test",
             "ci.status": done?.status || "incomplete",
             "ci.evidence": done
               ? "Playwright startTime + duration"
-              : "incomplete; end bounded by job finish",
+              : test.time > end
+                ? "incomplete; enclosing finish precedes start"
+                : "incomplete; end bounded by job finish",
             "test.file": test.file,
             "test.line": String(test.line),
             "test.project": test.project,

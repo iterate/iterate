@@ -335,8 +335,10 @@
       let open = new Set(
         spans.filter((s) => ["workflow", "job"].includes(s.a["ci.kind"])).map((s) => s.spanId),
       );
+      // Cancellation can finish the workflow before its cleanup markers stop.
+      const fullRange = [root.start, Math.max(...spans.map((span) => span.end))];
       let selected = root,
-        range = [root.start, root.end];
+        range = fullRange;
       const duration = (ms) =>
         ms < 1000
           ? `${Math.round(ms)}ms`
@@ -495,7 +497,7 @@
         render();
       };
       document.getElementById("reset").onclick = () => {
-        range = [root.start, root.end];
+        range = fullRange;
         render();
       };
       document.getElementById("download").onclick = () => {

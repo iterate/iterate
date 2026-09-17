@@ -370,6 +370,145 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
   ).toBe(true);
 });
 
+test("cleanup starting after Depot records cancellation stays incomplete", () => {
+  // Preview 9dsvdkskfv: Depot finished the job at 08:22:19, but erase
+  // started at 08:22:21.311 without an exit marker.
+  const workflow = greenWorkflow("cancelled");
+  const report = assembleTrace(
+    workflow,
+    new Map([
+      [
+        "finish-attempt",
+        [line("erase", { kind: "shell-start", id: "erase", step: "erase", time: ms(92.311) })],
+      ],
+    ]),
+  );
+  const spans = report.resourceSpans[0].scopeSpans[0].spans;
+  expect(spans.find((span) => span.name === "erase")).toMatchObject({
+    startTimeUnixNano: String(BigInt(ms(92.311)) * 1_000_000n),
+    endTimeUnixNano: String(BigInt(ms(92.311)) * 1_000_000n),
+    attributes: expect.arrayContaining([
+      { key: "ci.status", value: { stringValue: "incomplete" } },
+      { key: "ci.evidence", value: { stringValue: "incomplete; enclosing finish precedes start" } },
+    ]),
+  });
+  for (const name of ["Preview", "Reports & cleanup"]) {
+    expect(spans.find((span) => span.name === name)).toMatchObject({
+      endTimeUnixNano: String(BigInt(ms(90)) * 1_000_000n),
+      attributes: expect.arrayContaining([
+        { key: "ci.status", value: { stringValue: "cancelled" } },
+      ]),
+    });
+  }
+});
+
+test.for([
+  {
+    kind: "operation",
+    event: { kind: "span-start", id: "operation", parentId: "", name: "Erase namespace" },
+  },
+  {
+    kind: "test",
+    event: {
+      kind: "test-start",
+      id: "test",
+      title: "cleanup probe",
+      file: "specs/cleanup.spec.ts",
+      line: 1,
+      project: "web",
+      retry: 0,
+    },
+  },
+])("unfinished $kind after cancellation keeps its start and unknown outcome", ({ kind, event }) => {
+  const report = assembleTrace(
+    greenWorkflow("cancelled"),
+    new Map([
+      [
+        "finish-attempt",
+        [
+          line("erase", { kind: "shell-start", id: "erase", step: "erase", time: ms(89) }),
+          line("erase", { ...event, time: ms(92.311) }),
+        ],
+      ],
+    ]),
+  );
+  const spans = report.resourceSpans[0].scopeSpans[0].spans;
+  const unfinished = spans.find((span) =>
+    span.attributes.some(
+      (attribute) => attribute.key === "ci.kind" && attribute.value.stringValue === kind,
+    ),
+  );
+  expect(unfinished).toMatchObject({
+    startTimeUnixNano: String(BigInt(ms(92.311)) * 1_000_000n),
+    endTimeUnixNano: String(BigInt(ms(92.311)) * 1_000_000n),
+    attributes: expect.arrayContaining([
+      { key: "ci.status", value: { stringValue: "incomplete" } },
+      { key: "ci.evidence", value: { stringValue: "incomplete; enclosing finish precedes start" } },
+    ]),
+  });
+});
+
+test.for([
+  {
+    start: { kind: "shell-start", id: "erase", step: "erase" },
+    end: { kind: "shell-end", id: "erase", exitCode: 0 },
+    name: "erase",
+  },
+  {
+    start: { kind: "span-start", id: "operation", parentId: "", name: "Erase namespace" },
+    end: { kind: "span-end", id: "operation", status: "passed" },
+    name: "Erase namespace",
+  },
+  {
+    start: {
+      kind: "test-start",
+      id: "test",
+      title: "cleanup probe",
+      file: "specs/cleanup.spec.ts",
+      line: 1,
+      project: "web",
+      retry: 0,
+    },
+    end: { kind: "test-end", id: "test", status: "passed", expectedStatus: "passed", worker: 0 },
+    name: "cleanup probe",
+  },
+])(
+  "$name keeps measured times after cancellation and rejects reversed endpoints",
+  ({ start, end, name }) => {
+    const workflow = greenWorkflow("cancelled");
+    const report = assembleTrace(
+      workflow,
+      new Map([
+        [
+          "finish-attempt",
+          [line("erase", { ...start, time: ms(92.311) }), line("erase", { ...end, time: ms(94) })],
+        ],
+      ]),
+    );
+    expect(
+      report.resourceSpans[0].scopeSpans[0].spans.find((span) => span.name === name),
+    ).toMatchObject({
+      startTimeUnixNano: String(BigInt(ms(92.311)) * 1_000_000n),
+      endTimeUnixNano: String(BigInt(ms(94)) * 1_000_000n),
+      attributes: expect.arrayContaining([{ key: "ci.status", value: { stringValue: "passed" } }]),
+    });
+    expect(() =>
+      assembleTrace(
+        workflow,
+        new Map([
+          [
+            "finish-attempt",
+            [
+              line("erase", { ...start, time: ms(92.311) }),
+              line("erase", { ...end, time: ms(91) }),
+            ],
+          ],
+        ]),
+      ),
+    ).toThrow(`Invalid span interval: ${name}`);
+  },
+);
+
 test("a second-precision Depot finish does not invent a negative finish phase", () => {
   const report = assembleTrace(
     {
