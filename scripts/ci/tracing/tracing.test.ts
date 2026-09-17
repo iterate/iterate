@@ -32,13 +32,91 @@ test.each(["finished", "failed", "cancelled"])(
         { key: "ci.time_to_green_ms", value: { stringValue: "25000" } },
         { key: "ci.status", value: { stringValue: status } },
       ]),
-      events: [
+      events: expect.arrayContaining([
         expect.objectContaining({
           name: "ci.check.green",
           timeUnixNano: String(BigInt(ms(25)) * 1_000_000n),
         }),
-      ],
+      ]),
     });
+    if (status === "failed")
+      expect(root.events).toContainEqual(expect.objectContaining({ name: "ci.check.red" }));
+  },
+);
+
+test("time to red uses the first failed job, ignoring a recovered job attempt", () => {
+  const workflow = greenWorkflow("failed");
+  workflow.jobs.push(
+    {
+      jobId: "recovered",
+      jobKey: "preview.yml:preview:apps",
+      status: "finished",
+      attempts: [
+        { attemptId: "old", attempt: 1, status: "failed", startedAt: at(1), finishedAt: at(20) },
+        { attemptId: "new", attempt: 2, status: "finished", startedAt: at(21), finishedAt: at(40) },
+      ],
+    },
+    {
+      jobId: "shard",
+      jobKey: "preview.yml:preview:playwright:matrix-1",
+      status: "failed",
+      attempts: [
+        {
+          attemptId: "shard-attempt",
+          attempt: 1,
+          status: "failed",
+          startedAt: at(1),
+          finishedAt: at(60),
+        },
+      ],
+    },
+  );
+  const trace = assembleTrace(workflow, new Map());
+  expect(trace.resourceSpans[0].scopeSpans[0].spans[0]).toMatchObject({
+    attributes: expect.arrayContaining([
+      { key: "ci.time_to_red_ms", value: { stringValue: "60000" } },
+      { key: "ci.red.evidence", value: { stringValue: "First failed job completion (Depot)" } },
+    ]),
+    events: [
+      expect.objectContaining({
+        name: "ci.check.red",
+        timeUnixNano: String(BigInt(ms(60)) * 1_000_000n),
+      }),
+    ],
+  });
+});
+
+test.each(["finished", "cancelled"])("%s workflows do not acquire a time to red", (status) => {
+  const workflow = greenWorkflow(status);
+  workflow.jobs[0].status = "failed";
+  workflow.jobs[0].attempts[0].status = "failed";
+  const trace = assembleTrace(workflow, new Map());
+  expect(
+    trace.resourceSpans[0].scopeSpans[0].spans[0].attributes.find(
+      (a) => a.key === "ci.time_to_red_ms",
+    ),
+  ).toBeUndefined();
+});
+
+test.each(["missing", "previous execution"])(
+  "a rerun without a current failed job timestamp uses workflow completion (%s)",
+  (timing) => {
+    const workflow = greenWorkflow("failed");
+    workflow.executions.push({ executionId: "rerun", execution: 2, createdAt: at(30) });
+    workflow.jobs[0].attempts[0].finishedAt = timing === "missing" ? "" : at(20);
+    const trace = assembleTrace(workflow, new Map());
+    expect(trace.resourceSpans[0].scopeSpans[0].spans[0].attributes).toEqual(
+      expect.arrayContaining([
+        { key: "ci.time_to_red_ms", value: { stringValue: "60000" } },
+        {
+          key: "ci.red.evidence",
+          value: {
+            stringValue:
+              "Failed workflow completion (upper bound; no failed job completion recorded)",
+          },
+        },
+      ]),
+    );
   },
 );
 
@@ -94,7 +172,7 @@ test("a rerun does not inherit green from a previous execution", () => {
   expect(
     root.attributes.find((attribute) => attribute.key === "ci.time_to_green_ms"),
   ).toBeUndefined();
-  expect(root.events).toBeUndefined();
+  expect(root.events?.find((event) => event.name === "ci.check.green")).toBeUndefined();
 });
 
 test("the shell hook preserves failures and does not double-count nested bash", async () => {

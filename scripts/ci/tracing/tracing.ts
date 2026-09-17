@@ -148,6 +148,7 @@ export function assembleTrace(
   for (const job of workflow.jobs) {
     const key = job.jobKey.replace(/^.*:preview:/, "");
     const labels: Record<string, string> = {
+      plan: "Plan",
       prepare: "Prepare",
       apps: "App tests",
       finish: "Reports & cleanup",
@@ -438,6 +439,34 @@ export function assembleTrace(
         name: "ci.check.green",
         timeUnixNano: (BigInt(Math.round(green.time * 1000)) * 1000n).toString(),
         attributes: [{ key: "ci.evidence", value: { stringValue: green.evidence } }],
+      },
+    ];
+  }
+  if (workflow.workflowStatus === "failed") {
+    // Job outcomes, not test/step failures that may recover on retry. Ignore
+    // failed attempts of recovered jobs and timestamps from previous executions.
+    const failedAt = workflow.jobs
+      .filter((job) => job.status === "failed")
+      .flatMap((job) => job.attempts)
+      .filter((attempt) => attempt.status === "failed" && attempt.finishedAt)
+      .map((attempt) => Date.parse(attempt.finishedAt))
+      .filter((time) => time >= rootStart && time <= rootEnd)
+      .sort((a, b) => a - b)[0];
+    const red = failedAt === undefined ? rootEnd : failedAt;
+    const evidence =
+      failedAt === undefined
+        ? "Failed workflow completion (upper bound; no failed job completion recorded)"
+        : "First failed job completion (Depot)";
+    spans[0].attributes.push(
+      { key: "ci.time_to_red_ms", value: { stringValue: String(red - rootStart) } },
+      { key: "ci.red.evidence", value: { stringValue: evidence } },
+    );
+    spans[0].events = [
+      ...(spans[0].events || []),
+      {
+        name: "ci.check.red",
+        timeUnixNano: (BigInt(red) * 1_000_000n).toString(),
+        attributes: [{ key: "ci.evidence", value: { stringValue: evidence } }],
       },
     ];
   }

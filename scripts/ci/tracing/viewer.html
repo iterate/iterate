@@ -153,6 +153,7 @@
         overflow: hidden;
         white-space: nowrap;
         text-overflow: ellipsis;
+        line-height: 1.5;
       }
       .toggle {
         width: 22px;
@@ -300,7 +301,7 @@
         dependency arrows; tap a linked span below to reveal it.
       </p>
       <div class="stats" id="stats"></div>
-      <p id="green-note"></p>
+      <p id="outcome-note"></p>
       <p id="notice"></p>
       <div class="tools">
         <input
@@ -336,6 +337,13 @@
           update. Older runs use the successful early-green step’s end, or workflow completion when
           there was no early-green step. It does not include other workflows on the commit. Cleanup
           may continue afterwards and can still turn the check red.
+        </p>
+        <p>
+          Failed workflows show Time to red: the first failed job completion in this execution,
+          using Depot timestamps. Failed test attempts that recover on retry do not count, nor do
+          failed attempts of jobs that later pass. If no failed job completion was recorded, the
+          failed workflow’s completion provides an upper bound, labelled in the summary. Any earlier
+          green milestone remains in the trace and summary. Both metrics cover only this workflow.
         </p>
         <p>
           Workflow and runner attempt times come from Depot. Shell steps have explicit start/exit
@@ -402,13 +410,15 @@
             .sort((a, b) => {
               if (s === root) {
                 const rank = (span) =>
-                  span.name === "Prepare"
+                  span.a["ci.job.key"]?.endsWith(":plan")
                     ? 0
-                    : span.name === "App tests"
+                    : span.name === "Prepare"
                       ? 1
-                      : span.name.startsWith("Playwright ")
+                      : span.name === "App tests"
                         ? 2
-                        : 3;
+                        : span.name.startsWith("Playwright ")
+                          ? 3
+                          : 4;
                 return (
                   rank(a) - rank(b) || a.name.localeCompare(b.name, undefined, { numeric: true })
                 );
@@ -436,8 +446,13 @@
         `${root.a["ci.source.sha"].slice(0, 12)} · ${new Date(root.start).toISOString()} · ${root.a["ci.workflow.id"]}`;
       const tests = spans.filter((s) => s.a["ci.kind"] === "test");
       const greenMs = root.a["ci.time_to_green_ms"];
+      const failed = root.a["ci.status"] === "failed";
+      const outcomeMs = failed ? root.a["ci.time_to_red_ms"] : greenMs;
       const stats = [
-        [greenMs === undefined ? "Not recorded" : duration(Number(greenMs)), "Time to green"],
+        [
+          outcomeMs === undefined ? "Not recorded" : duration(Number(outcomeMs)),
+          failed ? "Time to red" : "Time to green",
+        ],
         [duration(root.end - root.start), "workflow wall time"],
         [spans.filter((s) => s.a["ci.attempt.id"]).length, "runner attempts"],
         [tests.length, "test attempts"],
@@ -453,12 +468,23 @@
         el.append(strong, small);
         document.getElementById("stats").append(el);
       }
-      document.getElementById("green-note").textContent =
-        greenMs === undefined
-          ? "No successful check update was recorded for this preview workflow."
-          : root.a["ci.status"] === "finished"
-            ? "Time to green covers this preview workflow; cleanup can continue afterwards."
-            : `This preview went green, then ${root.a["ci.status"]}. Time to green records that earlier milestone.`;
+      let outcomeNote;
+      if (failed) {
+        outcomeNote =
+          outcomeMs === undefined
+            ? "Failure timing was not recorded in this report. Regenerate it to measure time to red."
+            : `Time to red: ${root.a["ci.red.evidence"]}. Other jobs and cleanup can continue afterwards.`;
+        if (greenMs !== undefined)
+          outcomeNote += ` This preview first went green at ${duration(Number(greenMs))}, then failed.`;
+      } else {
+        outcomeNote =
+          greenMs === undefined
+            ? "No successful check update was recorded for this preview workflow."
+            : root.a["ci.status"] === "finished"
+              ? "Time to green covers this preview workflow; cleanup can continue afterwards."
+              : `This preview went green, then ${root.a["ci.status"]}. Time to green records that earlier milestone.`;
+      }
+      document.getElementById("outcome-note").textContent = outcomeNote;
       const incomplete = spans.filter((s) => s.a["ci.status"] === "incomplete").length;
       if (incomplete || !tests.length)
         document.getElementById("notice").textContent =

@@ -5,6 +5,13 @@ Its **Details** link opens the report for that tested commit. The report shows
 jobs, setup/wait/test/finish phases, measured shell steps and individual Playwright attempts. Expand rows, search for a test,
 click a bar, or zoom to a selected span. Download the same trace as OTLP JSON.
 
+The summary shows **Time to green** for successful runs and **Time to red** for
+failed runs. Red uses the first failed job completion in the current execution;
+recovered test or job attempts do not count. Without a failed job timestamp,
+workflow completion supplies a labelled upper bound. An earlier green milestone
+remains visible if cleanup later fails. Planning appears first in the waterfall,
+followed by preparation, app tests, Playwright shards and cleanup.
+
 Expand a **Wait** phase, then select its wait step (click/tap, or focus its bar
 and press Enter) to show curved arrows from its prerequisites. Selection shows
 only that span's own links, never links belonging to its children. The details list lets you reveal either
