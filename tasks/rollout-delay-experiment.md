@@ -5,8 +5,9 @@ size: medium
 
 # Find the shortest defensible preview rollout delay
 
-Status: branch and timing instrumentation ready; 90-second control dispatched,
-zero-delay candidate under test. Fresh-deployment evidence remains to collect.
+Status: zero delay rejected: the second trial recorded a code-update reset
+8.4 seconds after deploy during smoke project creation, despite passing all
+tests without retries. Testing 30 seconds next; repeated evidence remains.
 Five recent main smoke runs averaged 114.7 seconds, including 85.6 seconds
 waiting for the fixed 90-second deployment-age boundary.
 
@@ -44,7 +45,7 @@ permission to claim reliability from a few green smoke tests.
 ## Work
 
 - [x] Commit this specification before implementation and push the branch. *Commit `fc4599939`.*
-- [ ] Record a fresh 90-second control through the canonical Depot workflow.
+- [x] Record a fresh 90-second control through the canonical Depot workflow. *`4s9c5w1gmf` finished; smoke 115.43s, wait 87.05s, first project age 91.20s. One workspace test retried, so this is not a retry-free control.*
 - [x] Make the rollout wait visible as its own smoke phase. *`agent-smoke.ts` records the deployment wait separately from connection and project creation.*
 - [ ] Run shorter-delay experiments; retain a per-run evidence ledger.
 - [ ] Inspect deployment/version-reset telemetry and explain observed failures.
@@ -71,3 +72,40 @@ permission to claim reliability from a few green smoke tests.
   not the fresh experimental control.
 
 Codex task: `01a0b054-bdd8-7d52-9c01-30d9b92576c8`.
+
+- 2026-09-17 19:33 UTC: control `4s9c5w1gmf` completed all suites and cleanup.
+  The workspace namespace test retried after `An internal error occurred.`
+  Cloudflare recorded two storage-reset references, including OS trace
+  `1116b76e067186c40f29059b4e7d17f9` at 19:29:14 UTC (over three minutes after
+  OS deployment) and Streams trace `d6e9892ef1298b2e3b8f8a09b7e96be4`.
+  These are storage-error resets, not the code-update-reset signature (zero
+  matches across all six deployed services). Exact correlation between the
+  workspace retry and a storage-reset trace remains unproven. Retain this
+  control as a latency sample and baseline failure evidence, not a clean streak.
+  Known failing specs and `SAME-BOOT STALENESS` were also retained separately.
+  The zero-delay batch is alive on the immutable candidate, first run `tvvdlqht59`.
+
+- 2026-09-17 19:45 UTC: zero-delay run `tvvdlqht59` finished all suites and
+  cleanup. Smoke passed first attempt in 28.70s, creating its project at
+  deployment age 2.79s. No code-update resets or initial-connection recoveries.
+  The Streams first-paint test retried: first navigation took 12.93s, row
+  appeared 2.82s later, exceeding the 10s threshold; retry passed in 2.68s.
+  Its first attempt began 117.32s after Streams deployed, beyond the old
+  90s boundary. This does not establish a rollout failure, but the trial is
+  not retry-free. Continue zero-delay fresh deployments while retaining it.
+
+- 2026-09-17 19:54 UTC: second zero-delay run `10dgtcf6tc` passed all suites
+  with zero test retries and a 21.96s smoke, but CF recorded five code-update
+  reset records across two traces. Scheduler reset at deployment age 8.399s
+  belongs to smoke project `prj_1a781a304ced4f24b9ad8a1aa5a185ce`; the same
+  trace contains its creation timing and the explicit platform exception.
+  A later repo callback reset at age 124.504s remains unclassified. Cleanup
+  succeeded. Zero is rejected; stop its batch and test 30 seconds.
+  `docs/ci-rollout-delay-experiment.md` retains the evidence and reproduction
+  steps. Broader lifecycle queries now capture absorbed product recoveries
+  as well as explicit code-update errors.
+
+- 30-second candidate validation: changed the existing deployment-age spec
+  first (red: expected 30, received 0), then the constant. All 216 preview
+  tests, scripts typecheck and changed-file lint passed. No retries,
+  watchdogs, worker counts or suite selection changed.
