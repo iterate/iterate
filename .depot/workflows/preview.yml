@@ -32,6 +32,7 @@ name: Preview
 
 permissions:
   contents: read
+  checks: write
   pull-requests: write
   statuses: write
 
@@ -52,6 +53,7 @@ on:
       - scripts/preview/**
       - scripts/ci/status.ts
       - scripts/ci/tracing/**
+      - scripts/depot-ci/**
       - .depot/workflows/ci-trace.yml
       - envs.ts
       - scripts/lib/**

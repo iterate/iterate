@@ -18,12 +18,14 @@ on:
         required: true
 permissions:
   contents: read
+  checks: write
   pull-requests: write
   statuses: write
 defaults:
   run:
     shell: bash
 env:
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
   BASH_ENV: ${{ github.workspace }}/scripts/ci/tracing/shell.sh
   CI_TRACE_ENABLED: "1"
   CI_HEAD_SHA: ${{ inputs.head-sha }}
@@ -46,7 +48,7 @@ jobs:
           ref: ${{ inputs.head-sha }}
       - name: Reconcile dependencies (baked)
         id: install_dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: node scripts/depot-ci/dependencies.mjs install
       - name: Reset test artifacts
         id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
@@ -125,7 +127,7 @@ jobs:
           ref: ${{ inputs.head-sha }}
       - name: Reconcile dependencies (baked)
         id: install_dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: node scripts/depot-ci/dependencies.mjs install
       - name: Reset test artifacts
         id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
@@ -185,7 +187,7 @@ jobs:
           ref: ${{ inputs.head-sha }}
       - name: Reconcile dependencies (baked)
         id: install_dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: node scripts/depot-ci/dependencies.mjs install
       - name: Reset test artifacts
         id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
@@ -238,7 +240,7 @@ jobs:
           ref: ${{ inputs.head-sha }}
       - name: Reconcile dependencies (baked)
         id: install_dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: node scripts/depot-ci/dependencies.mjs install
       - name: Reset test artifacts
         id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
@@ -254,39 +256,45 @@ jobs:
           pnpm exec trpc-cli scripts/ci/status.ts wait-for-jobs apps
           playwright:matrix-0 playwright:matrix-1 playwright:matrix-2
           playwright:matrix-3 playwright:matrix-4 playwright:matrix-5
-      - if: always() && steps.consumers.outputs.settled == 'true'
-        fail-fast: false
-        parallel:
-          - sequential:
-              - name: Download every test result
-                if: always() && steps.consumers.outputs.settled == 'true'
-                uses: actions/download-artifact@v4
-                with:
-                  pattern: preview-ci-*
-                  merge-multiple: true
-                  path: test-results
-              - name: Merge reports and publish full preview result
-                id: merge_reports
-                if: always() && steps.consumers.outputs.settled == 'true' && needs.prepare.result == 'success'
-                env:
-                  DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-                  GITHUB_TOKEN: ${{ github.token }}
-                run: >-
-                  doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
-                  pnpm preview ci-finish $PREVIEW_TARGET_ARGS
-          - name: Erase slot data after all tests
-            id: erase
-            if: always() && steps.consumers.outputs.settled == 'true'
-            env:
-              DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-              GITHUB_TOKEN: ${{ github.token }}
-            # No result files are needed by erase. A crashed/failed producer is
-            # safe only after the all-settled barrier. Cancellation still relies
-            # on the next run's pre-deploy erase as its backstop.
-            run: >-
-              doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
-              pnpm preview erase $PREVIEW_TARGET_ARGS
-              --ran-head-sha "${{ inputs.head-sha }}"
+      - name: Download every test result
+        if: always() && steps.consumers.outputs.settled == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: preview-ci-*
+          merge-multiple: true
+          path: test-results
+      - name: Merge reports and publish full preview result
+        id: merge_reports
+        if: always() && steps.consumers.outputs.settled == 'true' && needs.prepare.result == 'success'
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
+          pnpm preview ci-finish $PREVIEW_TARGET_ARGS
+      - name: Tests passed; cleanup continues
+        id: tests_passed
+        if: success() && needs.prepare.result == 'success' && steps.consumers.outputs.succeeded == 'true' && steps.merge_reports.outcome == 'success'
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          pnpm exec trpc-cli scripts/ci/status.ts set-pending-check-green
+          "All preview tests passed. Cleanup and restoration run afterwards; their final outcome is reflected in this check. See Depot for current cleanup progress."
+      - name: Retire test data and restore the preview
+        id: erase
+        if: always() && steps.consumers.outputs.settled == 'true'
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        # A failed preparation still gets ordinary retirement. Only a prepared
+        # deployment is restored, using this run's exact checkout.
+        run: >-
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
+          pnpm preview erase $PREVIEW_TARGET_ARGS
+          --ran-head-sha "${{ inputs.head-sha }}"
+          ${{ needs.prepare.result == 'success' && '--restore' || '' }}
       - name: Normalize and send preview test telemetry
         id: telemetry
         if: always()

@@ -4,6 +4,99 @@ import { promisify } from "node:util";
 import { expect, test } from "vitest";
 import { assembleTrace, renderTrace, stepCommands } from "./tracing.ts";
 
+test.each(["finished", "failed", "cancelled"])(
+  "time to green retains the observed milestone when the workflow later %s",
+  (status) => {
+    const trace = assembleTrace(
+      greenWorkflow(status),
+      new Map([
+        [
+          "finish-attempt",
+          [
+            line("tests_passed", { kind: "check-green", time: ms(25), checkId: 123 }),
+            line("erase", { kind: "shell-start", step: "erase", id: "erase", time: ms(26) }),
+            line("erase", {
+              kind: "shell-end",
+              id: "erase",
+              time: ms(85),
+              exitCode: status === "finished" ? 0 : 1,
+            }),
+          ],
+        ],
+      ]),
+    );
+    const root = trace.resourceSpans[0].scopeSpans[0].spans[0];
+    expect(root).toMatchObject({
+      endTimeUnixNano: String(BigInt(ms(90)) * 1_000_000n),
+      attributes: expect.arrayContaining([
+        { key: "ci.time_to_green_ms", value: { stringValue: "25000" } },
+        { key: "ci.status", value: { stringValue: status } },
+      ]),
+      events: [
+        expect.objectContaining({
+          name: "ci.check.green",
+          timeUnixNano: String(BigInt(ms(25)) * 1_000_000n),
+        }),
+      ],
+    });
+  },
+);
+
+test.each([0, 1])(
+  "historical runs use the early-green step only when it succeeds (exit %s)",
+  (exitCode) => {
+    const trace = assembleTrace(
+      greenWorkflow("failed"),
+      new Map([
+        [
+          "finish-attempt",
+          [
+            line("tests_passed", {
+              kind: "shell-start",
+              step: "tests_passed",
+              id: "publish",
+              time: ms(24),
+            }),
+            line("tests_passed", { kind: "shell-end", id: "publish", time: ms(25), exitCode }),
+          ],
+        ],
+      ]),
+    );
+    const root = trace.resourceSpans[0].scopeSpans[0].spans[0];
+    const green = root.attributes.find((attribute) => attribute.key === "ci.time_to_green_ms");
+    expect(green?.value.stringValue).toBe(exitCode === 0 ? "25000" : undefined);
+  },
+);
+
+test.each(["finished", "failed", "cancelled"])(
+  "without an early signal, only successful completion establishes green (%s)",
+  (status) => {
+    const trace = assembleTrace(greenWorkflow(status), new Map());
+    const root = trace.resourceSpans[0].scopeSpans[0].spans[0];
+    const green = root.attributes.find((attribute) => attribute.key === "ci.time_to_green_ms");
+    expect(green?.value.stringValue).toBe(status === "finished" ? "90000" : undefined);
+  },
+);
+
+test("a rerun does not inherit green from a previous execution", () => {
+  const workflow = greenWorkflow("failed");
+  workflow.executions.push({ executionId: "rerun", execution: 2, createdAt: at(30) });
+  const trace = assembleTrace(
+    workflow,
+    new Map([
+      [
+        "finish-attempt",
+        [line("tests_passed", { kind: "check-green", time: ms(25), checkId: 123 })],
+      ],
+    ]),
+  );
+  const root = trace.resourceSpans[0].scopeSpans[0].spans[0];
+  expect(
+    root.attributes.find((attribute) => attribute.key === "ci.time_to_green_ms"),
+  ).toBeUndefined();
+  expect(root.events).toBeUndefined();
+});
+
 test("the shell hook preserves failures and does not double-count nested bash", async () => {
   const result = await promisify(execFile)("bash", ["-c", "bash -c 'echo nested'; exit 7"], {
     env: {
@@ -300,6 +393,145 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
     ),
   ).toBe(true);
 });
+
+test("cleanup starting after Depot records cancellation stays incomplete", () => {
+  // Preview 9dsvdkskfv: Depot finished the job at 08:22:19, but erase
+  // started at 08:22:21.311 without an exit marker.
+  const workflow = greenWorkflow("cancelled");
+  const report = assembleTrace(
+    workflow,
+    new Map([
+      [
+        "finish-attempt",
+        [line("erase", { kind: "shell-start", id: "erase", step: "erase", time: ms(92.311) })],
+      ],
+    ]),
+  );
+  const spans = report.resourceSpans[0].scopeSpans[0].spans;
+  expect(spans.find((span) => span.name === "erase")).toMatchObject({
+    startTimeUnixNano: String(BigInt(ms(92.311)) * 1_000_000n),
+    endTimeUnixNano: String(BigInt(ms(92.311)) * 1_000_000n),
+    attributes: expect.arrayContaining([
+      { key: "ci.status", value: { stringValue: "incomplete" } },
+      { key: "ci.evidence", value: { stringValue: "incomplete; enclosing finish precedes start" } },
+    ]),
+  });
+  for (const name of ["Preview", "Reports & cleanup"]) {
+    expect(spans.find((span) => span.name === name)).toMatchObject({
+      endTimeUnixNano: String(BigInt(ms(90)) * 1_000_000n),
+      attributes: expect.arrayContaining([
+        { key: "ci.status", value: { stringValue: "cancelled" } },
+      ]),
+    });
+  }
+});
+
+test.for([
+  {
+    kind: "operation",
+    event: { kind: "span-start", id: "operation", parentId: "", name: "Erase namespace" },
+  },
+  {
+    kind: "test",
+    event: {
+      kind: "test-start",
+      id: "test",
+      title: "cleanup probe",
+      file: "specs/cleanup.spec.ts",
+      line: 1,
+      project: "web",
+      retry: 0,
+    },
+  },
+])("unfinished $kind after cancellation keeps its start and unknown outcome", ({ kind, event }) => {
+  const report = assembleTrace(
+    greenWorkflow("cancelled"),
+    new Map([
+      [
+        "finish-attempt",
+        [
+          line("erase", { kind: "shell-start", id: "erase", step: "erase", time: ms(89) }),
+          line("erase", { ...event, time: ms(92.311) }),
+        ],
+      ],
+    ]),
+  );
+  const spans = report.resourceSpans[0].scopeSpans[0].spans;
+  const unfinished = spans.find((span) =>
+    span.attributes.some(
+      (attribute) => attribute.key === "ci.kind" && attribute.value.stringValue === kind,
+    ),
+  );
+  expect(unfinished).toMatchObject({
+    startTimeUnixNano: String(BigInt(ms(92.311)) * 1_000_000n),
+    endTimeUnixNano: String(BigInt(ms(92.311)) * 1_000_000n),
+    attributes: expect.arrayContaining([
+      { key: "ci.status", value: { stringValue: "incomplete" } },
+      { key: "ci.evidence", value: { stringValue: "incomplete; enclosing finish precedes start" } },
+    ]),
+  });
+});
+
+test.for([
+  {
+    start: { kind: "shell-start", id: "erase", step: "erase" },
+    end: { kind: "shell-end", id: "erase", exitCode: 0 },
+    name: "erase",
+  },
+  {
+    start: { kind: "span-start", id: "operation", parentId: "", name: "Erase namespace" },
+    end: { kind: "span-end", id: "operation", status: "passed" },
+    name: "Erase namespace",
+  },
+  {
+    start: {
+      kind: "test-start",
+      id: "test",
+      title: "cleanup probe",
+      file: "specs/cleanup.spec.ts",
+      line: 1,
+      project: "web",
+      retry: 0,
+    },
+    end: { kind: "test-end", id: "test", status: "passed", expectedStatus: "passed", worker: 0 },
+    name: "cleanup probe",
+  },
+])(
+  "$name keeps measured times after cancellation and rejects reversed endpoints",
+  ({ start, end, name }) => {
+    const workflow = greenWorkflow("cancelled");
+    const report = assembleTrace(
+      workflow,
+      new Map([
+        [
+          "finish-attempt",
+          [line("erase", { ...start, time: ms(92.311) }), line("erase", { ...end, time: ms(94) })],
+        ],
+      ]),
+    );
+    expect(
+      report.resourceSpans[0].scopeSpans[0].spans.find((span) => span.name === name),
+    ).toMatchObject({
+      startTimeUnixNano: String(BigInt(ms(92.311)) * 1_000_000n),
+      endTimeUnixNano: String(BigInt(ms(94)) * 1_000_000n),
+      attributes: expect.arrayContaining([{ key: "ci.status", value: { stringValue: "passed" } }]),
+    });
+    expect(() =>
+      assembleTrace(
+        workflow,
+        new Map([
+          [
+            "finish-attempt",
+            [
+              line("erase", { ...start, time: ms(92.311) }),
+              line("erase", { ...end, time: ms(91) }),
+            ],
+          ],
+        ]),
+      ),
+    ).toThrow(`Invalid span interval: ${name}`);
+  },
+);
 
 test("a second-precision Depot finish does not invent a negative finish phase", () => {
   const report = assembleTrace(
@@ -635,6 +867,38 @@ function markers(stdout: string) {
     .split("\n")
     .filter((line) => line.startsWith("@@ci-trace "))
     .map((line) => JSON.parse(line.slice(11)));
+}
+
+function greenWorkflow(status: string) {
+  return {
+    workflowId: "green-workflow",
+    workflowName: "Preview",
+    workflowPath: "preview.yml",
+    repo: "iterate/iterate",
+    headSha: "head",
+    sha: "merge",
+    ref: "refs/pull/2695/merge",
+    workflowStatus: status,
+    workflowCreatedAt: at(0),
+    workflowFinishedAt: at(90),
+    executions: [{ executionId: "execution", execution: 1, createdAt: at(0) }],
+    jobs: [
+      {
+        jobId: "finish",
+        jobKey: "preview.yml:preview:finish",
+        status,
+        attempts: [
+          {
+            attemptId: "finish-attempt",
+            attempt: 1,
+            status,
+            startedAt: at(10),
+            finishedAt: at(90),
+          },
+        ],
+      },
+    ],
+  };
 }
 
 const ms = (seconds: number) => Date.parse("2026-09-16T12:00:00Z") + seconds * 1000;

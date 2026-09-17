@@ -95,6 +95,7 @@ export function assembleTrace(
   const dependencies: { sourceId: string; targetId: string; milestone: string }[] = [];
   const rootStart = Date.parse(execution.createdAt);
   const rootEnd = Date.parse(workflow.workflowFinishedAt);
+  const greenSignals: { time: number; evidence: string }[] = [];
   const add = (
     id: string,
     parentSpanId: string,
@@ -211,6 +212,17 @@ export function assembleTrace(
       const shellEnds = new Map(
         events.filter((event) => event.kind === "shell-end").map((event) => [event.id, event]),
       );
+      const green = events.find((event) => event.kind === "check-green");
+      if (green) {
+        greenSignals.push({ time: green.time, evidence: "GitHub check update acknowledged" });
+      } else if (key === "finish") {
+        // Historical runs predate the explicit marker. A successful end of
+        // the early-green step bounds the acknowledgement a few ms earlier.
+        const publish = shells.find((event) => event.step === "tests_passed");
+        const done = publish && shellEnds.get(publish.id);
+        if (done?.exitCode === 0)
+          greenSignals.push({ time: done.time, evidence: "Successful early-green step end" });
+      }
       const testEnds = new Map(
         events.filter((event) => event.kind === "test-end").map((event) => [event.id, event]),
       );
@@ -261,6 +273,10 @@ export function assembleTrace(
       const stepEnds = new Map<string, number>();
       for (const shell of shells) {
         const done = shellEnds.get(shell.id);
+        // Cancellation can record a job finish before always() cleanup starts.
+        // With no exit marker, keep it incomplete at its start instead of
+        // inventing a negative duration. Measured intervals still validate below.
+        const shellEnd = done?.time || Math.max(shell.time, end);
         const parent =
           phases.findLast((phase) => shell.time >= phase.start && shell.time < phase.end)?.id ||
           jobSpan;
@@ -269,7 +285,7 @@ export function assembleTrace(
           parent,
           shell.stepName || shell.stepId || shell.command || shell.step,
           shell.time,
-          done?.time || end,
+          shellEnd,
           {
             "ci.kind": "step",
             "ci.step.key": shell.stepKey,
@@ -279,12 +295,14 @@ export function assembleTrace(
             "ci.status": done ? (done.exitCode ? "failed" : "passed") : "incomplete",
             "ci.evidence": done
               ? "Measured shell start/exit"
-              : "incomplete; end bounded by job finish",
+              : shell.time > end
+                ? "incomplete; enclosing finish precedes start"
+                : "incomplete; end bounded by job finish",
           },
           !!done?.exitCode,
         );
         stepParents.set(shell.stepKey, id);
-        stepEnds.set(shell.stepKey, done?.time || end);
+        stepEnds.set(shell.stepKey, shellEnd);
       }
       for (const event of events) {
         if (event.kind === "milestone") {
@@ -318,6 +336,7 @@ export function assembleTrace(
       );
       for (const operation of operations) {
         const done = operationEnds.get(operation.id);
+        const enclosingEnd = stepEnds.get(operation.stepKey) || end;
         if (operation.parentId && !operationIds.has(operation.parentId))
           throw new Error(`Missing parent for CI operation: ${operation.name}`);
         add(
@@ -325,13 +344,15 @@ export function assembleTrace(
           operationIds.get(operation.parentId) || stepParents.get(operation.stepKey) || jobSpan,
           operation.name,
           operation.time,
-          done?.time || stepEnds.get(operation.stepKey) || end,
+          done?.time || Math.max(operation.time, enclosingEnd),
           {
             "ci.kind": "operation",
             "ci.status": done?.status || "incomplete",
             "ci.evidence": done
               ? "Measured operation start/end"
-              : "incomplete; end bounded by enclosing step/job finish",
+              : operation.time > enclosingEnd
+                ? "incomplete; enclosing finish precedes start"
+                : "incomplete; end bounded by enclosing step/job finish",
           },
           done?.status === "failed",
         );
@@ -343,13 +364,15 @@ export function assembleTrace(
           stepParents.get(test.stepKey) || jobSpan,
           `${test.title}${test.retry ? ` · retry ${test.retry}` : ""}`,
           test.time,
-          done?.time || end,
+          done?.time || Math.max(test.time, end),
           {
             "ci.kind": "test",
             "ci.status": done?.status || "incomplete",
             "ci.evidence": done
               ? "Playwright startTime + duration"
-              : "incomplete; end bounded by job finish",
+              : test.time > end
+                ? "incomplete; enclosing finish precedes start"
+                : "incomplete; end bounded by job finish",
             "test.file": test.file,
             "test.line": String(test.line),
             "test.project": test.project,
@@ -393,6 +416,30 @@ export function assembleTrace(
         },
       ],
     });
+  }
+  const firstGreen = greenSignals
+    .filter((signal) => signal.time >= rootStart && signal.time <= rootEnd)
+    .sort((a, b) => a.time - b.time)[0];
+  // Without early completion, a successful workflow goes green at its end.
+  // Failed/cancelled workflows have no green time unless one was observed.
+  const green =
+    firstGreen ||
+    (workflow.workflowStatus === "finished"
+      ? { time: rootEnd, evidence: "Successful workflow completion" }
+      : null);
+  if (green) {
+    const workflowSpan = spans[0];
+    workflowSpan.attributes.push(
+      { key: "ci.time_to_green_ms", value: { stringValue: String(green.time - rootStart) } },
+      { key: "ci.green.evidence", value: { stringValue: green.evidence } },
+    );
+    workflowSpan.events = [
+      {
+        name: "ci.check.green",
+        timeUnixNano: (BigInt(Math.round(green.time * 1000)) * 1000n).toString(),
+        attributes: [{ key: "ci.evidence", value: { stringValue: green.evidence } }],
+      },
+    ];
   }
   return {
     resourceSpans: [
@@ -449,6 +496,11 @@ type Span = {
   startTimeUnixNano: string;
   endTimeUnixNano: string;
   attributes: { key: string; value: { stringValue: string } }[];
+  events?: {
+    name: string;
+    timeUnixNano: string;
+    attributes: { key: string; value: { stringValue: string } }[];
+  }[];
   status: { code: number };
   links: { traceId: string; spanId: string; attributes: Span["attributes"] }[];
 };
@@ -497,6 +549,11 @@ const TraceEvent = z.discriminatedUnion("kind", [
     kind: z.literal("milestone"),
     name: z.string().min(1),
     time: z.number().finite(),
+  }),
+  z.object({
+    kind: z.literal("check-green"),
+    time: z.number().finite(),
+    checkId: z.number().int().positive(),
   }),
   z.object({
     kind: z.literal("span-start"),

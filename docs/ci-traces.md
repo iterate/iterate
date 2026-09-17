@@ -115,7 +115,13 @@ pnpm exec trpc-cli scripts/ci/tracing/cli.ts render <workflow-id> /tmp/ci-trace
   their individual start/end timestamps are not exposed by Depot's public API.
   Quiet shell commands have measured start/exit times, not stdout estimates.
 - A missing completion marker produces a striped incomplete span bounded by the
-  runner finish. It is not reported as an observed test duration or a pass.
+  runner finish. After cancellation, cleanup can start after Depot's recorded
+  finish; an unfinished span then ends at its own start, with evidence that the
+  enclosing finish precedes it. This zero duration means the end is unknown,
+  not that the work completed instantly. Recorded Depot and lifecycle timestamps
+  remain unchanged; invalid measured intervals still fail rendering. The chart's
+  full range includes cleanup after cancellation; workflow wall time still uses
+  Depot's recorded finish.
 - Depot job-finish timestamps have whole-second precision. A millisecond marker
   can fall just after that timestamp: preserve both recorded times and give the
   synthetic trailing Finish phase zero duration rather than a negative interval.
