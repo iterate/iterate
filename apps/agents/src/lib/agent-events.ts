@@ -87,6 +87,11 @@ export function reduceAgentFeed(
 
 export const formatSeconds = (durationMs: number): string => formatAgentUiDuration(durationMs);
 
+/** CLI-style elapsed clock for the live phase indicator: one decimal, no space (`0.9s`, `12.3s`). */
+export function formatElapsedSeconds(durationMs: number): string {
+  return `${(Math.max(0, durationMs) / 1000).toFixed(1)}s`;
+}
+
 export function formatClockTime(timestampMs: number): string {
   return new Date(timestampMs).toLocaleTimeString([], {
     hour: "2-digit",

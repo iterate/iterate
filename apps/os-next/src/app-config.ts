@@ -74,6 +74,9 @@ export const AppConfig = z.object({
     .int()
     .positive()
     .default(1024 * 1024),
+  /** The AI Gateway (its id on the worker's account) the agent facet's OpenAI calls go through
+   *  (agent/durable-object.ts) — Cloudflare's unified billing pays the provider; no key anywhere. */
+  aiGatewayId: z.string().trim().default("default"),
   googleClientId: z.string().trim().default(""),
   /** The Google OAuth client secret — a secret, blank where Google login is off. */
   googleClientSecret: redacted(z.string().trim().default("")),
