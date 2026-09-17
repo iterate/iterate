@@ -42,9 +42,9 @@ permission to claim reliability from a few green smoke tests.
 
 ## Work
 
-- [ ] Commit this specification before implementation and push the branch.
+- [x] Commit this specification before implementation and push the branch. *Commit `fc4599939`.*
 - [ ] Record a fresh 90-second control through the canonical Depot workflow.
-- [ ] Make the rollout wait visible as its own smoke phase.
+- [x] Make the rollout wait visible as its own smoke phase. *`agent-smoke.ts` records the deployment wait separately from connection and project creation.*
 - [ ] Run shorter-delay experiments; retain a per-run evidence ledger.
 - [ ] Inspect deployment/version-reset telemetry and explain observed failures.
 - [ ] Repeat the best candidate against fresh deployments and all suites.
@@ -54,6 +54,11 @@ permission to claim reliability from a few green smoke tests.
 
 ## Implementation log
 
+- The initial setup dispatch `zl16nw5xv4` used the specification-only commit.
+  Feature branches without PRs do not publish their SDK packages automatically,
+  so this cannot serve as the control. Added an experiment-only push trigger to
+  the existing package publisher; remove it before final delivery. Later trials
+  will wait for the exact-head package publication before dispatch.
 - 2026-09-17: initial baseline from five main runs: 105.4–121.2 seconds total,
   78.6–87.6 seconds of rollout wait, 26.8–34.5 seconds of actual smoke work;
   all smoke attempts passed without retries. This is historical context,

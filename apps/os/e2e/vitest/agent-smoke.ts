@@ -48,7 +48,13 @@ async function attemptAgentSmoke(phases: SmokePhase[]): Promise<void> {
   // has finished propagating globally. Use the same absolute deployment
   // boundary as Playwright so this early lane cannot create an object while
   // Cloudflare is still replacing its assigned worker version.
+  const rolloutStartedAt = Date.now();
   await waitForPreviewRolloutBeforeProjectCreation();
+  phases.push({
+    name: "wait for deployment rollout",
+    category: "fixture",
+    durationMs: Date.now() - rolloutStartedAt,
+  });
   const connectionStartedAt = Date.now();
   using session = connectItx({
     baseUrl,
