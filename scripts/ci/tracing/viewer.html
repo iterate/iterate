@@ -144,7 +144,12 @@
         background: #141d2a;
         z-index: 1;
       }
-      .label span {
+      .span-name {
+        border: 0;
+        background: none;
+        padding: 0;
+        text-align: left;
+        min-width: 0;
         overflow: hidden;
         white-space: nowrap;
         text-overflow: ellipsis;
@@ -450,7 +455,7 @@
       const incomplete = spans.filter((s) => s.a["ci.status"] === "incomplete").length;
       if (incomplete || !tests.length)
         document.getElementById("notice").textContent =
-          `${incomplete ? `${incomplete} unfinished spans; striped durations are bounds. ` : ""}${!tests.length ? "No Playwright lifecycle records were observed in this run." : ""}`;
+          `${incomplete ? `${incomplete} unfinished spans; grey-striped durations are bounds. ` : ""}${!tests.length ? "No Playwright lifecycle records were observed in this run." : ""}`;
       function showDetail(span) {
         selected = span;
         document.getElementById("detail").hidden = false;
@@ -480,6 +485,8 @@
                 parent = byId.get(parent).parentSpanId;
               }
               document.getElementById("search").value = "";
+              if (endpoint.start < range[0] || endpoint.end > range[1])
+                range = [root.start, root.end];
               showDetail(endpoint);
               render();
               rows.get(endpoint.spanId).row.scrollIntoView({ block: "nearest" });
@@ -550,7 +557,9 @@
             open.has(span.spanId) ? open.delete(span.spanId) : open.add(span.spanId);
             render();
           };
-          const name = document.createElement("span");
+          const name = document.createElement("button");
+          name.className = "span-name";
+          name.setAttribute("aria-label", `Inspect ${spanLabel(span)}`);
           name.textContent = span.name;
           name.title = span.name;
           const time = document.createElement("small");
@@ -599,6 +608,7 @@
         const edges = related(selected);
         if (!edges.length) return;
         const rect = waterfall.getBoundingClientRect();
+        const scroller = document.getElementById("trace");
         const svg = svgElement("svg", {
           class: "dependency-overlay",
           "aria-hidden": "true",
@@ -618,6 +628,7 @@
         defs.append(marker);
         svg.append(defs);
         function endpoint(span) {
+          if (span.a["ci.evidence"] === "No runner attempt started") return null;
           let visible = span;
           while (visible && !rows.has(visible.spanId)) visible = byId.get(visible.parentSpanId);
           // Do not attach arrows to an unrelated ancestor hidden by a search filter.
@@ -644,15 +655,32 @@
               "marker-end": "url(#arrow)",
             }),
           );
+          const labelWidth = Math.min(220, scroller.clientWidth - from.left - 16);
+          const x = Math.max(
+            from.left + scroller.scrollLeft + 8,
+            Math.min(bend + 8, scroller.scrollLeft + scroller.clientWidth - labelWidth - 8),
+          );
           const label = svgElement("text", {
-            x: Math.max(from.left + 8, Math.min(bend + 8, rect.width - 220)),
+            x,
             y: (from.y + to.y) / 2 - 5,
           });
-          label.textContent = edge.label;
+          const lines = [""];
+          for (const word of edge.label.split(" ")) {
+            const last = lines.length - 1;
+            if (lines[last] && (lines[last].length + word.length + 1) * 6 > labelWidth)
+              lines.push(word);
+            else lines[last] += `${lines[last] ? " " : ""}${word}`;
+          }
+          for (const [index, line] of lines.entries()) {
+            const text = svgElement("tspan", { x, dy: index ? 13 : 0 });
+            text.textContent = line;
+            label.append(text);
+          }
           svg.append(label);
         }
         waterfall.append(svg);
       }
+      document.getElementById("trace").onscroll = drawLinks;
       new ResizeObserver(drawLinks).observe(document.getElementById("trace"));
       document.getElementById("search").oninput = render;
       document.getElementById("expand").onclick = () => {

@@ -7,8 +7,10 @@ click a bar, or zoom to a selected span. Download the same trace as OTLP JSON.
 
 Select a **Wait** phase (click/tap, or focus its bar and press Enter) to show
 curved arrows from its prerequisites. The details list lets you reveal either
-endpoint, even when collapsed or filtered out. Yellow diagonal stripes indicate
-waiting; grey stripes still mean incomplete evidence.
+endpoint, even when collapsed, filtered out or outside the current zoom range. Yellow diagonal stripes indicate
+waiting; grey stripes still mean incomplete evidence. A consumer whose runner
+never started has no measured endpoint: its dependency is listed without a
+timing arrow.
 
 The status CLI records exact producer attempt IDs and successful milestone
 publication. The collector exports standard OTLP `links` with a `ci.link.label`
