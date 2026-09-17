@@ -222,13 +222,17 @@ static void connection_mounts_reconnects_and_revokes(void) {
   assert(
       fixture.connection.state ==
       ITERATE_KIT_ITX_CONNECTION_CLOSED);
-  /* The rule handle is revoked first, then the project it was made on. */
+  /* The rule handle is revoked first, then the project it was made on, then
+   * the session the mount kept for its liveness probe. */
   assert(strcmp(
-      fixture.captured[fixture.captured_count - 2U],
+      fixture.captured[fixture.captured_count - 3U],
       "[\"release\",-22,1]") == 0);
   assert(strcmp(
-      fixture.captured[fixture.captured_count - 1U],
+      fixture.captured[fixture.captured_count - 2U],
       "[\"release\",-21,1]") == 0);
+  assert(strcmp(
+      fixture.captured[fixture.captured_count - 1U],
+      "[\"release\",-20,1]") == 0);
 }
 
 /*

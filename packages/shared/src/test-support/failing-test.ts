@@ -1,4 +1,5 @@
 import { appendFlakeRecord, type FlakeRecord } from "./flake-record.ts";
+import { E2E_CI_RETRY_DELAY_MS } from "./e2e-policy/budgets.ts";
 /**
  * Pinned-bug tests: the body asserts the DESIRED behavior, and while the bug
  * exists it must fail with an error matching the given pattern.
@@ -52,13 +53,28 @@ import { appendFlakeRecord, type FlakeRecord } from "./flake-record.ts";
  * error instead of succeeding. See
  * apps/os/e2e/vitest/userspace-facet-source-version.e2e.test.ts for the
  * worked example (its predecessor bare `test.fails` false-alarmed 7+ times).
+ *
+ * A failure that proves nothing is retried HERE, not by the runner: vitest's
+ * `retry` re-runs a body that THREW (for a pin, the pinned failure — the good
+ * outcome) and stops once the body passed, inverting for `.fails` only
+ * afterwards — so the outcome that proves nothing is the one it never retries
+ * (which is also why registration pins `retry: 0`). A pin opts in with
+ * `options.retries` (an e2e pin passes E2E_RETRIES_THIS_RUN: the CI retry
+ * count every plain e2e test gets, zero at a desk): a non-matching failure
+ * re-runs the body that many times, after `retryDelayMs` (default: the e2e
+ * suites' CI retry pause), with what is left of `timeoutMs` — never sleeping
+ * past the deadline, so the runner's timeout cannot fire during the pause and
+ * count as the pin holding. Each attempt writes its own record. A pass and a
+ * hang are never retried.
  */
 export function createFailing<TestFn extends (...args: any[]) => any>(
   test: TestFn,
   failure: RegExp,
-  options?: { timeoutMs: number },
+  options?: { timeoutMs?: number; retries?: number; retryDelayMs?: number },
 ): TestFn {
   const timeoutMs = options?.timeoutMs || 30_000;
+  const retries = options?.retries ?? 0;
+  const retryDelayMs = options?.retryDelayMs ?? E2E_CI_RETRY_DELAY_MS;
   const failer: unknown = "fails" in test ? test.fails : "fail" in test ? test.fail : undefined;
   if (typeof failer !== "function") {
     throw new Error(
@@ -78,24 +94,27 @@ export function createFailing<TestFn extends (...args: any[]) => any>(
       // playwright-like runners have no per-test `timeout` option; set the
       // runner timeout here so it never fires before the wrapper's own deadline.
       (test as any).setTimeout?.(timeoutMs + 1000);
-      const startedAt = Date.now();
+      const deadline = Date.now() + timeoutMs;
+      let startedAt = Date.now();
       // Race the body against the wrapper's own deadline: a hung body must
       // fail as NOT-the-pinned-failure rather than letting the runner's test
       // timeout fire, which the expected-fail machinery would count as the
       // pin holding.
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      // `as const` on the kinds: without it each arm's `kind` widens to
-      // `string`, the union stops discriminating, and `outcome.kind ===
-      // "failed"` below would not narrow to expose `.error`.
-      const outcome = await Promise.race([
-        (async () => body(...bodyArgs))().then(
-          () => ({ kind: "succeeded" as const }),
-          (error: unknown) => ({ kind: "failed" as const, error }),
-        ),
-        new Promise<{ kind: "timed-out" }>((resolve) => {
-          timer = setTimeout(() => resolve({ kind: "timed-out" }), timeoutMs);
-        }),
-      ]).finally(() => clearTimeout(timer));
+      const attempt = async () => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        // `as const` on the kinds: without it each arm's `kind` widens to
+        // `string`, the union stops discriminating, and `outcome.kind ===
+        // "failed"` below would not narrow to expose `.error`.
+        return Promise.race([
+          (async () => body(...bodyArgs))().then(
+            () => ({ kind: "succeeded" as const }),
+            (error: unknown) => ({ kind: "failed" as const, error }),
+          ),
+          new Promise<{ kind: "timed-out" }>((resolve) => {
+            timer = setTimeout(() => resolve({ kind: "timed-out" }), deadline - Date.now());
+          }),
+        ]).finally(() => clearTimeout(timer));
+      };
 
       // Same telemetry channel as createFlake (see ./flake-record.ts): the
       // dashboard's Failures section folds these — pinned-fail means the pin
@@ -111,6 +130,21 @@ export function createFailing<TestFn extends (...args: any[]) => any>(
           ...(error === undefined ? {} : { error: String(error).split("\n")[0] }),
         });
       };
+
+      let outcome = await attempt();
+      for (let retry = 1; retry <= retries; retry += 1) {
+        if (outcome.kind !== "failed" || failure.test(String(outcome.error))) break;
+        if (deadline - Date.now() <= retryDelayMs) break; // no pause past the deadline
+        await record("unexpected-error", outcome.error);
+        console.error(
+          `[failing-test] Expected failure to match /${failure.source}/, got a different failure — ` +
+            `it proves nothing about the pinned bug; retry ${retry} of ${retries} in ${retryDelayMs}ms:`,
+          outcome.error,
+        );
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+        startedAt = Date.now();
+        outcome = await attempt();
+      }
 
       if (outcome.kind === "failed") {
         if (failure.test(String(outcome.error))) {
