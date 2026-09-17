@@ -6,10 +6,10 @@ base: main
 
 # Choose preview work from ordered change types
 
-Implementation complete; live acceptance is in progress. The planner, explicit
-settlement marker, and restoration of reused deployments are wired. Remaining:
-observe full, tests-only, and docs-only PR runs in sequence without interruption,
-and handle review/CI feedback. Based on current main after #2695.
+Implementation and live acceptance complete in PR #2712. Full preview,
+tests-only reuse, and docs-only inheritance ran in sequence without interruption.
+Exact Worker versions, restoration and settlement were verified. The PR monitor
+remains active for new review feedback. Based on main after #2695.
 
 ## Request and decisions
 
@@ -118,7 +118,22 @@ and handle review/CI feedback. Based on current main after #2695.
   of cumulative workflow path filters. Restoration now validates the current CI
   preparation artifact and the exact deployed app identities. Reused fleets are
   restored fully from the tested head after cleanup so later reuse has one SHA.
-- [ ] Observe a complete initial PR run, including restoration and settlement.
-- [ ] Push only test changes; prove preparation reuses the existing deployment.
-- [ ] After settlement, push only docs changes; prove expensive preview jobs skip.
-- [ ] Handle review feedback and record links, timings and deployment evidence.
+- [x] Observe a complete initial PR run, including restoration and settlement. *`e1a5838dc`, workflow `hwk5nxq2x4`: deployed tests passed; restored and published `tests=success`.*
+- [x] Push only test changes; prove preparation reuses the existing deployment. *`0dcb04c42`, workflow `bzhzzvxxwn`: all six prepared Worker versions match the parent's restoration artifact; new-head tests pass; cleanup restores all six apps.*
+- [x] After settlement, push only docs changes; prove expensive preview jobs skip. *`a41561887`, workflow `kf201tf7t8`: planning inherited success in 32 seconds; all nine downstream jobs skipped without runner attempts.*
+- [x] Handle review feedback and record links, timings and deployment evidence. *No submitted review threads outstanding; evidence in `docs/preview-change-selection.md` and PR #2712. Global PR monitor registered.*
+
+- Live runs exposed native Node's rejection of constructor parameter properties
+  in `CloudflareApiError`; ordinary fields fixed it. The initial full-CLI
+  regression test exceeded CI's five-second budget under load; a focused native
+  module subprocess retains the regression proof in about 120ms. All 441 scripts
+  tests and the subsequent full unit CI pass, without raising timeout budgets.
+- A temporary health spec added to the first tests-only acceptance push timed
+  out on Playwright's one-second request budget. Removed it: the preparation
+  artifact provides exact version evidence without adding a remote probe. Its
+  failed run still restored all six apps and published `tests=failure`; the next
+  tests-only push successfully reused that restored deployment. The final
+  Playwright report has 88 passed, four existing skips, no failures or retries.
+- Full local workspace tests, typecheck, lint, knip and formatting passed. No
+  CI runs were cancelled or interrupted; every push waited for previous CI to
+  finish. No branch protection settings were changed.

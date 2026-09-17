@@ -126,10 +126,11 @@ lacks the required settlement marker and is intentionally inconclusive.
 [PR #2712](https://github.com/iterate/iterate/pull/2712) exercises separate pushes,
 waiting for each entire run, including cleanup/restoration, before the next:
 
-| Change                    | Observed preview behavior                                                                                                                                                        |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Full run at `e1a5838dc`   | Deployed all six apps, passed deployed tests, restored the preview and published `tests=success`. [Run](https://depot.dev/orgs/0p91s0lz49/workflows/hwk5nxq2x4).                 |
-| Tests only at `0dcb04c42` | Selected `reuse` of `75951cc06`, skipped preparation deployment, passed deployed tests and restored all six apps. [Run](https://depot.dev/orgs/0p91s0lz49/workflows/bzhzzvxxwn). |
+| Change                    | Observed preview behavior                                                                                                                                                                             |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Full run at `e1a5838dc`   | Deployed all six apps, passed deployed tests, restored the preview and published `tests=success`. [Run](https://depot.dev/orgs/0p91s0lz49/workflows/hwk5nxq2x4).                                      |
+| Tests only at `0dcb04c42` | Selected `reuse` of `75951cc06`, skipped preparation deployment, passed deployed tests and restored all six apps. [Run](https://depot.dev/orgs/0p91s0lz49/workflows/bzhzzvxxwn).                      |
+| Docs only at `a41561887`  | Inherited success from `0dcb04c42`. The planning job took 32 seconds; all nine downstream jobs were skipped with zero runner attempts. [Run](https://depot.dev/orgs/0p91s0lz49/workflows/kf201tf7t8). |
 
 The downloaded preparation artifact proves that the tests-only run used the
 parent's six exact restored Worker versions while running tests from the new
@@ -144,11 +145,10 @@ that test changes can reuse a clean deployment even after a failed test run.
 An earlier native Node import failure and an overly broad CLI regression test
 were fixed; the focused native-module test and subsequent unit CI passed.
 
-This documentation-only follow-up exercises result inheritance. The PR records
-its run after publication. Expected: `action: inherit`, `tests: false`,
-`deploy: false`, and no prepare, app-test, Playwright or cleanup job attempts.
-Other workflows, such as unit tests and lint, remain independent of preview
-selection and still run.
+The docs-only plan returned `action: inherit`, `tests: false`, and `deploy: false`.
+Its PR deployment record retained all six restored versions; the live OS health
+endpoint still returned the recorded version. Other workflows, such as unit
+tests and lint, remain independent of preview selection and still run.
 
 ## Restoration after deployment reuse
 
