@@ -48,7 +48,8 @@ function ProjectsPage() {
             <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {group.projects.map((project) => (
                 <li key={project.id}>
-                  <Card size="sm" className="h-full">
+                  {/* relative: the title link stretches over THIS card, not the page */}
+                  <Card size="sm" className="relative h-full transition-colors hover:bg-accent/50">
                     <CardHeader>
                       <CardTitle className="truncate font-mono text-sm">
                         <Link
