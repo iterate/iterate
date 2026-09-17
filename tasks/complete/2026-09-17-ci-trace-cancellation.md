@@ -1,11 +1,11 @@
 ---
-status: ready
+status: complete
 size: small
 ---
 
 # Render CI traces after cancellation
 
-The fix and regression coverage are implemented. The original cancelled run and a successful run render correctly. Full checks and PR review are in progress.
+Implementation and local validation are complete. The original cancelled report was successfully published from this branch; independent review found no blocking issues. The draft PR is under CI and monitoring.
 
 ## Request and scope
 
@@ -19,7 +19,7 @@ The cancelled preview `9dsvdkskfv` records its finish job ending at `2026-09-17T
 - [x] Keep unfinished steps, operations, and tests renderable and explicitly incomplete; inferred ends cannot precede their own starts. *`assembleTrace` bounds inferred endpoints at their own start and explains that the enclosing finish was earlier.*
 - [x] Preserve measured start/end times and Depot timestamps; still reject invalid measured intervals. *Regression cases check recorded parent timestamps, valid measured intervals after cancellation, and reversed endpoints.*
 - [x] Replay the original cancelled preview and check its report, including normal completed work. *`9dsvdkskfv`: 206 valid spans, two zero-duration incomplete cleanup steps; successful `tmnqx7jv18`: 217 valid spans.*
-- [ ] Document the timing limitation, run required checks, and address PR review.
+- [x] Document the timing limitation, run required checks, and address PR review. *Docs explain unknown zero-duration spans; install, typecheck, lint, Knip, format and the full test suite passed. Independent review found no blockers; the PR monitor owns new feedback.*
 
 ## Decisions
 
@@ -28,3 +28,6 @@ No workflow, cancellation, early-green, or repair-schedule changes. Correct only
 ## Implementation log
 
 - 2026-09-17: Captured the cancelled run's Depot metadata and trace markers locally; reproduced the renderer error. Raw logs and credentials will not be committed.
+- 2026-09-17: Added six regression cases; all 23 trace tests pass. The first full test run hit the existing readiness subprocess watchdog under concurrent local load; that test passed in isolation and the full suite passed on rerun without any test changes.
+- 2026-09-17: Depot collector `rcqlnm3692` successfully rendered and uploaded source `9dsvdkskfv`. Its previously missing CI trace status now links to a working report. A headless browser showed the incomplete markers without errors.
+- 2026-09-17: Browser review also found that the chart clipped cleanup after the root finish. Its initial/reset range now includes all observed span ends, while the workflow wall-time statistic retains Depot's original finish. No workflow or scheduling changes.
