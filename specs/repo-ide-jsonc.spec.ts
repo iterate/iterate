@@ -15,8 +15,7 @@ import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 // parked: schema-lint squiggle stopped appearing in CI on 2026-09-01 — schemastore.org
 // changed infra that day (json. now 301s to www.) and the spec depends on a live 467KB
 // schema fetch from the CI browser; vendor the schema instead. See
-// tasks/repo-ide-jsonc-schema-fetch.md. Renewed 2026-09-17: still unpicked, the schema is still
-// fetched live from the CI browser — revisit by 2026-10-01
+// tasks/repo-ide-jsonc-schema-fetch.md — still unvendored on 2026-09-17; revisit by 2026-10-01
 test.fixme("a commented tsconfig still schema-validates (comments are tolerated)", async ({
   helpers,
   page,
