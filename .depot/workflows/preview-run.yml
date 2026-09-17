@@ -1,5 +1,5 @@
 # Called by PR and main workflows. Each caller holds its lifecycle lock
-# until every job here, including cleanup, has finished.
+# until every job here, including cleanup and trace collection, has finished.
 name: Preview run
 on:
   workflow_call:
@@ -322,6 +322,27 @@ jobs:
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
           pnpm exec trpc-cli scripts/ci/status.ts set-pending-check-green
           "All preview tests passed. Cleanup and restoration run afterwards; their final outcome is reflected in this check. See Depot for current cleanup progress."
+      - name: Collect preparation and test trace
+        id: trace
+        if: always() && steps.consumers.outputs.settled == 'true'
+        timeout-minutes: 5
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          # Same-runner outputs preserve the measured verdict before Depot logs catch up.
+          CI_TRACE_GREEN: ${{ steps.tests_passed.outputs.ci-trace-green }}
+          CI_TRACE_VALIDATION_END: ${{ steps.merge_reports.outputs.ci-trace-end }}
+          CI_TRACE_GREEN_END: ${{ steps.tests_passed.outputs.ci-trace-end }}
+        run: >-
+          doppler run --project _shared --config preview --
+          pnpm exec trpc-cli scripts/ci/tracing/cli.ts current ci-trace.ignoreme
+      - name: Upload public CI trace
+        if: always() && steps.trace.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.trace.outputs.artifact-name }}
+          path: ci-trace.ignoreme/trace.*
+          if-no-files-found: error
+          retention-days: 30
       - name: Retire test data and restore the preview
         id: erase
         if: always() && steps.consumers.outputs.settled == 'true'
@@ -384,12 +405,3 @@ jobs:
           test "$PREPARE_RESULT" = success
           test "$CONSUMERS_SETTLED" = true
           test "$CONSUMERS_SUCCEEDED" = true
-      - name: Dispatch completed-run trace collector
-        id: trace_collector
-        if: always()
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          CI_TRACE_REF: ${{ github.head_ref || github.ref_name }}
-        run: >-
-          doppler run --project _shared --config preview --
-          pnpm exec trpc-cli scripts/ci/tracing/cli.ts dispatch "$CI_TRACE_REF"

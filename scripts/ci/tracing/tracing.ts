@@ -88,14 +88,100 @@ export function assembleTrace(
   >,
 ) {
   const workflow = Workflow.parse(input);
-  const execution = [...workflow.executions].sort((a, b) => b.execution - a.execution)[0];
-  if (!execution) throw new Error("Depot workflow has no execution");
+  const finish = workflow.jobs.find((job) => job.jobKey.endsWith(":finish"));
+  workflow.jobs = workflow.jobs.filter(
+    (job) => !job.jobKey.endsWith(":finish") && !job.jobKey.endsWith(":trace"),
+  );
+  if (
+    workflow.jobs.some(
+      (job) => !["finished", "failed", "cancelled", "skipped"].includes(job.status),
+    )
+  )
+    throw new Error("Preview jobs have not settled");
+  const ends = workflow.jobs
+    .flatMap((job) => [job.finishedAt, ...job.attempts.map((attempt) => attempt.finishedAt)])
+    .filter(Boolean)
+    .map((time) => Date.parse(time));
+  const producerEnd = ends.length ? Math.max(...ends) : Date.parse(workflow.workflowFinishedAt);
+  // Retrying only cleanup/reporting must not create a new test execution.
+  const executions = [...workflow.executions].sort((a, b) => b.execution - a.execution);
+  const execution = executions.find((execution) => Date.parse(execution.createdAt) <= producerEnd);
+  if (!execution) throw new Error("Depot workflow has no execution for its preview jobs");
+  const nextExecution = executions[executions.indexOf(execution) - 1];
+  const rootStart = Date.parse(execution.createdAt);
+  const executionEnd = nextExecution ? Date.parse(nextExecution.createdAt) : Infinity;
+  const eventsByAttempt = new Map(
+    [...logs].map(([id, lines]) => [
+      id,
+      lines.flatMap((line) => {
+        if (!line.body.startsWith("@@ci-trace ")) return [];
+        const event = TraceEvent.parse(JSON.parse(line.body.slice("@@ci-trace ".length)));
+        return [
+          {
+            ...event,
+            ...(event.kind === "shell-start" && { step: line.stepId || event.step }),
+            stepKey: line.stepKey,
+            stepId: line.stepId || "",
+            stepName: line.stepName || "",
+            command: line.command || "",
+          },
+        ];
+      }),
+    ]),
+  );
+  // Read only the test verdict from finish. Its setup, reporting and cleanup are
+  // deliberately outside this trace, even when they later fail the Depot job.
+  const verdictEvents = (finish?.attempts || [])
+    .flatMap((attempt) => eventsByAttempt.get(attempt.attemptId) || [])
+    .filter((event) => "time" in event && event.time >= rootStart && event.time < executionEnd);
+  const greenMarker = verdictEvents.find((event) => event.kind === "check-green");
+  const greenStep = verdictEvents.find(
+    (event) => event.kind === "shell-start" && event.step === "tests_passed",
+  );
+  const greenEnd =
+    greenStep?.kind === "shell-start"
+      ? verdictEvents.find(
+          (event) =>
+            event.kind === "shell-end" && event.id === greenStep.id && event.exitCode === 0,
+        )
+      : undefined;
+  const observedGreen =
+    greenMarker?.kind === "check-green"
+      ? { time: greenMarker.time, evidence: "GitHub check update acknowledged" }
+      : greenEnd?.kind === "shell-end"
+        ? { time: greenEnd.time, evidence: "Successful early-green step end" }
+        : null;
+  const verdictFailure = observedGreen
+    ? undefined
+    : verdictEvents
+        .flatMap((event) => {
+          if (event.kind !== "shell-end" || event.exitCode === 0) return [];
+          const start = verdictEvents.find(
+            (item) => item.kind === "shell-start" && item.id === event.id,
+          );
+          const step = event.stepId || (start?.kind === "shell-start" ? start.step : "");
+          return ["consumers", "merge_reports", "tests_passed"].includes(step)
+            ? [{ time: event.time, evidence: `Failed test-result validation (${step})` }]
+            : [];
+        })
+        .sort((a, b) => a.time - b.time)[0];
+  const rootEnd = Math.max(
+    producerEnd,
+    observedGreen?.time || producerEnd,
+    verdictFailure?.time || producerEnd,
+  );
+  workflow.workflowFinishedAt = new Date(rootEnd).toISOString();
+  if (verdictFailure || workflow.jobs.some((job) => job.status === "failed"))
+    workflow.workflowStatus = "failed";
+  else if (workflow.jobs.some((job) => job.status === "cancelled"))
+    workflow.workflowStatus = "cancelled";
+  else if (workflow.jobs.length && workflow.jobs.every((job) => job.status === "skipped"))
+    workflow.workflowStatus = "skipped";
+  else if (finish) workflow.workflowStatus = observedGreen ? "finished" : "incomplete";
+  else if (workflow.jobs.length) workflow.workflowStatus = "finished";
   const traceId = hash(`${workflow.workflowId}/${execution.executionId}`, 32);
   const spans: Span[] = [];
   const dependencies: { sourceId: string; targetId: string; milestone: string }[] = [];
-  const rootStart = Date.parse(execution.createdAt);
-  const rootEnd = Date.parse(workflow.workflowFinishedAt);
-  const greenSignals: { time: number; evidence: string }[] = [];
   const add = (
     id: string,
     parentSpanId: string,
@@ -133,6 +219,7 @@ export function assembleTrace(
     rootEnd,
     {
       "ci.kind": "workflow",
+      "ci.report.scope": "Preparation and tests; reporting and cleanup excluded",
       "ci.status": workflow.workflowStatus,
       "ci.workflow.id": workflow.workflowId,
       "ci.execution.id": execution.executionId,
@@ -145,12 +232,41 @@ export function assembleTrace(
     },
     workflow.workflowStatus === "failed",
   );
+  const cancelledBeforeStart =
+    !execution.startedAt &&
+    workflow.workflowStatus === "cancelled" &&
+    !workflow.jobs.some((job) =>
+      job.attempts.some(
+        (attempt) =>
+          attempt.startedAt &&
+          Date.parse(attempt.finishedAt || workflow.workflowFinishedAt) >= rootStart,
+      ),
+    );
+  const queueEnd = cancelledBeforeStart ? rootEnd : Date.parse(execution.startedAt);
+  if (queueEnd > rootStart) {
+    add(
+      "workflow-queue",
+      root,
+      cancelledBeforeStart ? "Workflow queue (cancelled)" : "Workflow queue",
+      rootStart,
+      queueEnd,
+      {
+        "ci.kind": "queue",
+        "ci.phase": "wait",
+        "ci.status": cancelledBeforeStart ? "cancelled" : "finished",
+        "ci.evidence": cancelledBeforeStart
+          ? "No execution or runner start recorded; wait ended at workflow cancellation"
+          : "Depot execution createdAt to startedAt; queue reason is not supplied",
+      },
+      false,
+    );
+  }
   for (const job of workflow.jobs) {
     const key = job.jobKey.replace(/^.*:preview:/, "");
     const labels: Record<string, string> = {
+      plan: "Plan",
       prepare: "Prepare",
       apps: "App tests",
-      finish: "Reports & cleanup",
     };
     const name =
       labels[key] ||
@@ -194,35 +310,11 @@ export function assembleTrace(
         },
         attempt.status === "failed",
       );
-      const events = (logs.get(attempt.attemptId) || []).flatMap((line) => {
-        if (!line.body.startsWith("@@ci-trace ")) return [];
-        const event = TraceEvent.parse(JSON.parse(line.body.slice("@@ci-trace ".length)));
-        return [
-          {
-            ...event,
-            ...(event.kind === "shell-start" && { step: line.stepId || event.step }),
-            stepKey: line.stepKey,
-            stepId: line.stepId || "",
-            stepName: line.stepName || "",
-            command: line.command || "",
-          },
-        ];
-      });
+      const events = eventsByAttempt.get(attempt.attemptId) || [];
       const shells = events.filter((event) => event.kind === "shell-start");
       const shellEnds = new Map(
         events.filter((event) => event.kind === "shell-end").map((event) => [event.id, event]),
       );
-      const green = events.find((event) => event.kind === "check-green");
-      if (green) {
-        greenSignals.push({ time: green.time, evidence: "GitHub check update acknowledged" });
-      } else if (key === "finish") {
-        // Historical runs predate the explicit marker. A successful end of
-        // the early-green step bounds the acknowledgement a few ms earlier.
-        const publish = shells.find((event) => event.step === "tests_passed");
-        const done = publish && shellEnds.get(publish.id);
-        if (done?.exitCode === 0)
-          greenSignals.push({ time: done.time, evidence: "Successful early-green step end" });
-      }
       const testEnds = new Map(
         events.filter((event) => event.kind === "test-end").map((event) => [event.id, event]),
       );
@@ -431,16 +523,10 @@ export function assembleTrace(
       ],
     });
   }
-  const firstGreen = greenSignals
-    .filter((signal) => signal.time >= rootStart && signal.time <= rootEnd)
-    .sort((a, b) => a.time - b.time)[0];
-  // Without early completion, a successful workflow goes green at its end.
-  // Failed/cancelled workflows have no green time unless one was observed.
   const green =
-    firstGreen ||
-    (workflow.workflowStatus === "finished"
-      ? { time: rootEnd, evidence: "Successful workflow completion" }
-      : null);
+    workflow.workflowStatus === "finished"
+      ? observedGreen || { time: rootEnd, evidence: "Successful preview completion" }
+      : null;
   if (green) {
     const workflowSpan = spans[0];
     workflowSpan.attributes.push(
@@ -452,6 +538,39 @@ export function assembleTrace(
         name: "ci.check.green",
         timeUnixNano: (BigInt(Math.round(green.time * 1000)) * 1000n).toString(),
         attributes: [{ key: "ci.evidence", value: { stringValue: green.evidence } }],
+      },
+    ];
+  }
+  if (workflow.workflowStatus === "failed") {
+    // Job outcomes, not test/step failures that may recover on retry. Ignore
+    // failed attempts of recovered jobs and timestamps from previous executions.
+    const failedAt = workflow.jobs
+      .filter((job) => job.status === "failed")
+      .flatMap((job) => job.attempts)
+      .filter((attempt) => attempt.status === "failed" && attempt.finishedAt)
+      .map((attempt) => Date.parse(attempt.finishedAt))
+      .filter((time) => time >= rootStart && time <= rootEnd)
+      .sort((a, b) => a - b)[0];
+    const failure = [
+      ...(failedAt === undefined
+        ? []
+        : [{ time: failedAt, evidence: "First failed job completion (Depot)" }]),
+      ...(verdictFailure ? [verdictFailure] : []),
+    ].sort((a, b) => a.time - b.time)[0];
+    const red = failure ? failure.time : rootEnd;
+    const evidence = failure
+      ? failure.evidence
+      : "Preview completion (upper bound; no failed job completion recorded)";
+    spans[0].attributes.push(
+      { key: "ci.time_to_red_ms", value: { stringValue: String(red - rootStart) } },
+      { key: "ci.red.evidence", value: { stringValue: evidence } },
+    );
+    spans[0].events = [
+      ...(spans[0].events || []),
+      {
+        name: "ci.check.red",
+        timeUnixNano: (BigInt(red) * 1_000_000n).toString(),
+        attributes: [{ key: "ci.evidence", value: { stringValue: evidence } }],
       },
     ];
   }
@@ -529,15 +648,21 @@ export const Workflow = z.object({
   ref: z.string(),
   workflowStatus: z.string(),
   workflowCreatedAt: z.string(),
-  workflowFinishedAt: z.string(),
+  workflowFinishedAt: z.string().default(""),
   executions: z.array(
-    z.object({ executionId: z.string(), execution: z.number(), createdAt: z.string() }),
+    z.object({
+      executionId: z.string(),
+      execution: z.number(),
+      createdAt: z.string(),
+      startedAt: z.string().default(""),
+    }),
   ),
   jobs: z.array(
     z.object({
       jobId: z.string(),
       jobKey: z.string(),
       status: z.string(),
+      finishedAt: z.string().default(""),
       attempts: z
         .array(
           z.object({
