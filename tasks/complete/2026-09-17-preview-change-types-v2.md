@@ -139,7 +139,7 @@ No runs were interrupted. Based on main after #2695.
   finish. No branch protection settings were changed.
 
 - [x] Start prepare setup concurrently with planning, then gate later steps on its signal. *`preview-run.yml` removes prepare's job dependency and uses `steps.plan.outputs`; app/shard gates remain.*
-- [x] Carry compact values through attempt-scoped milestones into step outputs. *`status.ts set --values` publishes JSON; `wait-for` validates and writes outputs. Inherited failures publish their decision before the job stops.*
+- [x] Carry compact values through attempt-scoped milestones into step outputs. *`status.ts set --values` validates and publishes `key=value; …`; `wait-for` converts separators directly into output lines. Inherited failures publish their decision before the job stops.*
 - [x] Verify the overlapped full run in Depot. *`8f4df71e3` / `czk85wphzh`: all workflows passed, including unchanged unit tests, deployed suites, restoration and settlement.*
 - [x] Verify setup-only inheritance through the new milestone outputs. *`2e5011617` / `wj7jlq6mb5`: inherited success, prepare received `tests=false` and skipped everything after its wait; eight other jobs skipped without attempts.*
 - Failure-path review: a plan publication can succeed before its job fails. The
@@ -150,3 +150,6 @@ No runs were interrupted. Based on main after #2695.
   all deployed suites, restoration and `preview-settled`. Separate unit CI hit
   the existing dependency-install test's five-second timeout; unchanged tests
   will run again with the finalizer follow-up. No run was interrupted.
+- Format follow-up: include `{ milestone, ...options.values }` in every signal.
+  Validate names and reserve semicolons/newlines in values before publication;
+  the waiter can append the description as output lines without JSON decoding.

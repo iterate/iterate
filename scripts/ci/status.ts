@@ -32,11 +32,16 @@ export default class CiStatus {
 
   /** Publish a milestone and optional step outputs for this exact job attempt. */
   async set(milestone: string, options: { values?: Record<string, string> } = {}) {
+    const values = Values.parse({ milestone, ...options.values });
     // Keep coordination data small; artifact identities and full reasons belong elsewhere.
     const description = z
       .string()
       .max(140)
-      .parse(JSON.stringify(Values.parse(options.values || {})));
+      .parse(
+        Object.entries(values)
+          .map(([name, value]) => `${name}=${value}`)
+          .join("; "),
+      );
     const workflow = await this.workflow();
     const context = `ci/${this.workflowId}/${workflow.executions[0].executionId}/${this.jobId}/${this.attemptId}/${milestone}`;
     await this.request(
@@ -87,15 +92,10 @@ export default class CiStatus {
           );
           const status = statuses.find((entry) => entry.context === context);
           if (status?.state === "success") {
-            const values = Values.parse(JSON.parse(z.string().parse(status.description)));
-            await appendFile(
-              this.env.GITHUB_OUTPUT,
-              Object.entries(values)
-                .map(([name, value]) => `${name}=${value}\n`)
-                .join(""),
-            );
+            const description = z.string().parse(status.description);
+            await appendFile(this.env.GITHUB_OUTPUT, description.replace(/; ?/g, "\n") + "\n");
             console.log(`[ci:status] reached ${context}`);
-            return { producer, attemptId: attempt.attemptId, values };
+            return { producer, attemptId: attempt.attemptId, description };
           }
           if (status && status.state !== "pending")
             throw new Error(`Milestone ${context}: ${status.state}`);
@@ -326,13 +326,18 @@ const Statuses = z.object({
     }),
   ),
 });
-// Single-line values and simple output names make the GITHUB_OUTPUT serialization unambiguous.
+// Reserve separators so descriptions convert directly into GITHUB_OUTPUT lines.
 const Values = z.record(
   z
     .string()
     .min(1)
     .refine((name) => !/[^A-Za-z0-9_-]/.test(name), "Invalid step output name"),
-  z.string().refine((value) => !/[\r\n]/.test(value), "Step output values must be single-line"),
+  z
+    .string()
+    .refine(
+      (value) => !/[;\r\n]/.test(value),
+      "Step output values cannot contain semicolons or newlines",
+    ),
 );
 const terminal = new Set(["finished", "failed", "cancelled", "skipped"]);
 
