@@ -364,17 +364,6 @@ export default {
     if (browserResponse) return browserResponse;
     if (url.pathname.startsWith("/api")) return new Response("Not found", { status: 404 });
 
-    // THE STATIC ASSETS — the issuer's page files (public/, served as written) — are the PLATFORM
-    // HOST's. Every request runs
-    // worker-first (wrangler.jsonc `run_worker_first: true` — the patterns are paths, never hostnames,
-    // so "every host but a project host" is spelled by asking the binding HERE, after the project
-    // hosts and the platform's own doors): no asset ever answers on a project host, and a miss falls
-    // through to the control plane. Absent in the workers lane.
-    if ((request.method === "GET" || request.method === "HEAD") && env.ASSETS) {
-      const asset = await env.ASSETS.fetch(request);
-      if (asset.status !== 404) return asset;
-    }
-
     const issuerRoute =
       ["/login", "/authorize", "/oauth/token", "/oauth/register"].includes(url.pathname) ||
       url.pathname.startsWith("/.well-known/");

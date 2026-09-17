@@ -12,7 +12,7 @@ export const Route = createFileRoute("/")({
           the code it ran, and the trace of every request.
         </p>
       </div>
-      <a href="/.auth/login?next=/agents&scope=iterate%20account" className={buttonVariants()}>
+      <a href="/.auth/login?next=/agents" className={buttonVariants()}>
         Log in with Iterate
       </a>
     </main>

@@ -11,8 +11,8 @@
 import { Route as rootRouteImport } from "./routes/__root.tsx";
 import { Route as AuthRouteImport } from "./routes/_auth.tsx";
 import { Route as IndexRouteImport } from "./routes/index.tsx";
+import { Route as AuthSessionsRouteImport } from "./routes/_auth/sessions.tsx";
 import { Route as AuthDashboardRouteImport } from "./routes/_auth/dashboard.tsx";
-import { Route as AuthAgentsRouteImport } from "./routes/_auth/agents.tsx";
 
 const AuthRoute = AuthRouteImport.update({
   id: "/_auth",
@@ -23,40 +23,40 @@ const IndexRoute = IndexRouteImport.update({
   path: "/",
   getParentRoute: () => rootRouteImport,
 } as any);
+const AuthSessionsRoute = AuthSessionsRouteImport.update({
+  id: "/sessions",
+  path: "/sessions",
+  getParentRoute: () => AuthRoute,
+} as any);
 const AuthDashboardRoute = AuthDashboardRouteImport.update({
   id: "/dashboard",
   path: "/dashboard",
   getParentRoute: () => AuthRoute,
 } as any);
-const AuthAgentsRoute = AuthAgentsRouteImport.update({
-  id: "/agents",
-  path: "/agents",
-  getParentRoute: () => AuthRoute,
-} as any);
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute;
-  "/agents": typeof AuthAgentsRoute;
   "/dashboard": typeof AuthDashboardRoute;
+  "/sessions": typeof AuthSessionsRoute;
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute;
-  "/agents": typeof AuthAgentsRoute;
   "/dashboard": typeof AuthDashboardRoute;
+  "/sessions": typeof AuthSessionsRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/": typeof IndexRoute;
   "/_auth": typeof AuthRouteWithChildren;
-  "/_auth/agents": typeof AuthAgentsRoute;
   "/_auth/dashboard": typeof AuthDashboardRoute;
+  "/_auth/sessions": typeof AuthSessionsRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: "/" | "/agents" | "/dashboard";
+  fullPaths: "/" | "/dashboard" | "/sessions";
   fileRoutesByTo: FileRoutesByTo;
-  to: "/" | "/agents" | "/dashboard";
-  id: "__root__" | "/" | "/_auth" | "/_auth/agents" | "/_auth/dashboard";
+  to: "/" | "/dashboard" | "/sessions";
+  id: "__root__" | "/" | "/_auth" | "/_auth/dashboard" | "/_auth/sessions";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -80,6 +80,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof IndexRouteImport;
       parentRoute: typeof rootRouteImport;
     };
+    "/_auth/sessions": {
+      id: "/_auth/sessions";
+      path: "/sessions";
+      fullPath: "/sessions";
+      preLoaderRoute: typeof AuthSessionsRouteImport;
+      parentRoute: typeof AuthRoute;
+    };
     "/_auth/dashboard": {
       id: "/_auth/dashboard";
       path: "/dashboard";
@@ -87,24 +94,17 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthDashboardRouteImport;
       parentRoute: typeof AuthRoute;
     };
-    "/_auth/agents": {
-      id: "/_auth/agents";
-      path: "/agents";
-      fullPath: "/agents";
-      preLoaderRoute: typeof AuthAgentsRouteImport;
-      parentRoute: typeof AuthRoute;
-    };
   }
 }
 
 interface AuthRouteChildren {
-  AuthAgentsRoute: typeof AuthAgentsRoute;
   AuthDashboardRoute: typeof AuthDashboardRoute;
+  AuthSessionsRoute: typeof AuthSessionsRoute;
 }
 
 const AuthRouteChildren: AuthRouteChildren = {
-  AuthAgentsRoute: AuthAgentsRoute,
   AuthDashboardRoute: AuthDashboardRoute,
+  AuthSessionsRoute: AuthSessionsRoute,
 };
 
 const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren);

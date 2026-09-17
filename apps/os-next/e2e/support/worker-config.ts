@@ -16,7 +16,7 @@ export const PACKAGE_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url
  *  (support/client.ts `adminCredentials`; global-setup hands it to every file). */
 export const E2E_ADMIN_API_SECRET = "e2e-admin-api-secret";
 
-/** wrangler.jsonc's top-level block patched for the harness: absolute main/assets paths, the e2e
+/** wrangler.jsonc's top-level block patched for the harness: an absolute main, the e2e
  *  configuration, the deployments' `env` blocks left out. The directory D1 + OAuth KV are the local
  *  ones (a fresh namespace; global-setup applies the schema). The DO lifecycle is declarative
  *  (`exports`), so there is no migration history to replay. */
@@ -27,10 +27,6 @@ export function e2eWorkerConfig(platformOrigin = "http://127.0.0.1"): Unstable_R
   return {
     ...rawConfig,
     main: join(PACKAGE_DIR, String(rawConfig.main)),
-    assets: {
-      ...rawConfig.assets,
-      directory: join(PACKAGE_DIR, String(rawConfig.assets?.directory)),
-    },
     // Configuration (src/worker.ts `parseAppConfig`): the e2e lane is its own deployment name, its project
     // hosts hang under `localhost` (support/project-host.ts reaches them with a Host header), and the
     // two secrets a deployment keeps in wrangler are plain test values here.

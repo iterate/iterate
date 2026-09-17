@@ -1,4 +1,4 @@
-import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
+import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { Dashboard } from "iterate/next/dashboard";
 import { loadDashboard } from "iterate/next/dashboard-data";
 
@@ -11,19 +11,12 @@ function DashboardPage() {
   const { api } = Route.useRouteContext();
   const router = useRouter();
   return (
-    <>
-      <nav className="px-4 pt-4 text-sm md:px-8">
-        <Link to="/sessions" className="underline underline-offset-4">
-          Sessions
-        </Link>
-      </nav>
-      <Dashboard
-        data={data}
-        createProject={async (project) => {
-          using _created = await api.projects.create({ project });
-          await router.invalidate();
-        }}
-      />
-    </>
+    <Dashboard
+      data={data}
+      createProject={async (project) => {
+        using _created = await api.projects.create({ project });
+        await router.invalidate();
+      }}
+    />
   );
 }

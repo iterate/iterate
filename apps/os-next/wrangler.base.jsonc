@@ -4,7 +4,7 @@
   // WRANGLER BUNDLES THE WORKER ITSELF from this entry — `wrangler dev`, `wrangler deploy`, the e2e
   // harness and the workers test lane all start from src/worker.ts. What the worker cannot import
   // from source, scripts/build.ts writes first: the generated modules (the injected SDK's text, the
-  // demo facet's source). The issuer's pages (`assets`, below) need no build. This template becomes
+  // demo facet's source). The issuer's pages are HTML the worker renders — no assets. This template becomes
   // wrangler.jsonc (gitignored) through scripts/generate-wrangler-config.ts: the top-level block is
   // local dev, one `env` block per deployment from the root envs.ts.
   "main": "src/worker.ts",
@@ -38,20 +38,6 @@
   // is CPU-bound on the DO's single thread; 5 min (the paid max) gives 10x the 30 s default before a
   // CPU-limit abort. Neither is billed until used.
   "limits": { "subrequests": 1000000, "cpu_ms": 300000 },
-
-  // THE STATIC ASSETS: the issuer's page files — public/authorize.js (the consent page, no build:
-  // React, htm and capnweb through the shell's import map) and public/issuer.css, served as written.
-  // `run_worker_first: true`, on purpose: the patterns are paths, never hostnames, and a project host
-  // (`<app>--<project>.<base>`) must never answer with a platform asset — so src/worker.ts asks the
-  // ASSETS binding itself, on the platform host only, after the project hosts; a miss falls through
-  // to the control plane (`not_found_handling: "none"` — control-plane.ts renders /login and the
-  // /authorize shell itself, there is no index.html).
-  "assets": {
-    "binding": "ASSETS",
-    "directory": "public",
-    "not_found_handling": "none",
-    "run_worker_first": true,
-  },
 
   // The Worker Loader that runs each project's confined config worker / agents.
   "worker_loaders": [{ "binding": "LOADER" }],

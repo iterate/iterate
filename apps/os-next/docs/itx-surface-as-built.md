@@ -574,16 +574,15 @@ is stripped with every inbound `x-itx-*`. The admin secret as the bearer is `{ a
 any project. Who signs in is the issuer's (`/login`, the OAuth AS); the ingress only verifies.
 
 **The control plane** (`src/control-plane.ts`, IN-PROCESS: everything on the worker's hostname that
-is not `/api`, `/version` or a static asset (`public/`: the consent page's module and the one
-stylesheet — asked for on the platform host only, `run_worker_first: true`) is its catch-all — one worker,
+is not `/api` or `/version` is its catch-all — one worker,
 one front door).
 An OAuth 2.1 Authorization Server (`@cloudflare/workers-oauth-provider`, built per request from the
 request's origin: `/authorize` app-owned, `/oauth/token`, `/oauth/register` (DCR; CIMD on, with the
 `global_fetch_strictly_public` flag), `/.well-known/*`; `/mcp` its ONLY protected route and its ONE
 pinned resource, `<origin>/mcp`, this origin the authorization server — every token bound to it, a
 foreign one refused), a D1 directory (`control-plane.sql`: users → orgs via `org_members` →
-projects; access is org membership), THE ISSUER'S PAGES (`/login` rendered whole here; `/authorize` a shell that mounts
-`public/authorize.js`, no build — React, htm and capnweb through the import map; `public/issuer.css`): `/login`
+projects; access is org membership), THE ISSUER'S PAGES (`/login` and the `/authorize` consent form, both rendered whole here; the
+stylesheet inlined from `src/issuer-css.ts`): `/login`
 (the email form; "continue as / switch account" with a session), the `_auth` layout (no session ⇒
 `/login?next=`), the account page at `/` (orgs; projects — a project's hosts, the APEX (the config
 worker's `fetch`, the bundled default's 404 for a project with none of its own) and one per app it
@@ -666,7 +665,7 @@ skipped on 45 files (the deployed-only ones run against the deployed worker).
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----: |
 | the edge                 | `worker.ts` · `session.ts` · `iterate-context.ts` · `principal.ts` · `types.ts`                                                                                     | 1,250 |
 | the control plane        | `control-plane.ts` · `control-plane.sql`                                                                                                                            | ≈ 830 |
-| the issuer's pages       | `public/authorize.js` · `public/issuer.css` (+ `/login` and the shell in `control-plane.ts`)                                                                        | ≈ 350 |
+| the issuer's pages       | `control-plane.ts` (`loginPage`, `consentPage`, `consentDoor`) · `issuer-css.ts`                                                                                    | ≈ 400 |
 | the DO                   | `iterate-context-durable-object.ts`                                                                                                                                 |   949 |
 | expressions + dispatch   | `context/expression.ts` · `dispatch.ts` · `invoke-handle.ts`                                                                                                        |   623 |
 | built-ins + loader       | `context/built-ins.ts` · `worker-loader.ts` · `durable-object-names.ts`                                                                                             |   859 |

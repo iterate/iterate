@@ -65,7 +65,7 @@ async function mcp(origin: string, token: string, name: string, args = {}) {
   return JSON.parse(message ? message.slice(6) : body);
 }
 
-test("first Claude consent creates the organization and project in the SPA before granting MCP access", async ({
+test("first Claude consent creates the organization and project on the consent page before granting MCP access", async ({
   page,
   context,
   baseURL,
@@ -99,7 +99,7 @@ test("first Claude consent creates the organization and project in the SPA befor
     resources: [resource, `${origin}/api`],
     scopes: ["iterate", "account"],
   });
-  // Repeated resource keys and '+' form encoding must survive the TanStack SPA.
+  // Repeated resource keys and '+' form encoding must survive the page's form round trips.
   const expectedState = `${flow.state} + OAuth state`;
   flow.url.searchParams.set("state", expectedState);
   const sockets: string[] = [];
@@ -185,7 +185,8 @@ test("first Claude consent creates the organization and project in the SPA befor
       .filter({ hasText: /^1 selected$/ })
       .waitFor();
     expect(new URL(page.url()).search).toBe(flow.url.search);
-    expect(sockets.filter((url) => new URL(url).pathname === "/api")).toHaveLength(1);
+    // The consent page is a form: it opens no socket — its session is built in the worker.
+    expect(sockets.filter((url) => new URL(url).pathname === "/api")).toHaveLength(0);
     await page.screenshot({ path: test.info().outputPath("first-consent.png"), fullPage: true });
     await page.getByRole("button", { name: "Approve", exact: true }).click();
     await page

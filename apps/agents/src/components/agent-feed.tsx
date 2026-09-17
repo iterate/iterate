@@ -66,12 +66,15 @@ export function AgentFeedItemRow({
   expanded,
   onToggle,
   inspect,
+  traceOffset,
   signedUrl,
 }: {
   item: AgentUiItem;
   expanded: boolean;
   onToggle: (id: string) => void;
   inspect: Inspect;
+  /** The llm request behind an assistant message, so its bubble opens the trace on hover. */
+  traceOffset: number | undefined;
   signedUrl: SignedUrl;
 }) {
   switch (item.kind) {
@@ -101,6 +104,16 @@ export function AgentFeedItemRow({
               hasText={item.text !== ""}
               signedUrl={signedUrl}
             />
+            {traceOffset === undefined ? null : (
+              <button
+                type="button"
+                onClick={() => inspect.llmRequest(traceOffset)}
+                className="self-start text-[11px] text-muted-foreground/60 opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
+                title="See the model's raw response and the code this turn ran"
+              >
+                trace ›
+              </button>
+            )}
           </MessageContent>
         </Message>
       );

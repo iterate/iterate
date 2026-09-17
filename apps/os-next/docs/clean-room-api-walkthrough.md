@@ -44,8 +44,8 @@ userspace code runs in Worker Loader isolates or as facets of the DO, and its
 entire world is one binding, `env.ITX`. The control plane — an OAuth AS, the D1
 directory of users, orgs and projects (a project's id IS its DNS-safe name),
 `/mcp`, the issuer's two pages — runs IN-PROCESS as the same worker's
-catch-all (`src/control-plane.ts`): `/login` rendered whole and the `/authorize` consent, a no-build
-React page (`public/authorize.js`) served by the same worker; a project host
+catch-all (`src/control-plane.ts`): `/login` and the `/authorize` consent, both HTML the worker
+renders whole (no framework, no build, no static assets); a project host
 (`<app>--<project>.<base>`, `<app>.<project>.<base>`, the apex `<project>.<base>` — the one
 HTTP way into a project) is admitted by one directory read before any DO is
 dialled. Egress is terminal: secrets substituted, then `fetch`.
@@ -105,17 +105,15 @@ packages/v3/project-worker/
   scripts/                       build.ts (THE BUILD, one esbuild script: wrangler.jsonc, src/generated/*.js — the
                                  injected SDK's text and the presence fixture's source), dev.ts (`pnpm dev`: the
                                  build, then wrangler dev on wrangler.jsonc, which bundles src/worker.ts itself)
-  public/                        THE ISSUER'S PAGES, served as written (no build): authorize.js (/authorize: the
-                                 OAuth consent and THE PROJECT SELECTION, org + project creation inline — React,
-                                 htm and capnweb through the shell's import map) · issuer.css. /login is HTML the
-                                 worker renders whole (control-plane.ts). The OS — dashboard, sessions, agents — is
-                                 apps/agents on dash.iterate2.com, an ordinary OAuth client of this issuer.
+  src/issuer-css.ts              the issuer's stylesheet, inlined into /login and /authorize (control-plane.ts renders
+                                 both whole — the consent page is one form; no framework, no build, no static assets).
+                                 The dash — sessions, projects, organizations — is apps/dash on dash.iterate2.com, an
+                                 ordinary OAuth client of this issuer; agents and notes are apps of the same shape.
   src/
     worker.ts                    THE EDGE and the front door. default fetch: project-host ingress (the three
                                  host shapes, admission, x-iterate-app, the OAuth bearer or the app's
                                  /.auth/* session, the principal stamp —
-                                 the one HTTP way into a project), /api, /version, the static assets (the
-                                 platform host's alone); everything else on the worker's hostname is the
+                                 the one HTTP way into a project), /api, /version, everything else on the worker's hostname is the
                                  in-process control plane.
                                  Exports ItxEntrypoint, IterateContextDurableObject.
     session.ts                   IterateRpcTarget → SessionRpcTarget (whoami, projects, grants) → ProjectCollection
@@ -1471,9 +1469,9 @@ origin — the provider wants its one resource as an absolute URL) owning `/oaut
 check on `/mcp` (its ONLY protected route, and its ONE resource: `<origin>/mcp`, this origin the
 authorization server — every token is bound to it, a foreign one refused); everything else falls
 through to THE ISSUER'S PAGES — `/login`, HTML the worker renders whole (control-plane.ts), and
-`/authorize`, the shell that mounts `public/authorize.js` (no build: React, htm and capnweb through
-the shell's import map), its data the public `/api` session; the one machine door beside them
-(`signInDoor`) is the sign-in form's plain POST — `POST /login`,
+`/authorize`, the consent page — one form, its three buttons naming approve / create an organization
+/ create a project, answered by a session built the way `/api` builds one (`consentDoor`); the one
+machine door beside them (`signInDoor`) is the sign-in form's plain POST — `POST /login`,
 `/logout` (the session is the signed `__Host-itx-control-plane-session` cookie, `signClaims` under
 `APP_CONFIG_SESSION_SECRET`), `POST /projects` (a program creates projects over `/api`,
 `projects.create`), `POST /authorize`. The `/authorize` consent is THE PROJECT SELECTION: the user's
@@ -1511,7 +1509,7 @@ Bindings (`wrangler.jsonc`):
 | `APP_CONFIG_*` vars   | configuration (`src/app-config.ts`)          | parsed once per isolate into one typed object, an unknown var warned about at boot and ignored: `ENVIRONMENT_NAME`, `PLATFORM_ORIGIN`, `MCP_ORIGIN`, `PROJECT_HOSTNAME_BASE`, `ARTIFACTS_ACCOUNT_ID`, `ARTIFACTS_NAMESPACE`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `TEST_EMAIL_LOGIN`, `SESSION_SECRET` and `ADMIN_API_SECRET` (both required; wrangler secrets on a deployment) |
 
 The route `*.project-worker.iterate.com/*` (a wildcard DNS record in the zone) is the project hosts;
-`public/` is served as static assets (`/demo`). The e2e lane boots this same config, patched
+The e2e lane boots this same config, patched
 (`e2e/support/worker-config.ts`: absolute paths, `APP_CONFIG_ENVIRONMENT_NAME=e2e`,
 `APP_CONFIG_PROJECT_HOSTNAME_BASE=localhost`, vars for the three secrets); the workers lane runs
 `wrangler.test.jsonc` (no build block, no `AI`).
@@ -1704,7 +1702,7 @@ itself.
 | incarnation           | one life of the DO between evictions; the first door's `stream/woken` (`appendWakeRecord`, `reason: "alarm"` when that door is the alarm handler) opens each (offset 1 is the first one's `stream/created`); ephemeral offsets are unique within one                                                                                                                                                                                                 |
 | live state            | a `LiveState` holder's `{ rev, state }` plus `live-state/changed` deltas; clients chain revs and re-seed on a gap                                                                                                                                                                                                                                                                                                                                    |
 | egress                | any fetch leaving project code: `getSecret("/secrets/NAME")` (and `{ field: "a.b" }`) substituted in the DO (URL + headers; a missing or origin-bound secret is a 502), then the terminal `fetch` — no next door                                                                                                                                                                                                                                     |
-| control plane         | the in-process catch-all of the one worker (`src/control-plane.ts`): the OAuth AS, the D1 directory (users → orgs → projects; a project's id IS its slug), `/mcp`, the issuer's pages — `/login` rendered whole, the shell `public/authorize.js` mounts into; what admits a project host and answers membership                                                                                                                                      |
+| control plane         | the in-process catch-all of the one worker (`src/control-plane.ts`): the OAuth AS, the D1 directory (users → orgs → projects; a project's id IS its slug), `/mcp`, the issuer's pages — `/login` and the `/authorize` consent form, rendered whole; what admits a project host and answers membership                                                                                                                                                |
 | project host          | the one HTTP way into a project: `<app>--<project>.<base>` and `<app>.<project>.<base>` are the app `itx.apps.<app>` of the project's root context, the apex `<project>.<base>` its config worker's `fetch`; the Request verbatim, `x-iterate-app` the host's label; admitted by one directory read (421 otherwise); an OAuth grant — the app's `/.auth/*` browser session, or an access token as `Authorization: Bearer` — stamps `x-itx-principal` |
 | fetch lane            | the DO's `x-itx-expression` door: a project host from outside, a terminal `itx.x.fetch(request)` from inside a session, `env.ITX.fetch` from loaded code                                                                                                                                                                                                                                                                                             |
 

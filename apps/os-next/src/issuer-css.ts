@@ -1,3 +1,6 @@
+// issuer-css.ts — the one stylesheet of the issuer's two pages, inlined into each document by
+// control-plane.ts: the platform serves HTML strings and nothing else, no static assets.
+export const ISSUER_CSS = `
 /* console.css — the ONE stylesheet of the console (src/routes/**): the string console's rules, verbatim. */
 :root {
   color-scheme: light dark;
@@ -337,3 +340,4 @@ body:has(.consent-card) {
     display: none;
   }
 }
+`;

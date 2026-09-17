@@ -7,16 +7,6 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { z } from "zod";
-import { Button } from "@iterate-com/ui/components/button";
-import { Input } from "@iterate-com/ui/components/input";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@iterate-com/ui/components/table";
 
 export const Route = createFileRoute("/_auth/sessions")({
   validateSearch: z.object({ cursor: z.string().optional() }),
@@ -72,44 +62,36 @@ function SessionsPage() {
   };
 
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 md:p-8">
-      <p className="text-sm">
-        <Link to="/dashboard" className="underline underline-offset-4">
-          Projects
-        </Link>
+    <main>
+      <p>
+        <Link to="/dashboard">Projects</Link>
       </p>
-      <h1 className="text-2xl font-semibold tracking-tight">Sessions</h1>
-      <p className="text-sm text-muted-foreground">
+      <h1>Sessions</h1>
+      <p className="muted">
         Each browser, connected client, and personal access token can be signed out independently.
         Existing connections end within a minute.
       </p>
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Name</TableHead>
-            <TableHead>Type</TableHead>
-            <TableHead>Last used</TableHead>
-            <TableHead>Expires</TableHead>
-            <TableHead>Action</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
+      {error && <p role="alert">{error}</p>}
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Last used</th>
+            <th>Expires</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
           {items.map((item) => (
-            <TableRow key={item.id}>
-              <TableCell>
+            <tr key={item.id}>
+              <td>
                 {item.name}
                 {item.current && " (this browser)"}
-              </TableCell>
-              <TableCell>{item.kind}</TableCell>
-              <TableCell>
-                {item.lastUsedAt ? new Date(item.lastUsedAt).toISOString() : "Not used yet"}
-              </TableCell>
-              <TableCell>
+              </td>
+              <td>{item.kind}</td>
+              <td>{item.lastUsedAt ? new Date(item.lastUsedAt).toISOString() : "Not used yet"}</td>
+              <td>
                 {item.cleanupPending
                   ? "Access revoked; cleanup pending"
                   : item.expired
@@ -117,12 +99,10 @@ function SessionsPage() {
                     : item.expiresAt
                       ? new Date(item.expiresAt).toISOString()
                       : "—"}
-              </TableCell>
-              <TableCell>
-                <Button
+              </td>
+              <td>
+                <button
                   type="button"
-                  variant="outline"
-                  size="sm"
                   onClick={async () => {
                     setError(null);
                     try {
@@ -141,75 +121,67 @@ function SessionsPage() {
                       : item.kind === "Personal access token"
                         ? "Revoke"
                         : "Log out"}
-                </Button>
-              </TableCell>
-            </TableRow>
+                </button>
+              </td>
+            </tr>
           ))}
-        </TableBody>
-      </Table>
-      {!items.length && <p className="text-sm text-muted-foreground">No sessions on this page.</p>}
-      <p className="flex gap-4 text-sm">
+        </tbody>
+      </table>
+      {!items.length && <p className="muted">No sessions on this page.</p>}
+      <p>
         {cursor && (
-          <Link to="/sessions" search={{}} className="underline underline-offset-4">
+          <Link to="/sessions" search={{}}>
             First page
           </Link>
-        )}
+        )}{" "}
         {nextCursor && (
-          <Link
-            to="/sessions"
-            search={{ cursor: nextCursor }}
-            className="underline underline-offset-4"
-          >
+          <Link to="/sessions" search={{ cursor: nextCursor }}>
             Next page
           </Link>
         )}
       </p>
 
-      <h2 className="text-lg font-semibold tracking-tight">Personal access tokens</h2>
-      <p className="text-sm text-muted-foreground">
+      <h2>Personal access tokens</h2>
+      <p className="muted">
         A personal access token is one OAuth grant: it acts as you, for the projects you choose, for
         30 days, and is shown once. Send it as <code>Authorization: Bearer</code> on{" "}
         <code>/api</code>, <code>/mcp</code> or a project host; revoke it from the list above.
       </p>
       {minted && (
-        <p role="status" data-testid="minted" className="rounded-lg border bg-muted/40 p-3 text-sm">
+        <p role="status" data-testid="minted">
           <strong>{minted.name}</strong> — copy it now; it is not shown again. Expires{" "}
           {new Date(minted.expiresAt).toISOString()}.{" "}
-          <code data-testid="minted-token" className="break-all">
-            {minted.token}
-          </code>{" "}
-          <Button type="button" variant="outline" size="sm" onClick={copyMintedToken}>
+          <code data-testid="minted-token">{minted.token}</code>{" "}
+          <button type="button" onClick={copyMintedToken}>
             {copied ? "Copied" : "Copy"}
-          </Button>{" "}
-          <Button type="button" variant="ghost" size="sm" onClick={() => setMinted(null)}>
+          </button>{" "}
+          <button type="button" onClick={() => setMinted(null)}>
             Dismiss
-          </Button>
+          </button>
         </p>
       )}
       {canMintToken ? (
-        <form onSubmit={mintPersonalAccessToken} className="flex flex-col gap-3">
-          <label className="flex items-center gap-2 text-sm">
+        <form onSubmit={mintPersonalAccessToken}>
+          <label>
             Name{" "}
-            <Input
+            <input
               aria-label="Token name"
               value={tokenName}
               onChange={(event) => setTokenName(event.target.value)}
               maxLength={100}
               placeholder="My script"
               required
-              className="max-w-xs"
             />
           </label>
-          <p aria-label="Projects the token may reach" className="flex flex-wrap gap-3 text-sm">
+          <p aria-label="Projects the token may reach">
             {projects.length > 0
               ? projects.map((project) => (
-                  <label key={project.id} className="flex items-center gap-1.5">
+                  <label key={project.id}>
                     <input
                       type="checkbox"
                       aria-label={project.id}
                       checked={!excludedProjectIds.has(project.id)}
                       disabled={minting}
-                      className="size-4 accent-primary"
                       onChange={(event) => {
                         const checked = event.target.checked;
                         setExcludedProjectIds((current) => {
@@ -225,19 +197,17 @@ function SessionsPage() {
                 ))
               : "Create a project first — a token is scoped to the projects it may reach."}
           </p>
-          <div>
-            <Button
+          <div className="actions">
+            <button
               type="submit"
               disabled={minting || selectedProjectIds.length === 0 || tokenName.trim().length === 0}
             >
               {minting ? "Creating…" : "Create personal access token"}
-            </Button>
+            </button>
           </div>
         </form>
       ) : (
-        <p className="text-sm text-muted-foreground">
-          Personal access tokens require an HTTPS deployment.
-        </p>
+        <p className="muted">Personal access tokens require an HTTPS deployment.</p>
       )}
     </main>
   );
