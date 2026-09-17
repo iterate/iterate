@@ -160,3 +160,4 @@ No runs were interrupted. Based on main after #2695.
   dependency tests. Keep ancestry gates and publish settlement after restoration.
   Select only the four plan values for the signal: the new shell tracer also
   appends `ci-trace-end`, which must not enter the 140-character description.
+- Docs-only CI probe after merging main and simplifying milestone contexts.
