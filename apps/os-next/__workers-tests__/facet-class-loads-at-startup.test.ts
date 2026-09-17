@@ -13,7 +13,7 @@
 // REFUSE a get. The bundle this project runs cannot be `vi.mock`ed; this can.
 //
 //   • RPC path: hosting a facet is ONE `LOADER.get` + ONE `getDurableObjectClass`; 20 warm calls add
-//     NONE. The test door's release (support.ts) aborts it; the next call re-materializes it — one more of
+//     NONE. The test's direct release (support.ts `quiesce`) aborts it; the next call re-materializes it — one more of
 //     each, the isolate still warm — and warm calls after that again add none.
 //   • push path: 20 durable events delivered to a hosted facet's `processEventBatch` add NO
 //     `LOADER.get` beyond the enable's catch-up.
@@ -136,7 +136,7 @@ test("hosting a facet is one LOADER.get + one getDurableObjectClass; 20 warm cal
   expect(last).toEqual({ calls: 21, instance: first.instance }); // running the whole time
   expect({ gets: tap.gets.length, classGets: tap.classGets }).toEqual({ gets: 1, classGets: 1 });
 
-  // The test door's release aborts the live facet (support.ts runs production's release directly). The next call
+  // The test's direct release (support.ts `quiesce`) aborts the live facet (support.ts runs production's release directly). The next call
   // re-materializes it: a fresh instance, one more LOADER.get + class mint — the isolate itself is
   // the loader's to keep (no cold build) — and the calls after that are warm again.
   await quiesce(ctx);

@@ -124,7 +124,7 @@ async function untilStubs(ctx: string, n: number, timeoutMs = 5_000): Promise<Re
   }
 }
 
-// ─────────── THE RELEASE (the workers lane's door), and what survives the eviction it enables ───────────
+// ─────────── THE RELEASE (`releasePins`, run directly by these tests), and what survives the eviction it enables ───────────
 
 test("QUIESCE PRESERVES CURSOR+STATE: abort an idle facet, re-materialize from the startup memo, snapshot is unchanged", async () => {
   // A facet aborted by the release and re-materialized by the next call (`itx.facets.get(name)`

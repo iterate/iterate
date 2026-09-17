@@ -2,7 +2,7 @@
 // NEVER a WebSocket. A socket terminates at the edge (a session's /api pager socket on the context
 // DO, a project host's lent-stub upgrade leg) and the facet behind it is reached by itx expression;
 // so `IterateContextDurableObject#invokeFacet` refuses an upgrade aimed at a facet, coded
-// FACET_NO_UPGRADE, BEFORE the facet is even materialized — and the workers lane's release can abort
+// FACET_NO_UPGRADE, BEFORE the facet is even materialized — and a test's direct release can abort
 // an idle facet with nothing to lose (a socket a facet held would die with it, 1006, unseen by the
 // parent: measured 2026-09-13, the reason for this rule).
 //
