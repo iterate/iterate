@@ -122,7 +122,9 @@ Its `success` means **decision available**, including an inherited red decision:
 the plan job still fails, while `prepare` receives `tests=false` and stops after
 its wait. If planning fails before deciding, its termination fails the waiter.
 Every subsequent prepare step, including failure-path artifact uploads, requires
-`tests=true`.
+`tests=true`. The finalizer also uses that decision, even if the plan job fails
+after publishing it: prepare might already have begun deploying and still needs
+cleanup. Test jobs retain their successful-plan dependency.
 
 **Before rollout, require `Preview / Plan preview work` as a merge check.**
 Inherited red fails that job; skipped downstream jobs alone cannot enforce it.
@@ -165,6 +167,14 @@ The docs-only plan returned `action: inherit`, `tests: false`, and `deploy: fals
 Its PR deployment record retained all six restored versions; the live OS health
 endpoint still returned the recorded version. Other workflows, such as unit
 tests and lint, remain independent of preview selection and still run.
+
+Prepare-overlap acceptance at `a511549af` ([run](https://depot.dev/orgs/0p91s0lz49/workflows/hg2flkdj90))
+confirmed that prepare's dependency install finished at 15:06:19 UTC, before
+planning published its signal at 15:06:53. The wait returned all four values;
+deployment, app tests, six browser shards and restoration succeeded, followed
+by `preview-settled`. The independent unit job hit the existing dependency-test
+case `changed pnpm-lock.yaml runs a frozen install`'s five-second limit; that
+test is unchanged by this work.
 
 ## Restoration after deployment reuse
 

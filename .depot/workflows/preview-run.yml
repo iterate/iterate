@@ -285,7 +285,8 @@ jobs:
   finish:
     name: Collect results and clean up
     needs: [plan, prepare]
-    if: always() && needs.plan.result == 'success' && needs.plan.outputs.tests == 'true'
+    # Prepare may already be deploying when plan fails after publishing its decision.
+    if: always() && needs.plan.outputs.tests == 'true'
     runs-on:
       size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree

@@ -142,3 +142,11 @@ interrupting runs. Based on main after #2695.
 - [x] Start prepare setup concurrently with planning, then gate later steps on its signal. *`preview-run.yml` removes prepare's job dependency and uses `steps.plan.outputs`; app/shard gates remain.*
 - [x] Carry compact values through attempt-scoped milestones into step outputs. *`status.ts set --values` publishes JSON; `wait-for` validates and writes outputs. Inherited failures publish their decision before the job stops.*
 - [ ] Verify the overlapped full run and setup-only inherited run in Depot. *Wait for each complete lifecycle before the next push.*
+- Failure-path review: a plan publication can succeed before its job fails. The
+  finalizer therefore admits `tests=true` even with a failed plan job, preserving
+  cleanup for preparation already underway. Test jobs still require plan success.
+- First overlap run `a511549af` / `hg2flkdj90`: preparation installed dependencies
+  before the plan signal, received all four values, and completed deployment,
+  all deployed suites, restoration and `preview-settled`. Separate unit CI hit
+  the existing dependency-install test's five-second timeout; unchanged tests
+  will run again with the finalizer follow-up. No run was interrupted.

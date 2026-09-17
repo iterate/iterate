@@ -120,7 +120,7 @@ test("the lifecycle owner encloses every fixed shard and cleanup waits for their
   });
   expect(workflow.jobs.finish).toMatchObject({
     needs: ["plan", "prepare"],
-    if: "always() && needs.plan.result == 'success' && needs.plan.outputs.tests == 'true'",
+    if: "always() && needs.plan.outputs.tests == 'true'",
   });
   const steps = workflow.jobs.finish.steps;
   const green = steps.findIndex((step: any) => step.id === "tests_passed");
