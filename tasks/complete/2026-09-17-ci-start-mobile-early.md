@@ -6,7 +6,7 @@ Playwright currently starts Expo/Metro after the preview-ready wait on all six s
 
 - [x] Start Expo after dependency reconciliation and artifact reset, before waiting for the prepared preview. *The start_mobile_web step runs before browser reconciliation and the preview-ready wait.*
 - [x] Reuse that server in Playwright with an explicit port and CI opt-in; preserve ordinary local startup. *The workflow passes PLAYWRIGHT_MOBILE_WEB_PORT=8081 and PLAYWRIGHT_MOBILE_WEB_PRESTARTED=1 to the config.*
-- [x] Preserve startup logs and ensure the background process is cleaned up on success or failure. *A separate process group is stopped in an always step; server.log is printed and uploaded.*
+- [x] Preserve startup logs and ensure the background process is cleaned up on success or failure. *A separate process group is stopped in an always step; each shard's mobile-web.log is printed and uploaded.*
 - [x] Document selective startup as a follow-up, including Playwright's reverted per-project webServer support (https://github.com/microsoft/playwright/pull/41167). *The startup-step comment points to --list --shard selection and the upstream revert.*
 - [x] Run relevant checks and use normal preview CI to verify early startup, reuse, successful mobile tests, and the remaining time before the first test. *All local checks and workflow n9ck0nn83t passed; one Expo launch and successful cleanup per shard.*
 
@@ -26,3 +26,5 @@ Start Expo on every shard. Do not change test selection, sharding, pnpm, runner 
 - Successful normal CI on 2c5fd6f48: https://depot.dev/orgs/0p91s0lz49/workflows/n9ck0nn83t. All six Playwright jobs and the complete preview workflow passed. Early Metro readiness took 1.8–16.7s, followed by 172–207s of preview wait. Logs show exactly one Expo launch per runner and successful cleanup.
 - Time from the Playwright step to its first non-skipped test, shards 1–6: 5.141s, 6.123s, 5.649s, 6.490s, 5.345s, 5.247s (median 5.497s). Recent main 7c97a098d: 19.922s, 6.945s, 7.989s, 19.087s, 17.503s, 8.845s (median 13.174s).
 - Mobile outcomes: 15 passed, one existing expected failure, one existing skip. The approvals test passed on its normal retry after a signup form Organization name field timeout. No test behavior or retry budget changed.
+
+- Final review caught that the collector merges shard artifacts into one directory. Store Metro logs in test-results/playwright-shard-N/mobile-web.log so all six survive collection; final-head CI verifies this path adjustment.
