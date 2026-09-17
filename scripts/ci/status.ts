@@ -4,8 +4,8 @@ import { z } from "zod";
 
 /** GitHub milestones, guarded by Depot job liveness. Run with trpc-cli. */
 export default class CiStatus {
-  /** Publish test success while this job keeps cleaning up; Depot owns its final outcome. */
-  async testsPassed(summary: string) {
+  /** Mark this job's GitHub check green while it continues; Depot owns its final outcome. */
+  async setPendingCheckGreen(summary: string) {
     const workflow = await this.workflow();
     if (workflow.jobs.find((job) => job.jobId === this.jobId)?.status !== "running")
       throw new Error("This Depot job is no longer running");
@@ -48,7 +48,7 @@ export default class CiStatus {
           status: "completed",
           conclusion: "success",
           output: {
-            title: "Test results passed",
+            title: "Check marked successful",
             summary,
           },
         }),
@@ -57,7 +57,7 @@ export default class CiStatus {
     );
     if (!response.ok) throw new Error(`Updating own GitHub check returned HTTP ${response.status}`);
     console.log(
-      `[ci:status] tests passed at ${new Date().toISOString()}; check ${check.id}; cleanup continues`,
+      `[ci:status] check ${check.id} set green at ${new Date().toISOString()}; job continues`,
     );
     return { checkId: check.id };
   }

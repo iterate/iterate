@@ -279,7 +279,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
-          pnpm exec trpc-cli scripts/ci/status.ts tests-passed
+          pnpm exec trpc-cli scripts/ci/status.ts set-pending-check-green
           "All preview tests passed. Cleanup and restoration run afterwards; their final outcome is reflected in this check. See Depot for current cleanup progress."
       - name: Retire test data and restore the preview
         id: erase

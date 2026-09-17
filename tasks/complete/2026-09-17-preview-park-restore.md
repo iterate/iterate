@@ -42,7 +42,7 @@ expired-test CI failure. No merge is authorized.
 
 - [x] Research current restore machinery and GitHub/Depot check ownership. *Reuse app deploy commands; job token can update its exact Depot check.*
 - [x] Implement and test the smallest post-test park/restore path. *`preview erase --restore` retires first, then restores Auth, OS and Streams from the tested checkout.*
-- [x] Implement and test honest early-green/final-failure reporting. *`status.ts tests-passed`; live checks 105090329542 and 105090616821 changed from success to failure/cancelled.*
+- [x] Implement and test honest early-green/final-failure reporting. *`status.ts set-pending-check-green`; live checks 105090329542 and 105090616821 changed from success to failure/cancelled.*
 - [x] Run preview experiments, including an injected cleanup failure and recovery. *First full run restored successfully; dirty-checkout guard refused only after retirement, then clean recovery passed.*
 - [x] Validate resulting namespaces, fresh application behavior and activity. *Ten namespaces replaced; fresh project, schedule and login worked. Retained containers were quiet in the measured window; ordinary OS analytics lacked a positive control.*
 - [x] Complete local checks, independent review and CI/review follow-up. *360 scripts tests and all preview jobs passed; only the unrelated expired-test check remains red. Global PR monitor retains follow-up ownership.*
@@ -86,3 +86,8 @@ expired-test CI failure. No merge is authorized.
 - Final reporting adjustment publishes the parked state before checking restore
   provenance, so an intentionally refused restore cannot leave an old success
   notice. Independent review approved this ordering; scripts tests/typecheck pass.
+- Review follow-up: renamed the generic check operation to `setPendingCheckGreen`
+  and updated its CLI caller. Main deliberately completes its pinned revision
+  under the workflow lock; it should not compare against the moving main tip.
+  The restoration deploy disables reuse and omits the optional main-size display
+  baseline. These two behaviors are unchanged.
