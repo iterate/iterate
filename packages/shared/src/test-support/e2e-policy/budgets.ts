@@ -40,6 +40,9 @@ export const E2E_CI_RETRIES = 1;
  */
 export const E2E_CI_RETRY_DELAY_MS = 5_000;
 
+/** The retries one test gets in THIS run: E2E_CI_RETRIES on CI, none at a desk. */
+export const E2E_RETRIES_THIS_RUN = process.env.CI === "true" ? E2E_CI_RETRIES : 0;
+
 /**
  * Playwright per-action wait — ONE number, every project, video mode
  * included. Deliberately tight: the middlewright spinner-waiter extends it

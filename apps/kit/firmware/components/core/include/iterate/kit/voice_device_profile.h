@@ -90,9 +90,11 @@ enum {
    *
    * One period, two probes, two questions. The transport sends a WebSocket
    * PING when the hop has been silent both ways (is this TCP hop half-open),
-   * and the mount sends `whoami()` on the project root (is this SESSION still
-   * there — and it is an application message, which is the only kind the idle
-   * close counts). On a mounted board the probe's own round trip keeps the hop
+   * and the mount sends `whoami()` on the SESSION (is this session still there
+   * — an application message, which is the only kind the idle close counts,
+   * answered at the edge without waking the project's Durable Object; asking
+   * the project root instead woke it once a minute). On a mounted board the
+   * probe's own round trip keeps the hop
    * busy and therefore suppresses the ping, so the liveness watchdog keys on
    * BOTH answers: the probe's while mounted, the PONG in the window before a
    * mount exists. Keying on the PONG alone made the two race.

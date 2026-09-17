@@ -90,11 +90,12 @@ struct iterate_kit_itx_mount_options {
  * `projects.get` is pure addressing and takes one string; `provide` is the ONE
  * front door for making a name mean this device.
  *
- * WHAT READY OWNS: the project import, and the rewrite-rule handle that IS the
- * live provision — releasing it un-does the rule and recalls the lent stub, so
- * the release order in close() is the rule first and the project second.
- * Dropping the rule handle instead of releasing it would leave the match
- * pointing at a stub this session no longer answers for.
+ * WHAT READY OWNS: the session import (what the liveness probe asks), the
+ * project import, and the rewrite-rule handle that IS the live provision —
+ * releasing it un-does the rule and recalls the lent stub, so the release order
+ * in close() is the rule first, the project second, the session last. Dropping
+ * the rule handle instead of releasing it would leave the match pointing at a
+ * stub this session no longer answers for.
  *
  * The state machine is single-owner and callback-driven. At each stage the
  * mount owns only the handles marked by `has_*`; these booleans are the cleanup
@@ -130,12 +131,16 @@ enum capnweb_status iterate_kit_itx_mount_start(
     const struct iterate_kit_itx_mount_options *options);
 
 /**
- * Sends `whoami()` on the project root once a period, because os-next's idle
- * close counts APPLICATION messages and a PING is not one; the timing and the
- * ping's division of labour are in voice_device_profile.h. `whoami()` is the
- * cheapest real call: no argument, no storage touched. Returns whether a probe
- * left the device — false covers not mounted, one already pending, not yet due,
- * and a session with no room, none of which a caller acts on differently.
+ * Sends `whoami()` on the SESSION once a period, because os-next's idle close
+ * counts APPLICATION messages and a PING is not one; the timing and the ping's
+ * division of labour are in voice_device_profile.h. The session's `whoami()` is
+ * the cheapest real call there is: the edge answers it from the admission gate
+ * and no Durable Object is touched. (The project root's `whoami()` is NOT that
+ * call: it wakes the project's context, and a device parked on it woke it once
+ * a minute, appending a wake record to the project's log each time.) Returns
+ * whether a probe left the device — false covers not mounted, one already
+ * pending, not yet due, and a session with no room, none of which a caller acts
+ * on differently.
  */
 bool iterate_kit_itx_mount_probe_if_due(
     struct iterate_kit_itx_mount *mount, uint64_t now_ms);
