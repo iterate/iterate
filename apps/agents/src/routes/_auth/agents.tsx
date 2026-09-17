@@ -1,83 +1,48 @@
-import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { CircleIcon } from "lucide-react";
+import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/next/app";
 import { useLiveState } from "iterate/next/react";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { z } from "zod";
+import {
+  Conversation,
+  ConversationContent,
+  ConversationScrollButton,
+} from "@iterate-com/ui/components/ai-elements/conversation";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@iterate-com/ui/components/sidebar";
+import { Spinner } from "@iterate-com/ui/components/spinner";
+import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
+import { cn } from "@iterate-com/ui/lib/utils";
+import type { Event } from "@iterate-com/ui/components/events/types";
+import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
+import { EventsList, InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
+import { AgentsSidebar } from "../../components/agents-sidebar.tsx";
+import { Composer, type OutgoingFile } from "../../components/composer.tsx";
+import { reduceAgentFeed, toAgentEvent } from "../../lib/agent-events.ts";
 
 // An agent is a conversation on its own path (`/agents/<name>`); everything it does is an event
-// there. This page is a window onto that log: the feed is DERIVED from the events (a person's words,
-// the assistant's prose, the scripts it ran and what they returned), the strip above the composer is
-// the agent facet's LIVE STATE (thinking / running a script / paused / idle), and the composer is
-// `itx.agents.get(path).message(...)`. The project stub is held for the page's life; the agent's
-// context is `project.cd(path)`, subscribed for pushes and caught up with `readEvents`.
+// there. This page is a window onto that log — apps/os's agent view at the size os-next carries:
+// the CHAT (the shared agent-UI reducer's items: messages, and the activities that open into
+// rounds of script + result), the EVENTS (the raw log), and the TRACES (one sheet, URL-backed: an
+// LLM request, a script execution, a raw event). The project stub is held for the page's life; the
+// agent's context is `project.cd(path)`, subscribed for every committed event and caught up with
+// `readEvents`. The header's status is the agent facet's LIVE STATE.
 type Project = Awaited<ReturnType<AuthenticatedApp["api"]["projects"]["get"]>>;
 type Context = Awaited<ReturnType<Project["cd"]>>;
 
 const AgentList = z.array(z.object({ path: z.string(), createdAt: z.string() }));
-const FileAttachment = z.object({
-  contentType: z.string(),
-  filename: z.string(),
-  path: z.string(),
-  size: z.number(),
-});
-/** The events the feed renders; anything else on the path is skipped. */
-const FeedEvent = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("events.iterate.com/agents/context-added"),
-    payload: z.object({
-      role: z.string(),
-      content: z.string(),
-      actor: z.object({ email: z.string().optional() }).optional(),
-      files: z.array(FileAttachment).optional(),
-    }),
-  }),
-  z.object({
-    type: z.literal("events.iterate.com/agents/web-message-sent"),
-    payload: z.object({ message: z.string() }),
-  }),
-  z.object({
-    type: z.literal("events.iterate.com/agent/summary-updated"),
-    payload: z.object({ activity: z.string() }),
-  }),
-  z.object({
-    type: z.literal("events.iterate.com/agent/llm-request-settled"),
-    payload: z.object({
-      result: z.discriminatedUnion("status", [
-        z.object({ status: z.literal("succeeded") }),
-        z.object({ status: z.literal("failed"), errorMessage: z.string() }),
-        z.object({ status: z.literal("cancelled") }),
-      ]),
-    }),
-  }),
-  z.object({
-    type: z.literal("events.iterate.com/agent/paused"),
-    payload: z.object({ reason: z.string() }),
-  }),
-  z.object({ type: z.literal("events.iterate.com/agent/resumed"), payload: z.object({}) }),
-  z.object({
-    type: z.literal("events.iterate.com/capability-host/script-run-requested"),
-    payload: z.object({ code: z.string(), executionId: z.string() }),
-  }),
-  z.object({
-    type: z.literal("events.iterate.com/capability-host/script-run-settled"),
-    payload: z.object({
-      executionId: z.string(),
-      settlement: z.discriminatedUnion("status", [
-        z.object({ status: z.literal("succeeded"), result: z.unknown().optional() }),
-        z.object({ status: z.literal("failed"), error: z.string() }),
-      ]),
-    }),
-  }),
-]);
-const FEED_TYPES = FeedEvent.options.map((option) => option.shape.type.value);
-const StreamRow = z.object({ offset: z.number(), createdAt: z.string() });
-type FeedEvent = z.infer<typeof FeedEvent> & z.infer<typeof StreamRow>;
 
 export const Route = createFileRoute("/_auth/agents")({
-  validateSearch: z.object({ project: z.string().optional(), agent: z.string().optional() }),
-  loaderDeps: ({ search }) => search,
+  validateSearch: z.object({
+    project: z.string().optional(),
+    agent: z.string().optional(),
+    view: z.enum(["chat", "events"]).optional(),
+    llmRequest: z.number().int().positive().optional(),
+    scriptExecution: z.string().optional(),
+    event: z.number().int().positive().optional(),
+  }),
+  loaderDeps: ({ search }) => ({ project: search.project, agent: search.agent }),
   loader: async ({ context, deps }) => {
     const projects = await context.api.projects.list();
     const project = deps.project ? projects.find((item) => item.id === deps.project) : projects[0];
@@ -87,8 +52,7 @@ export const Route = createFileRoute("/_auth/agents")({
       using itx = await context.api.projects.get(project.id);
       agents = AgentList.parse(await itx.invoke(["itx", "agents", ["list"]]));
     }
-    const agent = deps.agent || agents[0]?.path;
-    return { projects, project, agents, agent };
+    return { projects, project, agents, agent: deps.agent || agents[0]?.path };
   },
   component: AgentsPage,
 });
@@ -98,242 +62,88 @@ function AgentsPage() {
   const { api, info } = Route.useRouteContext();
   const navigate = useNavigate();
   const router = useRouter();
-  const [error, setError] = useState<string | null>(null);
-  async function createAgent(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!data.project) return;
-    const element = event.currentTarget;
-    const form = new FormData(element);
-    const path = `/agents/${String(form.get("name")).trim()}`;
-    const systemPrompt = String(form.get("prompt")).trim();
-    setError(null);
-    try {
-      using itx = await api.projects.get(data.project.id);
-      await itx.invoke([
-        "itx",
-        "agents",
-        ["get", path],
-        ["create", systemPrompt ? { systemPrompt } : {}],
-      ]);
-      element.reset();
-      await router.invalidate();
-      await navigate({ to: "/agents", search: { project: data.project.id, agent: path } });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }
+  if (!data.project)
+    return (
+      <Empty className="min-h-svh">
+        <EmptyHeader>
+          <EmptyTitle>No projects yet</EmptyTitle>
+          <EmptyDescription>
+            <a href="/dashboard" className="underline underline-offset-4">
+              Create a project
+            </a>{" "}
+            to give an agent a home.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  const project = data.project.id;
   return (
-    <main>
-      <header>
-        <div>
-          <p className="eyebrow">AGENTS</p>
-          <h1>{data.agent ? data.agent.replace(/^\/agents\//, "") : "Your agents"}</h1>
-        </div>
-        <form method="post" action="/.auth/logout">
-          <button type="submit">Log out</button>
-        </form>
-      </header>
-      <p className="muted">
-        {info.principal.email || info.principal.actor}
-        {data.projects.length > 1 && " · "}
-        {data.projects.length > 1 &&
-          data.projects.map((project) => (
-            <span key={project.id}>
-              <Link to="/agents" search={{ project: project.id }}>
-                {project.id}
-              </Link>{" "}
-            </span>
-          ))}
-        {" · "}
-        <Link to="/dashboard">Project dashboard</Link>
-      </p>
-      {data.project ? (
-        <>
-          <nav className="agents" aria-label="Agents">
-            {data.agents.map((agent) => (
-              <Link
-                key={agent.path}
-                to="/agents"
-                search={{ project: data.project!.id, agent: agent.path }}
-                aria-current={agent.path === data.agent ? "page" : undefined}
-              >
-                {agent.path.replace(/^\/agents\//, "")}
-              </Link>
-            ))}
-          </nav>
-          <form className="new-agent" onSubmit={createAgent}>
-            <input
-              name="name"
-              placeholder="new agent name, e.g. support"
-              pattern="[a-z0-9\-]+"
-              required
-            />
-            <input name="prompt" placeholder="system prompt (optional)" />
-            <button className="quiet" type="submit">
-              Create
-            </button>
-          </form>
-          {error && <p id="error">{error}</p>}
-          {data.agent && (
-            <Conversation
-              key={`${data.project.id}${data.agent}`}
-              project={data.project.id}
-              path={data.agent}
-            />
-          )}
-        </>
-      ) : (
-        <p>
-          No projects yet. <Link to="/dashboard">Create a project</Link>.
-        </p>
-      )}
-    </main>
+    <SidebarProvider className="h-svh">
+      <AgentsSidebar
+        projects={data.projects}
+        project={project}
+        agents={data.agents}
+        agent={data.agent}
+        account={info.principal.email || info.principal.actor}
+        onCreate={async (name, systemPrompt) => {
+          const path = `/agents/${name}`;
+          using itx = await api.projects.get(project);
+          await itx.invoke([
+            "itx",
+            "agents",
+            ["get", path],
+            ["create", systemPrompt ? { systemPrompt } : {}],
+          ]);
+          await router.invalidate();
+          await navigate({ to: "/agents", search: { project, agent: path } });
+        }}
+      />
+      <SidebarInset className="min-w-0 overflow-hidden">
+        {data.agent ? (
+          <AgentConversation key={`${project}${data.agent}`} project={project} path={data.agent} />
+        ) : (
+          <div className="flex h-full flex-col">
+            <header className="flex shrink-0 items-center gap-3 px-4 pb-1 pt-2.5">
+              <SidebarTrigger className="-ml-1 md:hidden" />
+            </header>
+            <Empty className="flex-1">
+              <EmptyHeader>
+                <EmptyTitle>No agents yet</EmptyTitle>
+                <EmptyDescription>
+                  Create one in the sidebar, then talk to it here.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          </div>
+        )}
+      </SidebarInset>
+    </SidebarProvider>
   );
 }
 
-// ── the conversation ── one agent's log, live.
+// ── the agent's log, live ──
 
-type Row =
-  | { kind: "prompt"; offset: number; text: string }
-  | {
-      kind: "user";
-      offset: number;
-      at: string;
-      text: string;
-      who?: string;
-      files: z.infer<typeof FileAttachment>[];
-    }
-  | { kind: "assistant"; offset: number; markdown: string; raw?: true }
-  | {
-      kind: "script";
-      offset: number;
-      label?: string;
-      code: string;
-      settlement?: { status: "succeeded"; result?: unknown } | { status: "failed"; error: string };
-    }
-  | { kind: "note"; offset: number; text: string; amber?: true };
-
-/** The feed as the log tells it, in offset order. A raw assistant item is shown only when nothing
- *  was derived from it (no prose, no script) — otherwise the derived rows ARE the answer. */
-function deriveFeed(events: FeedEvent[]): { rows: Row[]; activity?: string } {
-  const rows: Row[] = [];
-  const scripts = new Map<string, Extract<Row, { kind: "script" }>>();
-  let raw: Extract<Row, { kind: "assistant" }> | undefined;
-  let activity: string | undefined;
-  let afterSettlement = false;
-  for (const event of events) {
-    const wasAfterSettlement = afterSettlement;
-    afterSettlement = false;
-    switch (event.type) {
-      case "events.iterate.com/agents/context-added": {
-        const { role, content } = event.payload;
-        if (role === "system") rows.push({ kind: "prompt", offset: event.offset, text: content });
-        else if (role === "user")
-          rows.push({
-            kind: "user",
-            offset: event.offset,
-            at: event.createdAt,
-            text: content,
-            who: event.payload.actor?.email,
-            files: event.payload.files || [],
-          });
-        else if (role === "assistant") {
-          raw = { kind: "assistant", offset: event.offset, markdown: content, raw: true };
-          rows.push(raw);
-        } else if (role === "developer" && !wasAfterSettlement)
-          rows.push({ kind: "note", offset: event.offset, text: content, amber: true });
-        break;
-      }
-      case "events.iterate.com/agents/web-message-sent":
-        if (raw) raw.markdown = "";
-        rows.push({ kind: "assistant", offset: event.offset, markdown: event.payload.message });
-        break;
-      case "events.iterate.com/agent/summary-updated":
-        activity = event.payload.activity;
-        break;
-      case "events.iterate.com/capability-host/script-run-requested": {
-        if (raw) raw.markdown = "";
-        const row: Extract<Row, { kind: "script" }> = {
-          kind: "script",
-          offset: event.offset,
-          label: activity,
-          code: event.payload.code,
-        };
-        scripts.set(event.payload.executionId, row);
-        rows.push(row);
-        break;
-      }
-      case "events.iterate.com/capability-host/script-run-settled": {
-        const row = scripts.get(event.payload.executionId);
-        if (row) row.settlement = event.payload.settlement;
-        afterSettlement = true;
-        break;
-      }
-      case "events.iterate.com/agent/paused":
-        rows.push({
-          kind: "note",
-          offset: event.offset,
-          text: `Paused — ${event.payload.reason}`,
-          amber: true,
-        });
-        break;
-      case "events.iterate.com/agent/resumed":
-        rows.push({ kind: "note", offset: event.offset, text: "Resumed" });
-        break;
-      case "events.iterate.com/agent/llm-request-settled":
-        if (event.payload.result.status === "failed")
-          rows.push({
-            kind: "note",
-            offset: event.offset,
-            text: `Model call failed — ${event.payload.result.errorMessage}`,
-            amber: true,
-          });
-        else if (event.payload.result.status === "cancelled")
-          rows.push({
-            kind: "note",
-            offset: event.offset,
-            text: "Model call expired",
-            amber: true,
-          });
-        break;
-    }
-  }
-  return { rows: rows.filter((row) => row.kind !== "assistant" || row.markdown), activity };
-}
-
-const AgentLive = z.object({
-  paused: z.object({ reason: z.string() }).nullable(),
-  openRequest: z.object({ model: z.string() }).nullable(),
-  pendingLlmRequestTrigger: z.object({}).nullable(),
-  activeScriptExecutions: z.record(z.string(), z.unknown()),
-});
-
-function Conversation({ project, path }: { project: string; path: string }) {
-  const { api } = Route.useRouteContext();
+/** The agent's context, its log so far, and whether the catch-up read has reached the head. */
+function useAgentLog(api: AuthenticatedApp["api"], project: string, path: string) {
   const [context, setContext] = useState<Context>();
-  const [events, setEvents] = useState<Map<number, FeedEvent>>(() => new Map());
+  const [events, setEvents] = useState<Map<number, Event>>(() => new Map());
   const [caughtUp, setCaughtUp] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const merge = (batch: unknown[]) =>
-    setEvents((held) => {
-      const next = new Map(held);
-      for (const raw of batch) {
-        const plain: unknown = JSON.parse(JSON.stringify(raw));
-        const row = StreamRow.safeParse(plain);
-        const feed = FeedEvent.safeParse(plain);
-        if (row.success && feed.success) next.set(row.data.offset, { ...feed.data, ...row.data });
-      }
-      return next;
-    });
   useEffect(() => {
     let disposed = false;
+    const merge = (batch: unknown[]) =>
+      setEvents((held) => {
+        const next = new Map(held);
+        for (const raw of batch) {
+          const event = toAgentEvent(raw, path);
+          if (event) next.set(event.offset, event);
+        }
+        return next;
+      });
     // What the connect holds so far; released on unmount AND again after the connect settles, since
     // an unmount mid-await comes before the handle that await returns.
-    const held: {
-      stub?: Project;
-      agent?: Context;
-      subscription?: { [Symbol.dispose](): void };
-    } = {};
+    const held: { stub?: Project; agent?: Context; subscription?: { [Symbol.dispose](): void } } =
+      {};
     const release = () => {
       held.subscription?.[Symbol.dispose]();
       held.agent?.[Symbol.dispose]();
@@ -349,9 +159,9 @@ function Conversation({ project, path }: { project: string; path: string }) {
       // for an updater and CALL it (an empty method call the server refuses).
       setContext(() => agent);
       // Subscribe BEFORE the catch-up read, so nothing lands between the two; a push is a batch of
-      // committed events, deduped into the map by offset.
+      // committed events, deduped into the map by offset. No `consumes`: the Events view is the
+      // whole log, and the reducer keeps what it renders.
       held.subscription = await agent.subscribe({
-        consumes: FEED_TYPES,
         target: (batch: unknown[]) => !disposed && merge(batch),
       });
       for (let after = 0; ; ) {
@@ -370,7 +180,23 @@ function Conversation({ project, path }: { project: string; path: string }) {
       release();
     };
   }, [api, project, path]);
+  const sorted = useMemo(() => [...events.values()].sort((a, b) => a.offset - b.offset), [events]);
+  return { context, events: sorted, caughtUp, error };
+}
 
+/** The agent facet's live state, the fields the header reads. */
+const AgentLive = z.object({
+  paused: z.object({ reason: z.string() }).nullable(),
+  openRequest: z.object({ model: z.string() }).nullable(),
+  pendingLlmRequestTrigger: z.object({}).nullable(),
+  activeScriptExecutions: z.record(z.string(), z.unknown()),
+});
+
+function AgentConversation({ project, path }: { project: string; path: string }) {
+  const { api } = Route.useRouteContext();
+  const search = Route.useSearch();
+  const navigate = useNavigate();
+  const { context, events, caughtUp, error } = useAgentLog(api, project, path);
   const live = useLiveState<unknown>(context, {
     key: "agent",
     door: async () =>
@@ -378,216 +204,172 @@ function Conversation({ project, path }: { project: string; path: string }) {
         .object({ rev: z.number(), state: z.unknown() })
         .parse(await context!.invoke("itx.facets.get('agent').liveSnapshot()")),
   });
-  const view = AgentLive.safeParse(live.value);
-  const feed = useMemo(
-    () => deriveFeed([...events.values()].sort((a, b) => a.offset - b.offset)),
-    [events],
+  const facet = AgentLive.safeParse(live.value);
+  const idle =
+    facet.success &&
+    !facet.data.paused &&
+    !facet.data.openRequest &&
+    !facet.data.pendingLlmRequestTrigger &&
+    Object.keys(facet.data.activeScriptExecutions).length === 0;
+  const feed = useMemo(() => reduceAgentFeed(events, idle), [events, idle]);
+  const [toggled, setToggled] = useState<ReadonlySet<string>>(() => new Set());
+  const onToggle = useCallback(
+    (id: string) =>
+      setToggled((held) => {
+        const next = new Set(held);
+        if (!next.delete(id)) next.add(id);
+        return next;
+      }),
+    [],
   );
-  const status = !view.success
+  const inspected: Inspected = search.llmRequest
+    ? { kind: "llmRequest", llmRequestOffset: search.llmRequest }
+    : search.scriptExecution
+      ? { kind: "scriptExecution", executionId: search.scriptExecution }
+      : search.event
+        ? { kind: "event", offset: search.event }
+        : null;
+  const onInspect = useCallback(
+    (next: Inspected) =>
+      void navigate({
+        to: "/agents",
+        search: (prev) => ({
+          ...prev,
+          llmRequest: next?.kind === "llmRequest" ? next.llmRequestOffset : undefined,
+          scriptExecution: next?.kind === "scriptExecution" ? next.executionId : undefined,
+          event: next?.kind === "event" ? next.offset : undefined,
+        }),
+        replace: true,
+      }),
+    [navigate],
+  );
+  const inspect = useMemo<Inspect>(
+    () => ({
+      llmRequest: (llmRequestOffset) => onInspect({ kind: "llmRequest", llmRequestOffset }),
+      scriptExecution: (executionId) => onInspect({ kind: "scriptExecution", executionId }),
+    }),
+    [onInspect],
+  );
+  const signedUrl = useCallback(
+    async (filePath: string) => {
+      if (!context) throw new Error("not connected");
+      return z
+        .object({ url: z.string() })
+        .parse(await context.invoke(["itx", "files", ["get", filePath], ["url"]])).url;
+    },
+    [context],
+  );
+  const view = search.view || "chat";
+  const status = !facet.success
     ? {
-        text: live.status === "error" ? `Live state unavailable — ${live.error}` : "Connecting…",
-        dot: "",
+        text: live.status === "error" ? "Live state unavailable" : "Connecting…",
+        tone: "muted" as const,
       }
-    : view.data.paused
-      ? { text: `Paused — ${view.data.paused.reason}`, dot: "dot-amber" }
-      : Object.keys(view.data.activeScriptExecutions).length > 0
+    : facet.data.paused
+      ? { text: `Paused — ${facet.data.paused.reason}`, tone: "amber" as const }
+      : Object.keys(facet.data.activeScriptExecutions).length > 0
         ? {
-            text: `Running a script${feed.activity ? ` · ${feed.activity}` : ""}`,
-            dot: "dot-green dot-live",
+            text: `Running a script${feed.state.summaryActivity ? ` · ${feed.state.summaryActivity}` : ""}`,
+            tone: "live" as const,
           }
-        : view.data.openRequest
-          ? { text: `Thinking · ${view.data.openRequest.model}`, dot: "dot-green dot-live" }
-          : view.data.pendingLlmRequestTrigger
-            ? { text: "About to think", dot: "dot-green dot-live" }
-            : { text: "Idle", dot: "" };
-
-  const end = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    end.current?.scrollIntoView({ block: "end" });
-  }, [feed.rows.length, caughtUp]);
-
+        : facet.data.openRequest
+          ? { text: `Thinking · ${facet.data.openRequest.model}`, tone: "live" as const }
+          : facet.data.pendingLlmRequestTrigger
+            ? { text: "About to think", tone: "live" as const }
+            : { text: "Idle", tone: "muted" as const };
   return (
-    <>
-      <p className="strip">
-        <span className={`dot ${status.dot}`} />
-        {status.text}
-      </p>
-      {error && <p id="error">{error}</p>}
-      <div className="feed" aria-live="polite">
-        {caughtUp && feed.rows.length === 0 && <p className="muted">Nothing said yet.</p>}
-        {feed.rows.map((row) => (
-          <FeedRow key={row.offset} row={row} context={context} />
-        ))}
-        <div ref={end} className="feed-end" />
-      </div>
-      <Composer project={project} path={path} />
-    </>
-  );
-}
-
-function FeedRow({ row, context }: { row: Row; context: Context | undefined }) {
-  switch (row.kind) {
-    case "prompt":
-      return (
-        <details className="script row note">
-          <summary>System prompt</summary>
-          <pre>{row.text}</pre>
-        </details>
-      );
-    case "user":
-      return (
-        <div
-          className="row user"
-          title={`${row.who ? `${row.who} · ` : ""}${new Date(row.at).toLocaleString()}`}
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="flex shrink-0 items-center gap-3 px-4 pb-1 pt-2.5">
+        <SidebarTrigger className="-ml-1 md:hidden" />
+        <span className="truncate font-mono text-sm">{path}</span>
+        <span
+          className="flex min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground"
+          title={live.error}
+          data-status={status.tone}
         >
-          {row.text}
-          {row.files.map((file) => (
-            <Attachment key={file.path} file={file} context={context} />
-          ))}
-        </div>
-      );
-    case "assistant":
-      return (
-        <div className="row assistant">
-          <Markdown remarkPlugins={[remarkGfm]}>{row.markdown}</Markdown>
-        </div>
-      );
-    case "script":
-      return (
-        <details className="script row">
-          <summary>
-            {row.label || "Ran a script"}
-            {row.settlement
-              ? row.settlement.status === "failed"
-                ? " — failed"
-                : ""
-              : " — running…"}
-          </summary>
-          <pre>{row.code}</pre>
-          {row.settlement && (
-            <pre>
-              {row.settlement.status === "failed"
-                ? row.settlement.error
-                : row.settlement.result === undefined
-                  ? "(returned nothing)"
-                  : JSON.stringify(row.settlement.result, null, 2)}
-            </pre>
-          )}
-        </details>
-      );
-    case "note":
-      return <p className={`row note${row.amber ? " amber" : ""}`}>{row.text}</p>;
-  }
-}
-
-/** An image attachment renders through a signed URL on the project host; anything else is its name. */
-function Attachment({
-  file,
-  context,
-}: {
-  file: z.infer<typeof FileAttachment>;
-  context: Context | undefined;
-}) {
-  const [url, setUrl] = useState<string>();
-  const image = file.contentType.startsWith("image/");
-  useEffect(() => {
-    if (!context || !image) return;
-    let disposed = false;
-    void context
-      .invoke(["itx", "files", ["get", file.path], ["url"]])
-      .then((signed) => !disposed && setUrl(z.object({ url: z.string() }).parse(signed).url))
-      .catch(() => undefined);
-    return () => void (disposed = true);
-  }, [context, file.path, image]);
-  if (image && url) return <img src={url} alt={file.filename} />;
-  return (
-    <div className="muted">
-      {file.filename} · {Math.ceil(file.size / 1024)} KB
-    </div>
-  );
-}
-
-function Composer({ project, path }: { project: string; path: string }) {
-  const { api } = Route.useRouteContext();
-  const [text, setText] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const fileInput = useRef<HTMLInputElement>(null);
-  async function send() {
-    const message = text.trim();
-    if (pending || (!message && files.length === 0)) return;
-    setPending(true);
-    setError(null);
-    try {
-      const attachments = await Promise.all(
-        files.map(
-          (file) =>
-            new Promise<{ contentType: string; filename: string; data: string }>(
-              (resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = () =>
-                  resolve({
-                    contentType: file.type,
-                    filename: file.name,
-                    data: String(reader.result),
-                  });
-                reader.onerror = () => reject(reader.error);
-                reader.readAsDataURL(file); // a data: URL — what itx.files.put accepts as a string
-              },
-            ),
-        ),
-      );
-      using itx = await api.projects.get(project);
-      await itx.invoke([
-        "itx",
-        "agents",
-        ["get", path],
-        ["message", { message: message || "(see attached)", files: attachments }],
-      ]);
-      setText("");
-      setFiles([]);
-      if (fileInput.current) fileInput.current.value = "";
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setPending(false);
-    }
-  }
-  return (
-    <form
-      className="composer"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void send();
-      }}
-    >
-      <textarea
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-            event.preventDefault();
-            void send();
+          <CircleIcon
+            className={cn(
+              "size-2 shrink-0",
+              status.tone === "live" && "animate-pulse fill-emerald-500 text-emerald-500",
+              status.tone === "amber" && "fill-amber-500 text-amber-500",
+              status.tone === "muted" && "fill-muted-foreground/40 text-muted-foreground/40",
+            )}
+          />
+          <span className="truncate">{status.text}</span>
+        </span>
+        <Tabs
+          value={view}
+          onValueChange={(value) =>
+            void navigate({
+              to: "/agents",
+              search: (prev) => ({ ...prev, view: value === "chat" ? undefined : "events" }),
+              replace: true,
+            })
           }
-        }}
-        placeholder="Say something to the agent… (Enter sends, Shift+Enter for a new line)"
-        aria-label="Message"
-      />
-      <div className="actions">
-        <button type="submit" disabled={pending || (!text.trim() && files.length === 0)}>
-          {pending ? "Sending…" : "Send"}
-        </button>
-        <input
-          ref={fileInput}
-          type="file"
-          accept="image/*"
-          multiple
-          aria-label="Attach images"
-          onChange={(event) => setFiles([...(event.target.files || [])])}
-        />
-        {error && <span id="error">{error}</span>}
-      </div>
-    </form>
+          className="ml-auto"
+        >
+          <TabsList className="h-8">
+            <TabsTrigger value="chat" className="text-xs">
+              Chat
+            </TabsTrigger>
+            <TabsTrigger value="events" className="text-xs">
+              Events
+              <span className="font-mono text-[10px] text-muted-foreground/70">
+                {events.length}
+              </span>
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </header>
+      {error ? <p className="px-4 py-2 text-sm text-destructive">{error}</p> : null}
+      {view === "events" ? (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <EventsList events={events} onOpen={(offset) => onInspect({ kind: "event", offset })} />
+        </div>
+      ) : (
+        <>
+          <Conversation className="min-h-0 flex-1">
+            <ConversationContent className="mx-auto w-full max-w-3xl gap-0 px-4 py-2 md:px-6">
+              {!caughtUp ? (
+                <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+                  <Spinner className="size-4" /> Reading the log…
+                </div>
+              ) : feed.items.length === 0 && !feed.state.live ? (
+                <Empty className="py-16">
+                  <EmptyHeader>
+                    <EmptyTitle>Nothing said yet</EmptyTitle>
+                    <EmptyDescription>
+                      Say something below. The agent answers with prose, or with a script it runs
+                      against the project.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              ) : null}
+              {feed.items.map((item) => (
+                <AgentFeedItemRow
+                  key={item.id}
+                  item={item}
+                  expanded={toggled.has(item.id)}
+                  onToggle={onToggle}
+                  inspect={inspect}
+                  signedUrl={signedUrl}
+                />
+              ))}
+              <AgentLiveActivity state={feed.state} inspect={inspect} />
+            </ConversationContent>
+            <ConversationScrollButton />
+          </Conversation>
+          <div className="shrink-0 px-4 pb-4 pt-2 md:px-6">
+            <Composer
+              onSend={async (message, files: OutgoingFile[]) => {
+                using itx = await api.projects.get(project);
+                await itx.invoke(["itx", "agents", ["get", path], ["message", { message, files }]]);
+              }}
+            />
+          </div>
+        </>
+      )}
+      <InspectorSheet events={events} inspected={inspected} onInspect={onInspect} />
+    </div>
   );
 }
