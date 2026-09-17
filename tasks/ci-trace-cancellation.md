@@ -5,7 +5,7 @@ size: small
 
 # Render CI traces after cancellation
 
-Worktree created; the failure is diagnosed. Regression coverage, the renderer fix, and real-run replay remain.
+The fix and regression coverage are implemented. The original cancelled run and a successful run render correctly. Full checks and PR review are in progress.
 
 ## Request and scope
 
@@ -15,10 +15,10 @@ The cancelled preview `9dsvdkskfv` records its finish job ending at `2026-09-17T
 
 ## Acceptance
 
-- [ ] Add a failing renderer regression for work starting after cancellation.
-- [ ] Keep unfinished steps, operations, and tests renderable and explicitly incomplete; inferred ends cannot precede their own starts.
-- [ ] Preserve measured start/end times and Depot timestamps; still reject invalid measured intervals.
-- [ ] Replay the original cancelled preview and check its report, including normal completed work.
+- [x] Add a failing renderer regression for work starting after cancellation. *Observed `Invalid span interval` in the shell, operation, and test cases before each fix.*
+- [x] Keep unfinished steps, operations, and tests renderable and explicitly incomplete; inferred ends cannot precede their own starts. *`assembleTrace` bounds inferred endpoints at their own start and explains that the enclosing finish was earlier.*
+- [x] Preserve measured start/end times and Depot timestamps; still reject invalid measured intervals. *Regression cases check recorded parent timestamps, valid measured intervals after cancellation, and reversed endpoints.*
+- [x] Replay the original cancelled preview and check its report, including normal completed work. *`9dsvdkskfv`: 206 valid spans, two zero-duration incomplete cleanup steps; successful `tmnqx7jv18`: 217 valid spans.*
 - [ ] Document the timing limitation, run required checks, and address PR review.
 
 ## Decisions
