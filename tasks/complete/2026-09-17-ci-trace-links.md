@@ -39,3 +39,7 @@ readable.
   readiness on the wait step and cleanup's direct link to the job; 11 tracing tests pass.
 - Step labels now prefer name, then ID, then normalized run command. Both label
   and bar tooltips show all three; IDs remain in the exported OTLP attributes.
+- Merge-head preview `p62v10jlvq` hit the shared dev/preview AI Gateway's
+  $10/day global cap. The owner approved raising it to $30/day, keeping the
+  $10/project/day and $3/stream/hour limits. Record the setting in the existing
+  reconciliation script so a main deployment retains it.
