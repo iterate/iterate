@@ -29,12 +29,7 @@ function ProjectsPage() {
   const hostOf = (projectId: string) => projectHostOf(info, projectId);
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Projects</h1>
-        <p className="text-sm text-muted-foreground">
-          Every project this session reaches, by organization. Open one to see what it holds.
-        </p>
-      </div>
+      <h1 className="text-2xl font-semibold tracking-tight">Projects</h1>
       {groups.length ? (
         groups.map((group) => (
           <section key={group.org.id || "other"} className="flex flex-col gap-3">
@@ -124,7 +119,6 @@ function CreateProject({ orgs }: { orgs: { id: string; name: string }[] }) {
     <Card>
       <CardHeader>
         <CardTitle>New project</CardTitle>
-        <CardDescription>A DNS-safe name: it becomes the project's host.</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={create} className="flex flex-col gap-3">
@@ -189,7 +183,6 @@ function CreateOrganization() {
     <Card>
       <CardHeader>
         <CardTitle>New organization</CardTitle>
-        <CardDescription>You become its owner; projects live inside one.</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={create} className="flex flex-col gap-3">

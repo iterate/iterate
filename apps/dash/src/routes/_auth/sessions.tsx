@@ -120,13 +120,7 @@ function SessionsPage() {
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
       <form ref={logout} method="post" action="/.auth/logout" hidden />
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Sessions</h1>
-        <p className="text-sm text-muted-foreground">
-          Each browser, connected client, and personal access token can be signed out independently.
-          Existing connections end within a minute.
-        </p>
-      </div>
+      <h1 className="text-2xl font-semibold tracking-tight">Sessions</h1>
       {error && (
         <p role="alert" className="text-sm text-destructive">
           {error}

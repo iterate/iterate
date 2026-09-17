@@ -312,10 +312,7 @@ function AccountMenu({ email }: { email: string }) {
                 <Avatar className="size-8 rounded-lg">
                   <AvatarFallback className="rounded-lg">{initials}</AvatarFallback>
                 </Avatar>
-                <span className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-medium">{email}</span>
-                  <span className="truncate text-xs text-muted-foreground">Signed in</span>
-                </span>
+                <span className="truncate text-left text-sm font-medium">{email}</span>
                 <ChevronsUpDown className="ml-auto" />
               </SidebarMenuButton>
             }
