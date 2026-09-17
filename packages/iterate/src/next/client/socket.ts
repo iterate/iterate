@@ -2,7 +2,7 @@
  *  tunnel flapping, a cold edge — the things a first attempt trips over. Resolves with the socket
  *  once it is OPEN; rejects with the last failure after the last attempt. The delays are the
  *  waits BETWEEN attempts (the first is immediate). */
-export const RETRY_DELAYS_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000, 8_000];
+const RETRY_DELAYS_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000, 8_000];
 
 export function openSocketWithRetry(
   url: string | URL,
