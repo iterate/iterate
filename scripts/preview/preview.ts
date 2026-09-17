@@ -63,7 +63,12 @@ import {
   CloudflarePreviewSlotDisplay,
   CloudflarePreviewState,
 } from "./state.ts";
-import { assertPreviewCiIdentity, PreviewCiIdentity, readPreviewCiResults } from "./ci-identity.ts";
+import {
+  assertPreviewCiDeployments,
+  assertPreviewCiIdentity,
+  PreviewCiIdentity,
+  readPreviewCiResults,
+} from "./ci-identity.ts";
 import { previewPlaywrightShards } from "./playwright-capacity-reporter.ts";
 import { CommitHistory } from "./commit-history.ts";
 import { planPreview } from "./change-plan.ts";
@@ -844,6 +849,13 @@ async function resolvePreviewCiSetup(options: PreviewCommandOptions) {
     ...options,
     requireCleanCheckout: false,
   });
+  const plan = await readPreviewCiPlan(target, runtime);
+  // Consumers use the immutable prepared report, not another runner's local cache.
+  target.report.state = plan.state;
+  return { target, runtime, plan };
+}
+
+async function readPreviewCiPlan(target: PreviewTarget, runtime: PreviewRuntime) {
   const { run } = target;
   const plan = PreviewCiPlan.parse(
     JSON.parse(
@@ -864,10 +876,7 @@ async function resolvePreviewCiSetup(options: PreviewCommandOptions) {
   }).trim();
   if (checkedOutSha !== plan.headSha)
     throw new Error("Preview CI checkout does not match prepared head.");
-  // Consumers start from the immutable prepared report, not mutable PR prose
-  // or a different runner's local report cache.
-  target.report.state = plan.state;
-  return { target, runtime, plan };
+  return plan;
 }
 
 async function runPreviewCiCommand(
@@ -1789,6 +1798,8 @@ type EraseOptions = PreviewCommandOptions & {
   ranHeadSha?: string;
   /** After post-test retirement, redeploy the tested apps so this preview can be used again. */
   restore?: boolean;
+  /** Verify restoration against this run's prepared CI deployment artifact. */
+  preparedCiPlan?: boolean;
 };
 
 /**
@@ -1830,16 +1841,28 @@ export async function erase(options: EraseOptions = {}) {
     }).trim()
   )
     throw new Error("Restoration requires a clean checkout of the tested revision.");
-  for (const slug of ["auth", "os", "streams-example-app"]) {
-    const entry = target.report.state.apps[slug];
-    if (!entry?.deployedWorkerVersion || entry.headSha !== options.ranHeadSha)
-      throw new Error(`Cannot restore ${slug}: no deployment recorded for this tested head.`);
+  const plan = options.preparedCiPlan ? await readPreviewCiPlan(target, runtime) : null;
+  if (plan) {
+    assertPreviewCiIdentity(plan, { ...plan, slot: slot.slug });
+    assertPreviewCiDeployments(plan.state.apps, report.state.apps);
+  } else {
+    for (const slug of ["auth", "os", "streams-example-app"]) {
+      const entry = report.state.apps[slug];
+      if (!entry?.deployedWorkerVersion || entry.headSha !== options.ranHeadSha)
+        throw new Error(`Cannot restore ${slug}: no deployment recorded for this tested head.`);
+    }
   }
   const before = structuredClone(report.state.apps);
   const startedAt = new Date().toISOString();
   // OS reset also wipes Auth's OAuth client records. Use the ordinary deploy
   // commands to reseed Auth and restore all code, secrets, assets and bindings.
-  const apps = [cloudflarePreviewApps.auth, ...selectPreviewCleanupApps([])];
+  // After testing an ancestor, restore the whole fleet from the tested checkout.
+  // Otherwise the report would mix ancestor and head SHAs, preventing later reuse.
+  const reused =
+    plan && Object.values(plan.state.apps).some((entry) => entry.headSha !== run.headSha);
+  const apps = reused
+    ? Object.values(cloudflarePreviewApps)
+    : [cloudflarePreviewApps.auth, ...selectPreviewCleanupApps([])];
   await report.update((state) => ({
     ...state,
     notice: "Tests finished; restoring the clean preview.",
@@ -1910,6 +1933,8 @@ export async function erase(options: EraseOptions = {}) {
         completedAt: new Date().toISOString(),
         apps: apps.map(({ slug }) => ({
           app: slug,
+          testedHeadSha: before[slug].headSha,
+          restoredHeadSha: report.state.apps[slug].headSha,
           testedVersion: before[slug].deployedWorkerVersion,
           restoredVersion: report.state.apps[slug].deployedWorkerVersion,
         })),

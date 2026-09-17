@@ -51,7 +51,7 @@ jobs:
           ref: ${{ inputs.head-sha }}
           fetch-depth: 0
       - name: Reconcile dependencies (baked)
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: node scripts/depot-ci/dependencies.mjs install
       - name: Decide preview work from the head commit
         id: plan
         env:
@@ -329,7 +329,7 @@ jobs:
           doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
           pnpm preview erase $PREVIEW_TARGET_ARGS
           --ran-head-sha "${{ inputs.head-sha }}"
-          ${{ needs.prepare.result == 'success' && '--restore' || '' }}
+          ${{ needs.prepare.result == 'success' && '--restore --prepared-ci-plan' || '' }}
       - name: Normalize and send preview test telemetry
         id: telemetry
         if: always()

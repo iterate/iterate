@@ -5,9 +5,8 @@ inherit an existing result? Start with
 [`planPreview`](../scripts/preview/change-plan.ts). The decision loop is at the
 top; Git and remote evidence live elsewhere.
 
-This no-PR branch is based on main after PR #2695 merged. Its diff contains
-ancestry selection and its settlement signal; the closed storage-wipe experiment
-is excluded.
+This change builds on PR #2695's park/restore lifecycle. It adds ancestry
+selection and an explicit settlement signal.
 
 | Head changes                  | Work                                                                   |
 | ----------------------------- | ---------------------------------------------------------------------- |
@@ -121,20 +120,24 @@ deployment version parsing and workflow wiring. Read-only live checks recognized
 successful and failed PR runs, a successful main run, and the current Cloudflare
 deployment response. The earlier CLI inherited PR #2693's successful result; that historical run now
 lacks the required settlement marker and is intentionally inconclusive.
-**A live gated workflow and successful tests-only reuse still need acceptance
-runs.** This is a no-PR review branch; no preview was claimed or deployed for it.
+**Live acceptance is in progress:** let a full PR run settle, push a test-only
+change and verify deployment reuse, then push a docs-only change and verify
+result inheritance. Wait for each entire run, including cleanup/restoration,
+before the next push.
 
-## Follow-up integration before rollout
+## Restoration after deployment reuse
 
-This restack preserves #2695's behavior rather than changing its lifecycle:
+CI restoration verifies the immutable preparation artifact's run, attempt, head,
+slot and exact recorded app deployments. The deployment SHA may be an ancestor;
+the test checkout remains the current head. A changed Worker version, source SHA,
+Worker name or URL refuses restoration. Retirement still happens first so missing
+provenance cannot leave test projects spending.
 
-- Restoration currently requires each app's recorded deployment SHA to equal
-  the tested head. A reused ancestor intentionally differs, so that guard must
-  learn about the prepared test/deployment identities before tests-only reuse
-  can complete restoration. Until then, it refuses restoration after retirement.
-- The early-green inheritance gap is addressed by `preview-settled`. The marker
-  is emitted only after validated test collection and successful restoration;
-  the reader requires it for both inherited outcomes and deployment reuse.
+After tests use an ancestor, restoration deploys the full fleet from the tested
+head. That leaves one recorded source revision for subsequent reuse, rather than
+a mix of head and ancestor apps. This is post-test work; preparation still skips
+its deploy. Ordinary full runs retain the existing three-app restoration.
 
-The restore-identity guard and live acceptance runs remain rollout blockers;
-this diff does not claim verified tests-only reuse.
+`preview-restoration.json` records tested and restored SHAs and Worker versions.
+`preview-settled` is published only after the restore succeeds. Main/manual runs
+continue to request full deployment and tests.

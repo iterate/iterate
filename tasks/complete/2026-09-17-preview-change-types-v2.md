@@ -6,13 +6,10 @@ base: main
 
 # Choose preview work from ordered change types
 
-Implemented and locally checked. The head-path decision loop, inherited red/green,
-safe reuse checks and workflow gating are complete. Live lookup checks passed;
-a gated CI run and successful tests-only reuse remain rollout acceptance work.
-Restacked without the failed storage-wipe experiment. No PR: review
-`codex/preview-change-types-v3` against `main` after PR #2695 merged. Explicit
-`preview-settled` evidence now gates inheritance/reuse. The restore-identity guard
-still needs integration before rollout; see `docs/preview-change-selection.md`.
+Implementation complete; live acceptance is in progress. The planner, explicit
+settlement marker, and restoration of reused deployments are wired. Remaining:
+observe full, tests-only, and docs-only PR runs in sequence without interruption,
+and handle review/CI feedback. Based on current main after #2695.
 
 ## Request and decisions
 
@@ -116,3 +113,12 @@ still needs integration before rollout; see `docs/preview-change-selection.md`.
   scoped lint and CLI help passed. A read-only lookup of the earlier successful
   #2695 run returned no inheritable result because it has no marker. No live
   gated workflow or publication was run on this compare-only branch.
+
+- PR acceptance follow-up: merged main at `35c662a72`, keeping planning in place
+  of cumulative workflow path filters. Restoration now validates the current CI
+  preparation artifact and the exact deployed app identities. Reused fleets are
+  restored fully from the tested head after cleanup so later reuse has one SHA.
+- [ ] Observe a complete initial PR run, including restoration and settlement.
+- [ ] Push only test changes; prove preparation reuses the existing deployment.
+- [ ] After settlement, push only docs changes; prove expensive preview jobs skip.
+- [ ] Handle review feedback and record links, timings and deployment evidence.
