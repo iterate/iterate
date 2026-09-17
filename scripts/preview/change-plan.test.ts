@@ -40,7 +40,6 @@ test("Docs is an explicit allowlist; shipped markdown remains product work", () 
       "configs/template/README.md",
       "specs/readme.md",
       "scripts/ci/status.test.ts",
-      "scripts/preview/change-plan.test.ts",
       "apps/os/widget.test.tsx",
       "pnpm-lock.yaml",
       ".npmrc",
@@ -56,7 +55,7 @@ test("Docs is an explicit allowlist; shipped markdown remains product work", () 
     ],
     Product: ["apps/os/prompts/agent.md"],
     Default: ["configs/template/README.md", ".npmrc"],
-    Tests: ["specs/readme.md", "scripts/preview/change-plan.test.ts", "apps/os/widget.test.tsx"],
+    Tests: ["specs/readme.md", "apps/os/widget.test.tsx"],
     CI: ["scripts/ci/status.test.ts"],
     Generated: ["pnpm-lock.yaml"],
   });
