@@ -21,7 +21,11 @@ export type ConsentView =
       kind: "consent";
       query: string;
       clientName: string;
+      /** the OAuth client id — what the page asks `/client-icon` for the client's picture by */
+      clientId: string;
       email: string;
+      /** the identity provider's picture of the signed-in person, when the sign-in brought one */
+      picture?: string;
       projects: Project[];
       orgs: Org[];
       projectBound: boolean;
@@ -104,7 +108,9 @@ export class Consent extends RpcTarget {
         query,
         denyLocation: denied.href,
         clientName: client?.clientName ?? request.clientId,
+        clientId: request.clientId,
         email: this.#grant.email,
+        picture: this.#grant.picture,
         scopes: request.scope,
         orgs: await directory(env.DB).listOrgs(this.#grant.userId),
         ...(await projectsForClient(env, request.clientId, this.#grant.userId)),

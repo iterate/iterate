@@ -21,6 +21,7 @@ import { appConfigOf } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import { Consent } from "./consent.ts";
 import { Grants } from "./grants.ts";
+import { oauthHelpers } from "./oauth.ts";
 import { IterateRpcTarget, SessionTeardown, type SessionRpcTarget } from "./session.ts";
 import type { Env as DurableObjectEnv } from "./iterate-context-durable-object.ts";
 
@@ -66,9 +67,9 @@ export async function signIn(
 // ── the issuer's pages ──
 
 /** The paths the issuer's pages own on the platform origin, open to a browser that is not signed in
- *  (worker.ts lets them through without a bearer): the two pages, their JSON, their files — and `/`,
- *  one static page (public/index.html) telling a browser this origin is deliberately headless and
- *  where the dash is. */
+ *  (worker.ts lets them through without a bearer): the two pages, their JSON, their files, the OAuth
+ *  client's picture (`clientIcon`) — and `/`, one static page (public/index.html) telling a browser
+ *  this origin is deliberately headless and where the dash is. */
 export const issuerPagePaths = [
   "/",
   "/login",
@@ -78,7 +79,50 @@ export const issuerPagePaths = [
   "/authorize.json",
   "/authorize.js",
   "/issuer.css",
+  "/iterate-logo.svg",
+  "/client-icon",
 ];
+
+/** The tools people connect, whose marks we ship (public/brands/, from @lobehub/icons-static-svg,
+ *  MIT): crisper than a favicon, and there for a client whose registration names no picture at all
+ *  (Codex registers dynamically, with a name). Matched on the client's name, home and id. */
+const brandMarks: [RegExp, string][] = [
+  [/claude|anthropic/i, "/brands/claude.svg"],
+  [/codex|openai|chatgpt/i, "/brands/openai.svg"],
+  [/cursor/i, "/brands/cursor.svg"],
+  [/iterate/i, "/iterate-logo.svg"],
+];
+
+/** GET /client-icon?client_id=… — the client's picture for the consent page's hero: its `logo_uri`,
+ *  else the mark we ship for it, else the favicon of its `client_uri` (else of the client id's
+ *  origin — a CIMD client's id is a URL). Fetched here rather than by the browser: a client's origin
+ *  may forbid embedding across origins (claude.ai's favicon answers with
+ *  `Cross-Origin-Resource-Policy: same-origin`), and the pages' CSP stays `img-src 'self'`. Only a
+ *  client the provider knows, and only an image; anything else is a 404, on which the page keeps
+ *  the client's initials. */
+async function clientIcon(request: Request, env: Env): Promise<Response> {
+  const clientId = new URL(request.url).searchParams.get("client_id") || "";
+  const client = await oauthHelpers(env)
+    .lookupClient(clientId)
+    .catch(() => null);
+  if (!client) return new Response("Not found", { status: 404 });
+  const about = [client.clientName, client.clientUri, clientId].join(" ");
+  const mark = brandMarks.find(([pattern]) => pattern.test(about))?.[1];
+  if (!client.logoUri && mark) return env.ASSETS.fetch(new URL(mark, request.url));
+  const home = client.clientUri || clientId;
+  const source = client.logoUri || (URL.canParse(home) ? new URL("/favicon.ico", home).href : null);
+  if (!source) return new Response("Not found", { status: 404 });
+  const upstream = await fetch(source, {
+    headers: { accept: "image/*" },
+    signal: AbortSignal.timeout(5_000),
+  }).catch(() => null);
+  const type = upstream?.headers.get("content-type") || "";
+  if (!upstream?.ok || !type.startsWith("image/"))
+    return new Response("Not found", { status: 404 });
+  return new Response(upstream.body, {
+    headers: { "content-type": type, "cache-control": "public, max-age=86400" },
+  });
+}
 
 const json = (body: unknown, status = 200) =>
   Response.json(body, { status, headers: { "cache-control": "no-store" } });
@@ -157,23 +201,29 @@ async function browserSession(
 }
 
 /** What the consent page posts (public/authorize.js): approve with the projects ticked (`["*"]` =
- *  every current and future project) and the scopes left ticked, or create an organization or a
- *  project first. */
+ *  every current and future project) and the scopes left ticked, or create a project first — in one
+ *  of the person's organizations (`org`), or in a new one named with it (`newOrg`): the one place
+ *  the consent flow creates an organization. */
 const ConsentAction = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("approve"),
     projects: z.array(z.string()),
     scopes: z.array(z.string()),
   }),
-  z.object({ action: z.literal("create-org"), name: z.string() }),
-  z.object({ action: z.literal("create-project"), org: z.string(), project: z.string() }),
+  z.object({
+    action: z.literal("create-project"),
+    project: z.string(),
+    org: z.string().optional(),
+    newOrg: z.string().optional(),
+  }),
 ]);
 
 /** GET /authorize is the consent page (public/authorize.html) for a signed-in browser — no session ⇒
  *  sign in first, and come back to this very URL. GET /authorize.json describes the request for the
  *  page (`consent.describe`: the client, the person's projects and organizations, the scopes asked
- *  for). POST /authorize is one of the page's three actions: approve, which answers the client's
- *  redirect, or create an organization or a project, which answer the refreshed description. */
+ *  for). POST /authorize is one of the page's two actions: approve, which answers the client's
+ *  redirect, or create a project, which answers the refreshed description (and the organization the
+ *  project went into, so a retry after a refused name lands in the same one). */
 async function authorizeHandler(
   request: Request,
   env: Env,
@@ -211,12 +261,11 @@ async function authorizeHandler(
           ? json({ error: result.error }, 400)
           : json({ redirectTo: result.redirectTo });
       }
-      if (action.action === "create-org") orgId = (await session.createOrg(action.name)).id;
-      else {
-        // the new project's context is the session's to hold; the teardown below lets it go
-        await session.projects.create({ project: action.project, orgId: action.org });
-        orgId = action.org;
-      }
+      // an empty project name is refused before a new organization is made for it
+      if (!action.project.trim()) return json({ error: "Enter a project name." }, 400);
+      orgId = action.org || (await session.createOrg(action.newOrg || "")).id;
+      // the new project's context is the session's to hold; the teardown below lets it go
+      await session.projects.create({ project: action.project, orgId });
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
@@ -243,6 +292,7 @@ export const issuerHandler: Handler = {
       return authorizeHandler(request, env, ctx);
     if (request.method === "POST") return new Response("Not found", { status: 404 });
     if (pathname === "/login.json") return loginState(request, env, ctx);
+    if (pathname === "/client-icon") return clientIcon(request, env);
     // the pages and their files, as they are in public/
     if (issuerPagePaths.includes(pathname)) return env.ASSETS.fetch(request);
     return new Response("Not found", { status: 404 });

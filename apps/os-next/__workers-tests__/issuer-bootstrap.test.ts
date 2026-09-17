@@ -54,7 +54,9 @@ test("first consent creates organization and project through the ordinary sessio
     resources: [`${origin}/mcp`],
   });
   const next = flow.url.pathname + flow.url.search;
-  const login = await startIssuerSession(bindings, user, next);
+  // the picture Google's sign-in brings rides the issuer grant to the consent page's "signed in as"
+  const picture = "https://lh3.googleusercontent.com/a/bootstrap=s96-c";
+  const login = await startIssuerSession(bindings, user, next, picture);
   expect(login.location).toBe(next);
   expect(login.setCookie).toMatch(/^__Host-itx-session=[\da-f-]+; HttpOnly; Secure;/);
   const headers = { Cookie: login.setCookie.split(";")[0]!, Origin: origin };
@@ -65,6 +67,8 @@ test("first consent creates organization and project through the ordinary sessio
   expect(await api.consent.describe(flow.url.search)).toMatchObject({
     kind: "consent",
     clientName: "Claude fixture",
+    clientId: client.clientId,
+    picture,
     orgs: [],
     projects: [],
   });
@@ -229,6 +233,11 @@ test("an issuer session minted before a scope existed still holds every scope â€
   expect((await old.info()).scopes).toEqual(["iterate", "account", "organizations:write"]);
   const org = await old.createOrg("Made with an old cookie");
   expect((await old.orgs()).map((candidate) => candidate.id)).toContain(org.id);
+});
+
+test("the consent page's client picture is a 404 for a client the provider does not know â€” the page keeps the initials", async () => {
+  const icon = await SELF.fetch(`${origin}/client-icon?client_id=nobody-registered-this`);
+  expect(icon.status).toBe(404);
 });
 
 test("a browser landing on the platform origin is told it is headless and where the dash is", async () => {
