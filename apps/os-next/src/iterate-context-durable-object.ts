@@ -286,6 +286,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // here: the first door to open names the wake (`appendWakeRecord` — `alarm()` says "alarm").
     this.ctx.blockConcurrencyWhile(async () => {
       this.#alarms.restore(await this.ctx.storage.getAlarm());
+      // A claim row's value is the epoch-ms `at` this DO wrote in `#claimFacetAlarm` (kv types it
+      // as unknown): read back as the number it was stored as.
       for (const [key, at] of this.ctx.storage.kv.list({ prefix: "facet-claim:" }))
         this.#facetClaims.set(key.slice("facet-claim:".length), at as number);
       // Initialize the log before accepting requests. The root config worker subscribes once; its
@@ -838,7 +840,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   releasePins(): void {
     if (this.#facetWorkInFlight === 0) {
       for (const facetName of this.#liveFacetNames)
-        this.#abortFacetIfRunning(facetName, "released by the test door");
+        this.#abortFacetIfRunning(facetName, "released for the test's eviction");
       this.#liveFacetNames.clear();
     }
     clearTimeout(this.#pinReleaseTimer);
@@ -867,8 +869,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     if (itxExpressionSteps.length === 0) throw new Error(`facet: name a method`);
     // A FACET ANSWERS RPC AND PLAIN HTTP — NEVER A WEBSOCKET. A socket terminates at the edge (a
     // session's /api pager socket on this DO, a project host's lent-stub upgrade leg), and the
-    // facet behind it is reached by itx expression; so the workers lane's release aborts an idle
-    // facet with nothing to lose, and no socket is ever held by a facet the parent cannot see.
+    // facet behind it is reached by itx expression; so the test release aborts an idle facet
+    // with nothing to lose, and no socket is ever held by a facet the parent cannot see.
     // Refused BEFORE the memo: an upgrade aimed at a facet materializes nothing.
     const [first] = itxExpressionSteps;
     if (

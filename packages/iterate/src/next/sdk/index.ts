@@ -121,7 +121,7 @@ export abstract class StreamProcessorDurableObject<
   catchUpFromLog(): Promise<void> {
     return this.#engine.catchUpFromLog();
   }
-  /** THE REVIVE door: the context's alarm pass calls it for a due claim — catch up, then run the
+  /** THE REVIVE: the context's alarm pass calls it for a due claim — catch up, then run the
    *  at-head pass, so an attempt the last incarnation was running is started again from state. */
   revive(): Promise<void> {
     return this.#engine.revive();
