@@ -423,12 +423,11 @@ describe("preview workflow scope", () => {
       projectHostnameBases: [],
       workerName: "dummy-petshop-preview-3",
     });
-    // Only the deploy workflow is path-filtered; cleanup deliberately has no
-    // paths list (it must run for every closed PR — see the cleanup-trigger
-    // test below), so it is not asserted here.
-    expect(readFileSync(resolve(repoRoot, ".depot/workflows/preview.yml"), "utf8")).toContain(
-      "- apps/dummy-petshop/**",
-    );
+    // Every head now reaches planning; app paths still guide manual deployments.
+    expect(
+      parseYaml(readFileSync(resolve(repoRoot, ".depot/workflows/preview.yml"), "utf8")).on
+        .pull_request.paths,
+    ).toBeUndefined();
   });
 
   test("resolves repository-owned preview origins without duplicating them in Doppler", () => {
@@ -467,12 +466,6 @@ describe("preview workflow scope", () => {
         "dummy-petshop": "PETSHOP_BASE_URL",
       },
     });
-    expect(readFileSync(resolve(repoRoot, ".depot/workflows/preview.yml"), "utf8")).toContain(
-      "- packages/iterate/**",
-    );
-    expect(readFileSync(resolve(repoRoot, ".depot/workflows/preview.yml"), "utf8")).toContain(
-      "- specs/**",
-    );
     expect(
       resolvePreviewTestBaseUrlEnvironment({
         app: os,

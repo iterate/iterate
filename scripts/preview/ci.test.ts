@@ -45,6 +45,18 @@ test("the lifecycle owner encloses every fixed shard and cleanup waits for their
   const root = resolve(import.meta.dirname, "../..");
   const caller = parse(readFileSync(resolve(root, ".depot/workflows/preview.yml"), "utf8"));
   const workflow = parse(readFileSync(resolve(root, ".depot/workflows/preview-run.yml"), "utf8"));
+  expect(caller.on.pull_request.paths).toBeUndefined();
+  expect(workflow.jobs.plan.steps[0].with["fetch-depth"]).toBe(0);
+  expect(workflow.jobs.prepare).toMatchObject({
+    needs: "plan",
+    if: "needs.plan.outputs.tests == 'true'",
+  });
+  expect(workflow.jobs.prepare.steps.find((step: any) => step.id === "prepare").run).toContain(
+    "--reuse-commit {0} --reuse-slot {1}",
+  );
+  expect(workflow.jobs.plan.steps.find((step: any) => step.id === "plan").run).toContain(
+    "inputs.all-apps",
+  );
   expect(caller.jobs.preview).toMatchObject({
     uses: "./.depot/workflows/preview-run.yml",
     concurrency: { "cancel-in-progress": false },
@@ -53,11 +65,17 @@ test("the lifecycle owner encloses every fixed shard and cleanup waits for their
     strategy: { "fail-fast": false, matrix: { shard: previewPlaywrightShards } },
   });
   expect(workflow.jobs.playwright.concurrency).toBeUndefined();
-  expect(workflow.jobs.apps.needs).toBeUndefined();
-  expect(workflow.jobs.playwright.needs).toBeUndefined();
+  expect(workflow.jobs.apps).toMatchObject({
+    needs: "plan",
+    if: "needs.plan.outputs.tests == 'true'",
+  });
+  expect(workflow.jobs.playwright).toMatchObject({
+    needs: "plan",
+    if: "needs.plan.outputs.tests == 'true'",
+  });
   expect(workflow.jobs.finish).toMatchObject({
-    needs: "prepare",
-    if: "always()",
+    needs: ["plan", "prepare"],
+    if: "always() && needs.plan.result == 'success' && needs.plan.outputs.tests == 'true'",
   });
   const steps = workflow.jobs.finish.steps;
   const green = steps.findIndex((step: any) => step.id === "tests_passed");
