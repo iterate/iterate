@@ -462,7 +462,12 @@ function AgentConversation({ project, path }: { project: string; path: string })
           </div>
         </>
       )}
-      <InspectorSheet events={events} inspected={inspected} onInspect={onInspect} />
+      <InspectorSheet
+        events={events}
+        live={feed.state.live}
+        inspected={inspected}
+        onInspect={onInspect}
+      />
     </div>
   );
 }
