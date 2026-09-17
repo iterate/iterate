@@ -1,4 +1,4 @@
-#include "iterate/kit/platforms/esp_idf_restart_note.h"
+#include "iterate/kit/platforms/restart_note.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -43,10 +43,10 @@ static const char *read_note_once(void) {
   return kept;
 }
 
-void iterate_kit_esp_restart_with_note(const char *why) {
+void iterate_kit_platform_restart_with_note(const char *why) {
   (void)snprintf(note_text, sizeof(note_text), "%s", why == NULL ? "" : why);
   note_magic = NOTE_MAGIC;
   esp_restart();
 }
 
-const char *iterate_kit_esp_last_restart_note(void) { return read_note_once(); }
+const char *iterate_kit_platform_last_restart_note(void) { return read_note_once(); }

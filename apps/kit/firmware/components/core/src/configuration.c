@@ -127,7 +127,7 @@ static bool valid_base_url(const char *value) {
         *cursor == '#') {
       /*
        * Store only an origin-like base. Allowing paths, userinfo, fragments, or
-       * escaped control characters would make fixed `/internal/rpc` endpoint
+       * escaped control characters would make the fixed `/api` endpoint
        * construction ambiguous and could redirect credentials unexpectedly.
        */
       return false;

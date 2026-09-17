@@ -18,7 +18,7 @@
  * wrapping near INT64_MAX and that an impossible delay range is rejected.
  */
 /*
- * THE VOICELAB REMOUNT BACKOFF, WITH THE DEVICE'S OWN BUDGET.
+ * THE VOICE_STREAM REMOUNT BACKOFF, WITH THE DEVICE'S OWN BUDGET.
  *
  * All four boards ran this gate and none of them ever reset it, so the delay
  * only ever grew: five transient failures walked it to the 30s ceiling and

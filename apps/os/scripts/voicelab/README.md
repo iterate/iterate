@@ -7,8 +7,12 @@ owns the protocol and Agent delegation documentation. The
 flashing, and hardware proof.
 
 `live-probe` connects directly to GPT-Live from this Mac. `duplex` and `ask`
-exercise the deployed stream and ordinary Agent. `talk` runs the Mac firmware
-client with continuous capture; `q` hangs up.
+exercise the deployed stream and ordinary Agent. `setup` installs the server
+side without playing audio. A conversation from this Mac's microphone and
+speaker is the board firmware's Mac target, which mounts os-next: from
+`apps/kit`, `pnpm firmware:build:host` then
+`firmware/.build/host/iterate-kit-mac --config <image>`;
+`apps/os-next/scripts/voice-board.ts --device <name>` is the proof.
 
 ## Commands
 
@@ -37,8 +41,8 @@ doppler run --config prd -- pnpm cli voicelab ask --project <slug> --setup \
   --requests '["Create notes/hello.md in my config repo containing hello world and commit it."]' \
   --verify 'return await itx.repo.readFile({ path: "notes/hello.md" })'
 
-# A conversation using this Mac's microphone and speaker.
-doppler run --config prd -- pnpm cli voicelab talk --project <slug>
+# Install this checkout's voice source and mount the agent on a stream, no audio.
+doppler run --config prd -- pnpm cli voicelab setup --project <slug>
 
 # Read the durable spoken record; add --json for machine-readable rows.
 doppler run --config prd -- pnpm cli voicelab transcript --project <slug> --path /agents/voice/<name>
@@ -48,10 +52,9 @@ doppler run --config prd -- pnpm cli voicelab device --project <slug> \
   --name home-assistant-voice-preview-edition --action health
 ```
 
-`talk` installs this checkout's voice source into the selected project before
-starting. `deploy` installs the published package instead. Both use the voice
-package's installer. `--kit-dir` or `ITERATE_KIT_DIR` selects a different firmware
-checkout explicitly; otherwise the Mac client builds from this worktree.
+`setup` installs this checkout's voice source into the selected project;
+`duplex --setup` and `ask --setup` run it first. `deploy` installs the
+published package instead. Both use the voice package's installer.
 
 ## Hardware proof
 

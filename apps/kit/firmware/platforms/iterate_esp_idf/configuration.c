@@ -1,4 +1,4 @@
-#include "iterate/kit/platforms/esp_idf_configuration.h"
+#include "iterate/kit/platforms/provisioning.h"
 
 #include "esp_partition.h"
 
@@ -30,11 +30,11 @@ enum {
 
 static const char iterate_kit_partition_label[] = "iterate_kit";
 
-static struct iterate_kit_esp_configuration_result result(
-    enum iterate_kit_esp_configuration_status status,
+static struct iterate_kit_platform_provisioning_result result(
+    enum iterate_kit_platform_provisioning_status status,
     enum iterate_kit_configuration_error configuration_error,
     int32_t platform_error) {
-  const struct iterate_kit_esp_configuration_result value = {
+  const struct iterate_kit_platform_provisioning_result value = {
     status,
     configuration_error,
     platform_error,
@@ -42,8 +42,8 @@ static struct iterate_kit_esp_configuration_result result(
   return value;
 }
 
-struct iterate_kit_esp_configuration_result
-iterate_kit_esp_read_configuration(
+struct iterate_kit_platform_provisioning_result
+iterate_kit_platform_read_provisioning(
     struct iterate_kit_configuration *configuration) {
   const esp_partition_t *partition;
   const void *mapped_image = NULL;
@@ -53,7 +53,7 @@ iterate_kit_esp_read_configuration(
 
   if (configuration == NULL) {
     return result(
-        ITERATE_KIT_ESP_CONFIGURATION_INVALID_ARGUMENT,
+        ITERATE_KIT_PLATFORM_PROVISIONING_INVALID_ARGUMENT,
         ITERATE_KIT_CONFIGURATION_INVALID_ARGUMENT,
         0);
   }
@@ -69,13 +69,13 @@ iterate_kit_esp_read_configuration(
       iterate_kit_partition_label);
   if (partition == NULL) {
     return result(
-        ITERATE_KIT_ESP_CONFIGURATION_PARTITION_NOT_FOUND,
+        ITERATE_KIT_PLATFORM_PROVISIONING_PARTITION_NOT_FOUND,
         ITERATE_KIT_CONFIGURATION_INVALID_ARGUMENT,
         0);
   }
   if (partition->size < ITERATE_KIT_CONFIGURATION_HEADER_SIZE) {
     return result(
-        ITERATE_KIT_ESP_CONFIGURATION_PARTITION_TOO_SMALL,
+        ITERATE_KIT_PLATFORM_PROVISIONING_PARTITION_TOO_SMALL,
         ITERATE_KIT_CONFIGURATION_TRUNCATED,
         0);
   }
@@ -89,7 +89,7 @@ iterate_kit_esp_read_configuration(
       &mapping);
   if (map_error != ESP_OK || mapped_image == NULL) {
     return result(
-        ITERATE_KIT_ESP_CONFIGURATION_MMAP_FAILED,
+        ITERATE_KIT_PLATFORM_PROVISIONING_MMAP_FAILED,
         ITERATE_KIT_CONFIGURATION_INVALID_ARGUMENT,
         (int32_t)map_error);
   }
@@ -107,30 +107,30 @@ iterate_kit_esp_read_configuration(
   esp_partition_munmap(mapping);
   if (decode_error != ITERATE_KIT_CONFIGURATION_OK) {
     return result(
-        ITERATE_KIT_ESP_CONFIGURATION_DECODE_FAILED,
+        ITERATE_KIT_PLATFORM_PROVISIONING_DECODE_FAILED,
         decode_error,
         0);
   }
   return result(
-      ITERATE_KIT_ESP_CONFIGURATION_OK,
+      ITERATE_KIT_PLATFORM_PROVISIONING_OK,
       ITERATE_KIT_CONFIGURATION_OK,
       0);
 }
 
-const char *iterate_kit_esp_configuration_status_name(
-    enum iterate_kit_esp_configuration_status status) {
+const char *iterate_kit_platform_provisioning_status_name(
+    enum iterate_kit_platform_provisioning_status status) {
   switch (status) {
-    case ITERATE_KIT_ESP_CONFIGURATION_OK:
+    case ITERATE_KIT_PLATFORM_PROVISIONING_OK:
       return "ok";
-    case ITERATE_KIT_ESP_CONFIGURATION_INVALID_ARGUMENT:
+    case ITERATE_KIT_PLATFORM_PROVISIONING_INVALID_ARGUMENT:
       return "invalid argument";
-    case ITERATE_KIT_ESP_CONFIGURATION_PARTITION_NOT_FOUND:
+    case ITERATE_KIT_PLATFORM_PROVISIONING_PARTITION_NOT_FOUND:
       return "partition not found";
-    case ITERATE_KIT_ESP_CONFIGURATION_PARTITION_TOO_SMALL:
+    case ITERATE_KIT_PLATFORM_PROVISIONING_PARTITION_TOO_SMALL:
       return "partition too small";
-    case ITERATE_KIT_ESP_CONFIGURATION_MMAP_FAILED:
+    case ITERATE_KIT_PLATFORM_PROVISIONING_MMAP_FAILED:
       return "flash map failed";
-    case ITERATE_KIT_ESP_CONFIGURATION_DECODE_FAILED:
+    case ITERATE_KIT_PLATFORM_PROVISIONING_DECODE_FAILED:
       return "decode failed";
   }
   return "unknown ESP configuration status";

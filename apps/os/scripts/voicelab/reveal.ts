@@ -1,5 +1,5 @@
-// Print a project's own ingress key, which is what a device or the host CLI
-// authenticates with.
+// Print a project's own ingress key, which is what a device authenticates
+// with.
 //
 // Every other secret in a project is write-only; this one is born readable
 // precisely so it can be handed to something outside the platform. It is the
