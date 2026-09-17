@@ -32,7 +32,7 @@ export default class CiStatus {
 
   /** Publish a milestone and optional step outputs for this exact job attempt. */
   async set(milestone: string, options: { values?: Record<string, string> } = {}) {
-    const values = Values.parse({ ...options.values, milestone });
+    const values = Values.parse(options.values || { milestone });
     // Keep coordination data small; artifact identities and full reasons belong elsewhere.
     const description = z
       .string()
@@ -42,8 +42,8 @@ export default class CiStatus {
           .map(([name, value]) => `${name}=${value}`)
           .join("; "),
       );
-    const workflow = await this.workflow();
-    const context = `ci/${this.workflowId}/${workflow.executions[0].executionId}/${this.jobId}/${this.attemptId}/${milestone}`;
+    await this.workflow();
+    const context = `ci/${milestone}/${this.jobId}/${this.attemptId}`;
     await this.request(
       "github",
       `/repos/${this.env.GITHUB_REPOSITORY}/statuses/${this.env.CI_HEAD_SHA}`,
@@ -79,7 +79,7 @@ export default class CiStatus {
           );
           linked = true;
         }
-        const context = `ci/${this.workflowId}/${workflow.executions[0].executionId}/${job.jobId}/${attempt.attemptId}/${milestone}`;
+        const context = `ci/${milestone}/${job.jobId}/${attempt.attemptId}`;
         // Read the signal AFTER liveness. A final status write followed by job
         // termination must not be mistaken for a producer that forgot to signal.
         for (let page = 1; ; page++) {
@@ -305,7 +305,7 @@ const Workflow = z.object({
   workflowId: z.string(),
   repo: z.string(),
   headSha: z.string(),
-  executions: z.array(z.object({ executionId: z.string(), execution: z.number() })),
+  executions: z.array(z.object({ execution: z.number() })),
   jobs: z.array(
     z.object({
       jobId: z.string(),

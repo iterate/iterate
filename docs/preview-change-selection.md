@@ -111,17 +111,19 @@ workflow run and attempt; only the deployed revision may be older. Cleanup still
 waits for all consumers to settle.
 
 The plan publishes `tests`, `deploy`, `commit`, and `slot` as string values in the
-`preview-plan` milestone's description (`tests=true; deploy=true; …; milestone=preview-plan`).
+`preview-plan` milestone's description (`tests=true; deploy=true; commit=…; slot=…`).
 `status.ts wait-for` writes those values to step outputs, so `prepare` reads `steps.plan.outputs.tests` and the
 reuse identity. Milestone descriptions accept small, single-line values (140
 characters total); reasons and artifacts stay in their existing logs/storage.
 Names and values are validated before publication; values cannot contain
 semicolons or newlines. The waiter converts semicolon separators into output
-lines directly. `{ ...options.values, milestone }` keeps the useful values first
-when GitHub truncates the description. Existing calls expose a `milestone`
-output without extra arguments.
+lines directly. `options.values || { milestone }` supplies a `milestone` output
+only when no values are provided.
 
-The signal identifies the exact Depot workflow execution, job and attempt.
+The context is `ci/<milestone>/<jobId>/<attemptId>`, with the milestone visible
+first. Depot's unique job and attempt IDs identify the producer; workflow and
+execution IDs add no disambiguation. Both sides still validate membership in
+the current workflow, checkout and repository, and reject retried workflows.
 Its `success` means **decision available**, including an inherited red decision:
 the plan job still fails, while `prepare` receives `tests=false` and stops after
 its wait. If planning fails before deciding, its termination fails the waiter.
