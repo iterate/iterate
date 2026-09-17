@@ -288,6 +288,7 @@ describe("preview deploy ordering", () => {
 describe("preview workflow scope", () => {
   test("includes shared preview orchestration paths", () => {
     expect(cloudflarePreviewSharedPaths).toContain("scripts/preview/**");
+    expect(cloudflarePreviewSharedPaths).toContain("scripts/depot-ci/**");
     expect(cloudflarePreviewSharedPaths).toContain("packages/ui/**");
     expect(cloudflarePreviewAdditionalTriggerPaths).toContain("apps/auth-example/**");
     // The preview deploy + e2e lifecycle is one Depot CI workflow; a change to

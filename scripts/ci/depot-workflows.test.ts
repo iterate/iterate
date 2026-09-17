@@ -276,6 +276,10 @@ describe("Depot validation capacity", () => {
         "**/package.json",
         "pnpm-lock.yaml",
         "pnpm-workspace.yaml",
+        "**/.npmrc",
+        ".pnpmfile.cjs",
+        "patches/**",
+        "scripts/depot-ci/dependencies.mjs",
         "scripts/depot-ci/bake-preview-ci-image.sh",
         ".depot/workflows/build-preview-ci-image.yml",
       ]),
@@ -295,7 +299,7 @@ describe("Depot validation capacity", () => {
     expect(checkout?.with).toMatchObject({ clean: false });
 
     const reconcile = job.steps?.find((step) => step.name === "Reconcile dependencies (baked)");
-    expect(reconcile?.run).toBe("pnpm install --frozen-lockfile --prefer-offline");
+    expect(reconcile?.run).toBe("node scripts/depot-ci/dependencies.mjs install");
     expect(job.steps?.map((step) => step.name)).not.toEqual(
       expect.arrayContaining(["Setup pnpm", "Setup Node", "Install Doppler CLI"]),
     );
