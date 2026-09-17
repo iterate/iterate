@@ -22,7 +22,7 @@ enum iterate_kit_itx_connection_state {
 /**
  * The connection state as a word, for `health()`.
  *
- * It was the one state in the mount chain nothing published, and a voicelab
+ * It was the one state in the mount chain nothing published, and a voice_stream
  * that had latched failed could not be told from one waiting on a connection
  * that had latched under it. Never NULL.
  */

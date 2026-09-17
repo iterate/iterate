@@ -22,13 +22,20 @@ test.each([
   [".npmrc", "color=false\n"],
   ["patches/change.patch", "new patch input\n"],
   ["external/index.js", "module.exports = 8;\n"],
-])("changed %s runs a frozen install", (file, contents) => {
-  using workspace = fixture();
-  workspace.run("seal");
-  const before = file === "pnpm-lock.yaml" ? readFileSync(join(workspace.cwd, file), "utf8") : "";
-  workspace.write(file, before + contents);
-  expect(workspace.run("install")).toContain("install required: dependency inputs changed");
-});
+])(
+  "changed %s runs a frozen install",
+  (file, contents) => {
+    using workspace = fixture();
+    workspace.run("seal");
+    const before = file === "pnpm-lock.yaml" ? readFileSync(join(workspace.cwd, file), "utf8") : "";
+    workspace.write(file, before + contents);
+    expect(workspace.run("install")).toContain("install required: dependency inputs changed");
+  },
+  // Each row seals a fixture and runs a real `pnpm install --frozen-lockfile`;
+  // the first row's cold pnpm ran 5,107 ms and 5,135 ms against the 5 s default
+  // on two PRs' CI (2026-09-17). Real work, not a wait: give it the room.
+  30_000,
+);
 
 test("a changed manifest with an unchanged lockfile still fails the frozen install", () => {
   using workspace = fixture();

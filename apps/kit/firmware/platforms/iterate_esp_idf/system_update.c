@@ -1,6 +1,6 @@
-#include "iterate/kit/platforms/esp_idf_system_update.h"
+#include "iterate/kit/platforms/system_update.h"
 
-#include "iterate/kit/platforms/esp_idf_restart_note.h"
+#include "iterate/kit/platforms/restart_note.h"
 
 #include <stdbool.h>
 #include <string.h>
@@ -140,7 +140,7 @@ static void update_task(void *context) {
      * reaches READY — a client whose one job is the connection proves itself
      * by connecting.
      */
-    iterate_kit_esp_restart_with_note("system-update");
+    iterate_kit_platform_restart_with_note("system-update");
     return;
   } while (0);
 
@@ -153,7 +153,7 @@ failed:
   vTaskDelete(NULL);
 }
 
-enum iterate_kit_status iterate_kit_esp_idf_system_update_begin(
+enum iterate_kit_status iterate_kit_platform_system_update_begin(
     void *context, const char *url, const char *sha256_hex) {
   (void)context;
   if (url == NULL || sha256_hex == NULL ||
