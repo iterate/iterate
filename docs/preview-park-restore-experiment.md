@@ -126,8 +126,9 @@ bounded observation, not a guarantee for every workload or instance type.
   provider promise. No repository protection settings changed. GitHub can allow
   a merge during cleanup, and that commit can turn red afterwards.
 - Failed restoration may leave a parked or partly restored preview. Test results
-  describe the earlier deployment; the receipt and PR notice distinguish the
-  new versions. The original test suite is not rerun after restoration.
+  describe the earlier deployment; the receipt distinguishes the new versions.
+  Successful restoration clears the temporary PR notice. The original test suite
+  is not rerun after restoration.
 - Cancellation turns the check non-green but cannot guarantee interrupted cleanup
   finishes. Existing slot reclamation and reset-on-acquire remain necessary.
 - Retained container namespaces still need the existing cleanup strategy; this

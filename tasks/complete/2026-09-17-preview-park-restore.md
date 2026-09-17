@@ -91,3 +91,6 @@ expired-test CI failure. No merge is authorized.
   under the workflow lock; it should not compare against the moving main tip.
   The restoration deploy disables reuse and omits the optional main-size display
   baseline. These two behaviors are unchanged.
+- Removed the successful-restoration notice at the user's request. Successful
+  PR bodies return to their ordinary appearance; version details stay in the
+  restoration receipt.

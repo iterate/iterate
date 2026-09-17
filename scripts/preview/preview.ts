@@ -1751,8 +1751,7 @@ export async function erase(options: EraseOptions = {}) {
   );
   await report.update((state) => ({
     ...state,
-    notice:
-      "Preview restored after retiring test data. Test results describe the run before restoration; app versions below describe the restored deployment.",
+    notice: null,
   }));
   return { ...result, restored: true };
 }
