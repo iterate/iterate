@@ -18,7 +18,7 @@ export const Route = createFileRoute("/_auth/sessions")({
   component: SessionsPage,
 });
 
-/** The dash asked for `account` and the person unticked it: the login door with the scopes asked
+/** The dash asked for `account` and the person unticked it: `/.auth/login` with the scopes asked
  *  for again re-consents (`/.auth/login` bounces a session that already holds them). */
 function AllowAccount() {
   const stepUp = `/.auth/login?${new URLSearchParams({

@@ -2,7 +2,7 @@
 // wrangler.jsonc (scripts/generate-wrangler-config.ts, written by the build vitest.global-setup.ts
 // runs) with wrangler's own reader, so the config is what wrangler sees — its top-level block, the
 // local one — and patch it so the real project-worker runs under createTestHarness (local workerd,
-// which bundles src/worker.ts itself). Shared by the e2e lane's global-setup (the one worker every
+// which bundles src/worker.ts itself). Shared by the e2e project's global-setup (the one worker every
 // file speaks to) and support/log-harness.ts (the second worker the console-reading file boots).
 
 import { dirname, join } from "node:path";
@@ -42,7 +42,7 @@ export function e2eWorkerConfig(platformOrigin = "http://127.0.0.1"): Unstable_R
       APP_CONFIG_MCP_ORIGIN: "",
       APP_CONFIG_PROJECT_HOSTNAME_BASE: "localhost",
       // One custom hostname (a project's apex outside the base) for the ingress test that proves the
-      // door; the project it names is registered by that test.
+      // custom-hostname branch; the project it names is registered by that test.
       APP_CONFIG_PROJECT_CUSTOM_HOSTNAMES: "custom-apex.test=custom-apex-project",
       APP_CONFIG_SESSION_SECRET: "e2e-session-secret",
       APP_CONFIG_SECRETS_KEY: "e2e-secrets-key",

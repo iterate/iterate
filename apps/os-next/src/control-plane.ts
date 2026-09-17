@@ -1,4 +1,4 @@
-// The fixed issuer shell: the OAuth AS's bindings, the sign-in door, and THE ISSUER'S TWO PAGES —
+// The fixed issuer shell: the OAuth AS's bindings, the sign-in POST, and THE ISSUER'S TWO PAGES —
 // /login and the /authorize consent. The pages are FILES — public/login.html and public/authorize.html,
 // with the stylesheet and a script each beside them — served through the assets binding: no
 // framework, no build. What a page shows it asks its JSON sibling for (/login.json, /authorize.json)
@@ -82,7 +82,7 @@ const json = (body: unknown, status = 200) =>
 
 /** /login.json — what the sign-in page (public/login.js) shows: who is signed in (continue, or switch
  *  account), or the sign-ins this deployment offers — the email form for test deployments, Google —
- *  and where to continue to. Signing in is the form's POST to `signInDoor` or the Google link
+ *  and where to continue to. Signing in is the form's POST to `loginFormPost` or the Google link
  *  (identity.ts); "switch account" ends the browser's session and returns here. Without a `next`
  *  the page is its own destination (the issuer has no home page): signed in, it says so. */
 async function loginState(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -103,7 +103,7 @@ async function loginState(request: Request, env: Env, ctx: ExecutionContext): Pr
 }
 
 /** The sign-in form's POST — a plain form, no script needed to sign in. */
-async function signInDoor(request: Request, env: Env): Promise<Response | null> {
+async function loginFormPost(request: Request, env: Env): Promise<Response | null> {
   if (request.method !== "POST" || new URL(request.url).pathname !== "/login") return null;
   const form = await request.formData();
   try {
@@ -122,7 +122,7 @@ async function signInDoor(request: Request, env: Env): Promise<Response | null> 
 }
 
 /** The signed-in browser's session, built the way rpc.ts builds one for `/api` — the same
- *  IterateRpcTarget, the same `authenticate({ type: "from-server-cookie" })` — for the consent door
+ *  IterateRpcTarget, the same `authenticate({ type: "from-server-cookie" })` — for `authorizeHandler`
  *  to call in-process. Null when the browser holds no session. */
 async function browserSession(
   request: Request,
@@ -171,7 +171,11 @@ const ConsentAction = z.discriminatedUnion("action", [
  *  page (`consent.describe`: the client, the person's projects and organizations, the scopes asked
  *  for). POST /authorize is one of the page's three actions: approve, which answers the client's
  *  redirect, or create an organization or a project, which answer the refreshed description. */
-async function consentDoor(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+async function authorizeHandler(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
   const url = new URL(request.url);
   const query = url.search;
   const page = url.pathname === "/authorize" && request.method !== "POST";
@@ -219,7 +223,7 @@ async function consentDoor(request: Request, env: Env, ctx: ExecutionContext): P
   }
 }
 
-/** The issuer's pages: the sign-in door, the two pages and their JSON, their files — with same-origin
+/** The issuer's pages: the sign-in POST, the two pages and their JSON, their files — with same-origin
  *  POST checks. Anything else on the platform origin is not a page — the dash lives on its own origin. */
 export const issuerHandler: Handler = {
   async fetch(request, env, ctx) {
@@ -227,13 +231,13 @@ export const issuerHandler: Handler = {
       return new Response("403: a cross-site request cannot act on this session\n", {
         status: 403,
       });
-    const door = await signInDoor(request, env);
-    if (door) return door;
+    const signedIn = await loginFormPost(request, env);
+    if (signedIn) return signedIn;
     const { pathname } = new URL(request.url);
     if (!["GET", "HEAD", "POST"].includes(request.method))
       return new Response("Method not allowed", { status: 405 });
     if (pathname === "/authorize" || (pathname === "/authorize.json" && request.method !== "POST"))
-      return consentDoor(request, env, ctx);
+      return authorizeHandler(request, env, ctx);
     if (request.method === "POST") return new Response("Not found", { status: 404 });
     if (pathname === "/login.json") return loginState(request, env, ctx);
     // the pages and their files, as they are in public/

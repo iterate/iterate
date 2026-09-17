@@ -1471,7 +1471,7 @@ authorization server — every token is bound to it, a foreign one refused); eve
 through to THE ISSUER'S PAGES — `/login` and `/authorize`, files in public/ the assets binding serves;
 the consent page's script asks `/authorize.json` what to show and posts approve / create an
 organization / create a project to `/authorize`, answered by a session built the way `/api` builds one (`consentDoor`); the one
-machine door beside them (`signInDoor`) is the sign-in form's plain POST — `POST /login`,
+machine endpoint beside them (`loginFormPost`) is the sign-in form's plain POST — `POST /login`,
 `/logout` (the session is the signed `__Host-itx-control-plane-session` cookie, `signClaims` under
 `APP_CONFIG_SESSION_SECRET`), `POST /projects` (a program creates projects over `/api`,
 `projects.create`), `POST /authorize`. The `/authorize` consent is THE PROJECT SELECTION: the user's

@@ -652,7 +652,7 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
     dopplerConfig: "prd",
     workerName: "os-next-prd",
     // THE HEADLESS PLATFORM: sign-in, consent, `/api`, the OAuth endpoints — two no-build pages and
-    // doors, nothing else a person looks at. `dash.iterate2.com` is the dash (apps/dash): sessions,
+    // the OAuth endpoints, nothing else a person looks at. `dash.iterate2.com` is the dash (apps/dash): sessions,
     // projects and organizations — an ordinary OAuth client of this issuer, like every other app.
     baseUrl: "https://os.iterate2.com",
     mcpBaseUrl: "https://mcp.iterate2.com",

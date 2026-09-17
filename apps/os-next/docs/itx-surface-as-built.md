@@ -664,7 +664,7 @@ skipped on 45 files (the deployed-only ones run against the deployed worker).
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----: |
 | the edge                 | `worker.ts` · `session.ts` · `iterate-context.ts` · `principal.ts` · `types.ts`                                                                                     | 1,250 |
 | the control plane        | `control-plane.ts` · `control-plane.sql`                                                                                                                            | ≈ 830 |
-| the issuer's pages       | `control-plane.ts` (`loginState`, `consentDoor`) · `public/` (login.html, authorize.html, issuer.css, login.js, authorize.js, \_headers)                            | ≈ 500 |
+| the issuer's pages       | `control-plane.ts` (`loginState`, `authorizeHandler`) · `public/` (login.html, authorize.html, issuer.css, login.js, authorize.js, \_headers)                       | ≈ 500 |
 | the DO                   | `iterate-context-durable-object.ts`                                                                                                                                 |   949 |
 | expressions + dispatch   | `context/expression.ts` · `dispatch.ts` · `invoke-handle.ts`                                                                                                        |   623 |
 | built-ins + loader       | `context/built-ins.ts` · `worker-loader.ts` · `durable-object-names.ts`                                                                                             |   859 |

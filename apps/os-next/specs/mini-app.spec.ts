@@ -30,7 +30,7 @@ test("a no-build mini-app served by a project persists a note through its own ca
   });
   expect(login.status(), await login.text().catch(() => "")).toBe(302);
 
-  // Create the project as that user, over the platform's operator door (the platform has no
+  // Create the project as that user, over the platform's operator endpoint (/internal/rpc) (the platform has no
   // dashboard: creating a project is the OS app's or a script's — here the fixture's).
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
   using owner = newHttpBatchRpcSession<IterateRpcTarget>(`${origin}/internal/rpc`);
@@ -38,7 +38,7 @@ test("a no-build mini-app served by a project persists a note through its own ca
     .authenticate({ type: "admin-secret", secret: adminSecret, as: { email } })
     .projects.create({ project });
   // The project's host: `<project>.<base>` — `localhost` under the local worker (scripts/dev.ts), the
-  // deployment's base otherwise (PROJECT_HOSTNAME_BASE, as the e2e lane spells it).
+  // deployment's base otherwise (PROJECT_HOSTNAME_BASE, as the e2e suite spells it).
   const base =
     new URL(origin).hostname === "localhost" ? "localhost" : process.env.PROJECT_HOSTNAME_BASE;
   if (!base) throw new Error("PROJECT_HOSTNAME_BASE is required against a deployed worker");

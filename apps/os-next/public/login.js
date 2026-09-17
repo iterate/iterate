@@ -1,6 +1,6 @@
 // public/login.js — the sign-in page's script. /login.json (control-plane.ts) says who is signed in
 // and which sign-ins this deployment offers; this renders that. Signing in itself is a plain form
-// post to /login (the email door) or a link to /.auth/identity (Google) — no script in the loop.
+// post to /login (the email sign-in) or a link to /.auth/identity (Google) — no script in the loop.
 (async () => {
   const root = document.getElementById("login");
   const el = (tag, props, ...children) => {

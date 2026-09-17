@@ -32,8 +32,8 @@ export type ConsentView =
   | { kind: "invalid"; description: string };
 
 /** A platform-served project CIMD client can receive only that project's authority — on a host
- *  under the project hostname base or on a project's custom apex (the same two doors worker.ts
- *  admits a project host through). */
+ *  under the project hostname base or on a project's custom apex (the same two hostname checks
+ *  worker.ts admits a project host with). */
 async function projectsForClient(env: Env, clientId: string, userId: string) {
   const projects = await directory(env.DB).listProjects(userId);
   const url = URL.canParse(clientId) ? new URL(clientId) : null;
@@ -145,9 +145,8 @@ export class Consent extends RpcTarget {
         return { error: "Choose at least one project you can access." };
       const scope = OAuthScopes.parse(
         (data.scopes || request.scope).filter(
-          (candidate): candidate is OAuthScope =>
-            request.scope.includes(candidate) &&
-            OAuthScope.options.includes(candidate as OAuthScope),
+          (candidate) =>
+            request.scope.includes(candidate) && OAuthScope.safeParse(candidate).success,
         ),
       );
       return await oauthHelpers(env).completeAuthorization({

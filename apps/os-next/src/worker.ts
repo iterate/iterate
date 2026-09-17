@@ -364,7 +364,7 @@ export default {
     if (browserResponse) return browserResponse;
     if (url.pathname.startsWith("/api")) return new Response("Not found", { status: 404 });
 
-    // The issuer's own doors are open to a browser that is not signed in yet: the pages and their
+    // The issuer's own paths are open to a browser that is not signed in yet: the pages and their
     // files (control-plane.ts `issuerPagePaths`), the token and registration endpoints, discovery.
     const issuerRoute =
       issuerPagePaths.includes(url.pathname) ||
@@ -380,7 +380,7 @@ export default {
     }
 
     // Everything else on the platform host is the CONTROL PLANE, in-process (src/control-plane.ts
-    // lists its doors: the OAuth AS, /mcp, the issuer's pages). One worker, one front door.
+    // lists its handlers: the OAuth AS, /mcp, the issuer's pages). One worker, one entry point.
     return oauthResponse(request, env, ctx, issuerHandler);
   },
 };

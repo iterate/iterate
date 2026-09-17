@@ -34,7 +34,7 @@ function DashboardPage() {
   );
 }
 /** The dash asked for `organizations:write` and the person unticked it at consent: creating an
- *  organization is off until they grant it — the login door with the scope asked for again, which
+ *  organization is off until they grant it — `/.auth/login` with the scope asked for again, which
  *  re-consents (the granted set is what `info.scopes` says, never what the dash requested). */
 function AllowOrganizations() {
   const stepUp = `/.auth/login?${new URLSearchParams({

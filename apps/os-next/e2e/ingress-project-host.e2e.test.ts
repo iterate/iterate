@@ -140,7 +140,7 @@ localOnly(
     await registerProject(projectId);
     const itx = openItx(projectId);
     await itx.provide("itx.apps.site", siteRule());
-    // the bundled default config worker: 404 — the door reached the project, nothing answered
+    // the bundled default config worker: 404 — the request reached the project, nothing answered
     const bare = await fetchProjectHost("custom-apex.test", "/");
     expect(bare.status, bare.text).toBe(404);
     await itx.provide("itx.worker", [
