@@ -81,6 +81,6 @@
     // the test code (424242) signs in through the page's real posts; the mailed code is tested with
     // a fake mailbox handed to login-code.ts directly
     "APP_CONFIG_TEST_EMAIL_LOGIN": "true",
-    "APP_CONFIG_LOGIN_EMAIL_FROM": "Iterate <login@control.test>",
+    "APP_CONFIG_LOGIN_EMAIL_FROM": "iterate <login@control.test>",
   },
 }

@@ -25,14 +25,14 @@ test("the mailed code signs in; the test code does not without test mode; five w
     ...(env as unknown as Env),
     EMAIL: { send } as unknown as Env["EMAIL"],
     APP_CONFIG_TEST_EMAIL_LOGIN: "false",
-    APP_CONFIG_LOGIN_EMAIL_FROM: "Iterate <login@control.test>",
+    APP_CONFIG_LOGIN_EMAIL_FROM: "iterate <login@control.test>",
   } as Env;
   const started = await startLoginCode(mailbox, "Person@Real-Mailbox.dev");
   expect(send).toHaveBeenCalledTimes(1);
   const message = send.mock.calls[0]![0];
   expect(message.to).toBe("person@real-mailbox.dev");
-  expect(message.from).toBe("Iterate <login@control.test>");
-  const code = /^(\d{6}) is your Iterate sign-in code$/.exec(message.subject)![1]!;
+  expect(message.from).toBe("iterate <login@control.test>");
+  const code = /^(\d{6}) is your iterate sign-in code$/.exec(message.subject)![1]!;
   expect(message.text).toContain(code);
   // no test mode here: 424242 is just a wrong code, and costs a try
   expect(await finishLoginCode(mailbox, withCookie(started.setCookie), "424242")).toMatchObject({

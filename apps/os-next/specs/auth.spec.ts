@@ -329,7 +329,7 @@ test("the same Notes app and dashboard work on their own origin and through a pr
     projectContext.provide("itx.apps.notes", ["itx", "worker"]),
   ]);
   await page.goto(notesOrigin);
-  await page.getByRole("link", { name: "Log in with Iterate", exact: true }).click();
+  await page.getByRole("link", { name: "Log in with iterate", exact: true }).click();
   await page
     .getByRole("heading", { name: `Authorize ${new URL(notesOrigin).host}`, exact: true })
     .waitFor();

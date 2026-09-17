@@ -185,9 +185,9 @@ test("copied issuer client metadata and every scope confer app permissions but n
   expect((await app.grants.list()).items).toHaveLength(2);
   const org = await app.createOrg("Clone organization");
   expect((await app.orgs()).map((org) => org.id)).toContain(org.id);
-  await expect(app.consent.describe(flow.url.search)).rejects.toThrow(/Sign in to Iterate/);
+  await expect(app.consent.describe(flow.url.search)).rejects.toThrow(/Sign in to iterate/);
   await expect(app.consent.approve({ query: flow.url.search, projects: ["*"] })).rejects.toThrow(
-    /Sign in to Iterate/,
+    /Sign in to iterate/,
   );
 });
 
@@ -210,7 +210,7 @@ test("an issuer session minted before a scope existed still holds every scope â€
     request,
     userId: user.id,
     scope: request.scope,
-    metadata: { clientName: "Iterate" },
+    metadata: { clientName: "iterate" },
     revokeExistingGrants: false,
     props: {
       kind: "issuer",

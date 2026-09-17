@@ -102,7 +102,7 @@ export const AppConfig = z.object({
    *  (agent/durable-object.ts) — Cloudflare's unified billing pays the provider; no key anywhere. */
   aiGatewayId: z.string().trim().default("default"),
   /** The address the sign-in code is mailed from (login-code.ts, through the `EMAIL` binding), on a
-   *  domain onboarded for Email Sending — `Iterate <login@iterate2.com>`. Blank ⇒ no email sign-in,
+   *  domain onboarded for Email Sending — `iterate <login@iterate2.com>`. Blank ⇒ no email sign-in,
    *  unless `testEmailLogin` (whose code needs no mail). */
   loginEmailFrom: z.string().trim().default(""),
   googleClientId: z.string().trim().default(""),

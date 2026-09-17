@@ -64,7 +64,7 @@
     );
     const data = await response
       .json()
-      .catch(() => ({ error: `Iterate answered ${response.status}. Try again.` }));
+      .catch(() => ({ error: `iterate answered ${response.status}. Try again.` }));
     if (response.status === 401) {
       location.assign(data.login || loginAgain);
       return new Promise(() => {});
@@ -121,7 +121,7 @@
       return;
     }
     const { clientName, email, picture, projects, orgs, projectBound, scopes, denyLocation } = view;
-    document.title = `Authorize ${clientName} — Iterate`;
+    document.title = `Authorize ${clientName} — iterate`;
     const names = new Map(orgs.map((org) => [org.id, org.name]));
     const orgIds = [...new Set(projects.map((project) => project.orgId))];
     const ticked = (id) => state.all || !state.excluded.has(id);

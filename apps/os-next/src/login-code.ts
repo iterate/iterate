@@ -81,9 +81,9 @@ export async function startLoginCode(env: Env, email: string): Promise<{ setCook
       const sent = await env.EMAIL.send({
         to: address,
         from: config.loginEmailFrom,
-        subject: `${code} is your Iterate sign-in code`,
-        text: `${code}\n\nEnter this code to sign in to Iterate. It expires in 10 minutes.\n\nIf you did not try to sign in, ignore this email.`,
-        html: `<p style="font:15px/1.5 ui-sans-serif,system-ui,sans-serif;color:#18181b;margin:0 0 8px">Enter this code to sign in to Iterate:</p><p style="font:600 32px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.2em;color:#18181b;margin:0 0 16px">${code}</p><p style="font:13px/1.5 ui-sans-serif,system-ui,sans-serif;color:#71717a;margin:0">It expires in 10 minutes. If you did not try to sign in, ignore this email.</p>`,
+        subject: `${code} is your iterate sign-in code`,
+        text: `${code}\n\nEnter this code to sign in to iterate. It expires in 10 minutes.\n\nIf you did not try to sign in, ignore this email.`,
+        html: `<p style="font:15px/1.5 ui-sans-serif,system-ui,sans-serif;color:#18181b;margin:0 0 8px">Enter this code to sign in to iterate:</p><p style="font:600 32px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.2em;color:#18181b;margin:0 0 16px">${code}</p><p style="font:13px/1.5 ui-sans-serif,system-ui,sans-serif;color:#71717a;margin:0">It expires in 10 minutes. If you did not try to sign in, ignore this email.</p>`,
       });
       console.log(
         JSON.stringify({ event: "login-code.sent", to: address, messageId: sent.messageId }),

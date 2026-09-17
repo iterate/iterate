@@ -667,7 +667,7 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
     artifactsNamespace: "project-worker-prd-repos",
     resourceNamePrefix: "project-worker-prd",
     testEmailLogin: true,
-    loginEmailFrom: "Iterate <login@iterate2.com>",
+    loginEmailFrom: "iterate <login@iterate2.com>",
     resources: {
       directoryDbId: "be6a3789-726a-4786-8b50-ef150c583b4e",
       oauthKvId: "a1a12d1cf1c342f8a389e5bf9dc5b760",
