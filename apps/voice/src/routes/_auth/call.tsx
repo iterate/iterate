@@ -31,6 +31,7 @@ function CallPage() {
   const [facts, setFacts] = useState<CallFact[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [lastStats, setLastStats] = useState<string>();
   const live = useLiveState<VoiceLiveView>(call?.itx, {
     key: "voice-agent",
     door: async () =>
@@ -66,6 +67,15 @@ function CallPage() {
     setBusy(true);
     try {
       await call?.hangUp();
+      if (call && audio) {
+        // What this browser saw: the one hop the relay cannot measure.
+        const speaker = await audio.speaker.stats();
+        const s = call.stats;
+        setLastStats(
+          `last call: handshake ${s.handshakeMs ?? "?"} ms · mic ${s.micFramesSent} frames sent, ${s.micFramesDropped} dropped · ` +
+            `speaker ${s.spkChunksReceived} chunks (${Math.round(s.spkMsReceived)} ms) received, ${speaker.playedMs} ms played, ${speaker.underruns} underruns`,
+        );
+      }
       await audio?.close();
     } finally {
       setCall(undefined);
@@ -101,6 +111,7 @@ function CallPage() {
         )}
       </p>
       {error && <p role="alert">{error}</p>}
+      {!call && lastStats && <p className="facts">{lastStats}</p>}
       {call && (
         <section aria-label="Live state">
           <p>

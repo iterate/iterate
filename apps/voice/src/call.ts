@@ -20,11 +20,22 @@ export type CallItx = {
 
 export type CallFact = { at: number; text: string };
 
+/** What this browser saw of the call, counted here because the relay cannot see the last hop. */
+export type CallStats = {
+  micFramesSent: number;
+  /** Frames the microphone produced while five appends were still in flight (a slow link). */
+  micFramesDropped: number;
+  spkChunksReceived: number;
+  spkMsReceived: number;
+  handshakeMs: number | null;
+};
+
 export type Call = {
   streamPath: string;
   activation: string;
   /** The conversation's context — what `useLiveState` subscribes to. */
   itx: CallItx;
+  stats: CallStats;
   hangUp(): Promise<void>;
 };
 
@@ -47,6 +58,13 @@ export async function startCall(input: {
     );
   });
   const call = (project as unknown as { cd(path: string): CallItx }).cd(streamPath);
+  const stats: CallStats = {
+    micFramesSent: 0,
+    micFramesDropped: 0,
+    spkChunksReceived: 0,
+    spkMsReceived: 0,
+    handshakeMs: null,
+  };
   const setup = project.invoke(["itx", "voice", ["setupVoiceAgent", { streamPath, activation }]]);
   const subscription = await call.subscribe({
     name: `web-${activation}`,
@@ -68,8 +86,14 @@ export async function startCall(input: {
         if (kind === "spk-frame") {
           if (p.activation !== activation) continue;
           if (p.clearSpeakerBufferBeforeFrame) audio.speaker.clear();
-          if (typeof p.pcm === "string" && p.pcm !== "") audio.speaker.push(base64ToInt16(p.pcm));
+          if (typeof p.pcm === "string" && p.pcm !== "") {
+            const pcm = base64ToInt16(p.pcm);
+            stats.spkChunksReceived += 1;
+            stats.spkMsReceived += pcm.length / 16;
+            audio.speaker.push(pcm);
+          }
         } else if (kind === "conversation-accepted") {
+          stats.handshakeMs = Number(p.handshakeTookMs);
           onFact({ at: Date.now(), text: `accepted (handshake ${String(p.handshakeTookMs)} ms)` });
         } else if (kind === "conversation-ended") {
           audio.onFrame = null;
@@ -85,8 +109,12 @@ export async function startCall(input: {
   let sending = 0;
   audio.onFrame = (pcm) => {
     // Fire and forget, twenty a second; a slow link drops frames rather than queueing them.
-    if (sending > 4) return;
+    if (sending > 4) {
+      stats.micFramesDropped += 1;
+      return;
+    }
     sending += 1;
+    stats.micFramesSent += 1;
     void call
       .append({
         type: `${T}mic-frame`,
@@ -107,6 +135,7 @@ export async function startCall(input: {
     streamPath,
     activation,
     itx: call,
+    stats,
     async hangUp() {
       clearInterval(keepalive);
       audio.onFrame = null;
