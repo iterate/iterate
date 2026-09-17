@@ -5,8 +5,8 @@
 // scheduled append, the one timer a facet has (workerd#6810: facets cannot set alarms). Killed
 // mid-call, the context keeps its alarm; the alarm's tick is a durable commit; the commit is pushed
 // to the agent row; the push materializes the facet, which catches up, finds the request open with
-// nobody running it, and runs it again. This lane is the only one that can kill a context on purpose
-// (evictDurableObject) and fire its alarm on demand (runDurableObjectAlarm).
+// nobody running it, and runs it again. These tests are the only ones that can kill a context on
+// purpose (evictDurableObject) and fire its alarm on demand (runDurableObjectAlarm).
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "capnweb";
 import { beforeAll, expect, test, vi } from "vitest";
