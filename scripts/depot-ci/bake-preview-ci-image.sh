@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
-pnpm_version="${PNPM_VERSION:-10.24.0}"
+pnpm_version="$(node -p 'require("./package.json").packageManager.replace(/^pnpm@/, "")')"
 export PNPM_CONFIG_STORE_DIR="${PNPM_CONFIG_STORE_DIR:-/home/runner/.pnpm-store}"
 
 run_as_root() {
@@ -39,7 +39,7 @@ pnpm --version
 echo "pnpm-store=$(pnpm store path)"
 
 echo "==> Installing workspace dependencies"
-pnpm install
+pnpm install --frozen-lockfile
 
 echo "==> Baking Node and pnpm onto system PATH"
 node_root="$(dirname "$(dirname "$(command -v node)")")"
@@ -65,3 +65,6 @@ du -sh "$(pnpm store path)" || true
 du -sh node_modules || true
 du -sh apps/streams-example-app/node_modules || true
 du -sh /home/runner/.cache/ms-playwright || true
+
+# Seal only after every setup step succeeds. This receipt travels with the tree.
+/usr/local/bin/node scripts/depot-ci/dependencies.mjs seal

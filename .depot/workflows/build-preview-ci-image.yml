@@ -8,6 +8,10 @@ on:
       - "**/package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
+      - "**/.npmrc"
+      - ".pnpmfile.cjs"
+      - "patches/**"
+      - "scripts/depot-ci/dependencies.mjs"
       - "scripts/depot-ci/bake-preview-ci-image.sh"
       - ".depot/workflows/build-preview-ci-image.yml"
   schedule:
@@ -16,10 +20,14 @@ on:
     # rarely spend startup time reconciling a stale snapshot. The reconcile
     # step remains the correctness authority. See docs/depot-ci.md.
     - cron: "17 4 * * 1"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      image-tag:
+        description: Destination tag (override for isolated experiments)
+        required: false
 
 env:
-  PREVIEW_CI_IMAGE: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+  PREVIEW_CI_IMAGE: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:${{ inputs.image-tag || 'node24-pnpm10-worktree' }}
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 
 jobs:
@@ -36,6 +44,7 @@ jobs:
           node-version: 24
 
       - name: Bake preview CI image contents
+        id: bake
         run: ./scripts/depot-ci/bake-preview-ci-image.sh
 
       # Keep node_modules and the pnpm store in the image. Consumers must use
@@ -44,4 +53,6 @@ jobs:
       - name: Snapshot preview CI image
         uses: depot/snapshot-action@v1
         with:
-          image: ${{ env.PREVIEW_CI_IMAGE }}
+          image: |-
+            ${{ env.PREVIEW_CI_IMAGE }}
+            0p91s0lz49.registry.depot.dev/iterate-preview-ci:deps-${{ steps.bake.outputs.fingerprint }}

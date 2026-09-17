@@ -25,6 +25,7 @@ defaults:
   run:
     shell: bash
 env:
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
   BASH_ENV: ${{ github.workspace }}/scripts/ci/tracing/shell.sh
   CI_TRACE_ENABLED: "1"
   CI_HEAD_SHA: ${{ inputs.head-sha }}
@@ -47,7 +48,7 @@ jobs:
           ref: ${{ inputs.head-sha }}
       - name: Reconcile dependencies (baked)
         id: install_dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: node scripts/depot-ci/dependencies.mjs install
       - name: Reset test artifacts
         id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
@@ -126,7 +127,7 @@ jobs:
           ref: ${{ inputs.head-sha }}
       - name: Reconcile dependencies (baked)
         id: install_dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: node scripts/depot-ci/dependencies.mjs install
       - name: Reset test artifacts
         id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
@@ -186,7 +187,7 @@ jobs:
           ref: ${{ inputs.head-sha }}
       - name: Reconcile dependencies (baked)
         id: install_dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: node scripts/depot-ci/dependencies.mjs install
       - name: Reset test artifacts
         id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
@@ -239,7 +240,7 @@ jobs:
           ref: ${{ inputs.head-sha }}
       - name: Reconcile dependencies (baked)
         id: install_dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: node scripts/depot-ci/dependencies.mjs install
       - name: Reset test artifacts
         id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
