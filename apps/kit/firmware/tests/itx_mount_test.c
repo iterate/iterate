@@ -163,9 +163,11 @@ static void mount_to_ready(struct fixture *fixture) {
  *
  * Retaining every intermediate remote handle was rejected because fixed Cap'n
  * Web tables would slowly exhaust and obsolete authority would survive longer
- * than needed. This proves each temporary handle is released as ownership
- * advances, that READY retains the project root AND the rule handle that is the
- * live provision, and that a clean close revokes the rule before the project.
+ * than needed. This proves each temporary PROMISE is released as ownership
+ * advances, that READY retains the SESSION (what the liveness probe asks — a
+ * `whoami()` the edge answers without waking the project's context), the
+ * project root AND the rule handle that is the live provision, and that a
+ * clean close revokes the rule, then the project, then the session.
  */
 static void mounts_and_retains_the_project_and_the_rule(void) {
   struct fixture fixture;
@@ -202,10 +204,9 @@ static void mounts_and_retains_the_project_and_the_rule(void) {
   receive(&fixture, "[\"resolve\",2,[\"export\",-11]]");
   assert(fixture.mount.state == ITERATE_KIT_ITX_MOUNT_PROVIDING);
   assert(fixture.mount.has_project_capability);
-  assert(!fixture.mount.has_session_capability);
-  assert(fixture.captured_count == 9U);
+  assert(fixture.mount.has_session_capability); /* kept: the probe's target */
+  assert(fixture.captured_count == 8U);
   assert(strcmp(fixture.captured[5], "[\"release\",2,1]") == 0);
-  assert(strcmp(fixture.captured[6], "[\"release\",-10,1]") == 0);
   /*
    * The match and the stub, positionally — and the match is a DOTTED
    * IDENTIFIER expression, which is why a device slug's hyphens are
@@ -213,33 +214,36 @@ static void mounts_and_retains_the_project_and_the_rule(void) {
    * in JavaScript as `root.clients.m5stick_s3.health()`.
    */
   assert(strcmp(
-      fixture.captured[7],
+      fixture.captured[6],
       "[\"push\",[\"pipeline\",-11,[\"provide\"],"
       "[\"itx.clients.m5stick_s3\",[\"export\",-1]]]]") == 0);
-  assert(strcmp(fixture.captured[8], "[\"pull\",3]") == 0);
+  assert(strcmp(fixture.captured[7], "[\"pull\",3]") == 0);
 
   receive(&fixture, "[\"resolve\",3,[\"export\",-12]]");
   assert(fixture.mount.state == ITERATE_KIT_ITX_MOUNT_READY);
   assert(fixture.mount.failure == ITERATE_KIT_ITX_MOUNT_FAILURE_NONE);
   /*
-   * READY owns the project root, which everything else is addressed from, and
-   * the RULE handle, which is the revocable thing. The local export is already
-   * gone: the outgoing call carries its own wire hold.
+   * READY owns the SESSION (the probe's target), the project root, which
+   * everything else is addressed from, and the RULE handle, which is the
+   * revocable thing. The local export is already gone: the outgoing call
+   * carries its own wire hold.
    */
+  assert(fixture.mount.has_session_capability);
   assert(fixture.mount.has_project_capability);
   assert(fixture.mount.has_rule_capability);
-  assert(!fixture.mount.has_session_capability);
   assert(!fixture.mount.has_local_capability);
-  assert(fixture.captured_count == 10U);
-  assert(strcmp(fixture.captured[9], "[\"release\",3,1]") == 0);
+  assert(fixture.captured_count == 9U);
+  assert(strcmp(fixture.captured[8], "[\"release\",3,1]") == 0);
 
   assert(iterate_kit_itx_mount_close(&fixture.mount) == CAPNWEB_OK);
   assert(fixture.mount.state == ITERATE_KIT_ITX_MOUNT_CLOSED);
   assert(fixture.captured_count == 12U);
   /* The rule first: it IS the provision, and dropping it would leave the
-   * match naming a stub this session no longer answers for. */
-  assert(strcmp(fixture.captured[10], "[\"release\",-12,1]") == 0);
-  assert(strcmp(fixture.captured[11], "[\"release\",-11,1]") == 0);
+   * match naming a stub this session no longer answers for. Then the project,
+   * then the session it was addressed from. */
+  assert(strcmp(fixture.captured[9], "[\"release\",-12,1]") == 0);
+  assert(strcmp(fixture.captured[10], "[\"release\",-11,1]") == 0);
+  assert(strcmp(fixture.captured[11], "[\"release\",-10,1]") == 0);
   capnweb_session_close(&fixture.session);
 }
 
@@ -316,8 +320,11 @@ static void provide_rejection_is_classified_and_keeps_the_project(void) {
   assert(!fixture.mount.has_rule_capability);
   assert(iterate_kit_itx_mount_close(&fixture.mount) == CAPNWEB_OK);
   assert(strcmp(
-      fixture.captured[fixture.captured_count - 1U],
+      fixture.captured[fixture.captured_count - 2U],
       "[\"release\",-11,1]") == 0);
+  assert(strcmp(
+      fixture.captured[fixture.captured_count - 1U],
+      "[\"release\",-10,1]") == 0);
   capnweb_session_close(&fixture.session);
 }
 
@@ -407,8 +414,12 @@ static void rejects_unusable_capability_matches_before_network_io(void) {
  * ONE AT A TIME AND ONCE A PERIOD, because the failure this must not become is
  * a probe every tick against a session with no room for one — which is how a
  * liveness fix becomes the outage. Why it probes at all: voice_device_profile.h.
+ * AND ON THE SESSION, NOT THE PROJECT: the session's `whoami()` is answered at
+ * the edge from the admission gate; the project's is a call into its Durable
+ * Object, which a device parked on it woke once a minute, appending a wake
+ * record to the project's log each time.
  */
-static void probes_the_root_once_a_period_and_one_at_a_time(void) {
+static void probes_the_session_once_a_period_and_one_at_a_time(void) {
   struct fixture fixture;
   size_t after_ready;
   mount_to_ready(&fixture);
@@ -421,12 +432,12 @@ static void probes_the_root_once_a_period_and_one_at_a_time(void) {
   assert(fixture.captured_count == after_ready + 2U);
   assert(strcmp(
       fixture.captured[after_ready],
-      "[\"push\",[\"pipeline\",-11,[\"whoami\"],[]]]") == 0);
+      "[\"push\",[\"pipeline\",-10,[\"whoami\"],[]]]") == 0);
   assert(strcmp(fixture.captured[after_ready + 1U], "[\"pull\",4]") == 0);
 
   /* Not again while one is in flight, and not again inside the period. */
   assert(!iterate_kit_itx_mount_probe_if_due(&fixture.mount, 1001U));
-  receive(&fixture, "[\"resolve\",4,{\"projectId\":\"prj-voice\"}]");
+  receive(&fixture, "[\"resolve\",4,{\"kind\":\"user\",\"id\":\"usr-kit\"}]");
   assert(!fixture.mount.probe_pending);
   assert(fixture.mount.probes_answered == 1U);
   assert(!iterate_kit_itx_mount_probe_if_due(
@@ -440,8 +451,8 @@ static void probes_the_root_once_a_period_and_one_at_a_time(void) {
   capnweb_session_close(&fixture.session);
 }
 
-/* A mount that is not READY has no root to ask, and asking anyway would be a
- * call on a zero capability. */
+/* A mount that is not READY has no session to ask, and asking anyway would be
+ * a call on a zero capability. */
 static void refuses_to_probe_before_ready(void) {
   struct fixture fixture;
   fixture_init(&fixture);
@@ -461,7 +472,7 @@ int main(void) {
   session_end_is_reported_without_retry();
   accepts_a_full_length_device_match();
   rejects_unusable_capability_matches_before_network_io();
-  probes_the_root_once_a_period_and_one_at_a_time();
+  probes_the_session_once_a_period_and_one_at_a_time();
   refuses_to_probe_before_ready();
   return 0;
 }
