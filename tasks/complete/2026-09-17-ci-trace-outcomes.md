@@ -26,3 +26,5 @@ Status: implemented locally. The collector is now a dependent preview job; dispa
 - [ ] Verify success/failure timing, both workflow entry points and the live uploaded report. Cancelled runs may miss a report if Depot cancels the collector too; no scheduled repair is retained.
 
 - Inline follow-up local validation: 412 scripts tests (37 tracing tests), scripts typecheck, focused lint and formatting pass. Config report handler passes strict scoped typecheck and all 19 tests. Independent review found a collector-only retry timing bug; a regression now proves it retains the original measured execution, and follow-up review found no blockers.
+
+- First inline run caught the early-green guard treating the queued report job as unfinished test work. `setPendingCheckGreen` now excludes the downstream trace job while requiring every other producer to succeed. The failed run remains useful evidence that collection runs after a failed cleanup job.
