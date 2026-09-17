@@ -14,7 +14,10 @@
 //   2. ONE EVENT AT A TIME inside a batch: this event's `blockProcessorWhile` work completes
 //      before the next event's `processEvent` starts (a FIFO chain, awaited per event).
 //   3. `runInBackground` work is deliberately NOT awaited — it may overtake later events; it is
-//      a droppable attempt whose outcome must be recoverable from state at the next at-head pass.
+//      a droppable attempt whose outcome must be recoverable from state at the next at-head pass —
+//      and that pass is OWED: while any attempt is in flight the engine holds a one-shot REVIVE on
+//      the context (a scheduled append, armed before the first attempt starts, retracted after the
+//      last settles), so a host that dies mid-attempt is woken, pushed, and runs its at-head again.
 //   4. ONE DURABLE COMMIT PER BATCH, after every event's blocking work settled — persist BEFORE
 //      advancing past the last DURABLE offset. A failed batch persists nothing, retried whole.
 //   5. The at-head pass: the last consumable event of a batch that reaches the stream head
@@ -67,7 +70,27 @@ export type ProcessorStream = {
     afterOffset?: number,
     limit?: number,
   ): Promise<{ events: StreamEvent[]; scannedThroughOffset: number; atHead: boolean }>;
+  /** The revive's timer: a one-shot scheduled append on the context (`itx.schedules.set`), and its
+   *  retraction BY RECEIPT — a receipt names one definition, so a retraction never reaches a newer set. */
+  schedule(input: ReviveSchedule): Promise<ScheduleReceipt>;
+  cancelSchedule(receipt: ScheduleReceipt): Promise<unknown>;
 };
+/** The revive as the engine schedules it: the pair key `["revive", name]`, the delay, the one tick. */
+export type ReviveSchedule = {
+  key: [string, string];
+  when: { afterMs: number };
+  events: { type: string; payload: { name: string } }[];
+};
+/** What a schedule's set answers: the definition's identity, to retract exactly it. */
+export type ScheduleReceipt = { key: string; scheduledAtOffset: number };
+
+/** The tick a revive lands: a durable commit pushed to the row like any other (a row enabled with a
+ *  named `consumes` has this type added at enable — os-next context/built-ins.ts). The engine treats
+ *  its own tick as the one-shot SPENT, and arms again only if work is still in flight. */
+export const PROCESSOR_REVIVED_EVENT = "events.iterate.com/processor/revived";
+/** How long after an attempt starts a dead host is revived: the recovery bound, and the re-arm
+ *  cadence of a long attempt (the tick lands, the engine finds work in flight, arms again). */
+export const REVIVE_AFTER_MS = 20_000;
 
 /** The contiguity proof a delivery carries: the half-open offset window `(after, through]`. A chain
  *  of these (each `after` === the previous `through`) is how a subscriber proves it missed nothing. */
@@ -94,9 +117,7 @@ export type ProcessEventArgs<State, Event = StreamEvent> = {
  *  (a subscriber's default). "*" = every durable event. A NAMED type opts that type in, INCLUDING
  *  ephemerals ("*" NEVER sweeps ephemerals) — so a live-state watcher spells
  *  `consumes: ["events.iterate.com/live-state/changed"]` and filters `payload.key` itself. The wake
- *  record (`stream/woken`) is a durable event like any other: a "*" row receives every incarnation's.
- *  That a wake makes no LOOP is the delivery loop's and the alarm's to keep (subscription-delivery.ts,
- *  alarm-coordinator.ts) — never a carve-out here. */
+ *  record (`stream/woken`) is a durable event like any other: a "*" row receives every incarnation's. */
 export function consumesEvent(
   consumes: readonly string[] | undefined,
   event: { type: string; ephemeral?: boolean },
@@ -173,15 +194,22 @@ export class ProcessorEngine<State> {
   readonly #waitUntilProcessedWaiters: { offset: number; resolve: () => void }[] = [];
   /** Born with the engine, so its epoch is minted once per incarnation. */
   readonly #liveState: LiveState<unknown>;
+  /** The row this engine serves — the facet's name; the slug when the host names none. */
+  readonly #name: string;
+  /** Rule 3's revive: attempts in flight, and the one-shot armed for them — the arm's promise
+   *  (pending, or settled to the receipt to retract by); null = none, as far as this engine knows. */
+  #backgroundWorkInFlight = 0;
+  #reviveArmed: Promise<ScheduleReceipt | null> | null = null;
 
   constructor(
     processor: StreamProcessor<State>,
-    deps: { stream: ProcessorStream; storage: ReduceCheckpointTable },
+    deps: { stream: ProcessorStream; storage: ReduceCheckpointTable; name?: string },
   ) {
     this.processor = processor;
     this.#contract = processor.contract;
     this.#stream = deps.stream;
     this.#storage = deps.storage;
+    this.#name = deps.name || this.#contract.slug;
     // ONE row, so cursor and state never disagree; one written under another contract version is
     // kept as #staleCheckpoint for the chain's first work.
     const { slug, version } = this.#contract;
@@ -402,6 +430,10 @@ export class ProcessorEngine<State> {
     const reducedThroughOffsetBefore = this.#reducedThroughOffset;
     const stateBefore = this.#reducedState;
     let state = stateBefore;
+    // Own revive tick in this batch: the one-shot is SPENT — a one-shot never re-arms itself, so a
+    // dead engine's stale tick lands once. The invariant is restored at the end of the batch, after
+    // the pass that may start work.
+    if (events.some((event) => this.#isOwnReviveTick(event))) this.#reviveArmed = null;
     const consumableEvents = events.filter(
       (event) =>
         reducesEvent(this.#contract.consumes, event) &&
@@ -439,6 +471,62 @@ export class ProcessorEngine<State> {
     // healed by the chain gap, never state. Re-projected after EVERY batch, not only when the reduce
     // moved, so a runtime field bumped inside `processEvent` publishes on its own.
     this.publishLiveState();
+    void this.#ensureReviveArmed();
+  }
+
+  // ── rule 3's revive: work in flight ⇒ a one-shot wake of the context armed ──
+
+  /** Start an attempt — ARMED FIRST, so a death at any point of the attempt is revived (rule 3's
+   *  "recoverable at the next at-head pass" needs a pass); the last attempt's end retracts the arm. */
+  #runInBackground(work: () => Promise<unknown>): void {
+    this.#backgroundWorkInFlight += 1;
+    void this.#ensureReviveArmed()
+      .then(work)
+      .catch((error) => reportIssue("processor.background", error, { slug: this.#contract.slug }))
+      .finally(() => {
+        this.#backgroundWorkInFlight -= 1;
+        if (this.#backgroundWorkInFlight === 0) this.#retractRevive();
+      });
+  }
+
+  /** The invariant, restored wherever it can have lapsed (an attempt started, a tick spent the
+   *  one-shot): work in flight ⇒ a revive armed. A refused schedule (a paused stream, a storage
+   *  refusal) is reported and is NOT an arm: the attempt runs, and the next attempt start or batch
+   *  end asks again. */
+  #ensureReviveArmed(): Promise<unknown> {
+    if (this.#backgroundWorkInFlight === 0) return Promise.resolve();
+    if (!this.#reviveArmed) {
+      const armed: Promise<ScheduleReceipt | null> = this.#stream
+        .schedule({
+          key: ["revive", this.#name],
+          when: { afterMs: REVIVE_AFTER_MS },
+          events: [{ type: PROCESSOR_REVIVED_EVENT, payload: { name: this.#name } }],
+        })
+        .catch((error) => {
+          reportIssue("processor.revive", error, { slug: this.#contract.slug });
+          if (this.#reviveArmed === armed) this.#reviveArmed = null;
+          return null;
+        });
+      this.#reviveArmed = armed;
+    }
+    return this.#reviveArmed;
+  }
+
+  #retractRevive(): void {
+    const armed = this.#reviveArmed;
+    this.#reviveArmed = null;
+    void armed
+      ?.then((receipt) => receipt && this.#stream.cancelSchedule(receipt))
+      .catch((error) => reportIssue("processor.revive", error, { slug: this.#contract.slug }));
+  }
+
+  /** The tick this engine scheduled carries `{ name }` (above); the type is read off the wire, so
+   *  the payload is viewed as a maybe-name-bearing object and compared, never trusted. */
+  #isOwnReviveTick(event: StreamEvent): boolean {
+    return (
+      event.type === PROCESSOR_REVIVED_EVENT &&
+      (event.payload as { name?: unknown } | undefined)?.name === this.#name
+    );
   }
 
   /** THE GUARDED REDUCE, shared by the live flow and the version replay. A reducer that throws on an
@@ -532,9 +620,7 @@ export class ProcessorEngine<State> {
       blockProcessorWhile: (work) => {
         blockers = blockers.then(() => work());
       },
-      runInBackground: (work) => {
-        void work().catch((error) => reportIssue("processor.background", error, { slug }));
-      },
+      runInBackground: (work) => this.#runInBackground(work),
       delivery: { caughtUp },
     });
     // STRICT PER-EVENT ORDERING (rule 2): drain the blocker chain to a FIXED POINT. A

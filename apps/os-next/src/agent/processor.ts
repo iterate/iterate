@@ -26,13 +26,22 @@ import {
   type AgentView,
   type ChatMessage,
   type FileAttachment,
+  type LlmUsage,
 } from "./contract.ts";
 import { parseCodemodeResponse } from "./codemode-format.ts";
 
 /** What the host injects: the model and the script runner, both reached through `itx` there. */
 export type AgentDeps = {
-  /** One model call over the conversation so far → the assistant's text. */
-  chat(input: { model: string; messages: ChatMessage[] }): Promise<{ text: string }>;
+  /** One STREAMED model call over the conversation so far: every provider event the stream carries
+   *  reaches `onChunk` as it arrives, with the text it adds ("" for a reasoning or bookkeeping
+   *  event); the call answers the whole text once the stream ends, with the usage the provider
+   *  reported. Aborting `signal` stops the stream; the call then rejects. */
+  stream(input: {
+    model: string;
+    messages: ChatMessage[];
+    signal: AbortSignal;
+    onChunk(chunk: unknown, textDelta: string): void;
+  }): Promise<{ text: string; usage?: LlmUsage }>;
   /** Run `async (itx) => …` against this context; what it returned (JSON), or a throw. */
   runScript(code: string): Promise<unknown>;
   /** A stored file's bytes (`itx.files.get(path).bytes()`); throws when it is gone. */
@@ -85,6 +94,45 @@ function fileHintLine(file: FileAttachment): string {
   return `[Attached file: ${file.filename} (${file.contentType}, ${String(file.size)} bytes) — read it with \`await itx.files.get(${JSON.stringify(file.path)}).bytes()\`]`;
 }
 
+/** apps/os's chunk-coalescing window: how much streamed output rides one `llm-response-chunks`
+ *  append — ~7 repaints a second, and one commit per window instead of per token. */
+const CHUNK_WINDOW_MS = 150;
+/** A window that grew past this lands early rather than as one oversized append. */
+const CHUNK_WINDOW_MAX_CHARS = 64_000;
+/** apps/os's idle watchdog: a stream that carries nothing for this long fails the attempt, so a
+ *  stalled provider never wedges a turn until its expiry. */
+const STREAM_IDLE_BUDGET_MS = 45_000;
+
+/** apps/os's table, the models this loop names; a conservative floor for the rest. OpenAI's
+ *  figures are the operating window (where pricing doubles), not the documented one. */
+export function contextWindowTokens(model: string): number {
+  if (/^gpt-(6|5)/.test(model)) return 272_000;
+  if (model.startsWith("@cf/meta/llama-4-scout")) return 131_072;
+  return 128_000;
+}
+
+/** The abort reason an interruption carries, so the runner tells it from a clock. */
+class InterruptedError extends Error {
+  constructor() {
+    super("interrupted by the person's next words");
+    this.name = "InterruptedError";
+  }
+}
+
+/** An append that may LOSE to an earlier one under the same idempotency key with a different
+ *  body — the settle of a request an interruption already settled — and then appends nothing:
+ *  the first settlement stands, the later one was never a fact. */
+async function appendUnlessLost(
+  append: AgentArgs["append"],
+  ...events: StreamEventInput[]
+): Promise<void> {
+  try {
+    await append(...events);
+  } catch (error) {
+    if (!/idempotency key .* already names a different event/.test(String(error))) throw error;
+  }
+}
+
 /** Bytes → base64, in chunks (a spread of a large array overflows the call stack). */
 function base64Of(bytes: Uint8Array): string {
   let binary = "";
@@ -118,7 +166,10 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
 
   /** The obligations THIS incarnation is running, so a later at-head pass over the same fold does
    *  not start a second attempt; the durable ground is the fold (`openRequest`, `activeScriptExecutions`). */
-  readonly #llmRequestsInFlight = new Set<number>();
+  readonly #llmRequestsInFlight = new Map<
+    number,
+    { controller: AbortController; partialText: string }
+  >();
   readonly #scriptExecutionsInFlight = new Set<string>();
 
   reduce({ state, event }: ReduceArgs<AgentView, AgentEvent>): AgentView | undefined {
@@ -271,6 +322,53 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
 
   processEvent(args: AgentArgs): undefined {
     const { event, state, append, blockProcessorWhile } = args;
+    // THE INTERRUPT (apps/os's): cancellation is a property of new input, never a command. The
+    // person's words abort whatever this incarnation is streaming, keep what streamed as an
+    // assistant item the next turn can see (no llmRequestOffset: a record, never parsed for a
+    // script), and settle the request cancelled — blocked, so an eviction can never leave the
+    // request open for the next at-head pass to adopt. Their reduce already moved the trigger; the
+    // settlement's own delivery re-runs the at-head pass, which then records the next request.
+    if (
+      event?.type === "events.iterate.com/agents/context-added" &&
+      event.payload.llmRequestPolicy?.behaviour === "interrupt-current-request" &&
+      (event.payload.role === "user" || event.payload.role === "developer") &&
+      state.openRequest
+    ) {
+      const open = state.openRequest;
+      const inFlight = this.#llmRequestsInFlight.get(open.requestedAtOffset);
+      inFlight?.controller.abort(new InterruptedError());
+      const partialText = inFlight?.partialText || undefined;
+      blockProcessorWhile(() =>
+        appendUnlessLost(
+          append,
+          ...(partialText
+            ? [
+                {
+                  type: "events.iterate.com/agents/context-added",
+                  idempotencyKey: this.idempotencyKey(
+                    `interrupted/${String(open.requestedAtOffset)}`,
+                  ),
+                  payload: {
+                    role: "assistant",
+                    content: `[Response interrupted by the user's next message; partial output follows]\n${partialText}`,
+                  },
+                } satisfies StreamEventInput,
+              ]
+            : []),
+          {
+            type: "events.iterate.com/agent/llm-request-settled",
+            idempotencyKey: this.idempotencyKey(`settle/${String(open.requestedAtOffset)}`),
+            payload: {
+              requestOffset: open.requestedAtOffset,
+              result: { status: "cancelled", reason: "interrupted-by-user-input", partialText },
+            },
+          },
+        ),
+      );
+      // Not at head this frame: the pass reads the pre-cancel fold and would adopt the very
+      // request the queued settlement cancels.
+      return;
+    }
 
     // ── per-event consequences, blocked: the event is delivered once ──
     // The assistant's answer, interpreted (mmkal's order: the status precedes the script so the step
@@ -400,7 +498,8 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
     }
 
     // An open request nobody HERE is running: run it — the first time and after an eviction are the
-    // same path — or settle it expired.
+    // same path (the engine's revive wakes a dead context while an attempt is in flight; the wake's
+    // push lands here) — or settle it expired.
     const open = state.openRequest;
     if (open && !this.#llmRequestsInFlight.has(open.requestedAtOffset)) {
       if (now >= open.expiresAt)
@@ -415,8 +514,9 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
           }),
         );
       else {
-        this.#llmRequestsInFlight.add(open.requestedAtOffset);
-        runInBackground(() => this.#runLlmRequest(open, state, append));
+        const inFlight = { controller: new AbortController(), partialText: "" };
+        this.#llmRequestsInFlight.set(open.requestedAtOffset, inFlight);
+        runInBackground(() => this.#runLlmRequest(open, state, append, inFlight));
       }
     }
 
@@ -445,14 +545,29 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
     }
   }
 
-  /** The model over the conversation up to the request; ONE batch settles it and lands the
-   *  assistant's words, so an eviction between the two is impossible. */
+  /** The model over the conversation up to the request, STREAMED: each coalescing window of provider
+   *  events is one ephemeral `llm-response-chunks` (a feed renders the answer as it is written); ONE
+   *  batch then settles the request, lands the assistant's words and reports the cost, so an eviction
+   *  between them is impossible. An interruption settles the request itself (processEvent) — an
+   *  aborted stream ends here silently, and a success that raced it loses on the settle key. */
   async #runLlmRequest(
     open: NonNullable<AgentView["openRequest"]>,
     state: AgentView,
     append: AgentArgs["append"],
+    inFlight: { controller: AbortController; partialText: string },
   ): Promise<void> {
     const startedAt = this.deps.now();
+    const { controller } = inFlight;
+    // Two clocks fail a stalled stream, never wedge it: the request's own expiry, and apps/os's
+    // idle budget since the last provider event.
+    const expiry = setTimeout(
+      () => controller.abort(new Error("the model did not finish before the request expired")),
+      Math.max(1_000, open.expiresAt - startedAt),
+    );
+    let idle = setTimeout(
+      () => controller.abort(new Error("the model stream stalled")),
+      STREAM_IDLE_BUDGET_MS,
+    );
     try {
       const items = state.contextItems.filter((item) => item.offset < open.requestedAtOffset);
       // The images the model will see: read now, the freshest bytes at the request; one that is
@@ -471,41 +586,121 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
           }
         }
       const messages = buildChatMessages(items, images);
-      let text: string;
-      try {
-        text = (await this.deps.chat({ model: open.model, messages })).text;
-      } catch (error) {
-        await append({
-          type: "events.iterate.com/agent/llm-request-settled",
-          idempotencyKey: this.idempotencyKey(`settle/${String(open.requestedAtOffset)}`),
-          payload: {
-            requestOffset: open.requestedAtOffset,
-            durationMs: this.deps.now() - startedAt,
-            result: {
-              status: "failed",
-              errorMessage: String(error instanceof Error ? error.message : error).slice(0, 4_000),
+      // THE CHUNK WINDOWS (apps/os's coalescing): provider events pile into one buffer; a window
+      // closes CHUNK_WINDOW_MS after its first event (or at the size cap) and lands as one
+      // ephemeral append, windows in order — each waits for the one before. Nothing is stored:
+      // the settlement below carries the durable text.
+      const llmRequestOffset = open.requestedAtOffset;
+      let window: unknown[] = [];
+      let windowChars = 0;
+      let windowOpen = false;
+      let sequence = 0;
+      let windows: Promise<void> = Promise.resolve();
+      const closeWindow = () => {
+        windowOpen = false;
+        if (window.length === 0) return;
+        const chunks = window;
+        window = [];
+        windowChars = 0;
+        const payload = { llmRequestOffset, chunks, sequence: sequence++ };
+        windows = windows
+          .then(() =>
+            append({
+              type: "events.iterate.com/agent/llm-response-chunks",
+              ephemeral: true,
+              payload,
+            }),
+          )
+          .then(
+            () => undefined,
+            () => undefined, // a lost window loses only its repaint; the settlement is the truth
+          );
+      };
+      const settle = async (
+        result: Extract<
+          AgentEvent,
+          { type: "events.iterate.com/agent/llm-request-settled" }
+        >["payload"]["result"],
+        ...alongside: StreamEventInput[]
+      ) => {
+        closeWindow();
+        await windows; // every window before the terminal fact
+        await appendUnlessLost(
+          append,
+          {
+            type: "events.iterate.com/agent/llm-request-settled",
+            idempotencyKey: this.idempotencyKey(`settle/${String(llmRequestOffset)}`),
+            payload: {
+              requestOffset: llmRequestOffset,
+              durationMs: this.deps.now() - startedAt,
+              result,
             },
           },
+          ...alongside,
+        );
+      };
+      let answer: { text: string; usage?: LlmUsage };
+      try {
+        answer = await this.deps.stream({
+          model: open.model,
+          messages,
+          signal: controller.signal,
+          onChunk: (chunk, textDelta) => {
+            if (controller.signal.aborted) return;
+            clearTimeout(idle);
+            idle = setTimeout(
+              () => controller.abort(new Error("the model stream stalled")),
+              STREAM_IDLE_BUDGET_MS,
+            );
+            // The partial accrues BEFORE buffering: an interrupt keeps the whole streamed text even
+            // when its last window never landed.
+            inFlight.partialText += textDelta;
+            window.push(chunk);
+            windowChars += JSON.stringify(chunk).length;
+            if (windowChars >= CHUNK_WINDOW_MAX_CHARS) return closeWindow();
+            if (windowOpen) return;
+            windowOpen = true;
+            void this.deps.sleep(CHUNK_WINDOW_MS).then(closeWindow);
+          },
+        });
+      } catch (error) {
+        // The interrupt path's story — it settled the request itself.
+        if (controller.signal.reason instanceof InterruptedError) return;
+        await settle({
+          status: "failed",
+          errorMessage: String(error instanceof Error ? error.message : error).slice(0, 4_000),
+          partialText: inFlight.partialText || undefined,
         });
         return;
       }
-      await append(
-        {
-          type: "events.iterate.com/agent/llm-request-settled",
-          idempotencyKey: this.idempotencyKey(`settle/${String(open.requestedAtOffset)}`),
-          payload: {
-            requestOffset: open.requestedAtOffset,
-            durationMs: this.deps.now() - startedAt,
-            result: { status: "succeeded", text },
-          },
-        },
+      // An answer that arrived after the interruption is the interrupt path's story too.
+      if (controller.signal.reason instanceof InterruptedError) return;
+      const { text, usage } = answer;
+      await settle(
+        { status: "succeeded", text, usage },
         {
           type: "events.iterate.com/agents/context-added",
-          idempotencyKey: this.idempotencyKey(`assistant/${String(open.requestedAtOffset)}`),
-          payload: { role: "assistant", content: text, llmRequestOffset: open.requestedAtOffset },
+          idempotencyKey: this.idempotencyKey(`assistant/${String(llmRequestOffset)}`),
+          payload: { role: "assistant", content: text, llmRequestOffset },
         },
+        ...(usage
+          ? [
+              {
+                type: "events.iterate.com/agent/token-usage-reported",
+                idempotencyKey: this.idempotencyKey(`usage/${String(llmRequestOffset)}`),
+                payload: {
+                  model: open.model,
+                  maxContextTokens: contextWindowTokens(open.model),
+                  inputTokens: usage.inputTokens,
+                  outputTokens: usage.outputTokens,
+                },
+              } satisfies StreamEventInput,
+            ]
+          : []),
       );
     } finally {
+      clearTimeout(expiry);
+      clearTimeout(idle);
       this.#llmRequestsInFlight.delete(open.requestedAtOffset);
     }
   }

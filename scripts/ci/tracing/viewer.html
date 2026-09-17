@@ -82,6 +82,44 @@
         border-radius: 10px;
         overflow: auto;
       }
+      .waterfall {
+        position: relative;
+        min-width: 770px;
+      }
+      .dependency-overlay {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+      .dependency-overlay path {
+        fill: none;
+        stroke: #f2c875;
+        stroke-width: 2;
+      }
+      .dependency-overlay text {
+        fill: #ffe0a2;
+        stroke: #10151e;
+        stroke-width: 5px;
+        paint-order: stroke;
+        font-size: 11px;
+        font-weight: 600;
+      }
+      #dependencies {
+        display: grid;
+        gap: 8px;
+        padding-left: 20px;
+        font-size: 13px;
+      }
+      #dependencies button {
+        padding: 3px 7px;
+        margin: 3px;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        text-align: left;
+      }
       .row {
         display: grid;
         grid-template-columns: 350px minmax(420px, 1fr);
@@ -106,7 +144,12 @@
         background: #141d2a;
         z-index: 1;
       }
-      .label span {
+      .span-name {
+        border: 0;
+        background: none;
+        padding: 0;
+        text-align: left;
+        min-width: 0;
         overflow: hidden;
         white-space: nowrap;
         text-overflow: ellipsis;
@@ -155,7 +198,20 @@
         background: #739ef5;
       }
       .phase-wait {
-        background: #d7a653;
+        background: repeating-linear-gradient(
+          120deg,
+          #c59a49,
+          #c59a49 4px,
+          #5e4c2e 4px,
+          #5e4c2e 8px
+        );
+      }
+      .milestone {
+        width: 6px !important;
+        transform: translateX(-3px) rotate(45deg);
+        height: 6px;
+        top: 14px;
+        background: #ffe0a2;
       }
       .phase-test,
       .passed {
@@ -220,6 +276,9 @@
         body {
           padding: 16px;
         }
+        .waterfall {
+          min-width: 650px;
+        }
         .row {
           grid-template-columns: 230px minmax(420px, 1fr);
           min-width: 650px;
@@ -237,7 +296,8 @@
       <p id="subtitle"></p>
       <p>
         Expand a job’s phases, then a step, to see individual tests and retries. Click any bar for
-        its timing and evidence.
+        its timing and evidence. Expand a Wait phase and select its wait step to see labelled
+        dependency arrows; tap a linked span below to reveal it.
       </p>
       <div class="stats" id="stats"></div>
       <p id="green-note"></p>
@@ -254,7 +314,7 @@
         <button id="download">Download OTLP JSON</button>
       </div>
       <div class="legend">
-        <span><i class="phase-setup"></i>Setup</span><span><i class="phase-wait"></i>Wait</span>
+        <span><i class="phase-setup"></i>Setup</span><span><i class="phase-wait"></i>Waiting</span>
         <span><i class="phase-test"></i>Test / passed</span
         ><span><i class="phase-finish"></i>Finish</span>
         <span><i class="failed"></i>Failed attempt</span
@@ -266,6 +326,7 @@
       <section id="detail" hidden>
         <h2 id="span-name"></h2>
         <a id="source" target="_blank" rel="noreferrer">Open in Depot</a>
+        <ul id="dependencies" aria-label="Span dependencies"></ul>
         <pre id="attributes"></pre>
       </section>
       <details>
@@ -284,14 +345,18 @@
         </p>
         <p>
           JavaScript actions (checkout and artifact transfers) do not yet have individual measured
-          spans. Their time is included in the enclosing job/phase. A striped span has no completion
-          marker; its end is bounded by the runner’s finish and is not an exact observed duration.
-          This report does not include request tracing inside deployed workers.
+          spans. Their time is included in the enclosing job/phase. Yellow stripes mean waiting.
+          Grey stripes mean a span has no completion marker; its end is bounded by the runner’s
+          finish and is not an exact observed duration. This report does not include request tracing
+          inside deployed workers.
         </p>
         <p>
           The download is an OpenTelemetry ExportTraceServiceRequest JSON object: one trace, stable
-          span IDs, parent IDs, nanosecond timestamps and attributes. This page is self-contained
-          and can be saved or shared without a tracing service.
+          span IDs, parent IDs, nanosecond timestamps, attributes and span links. Dependency arrows
+          point from a prerequisite to the wait that requires it. Selecting a span shows only its
+          own links, not its children's. They represent explicit waits, not inferred critical paths.
+          A missing milestone is labelled “not observed”; older runs have no dependency records.
+          This page is self-contained and can be saved or shared without a tracing service.
         </p>
       </details>
     </main>
@@ -309,6 +374,26 @@
           end: Number(BigInt(s.endTimeUnixNano) / 1000n) / 1000,
         }));
       const root = spans.find((s) => !s.parentSpanId);
+      const byId = new Map(spans.map((span) => [span.spanId, span]));
+      const dependencies = spans.flatMap((source) =>
+        (source.links || []).flatMap((link) => {
+          const target = byId.get(link.spanId);
+          if (!target || link.traceId !== source.traceId) return [];
+          const label =
+            link.attributes?.find((a) => a.key === "ci.link.label")?.value.stringValue ||
+            "Depends on";
+          return [{ source, target, label }];
+        }),
+      );
+      const rows = new Map();
+      function related(span) {
+        return dependencies.filter((edge) => edge.source === span || edge.target === span);
+      }
+      function spanLabel(span) {
+        let job = span;
+        while (job.parentSpanId && job.a["ci.kind"] !== "job") job = byId.get(job.parentSpanId);
+        return `${span.a["ci.step.name"] || span.name}${job === span ? "" : ` (${job.name})`}`;
+      }
       const children = new Map(
         spans.map((s) => [
           s.spanId,
@@ -335,8 +420,10 @@
       let open = new Set(
         spans.filter((s) => ["workflow", "job"].includes(s.a["ci.kind"])).map((s) => s.spanId),
       );
+      // Cancellation can finish the workflow before its cleanup markers stop.
+      const fullRange = [root.start, Math.max(...spans.map((span) => span.end))];
       let selected = root,
-        range = [root.start, root.end];
+        range = fullRange;
       const duration = (ms) =>
         ms < 1000
           ? `${Math.round(ms)}ms`
@@ -375,7 +462,7 @@
       const incomplete = spans.filter((s) => s.a["ci.status"] === "incomplete").length;
       if (incomplete || !tests.length)
         document.getElementById("notice").textContent =
-          `${incomplete ? `${incomplete} unfinished spans; striped durations are bounds. ` : ""}${!tests.length ? "No Playwright lifecycle records were observed in this run." : ""}`;
+          `${incomplete ? `${incomplete} unfinished spans; grey-striped durations are bounds. ` : ""}${!tests.length ? "No Playwright lifecycle records were observed in this run." : ""}`;
       function showDetail(span) {
         selected = span;
         document.getElementById("detail").hidden = false;
@@ -389,10 +476,42 @@
           `parentSpanId: ${span.parentSpanId}`,
         ].join("\n");
         document.getElementById("source").href = span.a["ci.url"] || root.a["ci.url"];
+        const list = document.getElementById("dependencies");
+        list.replaceChildren();
+        for (const edge of related(span)) {
+          const item = document.createElement("li");
+          for (const [index, endpoint] of [edge.source, edge.target].entries()) {
+            if (index) item.append(` ${edge.label.toLowerCase()} → `);
+            const button = document.createElement("button");
+            button.textContent = spanLabel(endpoint);
+            button.onclick = () => {
+              // Reveal the actual endpoint even when it was collapsed or filtered out.
+              let parent = endpoint.parentSpanId;
+              while (parent) {
+                open.add(parent);
+                parent = byId.get(parent).parentSpanId;
+              }
+              document.getElementById("search").value = "";
+              if (endpoint.start < range[0] || endpoint.end > range[1]) range = fullRange;
+              showDetail(endpoint);
+              render();
+              rows.get(endpoint.spanId).row.scrollIntoView({ block: "nearest" });
+            };
+            item.append(button);
+          }
+          list.append(item);
+        }
+        if (!list.children.length)
+          list.textContent = "No explicit dependencies recorded for this span.";
+        drawLinks();
       }
       function render() {
         const container = document.getElementById("trace");
         container.replaceChildren();
+        rows.clear();
+        const waterfall = document.createElement("div");
+        waterfall.className = "waterfall";
+        container.append(waterfall);
         const axis = document.createElement("div");
         axis.className = "row axis";
         const label = document.createElement("div");
@@ -408,11 +527,15 @@
           ticks.append(tick);
         }
         axis.append(label, ticks);
-        container.append(axis);
+        waterfall.append(axis);
         const query = document.getElementById("search").value.toLowerCase();
         const matches = new Set(
           spans
-            .filter((s) => `${s.name} ${s.a["test.file"] || ""}`.toLowerCase().includes(query))
+            .filter((s) =>
+              `${s.name} ${s.a["ci.step.id"] || ""} ${s.a["ci.command"] || ""} ${s.a["test.file"] || ""}`
+                .toLowerCase()
+                .includes(query),
+            )
             .map((s) => s.spanId),
         );
         if (query)
@@ -444,9 +567,14 @@
             open.has(span.spanId) ? open.delete(span.spanId) : open.add(span.spanId);
             render();
           };
-          const name = document.createElement("span");
+          const name = document.createElement("button");
+          name.className = "span-name";
+          name.setAttribute("aria-label", `Inspect ${spanLabel(span)}`);
           name.textContent = span.name;
-          name.title = span.name;
+          name.title =
+            span.a["ci.kind"] === "step"
+              ? `Name: ${span.a["ci.step.name"] || "—"}\nID: ${span.a["ci.step.id"] || "—"}\nRun: ${span.a["ci.command"] || "—"}`
+              : span.name;
           const time = document.createElement("small");
           time.className = "duration";
           time.textContent = duration(span.end - span.start);
@@ -454,6 +582,7 @@
           name.onclick = () => showDetail(span);
           const timeline = document.createElement("div");
           timeline.className = "timeline";
+          timeline.title = name.title;
           timeline.tabIndex = 0;
           timeline.setAttribute("role", "button");
           timeline.setAttribute("aria-label", `${span.name}, ${duration(span.end - span.start)}`);
@@ -466,18 +595,107 @@
           };
           const bar = document.createElement("div");
           const state = span.a["ci.status"];
-          bar.className = `bar phase-${span.a["ci.phase"] || ""} ${span.a["ci.kind"] === "test" && state === "passed" ? "passed" : ""} ${span.status.code === 2 ? "failed" : ""} ${state === "incomplete" || state === "cancelled" ? "incomplete" : ""}`;
+          bar.className = `bar ${span.a["ci.kind"] === "milestone" ? "milestone" : ""} phase-${dependencies.some((edge) => edge.source === span) ? "wait" : span.a["ci.phase"] || ""} ${span.a["ci.kind"] === "test" && state === "passed" ? "passed" : ""} ${span.status.code === 2 ? "failed" : ""} ${state === "incomplete" || state === "cancelled" ? "incomplete" : ""}`;
           if (span.end >= range[0] && span.start <= range[1]) {
             bar.style.left = `${Math.max(0, ((span.start - range[0]) / (range[1] - range[0])) * 100)}%`;
             bar.style.width = `${Math.max(0, ((Math.min(span.end, range[1]) - Math.max(span.start, range[0])) / (range[1] - range[0])) * 100)}%`;
             timeline.append(bar);
           }
           row.append(label, timeline);
-          container.append(row);
+          waterfall.append(row);
+          rows.set(span.spanId, { row, timeline });
           if (expanded) nested.forEach((s) => visit(s, depth + 1));
         }
         visit(root, 0);
+        drawLinks();
       }
+      function svgElement(name, attributes) {
+        const element = document.createElementNS("http://www.w3.org/2000/svg", name);
+        for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, value);
+        return element;
+      }
+      function drawLinks() {
+        const waterfall = document.querySelector(".waterfall");
+        if (!waterfall) return;
+        waterfall.querySelector(".dependency-overlay")?.remove();
+        for (const [id, { row }] of rows) row.classList.toggle("selected", id === selected.spanId);
+        const edges = related(selected);
+        if (!edges.length) return;
+        const rect = waterfall.getBoundingClientRect();
+        const scroller = document.getElementById("trace");
+        const svg = svgElement("svg", {
+          class: "dependency-overlay",
+          "aria-hidden": "true",
+          viewBox: `0 0 ${rect.width} ${rect.height}`,
+        });
+        const marker = svgElement("marker", {
+          id: "arrow",
+          viewBox: "0 0 10 10",
+          refX: "9",
+          refY: "5",
+          markerWidth: "5",
+          markerHeight: "5",
+          orient: "auto",
+        });
+        marker.append(svgElement("polygon", { points: "0,0 10,5 0,10", fill: "#f2c875" }));
+        const defs = svgElement("defs", {});
+        defs.append(marker);
+        svg.append(defs);
+        function endpoint(span) {
+          if (span.a["ci.evidence"] === "No runner attempt started") return null;
+          let visible = span;
+          while (visible && !rows.has(visible.spanId)) visible = byId.get(visible.parentSpanId);
+          // Do not attach arrows to an unrelated ancestor hidden by a search filter.
+          if (!visible || visible === root) return null;
+          const timeline = rows.get(visible.spanId).timeline.getBoundingClientRect();
+          if (span.end < range[0] || span.end > range[1]) return null;
+          return {
+            x:
+              timeline.left -
+              rect.left +
+              ((span.end - range[0]) / (range[1] - range[0])) * timeline.width,
+            y: timeline.top - rect.top + 17,
+            left: timeline.left - rect.left,
+          };
+        }
+        for (const edge of edges) {
+          const from = endpoint(edge.target),
+            to = endpoint(edge.source);
+          if (!from || !to || (from.x === to.x && from.y === to.y)) continue;
+          const bend = Math.min(rect.width - 10, Math.max(from.x, to.x) + 65);
+          svg.append(
+            svgElement("path", {
+              d: `M ${from.x} ${from.y} C ${bend} ${from.y}, ${bend} ${to.y}, ${to.x} ${to.y}`,
+              "marker-end": "url(#arrow)",
+            }),
+          );
+          const labelWidth = Math.min(220, scroller.clientWidth - from.left - 16);
+          const x = Math.max(
+            from.left + scroller.scrollLeft + 8,
+            Math.min(bend + 8, scroller.scrollLeft + scroller.clientWidth - labelWidth - 8),
+          );
+          const label = svgElement("text", {
+            x,
+            y: (from.y + to.y) / 2 - 5,
+          });
+          const lines = [""];
+          for (const word of edge.label.split(" ")) {
+            const last = lines.length - 1;
+            if (lines[last] && (lines[last].length + word.length + 1) * 6 > labelWidth)
+              lines.push(word);
+            else lines[last] += `${lines[last] ? " " : ""}${word}`;
+          }
+          for (const [index, line] of lines.entries()) {
+            const text = svgElement("tspan", { x, dy: index ? 13 : 0 });
+            text.textContent = line;
+            label.append(text);
+          }
+          svg.append(label);
+        }
+        waterfall.append(svg);
+      }
+      document.getElementById("trace").onscroll = drawLinks;
+      new ResizeObserver(drawLinks).observe(document.getElementById("trace"));
       document.getElementById("search").oninput = render;
       document.getElementById("expand").onclick = () => {
         open = new Set(spans.map((s) => s.spanId));
@@ -495,7 +713,7 @@
         render();
       };
       document.getElementById("reset").onclick = () => {
-        range = [root.start, root.end];
+        range = fullRange;
         render();
       };
       document.getElementById("download").onclick = () => {

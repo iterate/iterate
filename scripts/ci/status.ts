@@ -45,11 +45,16 @@ export default class CiStatus {
       },
     );
     console.log(`[ci:status] reached ${context}`);
+    if (process.env.CI_TRACE_ENABLED === "1")
+      console.log(
+        `@@ci-trace ${JSON.stringify({ kind: "milestone", name: milestone, time: Date.now() })}`,
+      );
   }
 
   /** Wait for a producer milestone, failing if its job stops without signaling. */
   async waitFor(producer: string, milestone: string) {
     console.log(`[ci:status] waiting for ${producer}/${milestone}`);
+    let linked = false;
     while (true) {
       const workflow = await this.workflow();
       const jobs = workflow.jobs.filter((job) => job.jobKey.endsWith(`:${producer}`));
@@ -58,6 +63,12 @@ export default class CiStatus {
       const job = jobs[0];
       const attempt = job.attempts[0];
       if (attempt) {
+        if (!linked && process.env.CI_TRACE_ENABLED === "1") {
+          console.log(
+            `@@ci-trace ${JSON.stringify({ kind: "dependency", targetId: attempt.attemptId, milestone })}`,
+          );
+          linked = true;
+        }
         const context = `ci/${this.workflowId}/${workflow.executions[0].executionId}/${job.jobId}/${attempt.attemptId}/${milestone}`;
         // Read the signal AFTER liveness. A final status write followed by job
         // termination must not be mistaken for a producer that forgot to signal.
@@ -93,6 +104,7 @@ export default class CiStatus {
       throw new Error("Specify a nonempty, unique set of consumer jobs");
     console.log(`[ci:status] waiting for all consumers: ${producers.join(", ")}`);
     let previous = "";
+    const linked = new Set<string>();
     while (true) {
       const workflow = await this.workflow();
       const jobs = producers.map((producer) => {
@@ -102,6 +114,19 @@ export default class CiStatus {
         if (matches[0].jobId === this.jobId) throw new Error("A job cannot wait for itself");
         return matches[0];
       });
+      if (process.env.CI_TRACE_ENABLED === "1") {
+        for (const job of jobs) {
+          const attempt = job.attempts[0];
+          // A queued job has no trace span yet. A skipped/cancelled job may never run.
+          if (!attempt && !terminal.has(job.status)) continue;
+          const targetId = attempt?.attemptId || job.jobId;
+          if (linked.has(targetId)) continue;
+          console.log(
+            `@@ci-trace ${JSON.stringify({ kind: "dependency", targetId, milestone: "" })}`,
+          );
+          linked.add(targetId);
+        }
+      }
       const summary = jobs.map((job) => `${job.jobKey}: ${job.status}`).join("; ");
       if (summary !== previous) console.log(`[ci:status] ${summary}`);
       previous = summary;

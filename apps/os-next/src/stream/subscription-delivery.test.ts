@@ -809,7 +809,7 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): derived f
     expect(rig.alarms).toHaveLength(1);
     await settled();
     rig.stream.append({ type: "demo/ping", payload: { n: 2 } }); // lands while n=1 is in flight
-    expect(rig.alarms).toHaveLength(1); // the insurance already stands: no second write
+    expect(rig.alarms).toHaveLength(1); // the claim already stands: no second write
     await rig.release(); // acks n=1; the loop takes n=2
     await rig.release(); // acks n=2; caught up
     expect(rig.pushes).toEqual([[1], [2]]);

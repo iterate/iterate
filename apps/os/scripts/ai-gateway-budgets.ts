@@ -105,7 +105,7 @@ function nonProductionRules(): AIGatewayUpdateParams.SpendLimits.Rule[] {
       id: "iterate-gateway-daily",
       enabled: true,
       limitType: "cost",
-      limit: 10,
+      limit: 30,
       window: 86_400,
       technique: "sliding",
     },

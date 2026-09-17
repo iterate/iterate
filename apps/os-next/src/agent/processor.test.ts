@@ -11,7 +11,7 @@ import { parseCodemodeResponse } from "./codemode-format.ts";
 
 const processor = () =>
   new AgentProcessor({
-    chat: () => Promise.reject(new Error("the reduce never calls the model")),
+    stream: () => Promise.reject(new Error("the reduce never calls the model")),
     runScript: () => Promise.reject(new Error("the reduce never runs a script")),
     readFile: () => Promise.reject(new Error("the reduce never reads a file")),
     now: () => 0,

@@ -281,12 +281,16 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
     [
       "attempt",
       [
-        line("install_dependencies", {
-          kind: "shell-start",
-          id: "install",
-          step: "__run",
-          time: ms(3),
-        }),
+        {
+          ...line("install_dependencies", {
+            kind: "shell-start",
+            id: "install",
+            step: "__run",
+            time: ms(3),
+          }),
+          stepName: "Install dependencies",
+          command: "pnpm install",
+        },
         line("install_dependencies", {
           kind: "span-start",
           id: "interrupted-child",
@@ -300,14 +304,26 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
           time: ms(33),
           exitCode: 0,
         }),
-        line("wait_for_preview", {
-          kind: "shell-start",
-          id: "wait",
-          step: "wait_for_preview",
-          time: ms(33),
-        }),
+        {
+          ...line("wait_for_preview", {
+            kind: "shell-start",
+            id: "wait",
+            step: "wait_for_preview",
+            time: ms(33),
+          }),
+          command: "pnpm exec trpc-cli scripts/ci/status.ts wait-for prepare preview-ready",
+        },
         line("wait_for_preview", { kind: "shell-end", id: "wait", time: ms(60), exitCode: 0 }),
-        line("playwright", { kind: "shell-start", id: "tests", step: "playwright", time: ms(61) }),
+        {
+          ...line("playwright", {
+            kind: "shell-start",
+            id: "tests",
+            step: "playwright",
+            time: ms(61),
+          }),
+          stepId: "",
+          command: "pnpm spec",
+        },
         line("playwright", {
           kind: "test-start",
           id: "test/0",
@@ -341,7 +357,15 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
   ]);
   const report = assembleTrace(workflow, logs);
   const spans = report.resourceSpans[0].scopeSpans[0].spans;
-  const install = spans.find((span) => span.name === "install dependencies")!;
+  const install = spans.find((span) => span.name === "Install dependencies")!;
+  expect(install.attributes).toEqual(
+    expect.arrayContaining([
+      { key: "ci.step.name", value: { stringValue: "Install dependencies" } },
+      { key: "ci.step.id", value: { stringValue: "install_dependencies" } },
+      { key: "ci.command", value: { stringValue: "pnpm install" } },
+    ]),
+  );
+  expect(spans.find((span) => span.name === "wait_for_preview")).toBeDefined();
   expect(Number(install.endTimeUnixNano) - Number(install.startTimeUnixNano)).toBe(30e9);
   expect(spans.find((span) => span.name === "Interrupted setup operation")).toMatchObject({
     parentSpanId: install.spanId,
@@ -355,7 +379,7 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
   expect(tests[0].spanId).not.toBe(tests[1].spanId);
   expect(tests[0].parentSpanId).toBe(tests[1].parentSpanId);
   expect(spans.find((span) => span.spanId === tests[0].parentSpanId)).toMatchObject({
-    name: "playwright",
+    name: "pnpm spec",
   });
   expect(tests[1].attributes).toContainEqual({
     key: "ci.evidence",
@@ -369,6 +393,145 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
     ),
   ).toBe(true);
 });
+
+test("cleanup starting after Depot records cancellation stays incomplete", () => {
+  // Preview 9dsvdkskfv: Depot finished the job at 08:22:19, but erase
+  // started at 08:22:21.311 without an exit marker.
+  const workflow = greenWorkflow("cancelled");
+  const report = assembleTrace(
+    workflow,
+    new Map([
+      [
+        "finish-attempt",
+        [line("erase", { kind: "shell-start", id: "erase", step: "erase", time: ms(92.311) })],
+      ],
+    ]),
+  );
+  const spans = report.resourceSpans[0].scopeSpans[0].spans;
+  expect(spans.find((span) => span.name === "erase")).toMatchObject({
+    startTimeUnixNano: String(BigInt(ms(92.311)) * 1_000_000n),
+    endTimeUnixNano: String(BigInt(ms(92.311)) * 1_000_000n),
+    attributes: expect.arrayContaining([
+      { key: "ci.status", value: { stringValue: "incomplete" } },
+      { key: "ci.evidence", value: { stringValue: "incomplete; enclosing finish precedes start" } },
+    ]),
+  });
+  for (const name of ["Preview", "Reports & cleanup"]) {
+    expect(spans.find((span) => span.name === name)).toMatchObject({
+      endTimeUnixNano: String(BigInt(ms(90)) * 1_000_000n),
+      attributes: expect.arrayContaining([
+        { key: "ci.status", value: { stringValue: "cancelled" } },
+      ]),
+    });
+  }
+});
+
+test.for([
+  {
+    kind: "operation",
+    event: { kind: "span-start", id: "operation", parentId: "", name: "Erase namespace" },
+  },
+  {
+    kind: "test",
+    event: {
+      kind: "test-start",
+      id: "test",
+      title: "cleanup probe",
+      file: "specs/cleanup.spec.ts",
+      line: 1,
+      project: "web",
+      retry: 0,
+    },
+  },
+])("unfinished $kind after cancellation keeps its start and unknown outcome", ({ kind, event }) => {
+  const report = assembleTrace(
+    greenWorkflow("cancelled"),
+    new Map([
+      [
+        "finish-attempt",
+        [
+          line("erase", { kind: "shell-start", id: "erase", step: "erase", time: ms(89) }),
+          line("erase", { ...event, time: ms(92.311) }),
+        ],
+      ],
+    ]),
+  );
+  const spans = report.resourceSpans[0].scopeSpans[0].spans;
+  const unfinished = spans.find((span) =>
+    span.attributes.some(
+      (attribute) => attribute.key === "ci.kind" && attribute.value.stringValue === kind,
+    ),
+  );
+  expect(unfinished).toMatchObject({
+    startTimeUnixNano: String(BigInt(ms(92.311)) * 1_000_000n),
+    endTimeUnixNano: String(BigInt(ms(92.311)) * 1_000_000n),
+    attributes: expect.arrayContaining([
+      { key: "ci.status", value: { stringValue: "incomplete" } },
+      { key: "ci.evidence", value: { stringValue: "incomplete; enclosing finish precedes start" } },
+    ]),
+  });
+});
+
+test.for([
+  {
+    start: { kind: "shell-start", id: "erase", step: "erase" },
+    end: { kind: "shell-end", id: "erase", exitCode: 0 },
+    name: "erase",
+  },
+  {
+    start: { kind: "span-start", id: "operation", parentId: "", name: "Erase namespace" },
+    end: { kind: "span-end", id: "operation", status: "passed" },
+    name: "Erase namespace",
+  },
+  {
+    start: {
+      kind: "test-start",
+      id: "test",
+      title: "cleanup probe",
+      file: "specs/cleanup.spec.ts",
+      line: 1,
+      project: "web",
+      retry: 0,
+    },
+    end: { kind: "test-end", id: "test", status: "passed", expectedStatus: "passed", worker: 0 },
+    name: "cleanup probe",
+  },
+])(
+  "$name keeps measured times after cancellation and rejects reversed endpoints",
+  ({ start, end, name }) => {
+    const workflow = greenWorkflow("cancelled");
+    const report = assembleTrace(
+      workflow,
+      new Map([
+        [
+          "finish-attempt",
+          [line("erase", { ...start, time: ms(92.311) }), line("erase", { ...end, time: ms(94) })],
+        ],
+      ]),
+    );
+    expect(
+      report.resourceSpans[0].scopeSpans[0].spans.find((span) => span.name === name),
+    ).toMatchObject({
+      startTimeUnixNano: String(BigInt(ms(92.311)) * 1_000_000n),
+      endTimeUnixNano: String(BigInt(ms(94)) * 1_000_000n),
+      attributes: expect.arrayContaining([{ key: "ci.status", value: { stringValue: "passed" } }]),
+    });
+    expect(() =>
+      assembleTrace(
+        workflow,
+        new Map([
+          [
+            "finish-attempt",
+            [
+              line("erase", { ...start, time: ms(92.311) }),
+              line("erase", { ...end, time: ms(91) }),
+            ],
+          ],
+        ]),
+      ),
+    ).toThrow(`Invalid span interval: ${name}`);
+  },
+);
 
 test("a second-precision Depot finish does not invent a negative finish phase", () => {
   const report = assembleTrace(
@@ -417,7 +580,7 @@ test("a second-precision Depot finish does not invent a negative finish phase", 
     ]),
   );
   const spans = report.resourceSpans[0].scopeSpans[0].spans;
-  const wait = spans.find((span) => span.name === "wait for preview")!;
+  const wait = spans.find((span) => span.name === "wait_for_preview")!;
   const finish = spans.find((span) => span.name === "Finish")!;
   expect(wait).toMatchObject({
     status: { code: 2 },
@@ -490,6 +653,187 @@ jobs:
     "prepare/prepare": "pnpm preview ci-prepare $PREVIEW_TARGET_ARGS",
     "finish/erase": "pnpm preview erase",
     "finish/merge_reports": "pnpm preview ci-finish",
+  });
+});
+
+test.each([true, false])(
+  "wait links use the recorded producer attempt (milestone observed: %s)",
+  (ready) => {
+    const jobs = [
+      ["shard", "playwright:matrix-0", "shard-attempt"],
+      ["finish", "finish", "finish-attempt"],
+      ["prepare", "prepare", "prepare-attempt"],
+    ].map(([jobId, key, attemptId]) => ({
+      jobId,
+      jobKey: `preview.yml:preview:${key}`,
+      status: "finished",
+      attempts: [
+        { attemptId, attempt: 1, status: "finished", startedAt: at(1), finishedAt: at(99) },
+      ],
+    }));
+    // A later attempt must never become the target of a wait for the first attempt.
+    jobs[2].attempts.push({
+      attemptId: "replacement",
+      attempt: 2,
+      status: "finished",
+      startedAt: at(80),
+      finishedAt: at(99),
+    });
+    const trace = assembleTrace(
+      {
+        workflowId: "workflow",
+        workflowName: "Preview",
+        workflowPath: "preview.yml",
+        repo: "iterate/iterate",
+        headSha: "head",
+        sha: "merge",
+        ref: "refs/pull/2697/merge",
+        workflowStatus: "finished",
+        workflowCreatedAt: at(0),
+        workflowFinishedAt: at(100),
+        executions: [{ executionId: "execution", execution: 1, createdAt: at(0) }],
+        jobs,
+      },
+      new Map([
+        [
+          "shard-attempt",
+          [
+            line("wait_for_preview", {
+              kind: "shell-start",
+              id: "wait",
+              step: "wait_for_preview",
+              time: ms(3),
+            }),
+            line("wait_for_preview", {
+              kind: "dependency",
+              targetId: "prepare-attempt",
+              milestone: "preview-ready",
+            }),
+            line("wait_for_preview", {
+              kind: "shell-end",
+              id: "wait",
+              time: ms(50),
+              exitCode: ready ? 0 : 1,
+            }),
+          ],
+        ],
+        [
+          "finish-attempt",
+          [
+            line("consumers", { kind: "shell-start", id: "wait", step: "consumers", time: ms(50) }),
+            line("consumers", { kind: "dependency", targetId: "shard-attempt", milestone: "" }),
+            line("consumers", { kind: "shell-end", id: "wait", time: ms(99), exitCode: 0 }),
+          ],
+        ],
+        [
+          "prepare-attempt",
+          ready
+            ? [line("signal_ready", { kind: "milestone", name: "preview-ready", time: ms(49) })]
+            : [],
+        ],
+        [
+          "replacement",
+          [line("signal_ready", { kind: "milestone", name: "preview-ready", time: ms(90) })],
+        ],
+      ]),
+    );
+    const spans = trace.resourceSpans[0].scopeSpans[0].spans;
+    const wait = spans.find((span) => span.name === "wait_for_preview")!;
+    const prepare = spans.find((span) => span.name === "Prepare")!;
+    const target = ready
+      ? spans.find((span) => span.name === "preview-ready" && span.parentSpanId === prepare.spanId)!
+      : prepare;
+    expect(wait).toMatchObject({
+      links: [
+        {
+          traceId: target.traceId,
+          spanId: target.spanId,
+          attributes: [
+            {
+              key: "ci.link.label",
+              value: {
+                stringValue: ready
+                  ? "Requires preview-ready"
+                  : "Requires preview-ready (not observed)",
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const shard = spans.find((span) => span.name === "Playwright 1/6")!;
+    expect(spans.find((span) => span.name === "consumers")).toMatchObject({
+      links: [
+        {
+          traceId: shard.traceId,
+          spanId: shard.spanId,
+          attributes: [{ key: "ci.link.label", value: { stringValue: "Waits for job to settle" } }],
+        },
+      ],
+    });
+    // Links supplement parentage; waiting still belongs to the shard's Wait phase.
+    expect(spans.find((span) => span.spanId === wait.parentSpanId)).toMatchObject({
+      name: "Wait",
+      parentSpanId: shard.spanId,
+    });
+  },
+);
+
+test("a wait can link to a cancelled consumer whose runner never started", () => {
+  const trace = assembleTrace(
+    {
+      workflowId: "workflow",
+      workflowName: "Preview",
+      workflowPath: "preview.yml",
+      repo: "iterate/iterate",
+      headSha: "head",
+      sha: "merge",
+      ref: "refs/pull/2697/merge",
+      workflowStatus: "failed",
+      workflowCreatedAt: at(0),
+      workflowFinishedAt: at(100),
+      executions: [{ executionId: "execution", execution: 1, createdAt: at(0) }],
+      jobs: [
+        {
+          jobId: "consumer",
+          jobKey: "preview.yml:preview:apps",
+          status: "cancelled",
+          attempts: [
+            { attemptId: "never-started", attempt: 1, status: "cancelled", finishedAt: at(80) },
+          ],
+        },
+        {
+          jobId: "finish",
+          jobKey: "preview.yml:preview:finish",
+          status: "finished",
+          attempts: [
+            {
+              attemptId: "finish-attempt",
+              attempt: 1,
+              status: "finished",
+              startedAt: at(50),
+              finishedAt: at(100),
+            },
+          ],
+        },
+      ],
+    },
+    new Map([
+      [
+        "finish-attempt",
+        [
+          line("consumers", { kind: "shell-start", id: "wait", step: "consumers", time: ms(51) }),
+          line("consumers", { kind: "dependency", targetId: "never-started", milestone: "" }),
+          line("consumers", { kind: "shell-end", id: "wait", time: ms(90), exitCode: 0 }),
+        ],
+      ],
+    ]),
+  );
+  const spans = trace.resourceSpans[0].scopeSpans[0].spans;
+  const consumer = spans.find((span) => span.name === "App tests")!;
+  expect(consumer.startTimeUnixNano).toBe(consumer.endTimeUnixNano);
+  expect(spans.find((span) => span.name === "consumers")).toMatchObject({
+    links: [{ spanId: consumer.spanId }],
   });
 });
 

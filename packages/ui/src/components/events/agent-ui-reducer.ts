@@ -1648,6 +1648,15 @@ export function extractCloudflareChunkDeltas(chunk: unknown): {
   if (typeof chunk === "string") return { responseDelta: chunk, thinkingDelta: "" };
   if (!isRecord(chunk)) return { responseDelta: "", thinkingDelta: "" };
 
+  // OpenAI Responses API stream events: { type: "response.output_text.delta", delta } and the
+  // reasoning summary's { type: "response.reasoning_summary_text.delta", delta }.
+  if (typeof chunk.type === "string" && typeof chunk.delta === "string") {
+    if (chunk.type === "response.output_text.delta")
+      return { responseDelta: chunk.delta, thinkingDelta: "" };
+    if (chunk.type === "response.reasoning_summary_text.delta")
+      return { responseDelta: "", thinkingDelta: chunk.delta };
+    return { responseDelta: "", thinkingDelta: "" };
+  }
   // Workers AI: { response: "tok" }
   if (typeof chunk.response === "string") {
     return { responseDelta: chunk.response, thinkingDelta: "" };

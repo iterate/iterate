@@ -26,13 +26,12 @@
 //       stubs is pinned non-hibernatable (workerd#6800, the reason the quiesce alarm exists). So
 //       each eviction here reproduces the production sequence first: quiesce (return the stubs) →
 //       evict — see quiesceLikeProduction().
-//   (c) runDurableObjectAlarm() to fire the 30s quiesce — NOT VIABLE as the eviction ITSELF: the
-//       alarm body re-arms without quiescing unless 60 REAL seconds of idle have passed (alarm()
-//       checks Date.now() - lastActivity >= 60_000), and even then it only returns the borrowed
-//       stubs — the weaker assertion, subsumed by (b). It IS however the production-shaped way
-//       to reach dormancy on demand once Date alone is faked forward 61s (fake timers scoped to
-//       Date only — the alarm scheduler and sockets stay real), which is how (b)'s precondition
-//       is met above.
+//   (c) runDurableObjectAlarm() to fire the quiesce — NOT VIABLE as the eviction ITSELF: the
+//       alarm's quiesce runs only when the pins were last used IDLE_QUIESCE_AFTER_MS (30 s) ago
+//       (alarm() checks Date.now() - #lastPinUseMs), and even then it only returns the borrowed
+//       stubs and closes library connections — the weaker assertion, subsumed by (b). support.ts's
+//       `quiesce` runs that release directly, which is how (b)'s precondition is met above — no
+//       Date faking needed.
 
 import { evictDurableObject } from "cloudflare:test";
 import { beforeAll, expect, test } from "vitest";

@@ -55,8 +55,8 @@ import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 // call as an expression — a fresh MCP session, an open WebSocket, that no intermediate holder ever
 // disposes. So `buildLibrary` keeps every connection it opened, by (verb, url, options), hands the
 // same one back while it lives, and `releaseConnections()` closes them all — the context's idle
-// quiesce calls it beside returning its borrowed stubs, since a held connection pins the context
-// awake exactly like a borrowed stub. A connection closed by a holder or broken by the far side
+// quiesce calls it beside returning its borrowed stubs (only an open capnweb socket pins the actor:
+// `holdsOpenSocket`). A connection closed by a holder or broken by the far side
 // reopens itself on its next use (the mcp and capnweb sections), so a memoized one is never dead.
 
 /** What a library module is handed: the itx handle (the record's own dotted surface), narrowed to
@@ -616,7 +616,7 @@ export class CapnwebConnection extends InvokeHandle {
   }
   /** Close the WebSocket session (the next call reopens it); a batch connection holds nothing. A
    *  DECLARED member on purpose: the dotted fallback beneath `InvokeHandle` answers every unknown
-   *  name with a REMOTE path, so a probe for `close` (`releaseConnections`, index.ts) must find this
+   *  name with a REMOTE path, so a probe for `close` (`releaseConnections`, the DO's release) must find this
    *  one — else it would call `close()` on the remote main and leave the local socket open. */
   close(): void {
     this.#closeSession();
@@ -808,9 +808,9 @@ function mcpResultToValue(name: string, result: MCPToolResult): unknown {
 type JsonRpcResponse = { id?: unknown; result?: unknown; error?: { message?: string } };
 
 /** The JSON-RPC half: one endpoint, an id counter, the session id the server may hand out. A client
- *  closed by a holder (the context's idle quiesce releases the library's memoized connections,
- *  index.ts) re-runs the handshake on its next request, so a held or memoized connection is never
- *  a dead session. */
+ *  closed by a holder (the context's idle quiesce releases the library's memoized connections)
+ *  re-runs the handshake on its next request, so a held or memoized connection is never a dead
+ *  session. */
 class McpJsonRpcClient {
   readonly #itx: LibraryItx;
   readonly #url: string;

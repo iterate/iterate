@@ -188,6 +188,12 @@ importers:
 
   apps/agents:
     dependencies:
+      '@codemirror/state':
+        specifier: ^6.7.1
+        version: 6.7.1
+      '@codemirror/view':
+        specifier: ^6.43.6
+        version: 6.43.6
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -215,6 +221,9 @@ importers:
       tailwindcss:
         specifier: ^4.3.2
         version: 4.3.2
+      yaml:
+        specifier: ^2.8.3
+        version: 2.9.0
       zod:
         specifier: ^4.1.5
         version: 4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5)
@@ -23714,7 +23723,7 @@ snapshots:
       loglevel: 1.9.2
       markdown-it: 14.3.0
       shiki: 1.29.2
-      yaml: 2.8.3
+      yaml: 2.9.0
     optionalDependencies:
       '@codemirror/autocomplete': 6.20.1
       '@codemirror/lang-json': 6.0.2

@@ -11,7 +11,11 @@
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
 import { stampPrincipal, type Caller } from "iterate/next/principal";
-import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
+import {
+  PROCESSOR_REVIVED_EVENT,
+  type StreamEvent,
+  type StreamEventInput,
+} from "iterate/next/stream/processor";
 import { codedError } from "iterate/next/lib";
 import {
   itxExpressionStepName,
@@ -723,7 +727,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               firstPartyClassName ? ["get", name] : ["get", name, facetSpecOf(loaded!)],
               "processEventBatch",
             ],
-            consumes: spec?.consumes,
+            // A row that names its `consumes` still receives the engine's revive tick (packages/iterate
+            // stream/processor.ts rule 3): an attempt is revivable whatever the processor consumes.
+            consumes: spec?.consumes && [...new Set([...spec.consumes, PROCESSOR_REVIVED_EVENT])],
           },
         });
         return { name };

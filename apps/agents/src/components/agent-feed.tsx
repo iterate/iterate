@@ -2,7 +2,7 @@
 // assistant's prose, and the quiet "Ran code 2× · 3 requests · 7.4 s" activity row that opens into
 // rounds — the LLM step that wrote a script and the code step that ran it, each a `Script | Result |
 // Meta` tab group. Items come from the shared reducer (packages/ui); this file owns only their look.
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   BanIcon,
   ChevronRightIcon,
@@ -18,6 +18,7 @@ import {
   formatAgentUiActivitySummary,
   formatAgentUiDuration,
   groupActivityRounds,
+  isAgentUiActivityWorking,
   summarizeAgentUiActivity,
   type AgentUiActivity,
   type AgentUiActivityRound,
@@ -25,7 +26,9 @@ import {
   type AgentUiFileAttachment,
   type AgentUiItem,
   type AgentUiLlmStep,
+  type AgentUiMessageItem,
   type AgentUiState,
+  type AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import {
   Message,
@@ -41,11 +44,14 @@ import { cn } from "@iterate-com/ui/lib/utils";
 import {
   formatClockTime,
   formatDateTime,
+  formatElapsedSeconds,
   formatFileSize,
   formatSeconds,
   liveActivityLabel,
   looksLikeCode,
 } from "../lib/agent-events.ts";
+import { useTickingNowMs } from "../lib/use-ticking-now-ms.ts";
+import { StreamingCodeBlock, StreamingCursor, StreamingText } from "./streaming-text.tsx";
 
 /** The two traces a row can open: an LLM request (by its offset) and a script run (by id). */
 export type Inspect = {
@@ -73,14 +79,7 @@ export function AgentFeedItemRow({
       return (
         <Message from="user" className="pb-2 pt-3.5" data-kind="user">
           <MessageContent className="group-[.is-user]:rounded-2xl">
-            {item.text === "" ? null : (
-              <div className="whitespace-pre-wrap leading-6">{item.text}</div>
-            )}
-            <MessageAttachments
-              files={item.files}
-              hasText={item.text !== ""}
-              signedUrl={signedUrl}
-            />
+            <UserMessageBody item={item} signedUrl={signedUrl} />
           </MessageContent>
         </Message>
       );
@@ -497,67 +496,257 @@ export function ScriptResult({ code }: { code: AgentUiCodeStep }) {
   );
 }
 
-// ── the live tail: what the agent is doing right now ──
+// ── the live tail: what the agent is doing right now (apps/os's AgentLiveActivity) ──
 
-const tickingClock = (() => {
-  let now = Date.now();
-  const listeners = new Set<() => void>();
-  let timer: ReturnType<typeof setInterval> | undefined;
-  return {
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      if (!timer)
-        timer = setInterval(() => {
-          now = Date.now();
-          listeners.forEach((l) => l());
-        }, 100);
-      return () => {
-        listeners.delete(listener);
-        if (listeners.size === 0 && timer) {
-          clearInterval(timer);
-          timer = undefined;
-        }
-      };
-    },
-    getSnapshot: () => now,
-  };
-})();
-
-export function AgentLiveActivity({ state, inspect }: { state: AgentUiState; inspect: Inspect }) {
-  const now = useSyncExternalStore(tickingClock.subscribe, tickingClock.getSnapshot, () =>
-    Date.now(),
-  );
+/** The feed's trailing row whenever work is in flight. Receives the live reduced state on every
+ *  chunk: finished steps collapse upward into quiet rows while the current request or script keeps
+ *  the busy indicator visible — the running answer streams in place. */
+export function AgentLiveActivity({
+  state,
+  toggledIds,
+  onToggle,
+  inspect,
+}: {
+  state: AgentUiState;
+  toggledIds: ReadonlySet<string>;
+  onToggle: (id: string) => void;
+  inspect: Inspect;
+}) {
   const live = state.live;
+  const activityToggleId = live ? `live-activity:${live.id}` : "";
+  const toggleActivity = useCallback(
+    () => onToggle(activityToggleId),
+    [activityToggleId, onToggle],
+  );
   if (!live) return null;
-  const running = live.steps.filter((step) => step.status === "running");
+  const runningSteps = live.steps.filter((step) => step.status === "running");
+  const liveStep = runningSteps.at(-1);
+  const doneSteps = live.steps.filter((step) => step.status === "done");
+  const doneSummary = summarizeAgentUiActivity(live, doneSteps);
+  const working = isAgentUiActivityWorking(live, undefined);
+  const activityExpanded = toggledIds.has(activityToggleId);
+  const showStepRail =
+    activityExpanded &&
+    (doneSteps.length > 0 ||
+      runningSteps.some((step) => step.kind === "code" || liveStepHasVisibleContent(step)));
+
+  if (!working) {
+    // Nothing runs, but the turn is not over (a follow-up round may come): the quiet row.
+    return (
+      <AgentActivityRow
+        activity={live}
+        expanded={toggledIds.has(live.id)}
+        onToggle={onToggle}
+        inspect={inspect}
+      />
+    );
+  }
+
   const status = deriveAgentUiLiveStatus(state);
-  const label = status?.statusText ?? liveActivityLabel(running);
-  const since = running.at(-1)?.startedAtMs ?? live.startedAtMs;
-  const settledRounds = groupActivityRounds(live.steps.filter((step) => step.status === "done"));
-  const runningCode = running.find((step): step is AgentUiCodeStep => step.kind === "code");
+  const currentLabel = status?.statusText || liveActivityLabel(runningSteps);
+  const currentStartedAtMs = liveStep?.startedAtMs ?? live.startedAtMs;
+  const inspectCurrentWork =
+    liveStep?.kind === "llm"
+      ? () => inspect.llmRequest(liveStep.llmRequestOffset)
+      : liveStep?.kind === "code"
+        ? () => inspect.scriptExecution(liveStep.executionId)
+        : undefined;
+
   return (
-    <div className="flex flex-col gap-1.5 py-2" data-kind="live">
-      {settledRounds.length === 0 ? null : (
-        <div className="ml-1 flex flex-col gap-1 border-l-2 border-muted py-1 pl-4">
-          <AgentActivityRounds rounds={settledRounds} inspect={inspect} />
-        </div>
-      )}
-      <div className="flex items-center gap-2" role="status">
-        <Spinner className="size-3 shrink-0 text-primary" />
-        <span className="text-sm font-medium tabular-nums text-primary">
-          {label} · {(Math.max(0, now - since) / 1000).toFixed(1)}s
-        </span>
-      </div>
-      {runningCode ? (
-        <div className="max-h-80 max-w-2xl overflow-y-auto rounded-lg">
-          <SourceCodeBlock code={runningCode.code} language="typescript" showLineNumbers={false} />
+    <div className="flex flex-col py-0.5" data-kind="live">
+      {doneSteps.length > 0 ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-expanded={activityExpanded}
+          title="Agent activity so far — click to see details"
+          onClick={toggleActivity}
+          className="-ml-2.5 self-start font-mono text-xs font-normal text-muted-foreground"
+          data-testid="agent-live-summary"
+        >
+          {doneSummary.codeCount > 0 ? (
+            <CodeIcon className="size-3 shrink-0 text-muted-foreground/60" aria-hidden="true" />
+          ) : (
+            <span className="shrink-0 text-[11px] leading-none text-muted-foreground/60">✦</span>
+          )}
+          <span>
+            {formatAgentUiActivitySummary(live, {
+              summary: doneSummary,
+              interruptedPartialHint: "click to see partial response",
+            })}
+          </span>
+          <ChevronRightIcon
+            className={cn(
+              "size-2.5 text-muted-foreground/50 transition-transform",
+              activityExpanded && "rotate-90",
+            )}
+            aria-hidden="true"
+          />
+        </Button>
+      ) : null}
+      {showStepRail ? (
+        <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-1 border-l-2 border-muted py-1 pl-4">
+          {/* Rounds, like the settled rail — except the round whose llm step is still streaming
+              (no code step, so no tab bar yet): its thinking/response text streams in place. */}
+          {groupActivityRounds(live.steps).map((round, index) =>
+            !round.code && round.llm && round.llm.status === "running" ? (
+              round.llm === liveStep && liveStepHasVisibleContent(round.llm) ? (
+                <LiveStepStream key={round.llm.id} step={round.llm} />
+              ) : null
+            ) : (
+              <RoundRow
+                key={round.code?.id ?? round.llm?.id ?? index}
+                round={round}
+                index={index}
+                inspect={inspect}
+              />
+            ),
+          )}
         </div>
       ) : null}
+      {/* The running answer streams below the status even when the rail is collapsed — this is
+          the whole point of the live tail. */}
+      {!showStepRail && liveStep && liveStepHasVisibleContent(liveStep) ? (
+        <LiveStepStream step={liveStep} />
+      ) : null}
+      <AgentLiveStatus
+        label={currentLabel}
+        startedAtMs={currentStartedAtMs}
+        deadlineMs={liveStep?.kind === "code" ? liveStep.expiresAtMs : null}
+        onInspect={inspectCurrentWork}
+      />
+    </div>
+  );
+}
+
+/** The only subtree subscribed to the 100ms clock; grouped rows stay stable. */
+function AgentLiveStatus({
+  label,
+  startedAtMs,
+  deadlineMs,
+  onInspect,
+}: {
+  label: string;
+  startedAtMs: number;
+  deadlineMs: number | null;
+  onInspect: (() => void) | undefined;
+}) {
+  const phaseClock = useLivePhaseClock(startedAtMs, deadlineMs);
+  const phaseLabel = phaseClock.deadlineExceeded ? "Code deadline exceeded" : label;
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      disabled={!onInspect}
+      onClick={onInspect}
+      title={
+        phaseClock.deadlineExceeded
+          ? "The script has no durable settlement after its absolute deadline"
+          : onInspect
+            ? "Open the current operation's trace"
+            : undefined
+      }
+      className={cn(
+        "-ml-2.5 h-7 self-start px-2.5 text-primary disabled:opacity-100",
+        phaseClock.deadlineExceeded && "text-destructive",
+      )}
+      data-testid="agent-live-status"
+    >
+      {phaseClock.deadlineExceeded ? (
+        <CircleAlertIcon className="size-3 shrink-0 text-destructive" />
+      ) : (
+        <Spinner className="size-3 shrink-0 text-primary" />
+      )}
+      <span
+        className={cn(
+          "text-sm font-medium tabular-nums text-primary",
+          phaseClock.deadlineExceeded && "text-destructive",
+        )}
+      >
+        {phaseLabel} {phaseClock.elapsedLabel}
+      </span>
+      {onInspect ? (
+        <ChevronRightIcon
+          className={cn(
+            "size-2.5 text-primary/60",
+            phaseClock.deadlineExceeded && "text-destructive/60",
+          )}
+          aria-hidden="true"
+        />
+      ) : null}
+    </Button>
+  );
+}
+
+function liveStepHasVisibleContent(step: AgentUiStep) {
+  if (step.kind === "code") return step.code !== "";
+  return step.thinkingText.length > 0 || step.responseText.length > 0;
+}
+
+/** Live CLI-style elapsed counter (`0.9s`) for the current agent phase, ticking every 100ms. A
+ *  script clock stops at its absolute deadline and flips to an explicit failure state even if the
+ *  durable completion is delayed. */
+function useLivePhaseClock(
+  startedAtMs: number,
+  deadlineMs: number | null,
+): { deadlineExceeded: boolean; elapsedLabel: string } {
+  const nowMs = useTickingNowMs(100, true, deadlineMs);
+  const deadlineExceeded = typeof deadlineMs === "number" && nowMs >= deadlineMs;
+  return {
+    deadlineExceeded,
+    elapsedLabel: formatElapsedSeconds(
+      (deadlineExceeded && typeof deadlineMs === "number" ? deadlineMs : nowMs) - startedAtMs,
+    ),
+  };
+}
+
+/** The running step's text as it streams: thinking in italics, the answer as prose or, once it
+ *  reads as code, a plain code block (highlighting belongs to settled output). */
+function LiveStepStream({ step }: { step: AgentUiStep }) {
+  if (step.kind === "code") {
+    return (
+      <div className="flex flex-col gap-1.5 py-1">
+        {step.code === "" ? null : <StreamingCodeBlock code={step.code} />}
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1.5 py-1">
+      {step.thinkingText.length === 0 ? null : (
+        <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm italic leading-relaxed text-muted-foreground">
+          <StreamingText text={step.thinkingText} />
+          {step.responseText.length === 0 ? <StreamingCursor /> : null}
+        </div>
+      )}
+      {step.responseText.length === 0 ? null : looksLikeCode(step.responseText) ? (
+        <StreamingCodeBlock code={step.responseText} />
+      ) : (
+        <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm leading-relaxed">
+          <StreamingText text={step.responseText} animate />
+          <StreamingCursor />
+        </div>
+      )}
     </div>
   );
 }
 
 // ── attachments: an image inline through a signed URL, anything else by name ──
+
+/** A person's words and what rode with them — the chat bubble's body, and the queued panel's. */
+export function UserMessageBody({
+  item,
+  signedUrl,
+}: {
+  item: AgentUiMessageItem;
+  signedUrl: SignedUrl;
+}) {
+  return (
+    <>
+      {item.text === "" ? null : <div className="whitespace-pre-wrap leading-6">{item.text}</div>}
+      <MessageAttachments files={item.files} hasText={item.text !== ""} signedUrl={signedUrl} />
+    </>
+  );
+}
 
 function MessageAttachments({
   files,

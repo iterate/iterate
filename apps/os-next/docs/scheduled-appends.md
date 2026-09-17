@@ -85,21 +85,21 @@ business event, use `at: new Date(Date.parse(event.createdAt) + delayMs).toISOSt
   intervals coalesce the paused gap. Setting a definition is refused while paused, cancellation is
   allowed.
 - Each alarm processes at most 32 due definitions, ordered by deadline then defining offset, and
-  arms the next deadline once, when the pass completes (see below). Replacement or cancellation can
-  leave one obsolete early wake, which rechecks durable state.
+  arms the next deadline once, when the pass completes (see below). A replacement or cancellation
+  moves the alarm in its own commit.
 
 ## The one alarm
 
 A context has one native alarm and three reasons to want it. None of them is stored as an alarm
 request: each source answers "when next?" from state it already keeps, and `AlarmCoordinator`
-(`src/alarm-coordinator.ts`, ~40 lines) arms the earliest answer or deletes the alarm when there is
+(`src/alarm-coordinator.ts`) arms the earliest answer or deletes the alarm when there is
 none. Reconciliation runs after every commit, every pin use and every delivery change.
 
-| Source                | Its deadline                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Scheduled appends     | the earliest pending `nextAt` in core state (none while paused or when every definition is parked)                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| Subscription delivery | per cursor row (a target that, through the rules, resolves to neither a facet nor a lent rpc stub — decided statically, never by evaluating it): the time its cursor carries — a ladder rung, or the claim written before every awaited call (attempt + 1, now + 30 s, durable: a death mid-call is retried by the next incarnation, fifteen deaths halt the row) — else, while the cursor sits behind the durable mark, 20 s from when it was first seen behind; a row a loop holds claims that 20 s, renewed at every pass end; a halted row owes nothing |
-| Idle quiesce          | the pins' last use + 30 s, rounded up to the next 10 s — a borrowed rpc stub called, an open capnweb socket used (the two things that keep an actor resident, both measured; an HTTP client holds nothing); nothing else moves it, and none while nothing is pinned. A facet is not a pin: on the edge it does not keep the actor resident (it dies with the actor within seconds), so nothing arms an alarm for it; a release that runs for a pin aborts live facets too                                                                                   |
+| Source                | Its deadline                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Scheduled appends     | the earliest pending `nextAt` in core state (none while paused or when every definition is parked)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Subscription delivery | per cursor row (a target that, through the rules, resolves to neither a facet nor a lent rpc stub — decided statically, never by evaluating it): the time its cursor carries — a ladder rung, or the claim written before every awaited durable call (attempt + 1, the same 20 s instant the row already claims, durable: a death mid-call is retried by the next incarnation, fifteen deaths halt the row) — else, while the cursor sits behind the durable mark, 20 s from when it was first seen behind; a row a loop holds claims that 20 s, renewed at every pass end; a halted row owes nothing, nor does a dangling one (no rule resolves its target — it waits for the rule) |
+| Idle quiesce          | the pins' last use + 30 s, rounded up to the next 10 s — a borrowed rpc stub called, an open capnweb socket used (the two things that keep an actor resident, both measured; an HTTP client holds nothing); nothing else moves it, and none while nothing is pinned. A facet is not a pin: on the edge it does not keep the actor resident (it dies with the actor within seconds), so nothing arms an alarm for it, and a release never aborts one                                                                                                                                                                                                                                  |
 
 A wake makes no loop: `stream/woken` is a durable event like any other, and every `*` subscription
 receives it (`consumesEvent`, the one consumes rule, has no carve-out). What keeps it from looping is
@@ -143,8 +143,7 @@ proof stays the log's: `scannedThroughOffset` never names an ephemeral, and an e
 durable mark comes back on every at-head read until a durable takes the head or the ring evicts it.
 A trace is never subscription input and never activity, so observing a context cannot keep it
 awake. The durable `stream/woken { incarnation, reason }` says what woke each incarnation:
-the native alarm stored as it started, and `reason: "alarm"` when that alarm was due (workerd runs
-the constructor before the alarm handler), else `reason: "request"`.
+`"alarm"` when the alarm handler was the first door to open, `"request"` otherwise.
 
 ## Bounds
 
@@ -170,9 +169,10 @@ schedules leave the projection; history remains in the log.
   alarm; an observed pass yields one ephemeral trace and a ring holding the whole pass.
 - `src/stream/scheduled-appends.test.ts`: replay, deadline reconstruction, the pass holding its
   alarm, relative timestamp anchoring, interval replacement, recurrence identity, validation and
-  transactional limits. `src/alarm-coordinator.test.ts`: the two holds and the dedupe, as a table.
-  `src/stream/subscription-delivery.test.ts`: the lane's deadline lifecycle (insured, acked, in
-  flight past its deadline, classified, on its ladder, halted).
+  transactional limits. `src/alarm-coordinator.test.ts`: the earliest deadline, the dedupe seed, the
+  one hold, a pass that throws. `src/stream/subscription-delivery.test.ts`: the loop's claim on the
+  alarm (`deadlines()`) — behind vs caught up, a call in flight, a facet row never, the claim written
+  before a call surviving an eviction — and the wake record acked without a loop.
 
 ```sh
 pnpm --dir apps/os-next test scheduled-appends
