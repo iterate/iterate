@@ -111,6 +111,7 @@ export const BUILT_IN_ROOTS = [
   "workers",
   // THE LIBRARY (library.ts): first-party verbs that take only `itx` — could be userspace
   "run",
+  "chat",
   "connectToMcp",
   "connectToOpenApi",
   "connectToCapnweb",

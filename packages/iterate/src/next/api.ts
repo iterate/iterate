@@ -8,13 +8,15 @@
 // ones the SDK and the first-party facets spell, with the platform's own signatures (context/built-ins.ts).
 import type { FacetHandle, InvokeHandle, ItxExpressionInput } from "./expression.ts";
 import type { Principal } from "./principal.ts";
-import type { ScheduleReceipt, StreamEvent, StreamEventInput } from "./stream/processor.ts";
+import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
 
 /** What `authenticate` accepts: the browser (its login cookie rode the upgrade), a device or script
- *  (its bearer token did), or the operator (the deployment's admin secret, verified in-band). */
+ *  (its bearer token did — or, on a socket opened bare, presented here as `token`: a static page on
+ *  another origin cannot put a header on a WebSocket), or the operator (the deployment's admin
+ *  secret, verified in-band). */
 export type SessionCredentials =
   | { type: "from-server-cookie" }
-  | { type: "bearer" }
+  | { type: "bearer"; token?: string }
   | { type: "admin-secret"; secret: string; as?: { email: string } };
 
 /** One page of a context's durable log (`readEvents`). */
@@ -54,6 +56,9 @@ export type WorkerSource = Record<string, string> | ItxExpressionInput;
 export type FacetSpec = { source: WorkerSource; cacheKey?: string; className: string };
 
 /** A context (a project, a user, an organization): every `itx` root, reached through `invoke`. */
+/** What `schedules.set` answers: the definition's identity, to cancel exactly it. */
+export type ScheduleReceipt = { key: string; scheduledAtOffset: number };
+
 export interface IterateContextApi {
   invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown>;
   /** Another context of this project, by path (`..` and `/` allowed; the global namespace is not). */
@@ -79,6 +84,9 @@ export interface IterateContextApi {
       ): Promise<ScheduleReceipt>;
       cancel(schedule: string | [string, string] | ScheduleReceipt): Promise<StreamEvent[]>;
     };
+    /** A hosted processor's claim on this context's alarm: "revive me by `at`" (a facet with a
+     *  `runInBackground` attempt in flight), or `null` to release it. */
+    processors: { claim(name: string, at: number | null): Promise<void> };
   };
   whoami(): { projectId: string; path: string };
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;

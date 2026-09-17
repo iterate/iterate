@@ -11,11 +11,7 @@
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
 import { stampPrincipal, type Caller } from "iterate/next/principal";
-import {
-  PROCESSOR_REVIVED_EVENT,
-  type StreamEvent,
-  type StreamEventInput,
-} from "iterate/next/stream/processor";
+import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
 import { codedError } from "iterate/next/lib";
 import {
   itxExpressionStepName,
@@ -310,6 +306,10 @@ export interface BuiltInScope extends LibraryRoots {
     ): Promise<{ name: string }>;
     disable(name: string): Promise<void>;
     list(): SubscriptionListEntry[];
+    /** A hosted processor's claim on this context's alarm: "revive me by `at`" — the engine holds
+     *  one while a `runInBackground` attempt is in flight (packages/iterate stream/processor.ts rule
+     *  3) — or `null` to release it. Durable on the context (a kv row), never a log event. */
+    claim(name: string, at: number | null): Promise<void>;
   };
   /** The stateless host: `get({ source, cacheKey?, className?, props? })` → a `WorkerEntrypoint` in
    *  its own confined isolate (no DO, no storage) — ANY method it exports, reached by name (`run`,
@@ -419,6 +419,8 @@ interface BuildBuiltInsDeps {
   waitForEvent: BuiltInScope["waitForEvent"];
   /** The facet door, verbatim (accepted trade: a busy stateful facet pins its stream). */
   facets: BuiltInScope["facets"];
+  /** The DO's claim table for hosted processors (`processors.claim`). */
+  claimFacetAlarm: (name: string, at: number | null) => void;
   /** The `ItxEntrypoint` stub a loaded worker gets as `env.ITX` and `globalOutbound` — the loopback
    *  minted once for this context (the DO's `#itxEntrypoint`; iterate-context.ts's `ItxEntrypoint` for why it is never a
    *  raw getByName stub). */
@@ -727,9 +729,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               firstPartyClassName ? ["get", name] : ["get", name, facetSpecOf(loaded!)],
               "processEventBatch",
             ],
-            // A row that names its `consumes` still receives the engine's revive tick (packages/iterate
-            // stream/processor.ts rule 3): an attempt is revivable whatever the processor consumes.
-            consumes: spec?.consumes && [...new Set([...spec.consumes, PROCESSOR_REVIVED_EVENT])],
+            consumes: spec?.consumes,
           },
         });
         return { name };
@@ -741,6 +741,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         });
       },
       list: () => deps.subscriptions.list().filter((row) => row.hostedFacet),
+      claim: async (name, at) => deps.claimFacetAlarm(name, at),
     },
     rewriteRules: deps.rewriteRules,
     // A genuine InvokeHandle so `workers.get(spec).run()` pipelines on every lane (workerd#6873). A

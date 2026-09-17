@@ -31,11 +31,13 @@ export type ProjectIdOrSlug = string;
 
 /** What `IterateRpcTarget.authenticate` accepts. `from-server-cookie` is the browser and `bearer` is
  *  a device or script whose token rode the upgrade: the OAuth gate already resolved the session from
- *  the request, so either only says "hand me that session". `admin-secret` is the operator/CLI
- *  credential, verified in-band. */
+ *  the request, so either only says "hand me that session". `bearer` WITH a `token` is the in-band
+ *  form (capnweb's own pattern): a client that opened the socket bare — a static page on another
+ *  origin, whose browser cannot put a header on a WebSocket (api.ts) — presents its token here, and
+ *  it goes through the same gate. `admin-secret` is the operator/CLI credential, verified in-band. */
 const SessionCredentials = z.discriminatedUnion("type", [
   z.object({ type: z.literal("from-server-cookie") }),
-  z.object({ type: z.literal("bearer") }),
+  z.object({ type: z.literal("bearer"), token: z.string().min(1).optional() }),
   z.object({
     type: z.literal("admin-secret"),
     secret: z.string(),
@@ -56,6 +58,9 @@ export interface SessionInput {
   appConfig: AppConfig;
   /** A live transport tracks projects whose capabilities it has handed out. */
   onProjectAccess?: (projectId: string) => void;
+  /** The in-band bearer (rpc.ts): verify a token a bare socket presents and bind the transport to
+   *  its grant — null for a token the gate refuses. Absent on a door with no such form. */
+  resolveBearer?: (token: string) => Promise<SessionAuthority | null>;
 }
 
 /** THE `/api` ROOT — the one thing a fresh capnweb connection holds. `authenticate(credentials)` is
@@ -91,8 +96,15 @@ export class IterateRpcTarget extends RpcTarget {
     if (!credentials.success)
       throw codedError(
         "INVALID_CREDENTIALS",
-        "authenticate({ type }): 'from-server-cookie' (browser), 'bearer' (a token on the upgrade) or 'admin-secret' (operator).",
+        "authenticate({ type }): 'from-server-cookie' (browser), 'bearer' (a token on the upgrade, or in-band as `token`) or 'admin-secret' (operator).",
       );
+    if (credentials.data.type === "bearer" && credentials.data.token) {
+      // IN-BAND: the same gate as a header on the upgrade, bound to this transport by rpc.ts. No
+      // account fact — a page or script presenting its token on every reconnect is not a sign-in.
+      const resolved = await this.#input.resolveBearer?.(credentials.data.token);
+      if (!resolved) throw codedError("INVALID_CREDENTIALS", "Invalid or revoked bearer");
+      return new SessionRpcTarget(this.#input, this.#sessionTeardown, resolved);
+    }
     if (credentials.data.type === "from-server-cookie" || credentials.data.type === "bearer") {
       if (!this.#resolved)
         throw codedError("UNAUTHENTICATED", "this transport carries no session — sign in first.");
@@ -156,7 +168,7 @@ export class IterateRpcTarget extends RpcTarget {
 
 /** What you authenticate into: a catalog that vends contexts. A session is NOT a context — it is
  *  the directory you reach one through (apps/os: "a session is what authenticate() returns"). */
-type SessionAuthority = {
+export type SessionAuthority = {
   principal: SessionPrincipal;
   reach: Reach;
   grants?: Grants;

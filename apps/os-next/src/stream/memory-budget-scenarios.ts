@@ -33,11 +33,10 @@ import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
 import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 import { SubscriptionDelivery } from "./subscription-delivery.ts";
 
-/** These workloads run no background work, so the engine's revive is never armed: the stream's
- *  schedule calls are stubs that must never be reached. */
+/** These workloads run no background work, so the engine never claims the alarm: a stub that must
+ *  never be reached. */
 const neverScheduled = {
-  schedule: () => Promise.reject(new Error("no workload here schedules a revive")),
-  cancelSchedule: () => Promise.reject(new Error("no workload here schedules a revive")),
+  claim: () => Promise.reject(new Error("no workload here claims the alarm")),
 };
 
 /** The Workers-RPC ceiling on one serialized argument list or return value (workerd, hard). */

@@ -1,11 +1,11 @@
 // alarm-coordinator.ts — THE ONE NATIVE ALARM of a context, derived: it holds no deadline of its
 // own. `reconcile()` asks the deadline sources — the earliest pending schedule (core state), the
-// earliest cursor-row claim (subscription-delivery.ts), the idle quiesce of the pins (the DO) — and
+// earliest cursor-row claim (subscription-delivery.ts), the claims of hosted processors (the DO) — and
 // arms the earliest, or deletes the alarm when they report none. Every reason is derivable at
 // construction (a schedule is durable, a cursor row is durable and the log is, a pin is in memory
 // and known), so the alarm read from storage is only the DEDUPE SEED: the constructor's first
 // reconcile derives the same time (no write) or supersedes it — and a stored time no source still
-// wants (a dead incarnation's idle deadline) is rightly superseded, even though workerd then cancels
+// wants (one a dead incarnation left) is rightly superseded, even though workerd then cancels
 // the run it would have started (nothing durable was due).
 // ONE HOLD: nothing is written while the pass's WORK runs — its own alarm stays stored, so a pass
 // that dies is retried by the runtime, and the next deadline is set ONCE, at the pass's end.

@@ -286,8 +286,7 @@ Two layers, in the order the tutorial builds them.
 
 **Layer 1, the borrowed table.** Anyone with a Workers-RPC route to the DO can
 `lendRpcStub({ rpcStubKey, stub })`. The DO keeps it in `#borrowedRpcStubs`, every call on that
-key rides it, and `returnBorrowedRpcStubs()` at the idle quiesce (30 s after the pins' last use,
-rounded up to the next 10 s), because a held stub
+key rides it, and `returnBorrowedRpcStubs()` by the pins' timer (30 s after their last use), because a held stub
 pins the DO awake. A lender with no pager is one-shot.
 
 **Layer 2, the pagers.** One hibernatable WebSocket per key, opened by the edge relay in ONE

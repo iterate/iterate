@@ -3,41 +3,76 @@ import type { Env } from "./control-plane.ts";
 import { Consent } from "./consent.ts";
 import { Grants } from "./grants.ts";
 import { directory } from "./directory.ts";
-import { authorizationOf, recordGrantUse, type Authorization } from "./oauth.ts";
-import { IterateRpcTarget, SessionTeardown, type SessionInput } from "./session.ts";
+import {
+  authorizationForToken,
+  authorizationOf,
+  recordGrantUse,
+  type Authorization,
+} from "./oauth.ts";
+import {
+  IterateRpcTarget,
+  SessionTeardown,
+  type SessionAuthority,
+  type SessionInput,
+} from "./session.ts";
 import { appConfigOf } from "./app-config.ts";
 
 /** Cap’n Web always terminates at /api in the stateless edge. Its root is an
- * already-authorized session; authority never comes from a later caller-supplied actor. */
+ * already-authorized session — or, on a socket opened BARE (api.ts: no credential on the upgrade),
+ * a root that authorizes IN-BAND: `authenticate({ type: "bearer", token })` runs the token through
+ * the same gate and binds this transport to its grant. Authority never comes from a later
+ * caller-supplied actor; a transport carries one grant for its life. */
 export async function rpcResponse(
   request: Request,
   env: Env,
   ctx: ExecutionContext,
-  auth: Authorization,
+  auth: Authorization | null,
 ) {
   const projects = new Set<string>();
   const teardown = new SessionTeardown();
+  const authorityOf = (authorization: Authorization): SessionAuthority => ({
+    principal: authorization.principal,
+    reach: authorization.reach,
+    grants: new Grants(env, ctx, authorization),
+    scopes: authorization.grant?.scope,
+    ...(authorization.grant?.kind === "issuer" && {
+      consent: new Consent(env, authorization.grant),
+    }),
+  });
+  // THE GRANT THIS TRANSPORT CARRIES: the upgrade's (resolved by the gate before this call), or the
+  // one an in-band `authenticate` binds — once; a second token on the same socket is refused, a
+  // refreshed token is a new socket (the guard below closes this one at the grant's expiry).
+  let bound: Authorization | null = auth;
+  let binding = false; // an `authenticate` in flight: a second one on the same socket is refused at once
+  let bindSocket: ((authorization: Authorization) => void) | undefined;
   const input: SessionInput = {
     contextNamespace: env.ITERATE_CONTEXT,
     waitUntil: (promise) => ctx.waitUntil(promise),
     directory: directory(env.DB),
     appConfig: appConfigOf(env),
     onProjectAccess: (projectId) => projects.add(projectId),
+    resolveBearer: async (token) => {
+      // Claimed BEFORE the gate is awaited: two tokens racing on one socket cannot both bind.
+      if (bound || binding) throw new Error("This transport already carries a session");
+      binding = true;
+      try {
+        const authorization = await authorizationForToken(env, ctx, token);
+        if (!authorization) return null;
+        if (authorization.grant) ctx.waitUntil(recordGrantUse(env, authorization.grant));
+        bound = authorization;
+        bindSocket?.(authorization);
+        return authorityOf(authorization);
+      } finally {
+        binding = false;
+      }
+    },
   };
-  // The transport already carries a resolved authorization (the OAuth gate ran in api.ts); the root
-  // is the IterateRpcTarget, and `authenticate({ type: "from-server-cookie" })` vends the session for it.
-  const root = new IterateRpcTarget(input, teardown, {
-    principal: auth.principal,
-    reach: auth.reach,
-    grants: new Grants(env, ctx, auth),
-    scopes: auth.grant?.scope,
-    ...(auth.grant?.kind === "issuer" && { consent: new Consent(env, auth.grant) }),
-  });
-  const grant = auth.grant;
+  const root = new IterateRpcTarget(input, teardown, auth && authorityOf(auth));
   if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
     try {
       return await newWorkersRpcResponse(request, root, {
         onCall: (_call, invoke) => {
+          const grant = bound?.grant;
           if (grant && grant.expiresAt <= Date.now()) throw new Error("Session expired");
           return invoke();
         },
@@ -46,7 +81,8 @@ export async function rpcResponse(
       teardown.disposeAll();
     }
   }
-  if (!grant) return newWorkersRpcResponse(request, root);
+  // The operator credential (no grant) has no expiry or revocation to guard.
+  if (auth && !auth.grant) return newWorkersRpcResponse(request, root);
 
   const pair = new WebSocketPair();
   const socket = pair[0];
@@ -54,7 +90,7 @@ export async function rpcResponse(
   // This public transport accepts DOM WebSocket's type; Workers supplies the same
   // event/send/close interface, without the browser-only prototype members.
   const transport = new WebSocketTransport(socket as unknown as WebSocket);
-  let until = Math.min(Date.now() + 60_000, grant.expiresAt);
+  let until = Infinity; // a bare socket has nothing to expire until a grant is bound
   let stopped = false;
   let renewal: ReturnType<typeof setTimeout>;
   let deadline: ReturnType<typeof setTimeout>;
@@ -78,7 +114,7 @@ export async function rpcResponse(
       throw error;
     }
   }
-  const schedule = () => {
+  const schedule = (authorization: Authorization, grant: NonNullable<Authorization["grant"]>) => {
     clearTimeout(deadline);
     deadline = setTimeout(
       () => stop(new Error("Session authorization expired")),
@@ -89,7 +125,7 @@ export async function rpcResponse(
       try {
         const current = await authorizationOf(env, grant);
         const reachable = new Set(
-          (await input.directory.reachableProjects(auth.reach)).map((p) => p.id),
+          (await input.directory.reachableProjects(authorization.reach)).map((p) => p.id),
         );
         if (!current || [...projects].some((id) => !reachable.has(id))) {
           stop(new Error("Session revoked or project membership removed"));
@@ -97,18 +133,25 @@ export async function rpcResponse(
         }
         if (stopped) return;
         until = Math.min(started + 60_000, grant.expiresAt);
-        schedule();
+        schedule(authorization, grant);
       } catch (error) {
         console.error("oauth.live_authorization_failed", { grantId: grant.grantId, error });
         stop(new Error("Session authorization could not be renewed"));
       }
     }, 30_000);
   };
+  // Bind the guard to a grant: at once for the upgrade's, at `authenticate` for an in-band one.
+  bindSocket = (authorization) => {
+    const grant = authorization.grant;
+    if (!grant || stopped) return;
+    until = Math.min(Date.now() + 60_000, grant.expiresAt);
+    schedule(authorization, grant);
+  };
   socket.addEventListener("close", () => stop(new Error("Session closed")), { once: true });
   socket.addEventListener("error", () => stop(new Error("Session connection failed")), {
     once: true,
   });
-  schedule();
+  if (auth) bindSocket(auth);
   new RpcSession(
     {
       send(message) {
@@ -125,7 +168,8 @@ export async function rpcResponse(
               cancelReceive = undefined;
               // Guard every frame, including forwarded capabilities which bypass onCall.
               check();
-              if (Date.now() - recordedAt >= 60_000) {
+              const grant = bound?.grant;
+              if (grant && Date.now() - recordedAt >= 60_000) {
                 recordedAt = Date.now();
                 ctx.waitUntil(recordGrantUse(env, grant));
               }

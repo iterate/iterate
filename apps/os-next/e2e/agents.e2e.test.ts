@@ -134,13 +134,17 @@ test("the loop: a person's words → the model → a script run against itx → 
     "agents/context-added", // the developer: the script's result
     "agent/llm-request-requested",
     "agent/llm-request-settled",
-    "agents/context-added", // the assistant: prose alone
-    "agents/web-message-sent",
+    "agents/context-added", // the assistant: a bare reply (no tag)
+    "capability-host/script-run-requested", // the plain-response handler (itx.chat.sendMessage)
+    "agents/web-message-sent", // its sendMessage
+    "capability-host/script-run-settled",
   ]);
   const said = (type: string) => log.filter((e) => e.type === type).map((e) => e.payload);
   expect(said("events.iterate.com/agents/web-message-sent")).toEqual([
+    // The tag's prose is sent directly (with the request it came from); the bare reply is sent by
+    // the plain-response handler's sendMessage — a plain message, no request offset.
     { message: "Let me store that.", llmRequestOffset: expect.any(Number) },
-    { message: "Stored 42 under answer.", llmRequestOffset: expect.any(Number) },
+    { message: "Stored 42 under answer." },
   ]);
   expect(said("events.iterate.com/agent/summary-updated")).toEqual([
     { activity: "Storing the answer" },
