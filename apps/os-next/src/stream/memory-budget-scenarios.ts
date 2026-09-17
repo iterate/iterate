@@ -33,6 +33,13 @@ import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
 import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 import { SubscriptionDelivery } from "./subscription-delivery.ts";
 
+/** These workloads run no background work, so the engine's revive is never armed: the stream's
+ *  schedule calls are stubs that must never be reached. */
+const neverScheduled = {
+  schedule: () => Promise.reject(new Error("no workload here schedules a revive")),
+  cancelSchedule: () => Promise.reject(new Error("no workload here schedules a revive")),
+};
+
 /** The Workers-RPC ceiling on one serialized argument list or return value (workerd, hard). */
 const WORKERS_RPC_MESSAGE_MAX_BYTES = 32 * 1024 * 1024;
 const MiB = 1024 * 1024;
@@ -138,6 +145,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     }
     const engine = new ProcessorEngine(new Tally(), {
       stream: {
+        ...neverScheduled,
         append: (...events) => stream.append(...events),
         read: async (after, limit) => {
           const page = await stream.read(after, limit);
@@ -301,6 +309,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     });
     engine = new ProcessorEngine(new Hoarder(), {
       stream: {
+        ...neverScheduled,
         append: (...events) => stream.append(...events),
         read: async (after, limit) => {
           readCalls++;
@@ -409,6 +418,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     fact("projectionChars", JSON.stringify(projector.projectLiveState({ count: 0 })).length);
     engine = new ProcessorEngine(projector, {
       stream: {
+        ...neverScheduled,
         append: (...events) => {
           try {
             return stream.append(...events);

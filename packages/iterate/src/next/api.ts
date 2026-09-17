@@ -8,7 +8,7 @@
 // ones the SDK and the first-party facets spell, with the platform's own signatures (context/built-ins.ts).
 import type { FacetHandle, InvokeHandle, ItxExpressionInput } from "./expression.ts";
 import type { Principal } from "./principal.ts";
-import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
+import type { ScheduleReceipt, StreamEvent, StreamEventInput } from "./stream/processor.ts";
 
 /** What `authenticate` accepts: the browser (its login cookie rode the upgrade), a device or script
  *  (its bearer token did), or the operator (the deployment's admin secret, verified in-band). */
@@ -66,6 +66,19 @@ export interface IterateContextApi {
       limit?: number,
       options?: { includeEphemeral?: boolean },
     ): Promise<StreamPage>;
+    /** Durable batches appended after a deadline (`afterMs`), at an instant (`at`) or on an interval
+     *  (`everyMs`); a key set again is replaced; a receipt cancels exactly the definition it names. */
+    schedules: {
+      set(
+        input: {
+          key: string | [string, string];
+          when: { at: string } | { afterMs: number } | { everyMs: number };
+          events: StreamEventInput[];
+        },
+        options?: { idempotencyKey?: string },
+      ): Promise<ScheduleReceipt>;
+      cancel(schedule: string | [string, string] | ScheduleReceipt): Promise<StreamEvent[]>;
+    };
   };
   whoami(): { projectId: string; path: string };
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
