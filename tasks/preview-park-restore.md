@@ -5,9 +5,10 @@ size: medium
 
 # Retire preview DOs, then restore the tested deployment
 
-Implementation ready for its first full preview run. Live Depot probes proved
-early green is replaced by both later failure and cancellation. Restoration
-usability and resource activity still need live evidence. No merge is authorized.
+First full preview proved retirement/restoration and fresh application use.
+Failure/cancellation reporting and a refused-restore/recovery cycle also passed.
+A small existing Streams assertion bug blocked the all-tests-green path; its
+fix passed a focused live test and a fresh full run is next. No merge is authorized.
 
 ## Request and decisions
 
@@ -42,7 +43,7 @@ usability and resource activity still need live evidence. No merge is authorized
 - [x] Research current restore machinery and GitHub/Depot check ownership. *Reuse app deploy commands; job token can update its exact Depot check.*
 - [x] Implement and test the smallest post-test park/restore path. *`preview erase --restore` retires first, then restores Auth, OS and Streams from the tested checkout.*
 - [x] Implement and test honest early-green/final-failure reporting. *`status.ts tests-passed`; live checks 105090329542 and 105090616821 changed from success to failure/cancelled.*
-- [ ] Run preview experiments, including an injected cleanup failure and recovery.
+- [x] Run preview experiments, including an injected cleanup failure and recovery. *First full run restored successfully; dirty-checkout guard refused only after retirement, then clean recovery passed.*
 - [ ] Validate resulting namespaces, fresh application behavior and activity.
 - [ ] Complete local checks, independent review and CI/review follow-up.
 - [ ] Publish report, update PR and mark task complete.
@@ -64,3 +65,17 @@ usability and resource activity still need live evidence. No merge is authorized
   the scripts suite passed all 360 tests. Full tests reveal an existing expired
   parked test in `specs/repo-ide-jsonc.spec.ts` (revisit by 2026-09-16); this
   experiment does not hide or renew it.
+- Full workflow `xg4ww10ws2` on `827ee33e9`: all six browser shards and all
+  218 OS e2e tests passed. Streams' anonymous `openConnection` test failed twice:
+  after waiting for the expected event it assumed the latest callback batch was
+  still that event, but a background feed projection arrived afterwards. The
+  small assertion fix checks delivery by offset and still checks closed-client
+  exclusion; a focused authenticated live rerun passed.
+- The failed test correctly prevented early green. Retirement took 17.0s and
+  Auth/OS/Streams restoration 56.6s. All ten ordinary OS/Streams namespaces
+  changed; six Sandbox namespaces stayed. Fresh project creation, scheduled
+  script-to-stream delivery and real Auth-to-OS login passed afterwards.
+- Deliberately dirtying only this task file made `erase --restore` retire first
+  (27.7s), then fail the clean-checkout guard. Both Workers served 503. The file
+  was restored byte-for-byte; clean recovery completed at 06:00:24Z. Probe state
+  was retired too. No probe/failure switch is shipped in product code.
