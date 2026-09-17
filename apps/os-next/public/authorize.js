@@ -295,10 +295,6 @@
             ),
           )
         : null,
-      el("p", {
-        class: "muted",
-        text: "This app can read and make changes in the projects you grant it.",
-      }),
       setup,
       el(
         "footer",
@@ -355,39 +351,10 @@
     sync();
 
     card.replaceChildren(
-      el(
-        "header",
-        {},
-        el(
-          "div",
-          { class: "consent-app" },
-          el("span", {
-            class: "consent-avatar",
-            "aria-hidden": "true",
-            text: clientName.slice(0, 2).toUpperCase(),
-          }),
-          el(
-            "div",
-            {},
-            el("span", { class: "consent-badge", text: "Project access" }),
-            el("h1", { text: `Authorize ${clientName}` }),
-          ),
-        ),
-        el("p", {
-          class: "muted",
-          text: projectBound
-            ? "Review access to this app’s project."
-            : "Choose which projects this app can use.",
-        }),
-      ),
+      el("header", {}, el("h1", { text: `Authorize ${clientName}` })),
       el(
         "section",
         { class: "consent-account", "aria-label": "Signed-in account" },
-        el("span", {
-          class: "consent-avatar",
-          "aria-hidden": "true",
-          text: email.slice(0, 1).toUpperCase(),
-        }),
         el(
           "div",
           {},
