@@ -1,7 +1,7 @@
 // The agent's log as the shared agent-UI reducer (packages/ui) reads it. os-next's agent speaks
 // apps/os's event vocabulary, so the feed model IS apps/os's: `reduceAgentUi` folds every committed
 // event into messages and activities (an LLM step that wrote a script, the code step that ran it,
-// grouped into rounds). Two seams are adapted here: an attachment carries no `url` on os-next (the
+// grouped into rounds). Two differences are adapted here: an attachment carries no `url` on os-next (the
 // page signs one when it renders), and a failed script settlement carries fewer fields than
 // apps/os's strict schema (the missing ones follow from `failureKind`).
 import { z } from "zod";
@@ -18,12 +18,14 @@ import {
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import type { Event } from "@iterate-com/ui/components/events/types";
 
-const Committed = z.object({
+// Loose: the Events view is the raw log, so every envelope field the wire carries survives.
+const Committed = z.looseObject({
   offset: z.number().int().positive(),
   type: z.string(),
   createdAt: z.string(),
   payload: z.unknown().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  idempotencyKey: z.string().optional(),
 });
 
 /** A wire event (a capnweb proxy value or a plain object) as the reducer's `Event`, or null when it

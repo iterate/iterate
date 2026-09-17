@@ -52,7 +52,7 @@ export type Inspect = {
   llmRequest: (llmRequestOffset: number) => void;
   scriptExecution: (executionId: string) => void;
 };
-/** A signed download URL for a file under the agent's path — the page's `itx.files` door. */
+/** A signed download URL for a file under the agent's path — the page's `itx.files` call. */
 export type SignedUrl = (path: string) => Promise<string>;
 
 export function AgentFeedItemRow({

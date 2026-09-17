@@ -390,15 +390,9 @@ function RawEventContent({
         <SheetDescription>No event at that offset on this path.</SheetDescription>
       </SheetHeader>
     );
-  const { streamPath: _path, ...rest } = event;
-  const ordered = {
-    type: rest.type,
-    payload: rest.payload,
-    metadata: rest.metadata,
-    idempotencyKey: rest.idempotencyKey,
-    offset: rest.offset,
-    createdAt: rest.createdAt,
-  };
+  // Signal first: type and payload, then the rest of the envelope as the wire carried it.
+  const { streamPath: _path, type, payload, offset: at, createdAt, ...rest } = event;
+  const ordered = { type, payload, ...rest, offset: at, createdAt };
   return (
     <>
       <SheetHeader className="shrink-0 pr-12">

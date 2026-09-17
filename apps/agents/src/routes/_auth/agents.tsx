@@ -206,7 +206,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
   });
   const facet = AgentLive.safeParse(live.value);
   // The turn is over when the facet holds no obligation — a pause included (a paused loop owes no
-  // follow-up round). Without live state at all (the door failed), the log alone decides: the
+  // follow-up round). Without live state at all (the read failed), the log alone decides: the
   // reducer settles only once no step is running, and a follow-up round reopens an activity.
   const idle = facet.success
     ? !facet.data.openRequest &&
