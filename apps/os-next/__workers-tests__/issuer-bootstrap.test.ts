@@ -229,13 +229,18 @@ test("consent grants only the scopes left ticked; organizations:write, not proje
   expect((await narrow.info()).scopes).toEqual(["iterate"]);
   await expect(narrow.createOrg("Refused organization")).rejects.toThrow(/organizations:write/);
   await expect(narrow.grants.list()).rejects.toThrow(/Account permission/);
+  // without the scope a project-narrowed grant sees only its projects' organizations
+  expect((await narrow.orgs()).map((candidate) => candidate.id)).toEqual([org.id]);
   // every scope ticked: the grant is narrowed to one project and still creates an organization —
-  // which is the person's; the grant's own reach is unchanged and does not see it
+  // and, holding organizations:write, lists every organization of the person, the new one included
   const full = await grant(["iterate", "account", "organizations:write"]);
   expect((await full.info()).scopes).toEqual(["iterate", "account", "organizations:write"]);
   const created = await full.createOrg("Created by a project-narrowed grant");
   expect((await issuer.orgs()).map((candidate) => candidate.id)).toContain(created.id);
-  expect((await full.orgs()).map((candidate) => candidate.id)).not.toContain(created.id);
+  expect((await full.orgs()).map((candidate) => candidate.id)).toContain(created.id);
+  expect((await full.projects.list()).map((candidate) => candidate.id)).toEqual([
+    "ticked-scopes-project",
+  ]);
 });
 
 test("consent requires PKCE, defaults empty scopes, rejects empty reach and returns a cancellable request", async () => {

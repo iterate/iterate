@@ -229,11 +229,14 @@ export class SessionRpcTarget extends RpcTarget {
     };
   }
 
+  /** The person's organizations. A grant narrowed to projects sees only the organizations those
+   *  projects belong to — unless it holds `organizations:write`, which is the organizations
+   *  themselves: every one the person belongs to, the one it just created included. */
   async orgs() {
-    const { reach } = this.#authority;
+    const { reach, scopes } = this.#authority;
     if (reach === "every" || !("userId" in reach)) return [];
     const orgs = await this.#input.directory.listOrgs(reach.userId);
-    if (!("projectIds" in reach)) return orgs;
+    if (!("projectIds" in reach) || scopes?.includes("organizations:write")) return orgs;
     const projects = await this.#input.directory.reachableProjects(reach);
     return orgs.filter((org) => projects.some((project) => project.orgId === org.id));
   }

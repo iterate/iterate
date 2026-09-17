@@ -27,7 +27,7 @@
       "Required — what the app is for.",
     ],
     account: ["See and end your sessions, and mint personal access tokens", "Optional."],
-    "organizations:write": ["Create organizations for you", "Optional."],
+    "organizations:write": ["See all your organizations and create new ones", "Optional."],
   };
   const state = {
     view: null,
