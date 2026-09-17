@@ -10,26 +10,19 @@
 //      `workerd` condition (capnweb's workerd build: inside a loaded isolate its RpcTarget IS the
 //      cloudflare:workers one, so one class, not two). The SDK is the branch's: whatever `iterate` the
 //      workspace holds is what dev, tests, a preview and prd inject — pinning by construction.
-//   3. src/generated/presence-processor-source.js — the demo facet (src/client/presence/) bundled the
-//      way an author's tooling would: its SDK imports left external as "./processor.js", the module
-//      the host injects. The /demo page installs it.
-//   4. dist/client/ — THE CONSOLE: src/console/main.tsx → console.js (React and the SDK's browser
-//      client inlined, ~150 KiB gzipped) beside console.css — the static assets wrangler.jsonc
-//      `assets` serves on the platform host, mounted by the shell control-plane.ts renders.
+//   3. src/generated/presence-processor-source.js — the presence facet (src/client/presence/), the e2e
+//      fixtures' demo processor, bundled the way an author's tooling would: its SDK imports left
+//      external as "./processor.js", the module the host injects.
 //
-// The two generated modules have committed `.d.ts` siblings, so `tsc` and knip resolve the imports
-// without a build; every runtime lane runs this first (vitest.global-setup.ts, scripts/dev.ts,
-// scripts/deploy.ts). `--watch` keeps the console rebuilding (`pnpm dev`).
-import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+// The issuer's pages need no build at all: public/ is served as written (authorize.js imports React,
+// htm and capnweb through the shell's import map — control-plane.ts). The two generated modules have
+// committed `.d.ts` siblings, so `tsc` and knip resolve the imports without a build; every runtime
+// lane runs this first (vitest.global-setup.ts, scripts/dev.ts, scripts/deploy.ts).
+import { mkdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import process from "node:process";
-import {
-  build as esbuild,
-  context as esbuildContext,
-  type BuildOptions,
-  type Plugin,
-} from "esbuild";
+import { build as esbuild, type Plugin } from "esbuild";
 import { writeWranglerConfig } from "./generate-wrangler-config.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -79,8 +72,8 @@ async function presenceProcessorSource(): Promise<{ "cap.js": string }> {
   return { "cap.js": bundled.outputFiles[0]!.text };
 }
 
-/** Everything above, written; the console built once, or kept building with `watch`. */
-export async function build(options: { watch?: boolean } = {}): Promise<void> {
+/** Everything above, written. */
+export async function build(): Promise<void> {
   writeWranglerConfig();
   mkdirSync(path.join(root, "src/generated"), { recursive: true });
   writeFileSync(
@@ -91,26 +84,6 @@ export async function build(options: { watch?: boolean } = {}): Promise<void> {
     path.join(root, "src/generated/presence-processor-source.js"),
     `export default ${JSON.stringify(await presenceProcessorSource())};\n`,
   );
-  mkdirSync(path.join(root, "dist/client"), { recursive: true });
-  copyFileSync(path.join(root, "src/console.css"), path.join(root, "dist/client/console.css"));
-  const console: BuildOptions = {
-    entryPoints: [path.join(root, "src/console/main.tsx")],
-    bundle: true,
-    format: "esm",
-    platform: "browser",
-    target: "es2022",
-    jsx: "automatic",
-    minify: !options.watch,
-    sourcemap: options.watch ? "inline" : false,
-    outfile: path.join(root, "dist/client/console.js"),
-    logLevel: "info",
-  };
-  if (options.watch) {
-    const context = await esbuildContext(console);
-    await context.watch();
-    return;
-  }
-  await esbuild(console);
 }
 
-if (process.argv[1]?.endsWith("build.ts")) await build({ watch: process.argv.includes("--watch") });
+if (process.argv[1]?.endsWith("build.ts")) await build();

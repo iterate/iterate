@@ -13,7 +13,7 @@
 //     new commit — the base ConfigWorker's one convention — so the next event is answered by the new code
 //   • DEPLOYED ONLY: the same worker with its source in a real Artifacts repo — the rewrite's producer
 //     is `itx.repos.get('/repos/config').readFile('worker.ts')` and nothing else changes
-//     (`WORKER_BASE_URL=https://os.iterate2.com pnpm e2e config-worker`)
+//     (`WORKER_BASE_URL=https://auth.iterate2.com pnpm e2e config-worker`)
 
 import { expect, test } from "vitest";
 import { append, freshCtx, openItx, readAll, until } from "./support/client.ts";

@@ -2,8 +2,8 @@
 // Local workerd enforces no memory limit (NullIsolateLimitEnforcer), so the proof that counts is the
 // DEPLOYED worker, where the 128 MiB isolate is real:
 //
-//   WORKER_BASE_URL=https://os.iterate2.com pnpm e2e isolate-ceilings                        (pins + the deterministic deployed rows)
-//   RUN_ISOLATE_CRASH_HUNT=1 WORKER_BASE_URL=https://os.iterate2.com pnpm e2e isolate-ceilings   (+ the crash hunt, opt-in)
+//   WORKER_BASE_URL=https://auth.iterate2.com pnpm e2e isolate-ceilings                        (pins + the deterministic deployed rows)
+//   RUN_ISOLATE_CRASH_HUNT=1 WORKER_BASE_URL=https://auth.iterate2.com pnpm e2e isolate-ceilings   (+ the crash hunt, opt-in)
 //
 // The MEMORY PINS run everywhere (locally they prove only the platform's OTHER ceiling: a read page
 // over 32 MiB cannot leave the DO over Workers RPC — "Serialized RPC arguments or return values are

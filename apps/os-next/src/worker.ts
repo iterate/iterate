@@ -20,9 +20,9 @@ import { identityDoor } from "./identity.ts";
 import { isSecretOAuthState, SECRET_OAUTH_CALLBACK_PATH } from "./secret-oauth.ts";
 import type { Reach } from "./directory.ts";
 import { oauthResponse } from "./api.ts";
-import { consoleHandler } from "./control-plane.ts";
+import { issuerHandler } from "./control-plane.ts";
 import { appConfigOf } from "./app-config.ts";
-import { projectHostOf, hostnameLabelsUnderBase } from "./hosts.ts";
+import { customProjectHostOf, projectHostOf, hostnameLabelsUnderBase } from "./hosts.ts";
 import { FILES_APP_LABEL, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
 import { directory } from "./directory.ts";
@@ -242,7 +242,10 @@ export default {
       directory: directory(env.DB),
       appConfig,
     };
-    const projectHost = projectHostOf(url.hostname, projectHostnameBase);
+    // A project host under the base, or one of the deployment's custom hostnames (a project's apex).
+    const projectHost =
+      projectHostOf(url.hostname, projectHostnameBase) ??
+      customProjectHostOf(url.hostname, appConfig.projectCustomHostnames);
     if (projectHost) {
       // ADMISSION, before any Durable Object is dialled: a context is created on first touch, so a
       // hostname whose project the in-process directory does not know must never reach one — else
@@ -361,12 +364,12 @@ export default {
     if (browserResponse) return browserResponse;
     if (url.pathname.startsWith("/api")) return new Response("Not found", { status: 404 });
 
-    // THE STATIC ASSETS — the console's bundle (dist/client, scripts/build.ts) — are the PLATFORM
+    // THE STATIC ASSETS — the issuer's page files (public/, served as written) — are the PLATFORM
     // HOST's. Every request runs
     // worker-first (wrangler.jsonc `run_worker_first: true` — the patterns are paths, never hostnames,
     // so "every host but a project host" is spelled by asking the binding HERE, after the project
     // hosts and the platform's own doors): no asset ever answers on a project host, and a miss falls
-    // through to the control plane — the console's shell. Absent in the workers lane.
+    // through to the control plane. Absent in the workers lane.
     if ((request.method === "GET" || request.method === "HEAD") && env.ASSETS) {
       const asset = await env.ASSETS.fetch(request);
       if (asset.status !== 404) return asset;
@@ -385,7 +388,7 @@ export default {
     }
 
     // Everything else on the platform host is the CONTROL PLANE, in-process (src/control-plane.ts
-    // lists its doors: the OAuth AS, /mcp, the console). One worker, one front door.
-    return oauthResponse(request, env, ctx, consoleHandler);
+    // lists its doors: the OAuth AS, /mcp, the issuer's pages). One worker, one front door.
+    return oauthResponse(request, env, ctx, issuerHandler);
   },
 };

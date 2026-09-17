@@ -56,7 +56,7 @@ ESP32's 16 KiB inbox slot.
 ## Install, run, prove
 
 ```bash
-export WORKER_BASE_URL=https://os.iterate2.com
+export WORKER_BASE_URL=https://auth.iterate2.com
 export ADMIN_API_SECRET=$(doppler secrets get APP_CONFIG_ADMIN_API_SECRET --project project-worker --config prd --plain)
 export OPENAI_API_KEY=$(doppler secrets get OPENAI_API_KEY --project os --config dev --plain)
 PROJECT=prj-voice pnpm exec tsx scripts/voice-install.ts

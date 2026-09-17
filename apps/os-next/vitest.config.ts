@@ -6,7 +6,7 @@
 //               under test is src/worker.ts, bundled by the plugin — SELF.fetch, never
 //               `import worker from "../src/worker.ts"`.
 //   • e2e     — ONE real worker booted once by e2e/support/global-setup.ts (local workerd by default;
-//               the DEPLOYED worker with `WORKER_BASE_URL=https://os.iterate2.com`,
+//               the DEPLOYED worker with `WORKER_BASE_URL=https://auth.iterate2.com`,
 //               the proof that counts), every file a capnweb client at /api exactly like a production
 //               client, files in parallel, tests within a file sequential (the per-test session-dispose
 //               in support/setup.ts must not race a sibling)
@@ -14,8 +14,7 @@
 //               files one at a time so scenarios never share the wire; `BENCH_OUT=<file.json>` writes
 //               the raw samples
 // Every project runs after THE BUILD (vitest.global-setup.ts → scripts/build.ts): the generated modules
-// the worker imports and the console bundle the e2e worker serves. Browser E2E is Playwright
-// (playwright.config.ts + specs/**).
+// the worker imports. Browser E2E is Playwright (playwright.config.ts + specs/**).
 
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";

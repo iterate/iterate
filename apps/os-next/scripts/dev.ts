@@ -1,10 +1,11 @@
 // scripts/dev.ts — `pnpm dev`: THE BUILD once (scripts/build.ts — wrangler.jsonc, the generated
-// modules, the console), then the console in watch mode beside `wrangler dev` on wrangler.jsonc's
-// top-level block (local dev: `routes: []`, localhost vars), which bundles and reloads src/worker.ts
-// itself. The directory schema goes into the persisted local D1 first (src/control-plane.sql — IF NOT
-// EXISTS, so every run); state lives in .wrangler/state. Project hosts hang under `localhost`
-// (`<project>.localhost:<port>` — Chromium resolves them to loopback) and the deployment's secrets are
-// plain dev values. Extra arguments go to `wrangler dev`: `pnpm dev -- --port 8788`.
+// modules), then `wrangler dev` on wrangler.jsonc's top-level block (local dev: `routes: []`,
+// localhost vars), which bundles and reloads src/worker.ts itself; the issuer's pages (public/) are
+// served as written, so a save there is a browser reload. The directory schema goes into the
+// persisted local D1 first (src/control-plane.sql — IF NOT EXISTS, so every run); state lives in
+// .wrangler/state. Project hosts hang under `localhost` (`<project>.localhost:<port>` — Chromium
+// resolves them to loopback) and the deployment's secrets are plain dev values. Extra arguments go to
+// `wrangler dev`: `pnpm dev -- --port 8788`.
 import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
@@ -17,7 +18,6 @@ const port = portIndex >= 0 ? args[portIndex + 1] : "8788";
 const config = ["--config", "wrangler.jsonc", "--persist-to", ".wrangler/state"];
 
 await build();
-void build({ watch: true });
 const schema = spawnSync(
   "pnpm",
   [

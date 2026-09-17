@@ -43,9 +43,9 @@ the only place capnweb terminates. It reaches the DO over Workers RPC. Loaded
 userspace code runs in Worker Loader isolates or as facets of the DO, and its
 entire world is one binding, `env.ITX`. The control plane — an OAuth AS, the D1
 directory of users, orgs and projects (a project's id IS its DNS-safe name),
-`/mcp`, the console's server half — runs IN-PROCESS as the same worker's
-catch-all (`src/control-plane.ts`), and the console itself is React pages
-(`src/console/**`) bundled by esbuild and served by the same worker; a project host
+`/mcp`, the issuer's two pages — runs IN-PROCESS as the same worker's
+catch-all (`src/control-plane.ts`): `/login` rendered whole and the `/authorize` consent, a no-build
+React page (`public/authorize.js`) served by the same worker; a project host
 (`<app>--<project>.<base>`, `<app>.<project>.<base>`, the apex `<project>.<base>` — the one
 HTTP way into a project) is admitted by one directory read before any DO is
 dialled. Egress is terminal: secrets substituted, then `fetch`.
@@ -103,17 +103,14 @@ packages/v3/project-worker/
                                  src/worker.ts, bundled by the plugin)
   vitest.config.ts               THE ONE test config: four projects — unit · workers · e2e · bench
   scripts/                       build.ts (THE BUILD, one esbuild script: wrangler.jsonc, src/generated/*.js — the
-                                 injected SDK's text and the demo facet's source — and dist/client, the console
-                                 bundle), dev.ts (`pnpm dev`: the build, then wrangler dev on wrangler.jsonc, which
-                                 bundles src/worker.ts itself)
+                                 injected SDK's text and the presence fixture's source), dev.ts (`pnpm dev`: the
+                                 build, then wrangler dev on wrangler.jsonc, which bundles src/worker.ts itself)
+  public/                        THE ISSUER'S PAGES, served as written (no build): authorize.js (/authorize: the
+                                 OAuth consent and THE PROJECT SELECTION, org + project creation inline — React,
+                                 htm and capnweb through the shell's import map) · issuer.css. /login is HTML the
+                                 worker renders whole (control-plane.ts). The OS — dashboard, sessions, agents — is
+                                 apps/agents on os.iterate2.com, an ordinary OAuth client of this issuer.
   src/
-    console/                     THE CONSOLE: React pages in one esbuild bundle (dist/client/console.js), mounted
-                                 into the shell control-plane.ts serves per path — main.tsx (the entry: the path
-                                 picks the page, one `/api` session for all) · dashboard.tsx (/: orgs, projects,
-                                 create a project) · authorize.tsx (/authorize: the OAuth consent and THE PROJECT
-                                 SELECTION, org + project creation inline) · sessions.tsx (/sessions: grants,
-                                 personal access tokens) · account.tsx (/account: the LiveState proof) ·
-                                 demo.tsx (/demo). /login is HTML the worker renders (control-plane.ts). console.css
     worker.ts                    THE EDGE and the front door. default fetch: project-host ingress (the three
                                  host shapes, admission, x-iterate-app, the OAuth bearer or the app's
                                  /.auth/* session, the principal stamp —
@@ -194,7 +191,7 @@ packages/v3/project-worker/
                                  schema applied through the worker's own DB binding), every
                                  <primitive>-<claim>.e2e.test.ts speaks capnweb at /api through
                                  support/client.ts (the whole client surface a test uses).
-                                 WORKER_BASE_URL=https://os.iterate2.com pnpm e2e runs the
+                                 WORKER_BASE_URL=https://auth.iterate2.com pnpm e2e runs the
                                  same suite against the DEPLOYED worker; `deployedOnly` (support/project-host.ts)
                                  gates what only a deployment can prove
   __workers-tests__/             the workers project — @cloudflare/vitest-plugin over wrangler.test.jsonc,
@@ -226,7 +223,7 @@ imported as `capnweb`). There is no client SDK. The session shape is apps/os's.
 import { newWebSocketRpcSession, newHttpBatchRpcSession } from "capnweb";
 
 using api = newWebSocketRpcSession("wss://<worker>/api");
-const session = api.authenticate({ type: "from-server-cookie" }); // the console's login cookie rode the handshake
+const session = api.authenticate({ type: "from-server-cookie" }); // the issuer's login cookie rode the handshake
 const itx = session.projects.get("prj_demo"); // the project ROOT, path "/"
 const agent = itx.cd("/agents/x"); // a context within the project
 const inbox = agent.cd("../inbox"); // relative resolves; absolute by convention
@@ -1473,11 +1470,10 @@ origin — the provider wants its one resource as an absolute URL) owning `/oaut
 `/oauth/register` (DCR; CIMD for clients that self-describe by URL), `/.well-known/*` and the bearer
 check on `/mcp` (its ONLY protected route, and its ONE resource: `<origin>/mcp`, this origin the
 authorization server — every token is bound to it, a foreign one refused); everything else falls
-through to THE CONSOLE — `/login`, HTML the worker renders whole (control-plane.ts), and for `/`,
-`/authorize`, `/sessions`, `/account`, `/demo` the shell that mounts the console bundle
-(`src/console/**`, one esbuild bundle served as static assets), every page's data the public `/api`
-session; the one machine door beside them (`consoleDoor`) is the sign-in form's plain POST —
-`POST /login`,
+through to THE ISSUER'S PAGES — `/login`, HTML the worker renders whole (control-plane.ts), and
+`/authorize`, the shell that mounts `public/authorize.js` (no build: React, htm and capnweb through
+the shell's import map), its data the public `/api` session; the one machine door beside them
+(`signInDoor`) is the sign-in form's plain POST — `POST /login`,
 `/logout` (the session is the signed `__Host-itx-control-plane-session` cookie, `signClaims` under
 `APP_CONFIG_SESSION_SECRET`), `POST /projects` (a program creates projects over `/api`,
 `projects.create`), `POST /authorize`. The `/authorize` consent is THE PROJECT SELECTION: the user's
@@ -1490,7 +1486,7 @@ the bearer's principal, `project` optional when the grant reaches exactly one,
 required for the admin secret, refused outside the grant (apps/os's `resolveToolProject`) and refused
 as a context name (the
 expression `cd`s); an expression error is an `isError` result led by its code. No tool creates a
-project: a project is created on the console or over `/api` (`projects.create`). One more bearer
+project: a project is created on the OS, in consent, or over `/api` (`projects.create`). One more bearer
 rides the provider's `resolveExternalToken`: the admin secret (`{ actor: "admin" }`, every project);
 what any bearer reaches is its grant's `Reach` (`authorizationOf`, `src/oauth.ts`) — the projects
 the consent chose (a personal access token's, the ones named at mint), else the user's membership —
@@ -1708,7 +1704,7 @@ itself.
 | incarnation           | one life of the DO between evictions; the first door's `stream/woken` (`appendWakeRecord`, `reason: "alarm"` when that door is the alarm handler) opens each (offset 1 is the first one's `stream/created`); ephemeral offsets are unique within one                                                                                                                                                                                                 |
 | live state            | a `LiveState` holder's `{ rev, state }` plus `live-state/changed` deltas; clients chain revs and re-seed on a gap                                                                                                                                                                                                                                                                                                                                    |
 | egress                | any fetch leaving project code: `getSecret("/secrets/NAME")` (and `{ field: "a.b" }`) substituted in the DO (URL + headers; a missing or origin-bound secret is a 502), then the terminal `fetch` — no next door                                                                                                                                                                                                                                     |
-| control plane         | the in-process catch-all of the one worker (`src/control-plane.ts`): the OAuth AS, the D1 directory (users → orgs → projects; a project's id IS its slug), `/mcp`, the console's server half — `/login` rendered whole, the shell the console bundle (`src/console/**`) mounts into; what admits a project host and answers membership                                                                                                               |
+| control plane         | the in-process catch-all of the one worker (`src/control-plane.ts`): the OAuth AS, the D1 directory (users → orgs → projects; a project's id IS its slug), `/mcp`, the issuer's pages — `/login` rendered whole, the shell `public/authorize.js` mounts into; what admits a project host and answers membership                                                                                                                                      |
 | project host          | the one HTTP way into a project: `<app>--<project>.<base>` and `<app>.<project>.<base>` are the app `itx.apps.<app>` of the project's root context, the apex `<project>.<base>` its config worker's `fetch`; the Request verbatim, `x-iterate-app` the host's label; admitted by one directory read (421 otherwise); an OAuth grant — the app's `/.auth/*` browser session, or an access token as `Authorization: Bearer` — stamps `x-itx-principal` |
 | fetch lane            | the DO's `x-itx-expression` door: a project host from outside, a terminal `itx.x.fetch(request)` from inside a session, `env.ITX.fetch` from loaded code                                                                                                                                                                                                                                                                                             |
 

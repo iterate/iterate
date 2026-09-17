@@ -1,6 +1,7 @@
-// The fixed issuer shell: the OAuth AS's bindings, the sign-in door, and the console's two HTML
-// responses — /login rendered whole, every other console page an empty shell the console bundle
-// (src/console/, scripts/build.ts) fills over the public Cap’n Web session.
+// The fixed issuer shell: the OAuth AS's bindings, the sign-in door, and THE ISSUER'S TWO PAGES —
+// /login rendered whole, /authorize an empty shell that public/authorize.js fills over the public
+// Cap’n Web session (no build: React, htm and capnweb arrive through the shell's import map).
+// Everything else a person does with Iterate is an app's — an ordinary OAuth client of this issuer.
 import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import {
   codedError,
@@ -25,9 +26,9 @@ export interface Env extends DurableObjectEnv {
   DB: D1Database;
   /** Injected by the provider — the OAuth helper surface (parseAuthRequest / completeAuthorization / …). */
   OAUTH_PROVIDER: OAuthHelpers;
-  /** The static assets (wrangler.jsonc `assets`: dist/client — console.js + console.css, scripts/build.ts).
-   *  The PLATFORM HOST's alone: every request runs worker-first and src/worker.ts asks this binding
-   *  after the project hosts, so no asset answers on one. Absent in the workers lane
+  /** The static assets (wrangler.jsonc `assets`: public/ — authorize.js and issuer.css, served as
+   *  written). The PLATFORM HOST's alone: every request runs worker-first and src/worker.ts asks this
+   *  binding after the project hosts, so no asset answers on one. Absent in the workers lane
    *  (wrangler.test.jsonc binds none). */
   ASSETS?: Fetcher;
 }
@@ -57,11 +58,19 @@ export async function signIn(
   return startIssuerSession(env, user, input.next);
 }
 
-// ── the console ──
+// ── the issuer's pages ──
 
-/** The console's pages behind sign-in — each served the same shell; src/console/main.tsx picks the
- *  page by path and opens the `/api` session. `/login` is the one page the worker renders whole. */
-const CONSOLE_PATHS = new Set(["/", "/authorize", "/sessions", "/account", "/demo"]);
+/** The browser modules the consent page imports, pinned: React and htm (the page's `html` tagged
+ *  templates), the capnweb fork for the `/api` WebSocket. `react-dom` leaves `react` external so the
+ *  map resolves both to the one instance. An import map is the whole client toolchain. */
+const IMPORT_MAP = JSON.stringify({
+  imports: {
+    react: "https://esm.sh/react@19.2.7",
+    "react-dom/client": "https://esm.sh/react-dom@19.2.7/client?external=react",
+    htm: "https://esm.sh/htm@3.1.1",
+    "@iterate-com/capnweb": "https://esm.sh/@iterate-com/capnweb@0.12.2",
+  },
+});
 
 const escapeHtml = (text: string) =>
   text.replace(
@@ -69,15 +78,29 @@ const escapeHtml = (text: string) =>
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!,
   );
 
-/** One console document: the head every page shares (the one stylesheet, console.css), `body` as given. */
-function consoleDocument(body: string): Response {
+/** One issuer document: the head both pages share (the one stylesheet, public/issuer.css), `body` as
+ *  given, and — for the consent page — the import map and the module that mounts it, admitted by a
+ *  per-response nonce so the page's CSP names exactly its two script sources: this origin and the
+ *  pinned esm.sh modules. */
+function issuerDocument(body: string, page?: { module: string }): Response {
+  const nonce = crypto.randomUUID();
+  const scripts = page
+    ? `<script type="importmap" nonce="${nonce}">${IMPORT_MAP}</script><script type="module" nonce="${nonce}" src="${page.module}"></script>`
+    : "";
   return new Response(
-    `<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Control plane</title><link rel="stylesheet" href="/console.css"><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%278%27 fill=%27%23111%27/%3E%3Cpath d=%27M16 8v16%27 stroke=%27white%27 stroke-width=%274%27/%3E%3C/svg%3E"></head><body>${body}</body></html>\n`,
+    `<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Iterate</title><link rel="stylesheet" href="/issuer.css"><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%278%27 fill=%27%23111%27/%3E%3Cpath d=%27M16 8v16%27 stroke=%27white%27 stroke-width=%274%27/%3E%3C/svg%3E">${scripts}</head><body>${body}</body></html>\n`,
     {
       headers: {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
-        "Content-Security-Policy": "frame-ancestors 'none'",
+        "Content-Security-Policy": [
+          "default-src 'self'",
+          `script-src 'self' https://esm.sh 'nonce-${nonce}'`,
+          "connect-src 'self' https://esm.sh",
+          "style-src 'self'",
+          "img-src 'self' data:",
+          "frame-ancestors 'none'",
+        ].join("; "),
         "X-Frame-Options": "DENY",
       },
     },
@@ -85,7 +108,7 @@ function consoleDocument(body: string): Response {
 }
 
 /** /login, rendered whole — it needs the request (who is signed in, which sign-ins this deployment
- *  offers, where to continue) and nothing live. The email form posts back to `consoleDoor`; Google
+ *  offers, where to continue) and nothing live. The email form posts back to `signInDoor`; Google
  *  is the identity door (identity.ts); "switch account" ends the browser's session and returns here. */
 async function loginPage(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const config = appConfigOf(env);
@@ -112,11 +135,11 @@ async function loginPage(request: Request, env: Env, ctx: ExecutionContext): Pro
       ]
         .filter(Boolean)
         .join("\n");
-  return consoleDocument(`<main><h1>Sign in</h1>\n${body}\n</main>`);
+  return issuerDocument(`<main><h1>Sign in</h1>\n${body}\n</main>`);
 }
 
-/** Issuer forms work before hydration. App actions use Cap’n Web. */
-async function consoleDoor(request: Request, env: Env): Promise<Response | null> {
+/** The sign-in form's POST — a plain form, no script needed to sign in. */
+async function signInDoor(request: Request, env: Env): Promise<Response | null> {
   if (request.method !== "POST") return null;
   const url = new URL(request.url);
   const { pathname } = url;
@@ -142,23 +165,22 @@ async function consoleDoor(request: Request, env: Env): Promise<Response | null>
   return null;
 }
 
-/** The sign-in door, the sign-in page, and the console shell, with same-origin POST checks. */
-export const consoleHandler: Handler = {
+/** The issuer's pages: the sign-in door and page, the consent shell, with same-origin POST checks.
+ *  Anything else on the platform origin is not a page — the OS lives on its own origin. */
+export const issuerHandler: Handler = {
   async fetch(request, env, ctx) {
     if (request.method === "POST" && !isSameOriginBrowserRequest(request))
       return new Response("403: a cross-site request cannot act on this session\n", {
         status: 403,
       });
-    const door = await consoleDoor(request, env);
+    const door = await signInDoor(request, env);
     if (door) return door;
     if (request.method !== "GET" && request.method !== "HEAD")
       return new Response("Method not allowed", { status: 405 });
     const { pathname } = new URL(request.url);
     if (pathname === "/login") return loginPage(request, env, ctx);
-    if (CONSOLE_PATHS.has(pathname))
-      return consoleDocument(
-        `<div id="root"></div><script type="module" src="/console.js"></script>`,
-      );
+    if (pathname === "/authorize")
+      return issuerDocument(`<div id="root"></div>`, { module: "/authorize.js" });
     return new Response("Not found", { status: 404 });
   },
 };

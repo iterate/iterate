@@ -16,10 +16,10 @@ serve it on `<project>.iterate2.app`. It can also be installed as `itx.apps.note
 to serve `notes--<project>.iterate2.app`.
 
 Local dev: `pnpm dev` (Vite, with the Cloudflare plugin's local workerd). It talks to
-`https://os.iterate2.com` by default; to use a local os-next (`pnpm --dir ../os-next dev -- --port 8788`)
+`https://auth.iterate2.com` by default; to use a local os-next (`pnpm --dir ../os-next dev -- --port 8788`)
 put `ITERATE_ORIGIN=http://localhost:8788` in a gitignored `.dev.vars` here.
 
 Deploy: `pnpm run deploy --env prd` — after the platform it talks to
-(`os.iterate2.com`, which follows `main`) carries `itx.repos` and
+(`auth.iterate2.com`, which follows `main`) carries `itx.repos` and
 `itx.workspaces`. See the root environment map and the os-next's unified-auth
 build notes for the deployed E2E proof.

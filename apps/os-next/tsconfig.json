@@ -12,6 +12,5 @@
     "verbatimModuleSyntax": true,
     "isolatedModules": true
   },
-  "include": ["src"],
-  "exclude": ["src/console"]
+  "include": ["src"]
 }

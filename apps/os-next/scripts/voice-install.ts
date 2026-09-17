@@ -6,7 +6,7 @@
 // own root worker, `itx.worker`, is untouched), sets /secrets/openai, and runs one throwaway
 // conversation so the loader has both facet isolates warm before the first real press.
 //
-//   OPENAI_API_KEY=… WORKER_BASE_URL=https://os.iterate2.com ADMIN_API_SECRET=… \
+//   OPENAI_API_KEY=… WORKER_BASE_URL=https://auth.iterate2.com ADMIN_API_SECRET=… \
 //   PROJECT=prj-voice pnpm exec tsx scripts/voice-install.ts
 import { createHash } from "node:crypto";
 import { build } from "esbuild";

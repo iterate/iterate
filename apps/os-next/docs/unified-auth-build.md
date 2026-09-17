@@ -5,7 +5,7 @@ This is the current contract, incorporating the owner's corrections to the
 
 - `/api` is Cap’n Web. MCP is `https://mcp.iterate2.com/`, optionally routed to
   `/mcp` internally. Sharing authentication never changes these protocol routes.
-- The console and issuer are `https://os.iterate2.com`; project apps use
+- The console and issuer are `https://auth.iterate2.com`; project apps use
   `<app>--<project>.iterate2.app`. Issuer and allowed origins are configuration.
 - One released OAuth provider, one grant store and one authorization policy.
   DCR is off. Console and userspace apps share CIMD + code/PKCE browser login.

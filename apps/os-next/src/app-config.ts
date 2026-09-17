@@ -50,6 +50,30 @@ export const AppConfig = z.object({
   /** The base every project host hangs under — `<app>--<project>.<base>`, `<project>.<base>`
    *  (the project host section); blank ⇒ no project-host ingress. */
   projectHostnameBase: z.string().trim().default(""),
+  /** Hostnames of the deployment's own that ARE a project's apex — `iterate2.com=iterate`, comma-separated
+   *  pairs: a request there lands on that project's config worker `fetch` (hosts.ts
+   *  `customProjectHostOf`); the route and the DNS record are the deployment's (envs.ts). Blank ⇒ none.
+   *  (Pairs, not JSON: the shared env parser expands a JSON value into nested overrides.) */
+  projectCustomHostnames: z
+    .string()
+    .trim()
+    .default("")
+    .transform((text, ctx): Record<string, string> => {
+      const hostnames: Record<string, string> = {};
+      for (const pair of text.split(",")) {
+        if (!pair.trim()) continue;
+        const [hostname = "", project = "", ...rest] = pair.split("=").map((part) => part.trim());
+        if (!hostname || !project || rest.length) {
+          ctx.addIssue({
+            code: "custom",
+            message: `a comma-separated list of hostname=project, got ${JSON.stringify(pair.trim())}`,
+          });
+          return {};
+        }
+        hostnames[hostname.toLowerCase()] = project;
+      }
+      return hostnames;
+    }),
   /** The HMAC secret the control plane's session cookie is signed with (control-plane.ts). */
   sessionSecret: requiredSecret,
   /** The deployment's admin secret — `authenticate({ type: "admin-secret" })` and the project host's

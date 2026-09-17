@@ -95,7 +95,7 @@ the application and leaves the board looking absent rather than offline.
 ```sh
 python3 tools/make-config-image.py \
   --wifi-ssid <ssid> --wifi-password <password> \
-  --os-base-url https://os.iterate2.com \
+  --os-base-url https://auth.iterate2.com \
   --project-id prj-voice --project-api-key "$OPERATOR_SECRET" \
   --out /tmp/cfg.bin
 python -m esptool --chip esp32s3 -p /dev/cu.usbmodem2101 \

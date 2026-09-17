@@ -4,16 +4,16 @@ One Cloudflare Worker, one package: `src/worker.ts` is the stateless edge (capnw
 project-host ingress — `<app>--<project>.<base>`, `<app>.<project>.<base>`, the apex
 `<project>.<base>` — the one HTTP way into a project; the static assets on the platform host) with
 the control plane in-process as its catch-all (`src/control-plane.ts`: OAuth AS + a D1 directory +
-`/mcp`, the ONE MCP server for every project + the console's server half) and THE CONSOLE — React
-pages in one esbuild bundle (`src/console/**`: the account page at `/`, the `/authorize` consent,
-`/sessions`) mounted into a shell the same worker serves, `/login` rendered by the worker whole;
+`/mcp`, the ONE MCP server for every project + the issuer's server half) and THE ISSUER'S TWO PAGES —
+`/login`, HTML the worker renders whole, and the `/authorize` consent, a no-build React page
+(`public/authorize.js`: React, htm and capnweb through the shell's import map) over the same `/api`;
 `src/iterate-context-durable-object.ts` is THE CONTEXT — one Durable Object per `{ projectId, path }`
 holding the event log, the core reduce, subscription delivery, the facets, the rpc-stub pagers and
 the fetch door. Everything a client does is one dotted expression on `itx`.
 
 ```ts
 using api = newWebSocketRpcSession("wss://<worker>/api"); // the client's only dependency: capnweb
-const session = api.authenticate({ type: "from-server-cookie" }); // the console's login cookie rode the handshake
+const session = api.authenticate({ type: "from-server-cookie" }); // the issuer's login cookie rode the handshake
 const itx = await session.projects.create({ project: "my-project" }); // → the project's root context
 await itx.append({ type: "note", payload: { n: 1 } });
 ```
@@ -23,7 +23,7 @@ await itx.append({ type: "note", payload: { n: 1 } });
 same-origin request, or an `Authorization: Bearer` access token) and `admin-secret` (every project;
 with `as` a user's session without a login — the e2e project, tooling). OAuth grants are the ONE
 credential for every other principal: a browser session, a connected app, and a PERSONAL ACCESS
-TOKEN — `session.grants.mint({ name, projects })` on the console's sessions page: one finite grant
+TOKEN — `session.grants.mint({ name, projects })` on the OS's sessions page (apps/agents): one finite grant
 (30 days, scoped to the projects named, shown once, revocable from `session.grants.list()`/`end`)
 whose bearer opens `/api`, `/mcp` and a covered project host as the user.
 
@@ -32,7 +32,7 @@ worker itself (`/authorize`, `/oauth/token`, `/oauth/register`, `/.well-known/*`
 picks the projects the token may reach, and it exposes ONE tool, `run({ project?, script })`
 — the text of `async (itx) => …` evaluated in that project's context under the caller's
 principal (`run(script)` when the token reaches exactly one project). Whatever a caller might read —
-who it is, which projects — is a one-line script; a project is created on the console or over `/api`. The
+who it is, which projects — is a one-line script; a project is created on the OS, in consent, or over `/api`. The
 admin secret is a bearer on `/mcp` too (it reaches every project, so `run` must name one).
 
 ## Read next
@@ -64,11 +64,23 @@ one is warned about at boot and ignored). The two secrets are wrangler secrets o
 | `APP_CONFIG_TEST_EMAIL_LOGIN`                                       | no       | `true` permits unverified email sign-in; disabled remotely by default                        |
 | `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`, `APP_CONFIG_ARTIFACTS_NAMESPACE` | no       | the git remotes `itx.cfArtifacts` names for the repo facet                                   |
 
-## The console
+## Hostnames — the issuer, the OS, the projects
 
-The dashboard, session management and OAuth consent are React pages (`src/console/**`) in one
-esbuild bundle the worker serves as static assets; `/login` is HTML the worker renders whole.
-They share one `createIterateClient` and an ordinary `/api` Cap’n Web session. The dashboard
+| Origin              | What answers                                                                                                                                                           | Whose                                                                                                                                                                   |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auth.iterate2.com` | THE ISSUER: `/login`, the `/authorize` consent, `/oauth/*`, `/.well-known/*`, `/api` for bearers                                                                       | the platform — this worker; the one origin that is cryptographically load-bearing (the OAuth issuer identifier, the `__Host-` cookie, the resource tokens are bound to) |
+| `mcp.iterate2.com`  | the ONE MCP server, a door beside `/api`                                                                                                                               | the platform — this worker                                                                                                                                              |
+| `*.iterate2.app`    | project hosts: `<app>--<project>`, `<app>.<project>`, the apex `<project>` (the config worker's `fetch`)                                                               | userspace                                                                                                                                                               |
+| `iterate2.com`      | the `iterate` project's apex — its config worker's `fetch`, through the custom-hostname door (`APP_CONFIG_PROJECT_CUSTOM_HOSTNAMES`, envs.ts `projectCustomHostnames`) | userspace                                                                                                                                                               |
+| `os.iterate2.com`   | THE OS — the fat first-party app (apps/agents: agents, the dashboard, sessions and personal access tokens), an ordinary OAuth client of the issuer                     | an app; anyone could ship another                                                                                                                                       |
+
+The platform serves two pages and nothing else a person looks at: sign-in, because the session
+cookie is the issuer origin's, and consent, because the authorization server is the one that asks.
+Both read `public/issuer.css`; consent is `public/authorize.js`, served as written — no build, React
+and htm pinned on esm.sh through the shell's import map (`control-plane.ts`), the session the
+browser's cookie riding the `/api` WebSocket handshake. Everything else — the dashboard, sessions,
+agents — is an app on its own origin holding an OAuth grant (`kind: "app"`, the `account` scope for
+sessions); only the issuer's own grant (`kind: "issuer"`) can approve consent. The dashboard
 component and loader are also used verbatim by the independently hosted Notes app.
 
 Google login proves identity to our issuer. Its callback establishes one ordinary, revocable
@@ -76,8 +88,8 @@ issuer grant through the same `BrowserSession` used by other apps. There is no s
 identity cookie. The explicit `/login` page has a small server function for safe login options;
 the test/admin `POST /login` path establishes that same issuer session.
 
-For the isolated `os.iterate2.com` deployment, `testEmailLogin: true` in `envs.ts`
-enables the email form at [Sign in](https://os.iterate2.com/login). Enter any email
+For the isolated `auth.iterate2.com` deployment, `testEmailLogin: true` in `envs.ts`
+enables the email form at [Sign in](https://auth.iterate2.com/login). Enter any email
 to assume that user immediately, without verification. Localhost also offers this
 form. Other deployments require Google unless they explicitly enable test login.
 
@@ -97,18 +109,18 @@ authorization contract.
 wrangler bundles the worker itself from `src/worker.ts` — `wrangler dev`, `wrangler deploy`, the e2e
 harness and the workers test lane all start there. THE BUILD (`scripts/build.ts`, one esbuild script,
 about a second) writes what the worker cannot import from source: `wrangler.jsonc` from the root
-`envs.ts`, `src/generated/*.js` (the injected processor SDK's text, the demo facet's source — their
-`.d.ts` siblings are committed, so `tsc` and knip need no build) and `dist/client` (the console bundle +
-`console.css`, the `assets` the platform host serves). Every lane runs it first.
+`envs.ts` and `src/generated/*.js` (the injected processor SDK's text, the presence fixture's source —
+their `.d.ts` siblings are committed, so `tsc` and knip need no build). The issuer's pages (`public/`)
+need no build at all. Every lane runs the build first.
 
 ```bash
-pnpm dev -- --port 8788         # the build (the console kept rebuilding), the directory schema into the local D1,
-                                # wrangler dev on wrangler.jsonc (project hosts under `<project>.localhost:8788`;
-                                # dev values for the secrets — scripts/dev.ts)
-pnpm build                      # scripts/build.ts: wrangler.jsonc + src/generated/*.js + dist/client
-pnpm run typecheck              # the four tsconfigs (worker · console · tests · scripts)
+pnpm dev -- --port 8788         # the build, the directory schema into the local D1, wrangler dev on
+                                # wrangler.jsonc (project hosts under `<project>.localhost:8788`;
+                                # dev values for the secrets — scripts/dev.ts); a save under public/ is a reload
+pnpm build                      # scripts/build.ts: wrangler.jsonc + src/generated/*.js
+pnpm run typecheck              # the three tsconfigs (worker · tests · scripts)
 pnpm test                       # every lane: unit (node), workers (workerd, src/worker.ts), e2e (one real worker), bench
 pnpm e2e                        # the wire lane alone, against a local worker the harness bundles from src
-WORKER_BASE_URL=https://os.iterate2.com ADMIN_API_SECRET=… pnpm e2e   # the proof that counts
+WORKER_BASE_URL=https://auth.iterate2.com ADMIN_API_SECRET=… pnpm e2e   # the proof that counts
 pnpm run deploy                 # the build, then wrangler deploy --config wrangler.jsonc --env <name>
 ```

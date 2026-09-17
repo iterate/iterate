@@ -4,7 +4,7 @@ permissions:
   deployments: write
 concurrency:
   # Every ref deploys to the same production Worker (os-next-prd:
-  # os.iterate2.com, mcp.iterate2.com, *.iterate2.app). Never interrupt a
+  # auth.iterate2.com, mcp.iterate2.com, *.iterate2.app). Never interrupt a
   # credentialed deployment midway through its rollout.
   group: deploy-os-next-production
   cancel-in-progress: false
@@ -51,14 +51,14 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - id: metadata
         name: Resolve OS-Next deploy URL
-        run: echo "public_url=https://os.iterate2.com" >> "$GITHUB_OUTPUT"
+        run: echo "public_url=https://auth.iterate2.com" >> "$GITHUB_OUTPUT"
       - name: Deploy apps/os-next
         working-directory: apps/os-next
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run -- pnpm run-script deploy --env prd
   # THE PROOF THAT COUNTS (docs/testing.md): the e2e vitest project against the worker this
-  # run just deployed — every file a capnweb client at os.iterate2.com/api exactly like a
+  # run just deployed — every file a capnweb client at auth.iterate2.com/api exactly like a
   # production client. The shared Test job runs only os-next's unit + workers vitest projects,
   # so without this job a deployed regression is invisible until someone runs e2e by hand.
   e2e:
@@ -82,7 +82,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       # Deployed-target mode (apps/os-next/e2e/support/global-setup.ts): WORKER_BASE_URL selects
       # the deployed worker, ADMIN_API_SECRET is the config's APP_CONFIG_ADMIN_API_SECRET.
-      - name: Run e2e against os.iterate2.com
+      - name: Run e2e against auth.iterate2.com
         working-directory: apps/os-next
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}

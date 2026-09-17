@@ -4,7 +4,7 @@
   // WRANGLER BUNDLES THE WORKER ITSELF from this entry — `wrangler dev`, `wrangler deploy`, the e2e
   // harness and the workers test lane all start from src/worker.ts. What the worker cannot import
   // from source, scripts/build.ts writes first: the generated modules (the injected SDK's text, the
-  // demo facet's source) and the console bundle (`assets`, below). This template becomes
+  // demo facet's source). The issuer's pages (`assets`, below) need no build. This template becomes
   // wrangler.jsonc (gitignored) through scripts/generate-wrangler-config.ts: the top-level block is
   // local dev, one `env` block per deployment from the root envs.ts.
   "main": "src/worker.ts",
@@ -39,15 +39,16 @@
   // CPU-limit abort. Neither is billed until used.
   "limits": { "subrequests": 1000000, "cpu_ms": 300000 },
 
-  // THE STATIC ASSETS: the console bundle — console.js + console.css, scripts/build.ts → dist/client.
+  // THE STATIC ASSETS: the issuer's page files — public/authorize.js (the consent page, no build:
+  // React, htm and capnweb through the shell's import map) and public/issuer.css, served as written.
   // `run_worker_first: true`, on purpose: the patterns are paths, never hostnames, and a project host
   // (`<app>--<project>.<base>`) must never answer with a platform asset — so src/worker.ts asks the
   // ASSETS binding itself, on the platform host only, after the project hosts; a miss falls through
-  // to the control plane's shell (`not_found_handling: "none"` — the shell is the fallback, not an
-  // index.html: control-plane.ts renders it per console path).
+  // to the control plane (`not_found_handling: "none"` — control-plane.ts renders /login and the
+  // /authorize shell itself, there is no index.html).
   "assets": {
     "binding": "ASSETS",
-    "directory": "dist/client",
+    "directory": "public",
     "not_found_handling": "none",
     "run_worker_first": true,
   },
@@ -126,7 +127,7 @@
   // secret-at-rest.ts) — are wrangler secrets, never committed vars; all three are required.
   "vars": {
     "APP_CONFIG_ENVIRONMENT_NAME": "poc",
-    "APP_CONFIG_PLATFORM_ORIGIN": "https://os.iterate2.com",
+    "APP_CONFIG_PLATFORM_ORIGIN": "https://auth.iterate2.com",
     "APP_CONFIG_MCP_ORIGIN": "https://mcp.iterate2.com",
     "APP_CONFIG_PROJECT_HOSTNAME_BASE": "project-worker.iterate.com",
     // The Artifacts git remote is `https://<ACCOUNT_ID>.artifacts.cloudflare.net/git/<NAMESPACE>/<repo>.git`

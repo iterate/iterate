@@ -35,6 +35,11 @@ export function writeWranglerConfig() {
             ...(env.projectHostnameBase
               ? [{ pattern: `*.${env.projectHostnameBase}/*`, zone_name: env.projectHostnameBase }]
               : []),
+            // A custom hostname is a project's apex: its zone is the hostname's registrable domain.
+            ...Object.keys(env.projectCustomHostnames || {}).map((hostname) => ({
+              pattern: `${hostname}/*`,
+              zone_name: hostname.split(".").slice(-2).join("."),
+            })),
           ].filter((route) => !route.pattern.includes(".workers.dev/")),
           durable_objects: template.durable_objects,
           exports: template.exports,
@@ -63,6 +68,9 @@ export function writeWranglerConfig() {
             APP_CONFIG_MCP_ORIGIN:
               new URL(env.mcpBaseUrl).origin === new URL(env.baseUrl).origin ? "" : env.mcpBaseUrl,
             APP_CONFIG_PROJECT_HOSTNAME_BASE: env.projectHostnameBase,
+            APP_CONFIG_PROJECT_CUSTOM_HOSTNAMES: Object.entries(env.projectCustomHostnames || {})
+              .map(([hostname, project]) => `${hostname}=${project}`)
+              .join(","),
             APP_CONFIG_ARTIFACTS_ACCOUNT_ID: env.cloudflareAccountId,
             APP_CONFIG_ARTIFACTS_NAMESPACE: env.artifactsNamespace,
           },

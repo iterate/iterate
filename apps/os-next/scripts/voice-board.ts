@@ -8,7 +8,7 @@
 // the call became active (and how long that took), microphone frames left the device, an answer
 // reached its speaker, and the provider transcribed the words and the board answered them.
 //
-//   WORKER_BASE_URL=https://os.iterate2.com ADMIN_API_SECRET=… PROJECT=prj-voice \
+//   WORKER_BASE_URL=https://auth.iterate2.com ADMIN_API_SECRET=… PROJECT=prj-voice \
 //   pnpm exec tsx scripts/voice-board.ts --device home_assistant_voice_preview_edition \
 //     --prompt "Hello there. Please reply with the single word banana." --expect banana
 //
