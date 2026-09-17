@@ -24,11 +24,14 @@ export function base64ToInt16(base64: string): Int16Array {
   return new Int16Array(bytes.buffer);
 }
 
+export type SpeakerStats = { underruns: number; playedMs: number };
+
 export type AudioSession = {
   /** Set by the call: receives one 800-sample frame every 50 ms while the microphone is open. */
   onFrame: ((pcm: Int16Array) => void) | null;
-  /** Queue an answer chunk for the speaker; `clear` drops whatever is queued. */
-  speaker: { push(pcm: Int16Array): void; clear(): void };
+  /** Queue an answer chunk for the speaker; `clear` drops whatever is queued; `stats` asks the
+   *  worklet how often it ran dry mid-answer and how much it played. */
+  speaker: { push(pcm: Int16Array): void; clear(): void; stats(): Promise<SpeakerStats> };
   close(): Promise<void>;
 };
 
@@ -58,6 +61,24 @@ export async function openAudio(): Promise<AudioSession> {
     speaker: {
       push: (pcm) => playback.port.postMessage({ type: "push", pcm }, [pcm.buffer]),
       clear: () => playback.port.postMessage({ type: "clear" }),
+      stats: () =>
+        new Promise((resolve) => {
+          // A worklet that never answers (a closed context, a browser that dropped the port)
+          // must not hold up hanging up: after a second, no numbers is the answer.
+          const timer = setTimeout(() => resolve({ underruns: -1, playedMs: -1 }), 1_000);
+          playback.port.onmessage = (
+            event: MessageEvent<{ type: string; underruns: number; played: number }>,
+          ) => {
+            if (event.data.type !== "stats") return;
+            clearTimeout(timer);
+            playback.port.onmessage = null;
+            resolve({
+              underruns: event.data.underruns,
+              playedMs: Math.round(event.data.played / 16),
+            });
+          };
+          playback.port.postMessage({ type: "stats" });
+        }),
     },
     close: async () => {
       capture.port.onmessage = null;
