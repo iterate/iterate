@@ -70,6 +70,60 @@ test("an OAuth grant: identity, unforgeable append attribution, project boundary
   await revoked.body?.cancel();
 });
 
+test("a socket opened BARE authenticates in-band — the token in the authenticate call — and is bound to that grant: a wrong token, a second token and a cookie-less cookie form are refused; the HTTP probe stays a 401", async () => {
+  // THE STATIC-PAGE ARCHETYPE (apps/spa): a browser cannot put a header on a WebSocket, so the page
+  // opens /api with no credential and presents its OAuth access token IN `authenticate` — capnweb's
+  // own pattern. The same gate, the same session; nothing is reachable before the call resolves.
+  const project = freshDnsSafeProjectId("in-band");
+  const member = { email: `${project}@example.com` };
+  await registerProject(project, member);
+  const { token, principal, issuerHeaders } = await oauthSession(project, member);
+  // THE BARE SOCKET: /api with no credential on the upgrade — what a browser can open.
+  const url = new URL(workerUrl("/api"));
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  const socket = new UndiciWebSocket(url);
+  using bare = newWebSocketRpcSession<IterateRpcTarget>(socket as unknown as WebSocket);
+  expect(codeOf(await rejection(bare.authenticate({ type: "from-server-cookie" })))).toBe(
+    "UNAUTHENTICATED",
+  );
+  expect(codeOf(await rejection(bare.authenticate({ type: "bearer", token: `${token}x` })))).toBe(
+    "INVALID_CREDENTIALS",
+  );
+  using api = bare.authenticate({ type: "bearer", token });
+  const [whoami, projects] = await Promise.all([api.whoami(), api.projects.list()]); // pipelined
+  expect(whoami).toEqual(principal);
+  expect(projects.map((row) => row.id)).toContain(project);
+  expect((await api.projects.get(project).whoami()).projectId).toBe(project);
+  // one transport, one grant — a later token, and a token racing the first, are both refused
+  await expect(bare.authenticate({ type: "bearer", token })).rejects.toThrow(
+    /already carries a session/,
+  );
+  const racing = new UndiciWebSocket(url);
+  using bareRacing = newWebSocketRpcSession<IterateRpcTarget>(racing as unknown as WebSocket);
+  const outcomes = await Promise.allSettled([
+    bareRacing.authenticate({ type: "bearer", token }).whoami(),
+    bareRacing.authenticate({ type: "bearer", token }).whoami(),
+  ]);
+  expect(outcomes.map((outcome) => outcome.status).sort()).toEqual(["fulfilled", "rejected"]);
+  // THE BROWSER'S ACTUAL SHAPE: the page that just did the OAuth dance also carries the platform's
+  // own login cookie, from another origin. The cookie lends it nothing (CSRF — iterate/next/app-server
+  // used to answer 403 here); the socket opens bare and the token still works in-band.
+  const withCookie = new UndiciWebSocket(url, {
+    headers: { ...issuerHeaders, Origin: "http://spa.example" },
+  });
+  using bareWithCookie = newWebSocketRpcSession<IterateRpcTarget>(
+    withCookie as unknown as WebSocket,
+  );
+  expect(codeOf(await rejection(bareWithCookie.authenticate({ type: "from-server-cookie" })))).toBe(
+    "UNAUTHENTICATED",
+  );
+  expect(await bareWithCookie.authenticate({ type: "bearer", token }).whoami()).toEqual(principal);
+  // the HTTP form stays behind the gate: the console's sign-in probe reads this 401
+  const probe = await fetch(workerUrl("/api"), { method: "POST", body: "" });
+  expect(probe.status).toBe(401);
+  await probe.body?.cancel();
+});
+
 test("revoking a grant closes its live public socket and held capability within one minute", async () => {
   const project = freshDnsSafeProjectId("live-revoke");
   const member = { email: `${project}@example.com` };
