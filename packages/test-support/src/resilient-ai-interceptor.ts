@@ -193,3 +193,13 @@ export function aiTextResponse(
     { headers: { "content-type": "text/event-stream" } },
   );
 }
+
+/** Background agents in tests may finish a turn, but must not perform unscripted work. */
+export function noOpAgent(call: ProjectAiInterceptor.Input): Response {
+  if (call.source !== "agent-turn") {
+    throw new Error(`Test must script its ${call.source} response (${call.model})`);
+  }
+  return codemodeBackticksResponse("async () => {}", call);
+}
+
+export { createProject } from "./test-project.ts";

@@ -46,7 +46,7 @@ export const test = base.extend<{
   helpers: {
     createFixture: (
       slugPrefix: string,
-      options?: { projectCount?: number },
+      options?: { projectCount?: number; liveAgentPaths?: string[] },
     ) => Promise<Awaited<ReturnType<typeof createForgedProjectFixture>>>;
     createMobileFixture: (
       slugPrefix: string,

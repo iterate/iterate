@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import { createFlake } from "@iterate-com/shared/test-support/flake-test";
 import type { StreamEventInput } from "iterate/processors";
@@ -81,9 +82,9 @@ createFlake(test, /SAME-BOOT STALENESS/, { timeoutMs: 230_000 })(
   async () => {
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects
-      .get(`facet-version-${crypto.randomUUID().slice(0, 8)}`)
-      .create({});
+    using project = await interceptor.createProject(
+      itx.projects.get(`facet-version-${crypto.randomUUID().slice(0, 8)}`),
+    );
     await project.projectId;
 
     const streamPath = "/facet-version";
@@ -279,9 +280,9 @@ test(
   async () => {
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects
-      .get(`facet-replacement-${crypto.randomUUID().slice(0, 8)}`)
-      .create({});
+    using project = await interceptor.createProject(
+      itx.projects.get(`facet-replacement-${crypto.randomUUID().slice(0, 8)}`),
+    );
     await project.projectId;
 
     const streamPath = "/facet-replacement";

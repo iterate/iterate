@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 import type { RpcStub } from "capnweb";
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
@@ -20,8 +21,8 @@ export async function createTestProject(opts: { slugPrefix: string }) {
   // Trimmed: you get invalid DNS name errors if the slug is too long.
   const slug = uniqueFixtureSlug(opts.slugPrefix, { maxPrefixLength: 20 });
 
-  using session = createAdminOsItx({ baseUrl });
-  using created = await session.projects.get(slug).create({});
+  const session = createAdminOsItx({ baseUrl });
+  using created = await interceptor.createProject(session.projects.get(slug));
   const description = await created.__describe();
   const project = { id: description.projectId, slug };
 
@@ -44,6 +45,7 @@ export async function createTestProject(opts: { slugPrefix: string }) {
       return project;
     },
     [Symbol.asyncDispose]() {
+      session[Symbol.dispose]();
       // TODO(tasks/os-project-archival.md): project removal on itx.
       return Promise.resolve();
     },

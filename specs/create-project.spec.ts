@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 import { expect } from "@playwright/test";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { spinnerWaiter } from "middlewright";
@@ -43,6 +44,7 @@ test("the config template opens a proactive onboarding conversation for a new pr
   });
   using admin = await connectAdminItx(baseURL);
   using firstProject = admin.projects.get(firstSlug);
+  using _firstAi = await firstProject.ai.intercept(interceptor.noOpAgent);
   // Manual timeout: this ITX event poll has no browser loading UI for
   // spinner-waiter to observe.
   await expect
@@ -80,6 +82,14 @@ test("the config template opens a proactive onboarding conversation for a new pr
 
   using createdProject = admin.projects.get(slug);
   const onboardingAgent = createdProject.agents.get("/agents/onboarding");
+  using _ai = await createdProject.ai.intercept((call) => {
+    if (call.source !== "agent-turn" || call.agentPath !== "/agents/onboarding")
+      return interceptor.noOpAgent(call);
+    return interceptor.codemodeBackticksResponse(
+      'async (itx) => { await itx.chat.sendMessage("Welcome. What would you like to build?"); }',
+      call,
+    );
+  });
 
   // The userspace prompt starts the agent without waiting for the user. Route
   // chrome can render before Thinking starts, leaving a push-only gap with no

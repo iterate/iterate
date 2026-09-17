@@ -273,6 +273,9 @@ export class AgentTurnLoop {
       };
       runInBackground(async () => {
         if (windowClosesInMs > 0) await this.#host.sleep(windowClosesInMs);
+        if (this.#host.deps.resolveAiModel) {
+          intent.payload.model = await this.#host.deps.resolveAiModel(state.config.llm.model);
+        }
         await appendUnlessLostIdempotencyRace(append, [intent]);
       });
       return;

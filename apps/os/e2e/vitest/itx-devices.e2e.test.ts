@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -7,7 +8,9 @@ test("public itx discovers an enrolled device and appends a notification request
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(`device-itx-${crypto.randomUUID()}`).create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(`device-itx-${crypto.randomUUID()}`),
+  );
   const projectId = (await project.__describe()).projectId;
   using phone = project.devices.get("phone-test-installation");
 

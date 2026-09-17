@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { disposeIgnoredRpcResult, LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import type { StreamEvent } from "iterate/processors";
+import { projectAiModel } from "../../lib/project-ai-policy.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { parseConfig } from "../../config.ts";
 import { workerVersion, type Env } from "../../env.ts";
@@ -153,6 +154,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // engine at flush time, so scheduling here — the one materialization
     // point — is complete coverage.
     this.#liveStatePagers.scheduleFlush();
+  }
+
+  async resolveAiModel(model: string, agentPath: string | undefined): Promise<string> {
+    const state = await this.#refreshReducedState();
+    return projectAiModel(model, state.createRequest?.config.aiPolicy, agentPath);
   }
 
   async #loadAndRefreshLive(): Promise<void> {
@@ -733,6 +739,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
         ai: this.env.AI,
         projectId: this.#name.projectId!,
         consultInterceptor: (request) => this.consultAiInterceptor(request),
+        resolveAiModel: (model) => this.resolveAiModel(model, undefined),
         streamContext,
       });
       if (routed !== null) return routed;

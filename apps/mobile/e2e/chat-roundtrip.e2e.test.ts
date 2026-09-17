@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 // Live chat round-trip through the app's own client modules, from Node.
 //
 // This drives the shared iterate client over a real capnweb WebSocket with a
@@ -42,7 +43,7 @@ test("phone client seam: new mobile chat gets a live agent reply", async () => {
     },
   });
   const slug = `mobile-e2e-${Date.now().toString(36)}`;
-  const created = await adminSession.projects.get(slug).create({});
+  const created = await interceptor.createProject(adminSession.projects.get(slug));
   const { projectId } = await created.__describe();
 
   // The phone lane: bearer token over the app's own dial.
@@ -73,6 +74,14 @@ test("phone client seam: new mobile chat gets a live agent reply", async () => {
   // mutation (chat.tsx).
   const agent = project.agents.get(agentPath) as RpcStub<Agent>;
   await agent.create();
+  using _ai = await project.ai.intercept((call) =>
+    call.source === "agent-turn" && call.agentPath === agentPath
+      ? interceptor.codemodeBackticksResponse(
+          'async (itx) => { await itx.chat.sendMessage("Hello from the intercepted mobile model"); }',
+          call,
+        )
+      : interceptor.noOpAgent(call),
+  );
   const sent = await agent.message(
     "Reply with a short greeting. Do not run any code or take any other action.",
   );

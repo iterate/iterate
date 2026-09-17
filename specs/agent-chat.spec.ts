@@ -1,9 +1,11 @@
 import { test } from "./test-support/test.ts";
 
 test("agent replies to a browser chat message in the feed", async ({ helpers, page }) => {
-  await using fixture = await helpers.createFixture("agent-chat");
+  await using fixture = await helpers.createFixture("agent-chat", {
+    liveAgentPaths: ["/agents/bendy-yellow-fruit"],
+  });
 
-  const agent = await fixture.createAgent({ useRealLlm: true });
+  const agent = await fixture.createAgent({ useRealLlm: true, path: "/agents/bendy-yellow-fruit" });
 
   await page.goto(agent.webUrl);
 

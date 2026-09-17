@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import NodeWebSocket from "ws";
 import { newWebSocketRpcSession } from "capnweb";
@@ -10,7 +11,9 @@ import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 test("stateful app reconnects without resetting an unchanged live SQLite worker", async () => {
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`ws-reconnect-${crypto.randomUUID()}`).create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(`ws-reconnect-${crypto.randomUUID()}`),
+  );
   const { projectId } = await project.__describe();
   const appSource = `
     import { IterateDurableObject } from "iterate/sdk";

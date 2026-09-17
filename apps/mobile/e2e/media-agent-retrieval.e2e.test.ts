@@ -12,6 +12,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import { connectItx } from "iterate/node";
 import { mintForgedAccessToken } from "../../../scripts/auth/forge-token.ts";
@@ -29,7 +30,7 @@ test("an agent-style media-search run finds the swimming lesson among decoys", a
     auth: { type: "admin-secret", secret: requireEnv("APP_CONFIG_ADMIN_API_SECRET") },
   });
   const slug = `mobile-media-agent-e2e-${Date.now().toString(36)}`;
-  const created = await adminSession.projects.get(slug).create({});
+  const created = await interceptor.createProject(adminSession.projects.get(slug));
   const { projectId } = await created.__describe();
 
   const token = await mintForgedAccessToken({
@@ -41,11 +42,32 @@ test("an agent-style media-search run finds the swimming lesson among decoys", a
   });
   using project = connectItx({ baseUrl, auth: { type: "bearer", token }, projectId });
 
+  let analyzing = "";
+  const transcripts: Record<string, string> = {
+    "swim-email.png": "Swimming lesson Tuesday at 4:30",
+    "decoy-receipt.png": "Coffee receipt: paid £4",
+    "decoy-code.png": "Terminal: pnpm test passed",
+  };
+  using _ai = await project.ai.intercept((call) => {
+    if (call.source === "agent-turn") return interceptor.noOpAgent(call);
+    const transcript = transcripts[analyzing];
+    if (!transcript) throw new Error(`No scripted media response for ${analyzing}`);
+    if (call.model === "intercepted/cloudflare/to-markdown") {
+      return Response.json({ format: "markdown", data: transcript });
+    }
+    expect(call).toMatchObject({
+      source: "ai-run",
+      model: "intercepted/@cf/meta/llama-4-scout-17b-16e-instruct",
+    });
+    return Response.json({ response: JSON.stringify({ title: analyzing, transcript, tags: [] }) });
+  });
+
   // Capture all three the way the Media screen does: bytes + one uploaded
   // event each; the seeded MediaApp processor analyzes server-side.
   const stream = project.streams.get("/media");
   const uploads: { stableKey: string; offset: number }[] = [];
   for (const filename of FIXTURES) {
+    analyzing = filename;
     const png = readFileSync(resolve(import.meta.dirname, "fixtures", filename));
     const stableKey = createHash("sha256").update(png.toString("base64")).digest("hex");
     await project.files
@@ -65,6 +87,14 @@ test("an agent-style media-search run finds the swimming lesson among decoys", a
       }),
     );
     uploads.push({ stableKey, offset: uploaded!.offset });
+    // One scripted image at a time; selection is explicit, not a pretend vision model.
+    await stream.waitForEvent({
+      afterOffset: uploaded!.offset,
+      eventTypes: [MEDIA_PROCESSED_EVENT_TYPE],
+      predicate: (event: any) =>
+        event.payload.stableKey === stableKey && event.payload.error === null,
+      timeoutMs: 120_000,
+    });
   }
   // Search needs the transcripts: wait for every item's analysis settlement.
   for (const upload of uploads) {

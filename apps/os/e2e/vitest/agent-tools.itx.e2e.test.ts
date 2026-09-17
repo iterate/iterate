@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 /**
  * Goal coverage: an agent uses itx tools. Deterministic version of the
  * Playwright chat spec — drive an agent over itx, instruct it to run a script
@@ -23,6 +24,20 @@ test(
     await agent.create();
 
     const marker = crypto.randomUUID().slice(0, 8);
+    using project = handle.itx();
+    using _ai = await project.ai.intercept((call) => {
+      if (call.source !== "agent-turn" || call.agentPath !== "/agents/e2e-tools")
+        return interceptor.noOpAgent(call);
+      return interceptor.codemodeBackticksResponse(
+        `async (itx) => {
+        await itx.streams.get(${JSON.stringify(PROOF_STREAM)}).append({
+          type: ${JSON.stringify(PROOF_TYPE)}, payload: { marker: ${JSON.stringify(marker)} }
+        });
+        await itx.chat.sendMessage("done");
+      }`,
+        call,
+      );
+    });
     // Full codemode loop (LLM → script → reply) routinely exceeds the 45s ask
     // default under preview load; wait with the same ceiling as the test.
     const reply = await agent.ask({
@@ -96,6 +111,15 @@ test(
     expect(state).toMatchObject({ birthCertificate: {} });
     expect(state.config?.llm.model).toBeTruthy();
 
+    using project = handle.itx();
+    using _ai = await project.ai.intercept((call) =>
+      call.source === "agent-turn" && call.agentPath === "/agents/e2e-model"
+        ? interceptor.codemodeBackticksResponse(
+            'async (itx) => { await itx.chat.sendMessage("Hello"); }',
+            call,
+          )
+        : interceptor.noOpAgent(call),
+    );
     const response = await agent.ask({
       message: "Reply with a short greeting.",
       // Gateway turns under preview load can sit past the 45s default — a

@@ -7,6 +7,7 @@
 // here stick to the note's own text, which is stable whether or not the
 // derived title has landed yet.
 
+import { interceptor } from "@iterate-com/test-support";
 import { expect } from "@playwright/test";
 import { test } from "../test-support/test.ts";
 
@@ -15,6 +16,12 @@ test("captures a note from the global composer and manages it on /notes", async 
   helpers,
 }) => {
   await using fixture = await helpers.createMobileFixture("mobile-notes");
+
+  using _ai = await fixture.itx.ai.intercept((call) =>
+    call.source === "agent-turn"
+      ? interceptor.noOpAgent(call)
+      : Response.json({ response: JSON.stringify({ title: "", tags: [] }) }),
+  );
 
   // The composer is already there on the chat-list screen — no navigation
   // between "I opened the app" and "I captured the thought".
@@ -67,8 +74,8 @@ test("captures a note from the global composer and manages it on /notes", async 
   // Send it. This is the step that makes the platform PARSE the derived agent
   // path (create() + message()), so a path it would reject — the note's
   // filename stamp carries an uppercase T and Z — fails here instead of on a
-  // phone. Only the echo of our own message is asserted; whatever the agent
-  // says back is its own business.
+  // phone. Only the echo of our own message is asserted; the intercepted agent
+  // performs no background edits.
   await page.getByLabel("Send").click();
   await page
     .getByText(/About my note/)

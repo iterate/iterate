@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
@@ -52,7 +53,9 @@ test(
       type: "admin-secret",
       secret: adminSecret(),
     });
-    using project = await itx.projects.get(`workspace-${crypto.randomUUID()}`).create({});
+    using project = await interceptor.createProject(
+      itx.projects.get(`workspace-${crypto.randomUUID()}`),
+    );
 
     // The derived mount table points at the config repo, which seeds
     // asynchronously after project creation — wait for the seed so fall-through
@@ -519,7 +522,9 @@ test(
 test("an agent and its workspace share one stream and keep /workspace files isolated", async () => {
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`agent-workspace-${crypto.randomUUID()}`).create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(`agent-workspace-${crypto.randomUUID()}`),
+  );
   const agentPath = `/agents/workspace-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
   using workspace = project.workspaces.get(agentPath);

@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { interceptor } from "@iterate-com/test-support";
 
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { createAdminOsItx } from "./test-support/os-client.ts";
@@ -48,7 +49,7 @@ function requireAdminApiSecret() {
 async function ensureProject(input: { baseUrl: URL; slug: string }) {
   using itx = createAdminOsItx({ baseUrl: input.baseUrl.toString() });
   try {
-    await itx.projects.get(input.slug).create({});
+    await interceptor.createProject(itx.projects.get(input.slug));
   } catch (error) {
     const code = (error as { code?: unknown }).code;
     const message = error instanceof Error ? error.message : String(error);

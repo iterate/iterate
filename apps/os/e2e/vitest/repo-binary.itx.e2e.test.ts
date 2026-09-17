@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -8,7 +9,9 @@ test("commitFiles contentBase64 and readFile base64 round-trip bytes exactly", a
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(`repo-binary-${crypto.randomUUID()}`).create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(`repo-binary-${crypto.randomUUID()}`),
+  );
 
   // The project repo seeds asynchronously after project creation; readFile
   // THROWS (not null) until the repo artifact exists, so swallow errors

@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { expect, test } from "vitest";
 import type { StreamEventInput } from "iterate/processors";
@@ -76,9 +77,9 @@ createFailing(test, /PIN CANNOT TELL RECYCLE FROM REBUILD/, { timeoutMs: 170_000
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects
-      .get(`facet-recycle-${crypto.randomUUID().slice(0, 8)}`)
-      .create({});
+    using project = await interceptor.createProject(
+      itx.projects.get(`facet-recycle-${crypto.randomUUID().slice(0, 8)}`),
+    );
     log("project created", await project.projectId);
 
     const streamPath = "/facet-recycle";

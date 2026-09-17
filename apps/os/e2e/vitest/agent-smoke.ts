@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+import { interceptor } from "@iterate-com/test-support";
 /**
  * Smoke: create a project as admin, create an agent, and receive one reply.
  * Runs manually and as an independent preview sub-lane alongside the other
@@ -16,7 +18,6 @@
  * reply that needs attempt 2 is logged as retry telemetry rather than
  * silently absorbed — the 90s tail is a real product-latency signal.
  */
-import { fileURLToPath } from "node:url";
 import {
   ciTelemetrySourceFromEnvironment,
   normalizeTestTelemetryError,
@@ -63,7 +64,7 @@ async function attemptAgentSmoke(phases: SmokePhase[]): Promise<void> {
     durationMs: Date.now() - connectionStartedAt,
   });
   const createStartedAt = Date.now();
-  using project = await root.projects.get(`agent-smoke-${marker}`).create({});
+  using project = await interceptor.createProject(root.projects.get(`agent-smoke-${marker}`));
   const createMs = Date.now() - createStartedAt;
   phases.push({ name: "create project", category: "fixture", durationMs: createMs });
   const describeStartedAt = Date.now();
@@ -83,6 +84,14 @@ async function attemptAgentSmoke(phases: SmokePhase[]): Promise<void> {
     category: "runtime",
     durationMs: Date.now() - readyStartedAt,
   });
+  using _ai = await project.ai.intercept((call) =>
+    call.source === "agent-turn" && call.agentPath === "/agents/smoke"
+      ? interceptor.codemodeBackticksResponse(
+          'async (itx) => { await itx.chat.sendMessage("pong"); }',
+          call,
+        )
+      : interceptor.noOpAgent(call),
+  );
   const replyStartedAt = Date.now();
   await agent.message("Reply with exactly: pong");
   const reply = await agent.stream.waitForEvent({

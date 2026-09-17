@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
@@ -10,9 +11,9 @@ test(
   async () => {
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects
-      .get(`build-overlay-${crypto.randomUUID().slice(0, 8)}`)
-      .create({});
+    using project = await interceptor.createProject(
+      itx.projects.get(`build-overlay-${crypto.randomUUID().slice(0, 8)}`),
+    );
     const { projectId } = await project.__describe();
 
     const fetchHome = async () => {

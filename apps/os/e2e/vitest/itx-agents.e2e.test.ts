@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import type { Agent, AgentChat, CapabilityHost } from "../../src/itx-api.generated.ts";
@@ -20,7 +21,9 @@ test("agent create installs only generic machinery; later events configure it", 
     secret: adminSecret(),
   });
 
-  using project = await itx.projects.get(`agent-create-${crypto.randomUUID()}`).create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(`agent-create-${crypto.randomUUID()}`),
+  );
   expect(await project.agents.list()).toEqual([]);
   using agent = project.agents.get(`/agents/create-${crypto.randomUUID()}`);
   expect((await agent.processor.snapshot()).state.birthCertificate).toBeNull();
@@ -110,7 +113,9 @@ test("Agent scripts update their summary through the typed append door", async (
     secret: adminSecret(),
   });
 
-  using project = await itx.projects.get(uniqueFixtureSlug("agent-update-summary")).create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(uniqueFixtureSlug("agent-update-summary")),
+  );
   const agentPath = `/agents/update-summary-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
   await agent.create();
@@ -164,7 +169,9 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     secret: adminSecret(),
   });
 
-  using project = await itx.projects.get(uniqueFixtureSlug("agent-project-tool")).create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(uniqueFixtureSlug("agent-project-tool")),
+  );
   const agentPath = `/agents/project-tool-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
   await agent.create();
@@ -264,7 +271,9 @@ test("Agent create replays its earlier birth and setup events through its subscr
     secret: adminSecret(),
   });
 
-  using project = await itx.projects.get(`agent-create-replay-${crypto.randomUUID()}`).create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(`agent-create-replay-${crypto.randomUUID()}`),
+  );
   const agentPath = `/agents/create-replay-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
 
@@ -372,7 +381,9 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
     secret: adminSecret(),
   });
 
-  using project = await itx.projects.get(uniqueFixtureSlug("agent-only-tools")).create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(uniqueFixtureSlug("agent-only-tools")),
+  );
   const { projectId } = await project.__describe();
   const agentPath = `/agents/agent-only-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
@@ -523,9 +534,9 @@ test("Dynamic worker env.ITX.get() is scoped by project and agent host path", as
     secret: adminSecret(),
   });
 
-  using project = await itx.projects
-    .get(uniqueFixtureSlug("dynamic-worker-scope-cache"))
-    .create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(uniqueFixtureSlug("dynamic-worker-scope-cache")),
+  );
   const { projectId } = await project.__describe();
   const agentPath = `/agents/scope-cache-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
@@ -584,7 +595,9 @@ test('An agent scope provides a capability to the whole project via capabilityHo
     secret: adminSecret(),
   });
 
-  using project = await itx.projects.get(uniqueFixtureSlug("cross-scope-provide")).create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(uniqueFixtureSlug("cross-scope-provide")),
+  );
   await project.__describe();
   const agentPath = `/agents/cross-scope-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
@@ -632,7 +645,9 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     secret: adminSecret(),
   });
 
-  using project = await itx.projects.get(uniqueFixtureSlug("worker-births-agents")).create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(uniqueFixtureSlug("worker-births-agents")),
+  );
   const agentPath = `/agents/policy-probe-${crypto.randomUUID()}`;
   using agentStream = project.streams.get(agentPath);
 
@@ -716,9 +731,9 @@ test("Project worker processEventBatch receives events from every project stream
     secret: adminSecret(),
   });
 
-  using project = await itx.projects
-    .get(uniqueFixtureSlug("project-worker-process-event"))
-    .create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(uniqueFixtureSlug("project-worker-process-event")),
+  );
   const marker = `copy-${crypto.randomUUID()}`;
   // NOT the root stream: every project child stream self-configures the
   // project-worker push feed at birth, so a freshly minted child stream must

@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 import type { RpcStub } from "capnweb";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import type { Session } from "../../src/itx-api.generated.ts";
@@ -41,6 +42,8 @@ export function createTestProjectPool(opts: { size: number; slugPrefix: string }
       let projectId: string;
       try {
         projectId = await slot.getProjectId(session);
+        // Each lease has a new session; the previous borrower may have closed its interceptor.
+        await session.projects.get(projectId).ai.intercept(interceptor.noOpAgent);
       } catch (error) {
         releaseSlot(state, slot);
         throw error;
@@ -100,7 +103,7 @@ function releaseSlot(state: ProjectPoolState, slot: ProjectSlot): void {
 
 async function createProject(session: RpcStub<Session>, slugPrefix: string): Promise<string> {
   const slug = uniqueFixtureSlug(slugPrefix, { maxPrefixLength: 20 });
-  using project = await session.projects.get(slug).create({});
+  using project = await interceptor.createProject(session.projects.get(slug));
   const { projectId } = await project.__describe();
   console.log(`[project-pool] created ${slug} (${projectId})`);
   return projectId;

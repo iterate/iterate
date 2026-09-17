@@ -1,3 +1,4 @@
+import { interceptor } from "@iterate-com/test-support";
 // GitHub-backed repos, the CI-provable half: webhook events arriving on a
 // GitHub connection stream reach the linked repo's own stream
 // through the exact copy subscription `repo.linkGithub` installs (same
@@ -22,7 +23,9 @@ test("github pushes about a linked repository reach the repo stream", async () =
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(`os-github-repo-${RUN_SUFFIX}-${marker}`).create({});
+  using project = await interceptor.createProject(
+    itx.projects.get(`os-github-repo-${RUN_SUFFIX}-${marker}`),
+  );
 
   // A real repo, so the repo processor is live on the target stream and must
   // coexist with (ignore) the received webhook events.

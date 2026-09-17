@@ -13,8 +13,8 @@ createFailing(test, /CONCURRENT CREATE SPLITS IDENTITY/)(
 
     // Deliberately retain the two pipelined promises here: awaiting the first
     // create before issuing the second would no longer exercise the race.
-    using first = session.projects.get(slug).create({});
-    using second = session.projects.get(slug).create({});
+    using first = session.projects.get(slug).create({ aiPolicy: { liveAgentPaths: [] } });
+    using second = session.projects.get(slug).create({ aiPolicy: { liveAgentPaths: [] } });
     const [firstIdentity, secondIdentity] = await Promise.all([
       first.identity(),
       second.identity(),

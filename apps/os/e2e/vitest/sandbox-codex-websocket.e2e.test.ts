@@ -1,15 +1,17 @@
+// Disabled: the fruit browser smoke is the only permitted live-provider test.
+// This legacy provider-quality probe needs a scripted WebSocket provider before re-enabling.
+import { interceptor } from "@iterate-com/test-support";
 import type { RpcStub } from "capnweb";
 import { expect, test } from "vitest";
 import type { SandboxLiteDurableObject } from "../../src/domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { CODEX_VERSION } from "./sandbox-websocket-proof-programs.ts";
-import { adminSecret, deployedBaseUrl, withItxSession } from "./test-helpers.ts";
+import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const COMPLETION_MARKER = "ITERATE_WEBSOCKET_SMOKE_OK";
 
-const exactCodexProofEnabled = process.env.OS_E2E_STOCK_CODEX_WEBSOCKET === "1";
-
-test.skipIf(deployedBaseUrl() === null || !exactCodexProofEnabled)(
+// parked: scripted WebSocket provider needed — revisit by 2026-10-01
+test.skip(
   `completes a whole OpenAI turn with unmodified @openai/codex@${CODEX_VERSION}`,
   { timeout: 180_000 },
   async () => {
@@ -18,7 +20,9 @@ test.skipIf(deployedBaseUrl() === null || !exactCodexProofEnabled)(
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects.get(`sandbox-codex-${crypto.randomUUID()}`).create({});
+    using project = await interceptor.createProject(
+      itx.projects.get(`sandbox-codex-${crypto.randomUUID()}`),
+    );
     using secret = project.secrets.get(secretPath);
     await secret.create({
       egress: { urls: ["https://api.openai.com"] },

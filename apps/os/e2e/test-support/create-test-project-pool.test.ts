@@ -50,10 +50,12 @@ function createSessionStub() {
   const session = {
     projects: {
       get: () => ({
+        ai: { intercept: async () => ({}) },
         create: () => {
           const projectId = `project-${createdProjectIds.length + 1}`;
           createdProjectIds.push(projectId);
           return {
+            ai: { intercept: async () => ({}) },
             async __describe() {
               return { projectId };
             },

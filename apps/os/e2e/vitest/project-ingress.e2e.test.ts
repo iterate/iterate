@@ -1,4 +1,5 @@
 import { request as httpRequest } from "node:http";
+import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import WebSocket from "ws";
 import type { StreamProcessorWakeRequest, StreamProcessorWakeResponse } from "iterate/processors";
@@ -23,7 +24,7 @@ test("project ingress serves the static seeded homepage at the root", async () =
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(`project-ingress-${marker}`).create({});
+  using project = await interceptor.createProject(itx.projects.get(`project-ingress-${marker}`));
   const { projectId } = await project.__describe();
 
   const pageResponse = await fetch(buildUrl({ path: `/${projectId}` }));
@@ -61,7 +62,7 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(slug).create({});
+  using project = await interceptor.createProject(itx.projects.get(slug));
   const { projectId } = await project.__describe();
 
   // The app owns its birth invariant even when called directly, before the
@@ -268,7 +269,7 @@ test("guestbook websocket: the /api upgrade flows through ingress into the app D
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await itx.projects.get(slug).create({});
+  using project = await interceptor.createProject(itx.projects.get(slug));
   await project.__describe();
 
   const base = new URL(buildUrl({ path: "/" }));

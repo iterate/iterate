@@ -1,3 +1,5 @@
+// Disabled: the fruit browser smoke is the only permitted live-provider test.
+// This legacy provider-quality probe needs a scripted WebSocket provider before re-enabling.
 // The phone's voice call, live from Node — the grill's headless wire-driver:
 // the SAME shipped modules (voice-call.ts, voice-setup.ts, voice-pcm.ts) run
 // against a real deployment's voice-agent facet, with the audio session faked
@@ -25,7 +27,8 @@ import { requireEnv, resolveBaseUrl } from "./e2e-helpers.ts";
 
 const VOICE_E2E_PROJECT = process.env.VOICE_E2E_PROJECT || "voicelab-eval";
 
-test("calling a chat: speak, be answered, and the conversation lands on the chat's stream", async () => {
+// parked: scripted WebSocket provider needed — revisit by 2026-10-01
+test.skip("calling a chat: speak, be answered, and the conversation lands on the chat's stream", async () => {
   const baseUrl = resolveBaseUrl();
   using session = connectItx({
     baseUrl,
