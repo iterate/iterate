@@ -70,6 +70,8 @@
     "APP_CONFIG_GOOGLE_CLIENT_ID": "google-test-client",
     "APP_CONFIG_GOOGLE_CLIENT_SECRET": "google-test-secret",
     "APP_CONFIG_PROJECT_HOSTNAME_BASE": "projects.test",
+    // one custom apex, for the consent test that binds a client on it to its project
+    "APP_CONFIG_PROJECT_CUSTOM_HOSTNAMES": "custom-apex.test=custom-apex-project",
     "APP_CONFIG_SESSION_SECRET": "test-session-secret",
     "APP_CONFIG_SECRETS_KEY": "test-secrets-key",
     "APP_CONFIG_ADMIN_API_SECRET": "test-admin-api-secret",

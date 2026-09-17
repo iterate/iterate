@@ -83,11 +83,12 @@ const json = (body: unknown, status = 200) =>
 /** /login.json — what the sign-in page (public/login.js) shows: who is signed in (continue, or switch
  *  account), or the sign-ins this deployment offers — the email form for test deployments, Google —
  *  and where to continue to. Signing in is the form's POST to `signInDoor` or the Google link
- *  (identity.ts); "switch account" ends the browser's session and returns here. */
+ *  (identity.ts); "switch account" ends the browser's session and returns here. Without a `next`
+ *  the page is its own destination (the issuer has no home page): signed in, it says so. */
 async function loginState(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const config = appConfigOf(env);
   const next = sameOriginPath(
-    new URL(request.url).searchParams.get("next") || "/",
+    new URL(request.url).searchParams.get("next") || "/login",
     config.platformOrigin,
   );
   const session = await browserAuthorization(env, request, ctx);
@@ -108,7 +109,7 @@ async function signInDoor(request: Request, env: Env): Promise<Response | null> 
   try {
     const { setCookie, location } = await signIn(env, request, {
       email: String(form.get("email") ?? ""),
-      next: String(form.get("next") ?? "/"),
+      next: String(form.get("next") || "/login"),
     });
     return new Response(null, { status: 302, headers: { location, "set-cookie": setCookie } });
   } catch (error) {

@@ -1,13 +1,13 @@
 import { env, SELF, runInDurableObject } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
-import { appSession } from "iterate/next/app-server";
+import { appSession, startAppSession } from "iterate/next/app-server";
 import { authorizationCodeRequest } from "iterate/next/oauth";
 import type { Env } from "../src/control-plane.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { directory } from "../src/directory.ts";
 import { startIssuerSession } from "../src/issuer-session.ts";
-import { oauthHelpers } from "../src/oauth.ts";
+import { oauthAddresses, oauthHelpers, parseAuthorization } from "../src/oauth.ts";
 import { applyDirectorySchema } from "./support.ts";
 
 const bindings = env as unknown as Env;
@@ -185,6 +185,68 @@ test("copied issuer client metadata and every scope confer app permissions but n
   await expect(app.consent.approve({ query: flow.url.search, projects: ["*"] })).rejects.toThrow(
     /Sign in to Iterate/,
   );
+});
+
+test("an issuer session minted before a scope existed still holds every scope — its list is not a consent", async () => {
+  // the shape of startIssuerSession, with the two scopes an older cookie was minted with
+  const user = await directory(bindings.DB).upsertUser("old-issuer-cookie@example.com");
+  const { issuer: issuerOrigin, api: apiResource } = oauthAddresses(bindings);
+  const flow = await startAppSession(
+    bindings.BROWSER_SESSION,
+    {
+      origin: issuerOrigin,
+      issuer: issuerOrigin,
+      resource: apiResource,
+      scopes: ["iterate", "account"],
+    },
+    "/",
+  );
+  const request = await parseAuthorization(bindings, new Request(flow.location));
+  const approved = await oauthHelpers(bindings).completeAuthorization({
+    request,
+    userId: user.id,
+    scope: request.scope,
+    metadata: { clientName: "Iterate" },
+    revokeExistingGrants: false,
+    props: {
+      kind: "issuer",
+      version: 2,
+      userId: user.id,
+      email: user.email,
+      projects: null,
+      deadline: Date.now() + 30 * 24 * 3600_000,
+    },
+  });
+  const callback = new URL(approved.redirectTo).searchParams;
+  const result = await flow.session.complete({
+    state: callback.get("state") || "",
+    issuer: callback.get("iss") || "",
+    code: callback.get("code") || "",
+    error: callback.get("error") || "",
+  });
+  expect(result.error).toBeUndefined();
+  const old = await connect({ Cookie: flow.setCookie.split(";")[0]!, Origin: origin });
+  expect((await old.info()).scopes).toEqual(["iterate", "account", "organizations:write"]);
+  const org = await old.createOrg("Made with an old cookie");
+  expect((await old.orgs()).map((candidate) => candidate.id)).toContain(org.id);
+});
+
+test("a client on a project's custom apex is bound to that project at consent, like one under the hostname base", async () => {
+  const user = await directory(bindings.DB).upsertUser("custom-apex@example.com");
+  await directory(bindings.DB).createProject({ userId: user.id }, "custom-apex-project");
+  await directory(bindings.DB).createProject({ userId: user.id }, "custom-apex-other");
+  const login = await startIssuerSession(bindings, user, "/");
+  const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
+  const flow = await authorizationCodeRequest({
+    issuer: origin,
+    clientId: "https://custom-apex.test/.auth/client.json",
+    redirectUri: "https://custom-apex.test/.auth/callback",
+    resources: [`${origin}/api`],
+  });
+  const view = await issuer.consent.describe(flow.url.search);
+  if (view.kind !== "consent") throw new Error(`expected consent, got ${JSON.stringify(view)}`);
+  expect(view.projectBound).toBe(true);
+  expect(view.projects.map((project) => project.id)).toEqual(["custom-apex-project"]);
 });
 
 test("consent grants only the scopes left ticked; organizations:write, not project reach, is what creates an organization", async () => {

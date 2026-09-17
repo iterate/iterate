@@ -5,7 +5,7 @@ import { codedError } from "iterate/next/lib";
 import { OAuthScope, OAuthScopes } from "iterate/next/oauth-scopes";
 import type { Env } from "./control-plane.ts";
 import { directory, type Org, type Project } from "./directory.ts";
-import { projectHostOf } from "./hosts.ts";
+import { customProjectHostOf, projectHostOf } from "./hosts.ts";
 import { appConfigOf } from "./app-config.ts";
 import {
   authorizationOf,
@@ -31,13 +31,17 @@ export type ConsentView =
   | { kind: "redirect"; location: string }
   | { kind: "invalid"; description: string };
 
-/** A platform-served project CIMD client can receive only that project's authority. */
+/** A platform-served project CIMD client can receive only that project's authority — on a host
+ *  under the project hostname base or on a project's custom apex (the same two doors worker.ts
+ *  admits a project host through). */
 async function projectsForClient(env: Env, clientId: string, userId: string) {
   const projects = await directory(env.DB).listProjects(userId);
   const url = URL.canParse(clientId) ? new URL(clientId) : null;
+  const config = appConfigOf(env);
   const host =
     url?.pathname === "/.auth/client.json"
-      ? projectHostOf(url.hostname, appConfigOf(env).projectHostnameBase)
+      ? (projectHostOf(url.hostname, config.projectHostnameBase) ??
+        customProjectHostOf(url.hostname, config.projectCustomHostnames))
       : null;
   if (!host) return { projects, projectBound: false };
   const project = await directory(env.DB).getProject(host.project);

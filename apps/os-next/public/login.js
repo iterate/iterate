@@ -13,7 +13,7 @@
     node.append(...children);
     return node;
   };
-  const show = (...nodes) => root.replaceChildren(...nodes);
+  const show = (...nodes) => root.replaceChildren(...nodes.filter(Boolean));
   let state;
   try {
     const response = await fetch("/login.json" + location.search, { credentials: "same-origin" });
@@ -26,7 +26,10 @@
   if (state.signedInAs) {
     show(
       el("p", {}, "Signed in as ", el("strong", { text: state.signedInAs }), "."),
-      el("p", {}, el("a", { href: state.next, text: `Continue as ${state.signedInAs}` })),
+      // nowhere to continue to when this page is its own destination
+      state.next === "/login"
+        ? null
+        : el("p", {}, el("a", { href: state.next, text: `Continue as ${state.signedInAs}` })),
       el(
         "form",
         { method: "post", action: state.switchAccount },

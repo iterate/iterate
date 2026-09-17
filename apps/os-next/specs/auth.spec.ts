@@ -75,6 +75,7 @@ test("first Claude consent creates the organization and project on the consent p
   const email = `consent-${stamp()}@example.com`;
   const project = `consent-${stamp()}`;
   const otherProject = `unselected-${stamp()}`;
+  const thirdProject = `third-${stamp()}`;
   let receiveCallback!: (url: URL) => void;
   const callback = new Promise<URL>((resolve) => {
     receiveCallback = resolve;
@@ -191,9 +192,30 @@ test("first Claude consent creates the organization and project on the consent p
     expect(await choice.isChecked()).toBe(true);
     expect(await otherChoice.isChecked()).toBe(true);
     expect(await otherChoice.isDisabled()).toBe(true);
+    // A create while "every project" is ticked re-renders the parked list; the new project goes
+    // into the FIRST organization, so the boxes' order (grouped by organization) differs from the
+    // projects' creation order — the ticks must come back to the right boxes.
+    await page
+      .getByRole("combobox", { name: "Organization", exact: true })
+      .selectOption({ label: "First consent studio" });
+    await page.getByRole("textbox", { name: "Project name", exact: true }).fill(thirdProject);
+    await page.getByRole("button", { name: "Create project", exact: true }).click();
+    const thirdChoice = page.getByRole("checkbox", {
+      name: `${thirdProject} in First consent studio`,
+      exact: true,
+    });
+    await thirdChoice.waitFor();
+    expect(await thirdChoice.isChecked()).toBe(true);
+    expect(await thirdChoice.isDisabled()).toBe(true);
     await future.uncheck();
     expect(await choice.isChecked()).toBe(true);
+    expect(await thirdChoice.isChecked()).toBe(true);
     expect(await otherChoice.isChecked()).toBe(false);
+    await page
+      .getByRole("status")
+      .filter({ hasText: /^2 selected$/ })
+      .waitFor();
+    await thirdChoice.uncheck();
     await page
       .getByRole("status")
       .filter({ hasText: /^1 selected$/ })

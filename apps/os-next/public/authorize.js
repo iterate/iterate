@@ -311,7 +311,8 @@
     // The checkboxes are the state: every change re-reads them. "Every project" parks the list —
     // the ticks come back when it is unticked.
     const boxes = () => Array.from(form.querySelectorAll('input[name="project"]'));
-    let parked = state.all ? projects.map((project) => !state.excluded.has(project.id)) : null;
+    // parked ticks are in the boxes' own (organization-grouped) order, never the projects array's
+    let parked = state.all ? boxes().map((box) => !state.excluded.has(box.value)) : null;
     const sync = () => {
       const every = Boolean(all && all.checked);
       if (every && !parked) {
