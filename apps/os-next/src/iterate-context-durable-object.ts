@@ -774,11 +774,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         await this.#subscriptionDelivery.deliverEveryCursorSubscription();
         // THE QUIET BOUNDARY (the #6800 quiesce): nothing pinned, nothing to release; a pin used
         // within the quiet period keeps everything, and the next deadline derived below is a full
-        // quiet period after that use. Against the fired time, not just now: a clock a hair behind
-        // the alarm must not keep a pin one more period.
+        // quiet period after that use.
         const lastPinUseMs = this.#lastPinUseMs();
         if (lastPinUseMs === null) return;
-        if (Math.max(Date.now(), fired ?? 0) - lastPinUseMs < IDLE_QUIESCE_AFTER_MS) return;
+        if (Date.now() - lastPinUseMs < IDLE_QUIESCE_AFTER_MS) return;
         this.#releasePins();
         this.#traceAlarm("quiesce", { before: fired });
       });
@@ -789,26 +788,25 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#traceAlarm("alarm-pass", { before: fired });
   }
 
-  /** THE RELEASE: every borrowed stub returned, every library connection closed — the pins — and
-   *  every live facet aborted: where the runtime keeps a facet-pinned actor resident (workerd's
-   *  harness, workerd#6800) this is what un-pins it, and on the edge the facet would have died with
-   *  the actor anyway. Never a facet mid-call (a reduce aborted midway is the stall its gap repair
-   *  would have to heal): with a call in flight the facets wait for the next release, or the actor's
-   *  end. Aborted facets re-materialize from their startup memo on their next call. */
+  /** THE RELEASE: every borrowed stub returned, every library connection closed — the pins. Never a
+   *  facet: on the edge a facet is not a pin (it dies with the actor), and one may be mid-attempt — an
+   *  LLM call in its background — that an abort would kill for nothing. */
   #releasePins(): void {
+    this.#rpcStubs.returnBorrowedRpcStubs();
+    this.#library.releaseConnections();
+  }
+
+  /** DO-only, for the workers lane: the release, plus every live facet aborted — workerd's harness
+   *  keeps a facet-pinned actor resident (workerd#6800), so a test that must evict a facet-hosting
+   *  context runs this first (`quiesce` in __workers-tests__/support.ts). Never a facet mid-call (a
+   *  reduce aborted midway is the stall its gap repair would have to heal). Aborted facets
+   *  re-materialize from their startup memo on their next call. */
+  releasePins(): void {
     if (this.#facetWorkInFlight === 0) {
       for (const facetName of this.#liveFacetNames)
         this.#abortFacetIfRunning(facetName, "idle quiesce");
       this.#liveFacetNames.clear();
     }
-    this.#rpcStubs.returnBorrowedRpcStubs();
-    this.#library.releaseConnections();
-  }
-
-  /** DO-only, for the workers lane: the release step, run directly. A facet arms no alarm, and
-   *  workerd keeps a facet-pinned actor resident, so a test that must evict a facet-hosting context
-   *  releases first (`quiesce` in __workers-tests__/support.ts). */
-  releasePins(): void {
     this.#releasePins();
     this.#alarms.reconcile(); // what a pass end does: nothing pinned, nothing armed for it
   }

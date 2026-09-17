@@ -400,7 +400,8 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
     }
 
     // An open request nobody HERE is running: run it — the first time and after an eviction are the
-    // same path — or settle it expired.
+    // same path (the engine's revive wakes a dead context while an attempt is in flight; the wake's
+    // push lands here) — or settle it expired.
     const open = state.openRequest;
     if (open && !this.#llmRequestsInFlight.has(open.requestedAtOffset)) {
       if (now >= open.expiresAt)

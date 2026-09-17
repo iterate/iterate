@@ -351,6 +351,8 @@ const caughtUpProbe = (readFails?: Error) => {
         readFails
           ? Promise.reject(readFails)
           : Promise.resolve({ events: [], scannedThroughOffset: 0, atHead: true }),
+      schedule: () => Promise.reject(new Error("the probe runs no background work")),
+      cancelSchedule: () => Promise.reject(new Error("the probe runs no background work")),
     },
     storage: memoryStorage(),
   });
@@ -1339,4 +1341,97 @@ test("a throwing sink is contained (lossy notification, value still adopted, the
   await expect(live.deltasSettled()).resolves.toBeUndefined(); // the chain's .catch swallowed it — no wedge, no unhandled rejection
   // the value and the rev both advanced — the lost emission is a chain gap, not lost state
   expect(live.snapshot()).toEqual({ rev: epoch + 1, state: { n: 1 } });
+});
+
+// ── rule 3's other half: the revive — an attempt in flight holds a one-shot wake of the context ──
+
+describe("rule 3 — the revive: work in flight ⇒ a one-shot wake of the context armed", () => {
+  const AttemptsContract = defineProcessorContract({
+    slug: "attempts",
+    version: "1",
+    description: "every consumed event starts one attempt; the test ends each by hand",
+    stateSchema: z.object({}),
+    consumes: ["e"],
+    emits: [],
+  });
+  class AttemptsProcessor extends StreamProcessor<object> {
+    readonly contract = AttemptsContract;
+    readonly trace: string[] = [];
+    readonly endings: (() => void)[] = [];
+    override processEvent(args: ProcessEventArgs<object>): undefined {
+      if (!args.event) return;
+      args.runInBackground(async () => {
+        this.trace.push(`attempt ${args.event!.offset} started`);
+        await new Promise<void>((end) => this.endings.push(end));
+      });
+    }
+  }
+  const TICK = "events.iterate.com/processor/revived";
+  const revive = (name: string) => ({
+    key: ["revive", name],
+    when: { afterMs: 20_000 },
+    events: [{ type: TICK, payload: { name } }],
+  });
+
+  test("ARMED BEFORE THE ATTEMPT, RETRACTED AFTER THE LAST: one schedule however many attempts are in flight; the retraction names the receipt; the key is the slug when the host names no row", async () => {
+    const mem = memoryStream();
+    const attempts = new AttemptsProcessor();
+    const armed = mem.stream.schedule;
+    mem.stream.schedule = (input) => {
+      attempts.trace.push("armed");
+      return armed(input);
+    };
+    mem.engines.push(
+      new ProcessorEngine(attempts, { stream: mem.stream, storage: memoryStorage() }),
+    );
+    mem.stream.append({ type: "e" }, { type: "e" });
+    await settle();
+    // The schedule is asked for BEFORE either attempt's first line runs: a death anywhere in an
+    // attempt is a death with the wake armed.
+    expect(attempts.trace).toEqual(["armed", "attempt 1 started", "attempt 2 started"]);
+    expect(mem.scheduled).toEqual([revive("attempts")]);
+    attempts.endings[0]!();
+    await settle();
+    expect(mem.cancelled).toEqual([]); // one attempt still in flight: the wake stays armed
+    attempts.endings[1]!();
+    await settle();
+    expect(mem.cancelled).toEqual([
+      { key: JSON.stringify(["revive", "attempts"]), scheduledAtOffset: 1 },
+    ]);
+  });
+
+  test("A TICK IS THE ONE-SHOT SPENT: with an attempt in flight it is armed again; idle, a tick arms nothing — a one-shot never re-arms itself, so a dead incarnation's stale tick lands once", async () => {
+    const mem = memoryStream();
+    const attempts = new AttemptsProcessor();
+    mem.engines.push(
+      new ProcessorEngine(attempts, {
+        stream: mem.stream,
+        storage: memoryStorage(),
+        name: "worker",
+      }),
+    );
+    mem.stream.append({ type: "e" });
+    await settle();
+    expect(mem.scheduled).toEqual([revive("worker")]);
+    // Another row's tick is not this one's: nothing changes.
+    mem.stream.append({ type: TICK, payload: { name: "other" } });
+    await settle();
+    expect(mem.scheduled).toHaveLength(1);
+    // Its own tick, the attempt still in flight: spent, and armed again — never retracted (there
+    // is nothing left to cancel).
+    mem.stream.append({ type: TICK, payload: { name: "worker" } });
+    await settle();
+    expect(mem.scheduled).toEqual([revive("worker"), revive("worker")]);
+    expect(mem.cancelled).toEqual([]);
+    attempts.endings[0]!();
+    await settle();
+    expect(mem.cancelled).toEqual([
+      { key: JSON.stringify(["revive", "worker"]), scheduledAtOffset: 2 },
+    ]);
+    // Idle: a stale tick lands once and arms nothing.
+    mem.stream.append({ type: TICK, payload: { name: "worker" } });
+    await settle();
+    expect(mem.scheduled).toHaveLength(2);
+    expect(mem.cancelled).toHaveLength(1);
+  });
 });
