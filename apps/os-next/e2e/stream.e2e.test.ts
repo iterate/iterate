@@ -636,35 +636,39 @@ probe(
         consumes: ["kick"],
       },
     });
-    await append(itx, { type: "kick", payload: { n: 1 } }); // kicks the ladder
-    await sleep(2_000); // the first attempt fails and the ladder arms
-    let ring = await traces(itx);
-    console.log(`kick:\n${story(ring)}`);
-    let nextWakeAt = ring.at(-1)?.alarm.after ?? null;
-    disposeSessions(); // disconnect — the ladder runs off the DO's own alarm, untouched
-    // Six wakes: ladder rungs 1s…32s, about a minute.
-    for (let wake = 1; wake <= 6 && nextWakeAt !== null; wake++) {
-      await sleep(Math.max(0, nextWakeAt + 5_000 - Date.now()));
-      itx = openItx(ctx);
-      ring = await traces(itx);
+    try {
+      await append(itx, { type: "kick", payload: { n: 1 } }); // kicks the ladder
+      await sleep(2_000); // the first attempt fails and the ladder arms
+      let ring = await traces(itx);
+      console.log(`kick:\n${story(ring)}`);
+      let nextWakeAt = ring.at(-1)?.alarm.after ?? null;
+      disposeSessions(); // disconnect — the ladder runs off the DO's own alarm, untouched
+      // Six wakes: ladder rungs 1s…32s, about a minute.
+      for (let wake = 1; wake <= 6 && nextWakeAt !== null; wake++) {
+        await sleep(Math.max(0, nextWakeAt + 5_000 - Date.now()));
+        itx = openItx(ctx);
+        ring = await traces(itx);
+        console.log(
+          `wake ${wake} (expected at ${new Date(nextWakeAt).toISOString()}):\n${story(ring)}`,
+        );
+        nextWakeAt = ring.at(-1)?.alarm.after ?? null;
+        disposeSessions();
+      }
+      const events = await readAll(openItx(ctx));
+      const wokens = events.filter((e) => e.type === WOKEN);
       console.log(
-        `wake ${wake} (expected at ${new Date(nextWakeAt).toISOString()}):\n${story(ring)}`,
+        `wake-loop OBSERVE: woken=${wokens.length} reasons=${JSON.stringify(wokens.map((e) => (e.payload as { reason?: string }).reason))}`,
       );
-      nextWakeAt = ring.at(-1)?.alarm.after ?? null;
-      disposeSessions();
+      // The context is never poisoned by the loop; the durable log survives.
+      const [ev] = await append(openItx(ctx), { type: "after-observe" });
+      expect(ev.offset).toBeGreaterThan(0);
+    } finally {
+      // The row is removed WHATEVER happened above: a deployed context must not keep laddering
+      // after the observation, a failed assertion included.
+      await append(openItx(ctx), {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "faildeliver", target: null },
+      });
     }
-    const events = await readAll(openItx(ctx));
-    const wokens = events.filter((e) => e.type === WOKEN);
-    console.log(
-      `wake-loop OBSERVE: woken=${wokens.length} reasons=${JSON.stringify(wokens.map((e) => (e.payload as { reason?: string }).reason))}`,
-    );
-    // The context is never poisoned by the loop; the durable log survives.
-    const [ev] = await append(openItx(ctx), { type: "after-observe" });
-    expect(ev.offset).toBeGreaterThan(0);
-    // The row is removed: a deployed context must not keep laddering after the observation.
-    await append(openItx(ctx), {
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: { name: "faildeliver", target: null },
-    });
   },
 );

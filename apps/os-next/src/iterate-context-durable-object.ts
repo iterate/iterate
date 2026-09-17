@@ -456,7 +456,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** The own-context adapter used by built-ins: a loopback (`itx.cd(<own path>)`, the config
    *  delivery) keeps caller attribution and committed effects and records no wake (it runs inside
-   *  an incarnation a door already woke); the caller defaults to the one already in
+   *  an incarnation a request or alarm already woke); the caller defaults to the one already in
    *  AsyncLocalStorage, so a loopback's appends stay attributed. */
   readonly #localContext: ReachableContext = {
     append: async (...events) => this.#appendAndRunCommittedEffects(events),
