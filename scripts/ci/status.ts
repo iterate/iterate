@@ -43,7 +43,7 @@ export default class CiStatus {
           .join("; "),
       );
     await this.workflow();
-    const context = `ci/${milestone}/${this.attemptId}`;
+    const context = `${milestone.replaceAll("-", " ")} ${this.attemptId}`;
     await this.request(
       "github",
       `/repos/${this.env.GITHUB_REPOSITORY}/statuses/${this.env.CI_HEAD_SHA}`,
@@ -79,7 +79,7 @@ export default class CiStatus {
           );
           linked = true;
         }
-        const context = `ci/${milestone}/${attempt.attemptId}`;
+        const context = `${milestone.replaceAll("-", " ")} ${attempt.attemptId}`;
         // Read the signal AFTER liveness. A final status write followed by job
         // termination must not be mistaken for a producer that forgot to signal.
         for (let page = 1; ; page++) {
