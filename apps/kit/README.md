@@ -2,8 +2,8 @@
 
 Kit Flasher is the browser installer at `https://k.iterate.com` for the five
 supported ESP32-S3 voice boards: HA Voice PE, FutureProofHomes Satellite1, M5StickS3,
-StackChan and Waveshare AMOLED. Its catalog also names the boards that
-`voicelab boards` proves through real air. It prepares the selected project,
+StackChan and Waveshare AMOLED. Its catalog names the boards
+`apps/os-next/scripts/voice-board.ts` proves through real air. It prepares the selected project,
 then flashes a checked source-built release and its private configuration directly over USB.
 
 ## What a person needs

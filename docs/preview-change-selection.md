@@ -99,7 +99,7 @@ prepare: checkout → install → wait for preview-plan → deploy/reuse → rea
              inherit: skip remaining steps │                          │
              tests needed:                 ├─ apps setup → wait ──────┤→ tests
                                            └─ six shards setup → wait┘→ tests
-prepare done → finish setup → wait for all consumers → collect + erase + restore
+prepare done → finish setup → wait for all consumers → validate results → trace → erase + restore
 ```
 
 The caller holds the existing lifecycle lock around this entire workflow.
@@ -110,8 +110,14 @@ Consumers still use an immutable deployment plan tied to the current head,
 workflow run and attempt; only the deployed revision may be older. Cleanup still
 waits for all consumers to settle.
 
+Shards start Metro during setup, before waiting for the backend. The finalizer
+collects preparation and test traces before cleanup, including individual Vitest
+tests. `preview-settled` still waits for successful cleanup and restoration.
+
 The plan publishes `tests`, `deploy`, `commit`, and `slot` as string values in the
 `preview-plan` milestone's description (`tests=true; deploy=true; commit=…; slot=…`).
+The workflow selects these four outputs explicitly; the shell tracer's
+`ci-trace-end` JSON stays out of the size-limited status description.
 `status.ts wait-for` writes those values to step outputs, so `prepare` reads `steps.plan.outputs.tests` and the
 reuse identity. Milestone descriptions accept small, single-line values (140
 characters total); reasons and artifacts stay in their existing logs/storage.

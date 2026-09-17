@@ -1,6 +1,6 @@
 # Iterate Kit firmware
 
-Every ESP board and the host CLI use the same GPT-Live-1 stream. A board owns
+Every ESP board and the Mac target run the same GPT-Live-1 stream. A board owns
 physical audio, controls and display; shared components own the conversation.
 The backend owns the OpenAI session and the ordinary Agent. A new board should
 therefore be small and mostly data. One `device_name` means one stable client
@@ -8,14 +8,33 @@ path and a namespace for fresh conversations, with no per-board model choice.
 
 ## Where code belongs
 
-| Path                        | Owns                                                                        |
-| --------------------------- | --------------------------------------------------------------------------- |
-| `components/core`           | Cap’n Web, stream protocol, PCM framing, microphone flush and playout state |
-| `components/audio`          | PCM conversion, AEC processing and audio accounting                         |
-| `components/voice`          | activation, continuous capture and ESP task coordination                    |
-| `platforms/iterate_esp_idf` | Wi-Fi, ESP-IDF, codec tasks and provisioning                                |
-| `devices/<board>`           | board-only pins, codecs, display and DSP facts                              |
-| `targets/<board>`           | target composition, partitions and SDK defaults                             |
+| Path                        | Owns                                                                                                                                                                                                                         |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `components/core`           | Cap’n Web peer, itx mount and stream subscription, WebSocket framing, provisioning image decode, session grammar, microphone flush and playout; it includes no audio or platform header (`tests/verify_core_boundary.cmake`) |
+| `components/audio`          | PCM conversion, AEC processing and audio accounting                                                                                                                                                                          |
+| `components/capabilities`   | the lent capabilities: conversation, health, speaker and system update on every board; camera and servos where the hardware exists                                                                                           |
+| `components/avatar`         | the PCM-clocked talking head ([its README](components/avatar/README.md))                                                                                                                                                     |
+| `components/voice`          | the voice loop: activation, continuous capture, the two audio tasks and the itx session, compiled once per platform it links                                                                                                 |
+| `platforms/iterate_esp_idf` | the ESP-IDF platform: Wi-Fi, ESP-TLS WebSocket transport, the `iterate_kit` partition, OTA, the RTC restart note, board table, codecs, LED ring and wake word                                                                |
+| `platforms/host`            | the host ESP-IDF (`esp_idf/esp_idf.h`): the ESP-IDF primitives the loop names, on a laptop                                                                                                                                   |
+| `platforms/darwin`          | the Mac platform: CoreAudio behind the codec seam, VoiceProcessingIO echo cancellation, OpenSSL WebSocket transport, provisioning read from a file                                                                           |
+| `devices/<board>`           | board-only pins, codecs, display and DSP facts                                                                                                                                                                               |
+| `targets/<board>`           | target composition, partitions and SDK defaults                                                                                                                                                                              |
+| `targets/mac`               | the Mac as a board: `iterate-kit-mac`, with the keyboard as its button                                                                                                                                                       |
+| `tests`                     | host tests; `tests/fakes/esp_idf` is the scriptable platform half a loop test needs                                                                                                                                          |
+
+The loop reaches its platform through five headers under
+`iterate/kit/platforms/`: `provisioning.h`, `reset_reason.h`, `restart_note.h`,
+`system_update.h` and `itx_transport.h`. It calls `iterate_kit_platform_*` and
+`iterate_kit_itx_transport_*` only; no `iterate_kit_esp_*` or darwin name
+appears in it.
+Each platform provides all five under its own `include/iterate/kit/platforms/`:
+on ESP the `iterate_kit` partition, `esp_reset_reason`, an RTC note, OTA and an
+ESP-TLS WebSocket over Wi-Fi; on the Mac a file, `"started"`, print-and-exit,
+refused, and an OpenSSL WebSocket. Because the transport header defines the
+struct the loop keeps, `components/voice/CMakeLists.txt` compiles the loop once
+per platform it can link: `iterate-kit-voice` against the ESP headers for the
+host tests, `iterate-kit-voice-mac` against darwin's for the Mac.
 
 Do not fork the voice loop for a board. All clients capture before the stream
 mounts, retain opening audio, flush the first PCM immediately when ready, and
@@ -58,9 +77,10 @@ Register the board once in `apps/kit/src/firmware/catalog.ts`: device identity,
 ESP-IDF target, chip and flash plan, including its configuration partition.
 Use the target's partition CSV and generated `flasher_args.json` to establish
 those offsets. The release builder checks them against the actual binary
-partition table. Provide its checked-in chime assets if it uses them. The browser
-selector, release builder and `voicelab boards` all consume the catalog; none
-needs a separate board registration.
+partition table. Provide its checked-in chime assets if it uses them. The
+browser selector and the release builder consume the catalog. The air-path
+proof, `apps/os-next/scripts/voice-board.ts`, takes the device name on
+`--device` and needs no registration.
 
 ## Build and provision
 
@@ -79,13 +99,45 @@ Run shared checks from `apps/kit`:
 pnpm firmware:test:host
 ```
 
-Kit Flasher prepares the project before it enables USB install: it installs this
-Kit build's isolated VoiceAgent guest, verifies `/secrets/openai`, builds the
-guest through its health check and durably mounts its setup capability. It
-returns the canonical project ID and conversation namespace before flashing.
-The browser then writes Wi-Fi, OS URL, canonical project
-ID and project API key into the versioned `iterate_kit` partition on the
-connected board. Credentials never enter the Kit worker or a URL.
+### The Mac as a board
+
+`pnpm firmware:build:host` (from `apps/kit`) configures and builds every host
+target into `firmware/.build/host`, `iterate-kit-mac` among them. It runs the
+voice loop the four ESP boards run, with the Mac's hardware behind the same
+seams: CoreAudio behind the codec seam (`platforms/darwin/darwin_audio_codec.c`),
+Apple's VoiceProcessingIO where the HAVPE has its XMOS, the keyboard as the
+button, the provisioning image read from a file. `targets/mac/main.c` pumps the
+loop's two audio tasks on one thread — a control step, two capture steps and a
+playback step every 5 ms — the way the voice loop tests pump them.
+
+```sh
+cd apps/kit
+pnpm firmware:build:host
+firmware/.build/host/iterate-kit-mac --config /tmp/cfg.bin --name mac
+```
+
+`--config` takes the ITERKIT1 image `tools/make-config-image.py` writes for a
+board; the Wi-Fi fields ride along unused. `--name` sets the device name, `mac`
+by default. `--no-aec` keeps the plain capture and playback queues instead of
+VoiceProcessingIO. Space or return presses the button and `q` leaves; when
+stdin is not a terminal the button is remote-only. The Mac lends
+`itx.clients.<name>` with the shared capabilities plus `button.press`, so
+`voice-board.ts --device <name>` proves it the way it proves a board. Its
+`system.update` mounts and refuses; a restart the loop asks for prints the note
+and ends the process. Health carries `macCaptureFrames`, `macCaptureDropped`,
+`macPlaybackStarved` and `macVoiceProcessing`.
+
+### Provisioning
+
+Kit Flasher's **Prepare device** step calls the chosen project's
+`itx.voice.health()` — a project without the voice agent
+(`apps/os-next/scripts/voice-install.ts` installs it, beside `/secrets/openai`)
+gets no grant — then mints a ten-year personal access token scoped to that
+project, named `Kit <board> <date>` in the person's OS sessions list. The
+browser writes Wi-Fi, OS URL, project id and that token into the versioned
+`iterate_kit` partition on the connected board. Credentials never enter the Kit
+worker or a URL. The token is retired by revocation from that list, never
+refreshed.
 
 To write that partition by hand instead — which is how an os-next bench board
 is provisioned — use `tools/make-config-image.py`. Its `--offset-for <target>`
@@ -96,11 +148,16 @@ the application and leaves the board looking absent rather than offline.
 python3 tools/make-config-image.py \
   --wifi-ssid <ssid> --wifi-password <password> \
   --os-base-url https://os.iterate2.com \
-  --project-id prj-voice --project-api-key "$OPERATOR_SECRET" \
+  --project-id prj-voice --project-api-key "$KIT_TOKEN" \
   --out /tmp/cfg.bin
 python -m esptool --chip esp32s3 -p /dev/cu.usbmodem2101 \
   write_flash "$(python3 tools/make-config-image.py --offset-for havpe)" /tmp/cfg.bin
 ```
+
+`$KIT_TOKEN` is a personal access token scoped to the project: the one Kit
+Flasher's Prepare device step mints, or one minted the same way through
+os-next's `grants.mint` (`projects: [<project>]`, `expiresAt` up to ten years).
+The same image is what `iterate-kit-mac --config` reads.
 
 At boot, firmware rejects a missing or invalid partition, joins Wi-Fi and
 mounts. Health classifies provisioning, Wi-Fi/authentication, mount and audio
@@ -109,8 +166,9 @@ failures.
 The device dials `wss://<os base url host>/api` — os-next's public door — with
 the blob's key as `Authorization: Bearer` on the upgrade: a personal access
 token the Kit page minted for the person who set the device up, scoped to the
-one project, revocable from that person's sessions list. The blob's project id
-is a bare DNS-safe slug (`prj-voice`). The mount's three calls, the subscription shape
+one project, revocable from that person's sessions list. Both transports send
+it, ESP-TLS on a board and OpenSSL on the Mac. The blob's project id is a bare
+DNS-safe slug (`prj-voice`). The mount's three calls, the subscription shape
 and the delivery contract are documented where they live:
 `components/core/include/iterate/kit/itx_mount.h` and `stream_subscription.h`.
 
@@ -164,16 +222,23 @@ pnpm --dir apps/kit firmware:test:host
 cd apps/kit/firmware/targets/<board> && idf.py build
 ```
 
-Then use a provisioned, idle board for the air-path proof:
+Then use a provisioned, idle device — a board or `iterate-kit-mac` — for the
+air-path proof:
 
 ```sh
-doppler run --config <environment> -- pnpm --dir apps/os cli voicelab boards \
-  --project <project> --only <device-name-or-/clients/path>
+cd apps/os-next
+WORKER_BASE_URL=https://os.iterate2.com ADMIN_API_SECRET=… PROJECT=prj-voice \
+  pnpm exec tsx scripts/voice-board.ts --device <device_name> \
+    --prompt "Hello there. Please reply with the single word banana." --expect banana
 ```
 
-`voicelab boards` talks through real air and hangs up afterward; do not run it
-while someone is using the board. Inspect health before and after. A serial
-monitor can reboot a board, so use stream health for in-call observation.
+`voice-board.ts` asks the device to start a conversation (a remote press),
+speaks the prompt out of this Mac's speaker so the device's microphone has to
+hear it, watches the conversation for what the provider heard and said back,
+and hangs up. `--device` takes the `itx.clients.` spelling of the device name;
+its header comment documents `--prompt` and `--expect`. Do not run it while
+someone is using the device. Inspect health before and after. A serial monitor
+can reboot a board, so use stream health for in-call observation.
 
 For sprites and managed dependency pins, see the
 [onboarding guide](adding-a-board-or-sprite.md).

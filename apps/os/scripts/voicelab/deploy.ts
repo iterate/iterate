@@ -85,7 +85,7 @@ export async function deploy(options: DeployOptions) {
   /*
    * A commit is not a deployment: the guest is rebuilt on the next call into
    * it, and a warm stateful facet keeps the build it booted with until it is
-   * restarted (`talk` does that after a changed install). Saying so beats a
+   * restarted (`setup` does that after a changed install). Saying so beats a
    * caller assuming the old code is gone.
    */
   console.log(

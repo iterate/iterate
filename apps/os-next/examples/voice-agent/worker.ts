@@ -16,7 +16,7 @@
  */
 import { ConfigWorker } from "./processor.js";
 
-/* Replaced by the installer with the bundle's content hash (the agent facet's key is inlined at its
+/* Replaced by the installer with the bundle's content hash (the voice-delegate facet's key is inlined at its
  * row below): the loader caches an isolate under the key, so a new build must be a new key. */
 const VOICE_AGENT_CACHE_KEY = "voice-agent:dev";
 
@@ -70,19 +70,21 @@ export default class VoiceWorker extends ConfigWorker {
       {
         type: "events.iterate.com/stream/subscription-configured",
         payload: {
-          name: "agent",
+          /* Not "agent": first-party facet names (src/first-party-facets.ts) are reserved for the
+           * platform's own classes — that name would host the platform's agent, which ignores voice events. */
+          name: "voice-delegate",
           target: [
             "itx",
             "builtins",
             "facets",
             [
               "get",
-              "agent",
+              "voice-delegate",
               {
-                source: "itx.kv.get('agent.js')",
-                /* Substituted by the installer with agent.js's content hash, like the voice key. */
-                cacheKey: "agent:dev",
-                className: "AgentDurableObject",
+                source: "itx.kv.get('voice-delegate.js')",
+                /* Substituted by the installer with voice-delegate.js's content hash, like the voice key. */
+                cacheKey: "voice-delegate:dev",
+                className: "VoiceDelegateDurableObject",
               },
             ],
             "processEventBatch",

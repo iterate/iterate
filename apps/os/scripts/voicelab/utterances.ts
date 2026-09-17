@@ -1,4 +1,4 @@
-// The things an unattended driver says, synthesised on demand.
+// Long-answer test sentences as 16 kHz WAVs, synthesised on demand.
 //
 //   doppler run --config preview_3 -- pnpm cli voicelab utterances
 //
@@ -17,7 +17,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-/** What the driver says, in the order it rotates through them. */
+/** The sentences, in order. */
 const UTTERANCES: { name: string; text: string }[] = [
   {
     name: "01-count",
@@ -38,7 +38,7 @@ const UTTERANCES: { name: string; text: string }[] = [
 ];
 
 /**
- * The format the host CLI's WAV reader takes, and the boards' sample rate.
+ * The boards' sample rate, and the only format the pipe carries.
  *
  * Not negotiable and not guessed: 16 kHz mono PCM16 is what the whole pipe
  * carries, and a file at any other rate is played at the wrong speed by
@@ -76,5 +76,5 @@ export function utterances(options: UtterancesOptions = {}) {
     ]);
     console.log(`wrote   ${file}`);
   }
-  console.log(`\n  pass this to a driver:\n    --utterance-dir ${dir}\n`);
+  console.log(`\n  ${dir}\n`);
 }

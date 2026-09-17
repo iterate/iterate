@@ -1,14 +1,14 @@
 #include "fake_esp_idf_platform.h"
 #include "iterate/kit/voice_device_profile.h"
 
-#include "fake_esp_idf.h"
+#include "esp_idf.h"
 
 #include "esp_system.h"
 
-#include "iterate/kit/platforms/esp_idf_configuration.h"
-#include "iterate/kit/platforms/esp_idf_reset_reason.h"
-#include "iterate/kit/platforms/esp_idf_restart_note.h"
-#include "iterate/kit/platforms/esp_idf_system_update.h"
+#include "iterate/kit/platforms/provisioning.h"
+#include "iterate/kit/platforms/reset_reason.h"
+#include "iterate/kit/platforms/restart_note.h"
+#include "iterate/kit/platforms/system_update.h"
 #include "iterate/kit/spsc_ring.h"
 
 #include <stdio.h>
@@ -42,7 +42,7 @@ enum {
 };
 
 static struct {
-  struct iterate_kit_esp_idf_itx_transport *transport;
+  struct iterate_kit_itx_transport *transport;
   struct iterate_kit_itx_connection *connection;
   char sent[FAKE_SENT_CAPACITY][FAKE_MESSAGE_CAPACITY];
   size_t sent_lengths[FAKE_SENT_CAPACITY];
@@ -64,7 +64,7 @@ struct iterate_kit_itx_connection *iterate_kit_fake_platform_connection(void) {
 }
 
 void iterate_kit_fake_platform_set_state(
-    enum iterate_kit_esp_idf_itx_transport_state state) {
+    enum iterate_kit_itx_transport_state state) {
   if (platform.transport == NULL) return;
   platform.transport->state = state;
 }
@@ -72,7 +72,7 @@ void iterate_kit_fake_platform_set_state(
 void iterate_kit_fake_platform_connect(void) {
   if (platform.connection == NULL) return;
   (void)iterate_kit_itx_connection_open(platform.connection);
-  iterate_kit_fake_platform_set_state(ITERATE_KIT_ESP_IDF_ITX_READY);
+  iterate_kit_fake_platform_set_state(ITERATE_KIT_ITX_READY);
 }
 
 size_t iterate_kit_fake_platform_sent_count(void) { return platform.sent_count; }
@@ -143,13 +143,13 @@ void iterate_kit_fake_platform_drain_control_outbox(void) {
  * A PROVISIONED BOARD, because an unprovisioned one returns from init before
  * anything else in the loop runs and every test would be about that.
  */
-struct iterate_kit_esp_configuration_result
-iterate_kit_esp_read_configuration(
+struct iterate_kit_platform_provisioning_result
+iterate_kit_platform_read_provisioning(
     struct iterate_kit_configuration *configuration) {
-  struct iterate_kit_esp_configuration_result result;
+  struct iterate_kit_platform_provisioning_result result;
   memset(&result, 0, sizeof(result));
   if (configuration == NULL) {
-    result.status = ITERATE_KIT_ESP_CONFIGURATION_INVALID_ARGUMENT;
+    result.status = ITERATE_KIT_PLATFORM_PROVISIONING_INVALID_ARGUMENT;
     return result;
   }
   memset(configuration, 0, sizeof(*configuration));
@@ -168,31 +168,31 @@ iterate_kit_esp_read_configuration(
   (void)snprintf(
       configuration->project_api_key, sizeof(configuration->project_api_key),
       "%s", "itxk_fake");
-  result.status = ITERATE_KIT_ESP_CONFIGURATION_OK;
+  result.status = ITERATE_KIT_PLATFORM_PROVISIONING_OK;
   return result;
 }
 
-const char *iterate_kit_esp_configuration_status_name(
-    enum iterate_kit_esp_configuration_status status) {
-  return status == ITERATE_KIT_ESP_CONFIGURATION_OK ? "ok" : "fake-failure";
+const char *iterate_kit_platform_provisioning_status_name(
+    enum iterate_kit_platform_provisioning_status status) {
+  return status == ITERATE_KIT_PLATFORM_PROVISIONING_OK ? "ok" : "fake-failure";
 }
 
 /* --- restart bookkeeping -------------------------------------------------- */
 
-const char *iterate_kit_esp_reset_reason_name(void) { return "fake"; }
+const char *iterate_kit_platform_reset_reason_name(void) { return "fake"; }
 
 /*
  * RECORDED, NOT HONOURED, for the same reason esp_restart() is: this does not
  * return on hardware, and ending the test process is not a test result.
  */
-void iterate_kit_esp_restart_with_note(const char *why) {
+void iterate_kit_platform_restart_with_note(const char *why) {
   (void)snprintf(
       platform.restart_note, sizeof(platform.restart_note), "%s",
       why == NULL ? "" : why);
   esp_restart();
 }
 
-const char *iterate_kit_esp_last_restart_note(void) {
+const char *iterate_kit_platform_last_restart_note(void) {
   return platform.restart_note;
 }
 
@@ -201,7 +201,7 @@ const char *iterate_kit_esp_last_restart_note(void) {
  * under test only needs the driver to exist so system.update mounts; what an
  * update DOES is the device's integration proof, not this harness's.
  */
-enum iterate_kit_status iterate_kit_esp_idf_system_update_begin(
+enum iterate_kit_status iterate_kit_platform_system_update_begin(
     void *context, const char *url, const char *sha256_hex) {
   (void)context;
   (void)url;
@@ -211,15 +211,15 @@ enum iterate_kit_status iterate_kit_esp_idf_system_update_begin(
 
 /* --- the transport -------------------------------------------------------- */
 
-enum iterate_kit_status iterate_kit_esp_idf_itx_transport_prepare(
-    struct iterate_kit_esp_idf_itx_transport *transport,
-    const struct iterate_kit_esp_idf_itx_transport_options *options) {
+enum iterate_kit_status iterate_kit_itx_transport_prepare(
+    struct iterate_kit_itx_transport *transport,
+    const struct iterate_kit_itx_transport_options *options) {
   if (transport == NULL || options == NULL || options->connection == NULL) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   memset(transport, 0, sizeof(*transport));
   transport->options = *options;
-  transport->state = ITERATE_KIT_ESP_IDF_ITX_IDLE;
+  transport->state = ITERATE_KIT_ITX_IDLE;
   transport->initialized = true;
   platform.transport = transport;
   platform.connection = options->connection;
@@ -230,7 +230,7 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_prepare(
  * The loop's egress. Fragments in, whole messages out, because that is what the
  * real transport's outbox reassembles before anything can read one.
  */
-enum capnweb_status iterate_kit_esp_idf_itx_transport_send_text(
+enum capnweb_status iterate_kit_itx_transport_send_text(
     void *context,
     enum capnweb_text_fragment_kind kind,
     const char *data,
@@ -265,8 +265,8 @@ enum capnweb_status iterate_kit_esp_idf_itx_transport_send_text(
   return CAPNWEB_OK;
 }
 
-enum iterate_kit_status iterate_kit_esp_idf_itx_transport_start(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
+enum iterate_kit_status iterate_kit_itx_transport_start(
+    struct iterate_kit_itx_transport *transport) {
   if (transport == NULL || !transport->initialized) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
@@ -276,12 +276,12 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_start(
    * started would hide every state the loop has for coming up, and the loop's
    * whole launch ladder is about those states.
    */
-  transport->state = ITERATE_KIT_ESP_IDF_ITX_WIFI_CONNECTING;
+  transport->state = ITERATE_KIT_ITX_WIFI_CONNECTING;
   return ITERATE_KIT_OK;
 }
 
-enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
-    struct iterate_kit_esp_idf_itx_transport *transport,
+enum iterate_kit_status iterate_kit_itx_transport_poll(
+    struct iterate_kit_itx_transport *transport,
     size_t max_control_messages) {
   (void)max_control_messages;
   if (transport == NULL || !transport->initialized) {
@@ -290,23 +290,23 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
   return ITERATE_KIT_OK;
 }
 
-void iterate_kit_esp_idf_itx_transport_request_restart(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
+void iterate_kit_itx_transport_request_restart(
+    struct iterate_kit_itx_transport *transport) {
   if (transport == NULL) return;
   ++platform.restarts_requested;
 }
 
-enum iterate_kit_status iterate_kit_esp_idf_itx_transport_stop(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
+enum iterate_kit_status iterate_kit_itx_transport_stop(
+    struct iterate_kit_itx_transport *transport) {
   if (transport == NULL) return ITERATE_KIT_INVALID_ARGUMENT;
   transport->started = false;
-  transport->state = ITERATE_KIT_ESP_IDF_ITX_STOPPED;
+  transport->state = ITERATE_KIT_ITX_STOPPED;
   return ITERATE_KIT_OK;
 }
 
-void iterate_kit_esp_idf_itx_transport_metrics(
-    const struct iterate_kit_esp_idf_itx_transport *transport,
-    struct iterate_kit_esp_idf_itx_transport_metrics *metrics) {
+void iterate_kit_itx_transport_metrics(
+    const struct iterate_kit_itx_transport *transport,
+    struct iterate_kit_itx_transport_metrics *metrics) {
   if (metrics == NULL) return;
   memset(metrics, 0, sizeof(*metrics));
   if (transport == NULL) return;
@@ -317,25 +317,25 @@ void iterate_kit_esp_idf_itx_transport_metrics(
   metrics->control_outbox_capacity_slots = 1U;
 }
 
-void iterate_kit_esp_idf_itx_transport_lifecycle(
-    const struct iterate_kit_esp_idf_itx_transport *transport,
-    struct iterate_kit_esp_idf_itx_transport_lifecycle *lifecycle) {
+void iterate_kit_itx_transport_lifecycle(
+    const struct iterate_kit_itx_transport *transport,
+    struct iterate_kit_itx_transport_lifecycle *lifecycle) {
   if (lifecycle == NULL) return;
   memset(lifecycle, 0, sizeof(*lifecycle));
   if (transport == NULL) return;
   lifecycle->ready_socket_generation = transport->ready_socket_generation;
 }
 
-const char *iterate_kit_esp_idf_itx_transport_state_name(
-    enum iterate_kit_esp_idf_itx_transport_state state) {
+const char *iterate_kit_itx_transport_state_name(
+    enum iterate_kit_itx_transport_state state) {
   switch (state) {
-    case ITERATE_KIT_ESP_IDF_ITX_IDLE: return "idle";
-    case ITERATE_KIT_ESP_IDF_ITX_WIFI_CONNECTING: return "wifi-connecting";
-    case ITERATE_KIT_ESP_IDF_ITX_WEBSOCKET_CONNECTING: return "ws-connecting";
-    case ITERATE_KIT_ESP_IDF_ITX_MOUNTING: return "mounting";
-    case ITERATE_KIT_ESP_IDF_ITX_READY: return "ready";
-    case ITERATE_KIT_ESP_IDF_ITX_FAILED: return "failed";
-    case ITERATE_KIT_ESP_IDF_ITX_STOPPED: return "stopped";
+    case ITERATE_KIT_ITX_IDLE: return "idle";
+    case ITERATE_KIT_ITX_WIFI_CONNECTING: return "wifi-connecting";
+    case ITERATE_KIT_ITX_WEBSOCKET_CONNECTING: return "ws-connecting";
+    case ITERATE_KIT_ITX_MOUNTING: return "mounting";
+    case ITERATE_KIT_ITX_READY: return "ready";
+    case ITERATE_KIT_ITX_FAILED: return "failed";
+    case ITERATE_KIT_ITX_STOPPED: return "stopped";
   }
   return "unknown";
 }

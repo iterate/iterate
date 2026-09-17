@@ -5,7 +5,7 @@
 //   doppler run --config prd -- pnpm cli voicelab tap --project iterate \
 //     --path /agents/voice/2609090928 --out /tmp/tap.jsonl --minutes 3
 //
-// WHY THIS EXISTS. The host CLI's report says what the DEVICE saw: frames
+// WHY THIS EXISTS. A device's health report says what the DEVICE saw: frames
 // received, ring occupancy, starvation. When playback starves while every
 // frame still arrives, that report cannot say whether the server released it
 // late. This tap records live speaker audio alongside the durable call,

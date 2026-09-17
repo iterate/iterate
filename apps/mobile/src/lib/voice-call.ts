@@ -1,5 +1,5 @@
 // One voice call, as a client of the VoiceAgent protocol speaks
-// it (after the C host CLI and the ESP32 boards): open a live stream
+// it (as the ESP32 boards and the Mac target do): open a live stream
 // connection, pump ephemeral base64 PCM16 mic-frames up — the FIRST one
 // mints the call — and obey the spk-frame buffer policy coming down:
 // clear-before-frame throws the queue away, pcm is appended to playback,

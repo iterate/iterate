@@ -50,7 +50,7 @@ export { default, VoiceAgentFacet } from "${VOICE_AGENT_PACKAGE_NAME}/worker";
  * deployment unit — so a checkout can commit the package's own source files
  * into the repo and re-export the worker from there, and the platform builds
  * the agent from the repo on the next call, with nothing pinned or published
- * in between. `voicelab talk` does this on every run, so an edit to the
+ * in between. `voicelab setup` does this on every run, so an edit to the
  * facet is live on the next call from the same checkout. `voicelab deploy`
  * is the other way round: it names the published package and leaves the
  * committed copy to `--prune-legacy`.
@@ -73,7 +73,7 @@ export const VOICE_AGENT_SOURCE_FILES = [
 
 type VoiceAgentSourceFiles = Record<(typeof VOICE_AGENT_SOURCE_FILES)[number], string>;
 export const VOICE_AGENT_GUEST_SOURCE_FROM_REPO = `// The voice agent guest worker, built from this repo's own copy of the
-// agent's source in ${VOICE_AGENT_SOURCE_DIR}/ (committed by \`voicelab talk\` from a
+// agent's source in ${VOICE_AGENT_SOURCE_DIR}/ (committed by \`voicelab setup\` from a
 // checkout). \`voicelab deploy\` replaces this with the published package.
 export { default, VoiceAgentFacet } from "./${VOICE_AGENT_SOURCE_DIR}/worker.ts";
 `;

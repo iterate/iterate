@@ -20,7 +20,7 @@ export interface VoicelabConnectOptions {
   baseUrl?: string;
 }
 
-export function resolveVoicelabBaseUrl(options: Pick<VoicelabConnectOptions, "baseUrl">) {
+function resolveVoicelabBaseUrl(options: Pick<VoicelabConnectOptions, "baseUrl">) {
   const baseUrl =
     options.baseUrl ??
     process.env.APP_CONFIG_BASE_URL?.trim() ??
@@ -67,8 +67,8 @@ export async function connectProject(
 /**
  * Make the named project exist before anything scopes into it.
  *
- * A bare `talk` run's first act on a fresh environment: the default slug
- * does not resolve yet, and "get set up on a new project" is the first-run
+ * `setup`'s first act on a fresh environment: the default slug does not
+ * resolve yet, and "get set up on a new project" is the first-run
  * experience, not an error. Addressing an unknown slug is side-effect free,
  * so probing with identity() risks nothing; create() waits for the
  * bootstrap saga, so the caller may connect the moment this returns.

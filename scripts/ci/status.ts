@@ -157,7 +157,7 @@ export default class CiStatus {
     if (workflow.jobs.find((job) => job.jobId === this.jobId)?.status !== "running")
       throw new Error("This Depot job is no longer running");
     if (workflow.jobs.some((job) => job.jobId !== this.jobId && job.status !== "finished"))
-      throw new Error("Cannot publish success before every other job has succeeded");
+      throw new Error("Cannot publish success before every preview producer has succeeded");
     const check = await this.ownCheck();
     if (check.status !== "in_progress") throw new Error("This GitHub check is no longer running");
     const response = await fetch(
@@ -173,7 +173,7 @@ export default class CiStatus {
           status: "completed",
           conclusion: "success",
           output: {
-            title: "Check marked successful",
+            title: "Preview test summary",
             summary,
           },
         }),
@@ -182,10 +182,9 @@ export default class CiStatus {
     );
     if (!response.ok) throw new Error(`Updating own GitHub check returned HTTP ${response.status}`);
     const greenAt = Date.now();
-    if (process.env.CI_TRACE_ENABLED === "1")
-      console.log(
-        `\n@@ci-trace ${JSON.stringify({ kind: "check-green", time: greenAt, checkId: check.id })}`,
-      );
+    const marker = JSON.stringify({ kind: "check-green", time: greenAt, checkId: check.id });
+    await appendFile(this.env.GITHUB_OUTPUT, `ci-trace-green=${marker}\n`);
+    if (process.env.CI_TRACE_ENABLED === "1") console.log(`\n@@ci-trace ${marker}`);
     console.log(
       `[ci:status] check ${check.id} set green at ${new Date(greenAt).toISOString()}; job continues`,
     );

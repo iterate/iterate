@@ -2924,7 +2924,6 @@ export const cloudflarePreviewSharedPaths = [
   "scripts/ci/status.ts",
   "scripts/ci/tracing/**",
   "scripts/depot-ci/**",
-  ".depot/workflows/ci-trace.yml",
   // Every app's generated wrangler config (routes, worker names, resource
   // IDs) derives from the root envs.ts — an envs.ts change (e.g. recreating a
   // slot's deleted D1) must redeploy the fleet or the fix never ships.

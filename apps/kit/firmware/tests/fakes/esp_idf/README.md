@@ -1,55 +1,70 @@
-# A pretend ESP-IDF, so the shared voice loop can be tested at all
+# The platform half of a voice loop test
 
-`components/voice/src/voice_loop.c` is the one program every board runs, and
-until now it was in no host build. Its intent mapping — the thing that decides
-whether a press becomes a call — was verified only by diffing it against the
-four device files it replaced, and the bug that cost an afternoon (a remote
-press latched and never read) lived exactly there.
+`components/voice/src/voice_loop.c` is the one program every board runs. Its
+intent mapping — the thing that decides whether a press becomes a call — was
+once verified only by diffing it against the four device files it replaced, and
+the bug that cost an afternoon (a remote press latched and never read) lived
+exactly there. So the loop is compiled on a laptop and driven by tests.
 
 The loop is ESP-IDF-coupled by design: it owns FreeRTOS tasks, queues, the task
 watchdog and the platform transport, because those are the parts a device
-actually is. So the way to test it on a laptop is to give it an ESP-IDF that is
-not one.
+actually is. Two things stand in for the ESP32 on a host, and they live in two
+places.
 
-## What these headers are, and what they are not
+## The host ESP-IDF lives in `platforms/host`
 
-They are the **narrowest possible** stand-ins for the ESP-IDF and platform
-surface `voice_loop.c` names — nothing else in this repository includes them,
-and the real build never sees them. Each is on the include path only for the
-host `iterate-kit-voice` target.
+`platforms/host/esp_idf/` (library `iterate-kit-host-esp-idf`, entry point
+`esp_idf.h`) is the ESP-IDF the loop names — `esp_timer`, `esp_log`,
+`esp_random`, FreeRTOS tasks and queues, the task watchdog — on a laptop. It is
+real where a running program needs it: a monotonic clock, delays that sleep,
+randomness, logging to stderr. It is deliberately not scheduling:
+`xTaskCreatePinnedToCore` records the task and returns `pdPASS` without running
+it, and a queue is a bounded ring that never waits. Whoever owns the process
+pumps `iterate_kit_voice_loop_step`, `_capture_step` and `_playback_step`
+itself, on one thread. `targets/mac` does that to be a device; a test does it
+to be a test. That is the reason those three entry points exist.
 
-They are **not an emulator**. The queue fake is a real bounded ring, because the
-loop's audio paths would be meaningless without one; everything else is a
-recorded no-op that returns the success the loop needs to get past boot. Nothing
-here schedules: `xTaskCreatePinnedToCore` records the task and returns `pdPASS`
-without running it, so a host test drives `iterate_kit_voice_loop_step`,
-`_capture_step` and `_playback_step` itself, one thread, in whatever order the
-test is about. That is the reason those three entry points exist.
+A test pins the clock with `iterate_kit_host_esp_idf_set_now_us()`. From then
+on time moves only through set, `iterate_kit_host_esp_idf_advance_ms()` and the
+delays the loop itself takes (`vTaskDelay` is a clock move, a queue timeout is
+spent only when it is actually waited out), and a restart is recorded, not
+honoured: `iterate_kit_host_esp_idf_restart_requested()` and `_restart_note()`
+read what `esp_restart()` recorded. Unpinned, `esp_restart()` prints the note
+and exits. Logging is quiet under a pinned clock unless `ITERATE_KIT_ESP_LOG`
+says otherwise. Every fixture calls `iterate_kit_host_esp_idf_reset()` first,
+because all of it is file-static, exactly like the firmware it stands in for.
 
-`fake_esp_idf.h` exposes the handful of observations a test needs — how many
-tasks were created, whether the device asked to restart — plus
-`iterate_kit_fake_esp_idf_reset()`, which every fixture must call because all of
-this is file-static, exactly like the firmware it stands in for.
+## What is here: a scriptable transport and a provisioned board
 
-## The platform half
+`fake_esp_idf_platform.{c,h}` is library `iterate-kit-esp-idf-fakes`, defined
+in `tests/CMakeLists.txt` and compiled against
+`platforms/iterate_esp_idf/include`, because the loop it links
+(`iterate-kit-voice`) is the ESP-shaped one. It implements the five platform
+headers the loop calls — provisioning, reset reason, restart note, system update
+and the itx transport — so every struct has its real layout and every call its
+real signature. Only the behaviour is pretend.
 
-`fake_esp_idf_platform.c` stands in for the four platform modules the loop
-calls — provisioning, reset reason, restart note, and the itx transport — and
-it implements the **real** headers, so every struct has its real layout and
-every call its real signature.
+Provisioning answers with a provisioned board (`prj_fake`, `itxk_fake`),
+because an unprovisioned one returns from init before anything else in the loop
+runs and every test would be about that. The reset reason is `"fake"`. A
+restart note is recorded and handed to `esp_restart()`. `system.update` is
+accepted and not downloaded, so the capability mounts.
 
-The transport fake is also the way a test gets a message INTO the device. It
+The transport fake is the way a test gets a message INTO the device. It
 receives `options.connection` in `prepare()` exactly as the real transport does,
 so `iterate_kit_fake_platform_connection()` hands a test the same session the
-socket would feed. A remote call is therefore the bytes a caller sends, not a
+socket would feed. A remote press is therefore the bytes a caller sends, not a
 hook: no accessor had to be added to `loop.h` for any of this.
-
-It also owns the hop. `iterate_kit_fake_platform_set_hop_answers(false)` is a
-half-open socket — TCP accepting everything and nothing coming back — which is
-the failure the press probe exists for and cannot otherwise be reproduced.
+`iterate_kit_fake_platform_connect()` brings the pretend socket up when the
+test says so, never on a timer; `_set_state()` is what the loop reads as the
+transport's lifecycle. Everything the loop sent is reassembled into whole
+Cap'n Web messages (`_sent_count()`, `_sent()`, `_find_sent()`), and a test can
+fail the next send, fill or drain the control outbox, and count the restarts the
+loop asked the transport for. `iterate_kit_fake_platform_reset()` comes first in
+every fixture, beside the host ESP-IDF's.
 
 ## The rule
 
-If a test needs a behaviour these fakes do not have, add the behaviour here
-rather than reaching around them. A test that bypasses the seam is testing the
-test.
+If a test needs a behaviour these fakes do not have, add the behaviour here (or
+in `platforms/host/esp_idf` if it is an ESP-IDF primitive) rather than reaching
+around them. A test that bypasses the seam is testing the test.

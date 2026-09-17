@@ -1,4 +1,4 @@
-#include "iterate/kit/platforms/esp_idf_itx_transport.h"
+#include "iterate/kit/platforms/itx_transport.h"
 #include "iterate/kit/retry_gate.h"
 
 #include <limits.h>
@@ -178,7 +178,7 @@ static void atomic_max_u32(uint32_t *value, uint32_t candidate) {
 }
 
 static void remember_platform_error(
-    struct iterate_kit_esp_idf_itx_transport *transport,
+    struct iterate_kit_itx_transport *transport,
     esp_err_t error) {
   __atomic_store_n(
       &transport->last_platform_error,
@@ -187,7 +187,7 @@ static void remember_platform_error(
 }
 
 static void wake_network_task(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
+    struct iterate_kit_itx_transport *transport) {
   TaskHandle_t task = transport->network_task;
   if (task != NULL) {
     xTaskNotifyGive(task);
@@ -232,7 +232,7 @@ static bool control_ring_empty(
 }
 
 static void discard_control_inbox(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
+    struct iterate_kit_itx_transport *transport) {
   /*
    * Inbound fragments belong to the socket generation that produced them. A
    * parser reset without draining the SPSC ring would feed stale replies into
@@ -257,7 +257,7 @@ static void discard_control_inbox(
 }
 
 static void discard_control_outbox(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
+    struct iterate_kit_itx_transport *transport) {
   /*
    * Cap'n Web request IDs and export/import references are session-scoped.
    * Retrying old serialized messages after reconnect is not at-least-once
@@ -269,16 +269,16 @@ static void discard_control_outbox(
 }
 
 static void request_restart(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
+    struct iterate_kit_itx_transport *transport) {
   atomic_store_u32(&transport->restart_requested, 1U);
   wake_network_task(transport);
 }
 
 static void latch_fatal_failure(
-    struct iterate_kit_esp_idf_itx_transport *transport,
-    enum iterate_kit_esp_idf_itx_fatal_failure_reason reason) {
+    struct iterate_kit_itx_transport *transport,
+    enum iterate_kit_itx_fatal_failure_reason reason) {
   uint32_t expected =
-      (uint32_t)ITERATE_KIT_ESP_IDF_ITX_FATAL_NONE;
+      (uint32_t)ITERATE_KIT_ITX_FATAL_NONE;
   /*
    * Several owners can observe fallout from one broken generation. Retain the
    * first local invariant, not whichever cleanup path happens to run last;
@@ -296,7 +296,7 @@ static void latch_fatal_failure(
 }
 
 static void record_protocol_failure(
-    struct iterate_kit_esp_idf_itx_transport *transport,
+    struct iterate_kit_itx_transport *transport,
     uint32_t generation) {
   if (generation == 0U) {
     /*
@@ -306,7 +306,7 @@ static void record_protocol_failure(
      */
     latch_fatal_failure(
         transport,
-        ITERATE_KIT_ESP_IDF_ITX_FATAL_PROTOCOL_WITHOUT_GENERATION);
+        ITERATE_KIT_ITX_FATAL_PROTOCOL_WITHOUT_GENERATION);
     return;
   }
   if (atomic_publish_newer_generation(
@@ -325,7 +325,7 @@ static void record_protocol_failure(
 }
 
 static void remember_application_capnweb_failure(
-    struct iterate_kit_esp_idf_itx_transport *transport,
+    struct iterate_kit_itx_transport *transport,
     uint32_t generation,
     enum capnweb_status status) {
   if (status == CAPNWEB_OK) {
@@ -361,7 +361,7 @@ static void remember_application_capnweb_failure(
 }
 
 static void mark_socket_disconnected(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
+    struct iterate_kit_itx_transport *transport) {
   if (atomic_exchange_u32(
           &transport->socket_connected, 0U) != 0U) {
     /*
@@ -377,7 +377,7 @@ static void wifi_event(
     esp_event_base_t base,
     int32_t event_id,
     void *event_data) {
-  struct iterate_kit_esp_idf_itx_transport *transport = context;
+  struct iterate_kit_itx_transport *transport = context;
   (void)base;
   if (event_id == WIFI_EVENT_STA_START) {
     /*
@@ -408,7 +408,7 @@ static void ip_event(
     esp_event_base_t base,
     int32_t event_id,
     void *event_data) {
-  struct iterate_kit_esp_idf_itx_transport *transport = context;
+  struct iterate_kit_itx_transport *transport = context;
   (void)base;
   (void)event_data;
   if (event_id == IP_EVENT_STA_GOT_IP) {
@@ -418,7 +418,7 @@ static void ip_event(
 }
 
 static void fail_receive(
-    struct iterate_kit_esp_idf_itx_transport *transport,
+    struct iterate_kit_itx_transport *transport,
     int32_t status) {
   atomic_saturating_increment(
       &transport->control_receive_failures);
@@ -438,7 +438,7 @@ static void fail_receive(
 }
 
 static void fail_receive_fatal(
-    struct iterate_kit_esp_idf_itx_transport *transport,
+    struct iterate_kit_itx_transport *transport,
     int32_t status) {
   /*
    * This path is reserved for a local epoch invariant that a fresh peer cannot
@@ -454,11 +454,11 @@ static void fail_receive_fatal(
       __ATOMIC_RELEASE);
   latch_fatal_failure(
       transport,
-      ITERATE_KIT_ESP_IDF_ITX_FATAL_SOCKET_GENERATION_EXHAUSTED);
+      ITERATE_KIT_ITX_FATAL_SOCKET_GENERATION_EXHAUSTED);
 }
 
 static bool mark_socket_connected(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
+    struct iterate_kit_itx_transport *transport) {
   const uint32_t generation =
       atomic_load_u32(&transport->socket_generation);
   if (atomic_load_u32(&transport->socket_connected)) {
@@ -486,7 +486,7 @@ static bool mark_socket_connected(
 }
 
 static void remember_websocket_error(
-    struct iterate_kit_esp_idf_itx_transport *transport,
+    struct iterate_kit_itx_transport *transport,
     int32_t error) {
   /*
    * The lower taskless adapter exposes the errno/result at the point it loses
@@ -505,7 +505,7 @@ static void remember_websocket_error(
 }
 
 static bool service_websocket_control(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
+    struct iterate_kit_itx_transport *transport) {
   enum iterate_kit_websocket_tx_result result;
   result =
       iterate_kit_esp_idf_websocket_connection_service_control(
@@ -538,7 +538,7 @@ static bool service_websocket_control(
  * JSON contiguous. `write_acquired` is exactly that flag.
  */
 static bool inbox_has_room(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
+    struct iterate_kit_itx_transport *transport) {
   struct iterate_kit_spsc_ring_metrics metrics;
   if (transport->control_inbox.write_acquired) {
     return true; /* mid-message: the slot is already ours */
@@ -549,7 +549,7 @@ static bool inbox_has_room(
 }
 
 static void receive_control_messages(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
+    struct iterate_kit_itx_transport *transport) {
   unsigned int received;
   for (received = 0U;
        received < NETWORK_RECEIVE_BURST &&
@@ -632,7 +632,7 @@ static void receive_control_messages(
 
 static enum iterate_kit_websocket_tx_result send_control_message(
     void *context, const void *message, size_t length) {
-  struct iterate_kit_esp_idf_itx_transport *transport = context;
+  struct iterate_kit_itx_transport *transport = context;
   return iterate_kit_esp_idf_websocket_connection_send(
       &transport->websocket,
       ITERATE_KIT_WEBSOCKET_TEXT,
@@ -641,7 +641,7 @@ static enum iterate_kit_websocket_tx_result send_control_message(
 }
 
 static void send_control_messages(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
+    struct iterate_kit_itx_transport *transport) {
   unsigned int work_steps;
   if (atomic_load_u32(&transport->socket_generation) !=
       atomic_load_u32(
@@ -708,7 +708,7 @@ static void send_control_messages(
  * blank header beats no socket.
  */
 static void refresh_handshake_headers(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
+    struct iterate_kit_itx_transport *transport) {
   uint8_t mac[6] = {0};
   wifi_ap_record_t ap_info;
   int rssi = 0;
@@ -730,7 +730,7 @@ static void refresh_handshake_headers(
 }
 
 static void stop_websocket(
-    struct iterate_kit_esp_idf_itx_transport *transport,
+    struct iterate_kit_itx_transport *transport,
     bool *websocket_open) {
   if (!*websocket_open &&
       transport->websocket.parent == NULL &&
@@ -756,7 +756,7 @@ static void stop_websocket(
 }
 
 static void network_task(void *context) {
-  struct iterate_kit_esp_idf_itx_transport *transport = context;
+  struct iterate_kit_itx_transport *transport = context;
   struct iterate_kit_retry_gate websocket_retry;
   uint32_t wifi_retry_ms = WIFI_RETRY_INITIAL_MS;
   int64_t wifi_retry_at_us = 0;
@@ -890,7 +890,7 @@ static void network_task(void *context) {
         remember_platform_error(transport, ESP_ERR_NO_MEM);
         latch_fatal_failure(
             transport,
-            ITERATE_KIT_ESP_IDF_ITX_FATAL_NETWORK_STACK_HEADROOM);
+            ITERATE_KIT_ITX_FATAL_NETWORK_STACK_HEADROOM);
         continue;
       }
       atomic_saturating_increment(
@@ -916,7 +916,7 @@ static void network_task(void *context) {
               transport, ESP_ERR_INVALID_STATE);
           latch_fatal_failure(
               transport,
-              ITERATE_KIT_ESP_IDF_ITX_FATAL_WEBSOCKET_OPEN_INVARIANT);
+              ITERATE_KIT_ITX_FATAL_WEBSOCKET_OPEN_INVARIANT);
         } else {
           remember_websocket_error(
               transport, transport->websocket.last_error);
@@ -971,9 +971,9 @@ static void network_task(void *context) {
   vTaskDelete(NULL);
 }
 
-enum iterate_kit_status iterate_kit_esp_idf_itx_transport_prepare(
-    struct iterate_kit_esp_idf_itx_transport *transport,
-    const struct iterate_kit_esp_idf_itx_transport_options *options) {
+enum iterate_kit_status iterate_kit_itx_transport_prepare(
+    struct iterate_kit_itx_transport *transport,
+    const struct iterate_kit_itx_transport_options *options) {
   enum iterate_kit_configuration_error configuration_error;
   enum iterate_kit_status status;
   struct iterate_kit_esp_idf_websocket_connection_options
@@ -1046,18 +1046,18 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_prepare(
     memset(transport, 0, sizeof(*transport));
     return status;
   }
-  transport->state = ITERATE_KIT_ESP_IDF_ITX_IDLE;
+  transport->state = ITERATE_KIT_ITX_IDLE;
   transport->last_capnweb_status = CAPNWEB_OK;
   transport->initialized = true;
   return ITERATE_KIT_OK;
 }
 
-enum capnweb_status iterate_kit_esp_idf_itx_transport_send_text(
+enum capnweb_status iterate_kit_itx_transport_send_text(
     void *context,
     enum capnweb_text_fragment_kind kind,
     const char *data,
     size_t length) {
-  struct iterate_kit_esp_idf_itx_transport *transport = context;
+  struct iterate_kit_itx_transport *transport = context;
   enum capnweb_status status;
   if (transport == NULL || !transport->initialized) {
     return CAPNWEB_E_INVALID_ARGUMENT;
@@ -1075,8 +1075,8 @@ enum capnweb_status iterate_kit_esp_idf_itx_transport_send_text(
   return status;
 }
 
-enum iterate_kit_status iterate_kit_esp_idf_itx_transport_start(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
+enum iterate_kit_status iterate_kit_itx_transport_start(
+    struct iterate_kit_itx_transport *transport) {
   wifi_init_config_t wifi_initialization =
       WIFI_INIT_CONFIG_DEFAULT();
   wifi_config_t wifi_configuration = {0};
@@ -1264,12 +1264,12 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_start(
   }
   transport->started = true;
   transport->state =
-      ITERATE_KIT_ESP_IDF_ITX_WIFI_CONNECTING;
+      ITERATE_KIT_ITX_WIFI_CONNECTING;
   return ITERATE_KIT_OK;
 }
 
-enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
-    struct iterate_kit_esp_idf_itx_transport *transport,
+enum iterate_kit_status iterate_kit_itx_transport_poll(
+    struct iterate_kit_itx_transport *transport,
     size_t max_control_messages) {
   uint32_t protocol_failure_generation;
   uint32_t socket_generation;
@@ -1301,7 +1301,7 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
      * asking this application task to drain it would violate the SPSC contract
      * precisely while the network owner may be releasing an acquired slot.
      */
-    transport->state = ITERATE_KIT_ESP_IDF_ITX_FAILED;
+    transport->state = ITERATE_KIT_ITX_FAILED;
     return ITERATE_KIT_STATE_ERROR;
   }
   if (protocol_failure_generation != 0U &&
@@ -1324,7 +1324,7 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
      * delayed callback for this epoch then remains an idempotent observation
      * instead of racing a boolean clear for the replacement socket.
      */
-    transport->state = ITERATE_KIT_ESP_IDF_ITX_FAILED;
+    transport->state = ITERATE_KIT_ITX_FAILED;
     return ITERATE_KIT_STATE_ERROR;
   }
   if (!socket_connected) {
@@ -1340,10 +1340,10 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
      */
     if (!atomic_load_u32(&transport->wifi_connected)) {
       transport->state =
-          ITERATE_KIT_ESP_IDF_ITX_WIFI_CONNECTING;
+          ITERATE_KIT_ITX_WIFI_CONNECTING;
     } else {
       transport->state =
-          ITERATE_KIT_ESP_IDF_ITX_WEBSOCKET_CONNECTING;
+          ITERATE_KIT_ITX_WEBSOCKET_CONNECTING;
     }
     return ITERATE_KIT_OK;
   }
@@ -1362,7 +1362,7 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
        * then reset both fragment assemblers and accept the new generation.
        */
       transport->state =
-          ITERATE_KIT_ESP_IDF_ITX_WEBSOCKET_CONNECTING;
+          ITERATE_KIT_ITX_WEBSOCKET_CONNECTING;
       wake_network_task(transport);
       return ITERATE_KIT_OK;
     }
@@ -1377,7 +1377,7 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
       remember_application_capnweb_failure(
           transport, socket_generation, status);
       transport->state =
-          ITERATE_KIT_ESP_IDF_ITX_FAILED;
+          ITERATE_KIT_ITX_FAILED;
       /*
        * Reset can fail only when the documented ring/parser ownership contract
        * was violated. A peer reconnect cannot release a slot held by the wrong
@@ -1385,7 +1385,7 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
        */
       latch_fatal_failure(
           transport,
-          ITERATE_KIT_ESP_IDF_ITX_FATAL_CONTROL_RING_RESET);
+          ITERATE_KIT_ITX_FATAL_CONTROL_RING_RESET);
       return ITERATE_KIT_STATE_ERROR;
     }
     atomic_store_u32(
@@ -1403,7 +1403,7 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
       remember_application_capnweb_failure(
           transport, socket_generation, status);
       transport->state =
-          ITERATE_KIT_ESP_IDF_ITX_FAILED;
+          ITERATE_KIT_ITX_FAILED;
       /*
        * Opening a clean generation consumes only caller-owned, prevalidated
        * storage. Failure here is a local profile/ownership invariant, not bad
@@ -1411,7 +1411,7 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
        */
       latch_fatal_failure(
           transport,
-          ITERATE_KIT_ESP_IDF_ITX_FATAL_CONNECTION_OPEN);
+          ITERATE_KIT_ITX_FATAL_CONNECTION_OPEN);
       return ITERATE_KIT_STATE_ERROR;
     }
     /*
@@ -1423,7 +1423,7 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
     transport->mount_deadline_generation = socket_generation;
     transport->mount_deadline_us =
         esp_timer_get_time() +
-        (int64_t)ITERATE_KIT_ESP_IDF_ITX_MOUNT_TIMEOUT_MS * 1000;
+        (int64_t)ITERATE_KIT_ITX_MOUNT_TIMEOUT_MS * 1000;
     transport->handled_socket_generation =
         socket_generation;
     transport->last_capnweb_status = CAPNWEB_OK;
@@ -1456,7 +1456,7 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
           transport->handled_socket_generation,
           status);
       transport->state =
-          ITERATE_KIT_ESP_IDF_ITX_FAILED;
+          ITERATE_KIT_ITX_FAILED;
       record_protocol_failure(
           transport,
           /*
@@ -1495,13 +1495,13 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
               &transport->mount_timeouts);
         }
         remember_platform_error(transport, ESP_ERR_TIMEOUT);
-        transport->state = ITERATE_KIT_ESP_IDF_ITX_FAILED;
+        transport->state = ITERATE_KIT_ITX_FAILED;
         record_protocol_failure(
             transport, timed_out_generation);
         return ITERATE_KIT_STATE_ERROR;
       }
       transport->state =
-          ITERATE_KIT_ESP_IDF_ITX_MOUNTING;
+          ITERATE_KIT_ITX_MOUNTING;
       return ITERATE_KIT_OK;
     case ITERATE_KIT_ITX_CONNECTION_READY:
       if (!atomic_load_u32(&transport->socket_connected) ||
@@ -1516,7 +1516,7 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
          * READY would collapse backoff for the very failure replacing it.
          */
         transport->state =
-            ITERATE_KIT_ESP_IDF_ITX_WEBSOCKET_CONNECTING;
+            ITERATE_KIT_ITX_WEBSOCKET_CONNECTING;
         return ITERATE_KIT_OK;
       }
       transport->mount_deadline_us = 0;
@@ -1524,7 +1524,7 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
       atomic_store_u32(
           &transport->ready_socket_generation,
           socket_generation);
-      transport->state = ITERATE_KIT_ESP_IDF_ITX_READY;
+      transport->state = ITERATE_KIT_ITX_READY;
       {
         /*
          * READY is also the OTA acceptance test: a freshly updated image
@@ -1550,7 +1550,7 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
           transport->handled_socket_generation,
           transport->last_capnweb_status);
       transport->state =
-          ITERATE_KIT_ESP_IDF_ITX_FAILED;
+          ITERATE_KIT_ITX_FAILED;
       record_protocol_failure(
           transport,
           transport->handled_socket_generation);
@@ -1560,7 +1560,7 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
       transport->mount_deadline_us = 0;
       transport->mount_deadline_generation = 0U;
       transport->state =
-          ITERATE_KIT_ESP_IDF_ITX_WEBSOCKET_CONNECTING;
+          ITERATE_KIT_ITX_WEBSOCKET_CONNECTING;
       return ITERATE_KIT_STATE_ERROR;
   }
   /*
@@ -1573,23 +1573,23 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
       transport,
       transport->handled_socket_generation,
       transport->last_capnweb_status);
-  transport->state = ITERATE_KIT_ESP_IDF_ITX_FAILED;
+  transport->state = ITERATE_KIT_ITX_FAILED;
   latch_fatal_failure(
       transport,
-      ITERATE_KIT_ESP_IDF_ITX_FATAL_CONNECTION_STATE);
+      ITERATE_KIT_ITX_FATAL_CONNECTION_STATE);
   return ITERATE_KIT_STATE_ERROR;
 }
 
-void iterate_kit_esp_idf_itx_transport_request_restart(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
+void iterate_kit_itx_transport_request_restart(
+    struct iterate_kit_itx_transport *transport) {
   if (transport == NULL || !transport->initialized) {
     return;
   }
   request_restart(transport);
 }
 
-enum iterate_kit_status iterate_kit_esp_idf_itx_transport_stop(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
+enum iterate_kit_status iterate_kit_itx_transport_stop(
+    struct iterate_kit_itx_transport *transport) {
   TickType_t waited = 0U;
   TickType_t delay = pdMS_TO_TICKS(10U);
   TickType_t timeout = pdMS_TO_TICKS(STOP_TIMEOUT_MS);
@@ -1597,7 +1597,7 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_stop(
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   if (!transport->started) {
-    transport->state = ITERATE_KIT_ESP_IDF_ITX_STOPPED;
+    transport->state = ITERATE_KIT_ITX_STOPPED;
     return ITERATE_KIT_OK;
   }
   if (delay == 0U) {
@@ -1655,13 +1655,13 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_stop(
     (void)esp_event_loop_delete_default();
   }
   transport->started = false;
-  transport->state = ITERATE_KIT_ESP_IDF_ITX_STOPPED;
+  transport->state = ITERATE_KIT_ITX_STOPPED;
   return ITERATE_KIT_OK;
 }
 
-void iterate_kit_esp_idf_itx_transport_metrics(
-    const struct iterate_kit_esp_idf_itx_transport *transport,
-    struct iterate_kit_esp_idf_itx_transport_metrics *metrics) {
+void iterate_kit_itx_transport_metrics(
+    const struct iterate_kit_itx_transport *transport,
+    struct iterate_kit_itx_transport_metrics *metrics) {
   if (metrics == NULL) {
     return;
   }
@@ -1694,7 +1694,7 @@ void iterate_kit_esp_idf_itx_transport_metrics(
       atomic_load_u32(
           &transport->fatal_failure_latched) != 0U;
   metrics->fatal_failure_reason =
-      (enum iterate_kit_esp_idf_itx_fatal_failure_reason)
+      (enum iterate_kit_itx_fatal_failure_reason)
           atomic_load_u32(
               &transport->fatal_failure_reason);
   metrics->ready_socket_generation =
@@ -1811,9 +1811,9 @@ void iterate_kit_esp_idf_itx_transport_metrics(
       &metrics->control_outbox);
 }
 
-void iterate_kit_esp_idf_itx_transport_lifecycle(
-    const struct iterate_kit_esp_idf_itx_transport *transport,
-    struct iterate_kit_esp_idf_itx_transport_lifecycle *lifecycle) {
+void iterate_kit_itx_transport_lifecycle(
+    const struct iterate_kit_itx_transport *transport,
+    struct iterate_kit_itx_transport_lifecycle *lifecycle) {
   if (lifecycle == NULL) {
     return;
   }
@@ -1825,7 +1825,7 @@ void iterate_kit_esp_idf_itx_transport_lifecycle(
       atomic_load_u32(
           &transport->fatal_failure_latched) != 0U;
   lifecycle->fatal_failure_reason =
-      (enum iterate_kit_esp_idf_itx_fatal_failure_reason)
+      (enum iterate_kit_itx_fatal_failure_reason)
           atomic_load_u32(
               &transport->fatal_failure_reason);
   lifecycle->ready_socket_generation =
@@ -1833,22 +1833,22 @@ void iterate_kit_esp_idf_itx_transport_lifecycle(
           &transport->ready_socket_generation);
 }
 
-const char *iterate_kit_esp_idf_itx_transport_state_name(
-    enum iterate_kit_esp_idf_itx_transport_state state) {
+const char *iterate_kit_itx_transport_state_name(
+    enum iterate_kit_itx_transport_state state) {
   switch (state) {
-    case ITERATE_KIT_ESP_IDF_ITX_IDLE:
+    case ITERATE_KIT_ITX_IDLE:
       return "idle";
-    case ITERATE_KIT_ESP_IDF_ITX_WIFI_CONNECTING:
+    case ITERATE_KIT_ITX_WIFI_CONNECTING:
       return "wifi_connecting";
-    case ITERATE_KIT_ESP_IDF_ITX_WEBSOCKET_CONNECTING:
+    case ITERATE_KIT_ITX_WEBSOCKET_CONNECTING:
       return "websocket_connecting";
-    case ITERATE_KIT_ESP_IDF_ITX_MOUNTING:
+    case ITERATE_KIT_ITX_MOUNTING:
       return "mounting";
-    case ITERATE_KIT_ESP_IDF_ITX_READY:
+    case ITERATE_KIT_ITX_READY:
       return "ready";
-    case ITERATE_KIT_ESP_IDF_ITX_FAILED:
+    case ITERATE_KIT_ITX_FAILED:
       return "failed";
-    case ITERATE_KIT_ESP_IDF_ITX_STOPPED:
+    case ITERATE_KIT_ITX_STOPPED:
       return "stopped";
   }
   return "unknown";

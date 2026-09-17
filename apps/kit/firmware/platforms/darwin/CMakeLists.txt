@@ -14,7 +14,9 @@ add_library(iterate-kit-darwin STATIC
   darwin_audio_input.c
   darwin_audio_output.c
   darwin_audio_vpio.c
-  posix_itx_transport.c
+  itx_transport.c
+  provisioning.c
+  restart.c
   tls_stream.c
   websocket_client.c)
 
@@ -28,6 +30,7 @@ target_compile_options(iterate-kit-darwin PRIVATE
 target_link_libraries(iterate-kit-darwin PUBLIC
   iterate-kit-audio
   iterate-kit-core
+  iterate-kit-host-esp-idf
   ${ITERATE_KIT_AUDIO_TOOLBOX_FRAMEWORK}
   ${ITERATE_KIT_CORE_FOUNDATION_FRAMEWORK}
   OpenSSL::SSL

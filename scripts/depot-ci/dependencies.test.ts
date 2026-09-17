@@ -6,58 +6,34 @@ import { expect, test } from "vitest";
 
 const command = resolve(import.meta.dirname, "dependencies.mjs");
 
-test("a baked workspace reuses dependencies after a source-only checkout", () => {
+test("source-only changes preserve the dependency fingerprint", () => {
   using workspace = fixture();
-  workspace.run("seal");
-  workspace.write("app/index.js", "module.exports = 42;\n");
+  const before = workspace.run("fingerprint");
+  workspace.write("app/index.js", "module.exports = 99;\n");
 
-  expect(workspace.run("install")).toContain("reused baked dependencies");
-  expect(workspace.exec("node", ["-e", "console.log(require('local-dependency'))"]).trim()).toBe(
-    "42",
-  );
+  expect(workspace.run("fingerprint")).toBe(before);
 });
 
 test.each([
-  ["pnpm-lock.yaml", "\n# changed lock input\n"],
+  ["pnpm-lock.yaml", "lockfileVersion: '9.0'\n# changed lock input\n"],
+  ["pnpm-workspace.yaml", "packages:\n  - app\n  - another-app\n"],
   [".npmrc", "color=false\n"],
+  [".pnpmfile.cjs", "module.exports = { hooks: {} };\n"],
   ["patches/change.patch", "new patch input\n"],
   ["external/index.js", "module.exports = 8;\n"],
-])("changed %s runs a frozen install", (file, contents) => {
+])("changed %s changes the dependency fingerprint", (file, contents) => {
   using workspace = fixture();
-  workspace.run("seal");
-  const before = file === "pnpm-lock.yaml" ? readFileSync(join(workspace.cwd, file), "utf8") : "";
-  workspace.write(file, before + contents);
-  expect(workspace.run("install")).toContain("install required: dependency inputs changed");
+  const before = workspace.run("fingerprint");
+  workspace.write(file, contents);
+  expect(workspace.run("fingerprint")).not.toBe(before);
 });
 
-test("a changed manifest with an unchanged lockfile still fails the frozen install", () => {
+test("manifest changes affect the fingerprint even with an unchanged lockfile", () => {
   using workspace = fixture();
-  workspace.run("seal");
+  const before = workspace.run("fingerprint");
   const manifest = readFileSync(join(workspace.cwd, "package.json"), "utf8");
   workspace.write("package.json", manifest.replace('"workspace:*"', '"workspace:^"'));
-  expect(() => workspace.run("install")).toThrow(
-    expect.objectContaining({
-      status: 1,
-      stdout: expect.stringContaining("ERR_PNPM_OUTDATED_LOCKFILE"),
-    }),
-  );
-  workspace.write("package.json", manifest);
-  expect(workspace.run("install")).toContain("install required: no baked fingerprint");
-});
-
-test("a removed package link is repaired instead of trusting the matching fingerprint", () => {
-  using workspace = fixture();
-  workspace.run("seal");
-  rmSync(join(workspace.cwd, "node_modules/local-dependency"));
-  expect(workspace.run("install")).toContain("install required: installed state changed");
-  expect(workspace.exec("node", ["-e", "console.log(require('local-dependency'))"]).trim()).toBe(
-    "42",
-  );
-});
-
-test("an unsealed image follows the existing install path", () => {
-  using workspace = fixture();
-  expect(workspace.run("install")).toContain("install required: no baked fingerprint");
+  expect(workspace.run("fingerprint")).not.toBe(before);
 });
 
 test.each([
@@ -74,7 +50,7 @@ test.each([
   ["app/package.json", "preprepare"],
   ["app/package.json", "prepare"],
   ["app/package.json", "postprepare"],
-])("%s %s cannot silently be skipped", (file, hook) => {
+])("%s %s prevents sealing dependencies", (file, hook) => {
   using workspace = fixture();
   const manifest = JSON.parse(readFileSync(join(workspace.cwd, file), "utf8"));
   workspace.write(
@@ -84,10 +60,7 @@ test.each([
       scripts: { [hook]: "node -e \"console.log('lifecycle ran')\"" },
     }),
   );
-  // Establish which hooks the real frozen install runs, including with CI=true.
-  expect(workspace.exec("pnpm", ["install", "--frozen-lockfile"])).toContain("lifecycle ran");
   expect(() => workspace.run("seal")).toThrow("Cannot seal dependencies");
-  expect(workspace.run("install")).toContain("lifecycle ran");
 });
 
 test("local dependency fingerprints distinguish binary contents", () => {
@@ -99,17 +72,16 @@ test("local dependency fingerprints distinguish binary contents", () => {
   expect(workspace.run("fingerprint")).not.toBe(before);
 });
 
-test("a different install environment does not reuse the baked tree", () => {
+test("a different install environment changes the fingerprint", () => {
   using workspace = fixture();
-  workspace.run("seal");
-  expect(workspace.exec("env", ["NODE_ENV=production", "node", command, "install"])).toContain(
-    "install required: dependency inputs changed",
-  );
+  const before = workspace.run("fingerprint");
+  workspace.env.NODE_ENV = "production";
+  expect(workspace.run("fingerprint")).not.toBe(before);
 });
 
 function fixture() {
   const cwd = mkdtempSync(join(tmpdir(), "iterate-baked-deps-"));
-  const env = { ...process.env, CI: "true" };
+  const env = { ...process.env, CI: "true", NODE_ENV: "development" };
   function write(path: string, contents: string) {
     mkdirSync(dirname(join(cwd, path)), { recursive: true });
     writeFileSync(join(cwd, path), contents);
@@ -131,6 +103,7 @@ function fixture() {
     }),
   );
   write("pnpm-workspace.yaml", "packages:\n  - app\n");
+  write("pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
   write(
     "app/package.json",
     JSON.stringify({ name: "local-dependency", version: "1.0.0", main: "index.js" }),
@@ -144,12 +117,11 @@ function fixture() {
   write(".gitignore", "node_modules\n");
   exec("git", ["init", "-q"]);
   exec("git", ["add", "."]);
-  exec("pnpm", ["install"]);
   return {
     cwd,
     write,
-    exec,
-    run: (mode: string) => exec("node", [command, mode]),
+    env,
+    run: (mode: "fingerprint" | "seal") => exec(process.execPath, [command, mode]),
     [Symbol.dispose]: () => rmSync(cwd, { recursive: true, force: true }),
   };
 }

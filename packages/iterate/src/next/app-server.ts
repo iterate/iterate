@@ -170,9 +170,12 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     let token = request.headers.get("authorization");
     let cookieAuth = false;
     if (!token && request.method !== "OPTIONS") {
-      if (session && request.headers.get("origin") !== url.origin)
-        return new Response("A browser API request must have the same origin", { status: 403 });
-      const bearer = await session?.bearer();
+      // THE COOKIE'S AUTHORITY IS SAME-ORIGIN ONLY (CSRF): a page on another origin that happens to
+      // carry this app's cookie gets nothing from it — its request goes on BARE, and a WebSocket then
+      // authenticates in-band with its own token, `authenticate({ type: "bearer", token })` (os-next
+      // api.ts), or holds no session at all.
+      const bearer =
+        session && request.headers.get("origin") === url.origin ? await session.bearer() : null;
       if (bearer) {
         token = `Bearer ${bearer}`;
         cookieAuth = true;

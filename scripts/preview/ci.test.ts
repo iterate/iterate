@@ -91,7 +91,14 @@ test("the lifecycle owner encloses every fixed shard and cleanup waits for their
     // Inherited red still publishes its decision before the producer stops.
     if: "always() && steps.plan.outputs.tests != ''",
     run: expect.stringContaining('set preview-plan --values "$PLAN_VALUES"'),
-    env: { PLAN_VALUES: "${{ toJSON(steps.plan.outputs) }}" },
+  });
+  // The shell tracer adds ci-trace-end to every step's outputs. Publish only
+  // the small planning payload, not that JSON marker or future step metadata.
+  expect(JSON.parse(workflow.jobs.plan.steps.at(-1).env.PLAN_VALUES)).toEqual({
+    tests: "${{ steps.plan.outputs.tests }}",
+    deploy: "${{ steps.plan.outputs.deploy }}",
+    commit: "${{ steps.plan.outputs.commit }}",
+    slot: "${{ steps.plan.outputs.slot }}",
   });
   expect(workflow.jobs.prepare.steps.find((step: any) => step.id === "prepare").run).toContain(
     "--reuse-commit {0} --reuse-slot {1}",
@@ -124,9 +131,21 @@ test("the lifecycle owner encloses every fixed shard and cleanup waits for their
   });
   const steps = workflow.jobs.finish.steps;
   const green = steps.findIndex((step: any) => step.id === "tests_passed");
+  const trace = steps.findIndex((step: any) => step.id === "trace");
   const cleanup = steps.findIndex((step: any) => step.id === "erase");
   expect(green).toBeGreaterThan(steps.findIndex((step: any) => step.id === "merge_reports"));
-  expect(cleanup).toBeGreaterThan(green);
+  expect(trace).toBeGreaterThan(green);
+  expect(cleanup).toBeGreaterThan(trace);
+  expect(workflow.jobs.trace).toBeUndefined();
+  expect(steps[trace]).toMatchObject({
+    if: "always() && steps.consumers.outputs.settled == 'true'",
+    "timeout-minutes": 5,
+    env: {
+      CI_TRACE_GREEN: "${{ steps.tests_passed.outputs.ci-trace-green }}",
+      CI_TRACE_VALIDATION_END: "${{ steps.merge_reports.outputs.ci-trace-end }}",
+      CI_TRACE_GREEN_END: "${{ steps.tests_passed.outputs.ci-trace-end }}",
+    },
+  });
   expect(steps[green]).toMatchObject({
     if: "success() && needs.prepare.result == 'success' && steps.consumers.outputs.succeeded == 'true' && steps.merge_reports.outcome == 'success'",
   });

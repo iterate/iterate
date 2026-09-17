@@ -103,7 +103,7 @@ void waveshare_avatar_set_listening(bool listening);
  * scheduled against local playout positions in each answer. The shared
  * animator uses the local envelope when remote shapes are absent or expire.
  *
- * Everything below runs on the APP TASK (the voicelab callbacks and the tick
+ * Everything below runs on the APP TASK (the stream callbacks and the tick
  * both live there), so the bookkeeping needs no atomics; the only values that
  * cross tasks are the ones already inside the shared animator's seqlock.
  */

@@ -155,3 +155,8 @@ No runs were interrupted. Based on main after #2695.
   Unique attempt IDs suffice; workflow membership and retry guards remain.
   Validate names and reserve semicolons/newlines in values before publication;
   the waiter can append the description as output lines without JSON decoding.
+- Main integration: preserve #2718's trace collection before cleanup and verdict
+  outputs, #2720's early Metro startup, #2722's Vitest spans, and #2717's fast
+  dependency tests. Keep ancestry gates and publish settlement after restoration.
+  Select only the four plan values for the signal: the new shell tracer also
+  appends `ci-trace-end`, which must not enter the 140-character description.

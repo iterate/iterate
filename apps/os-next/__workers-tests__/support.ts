@@ -2,7 +2,7 @@
 // INSIDE workerd, next to the worker) shares: the context DO stub by ctx name, a capnweb session
 // over SELF's /api (disposed at teardown — importing this module registers the afterAll), a live
 // value to lend (`Echo`, tagged per instance), the directory schema into this lane's empty D1, the
-// production idle quiesce's release on demand, and the one poll-until.
+// production pins' release on demand, and the one poll-until.
 import { runInDurableObject, SELF } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
@@ -96,13 +96,13 @@ afterAll(async () => {
   }
 });
 
-/** The idle quiesce's RELEASE, run directly: every live facet aborted, every borrowed stub
- *  returned, every library connection closed — making the DO dormant, which is evictDurableObject's
- *  de-facto precondition here: workerd keeps a DO with a materialized facet or a borrowed stub
+/** The pins' RELEASE, run directly, plus every live facet aborted: every borrowed stub returned,
+ *  every library connection closed — making the DO dormant, which is evictDurableObject's de-facto
+ *  precondition here: workerd keeps a DO with a materialized facet or a borrowed stub
  *  non-hibernatable (workerd#6800), and evicting such a DO times out after 30s on "still has active
- *  references". You must release BEFORE you can evict. Run directly and not through the alarm
- *  because a FACET ARMS NO ALARM (on the edge it does not keep the actor resident, so the production
- *  release for facets is the actor's own end); a test that wants the alarm PASS itself fakes Date
+ *  references". You must release BEFORE you can evict. Run directly: in production the pins'
+ *  30 s timer releases them, and a facet is released by nothing but the actor's own end (on the
+ *  edge it does not keep the actor resident); a test that wants the alarm PASS itself fakes Date
  *  and calls `runDurableObjectAlarm`. */
 export async function quiesce(ctx: string): Promise<void> {
   await runInDurableObject(stub(ctx), (instance) => {

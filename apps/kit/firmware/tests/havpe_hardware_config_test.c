@@ -60,7 +60,7 @@ static void preserves_the_first_party_codec_sequence(void) {
  * mid-conversation: cancellation of nothing, heard as double talk. When
  * this assertion disagrees with board/codecs/aic3204.c, the FIX IS IN
  * THE CONFIG, and the evidence standard for moving it is the board's own
- * oracle (`voicelab aec --stages`, health's echoRawPeak/echoCleanPeak) on
+ * oracle (`voice_stream aec --stages`, health's echoRawPeak/echoCleanPeak) on
  * a live conversation — never a bench window, never this file.
  */
 static void selects_a_truthful_raw_and_server_vad_xmos_pair(void) {

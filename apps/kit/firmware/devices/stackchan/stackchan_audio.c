@@ -66,7 +66,7 @@ enum {
    * This was 80, chosen for ~1.5 dB of acoustic headroom over 85/90 — a real
    * measurement, but of loudness, and the thing it costs is not loudness. The
    * canceller's residual over a spoken answer, measured on this board's own
-   * microphone against a fixed sentence (`voicelab aec`, 2026-08-11):
+   * microphone against a fixed sentence (`voice_stream aec`, 2026-08-11):
    *
    *   volume 80   -33.4 / -33.3 dBFS peak   filter never settles
    *   volume 60   -42.4 / -44.9 dBFS peak   settles after ~1.5 s

@@ -15,7 +15,7 @@ Same harness as `evals/voicelab-roundtrip` (read it first): project slug
 `doppler run --config prd -- …`, utterances synthesized with
 `say -o <file> --data-format=LEI16@16000 --channels=1 "<text>"`.
 
-Utterances, in this order (the driver plays them sorted, cycling):
+Utterances, in this order:
 
 1. `01-first-cause.wav`: "Hi. Can you explain the first cause argument for
    God, briefly?"
@@ -24,13 +24,11 @@ Utterances, in this order (the driver plays them sorted, cycling):
 3. `03-nudge.wav`: "Any luck with those debates yet?"
 4. `04-nudge.wav`: "Take your time. Anything new come in?"
 
-Run on a fresh timestamped stream:
-
-```
-doppler run --config prd -- pnpm cli voicelab talk --project voicelab-eval \
-  --stream-path /agents/voice/eval-cause-<stamp> --converse 5 \
-  --utterance-dir <dir> --pretend-speaker <dir>/speaker.wav
-```
+Run the conversation on the board firmware's Mac target: from `apps/kit`,
+`pnpm firmware:build:host` then
+`firmware/.build/host/iterate-kit-mac --config <image> --name <name>`, and
+speak each utterance with
+`apps/os-next/scripts/voice-board.ts --device <name> --prompt "<text>"`.
 
 ## Success criteria (all must hold)
 
@@ -50,13 +48,12 @@ events):
 3. **Statuses flowed**: the stream has a "picking up a note from the
    frontend" status and at least one lifecycle phase ("writing code" or
    "running code").
-4. **Clean run**: `talk` exits 0, zero speaker sequence gaps, exactly one
+4. **Clean run**: every `voice-board.ts` run exits 0, exactly one
    `agent/created` on the colleague stream
    (`/agents/voice-notes/voice/eval-cause-<stamp>`), zero on the voice
    stream.
 
 Timing note: the backend's web research took ~2 minutes in the original
-conversation; the 5-minute run with nudge utterances absorbs that. If the
-run ends before any `colleague-note` arrives and the statuses show work
-still mid-flight, rerun once with `--converse 7` before calling it a
-failure.
+conversation; the nudge utterances absorb that. If the run ends before any
+`colleague-note` arrives and the statuses show work still mid-flight, rerun
+once with more nudges before calling it a failure.
