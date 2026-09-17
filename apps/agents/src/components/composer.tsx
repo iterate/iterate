@@ -3,20 +3,19 @@
 // `itx.files.put` takes as a string. The state lives in the provider, so the text and attachments
 // clear only once `onSend` resolves — a failed send keeps the draft for a retry.
 import { useState } from "react";
+import { PaperclipIcon } from "lucide-react";
 import {
   PromptInput,
-  PromptInputActionAddAttachments,
-  PromptInputActionMenu,
-  PromptInputActionMenuContent,
-  PromptInputActionMenuTrigger,
   PromptInputAttachment,
   PromptInputAttachments,
   PromptInputBody,
+  PromptInputButton,
   PromptInputFooter,
   PromptInputProvider,
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputTools,
+  usePromptInputAttachments,
 } from "@iterate-com/ui/components/ai-elements/prompt-input";
 
 /** A file as the agent's `message()` takes it: a data URL for `data`. */
@@ -65,12 +64,7 @@ export function Composer({
         </PromptInputBody>
         <PromptInputFooter>
           <PromptInputTools>
-            <PromptInputActionMenu>
-              <PromptInputActionMenuTrigger />
-              <PromptInputActionMenuContent>
-                <PromptInputActionAddAttachments />
-              </PromptInputActionMenuContent>
-            </PromptInputActionMenu>
+            <AttachButton />
           </PromptInputTools>
           {error ? (
             <span className="min-w-0 truncate text-xs text-destructive">{error}</span>
@@ -79,5 +73,20 @@ export function Composer({
         </PromptInputFooter>
       </PromptInput>
     </PromptInputProvider>
+  );
+}
+
+/** One tap opens the picker — no menu in between, so the file input's click stays inside the
+ *  user's gesture (what mobile browsers require). */
+function AttachButton() {
+  const attachments = usePromptInputAttachments();
+  return (
+    <PromptInputButton
+      aria-label="Attach images"
+      title="Attach images"
+      onClick={() => attachments.openFileDialog()}
+    >
+      <PaperclipIcon />
+    </PromptInputButton>
   );
 }

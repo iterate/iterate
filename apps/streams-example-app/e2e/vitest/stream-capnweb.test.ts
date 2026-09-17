@@ -463,9 +463,13 @@ describe("stream capnweb protocol", () => {
       () => received(callbackA, appended.offset) && received(callbackB, appended.offset),
       1_000,
     );
-    expect(callbackA.batches.at(-1)).toEqual([appended]);
-    expect(callbackB.batches.at(-1)).toEqual([appended]);
-    const callbackABatchesBeforeClose = callbackA.batches.length;
+    // Feed projections can arrive after this event or share its batch.
+    expect(callbackA.events.filter((event) => event.offset === appended.offset)).toEqual([
+      appended,
+    ]);
+    expect(callbackB.events.filter((event) => event.offset === appended.offset)).toEqual([
+      appended,
+    ]);
 
     await first.close();
     const [afterClose] = await stream.stream.append({
@@ -474,7 +478,7 @@ describe("stream capnweb protocol", () => {
     });
     if (afterClose === undefined) throw new Error("append returned no event");
     await waitFor(() => received(callbackB, afterClose.offset), 1_000);
-    expect(callbackA.batches.length).toBe(callbackABatchesBeforeClose);
+    expect(callbackA.events.filter((event) => event.offset === afterClose.offset)).toEqual([]);
   });
 
   // The pre-itx-v4 hosted circuit-breaker processor is gone; the pause

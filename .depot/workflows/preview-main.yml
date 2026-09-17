@@ -5,6 +5,7 @@ name: Preview Main
 
 permissions:
   contents: read
+  checks: write
   statuses: write
   pull-requests: write
 
