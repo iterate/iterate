@@ -107,13 +107,14 @@ test("an app is served at / on its project host — URL verbatim, relative asset
     expect(dotted.status, dotted.text).toBe(200);
     expect(dotted.text).toContain(`<p>site.${projectId}.${base}/w</p>`);
   }
-  // the apex names no app: the config worker's fetch answers it — the bundled default is 404, a
-  // project's own routes it (here: to the site, through `itx.apps.site.fetch`), and the site then
-  // sees ITS label: the DO's fetch lane derives `x-iterate-app` from the expression at every door,
-  // never from what the config worker forwarded (the config worker itself sees none — the workers lane)
+  // the apex names no app: the config worker's fetch answers it — the bundled default is the
+  // project's bare homepage, a project's own routes it (here: to the site, through
+  // `itx.apps.site.fetch`), and the site then sees ITS label: the DO's fetch path derives
+  // `x-iterate-app` from the expression at every entry, never from what the config worker forwarded
+  // (the config worker itself sees none)
   const bare = await fetchProjectHost(`${projectId}.${base}`, "/");
-  expect(bare.status, bare.text).toBe(404);
-  expect(bare.text).toContain("Not found");
+  expect(bare.status, bare.text).toBe(200);
+  expect(bare.text).toContain(`Homepage of project ${projectId}`);
   await itx.provide("itx.worker", [
     "itx",
     "workers",
@@ -140,9 +141,10 @@ localOnly(
     await registerProject(projectId);
     const itx = openItx(projectId);
     await itx.provide("itx.apps.site", siteRule());
-    // the bundled default config worker: 404 — the request reached the project, nothing answered
+    // the bundled default config worker: the project's bare homepage — the request reached the project
     const bare = await fetchProjectHost("custom-apex.test", "/");
-    expect(bare.status, bare.text).toBe(404);
+    expect(bare.status, bare.text).toBe(200);
+    expect(bare.text).toContain(`Homepage of project ${projectId}`);
     await itx.provide("itx.worker", [
       "itx",
       "workers",
