@@ -400,6 +400,187 @@ jobs:
   });
 });
 
+test.each([true, false])(
+  "wait links use the recorded producer attempt (milestone observed: %s)",
+  (ready) => {
+    const jobs = [
+      ["shard", "playwright:matrix-0", "shard-attempt"],
+      ["finish", "finish", "finish-attempt"],
+      ["prepare", "prepare", "prepare-attempt"],
+    ].map(([jobId, key, attemptId]) => ({
+      jobId,
+      jobKey: `preview.yml:preview:${key}`,
+      status: "finished",
+      attempts: [
+        { attemptId, attempt: 1, status: "finished", startedAt: at(1), finishedAt: at(99) },
+      ],
+    }));
+    // A later attempt must never become the target of a wait for the first attempt.
+    jobs[2].attempts.push({
+      attemptId: "replacement",
+      attempt: 2,
+      status: "finished",
+      startedAt: at(80),
+      finishedAt: at(99),
+    });
+    const trace = assembleTrace(
+      {
+        workflowId: "workflow",
+        workflowName: "Preview",
+        workflowPath: "preview.yml",
+        repo: "iterate/iterate",
+        headSha: "head",
+        sha: "merge",
+        ref: "refs/pull/2697/merge",
+        workflowStatus: "finished",
+        workflowCreatedAt: at(0),
+        workflowFinishedAt: at(100),
+        executions: [{ executionId: "execution", execution: 1, createdAt: at(0) }],
+        jobs,
+      },
+      new Map([
+        [
+          "shard-attempt",
+          [
+            line("wait_for_preview", {
+              kind: "shell-start",
+              id: "wait",
+              step: "wait_for_preview",
+              time: ms(3),
+            }),
+            line("wait_for_preview", {
+              kind: "dependency",
+              targetId: "prepare-attempt",
+              milestone: "preview-ready",
+            }),
+            line("wait_for_preview", {
+              kind: "shell-end",
+              id: "wait",
+              time: ms(50),
+              exitCode: ready ? 0 : 1,
+            }),
+          ],
+        ],
+        [
+          "finish-attempt",
+          [
+            line("consumers", { kind: "shell-start", id: "wait", step: "consumers", time: ms(50) }),
+            line("consumers", { kind: "dependency", targetId: "shard-attempt", milestone: "" }),
+            line("consumers", { kind: "shell-end", id: "wait", time: ms(99), exitCode: 0 }),
+          ],
+        ],
+        [
+          "prepare-attempt",
+          ready
+            ? [line("signal_ready", { kind: "milestone", name: "preview-ready", time: ms(49) })]
+            : [],
+        ],
+        [
+          "replacement",
+          [line("signal_ready", { kind: "milestone", name: "preview-ready", time: ms(90) })],
+        ],
+      ]),
+    );
+    const spans = trace.resourceSpans[0].scopeSpans[0].spans;
+    const wait = spans.find((span) => span.name === "wait for preview")!;
+    const prepare = spans.find((span) => span.name === "Prepare")!;
+    const target = ready
+      ? spans.find((span) => span.name === "preview-ready" && span.parentSpanId === prepare.spanId)!
+      : prepare;
+    expect(wait).toMatchObject({
+      links: [
+        {
+          traceId: target.traceId,
+          spanId: target.spanId,
+          attributes: [
+            {
+              key: "ci.link.label",
+              value: {
+                stringValue: ready
+                  ? "Requires preview-ready"
+                  : "Requires preview-ready (not observed)",
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const shard = spans.find((span) => span.name === "Playwright 1/6")!;
+    expect(spans.find((span) => span.name === "consumers")).toMatchObject({
+      links: [
+        {
+          traceId: shard.traceId,
+          spanId: shard.spanId,
+          attributes: [{ key: "ci.link.label", value: { stringValue: "Waits for job to settle" } }],
+        },
+      ],
+    });
+    // Links supplement parentage; waiting still belongs to the shard's Wait phase.
+    expect(spans.find((span) => span.spanId === wait.parentSpanId)).toMatchObject({
+      name: "Wait",
+      parentSpanId: shard.spanId,
+    });
+  },
+);
+
+test("a wait can link to a cancelled consumer whose runner never started", () => {
+  const trace = assembleTrace(
+    {
+      workflowId: "workflow",
+      workflowName: "Preview",
+      workflowPath: "preview.yml",
+      repo: "iterate/iterate",
+      headSha: "head",
+      sha: "merge",
+      ref: "refs/pull/2697/merge",
+      workflowStatus: "failed",
+      workflowCreatedAt: at(0),
+      workflowFinishedAt: at(100),
+      executions: [{ executionId: "execution", execution: 1, createdAt: at(0) }],
+      jobs: [
+        {
+          jobId: "consumer",
+          jobKey: "preview.yml:preview:apps",
+          status: "cancelled",
+          attempts: [
+            { attemptId: "never-started", attempt: 1, status: "cancelled", finishedAt: at(80) },
+          ],
+        },
+        {
+          jobId: "finish",
+          jobKey: "preview.yml:preview:finish",
+          status: "finished",
+          attempts: [
+            {
+              attemptId: "finish-attempt",
+              attempt: 1,
+              status: "finished",
+              startedAt: at(50),
+              finishedAt: at(100),
+            },
+          ],
+        },
+      ],
+    },
+    new Map([
+      [
+        "finish-attempt",
+        [
+          line("consumers", { kind: "shell-start", id: "wait", step: "consumers", time: ms(51) }),
+          line("consumers", { kind: "dependency", targetId: "never-started", milestone: "" }),
+          line("consumers", { kind: "shell-end", id: "wait", time: ms(90), exitCode: 0 }),
+        ],
+      ],
+    ]),
+  );
+  const spans = trace.resourceSpans[0].scopeSpans[0].spans;
+  const consumer = spans.find((span) => span.name === "App tests")!;
+  expect(consumer.startTimeUnixNano).toBe(consumer.endTimeUnixNano);
+  expect(spans.find((span) => span.name === "consumers")).toMatchObject({
+    links: [{ spanId: consumer.spanId }],
+  });
+});
+
 test("the standalone report embeds OTLP without allowing source names to break out of JSON", async () => {
   const report = assembleTrace(
     {

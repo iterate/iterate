@@ -5,6 +5,19 @@ Its **Details** link opens the report for that tested commit. The report shows
 jobs, setup/wait/test/finish phases, measured shell steps and individual Playwright attempts. Expand rows, search for a test,
 click a bar, or zoom to a selected span. Download the same trace as OTLP JSON.
 
+Select a **Wait** phase (click/tap, or focus its bar and press Enter) to show
+curved arrows from its prerequisites. The details list lets you reveal either
+endpoint, even when collapsed or filtered out. Yellow diagonal stripes indicate
+waiting; grey stripes still mean incomplete evidence.
+
+The status CLI records exact producer attempt IDs and successful milestone
+publication. The collector exports standard OTLP `links` with a `ci.link.label`
+attribute: preview waits require `preview-ready`; cleanup waits for consumer jobs
+to settle, including failures. Missing milestone evidence links to the recorded
+producer attempt with “not observed”, never to a later replacement attempt.
+Links supplement the existing parent tree. They describe explicit prerequisites,
+not an inferred critical path; old runs without these records have no links.
+
 Expand the `pnpm preview ci-prepare` step to compare **Provision and deploy
 preview** with **Shared readiness: rollout, agent smoke and TUI**. Deployment
 contains slot acquisition/cleanup and each app's parallel build/deploy command
