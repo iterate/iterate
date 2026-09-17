@@ -1638,6 +1638,15 @@ export async function erase(options: EraseOptions = {}) {
   });
   if (!options.restore || !result.erased) return result;
 
+  const { run, report } = target;
+  // Deployment authority comes from the semaphore, never the editable PR report.
+  const slot = CloudflarePreviewSlotDisplay.parse(result);
+  await report.update((state) => ({
+    ...state,
+    environmentConfigLease: slot,
+    notice:
+      "Preview parked after retiring test data. Restoration has not completed; versions below describe the previous deployment.",
+  }));
   // Missing restoration provenance must never prevent retiring test workloads.
   const checkedOut = execFileSync("git", ["rev-parse", "HEAD"], {
     cwd: runtime.repositoryRoot,
@@ -1657,9 +1666,6 @@ export async function erase(options: EraseOptions = {}) {
     if (!entry?.deployedWorkerVersion || entry.headSha !== options.ranHeadSha)
       throw new Error(`Cannot restore ${slug}: no deployment recorded for this tested head.`);
   }
-  const { run, report } = target;
-  // Deployment authority comes from the semaphore, never the editable PR report.
-  const slot = CloudflarePreviewSlotDisplay.parse(result);
   const before = structuredClone(report.state.apps);
   const startedAt = new Date().toISOString();
   // OS reset also wipes Auth's OAuth client records. Use the ordinary deploy

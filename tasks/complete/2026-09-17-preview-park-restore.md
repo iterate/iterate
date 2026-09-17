@@ -1,14 +1,14 @@
 ---
-status: in-progress
+status: complete
 size: medium
 ---
 
 # Retire preview DOs, then restore the tested deployment
 
-First full preview proved retirement/restoration and fresh application use.
-Failure/cancellation reporting and a refused-restore/recovery cycle also passed.
-A small existing Streams assertion bug blocked the all-tests-green path; its
-fix passed a focused live test and a fresh full run is next. No merge is authorized.
+Experiment complete: full preview passed, showed green 72s before cleanup ended,
+and restored fresh namespaces. Failure/cancellation, application use and recovery
+were verified. The draft PR records provider/container limits and an unrelated
+expired-test CI failure. No merge is authorized.
 
 ## Request and decisions
 
@@ -44,9 +44,9 @@ fix passed a focused live test and a fresh full run is next. No merge is authori
 - [x] Implement and test the smallest post-test park/restore path. *`preview erase --restore` retires first, then restores Auth, OS and Streams from the tested checkout.*
 - [x] Implement and test honest early-green/final-failure reporting. *`status.ts tests-passed`; live checks 105090329542 and 105090616821 changed from success to failure/cancelled.*
 - [x] Run preview experiments, including an injected cleanup failure and recovery. *First full run restored successfully; dirty-checkout guard refused only after retirement, then clean recovery passed.*
-- [ ] Validate resulting namespaces, fresh application behavior and activity.
-- [ ] Complete local checks, independent review and CI/review follow-up.
-- [ ] Publish report, update PR and mark task complete.
+- [x] Validate resulting namespaces, fresh application behavior and activity. *Ten namespaces replaced; fresh project, schedule and login worked. Retained containers were quiet in the measured window; ordinary OS analytics lacked a positive control.*
+- [x] Complete local checks, independent review and CI/review follow-up. *360 scripts tests and all preview jobs passed; only the unrelated expired-test check remains red. Global PR monitor retains follow-up ownership.*
+- [x] Publish report, update PR and mark task complete. *`docs/preview-park-restore-experiment.md` records successful/failed traces, timing, state, telemetry and limitations.*
 
 ## Implementation log
 
@@ -79,3 +79,10 @@ fix passed a focused live test and a fresh full run is next. No merge is authori
   (27.7s), then fail the clean-checkout guard. Both Workers served 503. The file
   was restored byte-for-byte; clean recovery completed at 06:00:24Z. Probe state
   was retired too. No probe/failure switch is shipped in product code.
+- Full workflow `lnhxm1vn0t` on `151dc2f93`: all nine preview jobs passed.
+  Finish check 105095187178 went green at 06:07:46.779Z while Depot kept running
+  until 06:08:59Z. Reset took 18.2s and restoration 45.1s. Namespace readback
+  again showed ten replacements and six retained Sandbox namespaces.
+- Final reporting adjustment publishes the parked state before checking restore
+  provenance, so an intentionally refused restore cannot leave an old success
+  notice. Independent review approved this ordering; scripts tests/typecheck pass.
