@@ -453,7 +453,10 @@
           outcomeMs === undefined ? "Not recorded" : duration(Number(outcomeMs)),
           failed ? "Time to red" : "Time to green",
         ],
-        [duration(root.end - root.start), "workflow wall time"],
+        [
+          duration(root.end - root.start),
+          root.a["ci.report.scope"] ? "preview wall time" : "workflow wall time",
+        ],
         [spans.filter((s) => s.a["ci.attempt.id"]).length, "runner attempts"],
         [tests.length, "test attempts"],
         [tests.filter((s) => Number(s.a["test.retry"]) > 0).length, "retries"],
@@ -484,6 +487,8 @@
               ? "Time to green covers this preview workflow; cleanup can continue afterwards."
               : `This preview went green, then ${root.a["ci.status"]}. Time to green records that earlier milestone.`;
       }
+      if (root.a["ci.report.scope"])
+        outcomeNote += " Report generation is excluded from these timings.";
       document.getElementById("outcome-note").textContent = outcomeNote;
       const incomplete = spans.filter((s) => s.a["ci.status"] === "incomplete").length;
       if (incomplete || !tests.length)

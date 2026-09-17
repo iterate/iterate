@@ -410,7 +410,7 @@ must not be accepted. Normal Playwright/Vitest test retries are unchanged.
 
 ## Interactive trace reports
 
-Preview workflows publish a **CI trace** commit status after completion; its
+Preview workflows publish a **CI trace** commit status after cleanup and report upload; its
 **Details** link opens the report:
 workflow → jobs → setup/wait/test/finish → shell steps → Playwright attempts.
 See [CI traces](./ci-traces.md) for the timing model, publishing, replay commands
@@ -436,7 +436,7 @@ and service workers without sharing the project's origin.
 
 Additional artifacts opt into public serving with a `public-` name prefix.
 The viewer only accepts artifacts from `iterate/iterate`; existing `ci-trace-*`
-artifacts remain supported. Only `public-playwright-report` and the named CI
+artifacts remain supported. Only `public-playwright-report`, `public-ci-trace` and the legacy named CI
 trace artifacts automatically get commit statuses; other `public-*` artifacts
 remain browsable without adding checks. Upload only files intended to be public. Append
 `?download` to a file link to download it instead of displaying it.

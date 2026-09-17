@@ -90,6 +90,31 @@ export function assembleTrace(
   const workflow = Workflow.parse(input);
   const execution = [...workflow.executions].sort((a, b) => b.execution - a.execution)[0];
   if (!execution) throw new Error("Depot workflow has no execution");
+  const inlineReport = workflow.jobs.some((job) => job.jobKey.endsWith(":trace"));
+  if (inlineReport) {
+    workflow.jobs = workflow.jobs.filter((job) => !job.jobKey.endsWith(":trace"));
+    if (
+      !workflow.jobs.length ||
+      workflow.jobs.some(
+        (job) => !["finished", "failed", "cancelled", "skipped"].includes(job.status),
+      )
+    )
+      throw new Error("Preview jobs have not settled");
+    // The report job keeps the outer workflow running. Bound this trace by the
+    // completed producer jobs, not by our own collection/upload time.
+    const ends = workflow.jobs
+      .flatMap((job) => [job.finishedAt, ...job.attempts.map((attempt) => attempt.finishedAt)])
+      .filter(Boolean)
+      .map((time) => Date.parse(time));
+    workflow.workflowFinishedAt = new Date(Math.max(...ends)).toISOString();
+    workflow.workflowStatus = workflow.jobs.some((job) => job.status === "failed")
+      ? "failed"
+      : workflow.jobs.some((job) => job.status === "cancelled")
+        ? "cancelled"
+        : workflow.jobs.every((job) => job.status === "skipped")
+          ? "skipped"
+          : "finished";
+  }
   const traceId = hash(`${workflow.workflowId}/${execution.executionId}`, 32);
   const spans: Span[] = [];
   const dependencies: { sourceId: string; targetId: string; milestone: string }[] = [];
@@ -133,6 +158,9 @@ export function assembleTrace(
     rootEnd,
     {
       "ci.kind": "workflow",
+      ...(inlineReport && {
+        "ci.report.scope": "Preview jobs through cleanup; report generation excluded",
+      }),
       "ci.status": workflow.workflowStatus,
       "ci.workflow.id": workflow.workflowId,
       "ci.execution.id": execution.executionId,
@@ -544,7 +572,7 @@ export const Workflow = z.object({
   ref: z.string(),
   workflowStatus: z.string(),
   workflowCreatedAt: z.string(),
-  workflowFinishedAt: z.string(),
+  workflowFinishedAt: z.string().default(""),
   executions: z.array(
     z.object({ executionId: z.string(), execution: z.number(), createdAt: z.string() }),
   ),
@@ -553,6 +581,7 @@ export const Workflow = z.object({
       jobId: z.string(),
       jobKey: z.string(),
       status: z.string(),
+      finishedAt: z.string().default(""),
       attempts: z
         .array(
           z.object({

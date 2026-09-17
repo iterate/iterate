@@ -1,6 +1,6 @@
 # Interactive CI traces
 
-Preview runs get a **CI trace** commit status after the workflow finishes.
+Preview runs get a **CI trace** commit status after cleanup and report upload.
 Its **Details** link opens the report for that tested commit. The report shows
 jobs, setup/wait/test/finish phases, measured shell steps and individual Playwright attempts. Expand rows, search for a test,
 click a bar, or zoom to a selected span. Download the same trace as OTLP JSON.
@@ -52,11 +52,17 @@ never expanded runner logs. `wait_for_preview`, `consumers`,
 preserves exit codes and ignores nested shells. It requires only the Node
 already installed in the runner image, so it measures `pnpm install` too.
 
-The last finish step dispatches `ci-trace.yml`. This independent collector waits
-for the source workflow to settle, reads Depot's workflow/attempt timestamps
-and lifecycle records, and uploads the report. A 15-minute scheduled pass
-repairs missed callbacks from the latest 200 workflows within 24 hours,
-including cancellations. Collector failures fail that workflow visibly.
+The `trace` job in `preview-run.yml` runs after preparation, app tests, browser
+shards and cleanup, with `if: always()`. It reads their completed Depot timings
+and lifecycle records, then uploads the report. The trace excludes this report
+job: **preview wall time** ends when the last producer job settles, while the
+outer workflow remains active for collection/upload. Test/cleanup failures remain
+visible; a collector failure fails its own check without changing the measured
+preview outcome.
+
+There is no dispatcher or scheduled repair. A workflow cancellation can prevent
+the report job from completing; such runs can be rendered manually. The explicit
+producer dependencies also handle cleanup failing before it waits for tests.
 
 Reports are Depot artifacts containing `trace.html` and `trace.json`, uploaded
 with `actions/upload-artifact`. No generated files or per-run commits go into Git.
@@ -72,8 +78,9 @@ index selection, attachments and Playwright reports.
 
 The config project receives Depot `check_run.completed` webhooks and scans the
 completed job's artifacts. It publishes only an explicit allowlist:
-`public-playwright-report` → **Playwright report**, and
-`ci-trace-<workflow>-<execution>` from `ci-trace.yml` → **CI trace**.
+`public-playwright-report` → **Playwright report** and
+`public-ci-trace` → **CI trace**. Retained `ci-trace-<workflow>-<execution>`
+artifacts from the old `ci-trace.yml` workflow remain supported.
 The handler verifies that the hosted HTML is reachable before adding the status.
 CI does not run a publication command or need status-write permission.
 
@@ -85,8 +92,6 @@ preview's link. Duplicate deliveries do no work. External failures retry after
 event and log the cause without blocking GitHub webhook delivery. Replaying a
 completed-job webhook safely retries publication.
 
-The scheduled collector still reads the CI trace status to repair missed trace
-generation, including cancellations. It needs `contents: read` and `statuses: read`.
 A successful report status means HTML is available; the preview checks carry
 the test outcome. PR bodies are never edited.
 
@@ -99,18 +104,9 @@ permanent archival storage.
 
 ## Replay
 
-The collector workflow accepts `source-workflow` (Depot's workflow ID, not its
-run ID). Empty input runs reconciliation. Branch-only workflows can be tested
-with a Depot dispatch before merge:
-
-```sh
-depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
-  --workflow ci-trace.yml --ref <branch> --input source-workflow=<workflow-id>
-```
-
 Local rendering requires `DEPOT_CI_TELEMETRY_TOKEN`. CI obtains it from Doppler
-`_shared/preview`. Reconciliation uses `GITHUB_TOKEN` to read commit statuses;
-the config project publishes links using its existing GitHub integration.
+`_shared/preview`. Use the Depot workflow ID, not its run ID. The config project
+publishes uploaded report links using its existing GitHub integration.
 
 ```sh
 pnpm exec trpc-cli scripts/ci/tracing/cli.ts render <workflow-id> /tmp/ci-trace

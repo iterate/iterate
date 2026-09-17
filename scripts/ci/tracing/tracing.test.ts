@@ -5,6 +5,82 @@ import { expect, test } from "vitest";
 import { assembleTrace, renderTrace, stepCommands } from "./tracing.ts";
 
 test.each(["finished", "failed", "cancelled"])(
+  "inline collection reports %s preview jobs while the collector is still running",
+  (status) => {
+    const workflow = greenWorkflow(status);
+    workflow.workflowStatus = "running";
+    workflow.workflowFinishedAt = "";
+    workflow.jobs.push({
+      jobId: "trace",
+      jobKey: "preview.yml:preview:trace",
+      status: "running",
+      attempts: [
+        {
+          attemptId: "trace-attempt",
+          attempt: 1,
+          status: "running",
+          startedAt: at(95),
+          finishedAt: "",
+        },
+      ],
+    });
+    const spans = assembleTrace(workflow, new Map()).resourceSpans[0].scopeSpans[0].spans;
+    expect(spans[0]).toMatchObject({
+      endTimeUnixNano: String(BigInt(ms(90)) * 1_000_000n),
+      attributes: expect.arrayContaining([
+        { key: "ci.status", value: { stringValue: status } },
+        {
+          key: "ci.report.scope",
+          value: { stringValue: "Preview jobs through cleanup; report generation excluded" },
+        },
+      ]),
+    });
+    expect(
+      spans.some((span) =>
+        span.attributes.some(
+          (a) => a.key === "ci.attempt.id" && a.value.stringValue === "trace-attempt",
+        ),
+      ),
+    ).toBe(false);
+  },
+);
+
+test("replaying an inline report excludes a failed collector from the preview outcome", () => {
+  const workflow = greenWorkflow("finished");
+  workflow.workflowStatus = "failed";
+  workflow.workflowFinishedAt = at(100);
+  workflow.jobs.push({
+    jobId: "trace",
+    jobKey: "preview.yml:preview:trace",
+    status: "failed",
+    attempts: [
+      {
+        attemptId: "trace-attempt",
+        attempt: 1,
+        status: "failed",
+        startedAt: at(95),
+        finishedAt: at(100),
+      },
+    ],
+  });
+  expect(assembleTrace(workflow, new Map()).resourceSpans[0].scopeSpans[0].spans[0]).toMatchObject({
+    endTimeUnixNano: String(BigInt(ms(90)) * 1_000_000n),
+    attributes: expect.arrayContaining([{ key: "ci.status", value: { stringValue: "finished" } }]),
+  });
+});
+
+test("inline collection refuses to label still-running preview jobs as finished", () => {
+  const workflow = greenWorkflow("running");
+  workflow.jobs.push({
+    jobId: "trace",
+    jobKey: "preview.yml:preview:trace",
+    status: "running",
+    attempts: [],
+  });
+  expect(() => assembleTrace(workflow, new Map())).toThrow("Preview jobs have not settled");
+});
+
+test.each(["finished", "failed", "cancelled"])(
   "time to green retains the observed milestone when the workflow later %s",
   (status) => {
     const trace = assembleTrace(
