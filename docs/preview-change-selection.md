@@ -93,20 +93,36 @@ registry yet.
 ## Workflow and rollout
 
 ```text
-plan (small machine: checkout full history, pnpm install, ci-plan)
-  ├─ inherit: exit green or red; no preview jobs
-  └─ tests needed:
-       prepare ───────────────┐
-       apps setup → wait → tests
-       six shards setup → wait → tests
-                              └─ finish setup → wait for all → collect + erase + restore
+plan:    checkout full history → install → decide → signal preview-plan
+prepare: checkout → install → wait for preview-plan → deploy/reuse → ready
+                                           │                          │
+             inherit: skip remaining steps │                          │
+             tests needed:                 ├─ apps setup → wait ──────┤→ tests
+                                           └─ six shards setup → wait┘→ tests
+prepare done → finish setup → wait for all consumers → collect + erase + restore
 ```
 
 The caller holds the existing lifecycle lock around this entire workflow.
-The planning job adds one install before expensive jobs start, preserving
-overlapped preparation afterwards. Consumers still use an immutable plan tied
-to the current head, workflow run and attempt; only the deployed revision may
-be older. Cleanup still waits for all consumers to settle.
+`plan` and `prepare` start together. `prepare` pays for checkout and installation
+even when inheriting a result, but deployment never waits for those tasks to
+start after planning. App tests and shards keep their job-level planning gate.
+Consumers still use an immutable deployment plan tied to the current head,
+workflow run and attempt; only the deployed revision may be older. Cleanup still
+waits for all consumers to settle.
+
+The plan publishes `tests`, `deploy`, `commit`, and `slot` as string values in the
+`preview-plan` milestone's JSON description. `status.ts wait-for` writes those
+values to step outputs, so `prepare` reads `steps.plan.outputs.tests` and the
+reuse identity. Milestone descriptions accept small, single-line values (140
+characters total); reasons and artifacts stay in their existing logs/storage.
+Existing milestones carry an empty object and need no extra arguments.
+
+The signal identifies the exact Depot workflow execution, job and attempt.
+Its `success` means **decision available**, including an inherited red decision:
+the plan job still fails, while `prepare` receives `tests=false` and stops after
+its wait. If planning fails before deciding, its termination fails the waiter.
+Every subsequent prepare step, including failure-path artifact uploads, requires
+`tests=true`.
 
 **Before rollout, require `Preview / Plan preview work` as a merge check.**
 Inherited red fails that job; skipped downstream jobs alone cannot enforce it.

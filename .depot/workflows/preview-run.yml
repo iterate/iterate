@@ -61,10 +61,17 @@ jobs:
           doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
           pnpm preview ci-plan $PREVIEW_TARGET_ARGS
           ${{ inputs.all-apps && '--all-apps' || '' }}
+      - name: Signal preview plan (including inherited failures)
+        if: always() && steps.plan.outputs.tests != ''
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PLAN_VALUES: ${{ toJSON(steps.plan.outputs) }}
+        run: >-
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          pnpm exec trpc-cli scripts/ci/status.ts set preview-plan --values "$PLAN_VALUES"
 
   prepare:
-    needs: plan
-    if: needs.plan.outputs.tests == 'true'
     name: Deploy and readiness
     runs-on:
       size: 16x64
@@ -80,10 +87,20 @@ jobs:
       - name: Reconcile dependencies (baked)
         id: install_dependencies
         run: node scripts/depot-ci/dependencies.mjs install
+      - name: Wait for preview plan
+        id: plan
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          pnpm exec trpc-cli scripts/ci/status.ts wait-for plan preview-plan
       - name: Reset test artifacts
+        if: steps.plan.outputs.tests == 'true'
         id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
       - name: Enforce preview deployment epoch
+        if: steps.plan.outputs.tests == 'true'
         id: deployment_epoch
         run: |-
           set -euo pipefail
@@ -94,6 +111,7 @@ jobs:
             exit 1
           fi
       - name: Verify coordination and signal preparing
+        if: steps.plan.outputs.tests == 'true'
         id: signal_preparing
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -102,6 +120,7 @@ jobs:
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
           pnpm exec trpc-cli scripts/ci/status.ts set preparing
       - name: Check fixed Playwright capacity
+        if: steps.plan.outputs.tests == 'true'
         id: catalogue
         env:
           CI: "true"
@@ -110,6 +129,7 @@ jobs:
           PLAYWRIGHT_CAPACITY_FILE: test-results/playwright-catalogue.json
         run: pnpm spec --list --reporter=./scripts/preview/playwright-capacity-reporter.ts
       - name: Deploy once and wait for readiness
+        if: steps.plan.outputs.tests == 'true'
         id: prepare
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -117,14 +137,16 @@ jobs:
         run: >-
           doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
           pnpm preview ci-prepare $PREVIEW_TARGET_ARGS
-          ${{ needs.plan.outputs.deploy == 'false' && format('--reuse-commit {0} --reuse-slot {1}', needs.plan.outputs.commit, needs.plan.outputs.slot) || '' }}
+          ${{ steps.plan.outputs.deploy == 'false' && format('--reuse-commit {0} --reuse-slot {1}', steps.plan.outputs.commit, steps.plan.outputs.slot) || '' }}
       - name: Publish prepared deployment identity
+        if: steps.plan.outputs.tests == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: preview-ci-plan
           path: test-results/preview-ci-plan.json
           if-no-files-found: error
       - name: Signal prepared preview
+        if: steps.plan.outputs.tests == 'true'
         id: signal_ready
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -134,10 +156,10 @@ jobs:
           pnpm exec trpc-cli scripts/ci/status.ts set preview-ready
       - name: Collect test artifacts
         id: collect_artifacts
-        if: always()
+        if: always() && steps.plan.outputs.tests == 'true'
         run: scripts/preview/collect-test-artifacts.sh test-results
       - name: Upload results
-        if: always()
+        if: always() && steps.plan.outputs.tests == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: preview-ci-prepare

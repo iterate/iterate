@@ -76,12 +76,28 @@ test("the lifecycle owner encloses every fixed shard and cleanup waits for their
   const workflow = parse(readFileSync(resolve(root, ".depot/workflows/preview-run.yml"), "utf8"));
   expect(caller.on.pull_request.paths).toBeUndefined();
   expect(workflow.jobs.plan.steps[0].with["fetch-depth"]).toBe(0);
-  expect(workflow.jobs.prepare).toMatchObject({
-    needs: "plan",
-    if: "needs.plan.outputs.tests == 'true'",
+  expect(workflow.jobs.prepare.needs).toBeUndefined();
+  expect(workflow.jobs.prepare.if).toBeUndefined();
+  const prepareSteps = workflow.jobs.prepare.steps;
+  const waitForPlan = prepareSteps.findIndex((step: any) => step.id === "plan");
+  expect(waitForPlan).toBeGreaterThan(
+    prepareSteps.findIndex((step: any) => step.id === "install_dependencies"),
+  );
+  expect(prepareSteps[waitForPlan].run).toContain("wait-for plan preview-plan");
+  for (const step of prepareSteps.slice(waitForPlan + 1)) {
+    expect(step.if, step.name).toContain("steps.plan.outputs.tests == 'true'");
+  }
+  expect(workflow.jobs.plan.steps.at(-1)).toMatchObject({
+    // Inherited red still publishes its decision before the producer stops.
+    if: "always() && steps.plan.outputs.tests != ''",
+    run: expect.stringContaining('set preview-plan --values "$PLAN_VALUES"'),
+    env: { PLAN_VALUES: "${{ toJSON(steps.plan.outputs) }}" },
   });
   expect(workflow.jobs.prepare.steps.find((step: any) => step.id === "prepare").run).toContain(
     "--reuse-commit {0} --reuse-slot {1}",
+  );
+  expect(workflow.jobs.prepare.steps.find((step: any) => step.id === "prepare").run).toContain(
+    "steps.plan.outputs.deploy == 'false'",
   );
   expect(workflow.jobs.plan.steps.find((step: any) => step.id === "plan").run).toContain(
     "inputs.all-apps",

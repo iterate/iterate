@@ -6,10 +6,11 @@ base: main
 
 # Choose preview work from ordered change types
 
-Implementation and live acceptance complete in PR #2712. Full preview,
-tests-only reuse, and docs-only inheritance ran in sequence without interruption.
-Exact Worker versions, restoration and settlement were verified. The PR monitor
-remains active for new review feedback. Based on main after #2695.
+Ancestry selection and its original live acceptance are complete in PR #2712.
+The follow-up starts prepare alongside planning and passes milestone values to
+step outputs; implementation is ready for live verification. Full preview,
+tests-only reuse, and docs-only inheritance were already verified without
+interrupting runs. Based on main after #2695.
 
 ## Request and decisions
 
@@ -137,3 +138,7 @@ remains active for new review feedback. Based on main after #2695.
 - Full local workspace tests, typecheck, lint, knip and formatting passed. No
   CI runs were cancelled or interrupted; every push waited for previous CI to
   finish. No branch protection settings were changed.
+
+- [x] Start prepare setup concurrently with planning, then gate later steps on its signal. *`preview-run.yml` removes prepare's job dependency and uses `steps.plan.outputs`; app/shard gates remain.*
+- [x] Carry compact values through attempt-scoped milestones into step outputs. *`status.ts set --values` publishes JSON; `wait-for` validates and writes outputs. Inherited failures publish their decision before the job stops.*
+- [ ] Verify the overlapped full run and setup-only inherited run in Depot. *Wait for each complete lifecycle before the next push.*

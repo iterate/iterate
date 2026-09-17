@@ -30,8 +30,13 @@ export default class CiStatus {
     this.attemptId = z.string().min(1).parse(url.searchParams.get("attempt"));
   }
 
-  /** Publish a milestone for this exact workflow execution and job attempt. */
-  async set(milestone: string) {
+  /** Publish a milestone and optional step outputs for this exact job attempt. */
+  async set(milestone: string, options: { values?: Record<string, string> } = {}) {
+    // Keep coordination data small; artifact identities and full reasons belong elsewhere.
+    const description = z
+      .string()
+      .max(140)
+      .parse(JSON.stringify(Values.parse(options.values || {})));
     const workflow = await this.workflow();
     const context = `ci/${this.workflowId}/${workflow.executions[0].executionId}/${this.jobId}/${this.attemptId}/${milestone}`;
     await this.request(
@@ -40,7 +45,7 @@ export default class CiStatus {
       {
         context,
         state: "success",
-        description: `Reached ${milestone}`,
+        description,
         target_url: this.env.DEPOT_JOB_URL,
       },
     );
@@ -51,7 +56,7 @@ export default class CiStatus {
       );
   }
 
-  /** Wait for a producer milestone, failing if its job stops without signaling. */
+  /** Wait for a milestone and write its values to step outputs; fail if its producer stops. */
   async waitFor(producer: string, milestone: string) {
     console.log(`[ci:status] waiting for ${producer}/${milestone}`);
     let linked = false;
@@ -82,8 +87,15 @@ export default class CiStatus {
           );
           const status = statuses.find((entry) => entry.context === context);
           if (status?.state === "success") {
+            const values = Values.parse(JSON.parse(z.string().parse(status.description)));
+            await appendFile(
+              this.env.GITHUB_OUTPUT,
+              Object.entries(values)
+                .map(([name, value]) => `${name}=${value}\n`)
+                .join(""),
+            );
             console.log(`[ci:status] reached ${context}`);
-            return { producer, attemptId: attempt.attemptId };
+            return { producer, attemptId: attempt.attemptId, values };
           }
           if (status && status.state !== "pending")
             throw new Error(`Milestone ${context}: ${status.state}`);
@@ -310,9 +322,18 @@ const Statuses = z.object({
     z.object({
       context: z.string(),
       state: z.enum(["pending", "success", "failure", "error"]),
+      description: z.string().nullable(),
     }),
   ),
 });
+// Single-line values and simple output names make the GITHUB_OUTPUT serialization unambiguous.
+const Values = z.record(
+  z
+    .string()
+    .min(1)
+    .refine((name) => !/[^A-Za-z0-9_-]/.test(name), "Invalid step output name"),
+  z.string().refine((value) => !/[\r\n]/.test(value), "Step output values must be single-line"),
+);
 const terminal = new Set(["finished", "failed", "cancelled", "skipped"]);
 
 const CheckRuns = z.object({
