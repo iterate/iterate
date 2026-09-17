@@ -201,6 +201,7 @@ export function assembleTrace(
             ...event,
             ...(event.kind === "shell-start" && { step: line.stepId || event.step }),
             stepKey: line.stepKey,
+            stepId: line.stepId || "",
             stepName: line.stepName || "",
             command: line.command || "",
           },
@@ -266,12 +267,13 @@ export function assembleTrace(
         const id = add(
           `${attempt.attemptId}/shell/${shell.id}`,
           parent,
-          shell.command || shell.stepName || shell.step.replaceAll("_", " "),
+          shell.stepName || shell.stepId || shell.command || shell.step,
           shell.time,
           done?.time || end,
           {
             "ci.kind": "step",
             "ci.step.key": shell.stepKey,
+            "ci.step.id": shell.stepId,
             "ci.step.name": shell.stepName,
             "ci.command": shell.command,
             "ci.status": done ? (done.exitCode ? "failed" : "passed") : "incomplete",

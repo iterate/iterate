@@ -36,9 +36,10 @@ remain visibly incomplete. Names and status are recorded, not exception text.
 
 `preview-run.yml` emits small lifecycle records into Depot logs using
 `scripts/ci/tracing/shell.sh` (`BASH_ENV`) and `TraceReporter` in
-`scripts/ci/tracing/tracing.ts`. Keep explicit step IDs: these join timings to the authored commands. Reports show those
-commands with the Doppler wrapper stripped; the friendly step name is in the
-details. Commands come from the workflow YAML at the run's triggering SHA (the merge revision on PR runs),
+`scripts/ci/tracing/tracing.ts`. Keep explicit step IDs: these join timings to the authored commands. Reports show
+the step's name, falling back to its ID and then its normalized run command.
+Hover the label or bar to see all three. Commands have the Doppler wrapper stripped
+and come from the workflow YAML at the run's triggering SHA (the merge revision on PR runs),
 never expanded runner logs. `wait_for_preview`, `consumers`,
 `playwright` and `app_tests` also define the phase boundaries. The shell hook
 preserves exit codes and ignores nested shells. It requires only the Node

@@ -37,3 +37,5 @@ readable.
   dependency arrows or detail links. Expand a Wait phase and select the measured
   wait step to see its own links. Browser checks verify empty parent selections,
   readiness on the wait step and cleanup's direct link to the job; 11 tracing tests pass.
+- Step labels now prefer name, then ID, then normalized run command. Both label
+  and bar tooltips show all three; IDs remain in the exported OTLP attributes.

@@ -188,12 +188,16 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
     [
       "attempt",
       [
-        line("install_dependencies", {
-          kind: "shell-start",
-          id: "install",
-          step: "__run",
-          time: ms(3),
-        }),
+        {
+          ...line("install_dependencies", {
+            kind: "shell-start",
+            id: "install",
+            step: "__run",
+            time: ms(3),
+          }),
+          stepName: "Install dependencies",
+          command: "pnpm install",
+        },
         line("install_dependencies", {
           kind: "span-start",
           id: "interrupted-child",
@@ -207,14 +211,26 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
           time: ms(33),
           exitCode: 0,
         }),
-        line("wait_for_preview", {
-          kind: "shell-start",
-          id: "wait",
-          step: "wait_for_preview",
-          time: ms(33),
-        }),
+        {
+          ...line("wait_for_preview", {
+            kind: "shell-start",
+            id: "wait",
+            step: "wait_for_preview",
+            time: ms(33),
+          }),
+          command: "pnpm exec trpc-cli scripts/ci/status.ts wait-for prepare preview-ready",
+        },
         line("wait_for_preview", { kind: "shell-end", id: "wait", time: ms(60), exitCode: 0 }),
-        line("playwright", { kind: "shell-start", id: "tests", step: "playwright", time: ms(61) }),
+        {
+          ...line("playwright", {
+            kind: "shell-start",
+            id: "tests",
+            step: "playwright",
+            time: ms(61),
+          }),
+          stepId: "",
+          command: "pnpm spec",
+        },
         line("playwright", {
           kind: "test-start",
           id: "test/0",
@@ -248,7 +264,15 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
   ]);
   const report = assembleTrace(workflow, logs);
   const spans = report.resourceSpans[0].scopeSpans[0].spans;
-  const install = spans.find((span) => span.name === "install dependencies")!;
+  const install = spans.find((span) => span.name === "Install dependencies")!;
+  expect(install.attributes).toEqual(
+    expect.arrayContaining([
+      { key: "ci.step.name", value: { stringValue: "Install dependencies" } },
+      { key: "ci.step.id", value: { stringValue: "install_dependencies" } },
+      { key: "ci.command", value: { stringValue: "pnpm install" } },
+    ]),
+  );
+  expect(spans.find((span) => span.name === "wait_for_preview")).toBeDefined();
   expect(Number(install.endTimeUnixNano) - Number(install.startTimeUnixNano)).toBe(30e9);
   expect(spans.find((span) => span.name === "Interrupted setup operation")).toMatchObject({
     parentSpanId: install.spanId,
@@ -262,7 +286,7 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
   expect(tests[0].spanId).not.toBe(tests[1].spanId);
   expect(tests[0].parentSpanId).toBe(tests[1].parentSpanId);
   expect(spans.find((span) => span.spanId === tests[0].parentSpanId)).toMatchObject({
-    name: "playwright",
+    name: "pnpm spec",
   });
   expect(tests[1].attributes).toContainEqual({
     key: "ci.evidence",
@@ -324,7 +348,7 @@ test("a second-precision Depot finish does not invent a negative finish phase", 
     ]),
   );
   const spans = report.resourceSpans[0].scopeSpans[0].spans;
-  const wait = spans.find((span) => span.name === "wait for preview")!;
+  const wait = spans.find((span) => span.name === "wait_for_preview")!;
   const finish = spans.find((span) => span.name === "Finish")!;
   expect(wait).toMatchObject({
     status: { code: 2 },
@@ -482,7 +506,7 @@ test.each([true, false])(
       ]),
     );
     const spans = trace.resourceSpans[0].scopeSpans[0].spans;
-    const wait = spans.find((span) => span.name === "wait for preview")!;
+    const wait = spans.find((span) => span.name === "wait_for_preview")!;
     const prepare = spans.find((span) => span.name === "Prepare")!;
     const target = ready
       ? spans.find((span) => span.name === "preview-ready" && span.parentSpanId === prepare.spanId)!

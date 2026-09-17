@@ -515,7 +515,11 @@
         const query = document.getElementById("search").value.toLowerCase();
         const matches = new Set(
           spans
-            .filter((s) => `${s.name} ${s.a["test.file"] || ""}`.toLowerCase().includes(query))
+            .filter((s) =>
+              `${s.name} ${s.a["ci.step.id"] || ""} ${s.a["ci.command"] || ""} ${s.a["test.file"] || ""}`
+                .toLowerCase()
+                .includes(query),
+            )
             .map((s) => s.spanId),
         );
         if (query)
@@ -551,7 +555,10 @@
           name.className = "span-name";
           name.setAttribute("aria-label", `Inspect ${spanLabel(span)}`);
           name.textContent = span.name;
-          name.title = span.name;
+          name.title =
+            span.a["ci.kind"] === "step"
+              ? `Name: ${span.a["ci.step.name"] || "—"}\nID: ${span.a["ci.step.id"] || "—"}\nRun: ${span.a["ci.command"] || "—"}`
+              : span.name;
           const time = document.createElement("small");
           time.className = "duration";
           time.textContent = duration(span.end - span.start);
@@ -559,6 +566,7 @@
           name.onclick = () => showDetail(span);
           const timeline = document.createElement("div");
           timeline.className = "timeline";
+          timeline.title = name.title;
           timeline.tabIndex = 0;
           timeline.setAttribute("role", "button");
           timeline.setAttribute("aria-label", `${span.name}, ${duration(span.end - span.start)}`);
