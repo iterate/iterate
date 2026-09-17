@@ -32,7 +32,7 @@ export default class CiStatus {
 
   /** Publish a milestone and optional step outputs for this exact job attempt. */
   async set(milestone: string, options: { values?: Record<string, string> } = {}) {
-    const values = Values.parse({ milestone, ...options.values });
+    const values = Values.parse({ ...options.values, milestone });
     // Keep coordination data small; artifact identities and full reasons belong elsewhere.
     const description = z
       .string()

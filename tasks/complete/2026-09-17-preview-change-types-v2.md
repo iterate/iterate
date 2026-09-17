@@ -150,6 +150,7 @@ No runs were interrupted. Based on main after #2695.
   all deployed suites, restoration and `preview-settled`. Separate unit CI hit
   the existing dependency-install test's five-second timeout; unchanged tests
   will run again with the finalizer follow-up. No run was interrupted.
-- Format follow-up: include `{ milestone, ...options.values }` in every signal.
+- Format follow-up: include `{ ...options.values, milestone }` in every signal,
+  keeping useful values first when GitHub truncates the description.
   Validate names and reserve semicolons/newlines in values before publication;
   the waiter can append the description as output lines without JSON decoding.
