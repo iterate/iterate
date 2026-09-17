@@ -1,4 +1,3 @@
-import { interceptor } from "@iterate-com/test-support";
 // Live event connections and stored subscriptions through the public ITX seam.
 //
 // This is intentionally a real live-deployment suite: product behavior enters
@@ -584,9 +583,9 @@ test("callback capabilities cross the worker proxy and disappear with their sess
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await interceptor.createProject(
-    observerItx.projects.get(`stream-subscriptions-${RUN_SUFFIX}-${marker}`),
-  );
+  using project = await observerItx.projects
+    .get(`stream-subscriptions-${RUN_SUFFIX}-${marker}`)
+    .create({});
   const { projectId } = await project.__describe();
   using observerStream = project.streams.get(streamPath);
 
@@ -671,9 +670,9 @@ test("newly appended events cross the callback owner's WebSocket in one directio
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await interceptor.createProject(
-    publisherItx.projects.get(`stream-subscriptions-${RUN_SUFFIX}-${marker}`),
-  );
+  using project = await publisherItx.projects
+    .get(`stream-subscriptions-${RUN_SUFFIX}-${marker}`)
+    .create({});
   const { projectId } = await project.__describe();
 
   const frames: ItxWebSocketMessage[] = [];
@@ -723,9 +722,9 @@ test("warm live delivery remains bounded across repeated appends", async () => {
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await interceptor.createProject(
-    publisherItx.projects.get(`stream-subscriptions-${RUN_SUFFIX}-${marker}`),
-  );
+  using project = await publisherItx.projects
+    .get(`stream-subscriptions-${RUN_SUFFIX}-${marker}`)
+    .create({});
   const { projectId } = await project.__describe();
 
   using callbackProject = withItxSession({
@@ -3589,7 +3588,7 @@ async function openTestProject(marker: string) {
   );
   try {
     const project = resources.adopt(
-      await interceptor.createProject(itx.projects.get(`subscriptions-${RUN_SUFFIX}-${marker}`)),
+      await itx.projects.get(`subscriptions-${RUN_SUFFIX}-${marker}`).create({}),
       disposeRpc,
     );
     return {

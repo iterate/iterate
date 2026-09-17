@@ -1,4 +1,3 @@
-import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -9,13 +8,9 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 test("itx.kv round-trips small values, lists by prefix, and is project-scoped", async () => {
   using session = withItxSession();
   using admin = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await interceptor.createProject(
-    admin.projects.get(`kv-${crypto.randomUUID().slice(0, 8)}`),
-  );
+  using project = await admin.projects.get(`kv-${crypto.randomUUID().slice(0, 8)}`).create({});
   await project.projectId;
-  using other = await interceptor.createProject(
-    admin.projects.get(`kv-other-${crypto.randomUUID().slice(0, 8)}`),
-  );
+  using other = await admin.projects.get(`kv-other-${crypto.randomUUID().slice(0, 8)}`).create({});
 
   expect(await project.kv.get("docs-app-origin")).toBeNull();
 

@@ -63,7 +63,6 @@ import type {
 } from "@iterate-com/auth-contract/worker";
 import { decodeMessageMentions, type Message } from "@iterate-com/shared/message";
 import type { AppConfig } from "./config.ts";
-import { ProjectAiPolicy, signupTestAiPolicy } from "./lib/project-ai-policy.ts";
 import { parseConfig } from "./config.ts";
 import { closeItxSessionTransport } from "./session-transport.ts";
 import {
@@ -3429,7 +3428,7 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
       context: streamContext,
     });
     const request = prepareWorkersAiRequest({
-      model: await projectStub(env.PROJECT, this.props.projectId).resolveAiModel(model, undefined),
+      model,
       gatewayId: config.cloudflareAiGateway.id,
       metadata,
       body,
@@ -3528,13 +3527,6 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
       return env.AI.toMarkdown().supported();
     }
     const [documents, options] = args;
-    const model = await projectStub(env.PROJECT, this.props.projectId).resolveAiModel(
-      "cloudflare/to-markdown",
-      undefined,
-    );
-    if (model.startsWith("intercepted/")) {
-      return this.run(model, { documents, options });
-    }
     // Blob cannot cross the capnweb hop from script sandboxes, so `blob`
     // accepts the whole FileData union and the Blob is minted here.
     const coerce = async (document: CfMarkdownDocument) => ({
@@ -6887,12 +6879,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * same handle, and addressing an unknown slug is side-effect free.
    */
   async create(
-    args: {
-      configRepoTemplate?: string;
-      organizationSlug?: string;
-      projectId?: string;
-      aiPolicy?: ProjectAiPolicy;
-    } = {},
+    args: { configRepoTemplate?: string; organizationSlug?: string; projectId?: string } = {},
     options?: { waitUntilCreated?: boolean },
   ): Promise<ProjectRpcTarget> {
     const projectCreateDeadline = Date.now() + PROJECT_CREATE_TIMEOUT_MS;
@@ -6969,11 +6956,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
     const timing = { projectId: registered.projectId };
     const creatorEmail = userPrincipalOf(this.#props.auth)?.email;
-    // Select the suite's policy before onboarding can request AI; ordinary
-    // +test logins remain usable for manual preview sessions.
-    const aiPolicy =
-      args.aiPolicy ||
-      signupTestAiPolicy(creatorEmail, registered.slug, parseConfig(env).environmentName);
     // Every birth event carries an idempotency key, so the keyed-append door
     // retry in StreamRpcTarget.append is the single deploy-reset recovery.
     // Platform lane: the root batch arms the facet-placed project and
@@ -6986,7 +6968,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           payload: {
             config: {
               slug: registered.slug,
-              ...(aiPolicy && { aiPolicy: ProjectAiPolicy.parse(aiPolicy) }),
               ...(creatorEmail === undefined ? {} : { creatorEmail }),
               ...(configRepoTemplate === undefined ? {} : { configRepoTemplate }),
             },

@@ -15,34 +15,6 @@ still chooses BYOK versus Cloudflare billing. Interception does not choose the p
 For provider-independent tests, synthetic names such as `intercepted/echo-args`
 are sufficient; they use generic Workers AI preparation without calling a provider.
 
-## Automated test projects
-
-`project.create({ aiPolicy: { liveAgentPaths: [] } })` opts a project into interception
-at birth. Ordinary agent models are prefixed with `intercepted/` **before** the
-request is journaled; direct `ai.run`, Markdown conversion and gateway-routed
-OpenAI HTTP requests also use the policy. Removing the handler never restores
-paid dispatch. Projects without the policy keep their normal models.
-
-Tests use `interceptor.createProject(session.projects.get(slug))` from
-`@iterate-com/test-support`. It installs a durable worker that returns a no-op agent
-response, surviving stream eviction without closing the test session. Tests that assert a reply
-or an AI result use `interceptor.intercept(project, handler)`,
-which keeps template onboarding on a no-op responder. The onboarding spec uses
-the raw `project.ai.intercept` to script that agent explicitly;
-unscripted direct calls fail loudly. Keep the owning session open until teardown.
-Browser signup's explicit `intercepted-e2e-…+test@nustom.com` identities or
-`intercepted-e2e-…` project slugs in non-production also record the policy at birth,
-before their onboarding agent starts. The slug handles mobile OAuth tokens without email claims.
-
-The sole live-model test is `specs/agent-chat.spec.ts`: its project allows exactly
-`/agents/bendy-yellow-fruit`. Other agents in that project remain intercepted.
-The allowlist applies only to agent turns, not nested `ai.run` calls.
-
-The real Gateway-cache probe was removed; cache-key and response-header contracts
-remain covered by unit tests. The optional stock-Codex WebSocket and voice probes
-are disabled pending scripted providers. Scripted media tests prove delivery and
-parsing, not OCR or transcription quality.
-
 ## Quick start
 
 ```ts

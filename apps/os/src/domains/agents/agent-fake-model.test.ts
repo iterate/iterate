@@ -66,32 +66,6 @@ test("an intercepted/* turn is served by the interceptor: prompt in, text out, u
   );
 });
 
-test("project policy selects the intercepted model before committing an ordinary agent request", async () => {
-  const seen: any[] = [];
-  const h = makeInterceptedModelHarness(
-    async (call) => {
-      seen.push(call);
-      return "scripted project default";
-    },
-    async (model) => `intercepted/${model}`,
-  );
-  await h.play(
-    [
-      "append",
-      ...newFakeAgentEvents("openai/gpt-5.6-terra"),
-      userMessage("hello from an indirectly created agent"),
-    ],
-    ["advanceTime", 10_000],
-  );
-  expect(h.events(REQUESTED)).toMatchObject([
-    { payload: { model: "intercepted/openai/gpt-5.6-terra" } },
-  ]);
-  expect(seen).toMatchObject([{ source: "agent-turn", model: "intercepted/openai/gpt-5.6-terra" }]);
-  expect(h.events(SETTLED)).toMatchObject([
-    { payload: { result: { status: "succeeded", text: "scripted project default" } } },
-  ]);
-});
-
 test("a handler returning { text, usage } reports that usage verbatim", async () => {
   const h = makeInterceptedModelHarness(async () => ({
     text: "counted precisely",
@@ -257,13 +231,11 @@ function userMessage(content: string): AgentEventInput {
 /** Harness with NO callLlm (so the intercepted-model branch is reachable) and the given interceptor consult. */
 function makeInterceptedModelHarness(
   consultAiInterceptor: AgentProcessorDeps["consultAiInterceptor"],
-  resolveAiModel?: AgentProcessorDeps["resolveAiModel"],
 ) {
   return makeProcessorHarness<AgentProcessorContract>({
     createProcessor: (deps) =>
       new AgentProcessor({
         ...deps,
-        resolveAiModel,
         ai: {
           run: async () => {
             throw new Error("An intercepted model must never dial");

@@ -1,4 +1,3 @@
-import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import type { StatefulDynamicWorkerRef } from "iterate/sdk";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -9,9 +8,9 @@ test("the packaged Todo adopts rows from the config-owned worker", async () => {
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await interceptor.createProject(
-    itx.projects.get(`todo-package-migration-${crypto.randomUUID().slice(0, 8)}`),
-  );
+  using project = await itx.projects
+    .get(`todo-package-migration-${crypto.randomUUID().slice(0, 8)}`)
+    .create({});
 
   const title = `created-before-packaging-${crypto.randomUUID().slice(0, 8)}`;
   {

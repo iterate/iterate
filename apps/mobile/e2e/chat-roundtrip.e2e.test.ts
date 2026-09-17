@@ -43,7 +43,7 @@ test("phone client seam: new mobile chat gets a live agent reply", async () => {
     },
   });
   const slug = `mobile-e2e-${Date.now().toString(36)}`;
-  const created = await interceptor.createProject(adminSession.projects.get(slug));
+  const created = await adminSession.projects.get(slug).create({});
   const { projectId } = await created.__describe();
 
   // The phone lane: bearer token over the app's own dial.
@@ -74,13 +74,17 @@ test("phone client seam: new mobile chat gets a live agent reply", async () => {
   // mutation (chat.tsx).
   const agent = project.agents.get(agentPath) as RpcStub<Agent>;
   await agent.create();
-  using _ai = await interceptor.intercept(project, (call) =>
+  await agent.append({
+    type: "events.iterate.com/agent/configured",
+    payload: { config: { llm: { model: "intercepted/openai/gpt-5.6-terra" } } },
+  });
+  using _ai = await project.ai.intercept((call) =>
     call.source === "agent-turn" && call.agentPath === agentPath
       ? interceptor.codemodeBackticksResponse(
           'async (itx) => { await itx.chat.sendMessage("Hello from the intercepted mobile model"); }',
           call,
         )
-      : interceptor.noOpAgent(call),
+      : interceptor.codemodeBackticksResponse("async () => {}", call),
   );
   const sent = await agent.message(
     "Reply with a short greeting. Do not run any code or take any other action.",

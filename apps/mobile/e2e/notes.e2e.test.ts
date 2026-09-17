@@ -1,8 +1,7 @@
-import { interceptor } from "@iterate-com/test-support";
 // Live proof of the convergence NotesApp: the composer's exact sequence —
 // provision the notes repo + workspace, write the note FILE, append the
 // captured fact to the workspace's stream — then the server's obligation
-// writes title/tags INTO the file's frontmatter (one intercepted model call), the
+// writes title/tags INTO the file's frontmatter (one real model call), the
 // settlement-debounced commit lane lands it on the notes repo's main, an
 // agent-shaped glob/readFiles finds it, and delete drops it everywhere.
 //
@@ -33,7 +32,7 @@ test(
       auth: { type: "admin-secret", secret: requireEnv("APP_CONFIG_ADMIN_API_SECRET") },
     });
     const slug = `mobile-notes-e2e-${Date.now().toString(36)}`;
-    const created = await interceptor.createProject(adminSession.projects.get(slug));
+    const created = await adminSession.projects.get(slug).create({});
     const { projectId } = await created.__describe();
 
     const token = await mintForgedAccessToken({
@@ -44,18 +43,6 @@ test(
       admin: true,
     });
     using project = connectItx({ baseUrl, auth: { type: "bearer", token }, projectId });
-
-    using _ai = await interceptor.intercept(project, (call) => {
-      if (call.source === "agent-turn") return interceptor.noOpAgent(call);
-      expect(call).toMatchObject({
-        source: "ai-run",
-        model: "intercepted/@cf/meta/llama-4-scout-17b-16e-instruct",
-      });
-      expect(JSON.stringify(call.request.body)).toContain("76cm");
-      return Response.json({
-        response: JSON.stringify({ title: "Standing desk: 76cm", tags: ["reference"] }),
-      });
-    });
 
     // The composer's exact sequence (components/note-composer.tsx): lazy
     // provisioning, file write, captured fact. No AI in the capture path.

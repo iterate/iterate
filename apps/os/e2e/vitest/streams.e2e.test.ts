@@ -1,4 +1,3 @@
-import { interceptor } from "@iterate-com/test-support";
 // Public-seam stream behavior that is independent of subscription policy.
 // Durable event sending, callback connections, cursor changes, retries, and
 // cross-stream appends live together in stream-connections-and-subscriptions.e2e.test.ts.
@@ -17,9 +16,7 @@ test("a project stream appends and reads events through the public capability", 
 
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await interceptor.createProject(
-    itx.projects.get(`streams-${RUN_SUFFIX}-${marker}`),
-  );
+  using project = await itx.projects.get(`streams-${RUN_SUFFIX}-${marker}`).create({});
   const { projectId } = await project.__describe();
   using stream = project.streams.get(streamPath);
 
@@ -45,9 +42,7 @@ test("readEvents pages a bounded window and getEvents filters by type", async ()
 
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await interceptor.createProject(
-    itx.projects.get(`stream-reads-${RUN_SUFFIX}-${marker}`),
-  );
+  using project = await itx.projects.get(`stream-reads-${RUN_SUFFIX}-${marker}`).create({});
   using stream = project.streams.get(`/e2e/streams/reads/${marker}`);
 
   const appended = await stream.append(
@@ -86,9 +81,7 @@ test("memory-only ephemeral events preserve offsets while normal reads omit them
 
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await interceptor.createProject(
-    itx.projects.get(`stream-ephemeral-${RUN_SUFFIX}-${marker}`),
-  );
+  using project = await itx.projects.get(`stream-ephemeral-${RUN_SUFFIX}-${marker}`).create({});
   using stream = project.streams.get(`/e2e/streams/ephemeral/${marker}`);
 
   const [before] = await stream.append({
@@ -151,9 +144,9 @@ test("an idempotency key on an ephemeral event rejects the whole append batch", 
 
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await interceptor.createProject(
-    itx.projects.get(`stream-ephemeral-idempotency-${RUN_SUFFIX}-${marker}`),
-  );
+  using project = await itx.projects
+    .get(`stream-ephemeral-idempotency-${RUN_SUFFIX}-${marker}`)
+    .create({});
   using stream = project.streams.get(`/e2e/streams/ephemeral-idempotency/${marker}`);
 
   const [before] = await stream.append({
@@ -195,9 +188,9 @@ test("ephemeral events are forgotten after the stream Durable Object restarts", 
 
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await interceptor.createProject(
-    itx.projects.get(`stream-ephemeral-restart-${RUN_SUFFIX}-${marker}`),
-  );
+  using project = await itx.projects
+    .get(`stream-ephemeral-restart-${RUN_SUFFIX}-${marker}`)
+    .create({});
   using stream = project.streams.get(`/e2e/streams/ephemeral-restart/${marker}`);
 
   const [ephemeral] = await stream.append({
@@ -229,9 +222,7 @@ test("a stream killed during a call reports the retryable stream-unavailable tag
 
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await interceptor.createProject(
-    itx.projects.get(`stream-kill-${RUN_SUFFIX}-${marker}`),
-  );
+  using project = await itx.projects.get(`stream-kill-${RUN_SUFFIX}-${marker}`).create({});
   using stream = project.streams.get(`/e2e/streams/kill/${marker}`);
 
   const pendingCall = stream

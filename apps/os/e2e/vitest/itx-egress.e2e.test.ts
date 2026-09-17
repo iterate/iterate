@@ -1,4 +1,3 @@
-import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import { withTunnel } from "../test-support/tunnel.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
@@ -18,9 +17,7 @@ test("two-arg fetch(url, init) carries method, headers, and body to the upstream
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await interceptor.createProject(
-    itx.projects.get(`egress-two-arg-${crypto.randomUUID()}`),
-  );
+  using project = await itx.projects.get(`egress-two-arg-${crypto.randomUUID()}`).create({});
 
   // project.egress.fetch(url, init) — previously the init was silently
   // dropped at the RPC boundary (headers/method/body all lost).
@@ -61,9 +58,7 @@ test("public secret events can change egress but copied ciphertext cannot follow
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await interceptor.createProject(
-    itx.projects.get(`secret-stream-forgery-${crypto.randomUUID()}`),
-  );
+  using project = await itx.projects.get(`secret-stream-forgery-${crypto.randomUUID()}`).create({});
   const secretPath = `/secrets/stream-forgery/${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);
   await secret.create({
@@ -112,9 +107,7 @@ test("every egress-only update clears retained secret material", async () => {
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await interceptor.createProject(
-    itx.projects.get(`secret-repin-${crypto.randomUUID()}`),
-  );
+  using project = await itx.projects.get(`secret-repin-${crypto.randomUUID()}`).create({});
   using secret = project.secrets.get(`/secrets/repin/${crypto.randomUUID()}`);
 
   await secret.create({
@@ -189,9 +182,7 @@ test("an in-flight refresh cannot resurrect material after an egress event", asy
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await interceptor.createProject(
-    itx.projects.get(`secret-refresh-race-${crypto.randomUUID()}`),
-  );
+  using project = await itx.projects.get(`secret-refresh-race-${crypto.randomUUID()}`).create({});
   const secretPath = `/secrets/refresh-race/${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);
   await secret.create({
@@ -263,9 +254,9 @@ test("a repeated refresh event before its snapshot cannot resurrect material", a
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await interceptor.createProject(
-    itx.projects.get(`secret-refresh-cleared-${crypto.randomUUID()}`),
-  );
+  using project = await itx.projects
+    .get(`secret-refresh-cleared-${crypto.randomUUID()}`)
+    .create({});
   const secretPath = `/secrets/refresh-cleared/${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);
   const refresh = {
@@ -333,9 +324,7 @@ test("secret egress rejects a cross-origin redirect without forwarding material"
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await interceptor.createProject(
-    itx.projects.get(`secret-redirect-${crypto.randomUUID()}`),
-  );
+  using project = await itx.projects.get(`secret-redirect-${crypto.randomUUID()}`).create({});
   const secretPath = `/secrets/redirect/${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);
 
@@ -366,9 +355,7 @@ test("URL-path secret material is not returned in Response metadata", async () =
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await interceptor.createProject(
-    itx.projects.get(`secret-response-url-${crypto.randomUUID()}`),
-  );
+  using project = await itx.projects.get(`secret-response-url-${crypto.randomUUID()}`).create({});
   const secretPath = `/secrets/response-url/${crypto.randomUUID()}`;
   const material = `url-secret-${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);
@@ -399,9 +386,7 @@ test("Project egress substitutes path-addressed secrets for explicit and project
   });
 
   try {
-    using project = await interceptor.createProject(
-      itx.projects.get(`project-egress-${crypto.randomUUID()}`),
-    );
+    using project = await itx.projects.get(`project-egress-${crypto.randomUUID()}`).create({});
     const secretPath = `/secrets/egress-proof/${crypto.randomUUID()}`;
     using secret = project.secrets.get(secretPath);
     await secret.create({
@@ -591,9 +576,9 @@ test("Project egress intercept catches explicit and worker fetches before secret
   });
 
   try {
-    using project = await interceptor.createProject(
-      itx.projects.get(`project-egress-intercept-${crypto.randomUUID()}`),
-    );
+    using project = await itx.projects
+      .get(`project-egress-intercept-${crypto.randomUUID()}`)
+      .create({});
     const secretPath = `/secrets/egress-intercept/${crypto.randomUUID()}`;
     using secret = project.secrets.get(secretPath);
     await secret.create({

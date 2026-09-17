@@ -32,7 +32,6 @@ export async function routeOpenAiViaGateway(input: {
   ai: Env["AI"];
   projectId: string;
   streamContext: StreamContext;
-  resolveAiModel?: (model: string) => Promise<string>;
   consultInterceptor: ((request: ProjectAiInterceptor.Input) => Promise<unknown>) | undefined;
 }): Promise<Response | null> {
   const { request, config, streamContext } = input;
@@ -53,7 +52,7 @@ export async function routeOpenAiViaGateway(input: {
   const model = z.string().safeParse(body.model).data;
   const gateway = config.cloudflareAiGateway;
   const prepared = await prepareOpenAiRequest({
-    model: model && input.resolveAiModel ? await input.resolveAiModel(model) : model,
+    model,
     transport: {
       kind: "byok",
       gatewayId: gateway.id,

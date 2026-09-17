@@ -1,4 +1,3 @@
-import { interceptor } from "@iterate-com/test-support";
 // Deployed Firecracker proof; local fixtures are not container-reachable.
 
 import type { RpcStub } from "capnweb";
@@ -47,7 +46,7 @@ test(
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
     using project = await measurePhase("create test project", "fixture", () =>
-      interceptor.createProject(itx.projects.get(`sandbox-timeout-${crypto.randomUUID()}`)),
+      itx.projects.get(`sandbox-timeout-${crypto.randomUUID()}`).create({}),
     );
 
     const sandboxPath = `/sandboxes/timeout-proof-${crypto.randomUUID()}`;

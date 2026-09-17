@@ -1,10 +1,9 @@
-import { createHash } from "node:crypto";
-import { interceptor } from "@iterate-com/test-support";
 // 2026-09-02: an agent tried to write several 6MB images to script settlement values
 // The incident mechanism was an unbounded journal replay after eviction: large
 // persisted events could exceed the Stream processor facet's isolate memory and
 // crash-loop the stream. This is now its deployed regression test.
 
+import { createHash } from "node:crypto";
 import { expect, test } from "vitest";
 import type { Stream } from "../../src/itx-api.generated.ts";
 import { adminSecret, deployedBaseUrl, withItxSession } from "./test-helpers.ts";
@@ -20,9 +19,9 @@ survivesReset(
   async () => {
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await interceptor.createProject(
-      itx.projects.get(`oversized-reset-${crypto.randomUUID().slice(0, 8)}`),
-    );
+    using project = await itx.projects
+      .get(`oversized-reset-${crypto.randomUUID().slice(0, 8)}`)
+      .create({});
     await using stream = withTestReset(project.streams.get("/"));
 
     // Six separately appended 14MB bodies exceed the former replay-memory

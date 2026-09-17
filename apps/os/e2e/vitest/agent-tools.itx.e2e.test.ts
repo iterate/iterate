@@ -22,12 +22,16 @@ test(
     await using handle = await createTestProject({ slugPrefix: "agent-tools" });
     using agent = handle.agent("/agents/e2e-tools");
     await agent.create();
+    await agent.append({
+      type: "events.iterate.com/agent/configured",
+      payload: { config: { llm: { model: "intercepted/openai/gpt-5.6-terra" } } },
+    });
 
     const marker = crypto.randomUUID().slice(0, 8);
     using project = handle.itx();
-    using _ai = await interceptor.intercept(project, (call) => {
+    using _ai = await project.ai.intercept((call) => {
       if (call.source !== "agent-turn" || call.agentPath !== "/agents/e2e-tools")
-        return interceptor.noOpAgent(call);
+        throw new Error(`Unexpected AI request: ${call.source}`);
       return interceptor.codemodeBackticksResponse(
         `async (itx) => {
         await itx.streams.get(${JSON.stringify(PROOF_STREAM)}).append({
@@ -107,18 +111,24 @@ test(
     await using handle = await createTestProject({ slugPrefix: "agent-model" });
     using agent = handle.agent("/agents/e2e-model");
     await agent.create();
+    await agent.append({
+      type: "events.iterate.com/agent/configured",
+      payload: { config: { llm: { model: "intercepted/openai/gpt-5.6-terra" } } },
+    });
     const state = (await agent.processor.snapshot()).state;
-    expect(state).toMatchObject({ birthCertificate: {} });
-    expect(state.config?.llm.model).toBeTruthy();
+    expect(state).toMatchObject({
+      birthCertificate: {},
+      config: { llm: { model: "intercepted/openai/gpt-5.6-terra" } },
+    });
 
     using project = handle.itx();
-    using _ai = await interceptor.intercept(project, (call) =>
+    using _ai = await project.ai.intercept((call) =>
       call.source === "agent-turn" && call.agentPath === "/agents/e2e-model"
         ? interceptor.codemodeBackticksResponse(
             'async (itx) => { await itx.chat.sendMessage("Hello"); }',
             call,
           )
-        : interceptor.noOpAgent(call),
+        : interceptor.codemodeBackticksResponse("async () => {}", call),
     );
     const response = await agent.ask({
       message: "Reply with a short greeting.",

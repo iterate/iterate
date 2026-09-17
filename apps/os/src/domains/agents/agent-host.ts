@@ -66,8 +66,6 @@ export type AgentLlmTransport = (args: {
  *   production.
  */
 export type AgentProcessorDeps = {
-  /** Resolve project policy before committing the model name to the journal. */
-  resolveAiModel?: (model: string) => Promise<string>;
   ai?: WorkersAiBinding;
   getAiGatewayOptions?: (eventOffset: number) => AiGatewayOptions;
   consultAiInterceptor?: (input: ProjectAiInterceptor.Input) => Promise<unknown>;

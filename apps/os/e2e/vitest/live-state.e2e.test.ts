@@ -1,4 +1,3 @@
-import { interceptor } from "@iterate-com/test-support";
 // The live-state channel over the real deployment transport.
 // `.liveState.subscribe` pushes a full snapshot then minimal diffs; this
 // exercises both cases the primitive supports — a Durable-Object-backed node
@@ -19,9 +18,7 @@ test("itx.liveState pushes a snapshot then a minimal diff; the DO-backed counter
   const marker = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await interceptor.createProject(
-    itx.projects.get(`live-state-${RUN_SUFFIX}-${marker}`),
-  );
+  using project = await itx.projects.get(`live-state-${RUN_SUFFIX}-${marker}`).create({});
   await project.__describe();
 
   const track = trackLiveState<ProjectLiveState>();
@@ -65,9 +62,7 @@ test("itx.liveDemo.ticker (stateless, no Durable Object) advances over time", as
   const marker = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await interceptor.createProject(
-    itx.projects.get(`live-ticker-${RUN_SUFFIX}-${marker}`),
-  );
+  using project = await itx.projects.get(`live-ticker-${RUN_SUFFIX}-${marker}`).create({});
   await project.__describe();
 
   const track = trackLiveState<{ tick: number; startedAt: number }>();
@@ -85,9 +80,7 @@ test("itx.liveState indexes stream activity as a peer slice", async () => {
   const marker = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await interceptor.createProject(
-    itx.projects.get(`live-index-${RUN_SUFFIX}-${marker}`),
-  );
+  using project = await itx.projects.get(`live-index-${RUN_SUFFIX}-${marker}`).create({});
   await project.__describe();
 
   const track = trackLiveState<ProjectLiveState>();
@@ -127,9 +120,7 @@ test("agents.liveState subscribed before any agent exists serves the empty catal
   const marker = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await interceptor.createProject(
-    itx.projects.get(`agents-live-${RUN_SUFFIX}-${marker}`),
-  );
+  using project = await itx.projects.get(`agents-live-${RUN_SUFFIX}-${marker}`).create({});
 
   const track = trackLiveState<AgentCollectionProcessorState>();
   using subscription = await project.agents.liveState.subscribe(track.onUpdate);
@@ -177,9 +168,7 @@ test("stream.liveState pushes updates through the state socket without a DO-side
   const marker = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await interceptor.createProject(
-    itx.projects.get(`stream-live-${RUN_SUFFIX}-${marker}`),
-  );
+  using project = await itx.projects.get(`stream-live-${RUN_SUFFIX}-${marker}`).create({});
   const streamPath = `/e2e/stream-live/${marker}`;
   using stream = project.streams.get(streamPath);
   const [first] = await stream.append({
@@ -218,9 +207,7 @@ test("secret.liveState pushes description updates through the Live State Pager",
   const marker = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await interceptor.createProject(
-    itx.projects.get(`secret-live-${RUN_SUFFIX}-${marker}`),
-  );
+  using project = await itx.projects.get(`secret-live-${RUN_SUFFIX}-${marker}`).create({});
   using secret = project.secrets.get(`/secrets/live/${marker}`);
   await secret.create({ egress: { urls: ["https://one.example"] }, material: "material-1" });
 
@@ -255,9 +242,7 @@ test("a user egress request wearing the liveState lane header is claimed by the 
   const marker = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await interceptor.createProject(
-    itx.projects.get(`lane-gate-${RUN_SUFFIX}-${marker}`),
-  );
+  using project = await itx.projects.get(`lane-gate-${RUN_SUFFIX}-${marker}`).create({});
   await project.__describe();
 
   const claimed = await project.egress.fetch(

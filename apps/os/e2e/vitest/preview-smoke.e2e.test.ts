@@ -1,4 +1,3 @@
-import { interceptor } from "@iterate-com/test-support";
 import { test } from "vitest";
 import { createAdminOsItx, requireBaseUrl as requireOsBaseUrl } from "../test-support/os-client.ts";
 
@@ -135,7 +134,7 @@ async function seedProject(input: { baseUrl: URL }) {
   const slug = previewSmokeProjectSlug();
   using itx = createAdminOsItx({ baseUrl: input.baseUrl.toString() });
   try {
-    await interceptor.createProject(itx.projects.get(slug));
+    await itx.projects.get(slug).create({});
   } catch (error) {
     const code = (error as { code?: unknown }).code;
     const message = error instanceof Error ? error.message : String(error);

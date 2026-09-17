@@ -28,11 +28,7 @@ import type { ProjectAiInterceptor } from "iterate/node";
 type InterceptorSession = Disposable & {
   projects: {
     get(projectId: string): {
-      ai: {
-        intercept(
-          handler: ProjectAiInterceptor,
-        ): Promise<{ release(): Promise<void>; [Symbol.dispose](): void }>;
-      };
+      ai: { intercept(handler: ProjectAiInterceptor): Promise<{ release(): Promise<void> }> };
     };
   };
 };
@@ -83,7 +79,7 @@ export async function installResilientAiInterceptor(input: {
           void runInstallLoop(Infinity);
         },
       });
-      const interception = await intercept(session.projects.get(input.projectId), input.handler);
+      const interception = await session.projects.get(input.projectId).ai.intercept(input.handler);
       if (disposed) {
         // Disposal raced this install: never leave the handler mounted after
         // the test tore down.
@@ -195,33 +191,5 @@ export function aiTextResponse(
         },
       })}\n\ndata: [DONE]\n\n`,
     { headers: { "content-type": "text/event-stream" } },
-  );
-}
-
-/** Background agents in tests may finish a turn, but must not perform unscripted work. */
-export function noOpAgent(call: ProjectAiInterceptor.Input): Response {
-  if (call.source !== "agent-turn") {
-    throw new Error(`Test must script its ${call.source} response (${call.model})`);
-  }
-  return codemodeBackticksResponse("async () => {}", call);
-}
-
-export { createProject, installNoOpAgent } from "./test-project.ts";
-
-/** Keep template onboarding from consuming a test's unrelated scripted responses. */
-export function intercept(
-  project: {
-    ai: {
-      intercept(
-        handler: ProjectAiInterceptor,
-      ): Promise<{ release(): Promise<void>; [Symbol.dispose](): void }>;
-    };
-  },
-  handler: ProjectAiInterceptor,
-) {
-  return project.ai.intercept((call) =>
-    call.source === "agent-turn" && call.agentPath === "/agents/onboarding"
-      ? noOpAgent(call)
-      : handler(call),
   );
 }

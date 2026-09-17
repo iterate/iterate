@@ -9,7 +9,6 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import { connectItx } from "iterate/node";
 import { mediaWorkerRef } from "iterate/starter-apps/media/ref";
@@ -25,7 +24,7 @@ test("the seeded MediaApp answers search over appended /media events, via worker
     auth: { type: "admin-secret", secret: requireEnv("APP_CONFIG_ADMIN_API_SECRET") },
   });
   const slug = `mobile-media-app-e2e-${Date.now().toString(36)}`;
-  const created = await interceptor.createProject(adminSession.projects.get(slug));
+  const created = await adminSession.projects.get(slug).create({});
   const { projectId } = await created.__describe();
 
   const token = await mintForgedAccessToken({

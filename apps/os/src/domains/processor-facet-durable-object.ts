@@ -545,8 +545,6 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       path,
       projectId,
       ai: this.env.AI,
-      resolveAiModel: (model: string) =>
-        projectStub(this.env.PROJECT, projectId).resolveAiModel(model, path),
       // intercepted/* model turns are served by the project's live AI interceptor
       // (itx.ai.intercept); the slot lives on the Project DO so both egress
       // paths share one handler, and this hop only happens for intercepted/* models.

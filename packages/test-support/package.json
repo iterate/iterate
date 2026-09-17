@@ -8,8 +8,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "iterate": "workspace:*",
-    "capnweb": "npm:@iterate-com/capnweb@^0.10.0"
+    "iterate": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^25.0.10",

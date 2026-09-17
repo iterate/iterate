@@ -1,4 +1,3 @@
-import { interceptor } from "@iterate-com/test-support";
 // The integrations & secrets model, proven end to end against the deployed
 // dummy-petshop (apps/dummy-petshop) — the userspace lane. One project runs
 // TWO instances of the same integration, each with its OWN OAuth client, each
@@ -53,7 +52,7 @@ test.skipIf(shouldSkipPetshopE2e())(
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await interceptor.createProject(itx.projects.get(`petshop-${run}`));
+    using project = await itx.projects.get(`petshop-${run}`).create({});
     await project.__describe();
 
     for (const instance of instances) {
@@ -135,7 +134,7 @@ test.skipIf(shouldSkipPetshopE2e())(
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await interceptor.createProject(itx.projects.get(`petshop-fp-${run}`));
+    using project = await itx.projects.get(`petshop-fp-${run}`).create({});
     await project.__describe();
 
     const code = await petshopAuthorize({ clientId, redirectUri: REDIRECT_URI });

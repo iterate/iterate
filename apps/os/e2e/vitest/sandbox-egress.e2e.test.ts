@@ -1,4 +1,3 @@
-import { interceptor } from "@iterate-com/test-support";
 // Deployed Firecracker proof; local fixtures are not container-reachable.
 
 import type { RpcStub } from "capnweb";
@@ -33,9 +32,7 @@ test.skipIf(deployedBaseUrl() === null)(
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await interceptor.createProject(
-      itx.projects.get(`sandbox-egress-${crypto.randomUUID()}`),
-    );
+    using project = await itx.projects.get(`sandbox-egress-${crypto.randomUUID()}`).create({});
 
     const material = `sandbox-egress-material-${crypto.randomUUID()}`;
     const secretPath = `/secrets/sandbox-egress/${crypto.randomUUID()}`;

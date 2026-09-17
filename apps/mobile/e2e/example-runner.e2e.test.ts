@@ -1,4 +1,3 @@
-import { interceptor } from "@iterate-com/test-support";
 // Live proof that the app's own capabilityHost.runScript call (see
 // app/project/[projectId]/examples.tsx) actually runs a real catalogue
 // example against a real project, from Node through the shared `iterate/node`
@@ -23,7 +22,7 @@ test("phone example runner: egress-rules-configured runs for real against a real
     },
   });
   const slug = `mobile-examples-e2e-${Date.now().toString(36)}`;
-  const created = await interceptor.createProject(adminSession.projects.get(slug));
+  const created = await adminSession.projects.get(slug).create({});
   const { projectId } = await created.__describe();
 
   const token = await mintForgedAccessToken({

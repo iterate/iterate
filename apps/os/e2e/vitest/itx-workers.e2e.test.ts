@@ -1,4 +1,3 @@
-import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import type { DynamicWorkerRef } from "../../src/domains/workers/schemas.ts";
@@ -13,9 +12,9 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
     secret: adminSecret(),
   });
 
-  using project = await interceptor.createProject(
-    itx.projects.get(`dynamic-worker-${crypto.randomUUID().slice(0, 8)}`),
-  );
+  using project = await itx.projects
+    .get(`dynamic-worker-${crypto.randomUUID().slice(0, 8)}`)
+    .create({});
   const description = await project.__describe();
   using root = project.streams.get("/");
 
@@ -268,9 +267,9 @@ test("deleting the main worker file makes the next project worker build fail", a
     secret: adminSecret(),
   });
 
-  using project = await interceptor.createProject(
-    itx.projects.get(`deleted-worker-${crypto.randomUUID().slice(0, 8)}`),
-  );
+  using project = await itx.projects
+    .get(`deleted-worker-${crypto.randomUUID().slice(0, 8)}`)
+    .create({});
   // The seeded root worker serves a static homepage; this warm-up only needs
   // proof the seeded worker.ts is live before we delete it.
   const warmResponse = await project.worker.fetch(new Request("https://example.com/warm"));
@@ -293,7 +292,7 @@ test("Worker expression capabilities dispatch nested RpcTarget paths", async () 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await interceptor.createProject(itx.projects.get(`worker-flatten-${marker}`));
+  using project = await itx.projects.get(`worker-flatten-${marker}`).create({});
 
   const source = {
     createWorker: {
@@ -410,9 +409,7 @@ test("Dynamic workers can return RpcTarget capabilities that keep chaining", asy
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await interceptor.createProject(
-    itx.projects.get(`returned-rpc-target-${crypto.randomUUID()}`),
-  );
+  using project = await itx.projects.get(`returned-rpc-target-${crypto.randomUUID()}`).create({});
 
   type ReturnedTool = {
     child: { value(): Promise<{ label: string; via: string }> };
@@ -549,9 +546,7 @@ test("Worker capabilities cover project/agent, stateful/stateless, repo/inline r
     secret: adminSecret(),
   });
 
-  using project = await interceptor.createProject(
-    itx.projects.get(uniqueFixtureSlug("worker-capability-matrix")),
-  );
+  using project = await itx.projects.get(uniqueFixtureSlug("worker-capability-matrix")).create({});
   const { projectId } = await project.__describe();
   const agentPath = `/agents/worker-capability-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);

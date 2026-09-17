@@ -1,4 +1,3 @@
-import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- this regression test intentionally proves the one-shot HTTP batch shape.
 import { newHttpBatchRpcSession } from "capnweb";
@@ -58,7 +57,7 @@ test("Authenticated internal auth itx can create project and append to stream", 
   });
 
   const projectSlug = `alice-project-${crypto.randomUUID().slice(0, 8)}`;
-  using project = await interceptor.createProject(itx.projects.get(projectSlug));
+  using project = await itx.projects.get(projectSlug).create({});
   const description = await project.__describe();
   expect(description.projectId).toMatch(/prj_[0-9a-f-]+$/);
   expect(description.name).toMatch(/prj_[0-9a-f-]+\.iterate\/$/);
@@ -84,15 +83,7 @@ test("Authenticated internal auth itx can create project and append to stream", 
         "out",
         ["push", ["pipeline", expect.any(Number), ["projects", "get"], [projectSlug]]],
       ],
-      [
-        expect.any(Number),
-        "out",
-        [
-          "push",
-          // Cap'n Web wraps literal arrays to distinguish them from wire instructions.
-          ["pipeline", expect.any(Number), ["create"], [{ aiPolicy: { liveAgentPaths: [[]] } }]],
-        ],
-      ],
+      [expect.any(Number), "out", ["push", ["pipeline", expect.any(Number), ["create"], [{}]]]],
     ]),
   );
 
@@ -331,9 +322,7 @@ test("Project describe exposes self-describing builtin capabilities", async () =
     secret: adminSecret(),
   });
 
-  using project = await interceptor.createProject(
-    itx.projects.get(uniqueFixtureSlug("ai-builtin")),
-  );
+  using project = await itx.projects.get(uniqueFixtureSlug("ai-builtin")).create({});
   const description = await project.__describe();
 
   // Built-ins live in the children map (capabilities holds dynamic mounts

@@ -97,12 +97,7 @@ export interface Project {
    * same handle, and addressing an unknown slug is side-effect free.
    */
   create(
-    args: {
-      configRepoTemplate?: string;
-      organizationSlug?: string;
-      projectId?: string;
-      aiPolicy?: ProjectAiPolicy;
-    },
+    args: { configRepoTemplate?: string; organizationSlug?: string; projectId?: string },
     options?: { waitUntilCreated?: boolean },
   ): Promise<Project>;
   /**
@@ -2217,9 +2212,6 @@ export type ItxAuthToken =
   | { type: "admin"; principal?: string }
   | { type: "user"; principal: string; projectScopes: string[] };
 
-/** Project-wide intercepted model selection, except the listed exact agent paths. */
-export type ProjectAiPolicy = { liveAgentPaths: string[] };
-
 /**
  * What `itx.identity()` returns: the directory's canonical project record,
  * with the itx surface's `projectId` field name (the surface always says
@@ -2271,7 +2263,6 @@ export type ProjectProcessorState = {
   createRequest: {
     config: {
       slug: string;
-      aiPolicy?: { liveAgentPaths: string[] } | undefined;
       creatorEmail?: string | undefined;
       configRepoTemplate?: string | undefined;
     };
@@ -2283,7 +2274,6 @@ export type ProjectProcessorState = {
     request: {
       config: {
         slug: string;
-        aiPolicy?: { liveAgentPaths: string[] } | undefined;
         creatorEmail?: string | undefined;
         configRepoTemplate?: string | undefined;
       };
@@ -2292,7 +2282,6 @@ export type ProjectProcessorState = {
   birthCertificate: {
     config: {
       slug: string;
-      aiPolicy?: { liveAgentPaths: string[] } | undefined;
       creatorEmail?: string | undefined;
       configRepoTemplate?: string | undefined;
     };

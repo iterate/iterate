@@ -19,7 +19,6 @@ import {
   type ProcessorState,
   type StreamEvent,
 } from "iterate/processors";
-import { ProjectAiPolicy } from "../../lib/project-ai-policy.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
@@ -589,8 +588,7 @@ function sameProjectCreationRequest(
   return (
     left.config.slug === right.config.slug &&
     left.config.creatorEmail === right.config.creatorEmail &&
-    left.config.configRepoTemplate === right.config.configRepoTemplate &&
-    JSON.stringify(left.config.aiPolicy) === JSON.stringify(right.config.aiPolicy)
+    left.config.configRepoTemplate === right.config.configRepoTemplate
   );
 }
 
@@ -690,7 +688,6 @@ function projectCreationPayloadSchema() {
         slug: z
           .string()
           .meta({ description: "The project's URL slug, unique within its organization." }),
-        aiPolicy: ProjectAiPolicy.optional(),
         creatorEmail: z
           .string()
           .optional()

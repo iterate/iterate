@@ -1,4 +1,3 @@
-import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -9,9 +8,7 @@ test("log, commitDetails and pinned readFile over a few commits", async () => {
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await interceptor.createProject(
-    itx.projects.get(`repo-history-${crypto.randomUUID()}`),
-  );
+  using project = await itx.projects.get(`repo-history-${crypto.randomUUID()}`).create({});
 
   // The project repo seeds asynchronously after project creation; readFile
   // THROWS (not null) until the repo artifact exists, so swallow errors

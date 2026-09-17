@@ -1,4 +1,3 @@
-import { interceptor } from "@iterate-com/test-support";
 import { expect, test } from "vitest";
 import WebSocket from "ws";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
@@ -71,7 +70,7 @@ test.skip("the boundary, pinned: a socket-carrying Response dies crossing the wo
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = await interceptor.createProject(itx.projects.get(`live-ws-pin-${marker}`));
+  using project = await itx.projects.get(`live-ws-pin-${marker}`).create({});
   await project.__describe();
 
   using _provision = await project.provideCapability({
@@ -116,7 +115,7 @@ test.skip(
       type: "admin-secret",
       secret: adminSecret(),
     });
-    using project = await interceptor.createProject(itx.projects.get(slug));
+    using project = await itx.projects.get(slug).create({});
     await project.__describe();
 
     using _provision = await project.provideCapability({

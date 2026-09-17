@@ -64,7 +64,7 @@ async function attemptAgentSmoke(phases: SmokePhase[]): Promise<void> {
     durationMs: Date.now() - connectionStartedAt,
   });
   const createStartedAt = Date.now();
-  using project = await interceptor.createProject(root.projects.get(`agent-smoke-${marker}`));
+  using project = await root.projects.get(`agent-smoke-${marker}`).create({});
   const createMs = Date.now() - createStartedAt;
   phases.push({ name: "create project", category: "fixture", durationMs: createMs });
   const describeStartedAt = Date.now();
@@ -79,18 +79,22 @@ async function attemptAgentSmoke(phases: SmokePhase[]): Promise<void> {
   using agent = project.agents.get("/agents/smoke");
   const readyStartedAt = Date.now();
   await agent.create();
+  await agent.append({
+    type: "events.iterate.com/agent/configured",
+    payload: { config: { llm: { model: "intercepted/openai/gpt-5.6-terra" } } },
+  });
   phases.push({
     name: "create agent",
     category: "runtime",
     durationMs: Date.now() - readyStartedAt,
   });
-  using _ai = await interceptor.intercept(project, (call) =>
+  using _ai = await project.ai.intercept((call) =>
     call.source === "agent-turn" && call.agentPath === "/agents/smoke"
       ? interceptor.codemodeBackticksResponse(
           'async (itx) => { await itx.chat.sendMessage("pong"); }',
           call,
         )
-      : interceptor.noOpAgent(call),
+      : interceptor.codemodeBackticksResponse("async () => {}", call),
   );
   const replyStartedAt = Date.now();
   await agent.message("Reply with exactly: pong");

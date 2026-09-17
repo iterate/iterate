@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { test, type Page } from "@playwright/test";
 import type {
   IterateAuthAccessTokenOrganizationClaim,
   IterateAuthProjectClaim,
@@ -36,7 +36,7 @@ export async function createMobileFixture(
   const resources = new AsyncDisposableStack();
   const osBaseUrl = await resolveOsBaseUrl();
 
-  const projectSlug = uniqueFixtureSlug(`intercepted-e2e-${slugPrefix}`, { maxPrefixLength: 40 });
+  const projectSlug = uniqueFixtureSlug(slugPrefix);
 
   await signUpToProject();
 
@@ -49,11 +49,6 @@ export async function createMobileFixture(
       projectId,
     }),
   );
-
-  expect((await itx.processor.snapshot()).state.createRequest?.config.aiPolicy).toEqual({
-    liveAgentPaths: [],
-  });
-  await interceptor.installNoOpAgent(itx);
 
   const agentHelper = resources.use(
     createAgentHelper({
@@ -115,7 +110,6 @@ export async function createProjectFixture(
     baseURL: string | undefined;
     page: Page;
     projectCount?: number;
-    liveAgentPaths?: string[];
   },
 ) {
   const baseUrl = input.baseURL;
@@ -128,7 +122,6 @@ export async function createProjectFixture(
       createAdminProjectAfterPreviewRollout({
         baseUrl,
         config,
-        liveAgentPaths: input.liveAgentPaths || [],
         slug: index === 0 ? projectSlug : uniqueFixtureSlug(`${slugPrefix}-${index + 1}`),
       }),
     ),
@@ -290,11 +283,11 @@ export function createAgentHelper<
             `unexpected source: ${call.source}, you will need to register a custom ai interceptor for agent turns`,
           );
         }
-        const agentInterceptor = agentTurnInterceptors.get(call.agentPath);
-        if (!agentInterceptor) {
-          return interceptor.noOpAgent(call);
+        const interceptor = agentTurnInterceptors.get(call.agentPath);
+        if (!interceptor) {
+          throw new Error(`no interceptor registered for agent path: ${call.agentPath}`);
         }
-        return await agentInterceptor(call);
+        return await interceptor(call);
       };
       resources.use(await interceptAi(handler));
     }
@@ -445,24 +438,20 @@ async function createAdminProjectAfterPreviewRollout(input: {
   baseUrl: string;
   config: OsPlaywrightAuthConfig;
   slug: string;
-  liveAgentPaths: string[];
 }) {
   // create() resolves only after the bootstrap saga commits terminal
   // project/created (sibling processors born, config repo seeded, the seed
   // worker reachable, and its permanent feed installed), so no separate
   // lifecycle poll is needed. The shared helper retries the initial admin
   // connection while a preview deployment finishes converging.
-  const session = await connectPlaywrightAdminItx(input);
-  using created = await interceptor.createProject(session.projects.get(input.slug), {
-    aiPolicy: { liveAgentPaths: input.liveAgentPaths },
-  });
+  using session = await connectPlaywrightAdminItx(input);
+  using created = await session.projects.get(input.slug).create({});
   const description = await created.__describe();
   const project = { id: description.projectId, slug: input.slug };
 
   return {
     project,
     [Symbol.asyncDispose]() {
-      session[Symbol.dispose]();
       // itx-v4 cutover: this used to `projects.remove({id})`. TODO(task #13):
       // project removal on itx — disposable Playwright projects
       // are leaked until then (stages reset periodically).

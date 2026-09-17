@@ -1,4 +1,3 @@
-import { interceptor } from "@iterate-com/test-support";
 // Proves human-in-the-loop egress approvals end-to-end: requests matching a
 // `hold` rule park at the Project DO egress door as an approval BATCH (a
 // lone request is a batch of one; a script run's concurrent burst coalesces
@@ -39,9 +38,7 @@ test("hold → approve releases, hold → reject refuses, short timeouts expire"
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
 
   try {
-    using project = await interceptor.createProject(
-      itx.projects.get(`egress-approvals-${crypto.randomUUID()}`),
-    );
+    using project = await itx.projects.get(`egress-approvals-${crypto.randomUUID()}`).create({});
     const stream = project.streams.get("/");
     const echoHost = new URL(echo.url).hostname;
 
@@ -245,9 +242,9 @@ test("an agent codemode script carries one durable source through bare and scope
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
 
   try {
-    using project = await interceptor.createProject(
-      itx.projects.get(`egress-approval-source-${crypto.randomUUID()}`),
-    );
+    using project = await itx.projects
+      .get(`egress-approval-source-${crypto.randomUUID()}`)
+      .create({});
     const root = project.streams.get("/");
     const agentPath = "/agents/refund-agent";
     const agent = await project.agents.get(agentPath).create();
@@ -373,9 +370,7 @@ test("a script run's parked hold survives a stream Durable Object restart", asyn
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
 
   try {
-    using project = await interceptor.createProject(
-      itx.projects.get(`egress-hold-restart-${crypto.randomUUID()}`),
-    );
+    using project = await itx.projects.get(`egress-hold-restart-${crypto.randomUUID()}`).create({});
     const root = project.streams.get("/");
     const agent = await project.agents.get("/agents/patient-agent").create();
     const echoHost = new URL(echo.url).hostname;
@@ -461,9 +456,9 @@ test("an approved fetch never succeeds without its durable settlement fact", asy
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
 
   try {
-    using project = await interceptor.createProject(
-      itx.projects.get(`egress-settlement-required-${crypto.randomUUID()}`),
-    );
+    using project = await itx.projects
+      .get(`egress-settlement-required-${crypto.randomUUID()}`)
+      .create({});
     const root = project.streams.get("/");
     await root.append({
       type: RULES_CONFIGURED,
@@ -529,9 +524,9 @@ test("approved worker WebSocket egress stays on the fetch-native transport", asy
   await using echo = await startWebSocketEcho();
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await interceptor.createProject(
-    itx.projects.get(`egress-approval-websocket-${crypto.randomUUID()}`),
-  );
+  using project = await itx.projects
+    .get(`egress-approval-websocket-${crypto.randomUUID()}`)
+    .create({});
   const root = project.streams.get("/");
   const agent = await project.agents.get("/agents/websocket-agent").create();
   const websocketUrl = new URL(echo.url);
@@ -610,9 +605,9 @@ test("a script's burst coalesces into ONE batch event, one push, and one decisio
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
 
   try {
-    using project = await interceptor.createProject(
-      itx.projects.get(`egress-approval-batch-${crypto.randomUUID()}`),
-    );
+    using project = await itx.projects
+      .get(`egress-approval-batch-${crypto.randomUUID()}`)
+      .create({});
     const root = project.streams.get("/");
     const agent = await project.agents.get("/agents/burst-agent").create();
     const echoHost = new URL(echo.url).hostname;
@@ -703,9 +698,9 @@ test("mixed verdicts in one decision: approved indexes release, rejected indexes
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
 
   try {
-    using project = await interceptor.createProject(
-      itx.projects.get(`egress-approval-mixed-${crypto.randomUUID()}`),
-    );
+    using project = await itx.projects
+      .get(`egress-approval-mixed-${crypto.randomUUID()}`)
+      .create({});
     const root = project.streams.get("/");
     const agent = await project.agents.get("/agents/mixed-agent").create();
     const echoHost = new URL(echo.url).hostname;
@@ -777,9 +772,9 @@ test("enrolled approval keys make unsigned approvals inert; a signed decision re
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
 
   try {
-    using project = await interceptor.createProject(
-      itx.projects.get(`egress-approvals-signed-${crypto.randomUUID()}`),
-    );
+    using project = await itx.projects
+      .get(`egress-approvals-signed-${crypto.randomUUID()}`)
+      .create({});
     // The signed message binds the real prj_… id (what the DO verifies with).
     const projectId = (await project.__describe()).projectId;
     const stream = project.streams.get("/");
