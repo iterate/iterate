@@ -117,7 +117,7 @@ const IDLE_QUIESCE_AFTER_MS = 30_000;
  *  live facet never re-runs its startup) and the cached isolate may be too — so the recovery is a
  *  restart of both and ONE more attempt (`#invokeFacet`). apps/os carries the same recovery for its
  *  dynamic workers (issue #2288). Remove when the platform is fixed. */
-const isClonedDataVersionFailure = (error: unknown): boolean =>
+const isClonedDataVersionFailure = (error: unknown) =>
   error instanceof Error && error.message.includes("Unable to deserialize cloned data");
 /** How long one facet call may take before the facet is aborted (a call that never answers would
  *  hold the quiesce, and with it this actor, forever). */
@@ -610,13 +610,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  the ladder over and a facet that cannot be revived would cost a wake every 40 s for good.
    *  Cleared by the facet's own next claim (its engine reached it) and by a revive that returned. */
   readonly #facetReviveFailures = new Map<string, number>();
-  #facetReviveFailed(name: string): number {
+  #facetReviveFailed(name: string) {
     const failures = (this.#facetReviveFailures.get(name) ?? 0) + 1;
     this.#facetReviveFailures.set(name, failures);
     this.ctx.storage.kv.put(`facet-claim-failures:${name}`, failures);
     return failures;
   }
-  #facetRevived(name: string): void {
+  #facetRevived(name: string) {
     this.#facetReviveFailures.delete(name);
     this.ctx.storage.kv.delete(`facet-claim-failures:${name}`);
   }
