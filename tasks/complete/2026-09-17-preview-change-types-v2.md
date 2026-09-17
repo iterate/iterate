@@ -6,11 +6,10 @@ base: main
 
 # Choose preview work from ordered change types
 
-Ancestry selection and its original live acceptance are complete in PR #2712.
-The follow-up starts prepare alongside planning and passes milestone values to
-step outputs; its full run is green, with setup-only inheritance left to verify. Full preview,
-tests-only reuse, and docs-only inheritance were already verified without
-interrupting runs. Based on main after #2695.
+Implementation and live acceptance are complete in draft PR #2712. Prepare
+starts alongside planning and reads milestone values as step outputs; both the
+full run and setup-only inheritance passed. Tests-only reuse was verified earlier.
+No runs were interrupted. Based on main after #2695.
 
 ## Request and decisions
 
@@ -142,7 +141,7 @@ interrupting runs. Based on main after #2695.
 - [x] Start prepare setup concurrently with planning, then gate later steps on its signal. *`preview-run.yml` removes prepare's job dependency and uses `steps.plan.outputs`; app/shard gates remain.*
 - [x] Carry compact values through attempt-scoped milestones into step outputs. *`status.ts set --values` publishes JSON; `wait-for` validates and writes outputs. Inherited failures publish their decision before the job stops.*
 - [x] Verify the overlapped full run in Depot. *`8f4df71e3` / `czk85wphzh`: all workflows passed, including unchanged unit tests, deployed suites, restoration and settlement.*
-- [ ] Verify setup-only inheritance through the new milestone outputs. *Docs-only push follows the completed full run; no interruptions.*
+- [x] Verify setup-only inheritance through the new milestone outputs. *`2e5011617` / `wj7jlq6mb5`: inherited success, prepare received `tests=false` and skipped everything after its wait; eight other jobs skipped without attempts.*
 - Failure-path review: a plan publication can succeed before its job fails. The
   finalizer therefore admits `tests=true` even with a failed plan job, preserving
   cleanup for preparation already underway. Test jobs still require plan success.

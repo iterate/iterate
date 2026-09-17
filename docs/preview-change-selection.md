@@ -180,8 +180,14 @@ The finalizer follow-up at `8f4df71e3`
 ([run](https://depot.dev/orgs/0p91s0lz49/workflows/czk85wphzh)) passed all workflows,
 including all 441 scripts tests without changing the timed-out test. Deployment,
 both deployed suites and restoration passed; settlement recorded `tests=success`
-at 15:24:46 UTC. The next docs-only push exercises the signal's `tests=false`
-branch after this complete lifecycle.
+at 15:24:46 UTC.
+
+Docs-only `2e5011617`
+([run](https://depot.dev/orgs/0p91s0lz49/workflows/wj7jlq6mb5)) inherited that success.
+The prepare log contains only checkout, installation, and the milestone wait,
+which returned `tests=false` and `deploy=false`. Every later prepare step skipped;
+the other eight jobs had zero runner attempts. The planning log includes the
+ancestor-to-head GitHub compare link.
 
 ## Restoration after deployment reuse
 
