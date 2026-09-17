@@ -299,6 +299,7 @@ body:has(.consent-card) {
   margin-top: 0.2rem;
 }
 .consent-create {
+  margin: 1.25rem 0;
   summary {
     cursor: pointer;
   }
