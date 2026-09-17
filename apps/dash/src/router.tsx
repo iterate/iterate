@@ -1,5 +1,6 @@
 import { createRouter, Link } from "@tanstack/react-router";
 import { Button, buttonVariants } from "@iterate-com/ui/components/button";
+import { cn } from "@iterate-com/ui/lib/utils";
 import { routeTree } from "./routeTree.gen.ts";
 export function getRouter() {
   return createRouter({
@@ -24,7 +25,7 @@ export function getRouter() {
           Nothing lives at this address, or this session does not reach it.
         </p>
         <div>
-          <Link to="/projects" className={buttonVariants({ variant: "outline" })}>
+          <Link to="/projects" className={cn(buttonVariants({ variant: "outline" }))}>
             Back to projects
           </Link>
         </div>

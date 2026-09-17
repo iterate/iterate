@@ -4,6 +4,7 @@ import { createFileRoute, getRouteApi } from "@tanstack/react-router";
 import { ArrowUpRight } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { buttonVariants } from "@iterate-com/ui/components/button";
+import { cn } from "@iterate-com/ui/lib/utils";
 import { projectHostOf } from "../../../_auth.tsx";
 
 const shell = getRouteApi("/_auth");
@@ -30,7 +31,7 @@ function ProjectOverview() {
             href={host}
             target="_blank"
             rel="noreferrer"
-            className={buttonVariants({ variant: "outline" })}
+            className={cn(buttonVariants({ variant: "outline" }))}
           >
             Open {new URL(host).host}
             <ArrowUpRight />
