@@ -53,16 +53,17 @@ admin secret is a bearer on `/mcp` too (it reaches every project, so `run` must 
 one is warned about at boot and ignored). The two secrets are wrangler secrets on a deployment
 (`wrangler secret put <name>`), plain vars in the test configs:
 
-| Var                                                                 | Required | What                                                                                         |
-| ------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------- |
-| `APP_CONFIG_ENVIRONMENT_NAME`                                       | yes      | the deployment's name at `/version` ("poc", "test", "e2e")                                   |
-| `APP_CONFIG_SESSION_SECRET`                                         | yes      | signs the ten-minute Google login flow (secret)                                              |
-| `APP_CONFIG_ADMIN_API_SECRET`                                       | yes      | the admin secret: `authenticate({ type: "admin-secret" })`, the lanes' admin bearer (secret) |
-| `APP_CONFIG_SECRETS_KEY`                                            | yes      | encrypts project secrets' material at rest (`secret-at-rest.ts`; secret)                     |
-| `APP_CONFIG_SECRETS_KEY_PREVIOUS`                                   | no       | the key before a rotation, decrypt-only; records are rewritten under the current key as read |
-| `APP_CONFIG_PROJECT_HOSTNAME_BASE`                                  | no       | the base project hosts hang under; blank ⇒ no project-host ingress                           |
-| `APP_CONFIG_TEST_EMAIL_LOGIN`                                       | no       | `true` permits unverified email sign-in; disabled remotely by default                        |
-| `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`, `APP_CONFIG_ARTIFACTS_NAMESPACE` | no       | the git remotes `itx.cfArtifacts` names for the repo facet                                   |
+| Var                                                                 | Required | What                                                                                                                                                  |
+| ------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `APP_CONFIG_ENVIRONMENT_NAME`                                       | yes      | the deployment's name at `/version` ("poc", "test", "e2e")                                                                                            |
+| `APP_CONFIG_SESSION_SECRET`                                         | yes      | signs the ten-minute Google login flow (secret)                                                                                                       |
+| `APP_CONFIG_ADMIN_API_SECRET`                                       | yes      | the admin secret: `authenticate({ type: "admin-secret" })`, the lanes' admin bearer (secret)                                                          |
+| `APP_CONFIG_SECRETS_KEY`                                            | yes      | encrypts project secrets' material at rest (`secret-at-rest.ts`; secret)                                                                              |
+| `APP_CONFIG_SECRETS_KEY_PREVIOUS`                                   | no       | the key before a rotation, decrypt-only; records are rewritten under the current key as read                                                          |
+| `APP_CONFIG_PROJECT_HOSTNAME_BASE`                                  | no       | the base project hosts hang under; blank ⇒ no project-host ingress                                                                                    |
+| `APP_CONFIG_LOGIN_EMAIL_FROM`                                       | no       | the address the sign-in code is mailed from (`EMAIL` binding), on a domain onboarded for Email Sending; blank ⇒ no email sign-in beyond the test code |
+| `APP_CONFIG_TEST_EMAIL_LOGIN`                                       | no       | `true` makes the code `424242` sign anyone in (the specs' way in); off remotely by default                                                            |
+| `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`, `APP_CONFIG_ARTIFACTS_NAMESPACE` | no       | the git remotes `itx.cfArtifacts` names for the repo facet                                                                                            |
 
 ## Hostnames — the issuer, the OS, the projects
 
@@ -93,10 +94,12 @@ issuer grant through the same `BrowserSession` used by other apps. There is no s
 identity cookie. The explicit `/login` page has a small server function for safe login options;
 the test/admin `POST /login` path establishes that same issuer session.
 
-For the isolated `os.iterate2.com` deployment, `testEmailLogin: true` in `envs.ts`
-enables the email form at [Sign in](https://os.iterate2.com/login). Enter any email
-to assume that user immediately, without verification. Localhost also offers this
-form. Other deployments require Google unless they explicitly enable test login.
+Email sign-in is a code: `POST /login` with an email mails a six-digit code through the
+`EMAIL` binding (Cloudflare Email Sending, from `APP_CONFIG_LOGIN_EMAIL_FROM`; `src/login-code.ts`),
+good for ten minutes and five tries, and the page's code step posts it back. A deployment with
+`testEmailLogin: true` in `envs.ts` (`os.iterate2.com`, and localhost always) also accepts
+`424242`, so the specs sign in without a mailbox; the reserved test domains (`example.com`,
+`.test`, …) are never mailed. Google is offered wherever it is configured.
 
 Only that issuer grant receives `session.consent`. The `/authorize` SPA can create an
 organization and project through `session.createOrg` and `session.projects.create`, then

@@ -1,113 +1,157 @@
-/* public/issuer.css — the one stylesheet of the issuer's two pages (login.html, authorize.html),
- * a file the assets binding serves. The plain rules first (the login page); the consent page after. */
+/* public/issuer.css — the one stylesheet of the issuer's pages (index.html, login.html,
+ * authorize.html), a file the assets binding serves: one centred column, phone-first, the same
+ * controls on every page. The consent page's own parts come after. */
 :root {
   color-scheme: light dark;
+  --line: light-dark(#e4e4e7, #343438);
+  --soft: light-dark(#f6f6f7, #232326);
+  --ink: light-dark(#18181b, #f4f4f5);
+  --quiet: light-dark(#71717a, #a1a1aa);
 }
 body {
   font:
     15px/1.5 ui-sans-serif,
     system-ui,
     sans-serif;
-  max-width: 56rem;
-  margin: 4rem auto;
-  padding: 0 1.25rem;
+  color: var(--ink);
+  background: light-dark(#fff, #111113);
+  margin: 0;
+  padding: 3rem 1rem;
+  min-height: 100dvh;
+  box-sizing: border-box;
+  display: grid;
+  place-items: start center;
+}
+.issuer-card {
+  width: min(100%, 24rem);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.issuer-mark {
+  display: block;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  margin: 0 auto 1rem;
 }
 h1 {
-  font-size: 1.25rem;
-  margin: 0 0 1rem;
+  font-size: 1.5rem;
+  margin: 0 0 1.25rem;
+  text-align: center;
 }
 h2 {
-  font-size: 1rem;
-  margin: 1.4rem 0 0.4rem;
+  font-size: 0.9rem;
+  margin: 0;
 }
-form {
-  margin: 1rem 0;
+p {
+  margin: 0.5rem 0 0;
 }
-fieldset {
-  border: 1px solid color-mix(in oklab, currentColor 25%, transparent);
-  border-radius: 6px;
-  margin: 0.8rem 0;
+strong {
+  font-weight: 600;
 }
-legend {
-  padding: 0 0.4rem;
-  opacity: 0.7;
+code {
+  font-size: 0.9em;
+  color: var(--quiet);
+}
+.muted {
+  color: var(--quiet);
   font-size: 0.85em;
 }
-input[type="email"],
-input[type="text"] {
-  font: inherit;
-  padding: 0.5rem 0.6rem;
-  width: 100%;
-  box-sizing: border-box;
-  margin-bottom: 0.6rem;
+[role="alert"] {
+  color: light-dark(#b91c1c, #fca5a5);
+  margin: 0 0 0.75rem;
 }
 label {
   display: block;
-  margin: 0.25rem 0;
+  margin: 0.6rem 0 0;
 }
-button {
+.issuer-card label,
+.consent-create label {
+  font-size: 13px;
+}
+input[type="email"],
+input[type="text"],
+select {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
   font: inherit;
-  padding: 0.5rem 0.9rem;
+  padding: 0.5rem;
+  margin: 0.3rem 0 0.6rem;
+  box-sizing: border-box;
+  width: 100%;
+}
+input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--ink);
+  flex-shrink: 0;
+}
+button,
+.button {
+  display: inline-block;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  text-decoration: none;
+  text-align: center;
+  font: inherit;
+  font-weight: 500;
+  padding: 0.5rem 0.8rem;
+  box-sizing: border-box;
   cursor: pointer;
 }
-.muted {
-  opacity: 0.6;
-  font-size: 0.85em;
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
-ul {
-  padding-left: 1.1rem;
+button:not(:disabled):hover,
+.button:hover {
+  background: var(--soft);
 }
-code {
-  font-size: 0.85em;
-  opacity: 0.8;
+.primary {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: light-dark(#fff, #18181b);
 }
-[role="alert"] {
-  color: color-mix(in oklab, currentColor 70%, red);
+.primary:not(:disabled):hover {
+  background: var(--ink);
+  opacity: 0.9;
+}
+.quiet,
+.consent-quiet,
+.consent-add {
+  border-color: transparent;
+  padding: 0.4rem 0.5rem;
+}
+:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 3px;
+}
+/* The login and landing pages: one column of forms, the main action full width. */
+.issuer-card form {
+  margin: 0.75rem 0 0;
+}
+.issuer-card .primary,
+.issuer-card .button {
+  display: block;
+  width: 100%;
+  margin-top: 0.25rem;
+}
+.issuer-card form + form {
+  margin-top: 0.5rem;
+  text-align: center;
+}
+.issuer-card .quiet {
+  font-size: 13px;
 }
 
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.9em;
-}
-th,
-td {
-  padding: 0.65rem 0.4rem;
-  text-align: left;
-  vertical-align: top;
-  border-bottom: 1px solid color-mix(in oklab, currentColor 20%, transparent);
-  overflow-wrap: anywhere;
-}
-td form {
-  margin: 0;
-}
-textarea {
-  box-sizing: border-box;
-  width: 100%;
-  padding: 0.6rem;
-  font: inherit;
-}
-
-/* The consent page: one column, phone-first — the hero (iterate ⇄ the client), the title, who is
-   signed in (the one card), the permissions, the projects as a flat list under the either/or, the
-   two buttons. */
-body:has(.consent-card) {
-  max-width: none;
-  min-height: 100dvh;
-  box-sizing: border-box;
-  margin: 0;
-  padding: 3rem 1rem;
-  display: grid;
-  place-items: start center;
-  background: light-dark(#fff, #111113);
-}
+/* The consent page: the hero (iterate ⇄ the client), the title, who is signed in (the one card),
+   the permissions, the projects as a flat list under the either/or, the two buttons. */
 .consent-card {
-  --line: light-dark(#e4e4e7, #343438);
-  --soft: light-dark(#f6f6f7, #232326);
-  --ink: light-dark(#18181b, #f4f4f5);
-  --quiet: light-dark(#71717a, #a1a1aa);
   width: min(100%, 34rem);
-  color: var(--ink);
   font-size: 14px;
   overflow-wrap: anywhere;
 
@@ -116,77 +160,10 @@ body:has(.consent-card) {
   > form {
     padding: 0 0 1.5rem;
   }
-  h1 {
-    font-size: 1.5rem;
-    margin: 0;
-    text-align: center;
-  }
-  h2 {
-    font-size: 0.9rem;
-    margin: 0;
-  }
-  p {
-    margin: 0.5rem 0 0;
-  }
   form {
     margin: 0;
   }
-  strong {
-    font-weight: 600;
-  }
-  .muted {
-    opacity: 1;
-    color: var(--quiet);
-    font-size: 0.85em;
-  }
-  button,
-  .consent-actions a {
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    background: transparent;
-    color: inherit;
-    text-decoration: none;
-    text-align: center;
-    font-weight: 500;
-    padding: 0.5rem 0.8rem;
-  }
-  button:disabled {
-    opacity: 0.45;
-    cursor: default;
-  }
-  button:not(:disabled):hover,
-  .consent-actions a:hover {
-    background: var(--soft);
-  }
-  .consent-quiet,
-  .consent-add {
-    border-color: transparent;
-    padding: 0.4rem 0.5rem;
-  }
-  :focus-visible {
-    outline: 2px solid #3b82f6;
-    outline-offset: 3px;
-  }
-  input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
-    accent-color: var(--ink);
-    flex-shrink: 0;
-  }
-  input[type="text"],
-  select {
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    padding: 0.5rem;
-    margin: 0.3rem 0 0.6rem;
-    box-sizing: border-box;
-    width: 100%;
-  }
 }
-/* The hero: iterate ⇄ the client, two tiles and an arrow, centred above the title. */
 .consent-hero {
   display: flex;
   align-items: center;
@@ -360,10 +337,6 @@ body:has(.consent-card) {
   border-radius: 10px;
   background: var(--soft);
 
-  label {
-    font-size: 13px;
-    margin: 0.6rem 0 0;
-  }
   input[type="text"],
   select {
     background: light-dark(#fff, #18181b);
@@ -375,6 +348,9 @@ body:has(.consent-card) {
 .consent-card footer {
   padding-top: 1.5rem;
 }
+.consent-card footer p {
+  margin: 0 0 1rem;
+}
 .consent-actions {
   display: flex;
   gap: 0.75rem;
@@ -382,15 +358,8 @@ body:has(.consent-card) {
 .consent-actions > * {
   flex: 1;
 }
-.consent-card .consent-actions button {
-  background: var(--ink);
-  color: light-dark(#fff, #18181b);
-}
-.consent-card footer p {
-  margin: 0 0 1rem;
-}
 @media (max-width: 420px) {
-  body:has(.consent-card) {
+  body {
     padding: 1.5rem 1rem;
   }
   .consent-card > header,

@@ -5,26 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Iterate platform</title>
     <link rel="stylesheet" href="/issuer.css" />
-    <link
-      rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%278%27 fill=%27%23111%27/%3E%3Cpath d=%27M16 8v16%27 stroke=%27white%27 stroke-width=%274%27/%3E%3C/svg%3E"
-    />
+    <link rel="icon" href="/iterate-logo.svg" type="image/svg+xml" />
   </head>
   <body>
-    <main>
-      <h1>This is the Iterate platform</h1>
+    <main class="issuer-card">
+      <img class="issuer-mark" src="/iterate-logo.svg" alt="" width="56" height="56" />
+      <h1>Iterate platform</h1>
       <p>
-        <strong>os.iterate2.com</strong> is deliberately headless: it is the API
-        (<code>/api</code>), the OAuth issuer (<code>/.well-known/oauth-authorization-server</code>)
-        and the MCP server — the only pages it serves are sign-in and consent.
+        <strong>os.iterate2.com</strong> is deliberately headless: the API (<code>/api</code>), the
+        OAuth issuer and the MCP server. Its only pages are sign-in and consent.
       </p>
       <p>
-        Looking for your projects, organizations and sessions? That is the dash:
-        <a href="https://dash.iterate2.com/">dash.iterate2.com</a>.
-      </p>
-      <p class="muted">
-        Every other app — agents, notes, voice — lives on its own origin as an OAuth client of this
-        platform.
+        Your projects, organizations and sessions are in the dash:
+        <a class="button primary" href="https://dash.iterate2.com/">dash.iterate2.com</a>
       </p>
     </main>
   </body>

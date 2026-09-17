@@ -51,6 +51,9 @@
   // Browser Run, the built-in root `itx.browser` (context/built-ins.ts). Quick Actions need the
   // remote binding in local wrangler; the workers test lane omits this the same way it omits `ai`.
   "browser": { "binding": "BROWSER" },
+  // Email Sending: the sign-in code's way out (src/login-code.ts). wrangler dev simulates it (the
+  // message lands in a local file); a deployment sends from APP_CONFIG_LOGIN_EMAIL_FROM (envs.ts).
+  "send_email": [{ "name": "EMAIL" }],
   // R2, the built-in root `itx.r2` (`itx.files` on top). Local wrangler keeps it in .wrangler/state;
   // a deployment's bucket is `<resourceNamePrefix>-files` (envs.ts, ensure-resources).
   "r2_buckets": [{ "binding": "FILES", "bucket_name": "os-next-files" }],

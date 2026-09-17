@@ -156,7 +156,7 @@
       );
     });
     const status = el("p", { class: "muted", role: "status" });
-    const approve = el("button", { type: "submit", text: "Approve" });
+    const approve = el("button", { class: "primary", type: "submit", text: "Approve" });
 
     // Which projects — an either/or: the ones ticked below, or every project now and later
     const mode = (value, text) => {
@@ -282,7 +282,7 @@
           el(
             "div",
             { class: "consent-actions" },
-            el("a", { href: denyLocation, text: "Cancel" }),
+            el("a", { class: "button", href: denyLocation, text: "Cancel" }),
             approve,
           ),
         ),
