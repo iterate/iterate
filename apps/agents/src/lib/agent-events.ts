@@ -70,8 +70,8 @@ export function reduceAgentFeed(
     state = reduced.endState;
     items.push(...reduced.items);
   }
-  // A bare reply runs as a `reply:` script (the plain-response handler) — its message shows as a
-  // normal bubble, so the redundant activity card is dropped from the feed (the trace still has it).
+  // A bare reply runs as a `reply:` script (the plain-response handler); its message shows as a
+  // normal bubble, so the redundant activity card is dropped (click the bubble for its trace).
   const shown = items.filter(
     (item) =>
       item.kind !== "activity" ||
@@ -147,6 +147,29 @@ export function stringifyScriptResult(result: unknown): string {
   } catch {
     return String(result);
   }
+}
+
+/** The llm request behind each assistant bubble (its item id → the request offset), so clicking the
+ *  message opens its trace: a `web-message-sent` names its request directly, or inherits the nearest
+ *  preceding assistant response's (a bare reply's message is sent by a script that carries none). */
+export function traceOffsetByMessage(events: readonly Event[]): Map<string, number> {
+  const map = new Map<string, number>();
+  let lastResponseOffset: number | undefined;
+  for (const event of events) {
+    const p = isRecord(event.payload) ? event.payload : {};
+    if (
+      event.type === "events.iterate.com/agents/context-added" &&
+      p.role === "assistant" &&
+      typeof p.llmRequestOffset === "number"
+    )
+      lastResponseOffset = p.llmRequestOffset;
+    if (event.type === "events.iterate.com/agents/web-message-sent") {
+      const offset =
+        typeof p.llmRequestOffset === "number" ? p.llmRequestOffset : lastResponseOffset;
+      if (offset !== undefined) map.set(`assistant-${String(event.offset)}`, offset);
+    }
+  }
+  return map;
 }
 
 /** The event type without its `events.iterate.com/` prefix. */
