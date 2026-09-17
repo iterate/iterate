@@ -185,9 +185,14 @@ export class ProcessorEngine<State> {
   /** Born with the engine, so its epoch is minted once per incarnation. */
   readonly #liveState: LiveState<unknown>;
   /** Rule 3's claim: attempts in flight, and how many revives found one still in flight (the
-   *  backoff of the next claim; reset when the last attempt settles). */
+   *  backoff of the next claim; reset when the last attempt settles). The claim calls ride ONE
+   *  chain, so a release never overtakes the claim of the attempt that followed it. */
   #backgroundWorkInFlight = 0;
   #revivesWhileBusy = 0;
+  #claimChain: Promise<unknown> = Promise.resolve();
+  /** Whether the last batch this engine ran carried the at-head pass (rule 5) — what `revive()`
+   *  reads to know if its catch-up already ran one. */
+  #lastBatchAtHead = false;
 
   constructor(
     processor: StreamProcessor<State>,
@@ -449,6 +454,7 @@ export class ProcessorEngine<State> {
       );
     this.#reducedState = state;
     this.#reducedThroughOffset = reducedThroughOffset;
+    this.#lastBatchAtHead = atHead;
     this.#resolveWaitUntilProcessedWaiters(reducedThroughOffset);
     // Persist FIRST, emit the live-state delta second: a crash between loses only a notification,
     // healed by the chain gap, never state. Re-projected after EVERY batch, not only when the reduce
@@ -476,8 +482,9 @@ export class ProcessorEngine<State> {
   }
 
   #claim(afterMs: number | null): void {
-    void this.#stream
-      .claim(afterMs === null ? null : Date.now() + afterMs)
+    const at = afterMs === null ? null : Date.now() + afterMs;
+    this.#claimChain = this.#claimChain
+      .then(() => this.#stream.claim(at))
       .catch((error) => reportIssue("processor.claim", error, { slug: this.#contract.slug }));
   }
 
@@ -486,13 +493,17 @@ export class ProcessorEngine<State> {
    *  (rule 3). A fresh incarnation finds nothing in flight and starts it; an attempt still in flight
    *  here claims again, later each time (20 s, 40 s, … `REVIVE_AFTER_MAX_MS`). */
   async revive(): Promise<void> {
+    this.#lastBatchAtHead = false;
     await this.catchUpFromLog();
-    await this.#runOnSerialChain(async () => {
-      this.#reducedState = (
-        await this.#reduceAndProcessEvent(null, this.#reducedState, true)
-      ).state;
-      this.publishLiveState();
-    });
+    // A catch-up that reached the head already ran the at-head pass (rule 5); one that found
+    // nothing to read runs it here, once.
+    if (!this.#lastBatchAtHead)
+      await this.#runOnSerialChain(async () => {
+        this.#reducedState = (
+          await this.#reduceAndProcessEvent(null, this.#reducedState, true)
+        ).state;
+        this.publishLiveState();
+      });
     if (this.#backgroundWorkInFlight === 0) return;
     this.#revivesWhileBusy += 1;
     this.#claim(Math.min(REVIVE_AFTER_MS * 2 ** this.#revivesWhileBusy, REVIVE_AFTER_MAX_MS));

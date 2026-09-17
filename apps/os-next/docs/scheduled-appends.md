@@ -97,7 +97,7 @@ from state it already keeps, and `AlarmCoordinator` (`src/alarm-coordinator.ts`)
 answer or deletes the alarm when there is none. Reconciliation runs after every commit, every claim
 and every delivery change. Pins — a borrowed rpc stub, the library's open capnweb socket, the two
 things that keep an actor resident on the edge — are memory, and memory releases them: a 30 s timer
-after the pin's last use returns the stubs and closes the sockets (`#pinUsed`). Nothing in memory
+after the pin's last use returns the stubs and closes the sockets (`#pinCallEnded`). Nothing in memory
 is ever a reason to wake.
 
 | Source                | Its deadline                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |

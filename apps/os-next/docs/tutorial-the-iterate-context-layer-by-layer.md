@@ -2110,7 +2110,7 @@ async alarm(): Promise<void> {
 ```
 
 The pins — a borrowed stub, the library's open capnweb socket — are not the alarm's: a 30 s timer
-after a pin's last use (`#pinUsed`) returns the stubs and closes the sockets, memory releasing memory.
+after a pin's last use (`#pinCallEnded`) returns the stubs and closes the sockets, memory releasing memory.
 A facet is never released at all: on the edge it is not a pin and dies with the actor, and one
 may be mid-attempt (an LLM call in its background). A facet the watchdog or a source change aborted
 re-materializes from its durable startup memo on the next call, its storage having

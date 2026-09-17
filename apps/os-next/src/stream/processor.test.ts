@@ -1370,7 +1370,7 @@ describe("rule 3 — the claim: work in flight ⇒ the context owes this process
   }
   const T = Date.UTC(2035, 0, 1);
 
-  test("CLAIMED AS THE FIRST ATTEMPT STARTS (20 s out, without waiting for the claim to land), RELEASED WHEN THE LAST SETTLES: one claim however many attempts are in flight", async () => {
+  test("CLAIMED RIGHT BEHIND THE FIRST ATTEMPT'S START (20 s out; the attempt never waits on it), RELEASED WHEN THE LAST SETTLES: one claim however many attempts are in flight", async () => {
     vi.useFakeTimers({ now: T, toFake: ["Date"] });
     try {
       const mem = memoryStream();
@@ -1385,7 +1385,9 @@ describe("rule 3 — the claim: work in flight ⇒ the context owes this process
       );
       mem.stream.append({ type: "e" }, { type: "e" });
       await settle();
-      expect(attempts.trace).toEqual(["claimed 20000", "attempt 1 started", "attempt 2 started"]);
+      // The claim rides the chain one microtask behind the first attempt's start — between the
+      // batch's two events — and the second attempt, in flight already, claims nothing new.
+      expect(attempts.trace).toEqual(["attempt 1 started", "claimed 20000", "attempt 2 started"]);
       expect(mem.claims).toEqual([T + 20_000]);
       attempts.endings[0]!();
       await settle();
@@ -1427,5 +1429,29 @@ describe("rule 3 — the claim: work in flight ⇒ the context owes this process
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  test("A RELEASE NEVER OVERTAKES THE NEXT CLAIM: claims are sent one after another, so a slow release lands before the claim of the attempt that followed it", async () => {
+    const mem = memoryStream();
+    const attempts = new AttemptsProcessor();
+    const landed: (number | null)[] = [];
+    mem.stream.claim = async (at) => {
+      await new Promise((r) => setTimeout(r, at === null ? 30 : 0)); // the release is the slow one
+      landed.push(at);
+    };
+    mem.engines.push(
+      new ProcessorEngine(attempts, { stream: mem.stream, storage: memoryStorage() }),
+    );
+    mem.stream.append({ type: "e" });
+    await settle();
+    attempts.endings[0]!(); // settles: a release is sent…
+    await settle(1);
+    mem.stream.append({ type: "e" }); // …and a new attempt claims right behind it
+    await settle(60);
+    expect(landed.map((at) => (at === null ? "release" : "claim"))).toEqual([
+      "claim",
+      "release",
+      "claim",
+    ]);
   });
 });

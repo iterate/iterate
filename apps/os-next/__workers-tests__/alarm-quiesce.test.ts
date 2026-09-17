@@ -2,7 +2,7 @@
 // lane — the ONLY lane that can fire the DO's alarm (runDurableObjectAlarm) and force a graceful
 // teardown (evictDurableObject) deterministically).
 //
-// Target surface: IterateContextDurableObject.alarm()/#pinUsed/#liveFacetNames/#facetWorkInFlight
+// Target surface: IterateContextDurableObject.alarm()/#pinCallEnded/#liveFacetNames/#facetWorkInFlight
 // (src/iterate-context-durable-object.ts), the delivery loop's cursor lane +
 // `deliverEveryCursorSubscription` (src/stream/subscription-delivery.ts), and the rpc-stub directory
 // (src/context/rpc-stubs.ts).

@@ -27,7 +27,7 @@
 //       each eviction here reproduces the production sequence first: quiesce (return the stubs) →
 //       evict — see quiesceLikeProduction().
 //   (c) waiting for the pins' release — NOT VIABLE as the eviction ITSELF: the release is a timer
-//       IDLE_QUIESCE_AFTER_MS (30 s) after the pins' last use (`#pinUsed`), and it only returns the
+//       IDLE_QUIESCE_AFTER_MS (30 s) after the pins' last use (`#pinCallEnded`), and it only returns the
 //       borrowed stubs and closes library connections — the weaker assertion, subsumed by (b).
 //       support.ts's `quiesce` runs that release directly, which is how (b)'s precondition is met
 //       above — no waiting needed.

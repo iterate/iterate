@@ -20,7 +20,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { DurableObject } from "cloudflare:workers";
 import { codedError, errorCode, reportIssue, withTimeout } from "iterate/next/lib";
-import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
+import {
+  REVIVE_AFTER_MAX_MS,
+  REVIVE_AFTER_MS,
+  type StreamEvent,
+  type StreamEventInput,
+} from "iterate/next/stream/processor";
 import {
   normalizedItxExpression,
   canonicalItxExpressionPrefix,
@@ -444,14 +449,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** THE LIBRARY (library.ts): its verbs closed over a genuine InvokeHandle over `invoke`, so a
    *  library call's `itx.fetch(...)` resolves through THIS context's rules (a test may shadow
-   *  `itx.fetch`) with zero hops. An open capnweb socket it holds pins this actor awake; the idle
-   *  release (`#pinUsed`) closes it. */
+   *  `itx.fetch`) with zero hops. An open capnweb socket it holds pins this actor awake; the pins'
+   *  timer closes it. */
   readonly #library = buildLibrary(
     // Every call the library makes (a connection opening, a call through it) is a use of the
     // library's pin: the quiet period runs from the call's end.
-    new InvokeHandle((steps) =>
-      this.invoke(["itx", ...steps]).finally(() => this.#pinUsed()),
-    ) as unknown as LibraryItx,
+    new InvokeHandle((steps) => {
+      this.#pinCallStarted();
+      return this.invoke(["itx", ...steps]).finally(() => this.#pinCallEnded());
+    }) as unknown as LibraryItx,
   );
 
   /** The own-context adapter used by built-ins: a loopback (`itx.cd(<own path>)`, the config
@@ -506,11 +512,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // A BORROW IS A USE: the quiet period runs from the call's end (this invoke may have borrowed
       // the stub, and a borrowed stub is exactly what the release exists to return).
       get: (rpcStubKey) =>
-        new RpcStubHandle((itxExpressionSteps) =>
-          this.#rpcStubs
+        new RpcStubHandle((itxExpressionSteps) => {
+          this.#pinCallStarted();
+          return this.#rpcStubs
             .invokeRpcStub(rpcStubKey, itxExpressionSteps)
-            .finally(() => this.#pinUsed()),
-        ),
+            .finally(() => this.#pinCallEnded());
+        }),
       list: () => this.#rpcStubs.listRpcStubKeys(),
     },
     // The facets view is PARENT-LOCAL — the facets live here and can never move (workerd#6702:
@@ -581,6 +588,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  a `revive()` is owed by. A kv row each, so a claim outlives the incarnation that made it —
    *  that is the whole point. Restored in the constructor; spent by the pass that serves it. */
   readonly #facetClaims = new Map<string, number>();
+  /** Consecutive revives of a facet that THREW (a load failure, a timeout): the backoff of the
+   *  claim the pass puts back. In memory: a fresh incarnation tries at once again. */
+  readonly #facetReviveFailures = new Map<string, number>();
   #claimFacetAlarm(name: string, at: number | null): void {
     if (at === null) {
       this.#facetClaims.delete(name);
@@ -657,15 +667,22 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   // ── the #6800 quiesce: idle facets un-pinned so this actor can hibernate ──
 
   /** THE PINS' TIMER: a pin's use — a borrowed stub called, the library's socket used (the two
-   *  things that keep an actor resident on the edge, both measured) — starts the quiet period over;
-   *  its end releases every pin (`#releasePins`). In memory on purpose: the pins are, and the pin
-   *  itself keeps the actor resident until the timer fires (a pending timer holds off hibernation,
-   *  not eviction — and nothing pinned means nothing to release). A live facet is not a pin: on the
-   *  edge it dies with the actor. */
+   *  things that keep an actor resident on the edge, both measured) — starts the quiet period over
+   *  when the call ENDS; a call in flight holds it off (a stub is never returned out from under a
+   *  call); its end releases every pin (`#releasePins`). In memory on purpose: the pins are, and
+   *  the pin itself keeps the actor resident until the timer fires (a pending timer holds off
+   *  hibernation, not eviction — and nothing pinned means nothing to release). A live facet is not
+   *  a pin: on the edge it dies with the actor. */
   #pinReleaseTimer: ReturnType<typeof setTimeout> | undefined;
-  #pinUsed(): void {
+  #pinCallsInFlight = 0;
+  #pinCallStarted(): void {
+    this.#pinCallsInFlight += 1;
     clearTimeout(this.#pinReleaseTimer);
     this.#pinReleaseTimer = undefined;
+  }
+  #pinCallEnded(): void {
+    this.#pinCallsInFlight -= 1;
+    if (this.#pinCallsInFlight > 0) return;
     // A call that ends with nothing pinned (an HTTP client's, a stub returned mid-call) starts no
     // timer: a pending timer holds off hibernation, and there would be nothing to release.
     if (!this.#rpcStubs.hasBorrowedRpcStubs() && !this.#library.holdsOpenSocket()) return;
@@ -780,8 +797,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           this.#claimFacetAlarm(name, null);
           try {
             await this.#invokeFacet(name, undefined, [["revive"]]);
+            this.#facetReviveFailures.delete(name);
           } catch (error) {
             reportIssue("iterate-context.revive", error, { name });
+            // A revive that threw (a load failure, a timeout) spent nothing: the claim is put back,
+            // later each time, so the attempt is still owed and a facet that cannot load costs a
+            // few wakes an hour. A facet that is GONE (its row removed) is owed nothing.
+            if (errorCode(error) === "NO_FACET") continue;
+            const failures = (this.#facetReviveFailures.get(name) ?? 0) + 1;
+            this.#facetReviveFailures.set(name, failures);
+            this.#claimFacetAlarm(
+              name,
+              Date.now() + Math.min(REVIVE_AFTER_MS * 2 ** failures, REVIVE_AFTER_MAX_MS),
+            );
           }
         }
       });
@@ -792,7 +820,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#traceAlarm("alarm-pass", fired);
   }
 
-  /** THE RELEASE (the pins' timer, `#pinUsed`): every borrowed stub returned, every library
+  /** THE RELEASE (the pins' timer, `#pinCallEnded`): every borrowed stub returned, every library
    *  connection closed — the pins. Never a facet: on the edge a facet is not a pin (it dies with the
    *  actor), and one may be mid-attempt — an LLM call in its background — that an abort would kill
    *  for nothing. */
