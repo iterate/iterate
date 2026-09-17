@@ -30,33 +30,38 @@ else()
   # diffing it against the four device files it replaced. That is exactly where
   # the bug lived that cost an afternoon.
   #
-  # It compiles here because the ESP-IDF it names is supplied by
-  # tests/fakes/esp_idf, and the platform modules it calls are supplied by the
-  # fakes beside them. Nothing about the loop changes for the host: no #ifdef,
-  # no second code path, and the same -Werror it is built with on a device.
-  # The include ORDER matters — the fakes must precede nothing real, because
-  # there is nothing real here to shadow.
-  add_library(iterate-kit-voice STATIC ${ITERATE_KIT_VOICE_SOURCES})
-  target_include_directories(iterate-kit-voice PUBLIC
-    include
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../tests/fakes/esp_idf"
+  # It compiles here because the ESP-IDF it names is the host one
+  # (platforms/host/esp_idf), and the five platform seams it calls —
+  # provisioning, reset reason, restart note, system update, the itx
+  # transport — come from whichever platform a target links: tests/fakes for
+  # a test, platforms/darwin for targets/mac. Nothing about the loop changes
+  # for the host: no #ifdef, no second code path, the same -Werror as a device.
+  #
+  # This library is compiled against the ESP platform's copies of the five
+  # headers, which is fine: a platform header declares the same names and the
+  # same struct shape a caller may touch; only the definitions differ.
+  #
+  # Compiled once per platform it can link, because a platform header defines
+  # the transport struct the loop keeps: against the ESP platform's headers for
+  # the tests (their fake transport is the ESP-shaped one), and against the
+  # darwin platform's for targets/mac.
+  function(iterate_kit_add_voice_loop NAME PLATFORM_INCLUDE)
+    add_library(${NAME} STATIC ${ITERATE_KIT_VOICE_SOURCES})
+    target_include_directories(${NAME} PUBLIC include "${PLATFORM_INCLUDE}")
+    target_link_libraries(${NAME} PUBLIC
+      iterate-kit-audio
+      iterate-kit-capabilities
+      iterate-kit-core
+      iterate-kit-host-esp-idf)
+    target_compile_features(${NAME} PUBLIC c_std_11)
+    target_compile_options(${NAME} PRIVATE -Wall -Wextra -Werror)
+  endfunction()
+  iterate_kit_add_voice_loop(iterate-kit-voice
     "${CMAKE_CURRENT_SOURCE_DIR}/../../platforms/iterate_esp_idf/include")
-  target_link_libraries(iterate-kit-voice PUBLIC
-    iterate-kit-audio
-    iterate-kit-capabilities
-    iterate-kit-core)
-  target_compile_features(iterate-kit-voice PUBLIC c_std_11)
-  target_compile_options(iterate-kit-voice PRIVATE -Wall -Wextra -Werror)
-
-  # The fakes are their own target so a test links them explicitly and nothing
-  # can pull a pretend ESP-IDF into a build that did not ask for one.
-  add_library(iterate-kit-esp-idf-fakes STATIC
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../tests/fakes/esp_idf/fake_esp_idf.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../tests/fakes/esp_idf/fake_esp_idf_platform.c")
-  target_include_directories(iterate-kit-esp-idf-fakes PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../tests/fakes/esp_idf"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../platforms/iterate_esp_idf/include")
-  target_link_libraries(iterate-kit-esp-idf-fakes PUBLIC iterate-kit-core)
-  target_compile_features(iterate-kit-esp-idf-fakes PUBLIC c_std_11)
-  target_compile_options(iterate-kit-esp-idf-fakes PRIVATE -Wall -Wextra -Werror)
+  if(APPLE)
+    iterate_kit_add_voice_loop(iterate-kit-voice-mac
+      "${CMAKE_CURRENT_SOURCE_DIR}/../../platforms/darwin/include")
+    # The darwin transport header reaches OpenSSL's; the platform carries it.
+    target_link_libraries(iterate-kit-voice-mac PUBLIC iterate-kit-darwin)
+  endif()
 endif()

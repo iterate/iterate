@@ -1,5 +1,5 @@
-#ifndef ITERATE_KIT_PLATFORMS_ESP_IDF_CONFIGURATION_H
-#define ITERATE_KIT_PLATFORMS_ESP_IDF_CONFIGURATION_H
+#ifndef ITERATE_KIT_PLATFORMS_PROVISIONING_H
+#define ITERATE_KIT_PLATFORMS_PROVISIONING_H
 
 #include "iterate/kit/configuration.h"
 
@@ -17,13 +17,13 @@ extern "C" {
  * both into a generic boot error would make field recovery guesswork and could
  * encourage retrying a permanently corrupt image forever.
  */
-enum iterate_kit_esp_configuration_status {
-  ITERATE_KIT_ESP_CONFIGURATION_OK = 0,
-  ITERATE_KIT_ESP_CONFIGURATION_INVALID_ARGUMENT,
-  ITERATE_KIT_ESP_CONFIGURATION_PARTITION_NOT_FOUND,
-  ITERATE_KIT_ESP_CONFIGURATION_PARTITION_TOO_SMALL,
-  ITERATE_KIT_ESP_CONFIGURATION_MMAP_FAILED,
-  ITERATE_KIT_ESP_CONFIGURATION_DECODE_FAILED,
+enum iterate_kit_platform_provisioning_status {
+  ITERATE_KIT_PLATFORM_PROVISIONING_OK = 0,
+  ITERATE_KIT_PLATFORM_PROVISIONING_INVALID_ARGUMENT,
+  ITERATE_KIT_PLATFORM_PROVISIONING_PARTITION_NOT_FOUND,
+  ITERATE_KIT_PLATFORM_PROVISIONING_PARTITION_TOO_SMALL,
+  ITERATE_KIT_PLATFORM_PROVISIONING_MMAP_FAILED,
+  ITERATE_KIT_PLATFORM_PROVISIONING_DECODE_FAILED,
 };
 
 /**
@@ -34,8 +34,8 @@ enum iterate_kit_esp_configuration_status {
  * MMAP_FAILED. The explicit outer status tells callers which secondary field
  * is evidence rather than forcing them to interpret a coincidental zero.
  */
-struct iterate_kit_esp_configuration_result {
-  enum iterate_kit_esp_configuration_status status;
+struct iterate_kit_platform_provisioning_result {
+  enum iterate_kit_platform_provisioning_status status;
   enum iterate_kit_configuration_error configuration_error;
   int32_t platform_error;
 };
@@ -50,13 +50,13 @@ struct iterate_kit_esp_configuration_result {
  * Call only during boot/provisioning setup. The returned configuration is a
  * caller-owned copy; it remains valid after the flash mapping is released.
  */
-struct iterate_kit_esp_configuration_result
-iterate_kit_esp_read_configuration(
+struct iterate_kit_platform_provisioning_result
+iterate_kit_platform_read_provisioning(
     struct iterate_kit_configuration *configuration);
 
 /** Stable human-readable classification for boot logs; never returns NULL. */
-const char *iterate_kit_esp_configuration_status_name(
-    enum iterate_kit_esp_configuration_status status);
+const char *iterate_kit_platform_provisioning_status_name(
+    enum iterate_kit_platform_provisioning_status status);
 
 #ifdef __cplusplus
 }

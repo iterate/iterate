@@ -1,5 +1,5 @@
-#ifndef ITERATE_KIT_PLATFORMS_ESP_IDF_ITX_TRANSPORT_H
-#define ITERATE_KIT_PLATFORMS_ESP_IDF_ITX_TRANSPORT_H
+#ifndef ITERATE_KIT_PLATFORMS_ITX_TRANSPORT_H
+#define ITERATE_KIT_PLATFORMS_ITX_TRANSPORT_H
 
 /*
  * ESP-IDF's public WebSocket/lwIP headers intentionally use GCC extensions
@@ -71,7 +71,7 @@ enum {
    * than ordinary production mounting while still making an unattended outage
    * bounded; the replacement generation follows the normal reconnect policy.
    */
-  ITERATE_KIT_ESP_IDF_ITX_MOUNT_TIMEOUT_MS = 10000,
+  ITERATE_KIT_ITX_MOUNT_TIMEOUT_MS = 10000,
 };
 
 /**
@@ -83,14 +83,14 @@ enum {
  * generation-local: a bounded reconnect may move FAILED back through mounting
  * to READY. Only fatal_failure_latched requires explicit intervention.
  */
-enum iterate_kit_esp_idf_itx_transport_state {
-  ITERATE_KIT_ESP_IDF_ITX_IDLE = 0,
-  ITERATE_KIT_ESP_IDF_ITX_WIFI_CONNECTING,
-  ITERATE_KIT_ESP_IDF_ITX_WEBSOCKET_CONNECTING,
-  ITERATE_KIT_ESP_IDF_ITX_MOUNTING,
-  ITERATE_KIT_ESP_IDF_ITX_READY,
-  ITERATE_KIT_ESP_IDF_ITX_FAILED,
-  ITERATE_KIT_ESP_IDF_ITX_STOPPED,
+enum iterate_kit_itx_transport_state {
+  ITERATE_KIT_ITX_IDLE = 0,
+  ITERATE_KIT_ITX_WIFI_CONNECTING,
+  ITERATE_KIT_ITX_WEBSOCKET_CONNECTING,
+  ITERATE_KIT_ITX_MOUNTING,
+  ITERATE_KIT_ITX_READY,
+  ITERATE_KIT_ITX_FAILED,
+  ITERATE_KIT_ITX_STOPPED,
 };
 
 /**
@@ -101,15 +101,15 @@ enum iterate_kit_esp_idf_itx_transport_state {
  * boot cannot recover the capability transport in place; a target supervisor
  * may therefore restart the process after preserving this exact reason.
  */
-enum iterate_kit_esp_idf_itx_fatal_failure_reason {
-  ITERATE_KIT_ESP_IDF_ITX_FATAL_NONE = 0,
-  ITERATE_KIT_ESP_IDF_ITX_FATAL_PROTOCOL_WITHOUT_GENERATION,
-  ITERATE_KIT_ESP_IDF_ITX_FATAL_SOCKET_GENERATION_EXHAUSTED,
-  ITERATE_KIT_ESP_IDF_ITX_FATAL_NETWORK_STACK_HEADROOM,
-  ITERATE_KIT_ESP_IDF_ITX_FATAL_WEBSOCKET_OPEN_INVARIANT,
-  ITERATE_KIT_ESP_IDF_ITX_FATAL_CONTROL_RING_RESET,
-  ITERATE_KIT_ESP_IDF_ITX_FATAL_CONNECTION_OPEN,
-  ITERATE_KIT_ESP_IDF_ITX_FATAL_CONNECTION_STATE,
+enum iterate_kit_itx_fatal_failure_reason {
+  ITERATE_KIT_ITX_FATAL_NONE = 0,
+  ITERATE_KIT_ITX_FATAL_PROTOCOL_WITHOUT_GENERATION,
+  ITERATE_KIT_ITX_FATAL_SOCKET_GENERATION_EXHAUSTED,
+  ITERATE_KIT_ITX_FATAL_NETWORK_STACK_HEADROOM,
+  ITERATE_KIT_ITX_FATAL_WEBSOCKET_OPEN_INVARIANT,
+  ITERATE_KIT_ITX_FATAL_CONTROL_RING_RESET,
+  ITERATE_KIT_ITX_FATAL_CONNECTION_OPEN,
+  ITERATE_KIT_ITX_FATAL_CONNECTION_STATE,
 };
 
 /**
@@ -124,7 +124,7 @@ enum iterate_kit_esp_idf_itx_fatal_failure_reason {
  * All pointers must outlive stop(). The rings must already be initialized, and
  * each is permanently dedicated to this transport's stated SPSC ownership.
  */
-struct iterate_kit_esp_idf_itx_transport_options {
+struct iterate_kit_itx_transport_options {
   const struct iterate_kit_configuration *configuration;
   struct iterate_kit_itx_connection *connection;
   struct iterate_kit_spsc_ring *control_inbox;
@@ -141,7 +141,7 @@ struct iterate_kit_esp_idf_itx_transport_options {
  * network_task_max_work_cycles retains the worst single pass. No field claims
  * visibility into opaque TLS, lwIP, or Wi-Fi buffering.
  */
-struct iterate_kit_esp_idf_itx_transport_metrics {
+struct iterate_kit_itx_transport_metrics {
   /*
    * Association is a current lifecycle fact, not derivable from cumulative
    * connect/disconnect counters or WebSocket state. Expose the transport's
@@ -156,7 +156,7 @@ struct iterate_kit_esp_idf_itx_transport_metrics {
   uint32_t websocket_errors;
   /** True only when this boot has no in-place control recovery path. */
   bool fatal_failure_latched;
-  enum iterate_kit_esp_idf_itx_fatal_failure_reason fatal_failure_reason;
+  enum iterate_kit_itx_fatal_failure_reason fatal_failure_reason;
   /** Newest socket generation that completed authentication and mounting. */
   uint32_t ready_socket_generation;
   /** Generations replaced because authentication/mount never completed. */
@@ -233,9 +233,9 @@ struct iterate_kit_esp_idf_itx_transport_metrics {
  * atomics needed to realign media after a remount or escalate a permanent
  * latch.
  */
-struct iterate_kit_esp_idf_itx_transport_lifecycle {
+struct iterate_kit_itx_transport_lifecycle {
   bool fatal_failure_latched;
-  enum iterate_kit_esp_idf_itx_fatal_failure_reason fatal_failure_reason;
+  enum iterate_kit_itx_fatal_failure_reason fatal_failure_reason;
   uint32_t ready_socket_generation;
 };
 
@@ -264,9 +264,9 @@ struct iterate_kit_esp_idf_itx_transport_lifecycle {
  * embedded network task storage avoids a runtime allocation and makes stop()
  * able to wait on an explicit exited flag rather than deleting another task.
  */
-struct iterate_kit_esp_idf_itx_transport {
+struct iterate_kit_itx_transport {
   /* Immutable after prepare(); borrowed dependencies must outlive stop(). */
-  struct iterate_kit_esp_idf_itx_transport_options options;
+  struct iterate_kit_itx_transport_options options;
   /* Fragment assemblers are each accessed only by their ring's SPSC owners. */
   struct iterate_kit_websocket_text_inbox control_inbox;
   struct iterate_kit_websocket_text_outbox control_outbox;
@@ -305,7 +305,7 @@ struct iterate_kit_esp_idf_itx_transport {
   StackType_t
       network_task_stack[ITERATE_KIT_ESP_IDF_NETWORK_TASK_STACK_BYTES];
   TaskHandle_t network_task;
-  enum iterate_kit_esp_idf_itx_transport_state state;
+  enum iterate_kit_itx_transport_state state;
   /*
    * Most recent application-side protocol outcome. A recoverable generation
    * failure is replaced and this returns to CAPNWEB_OK after the new session
@@ -396,9 +396,9 @@ struct iterate_kit_esp_idf_itx_transport {
  * task, and allocates no memory. A successful prepare establishes the lifetime
  * contract; start() performs the platform mutations.
  */
-enum iterate_kit_status iterate_kit_esp_idf_itx_transport_prepare(
-    struct iterate_kit_esp_idf_itx_transport *transport,
-    const struct iterate_kit_esp_idf_itx_transport_options *options);
+enum iterate_kit_status iterate_kit_itx_transport_prepare(
+    struct iterate_kit_itx_transport *transport,
+    const struct iterate_kit_itx_transport_options *options);
 
 /**
  * Cap'n Web egress callback; it only copies into the bounded control outbox.
@@ -408,7 +408,7 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_prepare(
  * sending; waking on every fragment would add scheduler churn without making a
  * partial WebSocket message useful.
  */
-enum capnweb_status iterate_kit_esp_idf_itx_transport_send_text(
+enum capnweb_status iterate_kit_itx_transport_send_text(
     void *context,
     enum capnweb_text_fragment_kind kind,
     const char *data,
@@ -421,8 +421,8 @@ enum capnweb_status iterate_kit_esp_idf_itx_transport_send_text(
  * application boot task, never a realtime audio callback. On a non-OK result,
  * last_platform_error identifies the platform operation that prevented start.
  */
-enum iterate_kit_status iterate_kit_esp_idf_itx_transport_start(
-    struct iterate_kit_esp_idf_itx_transport *transport);
+enum iterate_kit_status iterate_kit_itx_transport_start(
+    struct iterate_kit_itx_transport *transport);
 
 /**
  * Drains at most max_control_messages on the application task and advances
@@ -430,8 +430,8 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_start(
  * caller-supplied bound is a CPU fairness contract: a burst of RPC messages
  * cannot monopolize the task that must also service capture and playback.
  */
-enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
-    struct iterate_kit_esp_idf_itx_transport *transport,
+enum iterate_kit_status iterate_kit_itx_transport_poll(
+    struct iterate_kit_itx_transport *transport,
     size_t max_control_messages);
 
 /**
@@ -442,8 +442,8 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
  * at the generation boundary because replaying Cap'n Web session traffic is
  * less correct than remounting cleanly.
  */
-void iterate_kit_esp_idf_itx_transport_request_restart(
-    struct iterate_kit_esp_idf_itx_transport *transport);
+void iterate_kit_itx_transport_request_restart(
+    struct iterate_kit_itx_transport *transport);
 
 
 /**
@@ -454,8 +454,8 @@ void iterate_kit_esp_idf_itx_transport_request_restart(
  * a socket or event handler still reachable by a wedged task would convert a
  * diagnosable shutdown failure into use-after-free.
  */
-enum iterate_kit_status iterate_kit_esp_idf_itx_transport_stop(
-    struct iterate_kit_esp_idf_itx_transport *transport);
+enum iterate_kit_status iterate_kit_itx_transport_stop(
+    struct iterate_kit_itx_transport *transport);
 
 /**
  * Reads a diagnostic snapshot concurrently with event/network task updates.
@@ -464,16 +464,16 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_stop(
  * suitable for trends and incident evidence, not reconstructing exact event
  * ordering.
  */
-void iterate_kit_esp_idf_itx_transport_metrics(
-    const struct iterate_kit_esp_idf_itx_transport *transport,
-    struct iterate_kit_esp_idf_itx_transport_metrics *metrics);
+void iterate_kit_itx_transport_metrics(
+    const struct iterate_kit_itx_transport *transport,
+    struct iterate_kit_itx_transport_metrics *metrics);
 
-void iterate_kit_esp_idf_itx_transport_lifecycle(
-    const struct iterate_kit_esp_idf_itx_transport *transport,
-    struct iterate_kit_esp_idf_itx_transport_lifecycle *lifecycle);
+void iterate_kit_itx_transport_lifecycle(
+    const struct iterate_kit_itx_transport *transport,
+    struct iterate_kit_itx_transport_lifecycle *lifecycle);
 
-const char *iterate_kit_esp_idf_itx_transport_state_name(
-    enum iterate_kit_esp_idf_itx_transport_state state);
+const char *iterate_kit_itx_transport_state_name(
+    enum iterate_kit_itx_transport_state state);
 
 #ifdef __cplusplus
 }

@@ -1,5 +1,5 @@
-#ifndef ITERATE_KIT_PLATFORMS_ESP_IDF_RESET_REASON_H
-#define ITERATE_KIT_PLATFORMS_ESP_IDF_RESET_REASON_H
+#ifndef ITERATE_KIT_PLATFORMS_RESET_REASON_H
+#define ITERATE_KIT_PLATFORMS_RESET_REASON_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -21,10 +21,10 @@ extern "C" {
  *
  * Never NULL; an unrecognised code answers "unknown".
  */
-const char *iterate_kit_esp_reset_reason_name(void);
+const char *iterate_kit_platform_reset_reason_name(void);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* ITERATE_KIT_PLATFORMS_ESP_IDF_RESET_REASON_H */
+#endif /* ITERATE_KIT_PLATFORMS_RESET_REASON_H */

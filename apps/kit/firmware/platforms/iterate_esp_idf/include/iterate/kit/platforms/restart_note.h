@@ -1,5 +1,5 @@
-#ifndef ITERATE_KIT_PLATFORMS_ESP_IDF_RESTART_NOTE_H
-#define ITERATE_KIT_PLATFORMS_ESP_IDF_RESTART_NOTE_H
+#ifndef ITERATE_KIT_PLATFORMS_RESTART_NOTE_H
+#define ITERATE_KIT_PLATFORMS_RESTART_NOTE_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,7 +27,7 @@ extern "C" {
  * Every `esp_restart()` in this firmware goes through here; a bare one is a
  * restart that cannot be told apart from the others afterwards.
  */
-void iterate_kit_esp_restart_with_note(const char *why);
+void iterate_kit_platform_restart_with_note(const char *why);
 
 /**
  * The note left by the restart that brought this boot up. "" when there is
@@ -35,10 +35,10 @@ void iterate_kit_esp_restart_with_note(const char *why);
  *
  * Never NULL, so it can go straight into a health document.
  */
-const char *iterate_kit_esp_last_restart_note(void);
+const char *iterate_kit_platform_last_restart_note(void);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* ITERATE_KIT_PLATFORMS_ESP_IDF_RESTART_NOTE_H */
+#endif /* ITERATE_KIT_PLATFORMS_RESTART_NOTE_H */

@@ -1,4 +1,4 @@
-#include "fake_esp_idf.h"
+#include "esp_idf.h"
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -15,14 +15,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
-/*
- * The pretend ESP-IDF. See README.md in this directory for what it is for.
- *
- * Everything is file-static because everything it stands in for is: a device
- * has one clock, one heap and one watchdog, and pretending otherwise here would
- * let a test pass on a program shape no board has.
- */
+/* See esp_idf.h for what this is. Everything is file-static because everything it
+ * stands in for is: a device has one clock, one heap and one watchdog. */
 
 enum {
   /* Two on every board — capture and playback — plus room to notice a third. */
@@ -41,6 +37,7 @@ struct iterate_kit_fake_queue {
 };
 
 static struct {
+  bool clock_pinned;
   int64_t now_us;
   const char *task_names[FAKE_TASK_CAPACITY];
   size_t tasks_created;
@@ -52,7 +49,7 @@ static struct {
   bool log_checked;
 } fake;
 
-void iterate_kit_fake_esp_idf_reset(void) {
+void iterate_kit_host_esp_idf_reset(void) {
   size_t index;
   for (index = 0U; index < FAKE_QUEUE_CAPACITY; ++index) {
     free(fake.queues[index].storage);
@@ -60,48 +57,75 @@ void iterate_kit_fake_esp_idf_reset(void) {
   memset(&fake, 0, sizeof(fake));
 }
 
-void iterate_kit_fake_esp_idf_set_now_us(int64_t now_us) {
+void iterate_kit_host_esp_idf_set_now_us(int64_t now_us) {
+  fake.clock_pinned = true;
   fake.now_us = now_us;
 }
 
-void iterate_kit_fake_esp_idf_advance_ms(uint32_t milliseconds) {
+void iterate_kit_host_esp_idf_set_restart_note(const char *note) {
+  (void)snprintf(
+      fake.restart_note, sizeof(fake.restart_note), "%s", note == NULL ? "" : note);
+}
+
+void iterate_kit_host_esp_idf_advance_ms(uint32_t milliseconds) {
   fake.now_us += (int64_t)milliseconds * 1000;
 }
 
-size_t iterate_kit_fake_esp_idf_tasks_created(void) {
+size_t iterate_kit_host_esp_idf_tasks_created(void) {
   return fake.tasks_created;
 }
 
-const char *iterate_kit_fake_esp_idf_task_name(size_t index) {
+const char *iterate_kit_host_esp_idf_task_name(size_t index) {
   if (index >= fake.tasks_created) return "";
   return fake.task_names[index] == NULL ? "" : fake.task_names[index];
 }
 
-bool iterate_kit_fake_esp_idf_restart_requested(void) {
+bool iterate_kit_host_esp_idf_restart_requested(void) {
   return fake.restart_requested;
 }
 
-const char *iterate_kit_fake_esp_idf_restart_note(void) {
+const char *iterate_kit_host_esp_idf_restart_note(void) {
   return fake.restart_note;
 }
 
-void iterate_kit_fake_esp_idf_fail_next_queue(void) {
+void iterate_kit_host_esp_idf_fail_next_queue(void) {
   fake.fail_next_queue = true;
 }
 
 /* --- clock ---------------------------------------------------------------- */
 
-int64_t esp_timer_get_time(void) { return fake.now_us; }
+int64_t esp_timer_get_time(void) {
+  struct timespec now;
+  if (fake.clock_pinned) return fake.now_us;
+  (void)clock_gettime(CLOCK_MONOTONIC, &now);
+  return (int64_t)now.tv_sec * 1000000 + now.tv_nsec / 1000;
+}
+
+uint32_t esp_random(void) {
+  static bool seeded;
+  if (!seeded) {
+    FILE *urandom = fopen("/dev/urandom", "rb");
+    unsigned int seed = (unsigned int)time(NULL);
+    if (urandom != NULL) {
+      (void)fread(&seed, sizeof(seed), 1, urandom);
+      (void)fclose(urandom);
+    }
+    srandom(seed);
+    seeded = true;
+  }
+  return ((uint32_t)random() << 16) ^ (uint32_t)random();
+}
 
 /* --- logging -------------------------------------------------------------- */
 
-void iterate_kit_fake_esp_log(
+void iterate_kit_host_esp_log(
     const char *level, const char *tag, const char *format, ...) {
   va_list arguments;
   if (!fake.log_checked) {
-    const char *setting = getenv("ITERATE_KIT_FAKE_ESP_LOG");
-    fake.log_enabled = setting != NULL && setting[0] != '\0' &&
-        setting[0] != '0';
+    /* A test is quiet unless asked; a device on a laptop talks by default. */
+    const char *setting = getenv("ITERATE_KIT_ESP_LOG");
+    fake.log_enabled = setting == NULL ? !fake.clock_pinned
+                                       : (setting[0] != '\0' && setting[0] != '0');
     fake.log_checked = true;
   }
   if (!fake.log_enabled) return;
@@ -133,12 +157,16 @@ size_t heap_caps_get_minimum_free_size(uint32_t capabilities) {
 }
 
 /*
- * RECORDED, NOT HONOURED. A real esp_restart() does not come back; obeying that
- * here would end the test process instead of failing an assertion, so the fact
- * is kept and control returns. A test that expects a healthy boot must assert
- * on iterate_kit_fake_esp_idf_restart_requested().
+ * Under a pinned clock a restart is RECORDED, NOT HONOURED: obeying it would
+ * end the test process instead of failing an assertion. A device on a laptop
+ * has no other way to come back than to leave, so it says why and exits.
  */
-void esp_restart(void) { fake.restart_requested = true; }
+void esp_restart(void) {
+  fake.restart_requested = true;
+  if (fake.clock_pinned) return;
+  (void)fprintf(stderr, "restart: %s\n", fake.restart_note);
+  exit(70);
+}
 
 esp_err_t esp_task_wdt_add(void *task) {
   (void)task;
@@ -182,12 +210,15 @@ BaseType_t xTaskCreatePinnedToCore(
 
 void vTaskDelete(TaskHandle_t task) { (void)task; }
 
-/*
- * A DELAY IS A CLOCK MOVE, NOT A SLEEP. The loop delays inside its retry waits;
- * sleeping for real would make a test of those take as long as the device does.
- */
+/* Under a pinned clock a delay is a clock move, not a sleep. */
 void vTaskDelay(TickType_t ticks) {
-  iterate_kit_fake_esp_idf_advance_ms((uint32_t)ticks);
+  if (fake.clock_pinned) {
+    iterate_kit_host_esp_idf_advance_ms((uint32_t)ticks);
+    return;
+  }
+  const struct timespec pause = {
+    .tv_sec = (time_t)(ticks / 1000U), .tv_nsec = (long)(ticks % 1000U) * 1000000L};
+  (void)nanosleep(&pause, NULL);
 }
 
 void vTaskPrioritySet(TaskHandle_t task, UBaseType_t priority) {
@@ -276,11 +307,11 @@ BaseType_t xQueueReceive(QueueHandle_t queue, void *item, TickType_t wait) {
    * and does here.
    */
   if (queue == NULL || !queue->live || item == NULL) {
-    if (wait != 0U) iterate_kit_fake_esp_idf_advance_ms((uint32_t)wait);
+    if (wait != 0U) iterate_kit_host_esp_idf_advance_ms((uint32_t)wait);
     return pdFAIL;
   }
   if (queue->count == 0U) {
-    if (wait != 0U) iterate_kit_fake_esp_idf_advance_ms((uint32_t)wait);
+    if (wait != 0U) iterate_kit_host_esp_idf_advance_ms((uint32_t)wait);
     return pdFAIL;
   }
   memcpy(item, slot(queue, 0U), queue->item_bytes);

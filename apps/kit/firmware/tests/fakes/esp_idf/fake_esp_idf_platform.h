@@ -14,7 +14,7 @@
  */
 
 #include "iterate/kit/itx_connection.h"
-#include "iterate/kit/platforms/esp_idf_itx_transport.h"
+#include "iterate/kit/platforms/itx_transport.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -50,7 +50,7 @@ void iterate_kit_fake_platform_connect(void);
 
 /** What the loop reads as the transport's lifecycle state. */
 void iterate_kit_fake_platform_set_state(
-    enum iterate_kit_esp_idf_itx_transport_state state);
+    enum iterate_kit_itx_transport_state state);
 
 /**
  * Everything the loop sent, in order, as whole Cap'n Web messages.

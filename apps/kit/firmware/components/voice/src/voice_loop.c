@@ -28,10 +28,10 @@
 #include "capnweb/capnweb.h"
 #include "iterate/kit/audio_codec.h"
 #include "iterate/kit/retry_gate.h"
-#include "iterate/kit/platforms/esp_idf_reset_reason.h"
+#include "iterate/kit/platforms/reset_reason.h"
 #include "iterate/kit/capabilities/system_update.h"
-#include "iterate/kit/platforms/esp_idf_restart_note.h"
-#include "iterate/kit/platforms/esp_idf_system_update.h"
+#include "iterate/kit/platforms/restart_note.h"
+#include "iterate/kit/platforms/system_update.h"
 #include "iterate/kit/capabilities/conversation.h"
 #include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/capabilities/speaker.h"
@@ -59,8 +59,8 @@ static void end_local_activation(const char *reason, const char *status);
 #include "iterate/kit/itx_connection.h"
 #include "iterate/kit/microphone_flush.h"
 #include "iterate/kit/peer.h"
-#include "iterate/kit/platforms/esp_idf_configuration.h"
-#include "iterate/kit/platforms/esp_idf_itx_transport.h"
+#include "iterate/kit/platforms/provisioning.h"
+#include "iterate/kit/platforms/itx_transport.h"
 #include "iterate/kit/spsc_ring.h"
 #include "iterate/kit/stream_subscription.h"
 #include "iterate/kit/voicelab_stream.h"
@@ -245,7 +245,7 @@ _Static_assert(
  * see the note on `runtime` — so one symbol pays for internal placement
  * instead of sixty-six kilobytes doing it.
  */
-static struct iterate_kit_esp_idf_itx_transport transport;
+static struct iterate_kit_itx_transport transport;
 
 /*
  * EVERYTHING ELSE THE LOOP HOLDS, IN PSRAM — sixty-six kilobytes of it.
@@ -330,7 +330,7 @@ EXT_RAM_BSS_ATTR static struct {
   /* Health serialization must fit completely; truncation is not sent. */
   char stats_buffer[2816];
   uint32_t stats_sequence;
-  enum iterate_kit_esp_idf_itx_transport_state last_transport_state;
+  enum iterate_kit_itx_transport_state last_transport_state;
   enum iterate_kit_voicelab_state last_voicelab_state;
   /* Cross-task audio plumbing. */
   QueueHandle_t mic_queue;
@@ -1793,7 +1793,7 @@ static bool initialise_connection(void) {
   static struct iterate_kit_system_update system_update;
   size_t module_count = 0U;
   struct iterate_kit_itx_connection_options options;
-  struct iterate_kit_esp_idf_itx_transport_options transport_options;
+  struct iterate_kit_itx_transport_options transport_options;
   struct iterate_kit_peer_options peer_options;
 
   {
@@ -1853,7 +1853,7 @@ static bool initialise_connection(void) {
   {
     const struct iterate_kit_system_update_driver driver = {
       .context = NULL,
-      .begin = iterate_kit_esp_idf_system_update_begin,
+      .begin = iterate_kit_platform_system_update_begin,
     };
     if (iterate_kit_system_update_init(&system_update, &driver) ==
         ITERATE_KIT_OK) {
@@ -1899,7 +1899,7 @@ static bool initialise_connection(void) {
   options.token_count = TOKEN_CAPACITY;
   options.outbound_buffer = runtime.output_buffer;
   options.outbound_buffer_size = OUTPUT_CAPACITY;
-  options.send_text = iterate_kit_esp_idf_itx_transport_send_text;
+  options.send_text = iterate_kit_itx_transport_send_text;
   options.send_text_context = &transport;
   options.project_id = runtime.configuration.project_id;
   options.project_api_key = runtime.configuration.project_api_key;
@@ -1927,7 +1927,7 @@ static bool initialise_connection(void) {
   transport_options.connection = &runtime.connection;
   transport_options.control_inbox = &runtime.control_inbox;
   transport_options.control_outbox = &runtime.control_outbox;
-  return iterate_kit_esp_idf_itx_transport_prepare(
+  return iterate_kit_itx_transport_prepare(
              &transport, &transport_options) == ITERATE_KIT_OK;
 }
 
@@ -1977,7 +1977,7 @@ static size_t health_json(char *out, size_t capacity) {
     const char *name;
     uint32_t value;
   };
-  struct iterate_kit_esp_idf_itx_transport_metrics metrics;
+  struct iterate_kit_itx_transport_metrics metrics;
   struct iterate_kit_spsc_ring_metrics outbox_metrics;
   const uint64_t now = now_ms(NULL);
   size_t used;
@@ -1986,7 +1986,7 @@ static size_t health_json(char *out, size_t capacity) {
 
   struct iterate_kit_itx_connection_tables tables;
   iterate_kit_itx_connection_tables(&runtime.connection, &tables);
-  iterate_kit_esp_idf_itx_transport_metrics(&transport, &metrics);
+  iterate_kit_itx_transport_metrics(&transport, &metrics);
   iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
 
   /*
@@ -1996,7 +1996,7 @@ static size_t health_json(char *out, size_t capacity) {
    */
   const bool gate_open =
       (runtime.voicelab->state == ITERATE_KIT_VOICELAB_READY) &&
-      transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
+      transport.state == ITERATE_KIT_ITX_READY &&
       runtime.voicelab_generation == runtime.connection.generation;
 
   const struct field fields[] = {
@@ -2222,7 +2222,7 @@ static size_t health_json(char *out, size_t capacity) {
       "\"gateOpen\":%s,\"activationStartedMs\":%" PRIu64
       ",\"firstMicAppendOffsetMs\":%" PRId64 ",\"t\":%" PRIu64
       ",\"uptimeMs\":%" PRIu64,
-      iterate_kit_esp_idf_itx_transport_state_name(transport.state),
+      iterate_kit_itx_transport_state_name(transport.state),
       iterate_kit_voicelab_state_name(runtime.voicelab->state),
       iterate_kit_voicelab_failure_name(runtime.voicelab->failure),
       stream_path,
@@ -2230,8 +2230,8 @@ static size_t health_json(char *out, size_t capacity) {
       : runtime.opening_outcome == OPENING_ACCEPTED ? "accepted"
       : runtime.opening_outcome == OPENING_TIMED_OUT ? "timed-out" : "idle",
       clock,
-      iterate_kit_esp_reset_reason_name(),
-      iterate_kit_esp_last_restart_note(),
+      iterate_kit_platform_reset_reason_name(),
+      iterate_kit_platform_last_restart_note(),
       iterate_kit_itx_connection_state_name(runtime.connection.state),
       runtime.voicelab->call_active ? "true" : "false",
       runtime.view.wants_call ? "true" : "false",
@@ -2502,13 +2502,13 @@ bool iterate_kit_voice_loop_init(
   /* Drain the control inbox at the WebSocket task's priority so producer and
    * consumer round-robin under sustained speaker traffic. */
   vTaskPrioritySet(NULL, 5);
-  const struct iterate_kit_esp_configuration_result configuration_result =
-      iterate_kit_esp_read_configuration(&runtime.configuration);
-  if (configuration_result.status != ITERATE_KIT_ESP_CONFIGURATION_OK) {
+  const struct iterate_kit_platform_provisioning_result configuration_result =
+      iterate_kit_platform_read_provisioning(&runtime.configuration);
+  if (configuration_result.status != ITERATE_KIT_PLATFORM_PROVISIONING_OK) {
     ESP_LOGE(
         tag,
         "device is not provisioned: storage=%s",
-        iterate_kit_esp_configuration_status_name(
+        iterate_kit_platform_provisioning_status_name(
             configuration_result.status));
     return false;
   }
@@ -2574,7 +2574,7 @@ bool iterate_kit_voice_loop_init(
    * subscribed — turned a transient Wi-Fi start failure into a permanent
    * reboot loop. Keep trying, and keep the surface honest while trying.
    */
-  while (iterate_kit_esp_idf_itx_transport_start(&transport) !=
+  while (iterate_kit_itx_transport_start(&transport) !=
          ITERATE_KIT_OK) {
     ESP_LOGE(
         tag,
@@ -2655,7 +2655,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
   (void)now_ms_value;
   {
     (void)esp_task_wdt_reset();
-    (void)iterate_kit_esp_idf_itx_transport_poll(&transport, 16U);
+    (void)iterate_kit_itx_transport_poll(&transport, 16U);
     /*
      * The controls, at a human cadence rather than the loop's.
      *
@@ -2690,7 +2690,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
     {
       static bool published_link_ready = true;
       const bool api_ready =
-          transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
+          transport.state == ITERATE_KIT_ITX_READY &&
           runtime.connection.state == ITERATE_KIT_ITX_CONNECTION_READY;
       const bool stream_ready =
           runtime.voicelab->state == ITERATE_KIT_VOICELAB_READY &&
@@ -2772,11 +2772,11 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       ESP_LOGI(
           tag,
           "transport state=%s",
-          iterate_kit_esp_idf_itx_transport_state_name(
+          iterate_kit_itx_transport_state_name(
               transport.state));
-      if (runtime.last_transport_state == ITERATE_KIT_ESP_IDF_ITX_READY) {
-        struct iterate_kit_esp_idf_itx_transport_metrics metrics;
-        iterate_kit_esp_idf_itx_transport_metrics(&transport, &metrics);
+      if (runtime.last_transport_state == ITERATE_KIT_ITX_READY) {
+        struct iterate_kit_itx_transport_metrics metrics;
+        iterate_kit_itx_transport_metrics(&transport, &metrics);
         ESP_LOGE(
             tag,
             "left ready: recvStatus=%" PRId32 " wsClose=%" PRId32
@@ -2797,13 +2797,13 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
             metrics.last_application_capnweb_status,
             capnweb_status_name(metrics.last_application_capnweb_status));
       }
-      if (transport.state == ITERATE_KIT_ESP_IDF_ITX_READY) {
+      if (transport.state == ITERATE_KIT_ITX_READY) {
         /* The socket is up, so DNS and UDP work: a good moment to ask what
          * time it is. Once, and never blocking on the answer. */
         start_clock_once();
       }
-      if (transport.state == ITERATE_KIT_ESP_IDF_ITX_FAILED) {
-        struct iterate_kit_esp_idf_itx_transport_metrics metrics;
+      if (transport.state == ITERATE_KIT_ITX_FAILED) {
+        struct iterate_kit_itx_transport_metrics metrics;
         /*
          * The reason, on the screen. Whether the screen SAYS offline is decided
          * by the published link flag rather than here — nine other places set
@@ -2811,7 +2811,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
          * them ran.
          */
         runtime.view.status = (iterate_kit_voicelab_failure_name(runtime.voicelab->failure));
-        iterate_kit_esp_idf_itx_transport_metrics(&transport, &metrics);
+        iterate_kit_itx_transport_metrics(&transport, &metrics);
         ESP_LOGE(
             tag,
             "mount diagnosis: connection=%d mount=%s failure=%s "
@@ -2858,7 +2858,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
     {
       static uint64_t unhealthy_since;
       const bool healthy =
-          transport.state != ITERATE_KIT_ESP_IDF_ITX_FAILED;
+          transport.state != ITERATE_KIT_ITX_FAILED;
       if (healthy) {
         unhealthy_since = 0U;
       } else if (unhealthy_since == 0U) {
@@ -2868,7 +2868,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
             tag,
             "transport unrecoverable for %us — restarting",
             (unsigned int)(UNHEALTHY_RESTART_MS / 1000U));
-        iterate_kit_esp_restart_with_note("transport latched fatal");
+        iterate_kit_platform_restart_with_note("transport latched fatal");
       }
     }
 
@@ -2917,8 +2917,8 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       static uint32_t last_pong_count;
       static uint32_t last_probe_answer_count;
       const uint32_t probe_answers = runtime.connection.mount.probes_answered;
-      struct iterate_kit_esp_idf_itx_transport_metrics liveness;
-      iterate_kit_esp_idf_itx_transport_metrics(&transport, &liveness);
+      struct iterate_kit_itx_transport_metrics liveness;
+      iterate_kit_itx_transport_metrics(&transport, &liveness);
       if (last_liveness_ms == 0U) last_liveness_ms = now;
       if (liveness.websocket_pongs_received != last_pong_count) {
         last_pong_count = liveness.websocket_pongs_received;
@@ -2941,7 +2941,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
        * by a human pulling power. So the grace is bounded: being down is
        * forgiven, being down forever is the failure this restart exists for.
        */
-      if (transport.state != ITERATE_KIT_ESP_IDF_ITX_READY) {
+      if (transport.state != ITERATE_KIT_ITX_READY) {
         last_liveness_ms = now;
         if (not_ready_since_ms == 0U) not_ready_since_ms = now;
         if (iterate_kit_voice_elapsed_ms(now, not_ready_since_ms) >
@@ -2950,7 +2950,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
               tag,
               "transport has not been ready for %us — restarting",
               (unsigned int)(NO_LIVENESS_RESTART_MS / 1000U));
-          iterate_kit_esp_restart_with_note("transport never became ready");
+          iterate_kit_platform_restart_with_note("transport never became ready");
         }
       } else {
         not_ready_since_ms = 0U;
@@ -2961,7 +2961,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
             tag,
             "no answered round trip in %us despite a ready transport — restarting",
             (unsigned int)(NO_LIVENESS_RESTART_MS / 1000U));
-        iterate_kit_esp_restart_with_note("hop dead on a ready transport");
+        iterate_kit_platform_restart_with_note("hop dead on a ready transport");
       }
     }
 
@@ -3037,7 +3037,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       }
     }
 
-    if (transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
+    if (transport.state == ITERATE_KIT_ITX_READY &&
         runtime.connection.state == ITERATE_KIT_ITX_CONNECTION_READY) {
       struct iterate_kit_spsc_ring_metrics outbox_metrics;
       iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
@@ -3097,7 +3097,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
     }
 
     if (runtime.voicelab->state == ITERATE_KIT_VOICELAB_READY &&
-        transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
+        transport.state == ITERATE_KIT_ITX_READY &&
         runtime.voicelab_generation == runtime.connection.generation) {
       /*
        * EVERY producer gates on outbox headroom: exhaustion is
@@ -3184,7 +3184,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
               tag,
               "downlink still dead after 3 recycles — replacing the session");
           runtime.downlink_recycles_running = 0U;
-          iterate_kit_esp_idf_itx_transport_request_restart(&transport);
+          iterate_kit_itx_transport_request_restart(&transport);
         } else {
           ++runtime.downlink_recycles_running;
           ESP_LOGW(
@@ -3279,7 +3279,7 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
             ESP_LOGW(
                 tag, "mic backlog with no outbox drain — restarting transport");
             runtime.view.status = ("re-registering");
-            iterate_kit_esp_idf_itx_transport_request_restart(&transport);
+            iterate_kit_itx_transport_request_restart(&transport);
             drain_jammed_since = 0U;
           }
         }
@@ -3348,8 +3348,8 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       if (runtime.view.wants_call || runtime.voicelab->call_active ||
           iterate_kit_voice_elapsed_ms(now, runtime.last_pulse_ms) < 3000U) {
         if (iterate_kit_voice_elapsed_ms(now, runtime.last_pulse_ms) >= 1000U) {
-          struct iterate_kit_esp_idf_itx_transport_metrics pulse;
-          iterate_kit_esp_idf_itx_transport_metrics(&transport, &pulse);
+          struct iterate_kit_itx_transport_metrics pulse;
+          iterate_kit_itx_transport_metrics(&transport, &pulse);
           runtime.last_pulse_ms = now;
           ESP_LOGI(
               tag,
