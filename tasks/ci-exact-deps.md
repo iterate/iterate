@@ -15,3 +15,4 @@ Assumptions: scope is `.depot/workflows/preview.yml` and its reusable `preview-r
 ## Implementation log
 
 - 2026-09-17: started from origin/main (`8f8ff8d695`), branch `ci-exact-deps`. Current image contains node_modules and a pnpm store; every preview job still executes pnpm 10.24.0 install. The image rebuilds on main manifest changes and weekly.
+- Initial sample: 61 completed dependency installs across seven recent preview workflows; median 36.5s, maximum 53.9s. Many report “Already up to date”. Ranked explanations: (1) pnpm still scans/rewrites the tree; (2) cold snapshot filesystem reads magnify that overhead; (3) stale image input mismatches explain some, but not all, installs. First normal-push experiment compares initial install to a repeat on the same sandbox. Downstream steps temporarily omitted as requested.
