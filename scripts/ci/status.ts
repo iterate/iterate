@@ -121,30 +121,8 @@ export default class CiStatus {
       throw new Error("This Depot job is no longer running");
     if (workflow.jobs.some((job) => job.jobId !== this.jobId && job.status !== "finished"))
       throw new Error("Cannot publish success before every other job has succeeded");
-    const checks = [];
-    for (let page = 1; ; page++) {
-      const { check_runs } = CheckRuns.parse(
-        await this.request(
-          "github",
-          `/repos/${this.env.GITHUB_REPOSITORY}/commits/${this.env.CI_HEAD_SHA}/check-runs?filter=all&per_page=100&page=${page}`,
-          null,
-        ),
-      );
-      checks.push(...check_runs);
-      if (check_runs.length < 100) break;
-    }
-    const matches = checks.filter((check) => {
-      if (check.app?.slug !== "depot-code-access" || !check.details_url) return false;
-      const url = new URL(check.details_url);
-      return (
-        url.origin === "https://depot.dev" &&
-        url.pathname === `/orgs/${this.org}/workflows/${this.workflowId}` &&
-        url.searchParams.get("job") === this.jobId
-      );
-    });
-    if (matches.length !== 1 || matches[0].status !== "in_progress")
-      throw new Error("Expected one running GitHub check for this exact Depot job");
-    const check = matches[0];
+    const check = await this.ownCheck();
+    if (check.status !== "in_progress") throw new Error("This GitHub check is no longer running");
     const response = await fetch(
       `https://api.github.com/repos/${this.env.GITHUB_REPOSITORY}/check-runs/${check.id}`,
       {
@@ -175,6 +153,54 @@ export default class CiStatus {
       `[ci:status] check ${check.id} set green at ${new Date(greenAt).toISOString()}; job continues`,
     );
     return { checkId: check.id };
+  }
+
+  /** Publish reusable evidence after complete test collection and successful restoration. */
+  async setPreviewSettled(tests: "success" | "failure") {
+    const workflow = await this.workflow();
+    const self = workflow.jobs.find((job) => job.jobId === this.jobId);
+    if (!self?.jobKey.endsWith(":finish") || self.status !== "running")
+      throw new Error("Only the running preview finalizer can publish preview-settled");
+    if (workflow.jobs.some((job) => job !== self && !["finished", "failed"].includes(job.status)))
+      throw new Error("Cannot publish preview-settled with unfinished or cancelled jobs");
+    const check = await this.ownCheck();
+    await this.request(
+      "github",
+      `/repos/${this.env.GITHUB_REPOSITORY}/statuses/${this.env.CI_HEAD_SHA}`,
+      {
+        context: "preview-settled",
+        state: "success",
+        description: `tests=${tests}; deployment=restored; check=${check.id}`,
+        target_url: this.env.DEPOT_JOB_URL,
+      },
+    );
+    console.log(`[ci:status] preview-settled: tests=${tests}; deployment=restored`);
+  }
+
+  private async ownCheck() {
+    const checks = [];
+    for (let page = 1; ; page++) {
+      const { check_runs } = CheckRuns.parse(
+        await this.request(
+          "github",
+          `/repos/${this.env.GITHUB_REPOSITORY}/commits/${this.env.CI_HEAD_SHA}/check-runs?filter=all&per_page=100&page=${page}`,
+          null,
+        ),
+      );
+      checks.push(...check_runs);
+      if (check_runs.length < 100) break;
+    }
+    const matches = checks.filter((check) => {
+      if (check.app?.slug !== "depot-code-access" || !check.details_url) return false;
+      const url = new URL(check.details_url);
+      return (
+        url.origin === "https://depot.dev" &&
+        url.pathname === `/orgs/${this.org}/workflows/${this.workflowId}` &&
+        url.searchParams.get("job") === this.jobId
+      );
+    });
+    if (matches.length !== 1) throw new Error("Expected one GitHub check for this exact Depot job");
+    return matches[0];
   }
 
   private async workflow() {

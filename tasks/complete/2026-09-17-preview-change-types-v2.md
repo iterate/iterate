@@ -1,7 +1,7 @@
 ---
 status: complete
 size: medium
-base: codex/preview-park-restore
+base: main
 ---
 
 # Choose preview work from ordered change types
@@ -10,9 +10,9 @@ Implemented and locally checked. The head-path decision loop, inherited red/gree
 safe reuse checks and workflow gating are complete. Live lookup checks passed;
 a gated CI run and successful tests-only reuse remain rollout acceptance work.
 Restacked without the failed storage-wipe experiment. No PR: review
-`codex/preview-change-types-v3` against `codex/preview-park-restore` (PR #2695).
-The restore-identity guard and final Depot result check still need integration
-before rollout; see `docs/preview-change-selection.md`.
+`codex/preview-change-types-v3` against `main` after PR #2695 merged. Explicit
+`preview-settled` evidence now gates inheritance/reuse. The restore-identity guard
+still needs integration before rollout; see `docs/preview-change-selection.md`.
 
 ## Request and decisions
 
@@ -102,3 +102,17 @@ before rollout; see `docs/preview-change-selection.md`.
   `ChangeType` from its keys. Planner change maps use that union; unmatched types
   remain absent. Removed YAML parsing and filesystem reads without changing policy.
   All 14 planner tests, scripts typecheck, scoped lint and formatting passed.
+
+- Merged main at `b3b4dfa406` after PR #2695 landed. Kept its status helper and
+  tracing changes, and resolved the workflow-test overlap around the plan gate.
+- Added `preview-settled` as the final finish step. Conclusive result collection
+  writes a success/failure output even when tests fail; actual restoration writes
+  a separate completion output. Both are needed to publish. No pending status or
+  branch-protection change. Incomplete collection and failed restoration publish
+  no certificate. The reader requires the signal, producer identity and current
+  checks; live deployment reuse still verifies the lease and Worker versions.
+
+- Settlement validation: 405 scripts tests across 32 files, scripts typecheck,
+  scoped lint and CLI help passed. A read-only lookup of the earlier successful
+  #2695 run returned no inheritable result because it has no marker. No live
+  gated workflow or publication was run on this compare-only branch.

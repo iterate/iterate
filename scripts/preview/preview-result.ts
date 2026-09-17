@@ -4,13 +4,25 @@ import type { PreviewResult } from "./change-plan.ts";
 import { previewPlaywrightShards } from "./playwright-capacity-reporter.ts";
 import { splitRepositoryFullName, withGithubRetry } from "./github.ts";
 
-/** Read complete preview checks, keeping different workflows and reruns apart. */
+/** Read settled evidence, then verify it belongs to the newest complete preview run. */
 export async function findPreviewResult(
   commit: string,
   github: { githubToken: string; repositoryFullName: string },
 ): Promise<PreviewResult | null> {
   const octokit = new Octokit({ auth: github.githubToken });
   const [owner, repo] = splitRepositoryFullName(github.repositoryFullName);
+  const statuses = await withGithubRetry("repos.listCommitStatusesForRef (preview-settled)", () =>
+    octokit.paginate(octokit.rest.repos.listCommitStatusesForRef, {
+      owner,
+      repo,
+      ref: commit,
+      per_page: 100,
+    }),
+  );
+  if (
+    !statuses.some((status) => status.context === "preview-settled" && status.state === "success")
+  )
+    return null;
   const checks = await withGithubRetry("checks.listForRef (preview result)", () =>
     octokit.paginate(octokit.rest.checks.listForRef, {
       owner,
@@ -20,11 +32,15 @@ export async function findPreviewResult(
       per_page: 100,
     }),
   );
-  return previewResultFromChecks(commit, checks);
+  return previewResultFromChecks(commit, checks, statuses);
 }
 
-/** Missing, running, cancelled or partly rerun checks cannot certify a revision. */
-export function previewResultFromChecks(commit: string, input: unknown[]): PreviewResult | null {
+/** Inherit only an explicit settled result belonging to the newest complete run. */
+export function previewResultFromChecks(
+  commit: string,
+  input: unknown[],
+  statuses: unknown[],
+): PreviewResult | null {
   const workflows = new Map<string, z.infer<typeof Check>[]>();
   for (const check of z.array(Check).parse(input)) {
     if (check.app?.slug !== "depot-code-access" || !check.details_url) continue;
@@ -72,11 +88,38 @@ export function previewResultFromChecks(commit: string, input: unknown[]): Previ
     )
   )
     return null;
-  return {
-    commit,
-    conclusion: completed.every((check) => check?.conclusion === "success") ? "success" : "failure",
-    url: finish.details_url,
-  };
+  const settled = z
+    .array(SettledStatus)
+    .parse(statuses)
+    .filter((status) => status.context === "preview-settled")
+    .sort((a, b) => b.id - a.id)[0];
+  if (!settled || settled.state !== "success" || !settled.target_url) return null;
+  const description = /^tests=(success|failure); deployment=restored; check=(\d+)$/.exec(
+    settled.description || "",
+  );
+  if (!description || description[2] !== String(finish.id)) return null;
+  const source = new URL(settled.target_url);
+  const check = new URL(finish.details_url);
+  if (
+    source.origin !== check.origin ||
+    source.pathname !== check.pathname ||
+    source.searchParams.get("job") !== check.searchParams.get("job") ||
+    !source.searchParams.get("attempt")
+  )
+    return null;
+  const publishedAt = Date.parse(settled.created_at);
+  // A rerun may retain its workflow URL. Neither a new finalizer nor a later
+  // consumer attempt can borrow an old signal, even if check IDs are reused.
+  if (
+    !finish.started_at ||
+    Date.parse(finish.started_at) > publishedAt ||
+    completed.some((job) => job !== finish && Date.parse(job!.completed_at!) > publishedAt)
+  )
+    return null;
+  const conclusion = z.enum(["success", "failure"]).parse(description[1]);
+  if (conclusion === "success" && completed.some((job) => job?.conclusion !== "success"))
+    return null;
+  return { commit, conclusion, url: settled.target_url };
 }
 
 const Check = z.object({
@@ -84,7 +127,17 @@ const Check = z.object({
   name: z.string(),
   status: z.string(),
   conclusion: z.string().nullable(),
+  started_at: z.iso.datetime().nullable(),
   completed_at: z.iso.datetime().nullable(),
   details_url: z.url().nullable(),
   app: z.object({ slug: z.string().nullable() }).nullable(),
+});
+
+const SettledStatus = z.object({
+  id: z.number(),
+  context: z.string(),
+  state: z.string(),
+  description: z.string().nullable(),
+  target_url: z.url().nullable(),
+  created_at: z.iso.datetime(),
 });

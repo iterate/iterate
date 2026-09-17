@@ -89,6 +89,13 @@ test("the lifecycle owner encloses every fixed shard and cleanup waits for their
     if: "always() && steps.consumers.outputs.settled == 'true'",
   });
   expect(steps[cleanup].run).toContain("--restore");
+  const settled = steps.findIndex((step: any) => step.id === "settled");
+  expect(settled).toBe(steps.length - 1);
+  expect(settled).toBeGreaterThan(cleanup);
+  expect(steps[settled]).toMatchObject({
+    if: "always() && !cancelled() && steps.erase.outcome == 'success' && steps.erase.outputs.restored == 'true' && steps.merge_reports.outputs.test_outcome != ''",
+    run: expect.stringContaining("set-preview-settled"),
+  });
 });
 
 test("result collection retains failures and rejects missing or foreign shard receipts", async () => {
@@ -100,11 +107,18 @@ test("result collection retains failures and rejects missing or foreign shard re
     expect(await readPreviewCiResults(identity, ["playwright-1"], directory)).toEqual({
       failures: [],
       durationMs: 123,
+      complete: true,
     });
     await writeFile(
       join(directory, "playwright-2.json"),
       JSON.stringify({ ...passed, key: "playwright-2", exitCode: 1, error: "browser crashed" }),
     );
+    expect(
+      await readPreviewCiResults(identity, ["playwright-1", "playwright-2"], directory),
+    ).toMatchObject({
+      complete: true,
+      failures: ["browser crashed"],
+    });
     await writeFile(
       join(directory, "playwright-3.json"),
       JSON.stringify({ ...passed, key: "playwright-3", headSha: "other-commit" }),
@@ -114,6 +128,20 @@ test("result collection retains failures and rejects missing or foreign shard re
       ["playwright-1", "playwright-2", "playwright-3", "playwright-4"],
       directory,
     );
+    expect(result.complete).toBe(false);
+    await writeFile(
+      join(directory, "playwright-2.json"),
+      JSON.stringify({
+        ...passed,
+        key: "playwright-2",
+        exitCode: 124,
+        error: "timed out",
+      }),
+    );
+    expect(await readPreviewCiResults(identity, ["playwright-2"], directory)).toMatchObject({
+      complete: false,
+      failures: ["timed out"],
+    });
     expect(result.failures).toEqual([
       "browser crashed",
       expect.stringContaining("identity mismatch"),

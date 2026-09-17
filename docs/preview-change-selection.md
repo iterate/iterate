@@ -5,8 +5,9 @@ inherit an existing result? Start with
 [`planPreview`](../scripts/preview/change-plan.ts). The decision loop is at the
 top; Git and remote evidence live elsewhere.
 
-This no-PR branch is stacked on the park/restore experiment, PR #2695. Its diff
-contains only ancestry selection; the closed storage-wipe experiment is excluded.
+This no-PR branch is based on main after PR #2695 merged. Its diff contains
+ancestry selection and its settlement signal; the closed storage-wipe experiment
+is excluded.
 
 | Head changes                  | Work                                                                   |
 | ----------------------------- | ---------------------------------------------------------------------- |
@@ -50,15 +51,33 @@ product (green) → new untested product → docs
 
 ## What counts as evidence
 
-A **result** is the newest complete Depot preview workflow on that exact SHA:
-prepare, app tests, six browser shards and final collection. GitHub check IDs
-keep workflow histories apart; a newer incomplete workflow blocks an older
-green. Missing, running, cancelled, skipped and partially rerun checks do not
-certify a revision. A completed failure remains failure. Lightweight inherited
-planning results are not treated as full runs; later docs walk through them to
-the original evidence.
+A **result** requires an explicit `preview-settled` commit status from the newest
+complete preview run. Early-green GitHub checks alone are insufficient. The
+signal is published once, after complete test collection and successful cleanup
+and restoration, as the final workflow step:
 
-A **deployment** must be this PR's currently recorded fleet, still owned by
+```yaml
+context: preview-settled
+state: success
+description: "tests=failure; deployment=restored; check=105095187178"
+target_url: <exact Depot workflow/job/attempt URL>
+```
+
+`success` means settlement succeeded; the description records the inheritable
+**test** outcome. Failed tests remain red in their original checks. No pending
+status is created, so settlement does not hold up early green. Do not require
+this marker as a merge check.
+
+The check ID and URL bind the signal to its producer. The reader rejects newer
+unfinished runs, replaced finalizers, and test attempts completed after the
+signal. Cancellation, incomplete reports, missing/foreign receipts and command
+timeouts cannot certify a revision. Failed restoration publishes nothing, even
+if tests finished conclusively; a later docs change falls back to CI. Historical
+runs without the signal also fall back. Inherited planning results never publish
+it; later docs walk to the original full-run evidence.
+
+A **deployment** also requires that settled evidence, then must be this PR's
+currently recorded fleet, still owned by
 the PR in the semaphore, with at least an hour left on its lease. Every app's
 recorded SHA, URL and Worker name must match; Cloudflare must still route 100%
 of traffic to its recorded version. Public readiness must succeed, including
@@ -100,7 +119,8 @@ path filter also needs the eventual merge.
 Local validation covers real temporary Git histories, check-run parsing,
 deployment version parsing and workflow wiring. Read-only live checks recognized
 successful and failed PR runs, a successful main run, and the current Cloudflare
-deployment response. The actual CLI inherited PR #2693's successful result.
+deployment response. The earlier CLI inherited PR #2693's successful result; that historical run now
+lacks the required settlement marker and is intentionally inconclusive.
 **A live gated workflow and successful tests-only reuse still need acceptance
 runs.** This is a no-PR review branch; no preview was claimed or deployed for it.
 
@@ -112,9 +132,9 @@ This restack preserves #2695's behavior rather than changing its lifecycle:
   the tested head. A reused ancestor intentionally differs, so that guard must
   learn about the prepared test/deployment identities before tests-only reuse
   can complete restoration. Until then, it refuses restoration after retirement.
-- #2695 can complete the GitHub finish check before Depot actually finishes.
-  Result inheritance currently reads GitHub checks; establish final Depot
-  completion too before treating an early green as conclusive ancestor evidence.
+- The early-green inheritance gap is addressed by `preview-settled`. The marker
+  is emitted only after validated test collection and successful restoration;
+  the reader requires it for both inherited outcomes and deployment reuse.
 
-These are rollout blockers, not claims of verified reuse. The work in #2695
-does not depend on resolving them.
+The restore-identity guard and live acceptance runs remain rollout blockers;
+this diff does not claim verified tests-only reuse.

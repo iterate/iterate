@@ -621,7 +621,7 @@ export async function ciTest(options: PreviewCommandOptions & { shard?: number }
   return results;
 }
 
-/** Join local results and publish outcomes. No live lease is needed: erase runs concurrently. */
+/** Join local results and record conclusive outcomes before cleanup. */
 export async function ciFinish(options: PreviewCommandOptions = {}) {
   const { target, runtime, plan } = await resolvePreviewCiSetup(options);
   const { run } = target;
@@ -674,7 +674,7 @@ export async function ciFinish(options: PreviewCommandOptions = {}) {
         streamsReportError = `Could not collect streams Playwright report: ${String(error)}`;
       }
     }
-    const entries = await Promise.all(
+    const results = await Promise.all(
       apps.map(async (app) => {
         telemetry.appStarted(
           app.previewTestArtifactSources.flatMap((source) =>
@@ -689,7 +689,7 @@ export async function ciFinish(options: PreviewCommandOptions = {}) {
             ? previewPlaywrightShards.map((shard) => `playwright-${shard}`)
             : []),
         ];
-        const { failures, durationMs } = await readPreviewCiResults(
+        const { failures, durationMs, complete } = await readPreviewCiResults(
           plan,
           keys,
           resolve(runtime.repositoryRoot, "test-results/preview-ci-results"),
@@ -712,17 +712,21 @@ export async function ciFinish(options: PreviewCommandOptions = {}) {
           retryCount: summary.retried.reduce((sum, test) => sum + test.retryCount, 0),
           collectionErrors: summary.collectionErrors,
         });
-        return CloudflarePreviewAppEntry.parse({
-          ...plan.state.apps[app.slug],
-          status: message ? "tests-failed" : "deployed",
-          message,
-          testDurationMs: durationMs,
-          testRetries: renderPreviewRetrySummary(summary),
-          updatedAt: new Date().toISOString(),
-          runUrl: run.workflowRunUrl,
-        });
+        return {
+          complete: complete && summary.testCount > 0 && summary.collectionErrors.length === 0,
+          entry: CloudflarePreviewAppEntry.parse({
+            ...plan.state.apps[app.slug],
+            status: message ? "tests-failed" : "deployed",
+            message,
+            testDurationMs: durationMs,
+            testRetries: renderPreviewRetrySummary(summary),
+            updatedAt: new Date().toISOString(),
+            runUrl: run.workflowRunUrl,
+          }),
+        };
       }),
     );
+    const entries = results.map((result) => result.entry);
     await target.report.update((state) => ({
       ...state,
       apps: {
@@ -730,6 +734,19 @@ export async function ciFinish(options: PreviewCommandOptions = {}) {
         ...Object.fromEntries(entries.map((entry) => [entry.appSlug, entry])),
       },
     }));
+    // Failed tests are inheritable; missing reports, identities or interrupted
+    // commands are not. Emit before throwing so the finalizer can publish red.
+    if (
+      process.env.GITHUB_OUTPUT &&
+      !mergeFailure &&
+      !streamsReportError &&
+      results.every((result) => result.complete)
+    ) {
+      const outcome = entries.some((entry) => entry.status === "tests-failed")
+        ? "failure"
+        : "success";
+      await appendFile(process.env.GITHUB_OUTPUT, `test_outcome=${outcome}\n`);
+    }
     if (entries.some((entry) => entry.status === "tests-failed"))
       throw new Error(
         "Preview tests failed or a required shard result was missing; see the app results.",
@@ -761,6 +778,9 @@ async function findPreviewDeployment(
     )
       return null;
   }
+  // A live Worker alone does not prove its test data was retired. Require the
+  // same explicit settlement used for result inheritance, including failed tests.
+  if (!(await findPreviewResult(commit, target.run))) return null;
   const resources = await runtime.createPreviewSemaphoreResourceClient().list({
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   });
@@ -1902,6 +1922,7 @@ export async function erase(options: EraseOptions = {}) {
     ...state,
     notice: null,
   }));
+  if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT, "restored=true\n");
   return { ...result, restored: true };
 }
 
