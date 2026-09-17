@@ -111,6 +111,14 @@ function parseIterateContextDurableObjectName(name: string | undefined) {
  *  and dies in memory, so its release needs no durable alarm: the timer dies with the actor, and so
  *  do the pins. */
 const IDLE_QUIESCE_AFTER_MS = 30_000;
+/** WORKAROUND — on prd (never in local workerd), a Workers-RPC call into a LOADED facet can reject
+ *  with V8's clone-version error: seen on alarm-woken incarnations since 2026-09-15, with identical
+ *  worker code either side, in bursts. The facet container is then unusable for the incarnation (a
+ *  live facet never re-runs its startup) and the cached isolate may be too — so the recovery is a
+ *  restart of both and ONE more attempt (`#invokeFacet`). apps/os carries the same recovery for its
+ *  dynamic workers (issue #2288). Remove when the platform is fixed. */
+const isClonedDataVersionFailure = (error: unknown): boolean =>
+  error instanceof Error && error.message.includes("Unable to deserialize cloned data");
 /** How long one facet call may take before the facet is aborted (a call that never answers would
  *  hold the quiesce, and with it this actor, forever). */
 const FACET_CALL_WATCHDOG_MS = 60_000;
@@ -290,6 +298,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // as unknown): read back as the number it was stored as.
       for (const [key, at] of this.ctx.storage.kv.list({ prefix: "facet-claim:" }))
         this.#facetClaims.set(key.slice("facet-claim:".length), at as number);
+      // Same for the revive-failure ladder (`#facetReviveFailed` wrote it as a number).
+      for (const [key, n] of this.ctx.storage.kv.list({ prefix: "facet-claim-failures:" }))
+        this.#facetReviveFailures.set(key.slice("facet-claim-failures:".length), n as number);
       // Initialize the log before accepting requests. The root config worker subscribes once; its
       // idempotency key preserves that subscription across incarnations.
       this.#stream.appendBirthRecord();
@@ -524,7 +535,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     },
     // The facets view is PARENT-LOCAL — the facets live here and can never move (workerd#6702:
     // sockets never leave the parent). Branded FacetHandle for the delivery loop.
-    claimFacetAlarm: (name, at) => this.#claimFacetAlarm(name, at),
+    claimFacetAlarm: (name, at) => {
+      this.#facetRevived(name); // the facet's engine is reachable: its ladder of failed revives is over
+      this.#claimFacetAlarm(name, at);
+    },
     facets: {
       get: (name, spec) =>
         new FacetHandle((itxExpressionSteps) => this.#invokeFacet(name, spec, itxExpressionSteps)),
@@ -591,8 +605,21 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  that is the whole point. Restored in the constructor; spent by the pass that serves it. */
   readonly #facetClaims = new Map<string, number>();
   /** Consecutive revives of a facet that THREW (a load failure, a timeout): the backoff of the
-   *  claim the pass puts back. In memory: a fresh incarnation tries at once again. */
+   *  claim the pass puts back. A kv row beside the claim (`facet-claim-failures:<name>`), so the
+   *  backoff survives the eviction between two passes — else every fresh incarnation would start
+   *  the ladder over and a facet that cannot be revived would cost a wake every 40 s for good.
+   *  Cleared by the facet's own next claim (its engine reached it) and by a revive that returned. */
   readonly #facetReviveFailures = new Map<string, number>();
+  #facetReviveFailed(name: string): number {
+    const failures = (this.#facetReviveFailures.get(name) ?? 0) + 1;
+    this.#facetReviveFailures.set(name, failures);
+    this.ctx.storage.kv.put(`facet-claim-failures:${name}`, failures);
+    return failures;
+  }
+  #facetRevived(name: string): void {
+    this.#facetReviveFailures.delete(name);
+    this.ctx.storage.kv.delete(`facet-claim-failures:${name}`);
+  }
   #claimFacetAlarm(name: string, at: number | null): void {
     if (at === null) {
       this.#facetClaims.delete(name);
@@ -799,15 +826,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           this.#claimFacetAlarm(name, null);
           try {
             await this.#invokeFacet(name, undefined, [["revive"]]);
-            this.#facetReviveFailures.delete(name);
+            this.#facetRevived(name);
           } catch (error) {
             reportIssue("iterate-context.revive", error, { name });
             // A revive that threw (a load failure, a timeout) spent nothing: the claim is put back,
             // later each time, so the attempt is still owed and a facet that cannot load costs a
             // few wakes an hour. A facet that is GONE (its row removed) is owed nothing.
             if (errorCode(error) === "NO_FACET") continue;
-            const failures = (this.#facetReviveFailures.get(name) ?? 0) + 1;
-            this.#facetReviveFailures.set(name, failures);
+            const failures = this.#facetReviveFailed(name);
             this.#claimFacetAlarm(
               name,
               Date.now() + Math.min(REVIVE_AFTER_MS * 2 ** failures, REVIVE_AFTER_MAX_MS),
@@ -860,6 +886,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     name: string,
     spec: FacetSpec | undefined,
     itxExpressionSteps: ItxExpression,
+    retriedAfterCloneFailure = false,
   ): Promise<unknown> {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- name arrives as a client-authored itx expression argument; the static string type is the API contract, not a runtime guarantee, so a non-string is rejected with a usage error
     if (typeof name !== "string")
@@ -914,6 +941,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     try {
       const props = { iterateContextName: this.#durableObjectAddress.name, name };
       let mintClass: () => DurableObjectClass;
+      let retireLoadedIdentity: (() => void) | undefined;
       if (firstPartyClassName) {
         // `ctx.exports.<Class>({ props })` mints the class (__workers-tests__/facet-from-exports.test.ts).
         const exportsOf = this.ctx.exports as unknown as Record<
@@ -926,7 +954,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // THE LOADED IDENTITY, resolved — not loaded: `load` runs only for a facet that starts (below;
         // __workers-tests__/facet-class-loads-at-startup.test.ts). The one await is a dead id's
         // recovery (worker-loader.ts).
-        const { loaderId, load } = await prepareConfinedWorker({
+        const { loaderId, load, retire } = await prepareConfinedWorker({
           env: this.env,
           deployId: this.#appConfig.deployId,
           itxEntrypoint: this.#itxEntrypoint,
@@ -962,6 +990,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         if (previousLoaderId !== loaderId)
           this.ctx.storage.kv.put(`facet:${name}:loader-id`, loaderId);
         mintClass = () => load().getDurableObjectClass(memo.className, { props });
+        retireLoadedIdentity = retire;
       }
       // THE CLASS. A facet this actor holds LIVE (#liveFacetNames) is running: `facets.get` reuses
       // its container and never runs the startup callback — no loader lookup, no class minted for
@@ -1009,6 +1038,18 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         } else if (startupFailed) {
           this.#abortFacetIfRunning(name, "startup failed");
           this.#liveFacetNames.delete(name);
+        } else if (isClonedDataVersionFailure(error) && !retriedAfterCloneFailure) {
+          // The clone-version failure (the constant's doc): restart the facet AND retire its loaded
+          // identity (a cached isolate is suspect too), then the call once more, cold. One extra
+          // attempt, never a loop — a second failure is the caller's. The retry re-delivers a
+          // pushed batch: durables are offset-guarded by the engine, ephemerals are not (a duplicate
+          // beats a lost batch; at-least-once is the facet contract). Logged, never swallowed, so the
+          // platform condition stays queryable.
+          this.#abortFacetIfRunning(name, "clone-version failure — restarting");
+          this.#liveFacetNames.delete(name);
+          retireLoadedIdentity?.();
+          console.warn({ event: "facet.clone-version-retry", namespace: "iterate-context", name });
+          return await this.#invokeFacet(name, spec, itxExpressionSteps, true);
         }
         throw error;
       }
@@ -1102,6 +1143,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       throw new Error(`"${name}" is the core reduce — always on, never a facet`);
     this.ctx.facets.delete(name);
     this.#claimFacetAlarm(name, null);
+    this.#facetRevived(name);
     this.ctx.storage.kv.delete(`facet:${name}`);
     this.ctx.storage.kv.delete(`facet:${name}:loader-id`);
     this.#facetStartupMemoByName.delete(name);
