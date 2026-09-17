@@ -1,6 +1,7 @@
 # Interactive CI traces
 
-Preview runs get a **CI trace** commit status after cleanup and report upload.
+Preview runs get a **CI trace** commit status once their report is uploaded,
+without waiting for cleanup.
 Its **Details** link opens the report for that tested commit. The report shows
 jobs, setup/wait/test/finish phases, measured shell steps and individual Playwright attempts. Expand rows, search for a test,
 click a bar, or zoom to a selected span. Download the same trace as OTLP JSON.
@@ -103,7 +104,11 @@ See [browser reports](./depot-ci.md#browser-reports-from-artifacts) for root
 index selection, attachments and Playwright reports.
 
 The config project receives Depot `check_run.completed` webhooks and scans the
-completed job's artifacts. It publishes only an explicit allowlist:
+job's artifacts. An early-green patch can emit the only completed webhook before
+uploads exist. While the Depot job is still running, the publisher checks once a
+minute for up to 30 minutes, covering the finalizer's 25-minute limit. It publishes
+available reports immediately and keeps checking for later uploads, including the
+Playwright report after cleanup. It publishes only an explicit allowlist:
 `public-playwright-report` → **Playwright report** and
 `public-ci-trace-<workflow>-<execution>` → **CI trace**. Retained `ci-trace-<workflow>-<execution>`
 artifacts from the old `ci-trace.yml` workflow remain supported.
@@ -113,8 +118,8 @@ CI does not run a publication command or need status-write permission.
 Publication is serialized on the project's `/depot/artifacts` event stream.
 The description stores the artifact's source execution time: retained artifacts
 keep their original execution, and a late collector cannot overwrite a newer
-preview's link. Duplicate deliveries do no work. External failures retry after
-30, 60 and 120 seconds; exhausted retries append a `depot/publication-failed`
+preview's link. Duplicate deliveries do no work. External failures have three separate retries after
+30, 60 and 120 seconds. Either budget's exhaustion appends a `depot/publication-failed`
 event and log the cause without blocking GitHub webhook delivery. Replaying a
 completed-job webhook safely retries publication.
 
