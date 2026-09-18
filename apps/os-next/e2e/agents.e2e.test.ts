@@ -100,11 +100,15 @@ test("the loop: a person's words → the model → a script run against itx → 
     offset: expect.any(Number),
   });
 
-  // Wait for the LAST derived fact, the prose's web-message-sent — appended a beat after the
-  // assistant item it derives from; reading at the assistant's words raced it on the deployed worker.
-  const log = await until("the prose that ends the turn", async () => {
+  // Wait for the LAST derived fact: the plain-response handler's script-run-settled, appended a
+  // beat after the prose's web-message-sent it follows — reading at the prose raced it on the
+  // deployed worker (17 of the 18 events, twice on main).
+  const log = await until("the settle that ends the turn", async () => {
     const all = await readAll(support);
-    return all.filter((e) => e.type === "events.iterate.com/agents/web-message-sent").length === 2
+    const count = (type: string) =>
+      all.filter((e) => e.type === `events.iterate.com/${type}`).length;
+    return count("agents/web-message-sent") === 2 &&
+      count("capability-host/script-run-settled") === 2
       ? all
       : undefined;
   }).catch(async (error: unknown) => {
