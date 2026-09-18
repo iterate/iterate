@@ -1,5 +1,7 @@
 /* public/issuer.css — the one stylesheet of the issuer's pages (index.html, login.html,
- * authorize.html), a file the assets binding serves: one centred column, phone-first, the same
+ * authorize.html) and of the SDK's "Sign in again" page on every app's origin
+ * (packages/iterate/src/next/app-server.ts links it: .issuer-card, .issuer-mark, .primary), a file
+ * the assets binding serves: one centred column, phone-first, the same
  * controls on every page, light only like every os-next app. Plain 2026 CSS, written for Chrome
  * and degrading to nothing elsewhere: nesting, @starting-style for what appears, sibling-index()
  * for the list's stagger, corner-shape for the hero's squircles, color-mix() for every hover. The

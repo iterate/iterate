@@ -59,14 +59,11 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
   loaderDeps: ({ search }) => ({ agent: search.agent }),
   loader: async ({ context, params, deps }) => {
     const projects = await context.api.projects.list();
-    // the URL names the project by slug (its id works too); one the session cannot see is refused
+    // the URL names the project by slug (its id works too); one this sign-in lacks → sign in again
     const project = projects.find((item) => item.slug === params.slug || item.id === params.slug);
-    if (!project) throw new Error("This session cannot access that project.");
-    let agents: z.infer<typeof AgentList> = [];
-    if (project) {
-      using itx = await context.api.projects.get(project.id);
-      agents = AgentList.parse(await itx.invoke(["itx", "agents", ["list"]]));
-    }
+    if (!project) return context.signInFor(params.slug);
+    using itx = await context.api.projects.get(project.id);
+    const agents = AgentList.parse(await itx.invoke(["itx", "agents", ["list"]]));
     return { projects, project, agents, agent: deps.agent || agents[0]?.path };
   },
   component: AgentsPage,

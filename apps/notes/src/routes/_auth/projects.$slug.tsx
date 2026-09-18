@@ -25,26 +25,22 @@ const FILE = `${REPO}/notes/log.md`;
 export const Route = createFileRoute("/_auth/projects/$slug")({
   loader: async ({ context, params }) => {
     const projects = await context.api.projects.list();
-    // the URL names the project by slug (its id works too); one the session cannot see is refused
+    // the URL names the project by slug (its id works too); one this sign-in lacks → sign in again
     const project = projects.find((item) => item.slug === params.slug || item.id === params.slug);
-    if (!project) throw new Error("This session cannot access that project.");
-    let note = "";
-    let tip: string | null = null;
-    if (project) {
-      using itx = await context.api.projects.get(project.id);
-      await itx.invoke(["itx", "repos", ["get", REPO], ["create"]]);
-      await itx.invoke(["itx", "workspaces", ["get", WORKSPACE], ["create"]]);
-      note =
-        z
-          .string()
-          .nullable()
-          .parse(await itx.invoke(["itx", "workspaces", ["get", WORKSPACE], ["readFile", FILE]])) ??
-        "";
-      tip = z
+    if (!project) return context.signInFor(params.slug);
+    using itx = await context.api.projects.get(project.id);
+    await itx.invoke(["itx", "repos", ["get", REPO], ["create"]]);
+    await itx.invoke(["itx", "workspaces", ["get", WORKSPACE], ["create"]]);
+    const note =
+      z
         .string()
         .nullable()
-        .parse(await itx.invoke(["itx", "repos", ["get", REPO], ["tip"]]));
-    }
+        .parse(await itx.invoke(["itx", "workspaces", ["get", WORKSPACE], ["readFile", FILE]])) ??
+      "";
+    const tip = z
+      .string()
+      .nullable()
+      .parse(await itx.invoke(["itx", "repos", ["get", REPO], ["tip"]]));
     return { projects, project, note, tip };
   },
   component: NotesPage,
