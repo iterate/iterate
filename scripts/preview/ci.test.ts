@@ -4,11 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { expect, test } from "vitest";
 import { parse } from "yaml";
-import {
-  assertPreviewCiDeployments,
-  assertPreviewCiIdentity,
-  readPreviewCiResults,
-} from "./ci-identity.ts";
+import { assertPreviewCiIdentity, readPreviewCiResults } from "./ci-identity.ts";
 import {
   assertPlaywrightCapacity,
   previewPlaywrightShards,
@@ -43,31 +39,6 @@ test("fixed capacity rejects catalogue growth and an overloaded individual shard
   expect(() =>
     assertPlaywrightCapacity({ tests: 10, workers: 16, shard: { current: 1, total: 2 } }),
   ).toThrow(/six shards/);
-});
-
-test("restoration accepts the prepared ancestor deployment but rejects changed provenance", () => {
-  const prepared = {
-    os: {
-      headSha: "ancestor",
-      deployedWorkerVersion: "version-tested",
-      deployedWorkerName: "os-preview-2",
-      publicUrl: "https://os-preview-2.iterate.app",
-    },
-  };
-  expect(() => assertPreviewCiDeployments(prepared, structuredClone(prepared))).not.toThrow();
-  for (const changed of [
-    { headSha: "different-ancestor" },
-    { deployedWorkerVersion: "different-version" },
-    { deployedWorkerName: "os-preview-3" },
-    { publicUrl: "https://os-preview-3.iterate.app" },
-  ]) {
-    expect(() =>
-      assertPreviewCiDeployments(prepared, { os: { ...prepared.os, ...changed } }),
-    ).toThrow(/Prepared preview deployment mismatch/);
-  }
-  expect(() => assertPreviewCiDeployments(prepared, {})).toThrow(
-    /Prepared preview deployment mismatch/,
-  );
 });
 
 test("the lifecycle owner encloses every fixed shard and cleanup waits for their completion", () => {

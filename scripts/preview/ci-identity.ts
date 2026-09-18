@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { z } from "zod";
-import type { CloudflarePreviewAppEntry } from "./state.ts";
 
 export const PreviewCiIdentity = z.object({
   headSha: z.string().min(1),
@@ -28,30 +27,6 @@ export function assertPreviewCiIdentity(expected: PreviewCiIdentity, actual: Pre
     }
   }
 }
-
-/** Restoration must refer to the exact deployments the prepared run exercised. */
-export function assertPreviewCiDeployments(
-  expected: Record<string, PreviewDeploymentIdentity>,
-  actual: Record<string, PreviewDeploymentIdentity>,
-) {
-  for (const [app, deployment] of Object.entries(expected)) {
-    for (const key of [
-      "headSha",
-      "deployedWorkerName",
-      "deployedWorkerVersion",
-      "publicUrl",
-    ] as const) {
-      if (!deployment[key] || actual[app]?.[key] !== deployment[key]) {
-        throw new Error(`Prepared preview deployment mismatch: ${app}.${key}`);
-      }
-    }
-  }
-}
-
-type PreviewDeploymentIdentity = Pick<
-  CloudflarePreviewAppEntry,
-  "headSha" | "deployedWorkerName" | "deployedWorkerVersion" | "publicUrl"
->;
 
 /** Collect every required producer even when another failed or its artifact is absent. */
 export async function readPreviewCiResults(

@@ -29,6 +29,7 @@ export async function planPreview(
       // deployment, even though we have already passed it while looking for results.
       for (const candidate of commits) {
         const deployment = await evidence.findPreviewDeployment(candidate);
+        // We found a usable deployment before hitting a change that requires a newer one.
         if (deployment)
           return {
             action: "reuse",

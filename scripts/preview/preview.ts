@@ -63,12 +63,7 @@ import {
   CloudflarePreviewSlotDisplay,
   CloudflarePreviewState,
 } from "./state.ts";
-import {
-  assertPreviewCiDeployments,
-  assertPreviewCiIdentity,
-  PreviewCiIdentity,
-  readPreviewCiResults,
-} from "./ci-identity.ts";
+import { assertPreviewCiIdentity, PreviewCiIdentity, readPreviewCiResults } from "./ci-identity.ts";
 import { previewPlaywrightShards } from "./playwright-capacity-reporter.ts";
 import { CommitHistory } from "./commit-history.ts";
 import { planPreview } from "./change-plan.ts";
@@ -1874,8 +1869,21 @@ export async function erase(options: EraseOptions = {}) {
     throw new Error("Restoration requires a clean checkout of the tested revision.");
   const plan = options.preparedCiPlan ? await readPreviewCiPlan(target, runtime) : null;
   if (plan) {
-    assertPreviewCiIdentity(plan, { ...plan, slot: slot.slug });
-    assertPreviewCiDeployments(plan.state.apps, report.state.apps);
+    if (plan.slot !== slot.slug)
+      throw new Error(
+        `Preview CI identity mismatch: slot expected ${plan.slot}, received ${slot.slug}`,
+      );
+    for (const [app, deployment] of Object.entries(plan.state.apps)) {
+      for (const key of [
+        "headSha",
+        "deployedWorkerName",
+        "deployedWorkerVersion",
+        "publicUrl",
+      ] as const) {
+        if (!deployment[key] || report.state.apps[app]?.[key] !== deployment[key])
+          throw new Error(`Prepared preview deployment mismatch: ${app}.${key}`);
+      }
+    }
   } else {
     for (const slug of ["auth", "os", "streams-example-app"]) {
       const entry = report.state.apps[slug];
