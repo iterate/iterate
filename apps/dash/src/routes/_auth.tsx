@@ -1,13 +1,24 @@
 // The signed-in shell: authenticate once (the SDK client; a missing session leaves for the issuer's
 // login), load what every page shares — the person's organizations and projects — and frame every
-// child in the sidebar + header. Consent is task-based: the dash asks for `iterate`, `account` and
-// `organizations:write`, the person may untick the optional two, and the pages read `info.scopes`
-// for what they may do.
-import { createFileRoute, Outlet, useMatches } from "@tanstack/react-router";
+// child in the shared `AppShell` (packages/ui, the same frame agents, notes and voice use). Consent
+// is task-based: the dash asks for `iterate`, `account` and `organizations:write`, the person may
+// untick the optional two, and the pages read `info.scopes` for what they may do.
+import {
+  createFileRoute,
+  Link,
+  Outlet,
+  useMatches,
+  useParams,
+  useRouter,
+  useRouterState,
+} from "@tanstack/react-router";
+import { ArrowLeft, KeyRound, Plus } from "lucide-react";
 import { createIterateClient } from "iterate/next/app";
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "@iterate-com/ui/components/sidebar";
+import { AppShell } from "@iterate-com/ui/components/app-shell";
+import { DropdownMenuItem } from "@iterate-com/ui/components/dropdown-menu";
 import { DashBreadcrumbs } from "../components/dash-breadcrumbs.tsx";
-import { DashSidebar } from "../components/dash-sidebar.tsx";
+import { DashNav } from "../components/dash-nav.tsx";
+import { projectsByOrg } from "../lib/projects.ts";
 
 const iterate = createIterateClient({ scopes: ["iterate", "account", "organizations:write"] });
 
@@ -32,36 +43,59 @@ export function projectHostOf(
   return `${origin.protocol}//${projectId}.${info.projectHostnameBase}${origin.port ? `:${origin.port}` : ""}/`;
 }
 
-/** The shell is apps/os's (`apps/os/src/routes/_app.tsx`): the same Sidebar from packages/ui, the
- *  same minimal header — the trigger on phones only (desktop collapses from the footer and the
- *  rail), the page's label beside it — and the sidebar's open state remembered the way shadcn's
- *  provider remembers it (its `sidebar_state` cookie; this shell is client-only, so it reads it). */
 function Shell() {
   const { orgs, projects } = Route.useLoaderData();
   const { info } = Route.useRouteContext();
+  const router = useRouter();
+  const href = useRouterState({ select: (state) => state.location.href });
+  const { projectId } = useParams({ strict: false });
   const matches = useMatches();
   const page = matches
     .map((match) => match.staticData.page)
     .filter((label): label is string => Boolean(label))
     .at(-1);
-  const defaultOpen = !document.cookie.split("; ").includes("sidebar_state=false");
   return (
-    <SidebarProvider defaultOpen={defaultOpen} className="h-svh">
-      <DashSidebar
-        orgs={orgs}
-        projects={projects}
-        email={info.principal.email || info.principal.actor}
-        projectHost={(projectId) => projectHostOf(info, projectId)}
-      />
-      <SidebarInset className="min-w-0 overflow-hidden">
-        <header className="flex shrink-0 items-center gap-3 px-4 pt-2.5 pb-1">
-          <SidebarTrigger className="-ml-1 md:hidden" />
-          <DashBreadcrumbs orgs={orgs} projects={projects} page={page} />
-        </header>
-        <div className="flex min-h-0 flex-1 flex-col overflow-auto">
-          <Outlet />
-        </div>
-      </SidebarInset>
-    </SidebarProvider>
+    <AppShell
+      app="iterate"
+      // the switcher lists projects by organization, in the organizations' order
+      projects={projectsByOrg(orgs, projects).flatMap((group) =>
+        group.projects.map((project) => ({
+          id: project.id,
+          org: { id: group.org.id, name: group.org.name },
+        })),
+      )}
+      activeProjectId={projectId || null}
+      projectHref={(id) => `/projects/${id}`}
+      // the dash has a client router: a plain click on a switcher item is a route change, not a
+      // page load (the shell leaves modified and middle clicks to the anchor)
+      onNavigate={(to, event) => {
+        event.preventDefault();
+        void router.navigate({ href: to });
+      }}
+      switcherActions={
+        <>
+          <DropdownMenuItem render={<Link to="/projects" search={{ new: 1 }} />}>
+            <Plus />
+            <span>New project</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem render={<Link to="/projects" />}>
+            <ArrowLeft />
+            <span>All projects</span>
+          </DropdownMenuItem>
+        </>
+      }
+      nav={<DashNav projectId={projectId || null} projectHost={(id) => projectHostOf(info, id)} />}
+      header={<DashBreadcrumbs orgs={orgs} projects={projects} page={page} />}
+      account={{ email: info.principal.email || info.principal.actor }}
+      accountActions={
+        <DropdownMenuItem render={<Link to="/sessions" />}>
+          <KeyRound />
+          <span>Sessions</span>
+        </DropdownMenuItem>
+      }
+      locationKey={href}
+    >
+      <Outlet />
+    </AppShell>
   );
 }
