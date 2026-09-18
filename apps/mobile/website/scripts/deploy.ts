@@ -10,9 +10,11 @@
  * authenticate with os's admin bearer — one secret, one rotation).
  */
 import { fileURLToPath } from "node:url";
+import { readdirSync } from "node:fs";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { mobileWebsiteEnvs } from "../../../../envs.ts";
 import { deployApp } from "../../../../scripts/lib/deploy-app.ts";
+import { publishFilterAssets } from "./publish-filter-assets.ts";
 
 /** Deploy apps/mobile/website — see scripts/lib/deploy-app.ts for the pipeline. */
 export default async function deploy(
@@ -33,11 +35,17 @@ export default async function deploy(
     // The checked-in wrangler.jsonc carries the env blocks, so deploy selects
     // one with --env instead of a built per-env config.
     build: "checked-in-config",
+    prepare: publishFilterAssets,
     smokes: (env) => [
       // The install page renders its honest fallback even with an empty
       // bucket, so anything under 500 proves the worker + R2 binding serve.
       { url: `${env.baseUrl}/m/install/preview`, ok: (status) => status < 500, label: "install" },
       { url: `${env.baseUrl}/`, ok: (status) => status < 500, label: "root" },
+      {
+        url: `${env.baseUrl}/filter-assets/${readdirSync(new URL("../filter-assets/", import.meta.url))[0]}`,
+        ok: (status) => status === 200,
+        label: "filter asset",
+      },
     ],
   });
 }

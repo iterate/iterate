@@ -10,6 +10,7 @@ import {
   handleInstallPageRequest,
   handlePreviewChannelRequest,
 } from "./channel-status.ts";
+import { handleFilterAssetRequest } from "./filter-assets.ts";
 
 export interface Env {
   STATE_BUCKET: R2Bucket;
@@ -44,6 +45,9 @@ const APPLE_APP_SITE_ASSOCIATION = {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname.startsWith("/filter-assets/")) {
+      return handleFilterAssetRequest(request, env.STATE_BUCKET);
+    }
     if (
       url.pathname === "/.well-known/apple-app-site-association" ||
       url.pathname === "/apple-app-site-association"
