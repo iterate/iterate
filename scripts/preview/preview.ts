@@ -28,6 +28,7 @@ import {
   type TestTelemetryArtifactSource,
 } from "../../packages/shared/src/test-support/ci-telemetry.ts";
 import { fetchCloudflareWith429Retry } from "../lib/cloudflare-429-retry.ts";
+import { CloudflareApiError, resolveEnvContext } from "../lib/env-context.ts";
 import {
   compactRetryFailure,
   OS_AGENT_SMOKE_TIMEOUT_SECS,
@@ -64,6 +65,10 @@ import {
 } from "./state.ts";
 import { assertPreviewCiIdentity, PreviewCiIdentity, readPreviewCiResults } from "./ci-identity.ts";
 import { previewPlaywrightShards } from "./playwright-capacity-reporter.ts";
+import { CommitHistory } from "./commit-history.ts";
+import { planPreview } from "./change-plan.ts";
+import { findPreviewResult } from "./preview-result.ts";
+import { servesRecordedWorkerVersion } from "./deployed-version.ts";
 
 // Flake-hunt notes for the preview e2e lane live in
 // docs/preview-e2e-flake-hunt.md.
@@ -367,8 +372,72 @@ export async function run(options: DeployCommandOptions = {}) {
   });
 }
 
+/** Select new work, or inherit a completed ancestor result without provisioning. */
+export async function ciPlan(options: DeployCommandOptions = {}) {
+  const { target, runtime } = await resolvePreviewCommandSetup({
+    ...options,
+    requireCleanCheckout: true,
+  });
+  const history = new CommitHistory(runtime.repositoryRoot, "HEAD", "origin/main");
+  if (history.head !== target.run.headSha) throw new Error("Preview head changed before planning.");
+  const decision =
+    options.allApps || !target.run.pullRequestNumber
+      ? {
+          action: "deploy" as const,
+          changes: {},
+          reason: "Full preview requested (main or manual dispatch).",
+        }
+      : await planPreview(history, {
+          findPreviewResult: (commit) => findPreviewResult(commit, target.run),
+          findPreviewDeployment: async (commit) => {
+            const state = await findPreviewDeployment(commit, target, runtime);
+            return state ? { commit, slot: state.environmentConfigLease!.slug } : null;
+          },
+        });
+  const outputs = {
+    action: decision.action,
+    ...(decision.action === "inherit"
+      ? { conclusion: decision.result.conclusion, commit: decision.result.commit }
+      : decision.action === "reuse"
+        ? { commit: decision.deployment.commit, slot: decision.deployment.slot }
+        : { commit: history.head }),
+    tests: decision.action !== "inherit",
+    deploy: decision.action === "deploy",
+  };
+  if (process.env.GITHUB_OUTPUT) {
+    const values = Object.fromEntries(
+      Object.entries(outputs).map(([key, value]) => [key, String(value)]),
+    );
+    await appendFile(
+      process.env.GITHUB_OUTPUT,
+      Object.entries(outputs)
+        .map(([key, value]) => `${key}=${value}\n`)
+        .join("") + `values=${JSON.stringify(values)}\n`,
+    );
+  }
+  const result = { head: history.head, ...decision, ...outputs };
+  logPreview(
+    decision.action === "inherit"
+      ? `${decision.reason} (https://github.com/${target.run.repositoryFullName}/compare/${decision.result.commit}...${history.head})`
+      : decision.reason,
+  );
+  if (decision.action === "inherit" && decision.result.conclusion === "failure") {
+    throw new Error(
+      `Inherited failed preview from ${decision.result.commit}: ${decision.result.url}`,
+    );
+  }
+  return result;
+}
+
 /** Deploy once and publish only non-secret inputs for this workflow attempt. */
-export async function ciPrepare(options: DeployCommandOptions = {}) {
+export async function ciPrepare(
+  options: DeployCommandOptions & {
+    /** Ancestor selected by ci-plan; test code still comes from the head checkout. */
+    reuseCommit?: string;
+    /** Recorded slot, rechecked against the live lease before reuse. */
+    reuseSlot?: string;
+  } = {},
+) {
   const { target, runtime } = await resolvePreviewCommandSetup({
     ...options,
     requireCleanCheckout: true,
@@ -381,11 +450,37 @@ export async function ciPrepare(options: DeployCommandOptions = {}) {
   if (checkedOutSha !== run.headSha)
     throw new Error("Preview head changed before CI preparation; refusing to deploy.");
   return await withPreviewE2eTelemetry(run, runtime, "deploy", async (telemetry) => {
-    const { state } = await traceOperation("Provision and deploy preview", () =>
-      measurePreviewDeployRun(telemetry, () =>
-        deployPreviewApps({ target, runtime, allApps: Boolean(options.allApps), telemetry }),
-      ),
-    );
+    if (Boolean(options.reuseCommit) !== Boolean(options.reuseSlot))
+      throw new Error("Reuse requires both a commit and a slot.");
+    let state = options.reuseCommit
+      ? await findPreviewDeployment(options.reuseCommit, target, runtime)
+      : null;
+    if (state?.environmentConfigLease?.slug !== options.reuseSlot) state = null;
+    if (state && options.reuseCommit && options.reuseSlot) {
+      const lease = await adoptLeaseHeldBySemaphore({
+        holder: run.holder,
+        leaseMs: defaultPreviewLeaseMs,
+        preferSlug: options.reuseSlot,
+        allowedSlugs: [options.reuseSlot],
+        semaphore: runtime.createPreviewSemaphoreResourceClient(),
+      });
+      // Renewal must not erase the restored fleet. Recheck ownership and every
+      // serving version after renewal, before publishing the plan to consumers.
+      state = lease ? await findPreviewDeployment(options.reuseCommit, target, runtime) : null;
+      if (state)
+        logPreview(
+          `Reusing preview ${options.reuseSlot} from ${options.reuseCommit} after lease renewal.`,
+        );
+    }
+    if (options.reuseCommit && !state)
+      logPreview("Selected preview is no longer usable; deploying the head instead.");
+    if (!state) {
+      ({ state } = await traceOperation("Provision and deploy preview", () =>
+        measurePreviewDeployRun(telemetry, () =>
+          deployPreviewApps({ target, runtime, allApps: true, telemetry }),
+        ),
+      ));
+    }
     const slot = state.environmentConfigLease;
     if (!slot) throw new Error("Preview deployment produced no slot.");
     const apps = selectPreviewAppsForTesting(state.apps);
@@ -553,7 +648,7 @@ export async function ciTest(options: PreviewCommandOptions & { shard?: number }
   return results;
 }
 
-/** Join local results and publish outcomes. No live lease is needed: erase runs concurrently. */
+/** Join local results and record conclusive outcomes before cleanup. */
 export async function ciFinish(options: PreviewCommandOptions = {}) {
   const { target, runtime, plan } = await resolvePreviewCiSetup(options);
   const { run } = target;
@@ -606,7 +701,7 @@ export async function ciFinish(options: PreviewCommandOptions = {}) {
         streamsReportError = `Could not collect streams Playwright report: ${String(error)}`;
       }
     }
-    const entries = await Promise.all(
+    const results = await Promise.all(
       apps.map(async (app) => {
         telemetry.appStarted(
           app.previewTestArtifactSources.flatMap((source) =>
@@ -621,7 +716,7 @@ export async function ciFinish(options: PreviewCommandOptions = {}) {
             ? previewPlaywrightShards.map((shard) => `playwright-${shard}`)
             : []),
         ];
-        const { failures, durationMs } = await readPreviewCiResults(
+        const { failures, durationMs, complete } = await readPreviewCiResults(
           plan,
           keys,
           resolve(runtime.repositoryRoot, "test-results/preview-ci-results"),
@@ -644,17 +739,21 @@ export async function ciFinish(options: PreviewCommandOptions = {}) {
           retryCount: summary.retried.reduce((sum, test) => sum + test.retryCount, 0),
           collectionErrors: summary.collectionErrors,
         });
-        return CloudflarePreviewAppEntry.parse({
-          ...plan.state.apps[app.slug],
-          status: message ? "tests-failed" : "deployed",
-          message,
-          testDurationMs: durationMs,
-          testRetries: renderPreviewRetrySummary(summary),
-          updatedAt: new Date().toISOString(),
-          runUrl: run.workflowRunUrl,
-        });
+        return {
+          complete: complete && summary.testCount > 0 && summary.collectionErrors.length === 0,
+          entry: CloudflarePreviewAppEntry.parse({
+            ...plan.state.apps[app.slug],
+            status: message ? "tests-failed" : "deployed",
+            message,
+            testDurationMs: durationMs,
+            testRetries: renderPreviewRetrySummary(summary),
+            updatedAt: new Date().toISOString(),
+            runUrl: run.workflowRunUrl,
+          }),
+        };
       }),
     );
+    const entries = results.map((result) => result.entry);
     await target.report.update((state) => ({
       ...state,
       apps: {
@@ -662,6 +761,19 @@ export async function ciFinish(options: PreviewCommandOptions = {}) {
         ...Object.fromEntries(entries.map((entry) => [entry.appSlug, entry])),
       },
     }));
+    // Failed tests are inheritable; missing reports, identities or interrupted
+    // commands are not. Emit before throwing so the finalizer can publish red.
+    if (
+      process.env.GITHUB_OUTPUT &&
+      !mergeFailure &&
+      !streamsReportError &&
+      results.every((result) => result.complete)
+    ) {
+      const outcome = entries.some((entry) => entry.status === "tests-failed")
+        ? "failure"
+        : "success";
+      await appendFile(process.env.GITHUB_OUTPUT, `test_outcome=${outcome}\n`);
+    }
     if (entries.some((entry) => entry.status === "tests-failed"))
       throw new Error(
         "Preview tests failed or a required shard result was missing; see the app results.",
@@ -670,11 +782,106 @@ export async function ciFinish(options: PreviewCommandOptions = {}) {
   });
 }
 
+/** Only reuse our leased, complete fleet while its recorded versions still serve. */
+async function findPreviewDeployment(
+  commit: string,
+  target: PreviewTarget,
+  runtime: PreviewRuntime,
+) {
+  if (!target.run.pullRequestNumber) return null;
+  const state = target.report.state;
+  const slot = state.environmentConfigLease;
+  if (!slot) return null;
+  const apps = Object.values(cloudflarePreviewApps);
+  for (const app of apps) {
+    const entry = state.apps[app.slug];
+    const config = app.resolvePreviewAppConfig(slot.dopplerConfig);
+    if (
+      !canRunPreviewTests(entry) ||
+      entry?.headSha !== commit ||
+      entry.publicUrl !== config.baseUrl ||
+      entry.deployedWorkerName !== config.workerName ||
+      !entry.deployedWorkerVersion
+    )
+      return null;
+  }
+  // A live Worker alone does not prove its test data was retired. Require the
+  // same explicit settlement used for result inheritance, including failed tests.
+  if (!(await findPreviewResult(commit, target.run))) return null;
+  const resources = await runtime.createPreviewSemaphoreResourceClient().list({
+    type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+  });
+  const resource = resources.find((item) => item.slug === slot.slug);
+  // Planning only reads ownership. Prepare renews the selected lease before
+  // reuse, so a nearly expired lease is still a candidate; an expired one is not.
+  if (
+    resource?.leaseState !== "leased" ||
+    resource.holder !== target.run.holder ||
+    !resource.leasedUntil ||
+    resource.leasedUntil <= Date.now()
+  ) {
+    logPreview(
+      `Cannot reuse ${commit}: ${slot.slug} has no live lease owned by ${target.run.holder}.`,
+    );
+    return null;
+  }
+  // Every preview app lives in this slot's account. Consult deployment
+  // metadata too: auth, semaphore and dummy-petshop do not expose version headers.
+  const account = await resolveEnvContext({ envs, dopplerProject: "os", env: slot.dopplerConfig });
+  const serving = await Promise.all(
+    apps.map(async (app) => {
+      const entry = state.apps[app.slug];
+      let deployments: unknown;
+      try {
+        deployments = await account.cf(
+          `/workers/scripts/${encodeURIComponent(entry.deployedWorkerName!)}/deployments`,
+          { signal: runtime.signal },
+        );
+      } catch (error) {
+        if (!(error instanceof CloudflareApiError && error.status === 404)) throw error;
+        logPreview(`Cannot reuse ${commit}: ${app.slug} has no deployed Worker.`);
+        return false;
+      }
+      if (!servesRecordedWorkerVersion(deployments, entry.deployedWorkerVersion!)) {
+        logPreview(`Cannot reuse ${commit}: ${app.slug} no longer deploys its recorded version.`);
+        return false;
+      }
+      const url = new URL(app.previewReadyUrlPath || defaultPreviewReadyUrlPath, entry.publicUrl!);
+      const response = await fetchReadinessResponse(url, {
+        signal: runtime.signal,
+        timeoutMs: previewServingProbeTimeoutMs,
+      }).catch((error: unknown) => {
+        runtime.signal?.throwIfAborted();
+        logPreview(`Cannot reuse ${commit}: ${app.slug} readiness probe failed: ${String(error)}`);
+        return null;
+      });
+      if (!response) return false;
+      const ok =
+        response.status >= 200 &&
+        response.status < 300 &&
+        (!app.previewReadyWorkerVersion || response.workerVersion === entry.deployedWorkerVersion);
+      if (!ok)
+        logPreview(
+          `Cannot reuse ${commit}: ${app.slug} is not serving its recorded preview (HTTP ${response.status}).`,
+        );
+      return ok;
+    }),
+  );
+  return serving.every(Boolean) ? state : null;
+}
+
 async function resolvePreviewCiSetup(options: PreviewCommandOptions) {
   const { target, runtime } = await resolvePreviewCommandSetup({
     ...options,
     requireCleanCheckout: false,
   });
+  const plan = await readPreviewCiPlan(target, runtime);
+  // Consumers use the immutable prepared report, not another runner's local cache.
+  target.report.state = plan.state;
+  return { target, runtime, plan };
+}
+
+async function readPreviewCiPlan(target: PreviewTarget, runtime: PreviewRuntime) {
   const { run } = target;
   const plan = PreviewCiPlan.parse(
     JSON.parse(
@@ -695,10 +902,7 @@ async function resolvePreviewCiSetup(options: PreviewCommandOptions) {
   }).trim();
   if (checkedOutSha !== plan.headSha)
     throw new Error("Preview CI checkout does not match prepared head.");
-  // Consumers start from the immutable prepared report, not mutable PR prose
-  // or a different runner's local report cache.
-  target.report.state = plan.state;
-  return { target, runtime, plan };
+  return plan;
 }
 
 async function runPreviewCiCommand(
@@ -1620,6 +1824,8 @@ type EraseOptions = PreviewCommandOptions & {
   ranHeadSha?: string;
   /** After post-test retirement, redeploy the tested apps so this preview can be used again. */
   restore?: boolean;
+  /** Verify restoration against this run's prepared CI deployment artifact. */
+  preparedCiPlan?: boolean;
 };
 
 /**
@@ -1661,16 +1867,41 @@ export async function erase(options: EraseOptions = {}) {
     }).trim()
   )
     throw new Error("Restoration requires a clean checkout of the tested revision.");
-  for (const slug of ["auth", "os", "streams-example-app"]) {
-    const entry = target.report.state.apps[slug];
-    if (!entry?.deployedWorkerVersion || entry.headSha !== options.ranHeadSha)
-      throw new Error(`Cannot restore ${slug}: no deployment recorded for this tested head.`);
+  const plan = options.preparedCiPlan ? await readPreviewCiPlan(target, runtime) : null;
+  if (plan) {
+    if (plan.slot !== slot.slug)
+      throw new Error(
+        `Preview CI identity mismatch: slot expected ${plan.slot}, received ${slot.slug}`,
+      );
+    for (const [app, deployment] of Object.entries(plan.state.apps)) {
+      for (const key of [
+        "headSha",
+        "deployedWorkerName",
+        "deployedWorkerVersion",
+        "publicUrl",
+      ] as const) {
+        if (!deployment[key] || report.state.apps[app]?.[key] !== deployment[key])
+          throw new Error(`Prepared preview deployment mismatch: ${app}.${key}`);
+      }
+    }
+  } else {
+    for (const slug of ["auth", "os", "streams-example-app"]) {
+      const entry = report.state.apps[slug];
+      if (!entry?.deployedWorkerVersion || entry.headSha !== options.ranHeadSha)
+        throw new Error(`Cannot restore ${slug}: no deployment recorded for this tested head.`);
+    }
   }
   const before = structuredClone(report.state.apps);
   const startedAt = new Date().toISOString();
   // OS reset also wipes Auth's OAuth client records. Use the ordinary deploy
   // commands to reseed Auth and restore all code, secrets, assets and bindings.
-  const apps = [cloudflarePreviewApps.auth, ...selectPreviewCleanupApps([])];
+  // After testing an ancestor, restore the whole fleet from the tested checkout.
+  // Otherwise the report would mix ancestor and head SHAs, preventing later reuse.
+  const reused =
+    plan && Object.values(plan.state.apps).some((entry) => entry.headSha !== run.headSha);
+  const apps = reused
+    ? Object.values(cloudflarePreviewApps)
+    : [cloudflarePreviewApps.auth, ...selectPreviewCleanupApps([])];
   await report.update((state) => ({
     ...state,
     notice: "Tests finished; restoring the clean preview.",
@@ -1741,6 +1972,8 @@ export async function erase(options: EraseOptions = {}) {
         completedAt: new Date().toISOString(),
         apps: apps.map(({ slug }) => ({
           app: slug,
+          testedHeadSha: before[slug].headSha,
+          restoredHeadSha: report.state.apps[slug].headSha,
           testedVersion: before[slug].deployedWorkerVersion,
           restoredVersion: report.state.apps[slug].deployedWorkerVersion,
         })),
@@ -1753,6 +1986,7 @@ export async function erase(options: EraseOptions = {}) {
     ...state,
     notice: null,
   }));
+  if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT, "restored=true\n");
   return { ...result, restored: true };
 }
 
@@ -5894,19 +6128,23 @@ async function listSlotsLeasedToHolder(semaphore: PreviewSemaphoreResourceClient
  * slots there); returning false moves on to the holder's next slot, if any.
  */
 async function adoptLeaseHeldBySemaphore(input: {
+  /** Reuse must renew only the selected deployment's slot, never another hold. */
+  allowedSlugs?: string[];
   holder: string;
   leaseMs: number;
   onAdopted?: (lease: PreviewSemaphoreLease) => Promise<boolean>;
   preferSlug: string | null;
   semaphore: PreviewSemaphoreResourceClient;
 }): Promise<EnvironmentConfigLease | null> {
-  const held = (await listSlotsLeasedToHolder(input.semaphore, input.holder)).sort(
-    (left, right) =>
-      Number(right.slug === input.preferSlug) - Number(left.slug === input.preferSlug),
-  );
+  const held = (await listSlotsLeasedToHolder(input.semaphore, input.holder))
+    .filter((resource) => !input.allowedSlugs || input.allowedSlugs.includes(resource.slug))
+    .sort(
+      (left, right) =>
+        Number(right.slug === input.preferSlug) - Number(left.slug === input.preferSlug),
+    );
   for (const resource of held) {
     const reissued = await input.semaphore.acquireSpecific({
-      allowedSlugs: previewEnvironmentSlugs,
+      allowedSlugs: input.allowedSlugs || previewEnvironmentSlugs,
       type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
       slug: resource.slug,
       leaseMs: input.leaseMs,
