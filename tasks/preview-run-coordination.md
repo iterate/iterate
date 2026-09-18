@@ -1,14 +1,16 @@
 ---
-status: in-progress
+status: implemented
 size: large
 base: codex/preview-change-types-v3
 ---
 
 # Keep useful preview runs, stop obsolete work, and wait across commits
 
-Stacked draft PR #2741, based on #2712. Implementation and local checks pass.
-Live runs prove exclusive cleanup, cross-commit waiting, smart cancellation and
-both forms of job retry recovery. Final pending inheritance acceptance remains.
+Compare-only follow-up to #2712; draft #2741 was closed at the user's request.
+Implementation and local checks pass. Live runs prove exclusive cleanup,
+cross-commit waiting, smart cancellation and both forms of job retry recovery.
+The last pending-docs trial preserved its ancestor and queued its successor;
+the final inheritance outcome was not observed before closure.
 
 ## Request
 
@@ -53,11 +55,11 @@ both forms of job retry recovery. Final pending inheritance acceptance remains.
 - [x] Pin preview identity and support pending-ancestor inheritance/reuse. *Pinned checkout SHA and workflow-level exclusion preserve useful ancestors.*
 - [x] Implement conservative cancellation and preserve cleanup/lease exclusion. *The independent coordinator cancels proven-obsolete consumers and preserves both mutators.*
 - [x] Support retry recovery and reject stale artifacts/results with clear reasons. *Partial attempts stop at the guard; recovery drains then requests a full rerun.*
-- [ ] Validate types, lint, formatting and relevant/full required tests.
+- [x] Validate types, lint, formatting and relevant/full required tests. *Full local checks passed; after merging parent review fixes, all 489 scripts tests, scripts typecheck and affected-file lint passed again.*
 - [ ] Exercise live pending docs inheritance, useful ancestor preservation,
       obsolete-work cancellation, full rerun and partial retry behavior.
-- [ ] Review the stacked diff independently, handle review feedback, and record
-      operational evidence in the draft PR.
+- [x] Review the stacked diff independently, handle review feedback, and record
+      operational evidence. *Independent review found no remaining safety blocker. Evidence and the proposed PR body are in the latest commit message; #2741 is closed.*
 
 ## Implementation log
 
@@ -136,3 +138,9 @@ both forms of job retry recovery. Final pending inheritance acceptance remains.
 - Final pending-docs trial: push this documentation while the merged implementation
   is running. The ancestor must finish restoration; this successor must inherit its
   conclusive outcome without deploying or testing again.
+
+- User requested compare-only review and closure of #2741. The pending-docs
+  trial had confirmed that `3lm1lnnm8x` preserves `lpbht2t3w8` and waits for
+  its `preview-settled` signal; successor `bhvxcldzbt` remained queued.
+  Final docs inheritance was not observed before closing the PR. Do not mistake
+  this partially observed acceptance scenario for a completed one.
