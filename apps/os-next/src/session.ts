@@ -20,7 +20,7 @@ import type { AppConfig } from "./app-config.ts";
 import type { AuthenticationFact } from "./account/contract.ts";
 
 /** A project as a caller names it: its minted id (`prj_<hex>`) or its slug (a URL's
- *  `/projects/<slug>`, a hostname's label) — the directory resolves either (`getProject`), and the
+ *  `/projects/<slug>`, a hostname's label) — the directory resolves either (`projectIdOf`), and the
  *  id alone goes on: the DO name's host, a grant's list, `whoami()`. */
 export type ProjectRef = string;
 
@@ -434,9 +434,8 @@ class ProjectCollection extends RpcTarget {
         "FORBIDDEN",
         `projects.get(${JSON.stringify(project)}): the deployment-global namespace is no project — a global context is reached by identity (session.user, session.organizations)`,
       );
-    const row = await this.#input.directory.getProject(address.projectId);
-    const id = row?.id ?? (this.#reach === "every" ? address.projectId : null);
-    if (!id || !(await this.#input.directory.reachesProject(this.#reach, id)))
+    const id = await this.#input.directory.projectIdOf(address.projectId);
+    if (!(await this.#input.directory.reachesProject(this.#reach, id)))
       throw codedError(
         "FORBIDDEN",
         `projects.get(${JSON.stringify(project)}): outside this session's reach — ${describeReach(this.#reach)}`,

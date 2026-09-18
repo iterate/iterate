@@ -285,14 +285,20 @@ ORDER BY p.slug ASC;`,
     /** Whether `reach` reaches `projectId` — the admission behind `projects.get` (session.ts) and a
      *  `/mcp` tool's `project`. The admin reaches a project the directory never heard of (the door
      *  is the admin's); a named reach is its list; a user's is one membership read. */
+    /** The id a ref names: an id is self-evident (`prj_…` — a slug never holds an underscore), a
+     *  slug resolves through the directory, and a slug it lacks passes through for the reach check
+     *  to refuse. The ONE slug-or-id rule (`projects.get`, the MCP `project`, every reach check). */
+    async projectIdOf(ref: string): Promise<string> {
+      if (ref.startsWith("prj_")) return ref;
+      return (await d1Directory.getProject(ref))?.id ?? ref;
+    },
+
     async reachesProject(reach: Reach, ref: string): Promise<boolean> {
       if (reach === "every") return true;
-      // a slug or an id: the row's id is what a grant and a membership name
-      const project = await d1Directory.getProject(ref);
-      if (!project) return false;
-      if (reach.projectIds && !reach.projectIds.includes(project.id)) return false;
+      const id = await d1Directory.projectIdOf(ref);
+      if (reach.projectIds && !reach.projectIds.includes(id)) return false;
       if (!("userId" in reach)) return true;
-      return (await d1Directory.listProjects(reach.userId)).some((row) => row.id === project.id);
+      return (await d1Directory.listProjects(reach.userId)).some((row) => row.id === id);
     },
 
     /** The deployment's own org — `org_admin`, created on first use, no members: where the admin

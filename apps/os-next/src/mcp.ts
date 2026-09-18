@@ -27,10 +27,8 @@ async function projectOfToolCall(
       throw new Error(
         `project: got a context name ${JSON.stringify(requested)} — pass the project and cd(path) in the expression`,
       );
-    // a slug or an id (session.ts `projects.get`): the directory's row says the id
-    const row = await d1Directory.getProject(projectId);
-    const id = row?.id ?? (reach === "every" ? projectId : null);
-    if (!id || !(await d1Directory.reachesProject(reach, id)))
+    const id = await d1Directory.projectIdOf(projectId);
+    if (!(await d1Directory.reachesProject(reach, id)))
       throw new Error(`project ${JSON.stringify(requested)} is outside this token's grant`);
     return id;
   }
