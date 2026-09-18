@@ -1,5 +1,5 @@
-import { replacePreview, retirePreview } from "./lifecycle.ts";
 import { expect, test } from "vitest";
+import { replacePreview, retirePreview } from "./lifecycle.ts";
 
 test("a failed replacement leaves the published preview usable and retires only the candidate", async () => {
   const events: string[] = [];

@@ -36,7 +36,7 @@ The registry is local to `evidence.ignoreme/<id>/`, including lease tokens and
 recovery checkpoints; do not commit it. A cleanup launch is independent of the
 deploy process and its intent is saved before launch. It survives a normal
 parent exit, but **this is not a distributed durable job runner**: machine death
-requires the explicit recovery command. A stale `.cleanup.lock` or
+requires the explicit recovery command. A stale `.mutation.lock` or
 `registry.lock` must be inspected before removal. Never remove a lock while its
 process is running. Expired/lost leases forbid recovery mutations.
 
@@ -71,3 +71,8 @@ The manual experiment proves Cloudflare behavior and the local lifecycle. It doe
 not claim to exercise GitHub PR reporting, Depot cancellation, the complete browser
 suite or settlement publication. The existing planner and settlement tests are
 run unchanged to check the starting assumptions.
+
+`watch <id> <slot> <duration-ms>` samples the current preview until publication
+moves to a replacement (maximum 15 minutes). `inspect <id> <slot>` saves route,
+namespace, container and sampled Worker Logs evidence without attaching a live
+tail. Request/log samples do not establish worldwide propagation.

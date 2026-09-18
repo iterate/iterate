@@ -301,6 +301,21 @@ export class Experiment {
 
   /** Deploy the real six-app fleet, then run unretried agent work at the measured OS deployment age. */
   async deploy(slug: string, waitMs: number) {
+    assert(
+      !(await this.registry((r) => r.pendingCleanup.includes(slug))),
+      "Cannot deploy a retiring slot",
+    );
+    const lock = join(this.directory, `${slug}.mutation.lock`);
+    await mkdir(lock);
+    try {
+      await this.#deploy(slug, waitMs);
+    } finally {
+      await rm(lock, { recursive: true });
+    }
+  }
+
+  /** Run the fleet while holding the per-slot mutation lock. */
+  async #deploy(slug: string, waitMs: number) {
     assert([0, 15_000, 90_000].includes(waitMs));
     const before = await this.slot(slug);
     assert.equal(
@@ -449,7 +464,7 @@ export class Experiment {
 
   /** Resumeable cleanup owns one lease continuously; errors retain it and the recovery journal. */
   async cleanup(slug: string) {
-    const lock = join(this.directory, `${slug}.cleanup.lock`);
+    const lock = join(this.directory, `${slug}.mutation.lock`);
     await mkdir(lock);
     try {
       assert.notEqual(
@@ -457,6 +472,14 @@ export class Experiment {
         slug,
         "Cannot clean the current preview",
       );
+      assert(
+        (await this.slot(slug)).stage === "acquired" ||
+          (await this.registry((r) => r.pendingCleanup.includes(slug))),
+        "Cleanup requires a queued retirement or an undeployed acquired slot",
+      );
+      await this.registry((r) => {
+        if (!r.pendingCleanup.includes(slug)) r.pendingCleanup.push(slug);
+      });
       await retirePreview({
         assertOwned: async () => {
           await this.owned(slug);
@@ -530,25 +553,108 @@ export class Experiment {
     await this.record("cleanup-scheduled", { slug, pid: child.pid, log });
   }
 
+  /** Capture routes, namespaces and sampled Worker logs without attaching a tail or waking DOs. */
+  async inspect(slug: string) {
+    const ctx = await this.context(slug);
+    const state = await this.slot(slug);
+    const config = envs[slug.replace("-", "_") as keyof typeof envs];
+    const zoneName = new URL(config.baseUrl).hostname.replace(/^os\./, "");
+    const zones = await ctx.cfV4<{ id: string }[]>(`/zones?name=${zoneName}`);
+    assert.equal(zones.length, 1);
+    const routes = await ctx.cfV4(`/zones/${zones[0].id}/workers/routes`);
+    const namespaces = await getWorkerDoNamespaces(ctx, config.osWorkerName);
+    const apps = await ctx.cf<{ name: string; durable_objects?: { namespace_id?: string } }[]>(
+      "/containers/applications",
+    );
+    const containers = apps.filter((a) =>
+      namespaces.some((n) => n.namespaceId === a.durable_objects?.namespace_id),
+    );
+    const telemetry = await ctx.cf("/workers/observability/telemetry/query", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        queryId: `lease-cycle-${Date.now()}`,
+        dry: true,
+        view: "events",
+        limit: 2000,
+        timeframe: { from: state.acquired, to: Date.now() },
+        parameters: {
+          datasets: [],
+          filters: [
+            {
+              key: "$metadata.service",
+              operation: "eq",
+              type: "string",
+              value: config.osWorkerName,
+            },
+          ],
+        },
+      }),
+    });
+    const file = join(this.directory, `${slug}-inspection-${Date.now()}.json`);
+    await writeFile(
+      file,
+      JSON.stringify({ at: Date.now(), state, routes, namespaces, containers, telemetry }, null, 2),
+    );
+    await this.record("inspection", {
+      slug,
+      file,
+      namespaceCount: namespaces.length,
+      containerCount: containers.length,
+    });
+  }
+
+  /** Sample the published preview throughout a replacement; a parked/error response stays visible. */
+  async watch(slug: string, durationMs: number) {
+    assert(durationMs > 0 && durationMs <= 900_000);
+    const until = Date.now() + durationMs;
+    while (Date.now() < until) {
+      const current = await this.registry((r) => r.current);
+      if (current !== slug) {
+        await this.record("watch-handoff", { previous: slug, current });
+        return;
+      }
+      await this.record("old-preview-health", { slug, health: await this.health(slug) });
+      await delay(5_000);
+    }
+  }
+
   /** Publish only the latest requested generation, retaining the previous preview through deployment and smoke. */
   async replace(allowed: string[], waitMs: number) {
     const generation = await this.registry((r) => ++r.generation);
-    return replacePreview({
-      acquire: () => this.acquire(allowed),
-      deploy: async (slug) => {
-        await this.deploy(slug, waitMs);
-      },
-      publish: async (slug) =>
-        this.registry((r) => {
-          if (r.generation !== generation) return { accepted: false, previous: null };
-          const previous = r.current;
-          r.current = slug;
-          // Persist retirement intent in the same publication transaction.
-          if (previous && !r.pendingCleanup.includes(previous)) r.pendingCleanup.push(previous);
-          return { accepted: true, previous };
-        }),
-      scheduleCleanup: (slug) => this.scheduleCleanup(slug),
-    });
+    const old = await this.registry((r) => r.current);
+    if (old) await this.owned(old);
+    let oldLeaseFailure: unknown;
+    const heartbeat = old
+      ? setInterval(() => {
+          this.owned(old).catch((error) => {
+            oldLeaseFailure = error;
+          });
+        }, 30_000)
+      : null;
+    try {
+      return await replacePreview({
+        acquire: () => this.acquire(allowed),
+        deploy: async (slug) => {
+          await this.deploy(slug, waitMs);
+          if (oldLeaseFailure) throw oldLeaseFailure;
+          await this.owned(slug);
+          if (old) await this.owned(old);
+        },
+        publish: async (slug) =>
+          this.registry((r) => {
+            if (r.generation !== generation) return { accepted: false, previous: null };
+            const previous = r.current;
+            r.current = slug;
+            // Persist retirement intent in the same publication transaction.
+            if (previous && !r.pendingCleanup.includes(previous)) r.pendingCleanup.push(previous);
+            return { accepted: true, previous };
+          }),
+        scheduleCleanup: (slug) => this.scheduleCleanup(slug),
+      });
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
+    }
   }
 }
 
@@ -559,6 +665,8 @@ if (process.argv[1] === import.meta.filename) {
   else if (action === "replace")
     console.log(await experiment.replace(arg.split(","), Number(wait)));
   else if (action === "deploy") await experiment.deploy(arg, Number(wait));
+  else if (action === "inspect") await experiment.inspect(arg);
+  else if (action === "watch") await experiment.watch(arg, Number(wait));
   else if (action === "smoke") await experiment.smoke(arg);
   else if (action === "cleanup") await experiment.cleanup(arg);
   else if (action === "status") console.log(await experiment.registry((r) => r));

@@ -30,3 +30,11 @@ Experimental lease cycling keeps the previous preview usable while deploying its
 Risk map: Worker deletion/recreation and external cleanup after lease expiry are highest risk. Live mutations require current ownership; uncertain cleanup must never certify a clean slot. Read experiment results before considering production adoption.
 
 Session: Codex `01a0b054-bdd8-7d52-9c01-30d9b92576c8`.
+
+## Implementation log
+
+- 2026-09-18: fetched main and branched from #2712's merge, leaving the root worktree unchanged. Initial specification committed separately.
+- Added an opt-in manual CLI and 12 passing lifecycle tests; 39 existing #2712 planner/settlement/CI tests pass unchanged. No production Semaphore or workflow changes.
+- Live run `sept18` acquired preview-10 for full cleanup/cooling and preview-15 for the 90-second baseline. Both acquired without force from available inventory.
+- The package publisher runs for main/PRs, not arbitrary branch pushes. Product code and immutable package references are therefore pinned to merged main `97ffd6fd65`; a diff guard rejects accidental mismatch. Repeated deployments still produce distinct Worker versions.
+- Raw evidence and command logs remain in `experiments/preview-lease-cycling/evidence.ignoreme/sept18/`. Cleanup jobs persist intent/checkpoints locally and can be resumed; this is explicitly not the final distributed CI implementation.
