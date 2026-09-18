@@ -109,5 +109,9 @@ test("KILLED MID-CALL, THE REQUEST CONTINUES: the context dies with the model ca
       (await runInDurableObject(s, (_i, state) => state.storage.kv.get("facet-claim:agent"))) ===
       undefined,
   );
-  expect(await runInDurableObject(s, (_i, state) => state.storage.getAlarm())).toBeNull();
+  // the claim goes first and the alarm derived from it a moment later: wait for it the same way
+  await until(
+    "no alarm",
+    async () => (await runInDurableObject(s, (_i, state) => state.storage.getAlarm())) === null,
+  );
 });
