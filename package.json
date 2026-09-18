@@ -28,7 +28,8 @@
     "clean": "rm -rf ./**/node_modules",
     "super-reset": "pnpm i && pnpm -r --parallel super-reset",
     "auth:mint": "tsx scripts/auth/mint-session.ts",
-    "getin": "trpc-cli scripts/getin.ts"
+    "getin": "trpc-cli scripts/getin.ts",
+    "test:e2e:do-rollout": "RUN_DO_ROLLOUT=1 vitest run --config experiments/durable-object-rollout/vitest.config.ts"
   },
   "devDependencies": {
     "@iterate-com/auth-contract": "workspace:*",
@@ -58,7 +59,9 @@
     "playwright": "1.60.0",
     "trpc-cli": "0.15.1",
     "tsx": "^4.20.6",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "4.1.8",
+    "wrangler": "4.107.0"
   },
   "packageManager": "pnpm@10.24.0",
   "dependencies": {

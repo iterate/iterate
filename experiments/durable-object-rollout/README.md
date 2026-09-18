@@ -1,29 +1,38 @@
 # Durable Object deployment reset probe
 
-A manual, standalone Cloudflare test. It embeds its entire Worker and Durable Object,
+A manual, standalone Vitest e2e test against real Cloudflare. It embeds its entire Worker and Durable Object,
 writes temporary Wrangler configs, and gives each of its three top-level tests
 its own isolated Worker and disposable cleanup. Tests share no deployed state.
-It imports only Node builtins: no Iterate runtime, deployment helpers, auth service, or fixtures.
+It imports only Vitest and Node builtins: no Iterate runtime, deployment helpers, auth service, or fixtures.
 
 From the repo root (Node 26 and Wrangler 4.107.0 used for the recorded run):
 
 ```sh
-RUN_DO_ROLLOUT=1 doppler run --project os --config preview_11 -- \
-  pnpm --dir apps/os exec node --test ../../experiments/durable-object-rollout/rollout.test.ts
+ROLLOUT_ROUNDS=1 doppler run --project os --config preview_11 -- \
+  pnpm test:e2e:do-rollout
 ```
 
-To run just one test, add `--test-name-pattern` before the filename, for example:
+To run just one test, use Vitest’s `-t` filter:
 
 ```sh
-RUN_DO_ROLLOUT=1 ROLLOUT_ROUNDS=1 doppler run --project os --config preview_11 -- \
-  pnpm --dir apps/os exec node --test --test-name-pattern='ordinary redeploy' \
-  ../../experiments/durable-object-rollout/rollout.test.ts
+ROLLOUT_ROUNDS=1 doppler run --project os --config preview_11 -- \
+  pnpm test:e2e:do-rollout -t 'ordinary redeploy'
 ```
 
-Outside this repo, put `wrangler` on PATH and supply `CLOUDFLARE_API_TOKEN` and
+The script sets `RUN_DO_ROLLOUT=1` and uses the dedicated `vitest.config.ts`.
+Outside this repo, install Vitest, put `wrangler` on PATH and supply `CLOUDFLARE_API_TOKEN` and
 `CLOUDFLARE_ACCOUNT_ID`. The test deliberately allows only our preview account;
 change that assertion to use your own account. Without `RUN_DO_ROLLOUT=1` it reports
 three explicit skips. This test is manual and is not part of CI or `pnpm test`.
+To check discovery without deploying anything:
+
+```sh
+pnpm exec vitest run --config experiments/durable-object-rollout/vitest.config.ts
+```
+
+There are no test retries. Deploys and requests have their own deadlines, and reads
+have a fixed attempt limit. The config disables Vitest’s overall test timeout so
+its default five-second deadline cannot cut off deployment or disposable cleanup.
 
 | Case                  | What happens                                                                                                         | What it can establish                                                        |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |

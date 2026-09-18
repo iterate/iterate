@@ -1,23 +1,22 @@
 // Manual, real-Cloudflare experiment. See README.md. No Iterate code or test fixtures.
-import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve as resolvePath } from "node:path";
-import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { expect, test } from "vitest";
 
 test(
   "fresh objects complete work immediately after an ordinary redeploy",
   {
-    skip: process.env.RUN_DO_ROLLOUT !== "1" && "Manual cloud experiment: set RUN_DO_ROLLOUT=1",
+    skip: process.env.RUN_DO_ROLLOUT !== "1",
   },
   async () => {
     await using probe = await Probe.create("ordinary-redeploy");
     await probe.bootstrap();
     const previousNamespace = await probe.namespace();
-    assert.ok(previousNamespace);
+    expect(previousNamespace).toEqual(expect.any(String));
 
     for (let round = 1; round <= probe.evidence.rounds; round++) {
       const deployment = await probe.deploy(`ordinary-redeploy-${round}`, true);
@@ -47,21 +46,14 @@ test(
           (r) => r.status === 200 && r.data.object?.build === deployment.build,
         );
       }
-      assert.equal(trial.namespace, previousNamespace);
+      expect(trial).toMatchObject({ namespace: previousNamespace });
       // Both the first call and durable record should say 'completed'. A later healthy
       // read must not turn a failed first call green; recorded runs hit code-update resets here.
       for (const operation of operations) {
-        assert.equal(operation.response.status, 200, JSON.stringify(operation));
-        assert.equal(
-          operation.response.data.record?.status,
-          "completed",
-          JSON.stringify(operation),
-        );
-        assert.equal(
-          operation.followup.at(-1).data.record?.status,
-          "completed",
-          JSON.stringify(operation),
-        );
+        expect({ response: operation.response, state: operation.followup.at(-1) }).toMatchObject({
+          response: { status: 200, data: { record: { status: "completed" } } },
+          state: { status: 200, data: { record: { status: "completed" } } },
+        });
       }
     }
   },
@@ -70,7 +62,7 @@ test(
 test(
   "fresh objects complete work immediately after retiring and recreating their class",
   {
-    skip: process.env.RUN_DO_ROLLOUT !== "1" && "Manual cloud experiment: set RUN_DO_ROLLOUT=1",
+    skip: process.env.RUN_DO_ROLLOUT !== "1",
   },
   async () => {
     await using probe = await Probe.create("retire-recreate");
@@ -78,11 +70,11 @@ test(
 
     for (let round = 1; round <= probe.evidence.rounds; round++) {
       const previousNamespace = await probe.namespace();
-      assert.ok(previousNamespace);
+      expect(previousNamespace).toEqual(expect.any(String));
       // Erase the namespace, then recreate the class under a new namespace ID. Old Workers
       // may still answer during rollout, so failures here do not prove old DOs survived erasure.
       await probe.deploy(`retired-${round}`, false);
-      assert.equal(await probe.namespace(), null);
+      expect(await probe.namespace()).toBeNull();
       const deployment = await probe.deploy(`retire-recreate-${round}`, true);
       // First-touch unique names immediately after Wrangler exits. Never retry a write.
       const operations = await Promise.all(
@@ -107,20 +99,13 @@ test(
           (r) => r.status === 200 && r.data.object?.build === deployment.build,
         );
       }
-      assert.ok(trial.namespace);
-      assert.notEqual(trial.namespace, previousNamespace);
+      expect(trial.namespace).toEqual(expect.any(String));
+      expect(trial.namespace).not.toBe(previousNamespace);
       for (const operation of operations) {
-        assert.equal(operation.response.status, 200, JSON.stringify(operation));
-        assert.equal(
-          operation.response.data.record?.status,
-          "completed",
-          JSON.stringify(operation),
-        );
-        assert.equal(
-          operation.followup.at(-1).data.record?.status,
-          "completed",
-          JSON.stringify(operation),
-        );
+        expect({ response: operation.response, state: operation.followup.at(-1) }).toMatchObject({
+          response: { status: 200, data: { record: { status: "completed" } } },
+          state: { status: 200, data: { record: { status: "completed" } } },
+        });
       }
     }
   },
@@ -129,7 +114,7 @@ test(
 test(
   "an active operation is interrupted by a code-update reset during redeploy",
   {
-    skip: process.env.RUN_DO_ROLLOUT !== "1" && "Manual cloud experiment: set RUN_DO_ROLLOUT=1",
+    skip: process.env.RUN_DO_ROLLOUT !== "1",
   },
   async () => {
     await using probe = await Probe.create("active-object-control");
@@ -144,11 +129,10 @@ test(
       (r) => r.data.record?.status === "started",
     );
     probe.evidence.checks.push({ kind: "control-started", attempts: started });
-    assert.equal(
-      started.at(-1)?.data.record?.status,
-      "started",
-      "Work must be active before redeploy",
-    );
+    expect(started.at(-1), "Work must be active before redeploy").toMatchObject({
+      status: 200,
+      data: { record: { status: "started" } },
+    });
 
     const replacement = await probe.deploy("active-object-control", true);
     const response = await inFlight;
@@ -162,15 +146,29 @@ test(
 
     // This control should show a reset, unfinished work, and a new boot/version. It proves
     // we can detect interrupted work; by itself it says nothing about fresh objects after deploy.
-    assert.match(
-      response.data.error?.message || "",
-      /Durable Object reset because its code was updated/,
-      JSON.stringify(operation),
-    );
+    expect({ response, state: followup.at(-1) }).toMatchObject({
+      response: {
+        status: 500,
+        data: {
+          error: {
+            message: expect.stringContaining("Durable Object reset because its code was updated"),
+          },
+        },
+      },
+      state: {
+        status: 200,
+        data: {
+          record: { status: "started", build: initial.build, versionId: initial.versionId },
+          object: {
+            build: replacement.build,
+            versionId: replacement.versionId,
+            bootId: expect.any(String),
+          },
+        },
+      },
+    });
     const state = followup.at(-1)!.data;
-    assert.equal(state.record?.status, "started", "Interrupted work must remain unfinished");
-    assert.notEqual(state.object.bootId, state.record.bootId);
-    assert.notEqual(state.object.versionId, state.record.versionId);
+    expect(state.object.bootId).not.toBe(state.record.bootId);
   },
 );
 
@@ -193,10 +191,10 @@ class Probe {
   /** Validate preview credentials and prepare this scenario's evidence record. */
   private constructor(scenario: string) {
     // This repo's preview account. Never target production, or reuse an existing Worker.
-    assert.equal(this.#account, "376ef7ed81b0573f93524de763666c15");
-    assert.ok(process.env.CLOUDFLARE_API_TOKEN, "CLOUDFLARE_API_TOKEN is required");
+    expect(this.#account).toBe("376ef7ed81b0573f93524de763666c15");
+    expect(process.env.CLOUDFLARE_API_TOKEN, "CLOUDFLARE_API_TOKEN is required").toBeTruthy();
     const rounds = Number(process.env.ROLLOUT_ROUNDS || 3);
-    assert.ok(Number.isInteger(rounds) && rounds >= 1 && rounds <= 10);
+    expect(Number.isInteger(rounds) && rounds >= 1 && rounds <= 10).toBe(true);
     this.evidence = {
       runId: this.#runId,
       scenario,
@@ -220,9 +218,9 @@ class Probe {
   /** Check the Worker name is unused and prepare its URL and local directories. */
   async #init() {
     const existing = await this.#api(`/workers/scripts/${this.#workerName}/settings`, null);
-    assert.equal(existing.status, 404, "Refuse to overwrite any existing Worker");
+    expect(existing, "Refuse to overwrite any existing Worker").toMatchObject({ status: 404 });
     const subdomain = await this.#api("/workers/subdomain", null);
-    assert.equal(subdomain.success, true, JSON.stringify(subdomain));
+    expect(subdomain).toMatchObject({ success: true });
     this.#origin = `https://${this.#workerName}.${subdomain.result.subdomain}.workers.dev`;
     this.evidence.origin = this.#origin;
     await mkdir(this.#evidenceDirectory, { recursive: true });
@@ -334,15 +332,14 @@ class Probe {
       .replaceAll(this.#token, "[redacted]")
       .replace(/env\.PROBE_TOKEN.*$/gm, "env.PROBE_TOKEN ([redacted])");
     deployment.versionId = deployment.output.match(/Current Version ID:\s*(\S+)/)?.[1] || "";
-    assert.equal(deployment.exitCode, 0, deployment.output);
-    assert.ok(deployment.versionId, deployment.output);
+    expect(deployment).toMatchObject({ exitCode: 0, versionId: expect.stringMatching(/\S+/) });
     return deployment;
   }
 
   /** Read the currently bound DO namespace ID, or null after retirement. */
   async namespace() {
     const settings = await this.#api(`/workers/scripts/${this.#workerName}/settings`, null);
-    assert.equal(settings.success, true, JSON.stringify(settings.errors));
+    expect(settings).toMatchObject({ success: true });
     return (
       settings.result.bindings.find((binding: any) => binding.name === "PROBE")?.namespace_id ||
       null
@@ -376,7 +373,10 @@ class Probe {
       (r) => r.data.worker?.build === "bootstrap",
     );
     this.evidence.checks.push({ kind: "bootstrap", attempts: readiness });
-    assert.equal(readiness.at(-1)?.data.worker?.build, "bootstrap");
+    expect(readiness.at(-1)).toMatchObject({
+      status: 200,
+      data: { worker: { build: "bootstrap" } },
+    });
     return initial;
   }
 
@@ -393,8 +393,10 @@ class Probe {
         );
         const remainingNamespace = await this.namespace();
         this.evidence.cleanup = { remainingNamespace, attempts };
-        assert.equal(remainingNamespace, null);
-        assert.equal(attempts.at(-1)?.data.build, "cleanup-parked");
+        expect({ remainingNamespace, response: attempts.at(-1) }).toMatchObject({
+          remainingNamespace: null,
+          response: { status: 200, data: { build: "cleanup-parked" } },
+        });
       } catch (error: any) {
         this.evidence.cleanup = {
           error: error.message,
@@ -429,12 +431,9 @@ class Probe {
     console.log(`Evidence: ${this.#evidenceDirectory}/evidence.json`);
     if (!this.#touchedCloud || (this.evidence.cleanup && !this.evidence.cleanup.error))
       await rm(this.#directory, { recursive: true });
-    assert.equal(
-      this.evidence.cleanup?.remainingNamespace,
-      null,
-      "Cleanup must retire the probe namespace",
-    );
-    assert.ok(!this.evidence.cleanup?.error, this.evidence.cleanup?.error);
+    expect(this.evidence.cleanup, "Cleanup must retire the probe namespace").toMatchObject({
+      remainingNamespace: null,
+    });
   }
 }
 

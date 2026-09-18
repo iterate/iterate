@@ -143,3 +143,21 @@ All three evidence files show cleanup removed the DO binding and the public
 endpoint returned `cleanup-parked`. The embedded Worker source is unchanged.
 TypeScript, targeted lint, formatting, and the non-cloud name-filter check passed.
 Without the opt-in, the runner reports three explicit skips.
+
+## Vitest migration verification
+
+Ran all three cases with Vitest 4.1.8 and `ROLLOUT_ROUNDS=1` on 18 September,
+15:22–15:24 UTC: **2 passed, 1 failed**, exit code 1 in 125 seconds.
+
+| Test                  | Local evidence ID | Result                                                                       |
+| --------------------- | ----------------- | ---------------------------------------------------------------------------- |
+| Ordinary redeploy     | `10a3668c`        | Passed: all 12 operations completed.                                         |
+| Retire/recreate       | `94b66a86`        | Failed: 9 completed operations, 2 parked responses, 1 internal error.        |
+| Active-object control | `c64881a4`        | Passed: code-update reset, unfinished work, new boot and deployment version. |
+
+The grouped `toMatchObject` failure showed the parked response and `record: null`
+together, against the expected completed response and durable record. All three
+Workers were parked, their DO bindings removed, and telemetry queries succeeded.
+Raw evidence remains under `evidence.ignoreme/`. The embedded Worker is unchanged.
+The explicit-skip run, standalone typecheck, targeted lint, formatting, and frozen
+lockfile install also passed.
