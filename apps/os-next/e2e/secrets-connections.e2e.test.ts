@@ -27,7 +27,7 @@ import {
   petshopRegisterPublicClient,
   petshopRevokeRefreshToken,
 } from "./support/petshop.ts";
-import { freshDnsSafeProjectId, registerProject } from "./support/project-host.ts";
+import { freshDnsSafeProjectSlug, registerProject } from "./support/project-host.ts";
 
 /** A bearer call on the pets API through egress, the secret's `accessToken` as the placeholder
  *  (`itx` is the untyped capnweb stub `openItx` hands out). */
@@ -176,9 +176,7 @@ test("oauth-refresh-token, end to end against the petshop: discovery, consent, t
 // — not even the test.
 test("beginOAuth, confidential client, in a directory-registered project: authorize URL out, the code back at the platform's callback (a project member only), the exchange inside the secret's Durable Object; then a call, expiry and refresh", async () => {
   // a REAL project: a directory row (the console lists it), not an ad-hoc context
-  const projectId = freshDnsSafeProjectId("secrets-connect");
-  await registerProject(projectId);
-  const itx = openItx(projectId);
+  const itx = openItx(await registerProject(freshDnsSafeProjectSlug("secrets-connect")));
   const petshop = petshopBaseUrl();
   const { authorization_endpoint: authorizationEndpoint, token_endpoint: tokenEndpoint } =
     await petshopAuthorizationServer();
@@ -253,9 +251,7 @@ test("beginOAuth, confidential client, in a directory-registered project: author
 // redirect URI, PKCE alone proves the exchange, and every later refresh identifies the client with
 // `client_id` in the body. This is how an MCP client (and any DCR-registered client) connects.
 test("beginOAuth, public client (RFC 7591 registration, PKCE alone, client_id in the body on refresh): the same flow, no secret involved at any point", async () => {
-  const projectId = freshDnsSafeProjectId("secrets-connect-public");
-  await registerProject(projectId);
-  const itx = openItx(projectId);
+  const itx = openItx(await registerProject(freshDnsSafeProjectSlug("secrets-connect-public")));
   const petshop = petshopBaseUrl();
   const { authorization_endpoint: authorizationEndpoint, token_endpoint: tokenEndpoint } =
     await petshopAuthorizationServer();

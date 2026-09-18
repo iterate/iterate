@@ -31,7 +31,7 @@ import { expect, test } from "vitest";
 import { adminCredentials, freshCtx, openItx, session, workerUrl } from "./support/client.ts";
 import {
   fetchProjectHost,
-  freshDnsSafeProjectId,
+  freshDnsSafeProjectSlug,
   projectHostnameBase,
   registerProject,
   wsRoundTripOnProjectHost,
@@ -41,13 +41,13 @@ import { SOURCES } from "./support/sources.ts";
 // ── the project host: HTTP and WebSocket, a loaded worker and a lent stub ──
 
 test("a project host serves a LOADED WORKER as an app: GET → 200 HTML, WebSocket upgrade → 101 echo, clean close", async () => {
-  const projectId = freshDnsSafeProjectId("capcode");
-  await registerProject(projectId);
+  const slug = freshDnsSafeProjectSlug("capcode");
+  const projectId = await registerProject(slug);
   // A rule whose target is a stateless dynamic worker (its .fetch serves the host) — the target is
   // an itx EXPRESSION (workers.get({ source })), same as every other rule.
   const itx = openItx(projectId);
   await itx.provide("itx.apps.site", ["itx", "workers", ["get", { source: SOURCES.site }]]);
-  const host = `site--${projectId}.${projectHostnameBase()}`;
+  const host = `site--${slug}.${projectHostnameBase()}`;
 
   const page = await fetchProjectHost(host, "/");
   expect(page.status, page.text).toBe(200);
@@ -82,14 +82,14 @@ class HttpDevice extends RpcTarget {
 }
 
 test("lent stub HTTP fetch: an eyeball POST on the project host reaches the Node provider's fetch() and its Response rides back out", async () => {
-  const projectId = freshDnsSafeProjectId("caplivehttp");
-  await registerProject(projectId);
+  const slug = freshDnsSafeProjectSlug("caplivehttp");
+  const projectId = await registerProject(slug);
   const device = new HttpDevice();
   await session()
     .authenticate(adminCredentials())
     .projects.get(projectId)
     .provide("itx.apps.device", device);
-  const host = `device--${projectId}.${projectHostnameBase()}`;
+  const host = `device--${slug}.${projectHostnameBase()}`;
 
   const res = await fetchProjectHost(host, "/hunt?probe=1", {}, { method: "POST", body: "ping" });
   expect(res.status, res.text).toBe(201);
@@ -114,13 +114,13 @@ class WsDevice extends RpcTarget {
 }
 
 test("lent stub WebSocket fetch: a plain eyeball WebSocket on the project host opens (101), echoes, and closes through the Node provider", async () => {
-  const projectId = freshDnsSafeProjectId("caplivews");
-  await registerProject(projectId);
+  const slug = freshDnsSafeProjectSlug("caplivews");
+  const projectId = await registerProject(slug);
   await session()
     .authenticate(adminCredentials())
     .projects.get(projectId)
     .provide("itx.apps.device", new WsDevice());
-  const host = `device--${projectId}.${projectHostnameBase()}`;
+  const host = `device--${slug}.${projectHostnameBase()}`;
   // Sanity: the rule still answers plain HTTP (so the assertions below are about the UPGRADE).
   const plain = await fetchProjectHost(host, "/");
   expect(plain.text).toBe("http-fallback");
@@ -139,7 +139,7 @@ test("lent stub WebSocket fetch: a plain eyeball WebSocket on the project host o
 test("a hop count the platform never wrote (an app spelling `NaN` to defeat the budget) is over budget on arrival: 508, never a loop", async () => {
   // before admission — the count is read first, so the project need not exist
   const response = await fetchProjectHost(
-    `site--${freshDnsSafeProjectId("lane-nan-hops")}.${projectHostnameBase()}`,
+    `site--${freshDnsSafeProjectSlug("lane-nan-hops")}.${projectHostnameBase()}`,
     "/",
     { "x-itx-expression-hops": "NaN" },
   );

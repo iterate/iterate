@@ -64,9 +64,10 @@ export async function registerProject(slug: string, as?: { email: string }): Pro
   return (await itx.whoami()).projectId;
 }
 
-/** A project id that is a DNS label — the convention needs one (`freshCtx` names carry `_`). */
+/** A fresh project slug — a DNS label, the one the project's hosts carry (`freshCtx` names carry
+ *  `_`, which no hostname may). `registerProject(slug)` turns it into a project and hands back the id. */
 let counter = 0;
-export const freshDnsSafeProjectId = (prefix: string): string =>
+export const freshDnsSafeProjectSlug = (prefix: string): string =>
   `prj-${prefix}-${Date.now().toString(36)}-${counter++}`;
 
 /** `path` on `host` — a GET, or `init`'s method and body — through `projectHostDispatcher`. */
