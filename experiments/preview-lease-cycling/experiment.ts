@@ -38,7 +38,11 @@ type Slot = {
   acquired: number;
   source: string;
   stage: string;
-  priorCleanup: { completedAt: number; releasedAt: number | null } | null;
+  priorCleanup: {
+    kind: "deleted" | "parked";
+    completedAt: number;
+    releasedAt: number | null;
+  } | null;
   parkedAt: number | null;
   deletedAt: number | null;
   releasedAt: number | null;
@@ -172,6 +176,19 @@ export class Experiment {
     return state;
   }
 
+  /** The exact fleet owned by one slot, including the two OS compiler sidecars. */
+  workers(slug: string) {
+    const config = slug.replace("-", "_");
+    const os = envs[config as keyof typeof envs].osWorkerName;
+    return [
+      ...Object.values(cloudflarePreviewApps).map(
+        (app) => app.resolvePreviewAppConfig(config).workerName,
+      ),
+      `${os}-typechecker`,
+      `${os}-worker-bundler`,
+    ];
+  }
+
   /** Load only the selected preview account's credentials, never recording them in evidence. */
   async context(slug: string) {
     if (!this.#context.has(slug)) {
@@ -256,9 +273,7 @@ export class Experiment {
     const state = await this.owned(slug);
     assert.equal(state.stage, "acquired");
     const ctx = await this.context(slug);
-    const names = Object.values(cloudflarePreviewApps).map(
-      (a) => a.resolvePreviewAppConfig(slug.replace("-", "_")).workerName,
-    );
+    const names = this.workers(slug);
     const observedAt = Date.now();
     for (let check = 0; check < 2; check++) {
       const scripts = await ctx.cf<{ id: string }[]>("/workers/scripts");
@@ -267,8 +282,39 @@ export class Experiment {
       await this.record("observed-deleted", { slug, observedAt, check, names });
       if (!check) await this.waitOwned(slug, observedAt + 150_000);
     }
-    state.priorCleanup = { completedAt: observedAt, releasedAt: null };
+    state.priorCleanup = { kind: "deleted", completedAt: observedAt, releasedAt: null };
     await this.save(slug, state);
+  }
+
+  /** Comparison arm: rest after normal erasure, retaining Worker assets and container applications. */
+  async restParked(slug: string) {
+    assert.equal((await this.owned(slug)).stage, "acquired");
+    const lock = join(this.directory, `${slug}.mutation.lock`);
+    await mkdir(lock);
+    try {
+      await this.park(slug);
+      const state = await this.slot(slug);
+      await this.waitOwned(slug, state.parkedAt! + 150_000);
+      const health = await this.health(slug);
+      assert.equal(health.status, 503);
+      const ctx = await this.context(slug);
+      const namespaces = await getWorkerDoNamespaces(
+        ctx,
+        envs[slug.replace("-", "_") as keyof typeof envs].osWorkerName,
+      );
+      assert(
+        namespaces.every((n) =>
+          /^Sandbox(Basic|Lite|Standard[1-4])DurableObject$/.test(n.className),
+        ),
+        "Ordinary DO namespaces must be retired",
+      );
+      state.priorCleanup = { kind: "parked", completedAt: state.parkedAt!, releasedAt: null };
+      state.stage = "acquired";
+      await this.save(slug, state);
+      await this.record("rested-parked", { slug, health, namespaces });
+    } finally {
+      await rm(lock, { recursive: true });
+    }
   }
 
   /** Existing erase scripts stop spend and wipe identities before a dirty slot can be deployed. */
@@ -384,13 +430,13 @@ export class Experiment {
     assert.equal(health.status, 200);
     assert.equal(health.version, state.deployments.os.version);
     if (waitMs) await this.waitOwned(slug, state.deployments.os.completedAt + waitMs);
-    await this.smoke(slug);
+    await this.smoke(slug, "agent");
     state.stage = "ready";
     await this.save(slug, state);
   }
 
   /** The same create-project/create-agent/receive-reply behavior as CI, with one attempt and saved events. */
-  async smoke(slug: string) {
+  async smoke(slug: string, kind: "agent" | "sandbox") {
     const state = await this.slot(slug);
     const context = await this.context(slug);
     const versions = Object.entries(state.deployments)
@@ -403,13 +449,14 @@ export class Experiment {
       .join(",");
     await this.record("smoke-start", {
       slug,
+      kind,
       ageMs: Date.now() - state.deployments.os.completedAt,
     });
     await this.command(
       slug,
-      "smoke",
+      `smoke-${kind}`,
       "pnpm",
-      ["exec", "tsx", join(import.meta.dirname, "smoke.ts")],
+      ["exec", "tsx", join(import.meta.dirname, kind === "agent" ? "smoke.ts" : "sandbox.ts")],
       root,
       {
         APP_CONFIG_ADMIN_API_SECRET: context.secrets.APP_CONFIG_ADMIN_API_SECRET,
@@ -444,14 +491,7 @@ export class Experiment {
       compatibilityDate: "2026-06-01",
       containerClassNames: [],
     });
-    const names = [
-      workerName,
-      ...Object.values(cloudflarePreviewApps)
-        .filter((a) => a.slug !== "os")
-        .map((a) => a.resolvePreviewAppConfig(slug.replace("-", "_")).workerName),
-      `${workerName}-typechecker`,
-      `${workerName}-worker-bundler`,
-    ];
+    const names = this.workers(slug);
     await this.record("before-delete", {
       slug,
       names,
@@ -512,9 +552,7 @@ export class Experiment {
         verifyRemoved: async () => {
           const ctx = await this.context(slug);
           const scripts = await ctx.cf<{ id: string }[]>("/workers/scripts");
-          const names = Object.values(cloudflarePreviewApps).map(
-            (a) => a.resolvePreviewAppConfig(slug.replace("-", "_")).workerName,
-          );
+          const names = this.workers(slug);
           assert(!scripts.some((s) => names.includes(s.id)));
           for (const name of names) assert.deepEqual(await getWorkerDoNamespaces(ctx, name), []);
           await this.record("verified-removed", { slug, names });
@@ -604,10 +642,37 @@ export class Experiment {
         },
       }),
     });
+    const errors = await ctx.cf("/workers/observability/telemetry/query", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        queryId: `lease-cycle-errors-${Date.now()}`,
+        dry: true,
+        view: "events",
+        limit: 2000,
+        timeframe: { from: state.deployments.os?.completedAt || state.acquired, to: Date.now() },
+        parameters: {
+          datasets: [],
+          filters: [
+            {
+              key: "$metadata.service",
+              operation: "eq",
+              type: "string",
+              value: config.osWorkerName,
+            },
+            { key: "$metadata.level", operation: "eq", type: "string", value: "error" },
+          ],
+        },
+      }),
+    });
     const file = join(this.directory, `${slug}-inspection-${Date.now()}.json`);
     await writeFile(
       file,
-      JSON.stringify({ at: Date.now(), state, routes, namespaces, containers, telemetry }, null, 2),
+      JSON.stringify(
+        { at: Date.now(), state, routes, namespaces, containers, telemetry, errors },
+        null,
+        2,
+      ),
     );
     await this.record("inspection", {
       slug,
@@ -684,11 +749,13 @@ if (process.argv[1] === import.meta.filename) {
     console.log(await experiment.replace(arg.split(","), Number(wait), null));
   else if (action === "replace-owned")
     console.log(await experiment.replace([arg], Number(wait), arg));
+  else if (action === "rest-parked") await experiment.restParked(arg);
   else if (action === "rest-deleted") await experiment.restDeleted(arg);
   else if (action === "deploy") await experiment.deploy(arg, Number(wait));
   else if (action === "inspect") await experiment.inspect(arg);
   else if (action === "watch") await experiment.watch(arg, Number(wait));
-  else if (action === "smoke") await experiment.smoke(arg);
+  else if (action === "smoke") await experiment.smoke(arg, "agent");
+  else if (action === "sandbox") await experiment.smoke(arg, "sandbox");
   else if (action === "cleanup") await experiment.cleanup(arg);
   else if (action === "status") console.log(await experiment.registry((r) => r));
   else if (action === "finish") {

@@ -81,3 +81,12 @@ tail. Request/log samples do not establish worldwide propagation.
 150 seconds under ownership when a cleanup receipt is missing. It never treats
 unknown age as old. Semaphore renewals update `lastAcquiredAt`; only the release
 timestamp is used to invalidate receipts on an intervening acquisition/release.
+
+`rest-parked <id> <slot>` is a comparison arm: ordinary DOs and identity data
+are erased, the slot rests for 150 seconds under its lease, and the next deploy
+skips entry erasure. Worker assets and container applications are retained. It is
+labelled `kind: parked` in evidence, distinct from full deletion.
+
+`sandbox <id> <slot>` additionally creates a project, boots a lite container,
+executes a fixed command and destroys it. A failure before sandbox creation is
+reported as project bootstrap failure, not container-recreation evidence.

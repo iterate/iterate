@@ -54,5 +54,9 @@ export function releasedCleanup(
   if (receipt?.stage !== "released" || !receipt.deletedAt || !receipt.releasedAt) return null;
   if (receipt.releasedAt !== releasedBeforeClaim || releasedBeforeClaim !== releasedAfterClaim)
     return null;
-  return { completedAt: receipt.deletedAt, releasedAt: receipt.releasedAt };
+  return {
+    kind: "deleted" as const,
+    completedAt: receipt.deletedAt,
+    releasedAt: receipt.releasedAt,
+  };
 }
