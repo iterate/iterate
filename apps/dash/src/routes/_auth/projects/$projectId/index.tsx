@@ -18,12 +18,12 @@ function ProjectOverview() {
   const { orgs } = shell.useLoaderData();
   const { info } = shell.useRouteContext();
   const org = orgs.find((candidate) => candidate.id === project.orgId);
-  const host = projectHostOf(info, project.id);
+  const host = projectHostOf(info, project.slug);
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-2">
-          <h1 className="font-mono text-2xl font-semibold tracking-tight">{project.id}</h1>
+          <h1 className="font-mono text-2xl font-semibold tracking-tight">{project.slug}</h1>
           {org?.role ? <Badge variant="secondary">{org.role}</Badge> : null}
         </div>
         {host ? (

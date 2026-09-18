@@ -54,13 +54,14 @@ function projectHostDispatcher(): Agent | undefined {
 const projectHostUrl = (scheme: "http" | "ws", host: string, path: string): string =>
   `${scheme}${worker().protocol === "https:" ? "s" : ""}://${host}${path}`;
 
-/** Register `projectId` with the directory — `projects.create({ project })` over the worker's own
- *  /api, on the admin session (the project lands in the deployment's own org) or as `as` (a user's
- *  session: their org, with them a member) — so its host serves. A project's id IS its slug (a DNS
- *  label), so one name addresses both the DO (`openItx(projectId)`) and the host
- *  (`site--<projectId>.<base>`). Idempotent; identical against the local and the deployed worker. */
-export async function registerProject(projectId: string, as?: { email: string }): Promise<void> {
-  await session().authenticate(adminCredentials(as)).projects.create({ project: projectId });
+/** Register the project slugged `slug` with the directory — `projects.create({ project })` over the
+ *  worker's own /api, on the admin session (the project lands in the deployment's own org) or as
+ *  `as` (a user's session: their org, with them a member) — so its host serves, and return its
+ *  minted id: the DO is addressed by the id (`openItx(id)`), the host by the slug
+ *  (`site--<slug>.<base>`). Idempotent; identical against the local and the deployed worker. */
+export async function registerProject(slug: string, as?: { email: string }): Promise<string> {
+  using itx = await session().authenticate(adminCredentials(as)).projects.create({ project: slug });
+  return (await itx.whoami()).projectId;
 }
 
 /** A project id that is a DNS label — the convention needs one (`freshCtx` names carry `_`). */

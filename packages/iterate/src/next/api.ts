@@ -176,7 +176,7 @@ export type ConsentAnswer =
       query: string;
       clientName: string;
       email: string;
-      projects: { id: string; orgId: string }[];
+      projects: ProjectRecord[];
       orgs: { id: string; name: string; role?: string }[];
       projectBound: boolean;
       scopes: string[];
@@ -188,9 +188,12 @@ export type ConsentAnswer =
   | { kind: "redirect"; location: string }
   | { kind: "invalid"; description: string };
 
-/** A project as the catalog lists it. */
+/** A project as the catalog lists it: addressed by `id` everywhere (`projects.get`, a grant's list,
+ *  an MCP call's `project`, an app's URL); `slug` is the label of its hostnames and its name to a
+ *  person. The id is the one stable identifier. */
 export interface ProjectRecord {
   id: string;
+  slug: string;
   orgId: string;
 }
 
@@ -229,7 +232,10 @@ export interface IterateSessionApi {
   };
   projects: {
     list(): Promise<ProjectRecord[]>;
+    /** the project's root context, by its id */
     get(project: string): Promise<IterateContextApi>;
+    /** a new project: `project` is slugged into its hostname label, its id is minted — the returned
+     *  context's `whoami()` says it, so does `list()` */
     create(input: { project: string; orgId?: string }): Promise<IterateContextApi>;
   };
   organizations: { get(orgId: string): Promise<IterateContextApi> };

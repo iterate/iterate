@@ -66,7 +66,7 @@ function buildServer(env: Env, authorization: Authorization): McpServer {
             project: {
               type: "string",
               description:
-                "The project (its id/slug). Optional when this token reaches exactly one; required for the admin secret.",
+                "The project's id (prj_…). Optional when this token reaches exactly one; required for the admin secret.",
             },
             script: {
               type: "string",

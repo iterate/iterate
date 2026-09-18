@@ -261,7 +261,7 @@ function SessionsPage() {
                   ? projects.map((project) => (
                       <Label key={project.id} className="gap-2 font-mono font-normal">
                         <Checkbox
-                          aria-label={project.id}
+                          aria-label={project.slug}
                           checked={!excludedProjectIds.has(project.id)}
                           disabled={minting}
                           onCheckedChange={(checked) => {
@@ -273,7 +273,7 @@ function SessionsPage() {
                             });
                           }}
                         />
-                        {project.id}
+                        {project.slug}
                       </Label>
                     ))
                   : "Create a project first — a token is scoped to the projects it may reach."}

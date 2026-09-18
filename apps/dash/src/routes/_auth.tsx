@@ -61,6 +61,7 @@ function Shell() {
       projects={projectsByOrg(orgs, projects).flatMap((group) =>
         group.projects.map((project) => ({
           id: project.id,
+          slug: project.slug,
           org: { id: group.org.id, name: group.org.name },
         })),
       )}
@@ -84,7 +85,16 @@ function Shell() {
           </DropdownMenuItem>
         </>
       }
-      nav={<DashNav projectId={projectId || null} projectHost={(id) => projectHostOf(info, id)} />}
+      nav={
+        <DashNav
+          projectId={projectId || null}
+          // a project's site is at its slug, never its id
+          projectHost={(id) => {
+            const slug = projects.find((project) => project.id === id)?.slug;
+            return slug ? projectHostOf(info, slug) : null;
+          }}
+        />
+      }
       header={<DashBreadcrumbs orgs={orgs} projects={projects} page={page} />}
       account={{ email: info.principal.email || info.principal.actor }}
       accountActions={

@@ -15,19 +15,13 @@ import {
   type IterateContextNamespace,
   type WaitUntil,
 } from "./iterate-context.ts";
-import {
-  describeReach,
-  projectSlug,
-  type Directory,
-  type Project,
-  type Reach,
-} from "./directory.ts";
+import { describeReach, type Directory, type Project, type Reach } from "./directory.ts";
 import type { AppConfig } from "./app-config.ts";
 import type { AuthenticationFact } from "./account/contract.ts";
 
-/** One DNS-safe name — the directory row, the DO name, the host label; in this deployment a project's
- *  id IS its slug. */
-export type ProjectIdOrSlug = string;
+/** A project's minted id (`prj_<hex>`) — the one way a project is addressed: the DO name's host, a
+ *  grant's list, `projects.get`. Its slug is a hostname label and a name, never an address. */
+export type ProjectId = string;
 
 /** What `IterateRpcTarget.authenticate` accepts. `from-server-cookie` is the browser and `bearer` is
  *  a device or script whose token rode the upgrade: the OAuth gate already resolved the session from
@@ -388,22 +382,14 @@ class ProjectCollection extends RpcTarget {
     return this.#input.directory.reachableProjects(this.#reach);
   }
 
-  /** Create the project named `project` (slugified: that IS its id) — in the user's org (the first
+  /** Create the project named `project` (slugified into its hostname label; its id is minted —
+   *  the returned context's `whoami()` says it, so does `list()`) — in the user's org (the first
    *  by name when they have several, created on first use when they have none), or in the
    *  deployment's own org for the admin secret — and vend its root context. A grant narrowed to
-   *  named projects creates none: FORBIDDEN. A name ANY org already holds is refused, coded
-   *  (PROJECT_NAME_TAKEN); the same org's again is idempotent. The global namespace's id is a
-   *  RESERVED word (PROJECT_NAME_RESERVED): a project could otherwise address `(global, "/")`. */
-  async create(input: {
-    project: ProjectIdOrSlug;
-    orgId?: string;
-  }): Promise<IterateContextRpcTarget> {
+   *  named projects creates none: FORBIDDEN. A slug ANY org already holds is refused, coded
+   *  (PROJECT_NAME_TAKEN); the same org's again is idempotent. */
+  async create(input: { project: string; orgId?: string }): Promise<IterateContextRpcTarget> {
     const data = z.object({ project: z.string(), orgId: z.string().optional() }).parse(input);
-    if (projectSlug(data.project) === GLOBAL_PROJECT_ID)
-      throw codedError(
-        "PROJECT_NAME_RESERVED",
-        `projects.create: ${JSON.stringify(GLOBAL_PROJECT_ID)} is the deployment-global namespace, not a project name`,
-      );
     const project = await this.#input.directory.createProject(
       this.#reach,
       data.project,
@@ -412,9 +398,9 @@ class ProjectCollection extends RpcTarget {
     return this.#context(project.id);
   }
 
-  /** The project's root context ("/"). A project only — a context name belongs to `cd`. Outside
-   *  this session's reach is FORBIDDEN; so is the global namespace's id (it is no project). */
-  async get(project: ProjectIdOrSlug): Promise<IterateContextRpcTarget> {
+  /** The project's root context ("/"), by its id. A project only — a context name belongs to `cd`.
+   *  Outside this session's reach is FORBIDDEN; so is the global namespace's id (it is no project). */
+  async get(project: ProjectId): Promise<IterateContextRpcTarget> {
     const address = DurableObjectNameCodec.parse(project);
     if (address.path !== "/")
       throw new Error(

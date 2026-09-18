@@ -56,7 +56,7 @@ function CallPage() {
               <BreadcrumbItem className="hidden md:inline-flex">Voice</BreadcrumbItem>
               <BreadcrumbSeparator className="hidden md:inline-flex" />
               <BreadcrumbItem>
-                <BreadcrumbPage className="font-mono">{project.id}</BreadcrumbPage>
+                <BreadcrumbPage className="font-mono">{project.slug}</BreadcrumbPage>
               </BreadcrumbItem>
             </BreadcrumbList>
           </Breadcrumb>

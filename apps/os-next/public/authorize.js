@@ -372,18 +372,19 @@
           ...projects
             .filter((project) => project.orgId === orgId)
             .map((project) => {
+              // the box carries the id (what the grant names); the person reads the slug
               const box = el("input", {
                 type: "checkbox",
                 name: "project",
                 value: project.id,
-                "aria-label": `${project.id} in ${orgName}`,
+                "aria-label": `${project.slug} in ${orgName}`,
               });
               box.checked = ticked(project.id);
               return el(
                 "label",
                 { class: "consent-project" },
                 box,
-                el("span", { text: project.id }),
+                el("span", { text: project.slug }),
               );
             }),
         ),

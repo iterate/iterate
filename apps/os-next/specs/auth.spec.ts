@@ -271,30 +271,37 @@ test("first Claude consent creates the organization and project on the consent p
     });
     expect(exchange.status, await exchange.clone().text()).toBe(200);
     const tokens = (await exchange.json()) as { access_token: string };
-    // The one MCP tool is `run`: the Claude grant reaches the CONSENTED project (a run there succeeds
-    // and itx.whoami() names it) and no other (a run in the unselected project is refused).
-    const reached = await mcp(resource, tokens.access_token, "run", {
-      project,
-      script: "async (itx) => itx.whoami()",
-    });
-    expect(reached.result.isError).toBe(false);
-    expect(reached.result.content[0].text).toContain(project);
-    const denied = await mcp(resource, tokens.access_token, "run", {
-      project: otherProject,
-      script: "async (itx) => itx.whoami()",
-    });
-    expect(denied.result.isError).toBe(true);
-    // The issuer grant and the Claude grant are the only two sessions created.
+    // The inventory, in one batch (an HTTP batch session ends with its first round trip): the
+    // issuer grant and the Claude grant are the only two sessions created; the onboarding step's
+    // refused first try made ONE organization, not one per try; and the projects' minted ids, by
+    // which alone a project is addressed (the page showed their slugs).
     const headers = await cookieHeaders(context, origin);
     // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory assertion after the UI flow.
     using api = newHttpBatchRpcSession<IterateRpcTarget>(new Request(`${origin}/api`, { headers }));
-    // one batch: an HTTP batch session ends with its first round trip
     const session = api.authenticate({ type: "from-server-cookie" });
-    const [inventory, orgs] = await Promise.all([session.grants.list(), session.orgs()]);
+    const [inventory, orgs, listed] = await Promise.all([
+      session.grants.list(),
+      session.orgs(),
+      session.projects.list(),
+    ]);
     expect(inventory.items).toHaveLength(2);
     expect(inventory.items.filter((item) => item.current)).toHaveLength(1);
-    // the onboarding step's refused first try made ONE organization, not one per try
     expect(orgs.map((org) => org.name).sort()).toEqual([firstOrg, "Second studio"]);
+    const idOf = (slug: string) => listed.find((candidate) => candidate.slug === slug)!.id;
+    expect(idOf(project)).toMatch(/^prj_[0-9a-f]{32}$/);
+    // The one MCP tool is `run`: the Claude grant reaches the CONSENTED project (a run there succeeds
+    // and itx.whoami() names it, by id) and no other (a run in the unselected project is refused).
+    const reached = await mcp(resource, tokens.access_token, "run", {
+      project: idOf(project),
+      script: "async (itx) => itx.whoami()",
+    });
+    expect(reached.result.isError).toBe(false);
+    expect(reached.result.content[0].text).toContain(idOf(project));
+    const denied = await mcp(resource, tokens.access_token, "run", {
+      project: idOf(otherProject),
+      script: "async (itx) => itx.whoami()",
+    });
+    expect(denied.result.isError).toBe(true);
     expect(errors).toEqual([]);
   } finally {
     listener.closeAllConnections();

@@ -1,7 +1,7 @@
 // What the shell loads once for every page: the person's organizations and projects, as the
 // session lists them, and the one grouping the switcher, the breadcrumbs and the projects page share.
 export type Org = { id: string; name: string; role?: string };
-export type Project = { id: string; orgId: string };
+export type Project = { id: string; slug: string; orgId: string };
 
 /** Projects grouped by organization, in the organizations' order; a project whose organization
  *  this grant does not list (a narrowed grant) sits under "Other". */

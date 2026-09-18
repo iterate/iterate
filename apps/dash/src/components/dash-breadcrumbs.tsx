@@ -28,7 +28,7 @@ export function DashBreadcrumbs({
     ? [
         { label: "Projects", to: "/projects", hideOnMobile: true },
         ...(org ? [{ label: org.name, hideOnMobile: true }] : []),
-        { label: projectId },
+        { label: project?.slug || projectId },
       ]
     : [{ label: page || "Projects" }];
   return (

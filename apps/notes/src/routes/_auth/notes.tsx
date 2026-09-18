@@ -68,7 +68,7 @@ function NotesPage() {
               <BreadcrumbItem className="hidden md:inline-flex">Notes</BreadcrumbItem>
               <BreadcrumbSeparator className="hidden md:inline-flex" />
               <BreadcrumbItem>
-                <BreadcrumbPage className="font-mono">{data.project.id}</BreadcrumbPage>
+                <BreadcrumbPage className="font-mono">{data.project.slug}</BreadcrumbPage>
               </BreadcrumbItem>
             </BreadcrumbList>
           </Breadcrumb>

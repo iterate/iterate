@@ -33,7 +33,7 @@ import {
 
 /** A project as the switcher lists it; `org` is its organization, when the app knows it — grouped
  *  by the id (two organizations may share a name), labelled by the name. */
-export type AppShellProject = { id: string; org?: { id: string; name: string } };
+export type AppShellProject = { id: string; slug: string; org?: { id: string; name: string } };
 
 /** Frames a signed-in page. Client-only, like every page that frames itself in it: it reads the
  *  `sidebar_state` cookie shadcn's provider writes, so the sidebar reopens the way it was left. */
@@ -165,7 +165,8 @@ function ProjectSwitcher({
                 <span className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">{app}</span>
                   <span className="truncate text-xs text-muted-foreground">
-                    {activeProjectId || "(select project)"}
+                    {projects.find((project) => project.id === activeProjectId)?.slug ||
+                      "(select project)"}
                   </span>
                 </span>
                 <ChevronsUpDownIcon className="ml-auto" />
@@ -200,7 +201,7 @@ function ProjectSwitcher({
                       render={
                         <a
                           href={projectHref(project.id)}
-                          aria-label={`Switch to ${project.id}`}
+                          aria-label={`Switch to ${project.slug}`}
                           onClick={
                             onNavigate
                               ? (event) => {
@@ -213,9 +214,9 @@ function ProjectSwitcher({
                       }
                     >
                       <span className="flex size-6 items-center justify-center rounded-md border text-xs font-medium text-muted-foreground">
-                        {project.id.slice(0, 1)}
+                        {project.slug.slice(0, 1)}
                       </span>
-                      <span className="truncate">{project.id}</span>
+                      <span className="truncate">{project.slug}</span>
                       {project.id === activeProjectId ? <CheckIcon className="ml-auto" /> : null}
                     </DropdownMenuItem>
                   ))}

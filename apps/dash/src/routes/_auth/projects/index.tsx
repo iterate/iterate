@@ -38,7 +38,7 @@ function ProjectsPage() {
   const navigate = useNavigate();
   const [pending, setPending] = useState(false);
   const groups = projectsByOrg(orgs, projects);
-  const hostOf = (projectId: string) => projectHostOf(info, projectId);
+  const hostOf = (slug: string) => projectHostOf(info, slug);
   const closeSheet = () => navigate({ to: "/projects", search: {}, replace: true });
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
@@ -71,13 +71,13 @@ function ProjectsPage() {
                           params={{ projectId: project.id }}
                           className="after:absolute after:inset-0"
                         >
-                          {project.id}
+                          {project.slug}
                         </Link>
                       </CardTitle>
                       <CardDescription className="flex items-center gap-2">
-                        {hostOf(project.id) ? (
+                        {hostOf(project.slug) ? (
                           <a
-                            href={hostOf(project.id)!}
+                            href={hostOf(project.slug)!}
                             target="_blank"
                             rel="noreferrer"
                             className="relative z-10 inline-flex items-center gap-1 hover:text-foreground"
@@ -142,7 +142,7 @@ function NewProjectForm({
 }) {
   const { api, info } = shell.useRouteContext();
   const router = useRouter();
-  // a project is its slug — its id and its hostname's label: lowercased as typed, anything but
+  // the project's slug — its hostname's label (its id is minted): lowercased as typed, anything but
   // a-z, 0-9 and dashes becoming a dash (the platform slugs it the same way)
   const [name, setName] = useState("");
   const host = projectHostOf(info, name || "my-project");
