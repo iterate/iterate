@@ -21,7 +21,8 @@ test(
 
     for (let round = 1; round <= probe.evidence.rounds; round++) {
       const deployment = await probe.deploy(`ordinary-redeploy-${round}`, true);
-      // First-touch unique names immediately after Wrangler exits. Never retry a write.
+      // First-touch new names as soon as deploy returns: /work saves 'started', does 15s
+      // of work, then saves 'completed'. No readiness wait and no write retries.
       const operations = await Promise.all(
         Array.from({ length: 12 }, async () => {
           const id = randomUUID();
@@ -37,6 +38,8 @@ test(
         operations,
       };
       probe.evidence.trials.push(trial);
+      // Read back through a DO on the new build. Its record survives restarts and keeps
+      // the boot/version that started the work; object describes the instance reading it now.
       for (const operation of operations) {
         operation.followup = await probe.observe(
           `/state/${operation.id}`,
@@ -45,6 +48,8 @@ test(
         );
       }
       assert.equal(trial.namespace, previousNamespace);
+      // Both the first call and durable record should say 'completed'. A later healthy
+      // read must not turn a failed first call green; recorded runs hit code-update resets here.
       for (const operation of operations) {
         assert.equal(operation.response.status, 200, JSON.stringify(operation));
         assert.equal(
@@ -74,6 +79,8 @@ test(
     for (let round = 1; round <= probe.evidence.rounds; round++) {
       const previousNamespace = await probe.namespace();
       assert.ok(previousNamespace);
+      // Erase the namespace, then recreate the class under a new namespace ID. Old Workers
+      // may still answer during rollout, so failures here do not prove old DOs survived erasure.
       await probe.deploy(`retired-${round}`, false);
       assert.equal(await probe.namespace(), null);
       const deployment = await probe.deploy(`retire-recreate-${round}`, true);
@@ -128,6 +135,8 @@ test(
     await using probe = await Probe.create("active-object-control");
     const initial = await probe.bootstrap();
     const id = randomUUID();
+    // Unlike the fresh-object cases, start work BEFORE redeploy and confirm its durable
+    // 'started' marker, so the deployment interrupts an operation we know is already active.
     const inFlight = probe.request(`/work/${id}`, { durationMs: 90_000 }, initial);
     const started = await probe.observe(
       `/state/${id}`,
@@ -151,6 +160,8 @@ test(
     const operation = { id, response, followup };
     probe.evidence.trials.push({ deployment: replacement.build, operations: [operation] });
 
+    // This control should show a reset, unfinished work, and a new boot/version. It proves
+    // we can detect interrupted work; by itself it says nothing about fresh objects after deploy.
     assert.match(
       response.data.error?.message || "",
       /Durable Object reset because its code was updated/,
@@ -303,7 +314,14 @@ class Probe {
         2,
       ),
     );
-    const deployment: any = { build, live, startedAt: Date.now() };
+    const deployment = {
+      build,
+      live,
+      startedAt: Date.now(),
+      output: "",
+      exitCode: undefined as number | undefined,
+      versionId: undefined as string | undefined,
+    };
     this.evidence.deployments.push(deployment);
     console.log(`Deploying ${build} (${this.#workerName})`);
     this.#touchedCloud = true;
@@ -314,7 +332,7 @@ class Probe {
     deployment.output = deployment.output
       .replaceAll(this.#token, "[redacted]")
       .replace(/env\.PROBE_TOKEN.*$/gm, "env.PROBE_TOKEN ([redacted])");
-    deployment.versionId = deployment.output.match(/Current Version ID:\s*(\S+)/)?.[1];
+    deployment.versionId = deployment.output.match(/Current Version ID:\s*(\S+)/)?.[1] || "";
     assert.equal(deployment.exitCode, 0, deployment.output);
     assert.ok(deployment.versionId, deployment.output);
     return deployment;
@@ -331,7 +349,11 @@ class Probe {
   }
 
   /** Poll a read-only endpoint up to 30 times, retaining every response. */
-  async observe(path: string, deployment: any, accepts: (response: any) => boolean) {
+  async observe(
+    path: string,
+    deployment: Awaited<ReturnType<typeof this.deploy>>,
+    accepts: (response: any) => boolean,
+  ) {
     const attempts = [];
     // Read-only follow-ups may retry; every response is kept. Never retry an operation.
     for (let i = 0; i < 30; i++) {
