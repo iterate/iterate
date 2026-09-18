@@ -2,12 +2,12 @@
 // request — the client, the signed-in person, their projects and organizations, the scopes asked
 // for — and this renders the page: iterate ⇄ the client, who is signed in, the permissions, the
 // projects. The projects are an either/or — one checkbox for every project now and later, else the
-// ones ticked — with
-// "New project" (in one of the person's organizations, or in a new one named right there) posting
-// to /authorize and answering the refreshed description with every choice kept. Approve posts the
-// projects and scopes left ticked and ends in the client's redirect. Consent is task-based: every
-// scope but `iterate` may be unticked, and the grant carries what stays ticked. Plain DOM, no
-// framework — the roles and strings here are what specs/auth.spec.ts drives.
+// ones ticked — with "New project" (in one of the person's organizations, or in a new one named
+// right there) posting to /authorize and answering the refreshed description with every choice
+// kept. Approve posts the projects and scopes left ticked and ends in the client's redirect.
+// Consent is task-based: every scope but `iterate` may be unticked, and the grant carries what
+// stays ticked. Plain DOM, no framework — the roles and strings here are what specs/auth.spec.ts
+// drives; every bit of motion is issuer.css's.
 (() => {
   const card = document.getElementById("consent");
   const query = location.search;
@@ -27,6 +27,23 @@
     const image = el("img", { src, alt: "" });
     image.addEventListener("load", () => tile.replaceChildren(image), { once: true });
     return tile;
+  };
+  /** The project field — a slug, the project's id and its hostname's label: lowercased as it is
+   *  typed, anything but a-z, 0-9 and dashes becoming a dash (the directory slugs it the same way). */
+  const slugInput = (name, placeholder) => {
+    const input = el("input", {
+      type: "text",
+      name,
+      placeholder,
+      autocomplete: "off",
+      autocapitalize: "off",
+      spellcheck: "false",
+    });
+    input.addEventListener("input", () => {
+      const slug = input.value.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+      if (slug !== input.value) input.value = slug;
+    });
+    return input;
   };
   /** What each scope means to the person, as a title and a note. `iterate` is what the app is for;
    *  the rest are optional and tickable (packages/iterate/src/next/oauth-scopes.ts lists them). */
@@ -189,7 +206,6 @@
       "aria-label": "Projects it may reach",
     });
     for (const orgId of orgIds) {
-      const group = projects.filter((project) => project.orgId === orgId);
       const orgName = names.get(orgId) || orgId;
       list.append(
         el(
@@ -197,16 +213,23 @@
           { class: "consent-org", "aria-label": orgName },
           // the organization's name only when there is more than one to tell apart
           orgIds.length > 1 ? el("h3", { text: orgName }) : null,
-          ...group.map((project) => {
-            const box = el("input", {
-              type: "checkbox",
-              name: "project",
-              value: project.id,
-              "aria-label": `${project.id} in ${orgName}`,
-            });
-            box.checked = ticked(project.id);
-            return el("label", { class: "consent-project" }, box, el("span", { text: project.id }));
-          }),
+          ...projects
+            .filter((project) => project.orgId === orgId)
+            .map((project) => {
+              const box = el("input", {
+                type: "checkbox",
+                name: "project",
+                value: project.id,
+                "aria-label": `${project.id} in ${orgName}`,
+              });
+              box.checked = ticked(project.id);
+              return el(
+                "label",
+                { class: "consent-project" },
+                box,
+                el("span", { text: project.id }),
+              );
+            }),
         ),
       );
     }
@@ -215,9 +238,10 @@
         el("p", { class: "muted", text: "You do not have access to this app’s project." }),
       );
 
-    // New project — in one of the person's organizations, or in a new one named right here: the
-    // only place the consent flow creates an organization. Open on its own while there is no
-    // project (nothing to approve until there is one).
+    // New project — in one of the person's organizations, or in a new one named right here (the
+    // only place the consent flow creates an organization); the first project makes the person's
+    // first organization by itself. Open on its own while there is no project (nothing to approve
+    // until there is one).
     const creating = !projectBound && (state.creating || !projects.length);
     const add =
       projectBound || !projects.length
@@ -234,12 +258,18 @@
     });
     let create = null;
     if (creating) {
-      const projectName = el("input", { type: "text", name: "project-name", autocomplete: "off" });
-      projectName.value = typed("project-name");
-      const orgName = el("input", { type: "text", name: "org-name", autocomplete: "off" });
-      orgName.value = typed("org-name");
-      const orgNameField = el("label", {}, "Organization name ", orgName);
+      const project = slugInput("slug", "my-project");
+      project.value = typed("slug");
+      // where it will live: the slug is the label of the project's own hostname
+      const host = el("span", { class: "muted consent-host" });
+      const showHost = () => {
+        host.hidden = !view.projectHostnameBase;
+        host.textContent = `Your project will be hosted at ${project.value || "my-project"}.${view.projectHostnameBase}`;
+      };
+      project.addEventListener("input", showHost);
+      showHost();
       let org = null;
+      let newOrgField = null;
       if (orgs.length) {
         org = el("select", { name: "org" });
         for (const candidate of orgs)
@@ -247,25 +277,34 @@
         org.append(el("option", { value: "", text: "New organization…" }));
         const before = card.querySelector('[name="org"]');
         org.value = before ? before.value : state.lastOrgId || orgs[0].id;
-        const showOrgName = () => (orgNameField.hidden = org.value !== "");
-        org.addEventListener("change", showOrgName);
-        showOrgName();
+        const newOrg = el("input", { type: "text", name: "new-org", autocomplete: "organization" });
+        newOrg.value = typed("new-org");
+        newOrgField = el("label", {}, "Organization name ", newOrg);
+        // the new organization's field opens for "New organization…" alone
+        const reveal = () => (newOrgField.hidden = org.value !== "");
+        org.addEventListener("change", reveal);
+        reveal();
       }
       const createProject = el("button", { type: "button", text: "Create project" });
       createProject.addEventListener("click", () =>
         act({
           action: "create-project",
-          project: projectName.value,
-          ...(org && org.value ? { org: org.value } : { newOrg: orgName.value }),
+          project: project.value,
+          ...(org && (org.value ? { org: org.value } : { newOrg: typed("new-org") })),
         }),
       );
       create = el(
         "section",
         { class: "consent-create", "aria-label": "New project" },
         el("h2", { text: projects.length ? "New project" : "Create your first project" }),
-        el("label", {}, "Project name ", projectName),
-        org ? el("label", {}, "Organization ", org) : null,
-        orgNameField,
+        el(
+          "div",
+          { class: "consent-fields" },
+          // the hostname line sits beside the label, not in it: the field's name stays "Project"
+          el("div", {}, el("label", {}, "Project ", project), host),
+          org ? el("label", {}, "Organization ", org) : null,
+          newOrgField,
+        ),
         createProject,
       );
     }
@@ -340,13 +379,17 @@
     form.addEventListener("change", sync);
     sync();
 
+    // The hero (iterate ⇄ the client: its picture — /client-icon — or its initials) and who is
+    // signed in are built once; every later render swaps the form alone, so the entrance in
+    // issuer.css plays once and the pictures stay put.
+    const shown = card.querySelector("#consent-form");
+    if (shown) return shown.replaceWith(form);
     const initial = el("span", {
       class: "consent-avatar",
       "aria-hidden": "true",
       text: email.slice(0, 1).toUpperCase(),
     });
     card.replaceChildren(
-      // the hero: iterate ⇄ the client (its picture — /client-icon — or its initials)
       el(
         "header",
         {},

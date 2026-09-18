@@ -312,7 +312,12 @@ async function authorizeHandler(
       }
       // an empty project name is refused before a new organization is made for it
       if (!action.project.trim()) return json({ error: "Enter a project name." }, 400);
-      orgId = action.org || (await session.createOrg(action.newOrg || "")).id;
+      // The page sends `newOrg` — typed or still empty — only with "New organization…" chosen, so
+      // an empty one is refused rather than becoming the person's first organization; with neither
+      // named, the project goes to their first (made from their email when they have none).
+      orgId =
+        action.org ||
+        ("newOrg" in action ? (await session.createOrg(action.newOrg || "")).id : undefined);
       // the new project's context is the session's to hold; the teardown below lets it go
       await session.projects.create({ project: action.project, orgId });
     } catch (error) {

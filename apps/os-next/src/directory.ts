@@ -169,8 +169,9 @@ ON CONFLICT DO NOTHING;`,
       return project;
     },
 
-    /** The user's first org — created as `<email>'s org`, with them as owner, when they have none
-     *  yet (the row `/login` or the admin's `as` upserted names the email). */
+    /** The user's first org — named after their email's local part (`jonas` for jonas@…), with them
+     *  as owner — made when they have none yet: a first project created without naming one (the
+     *  consent page's "Create your first project", the dash's first "New project"). */
     async ensureOrg(userId: string): Promise<Org> {
       const orgs = await d1Directory.listOrgs(userId);
       if (orgs[0]) return orgs[0];
@@ -178,7 +179,7 @@ ON CONFLICT DO NOTHING;`,
         .prepare(`SELECT id, email FROM users WHERE id = ?;`)
         .bind(userId)
         .first<User>();
-      return d1Directory.createOrg(userId, `${user!.email}'s org`);
+      return d1Directory.createOrg(userId, user!.email.split("@")[0]!);
     },
 
     /** Projects the user can reach (member of the owning org), with their role. */

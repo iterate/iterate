@@ -31,6 +31,9 @@ export type ConsentView =
       projectBound: boolean;
       scopes: string[];
       denyLocation: string;
+      /** where a project's own site lives — `<slug>.<base>` — for the New project form's hint;
+       *  blank when the deployment serves no project hosts */
+      projectHostnameBase: string;
     }
   | { kind: "redirect"; location: string }
   | { kind: "invalid"; description: string };
@@ -113,6 +116,7 @@ export class Consent extends RpcTarget {
         picture: this.#grant.picture,
         scopes: request.scope,
         orgs: await directory(env.DB).listOrgs(this.#grant.userId),
+        projectHostnameBase: appConfigOf(env).projectHostnameBase,
         ...(await projectsForClient(env, request.clientId, this.#grant.userId)),
       };
     } catch (error) {

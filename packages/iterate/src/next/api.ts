@@ -181,6 +181,7 @@ export type ConsentAnswer =
       projectBound: boolean;
       scopes: string[];
       denyLocation: string;
+      projectHostnameBase: string;
     }
   | { kind: "redirect"; location: string }
   | { kind: "invalid"; description: string };
