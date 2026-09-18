@@ -300,6 +300,71 @@ test("docs inherit a tested merge even when main is its second parent", async ()
   ).toMatchObject({ action: "inherit", result: { commit: merge } });
 });
 
+test.each([false, true])(
+  "a depth-ten checkout deploys when ancestry is unavailable (main fetched=%s)",
+  async (fetchMain) => {
+    using repo = repository();
+    repo.commit({ "apps/os/index.ts": "main" });
+    repo.git("switch", "-c", "feature");
+    for (let i = 0; i < 12; i++) repo.commit({ "README.md": `docs ${i}` });
+    const checkout = join(repo.directory, "checkout.ignoreme");
+    repo.git(
+      "clone",
+      "--depth=10",
+      "--single-branch",
+      "--branch=feature",
+      `file://${repo.directory}`,
+      checkout,
+    );
+    if (fetchMain) {
+      execFileSync("git", ["fetch", "--depth=10", "origin", "main:refs/remotes/origin/main"], {
+        cwd: checkout,
+        stdio: "pipe",
+      });
+    }
+    const plan = await planPreview(new CommitHistory(checkout, "HEAD", "origin/main"), {
+      findPreviewResult: async () => {
+        throw new Error("Incomplete ancestry cannot inherit results");
+      },
+      findPreviewDeployment: async () => {
+        throw new Error("Incomplete ancestry cannot reuse deployments");
+      },
+    });
+    expect(plan).toMatchObject({ action: "deploy", changes: { Docs: ["README.md"] } });
+  },
+);
+
+test("a depth-ten checkout can still inherit when the merge-base is available", async () => {
+  using repo = repository();
+  const base = repo.commit({ "apps/os/index.ts": "main" });
+  repo.git("switch", "-c", "feature");
+  repo.commit({ "README.md": "docs" });
+  const checkout = join(repo.directory, "checkout.ignoreme");
+  repo.git(
+    "clone",
+    "--depth=10",
+    "--single-branch",
+    "--branch=feature",
+    `file://${repo.directory}`,
+    checkout,
+  );
+  execFileSync("git", ["fetch", "--depth=10", "origin", "main:refs/remotes/origin/main"], {
+    cwd: checkout,
+    stdio: "pipe",
+  });
+  expect(
+    await planPreview(new CommitHistory(checkout, "HEAD", "origin/main"), {
+      findPreviewResult: async (commit) =>
+        commit === base
+          ? { commit, conclusion: "success", url: "https://depot.dev/main-preview" }
+          : null,
+      findPreviewDeployment: async () => {
+        throw new Error("Docs inherit without deployment lookup");
+      },
+    }),
+  ).toMatchObject({ action: "inherit", result: { commit: base, conclusion: "success" } });
+});
+
 function repository() {
   const directory = mkdtempSync(join(tmpdir(), "preview-change-plan-"));
   const git = (...args: string[]) =>
