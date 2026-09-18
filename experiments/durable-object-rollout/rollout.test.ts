@@ -14,19 +14,18 @@ test(
     skip: process.env.RUN_DO_ROLLOUT !== "1" && "Manual cloud experiment: set RUN_DO_ROLLOUT=1",
   },
   async () => {
-    await using probe = await createProbe("ordinary-redeploy");
-    const { evidence, deploy, request, observe, namespace } = probe;
+    await using probe = await Probe.create("ordinary-redeploy");
     await probe.bootstrap();
-    const previousNamespace = await namespace();
+    const previousNamespace = await probe.namespace();
     assert.ok(previousNamespace);
 
-    for (let round = 1; round <= evidence.rounds; round++) {
-      const deployment = await deploy(`ordinary-redeploy-${round}`, true);
+    for (let round = 1; round <= probe.evidence.rounds; round++) {
+      const deployment = await probe.deploy(`ordinary-redeploy-${round}`, true);
       // First-touch unique names immediately after Wrangler exits. Never retry a write.
       const operations = await Promise.all(
         Array.from({ length: 12 }, async () => {
           const id = randomUUID();
-          const response = await request(`/work/${id}`, { durationMs: 15_000 }, deployment);
+          const response = await probe.request(`/work/${id}`, { durationMs: 15_000 }, deployment);
           return { id, response, followup: [] as any[] };
         }),
       );
@@ -34,12 +33,12 @@ test(
         round,
         deployment: deployment.build,
         previousNamespace,
-        namespace: await namespace(),
+        namespace: await probe.namespace(),
         operations,
       };
-      evidence.trials.push(trial);
+      probe.evidence.trials.push(trial);
       for (const operation of operations) {
-        operation.followup = await observe(
+        operation.followup = await probe.observe(
           `/state/${operation.id}`,
           deployment,
           (r) => r.status === 200 && r.data.object?.build === deployment.build,
@@ -69,21 +68,20 @@ test(
     skip: process.env.RUN_DO_ROLLOUT !== "1" && "Manual cloud experiment: set RUN_DO_ROLLOUT=1",
   },
   async () => {
-    await using probe = await createProbe("retire-recreate");
-    const { evidence, deploy, request, observe, namespace } = probe;
+    await using probe = await Probe.create("retire-recreate");
     await probe.bootstrap();
 
-    for (let round = 1; round <= evidence.rounds; round++) {
-      const previousNamespace = await namespace();
+    for (let round = 1; round <= probe.evidence.rounds; round++) {
+      const previousNamespace = await probe.namespace();
       assert.ok(previousNamespace);
-      await deploy(`retired-${round}`, false);
-      assert.equal(await namespace(), null);
-      const deployment = await deploy(`retire-recreate-${round}`, true);
+      await probe.deploy(`retired-${round}`, false);
+      assert.equal(await probe.namespace(), null);
+      const deployment = await probe.deploy(`retire-recreate-${round}`, true);
       // First-touch unique names immediately after Wrangler exits. Never retry a write.
       const operations = await Promise.all(
         Array.from({ length: 12 }, async () => {
           const id = randomUUID();
-          const response = await request(`/work/${id}`, { durationMs: 15_000 }, deployment);
+          const response = await probe.request(`/work/${id}`, { durationMs: 15_000 }, deployment);
           return { id, response, followup: [] as any[] };
         }),
       );
@@ -91,12 +89,12 @@ test(
         round,
         deployment: deployment.build,
         previousNamespace,
-        namespace: await namespace(),
+        namespace: await probe.namespace(),
         operations,
       };
-      evidence.trials.push(trial);
+      probe.evidence.trials.push(trial);
       for (const operation of operations) {
-        operation.followup = await observe(
+        operation.followup = await probe.observe(
           `/state/${operation.id}`,
           deployment,
           (r) => r.status === 200 && r.data.object?.build === deployment.build,
@@ -127,75 +125,98 @@ test(
     skip: process.env.RUN_DO_ROLLOUT !== "1" && "Manual cloud experiment: set RUN_DO_ROLLOUT=1",
   },
   async () => {
-    await using probe = await createProbe("active-object-control");
-    const { evidence, deploy, request, observe } = probe;
+    await using probe = await Probe.create("active-object-control");
     const initial = await probe.bootstrap();
     const id = randomUUID();
-    const inFlight = request(`/work/${id}`, { durationMs: 90_000 }, initial);
-    const started = await observe(
+    const inFlight = probe.request(`/work/${id}`, { durationMs: 90_000 }, initial);
+    const started = await probe.observe(
       `/state/${id}`,
       initial,
       (r) => r.data.record?.status === "started",
     );
-    evidence.checks.push({ kind: "control-started", attempts: started });
+    probe.evidence.checks.push({ kind: "control-started", attempts: started });
     assert.equal(
       started.at(-1)?.data.record?.status,
       "started",
       "Work must be active before redeploy",
     );
 
-    const replacement = await deploy("active-object-control", true);
+    const replacement = await probe.deploy("active-object-control", true);
     const response = await inFlight;
-    const followup = await observe(
+    const followup = await probe.observe(
       `/state/${id}`,
       replacement,
       (r) => r.status === 200 && r.data.object?.build === replacement.build,
     );
     const operation = { id, response, followup };
-    evidence.trials.push({ deployment: replacement.build, operations: [operation] });
+    probe.evidence.trials.push({ deployment: replacement.build, operations: [operation] });
 
     assert.match(
       response.data.error?.message || "",
       /Durable Object reset because its code was updated/,
       JSON.stringify(operation),
     );
-    const state = followup.at(-1).data;
+    const state = followup.at(-1)!.data;
     assert.equal(state.record?.status, "started", "Interrupted work must remain unfinished");
     assert.notEqual(state.object.bootId, state.record.bootId);
     assert.notEqual(state.object.versionId, state.record.versionId);
   },
 );
 
-async function createProbe(scenario: string) {
-  const account = process.env.CLOUDFLARE_ACCOUNT_ID;
-  // This repo's preview account. Never target production, or reuse an existing Worker.
-  assert.equal(account, "376ef7ed81b0573f93524de763666c15");
-  assert.ok(process.env.CLOUDFLARE_API_TOKEN, "CLOUDFLARE_API_TOKEN is required");
-  const rounds = Number(process.env.ROLLOUT_ROUNDS || 3);
-  assert.ok(Number.isInteger(rounds) && rounds >= 1 && rounds <= 10);
-  const runId = randomUUID().slice(0, 8);
-  const workerName = `do-rollout-probe-${runId}`;
-  const directory = await mkdtemp(join(tmpdir(), `${workerName}-`));
-  const evidenceDirectory = resolvePath(
+class Probe {
+  #account = process.env.CLOUDFLARE_ACCOUNT_ID;
+  #runId = randomUUID().slice(0, 8);
+  #workerName = `do-rollout-probe-${this.#runId}`;
+  #token = randomUUID();
+  #apiBase = `https://api.cloudflare.com/client/v4/accounts/${this.#account}`;
+  #evidenceDirectory = resolvePath(
     process.env.ROLLOUT_EVIDENCE_DIR || join(import.meta.dirname, "evidence.ignoreme"),
-    runId,
+    this.#runId,
   );
-  await mkdir(evidenceDirectory, { recursive: true });
-  const token = randomUUID();
-  const evidence: any = {
-    runId,
-    scenario,
-    workerName,
-    startedAt: Date.now(),
-    rounds,
-    deployments: [],
-    trials: [],
-    checks: [],
-    cleanup: null,
-  };
-  const apiBase = `https://api.cloudflare.com/client/v4/accounts/${account}`;
-  const api = async (path: string, body: any) => {
-    const response = await fetch(`${apiBase}${path}`, {
+  // #init fills these before create exposes the instance.
+  #directory!: string;
+  #origin!: string;
+  #touchedCloud = false;
+  evidence: any;
+
+  private constructor(scenario: string) {
+    // This repo's preview account. Never target production, or reuse an existing Worker.
+    assert.equal(this.#account, "376ef7ed81b0573f93524de763666c15");
+    assert.ok(process.env.CLOUDFLARE_API_TOKEN, "CLOUDFLARE_API_TOKEN is required");
+    const rounds = Number(process.env.ROLLOUT_ROUNDS || 3);
+    assert.ok(Number.isInteger(rounds) && rounds >= 1 && rounds <= 10);
+    this.evidence = {
+      runId: this.#runId,
+      scenario,
+      workerName: this.#workerName,
+      startedAt: Date.now(),
+      rounds,
+      deployments: [],
+      trials: [],
+      checks: [],
+      cleanup: null,
+    };
+  }
+
+  static async create(scenario: string) {
+    const probe = new Probe(scenario);
+    await probe.#init();
+    return probe;
+  }
+
+  async #init() {
+    const existing = await this.#api(`/workers/scripts/${this.#workerName}/settings`, null);
+    assert.equal(existing.status, 404, "Refuse to overwrite any existing Worker");
+    const subdomain = await this.#api("/workers/subdomain", null);
+    assert.equal(subdomain.success, true, JSON.stringify(subdomain));
+    this.#origin = `https://${this.#workerName}.${subdomain.result.subdomain}.workers.dev`;
+    this.evidence.origin = this.#origin;
+    await mkdir(this.#evidenceDirectory, { recursive: true });
+    this.#directory = await mkdtemp(join(tmpdir(), `${this.#workerName}-`));
+  }
+
+  async #api(path: string, body: any) {
+    const response = await fetch(`${this.#apiBase}${path}`, {
       method: body ? "POST" : "GET",
       headers: {
         Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}`,
@@ -206,20 +227,14 @@ async function createProbe(scenario: string) {
     });
     const data: any = await response.json();
     return { status: response.status, ...data };
-  };
-  const existing = await api(`/workers/scripts/${workerName}/settings`, null);
-  assert.equal(existing.status, 404, "Refuse to overwrite any existing Worker");
-  const subdomain = await api("/workers/subdomain", null);
-  assert.equal(subdomain.success, true, JSON.stringify(subdomain));
-  const origin = `https://${workerName}.${subdomain.result.subdomain}.workers.dev`;
-  evidence.origin = origin;
+  }
 
-  const request = async (path: string, body: any, deployment: any) => {
+  async request(path: string, body: any, deployment: any) {
     const startedAt = Date.now();
     try {
-      const response = await fetch(`${origin}${path}`, {
+      const response = await fetch(`${this.#origin}${path}`, {
         method: body ? "POST" : "GET",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${this.#token}`, "Content-Type": "application/json" },
         ...(body && { body: JSON.stringify(body) }),
         // Control work spans a deployment; fresh work lasts 15s. A hung request is evidence.
         signal: AbortSignal.timeout(body ? body.durationMs + 20_000 : 5_000),
@@ -247,22 +262,21 @@ async function createProbe(scenario: string) {
         data: { transportError: error.message },
       };
     }
-  };
+  }
 
-  let touchedCloud = false;
-  const deploy = async (build: string, live: boolean) => {
+  async deploy(build: string, live: boolean) {
     await writeFile(
-      join(directory, "worker.js"),
+      join(this.#directory, "worker.js"),
       live
         ? `const build = ${JSON.stringify(build)};\n${workerSource}`
         : `export default { fetch() { return Response.json({ parked: true, build: ${JSON.stringify(build)} }); } };`,
     );
     await writeFile(
-      join(directory, "wrangler.json"),
+      join(this.#directory, "wrangler.json"),
       JSON.stringify(
         {
-          name: workerName,
-          account_id: account,
+          name: this.#workerName,
+          account_id: this.#account,
           main: "worker.js",
           compatibility_date: "2026-09-01",
           workers_dev: true,
@@ -270,7 +284,7 @@ async function createProbe(scenario: string) {
           observability: { enabled: true, head_sampling_rate: 1 },
           version_metadata: { binding: "VERSION" },
           ...(live && {
-            vars: { PROBE_TOKEN: token },
+            vars: { PROBE_TOKEN: this.#token },
             durable_objects: { bindings: [{ name: "PROBE", class_name: "Probe" }] },
           }),
           exports: {
@@ -284,115 +298,111 @@ async function createProbe(scenario: string) {
       ),
     );
     const deployment: any = { build, live, startedAt: Date.now() };
-    evidence.deployments.push(deployment);
-    console.log(`Deploying ${build} (${workerName})`);
-    touchedCloud = true;
+    this.evidence.deployments.push(deployment);
+    console.log(`Deploying ${build} (${this.#workerName})`);
+    this.#touchedCloud = true;
     Object.assign(
       deployment,
-      await command("wrangler", ["deploy", "--config", "wrangler.json"], directory),
+      await command("wrangler", ["deploy", "--config", "wrangler.json"], this.#directory),
     );
     deployment.output = deployment.output
-      .replaceAll(token, "[redacted]")
+      .replaceAll(this.#token, "[redacted]")
       .replace(/env\.PROBE_TOKEN.*$/gm, "env.PROBE_TOKEN ([redacted])");
     deployment.versionId = deployment.output.match(/Current Version ID:\s*(\S+)/)?.[1];
     assert.equal(deployment.exitCode, 0, deployment.output);
     assert.ok(deployment.versionId, deployment.output);
     return deployment;
-  };
+  }
 
-  const namespace = async () => {
-    const settings = await api(`/workers/scripts/${workerName}/settings`, null);
+  async namespace() {
+    const settings = await this.#api(`/workers/scripts/${this.#workerName}/settings`, null);
     assert.equal(settings.success, true, JSON.stringify(settings.errors));
     return (
       settings.result.bindings.find((binding: any) => binding.name === "PROBE")?.namespace_id ||
       null
     );
-  };
-  const observe = async (path: string, deployment: any, accepts: (response: any) => boolean) => {
+  }
+
+  async observe(path: string, deployment: any, accepts: (response: any) => boolean) {
     const attempts = [];
     // Read-only follow-ups may retry; every response is kept. Never retry an operation.
     for (let i = 0; i < 30; i++) {
-      const response = await request(path, null, deployment);
+      const response = await this.request(path, null, deployment);
       attempts.push(response);
       if (accepts(response)) break;
       await delay(500);
     }
     return attempts;
-  };
-  return {
-    evidence,
-    deploy,
-    request,
-    observe,
-    namespace,
-    async bootstrap() {
-      const initial = await deploy("bootstrap", true);
-      // Provision the new hostname before measuring a deployment. No measured deploy waits here.
-      const readiness = await observe(
-        "/health",
-        initial,
-        (r) => r.data.worker?.build === "bootstrap",
-      );
-      evidence.checks.push({ kind: "bootstrap", attempts: readiness });
-      assert.equal(readiness.at(-1)?.data.worker?.build, "bootstrap");
-      return initial;
-    },
-    async [Symbol.asyncDispose]() {
-      // Preserve partial failures, and retire only our new class. Never delete Workers.
-      if (touchedCloud) {
-        try {
-          const parked = await deploy("cleanup-parked", false);
-          const attempts = await observe(
-            "/health",
-            parked,
-            (r) => r.data.build === "cleanup-parked",
-          );
-          const remainingNamespace = await namespace();
-          evidence.cleanup = { remainingNamespace, attempts };
-          assert.equal(remainingNamespace, null);
-          assert.equal(attempts.at(-1)?.data.build, "cleanup-parked");
-        } catch (error: any) {
-          evidence.cleanup = {
-            error: error.message,
-            recoveryConfig: join(directory, "wrangler.json"),
-          };
-        }
-      }
-      evidence.finishedAt = Date.now();
-      // Query after parking, not wrangler tail: enabling a tail can itself restart a DO.
+  }
+
+  async bootstrap() {
+    const initial = await this.deploy("bootstrap", true);
+    // Provision the new hostname before measuring a deployment. No measured deploy waits here.
+    const readiness = await this.observe(
+      "/health",
+      initial,
+      (r) => r.data.worker?.build === "bootstrap",
+    );
+    this.evidence.checks.push({ kind: "bootstrap", attempts: readiness });
+    assert.equal(readiness.at(-1)?.data.worker?.build, "bootstrap");
+    return initial;
+  }
+
+  async [Symbol.asyncDispose]() {
+    // Preserve partial failures, and retire only our new class. Never delete Workers.
+    if (this.#touchedCloud) {
       try {
-        evidence.telemetry = await api("/workers/observability/telemetry/query", {
-          queryId: `rollout-${runId}`,
-          dry: true,
-          view: "events",
-          limit: 2000,
-          timeframe: { from: evidence.startedAt, to: evidence.finishedAt },
-          parameters: {
-            datasets: [],
-            filters: [
-              { key: "$metadata.service", operation: "eq", type: "string", value: workerName },
-            ],
-            needle: { value: "code was updated", matchCase: false },
-          },
-        });
+        const parked = await this.deploy("cleanup-parked", false);
+        const attempts = await this.observe(
+          "/health",
+          parked,
+          (r) => r.data.build === "cleanup-parked",
+        );
+        const remainingNamespace = await this.namespace();
+        this.evidence.cleanup = { remainingNamespace, attempts };
+        assert.equal(remainingNamespace, null);
+        assert.equal(attempts.at(-1)?.data.build, "cleanup-parked");
       } catch (error: any) {
-        evidence.telemetry = { error: error.message };
+        this.evidence.cleanup = {
+          error: error.message,
+          recoveryConfig: join(this.#directory, "wrangler.json"),
+        };
       }
-      await writeFile(
-        join(evidenceDirectory, "evidence.json"),
-        `${JSON.stringify(evidence, null, 2)}\n`,
-      );
-      console.log(`Evidence: ${evidenceDirectory}/evidence.json`);
-      if (!touchedCloud || (evidence.cleanup && !evidence.cleanup.error))
-        await rm(directory, { recursive: true });
-      assert.equal(
-        evidence.cleanup?.remainingNamespace,
-        null,
-        "Cleanup must retire the probe namespace",
-      );
-      assert.ok(!evidence.cleanup?.error, evidence.cleanup?.error);
-    },
-  };
+    }
+    this.evidence.finishedAt = Date.now();
+    // Query after parking, not wrangler tail: enabling a tail can itself restart a DO.
+    try {
+      this.evidence.telemetry = await this.#api("/workers/observability/telemetry/query", {
+        queryId: `rollout-${this.#runId}`,
+        dry: true,
+        view: "events",
+        limit: 2000,
+        timeframe: { from: this.evidence.startedAt, to: this.evidence.finishedAt },
+        parameters: {
+          datasets: [],
+          filters: [
+            { key: "$metadata.service", operation: "eq", type: "string", value: this.#workerName },
+          ],
+          needle: { value: "code was updated", matchCase: false },
+        },
+      });
+    } catch (error: any) {
+      this.evidence.telemetry = { error: error.message };
+    }
+    await writeFile(
+      join(this.#evidenceDirectory, "evidence.json"),
+      `${JSON.stringify(this.evidence, null, 2)}\n`,
+    );
+    console.log(`Evidence: ${this.#evidenceDirectory}/evidence.json`);
+    if (!this.#touchedCloud || (this.evidence.cleanup && !this.evidence.cleanup.error))
+      await rm(this.#directory, { recursive: true });
+    assert.equal(
+      this.evidence.cleanup?.remainingNamespace,
+      null,
+      "Cleanup must retire the probe namespace",
+    );
+    assert.ok(!this.evidence.cleanup?.error, this.evidence.cleanup?.error);
+  }
 }
 
 async function command(executable: string, args: string[], cwd: string) {
