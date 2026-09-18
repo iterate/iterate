@@ -1,14 +1,15 @@
 ---
-status: in-progress
+status: complete
 size: medium
 ---
 
 # Experiment: a new OS Worker name for each preview run
 
-Status: harness implemented and live runs are in progress. Initial measurements
-reproduce stale routing and resets during retirement, even after exact-version
-readiness. Settling-time comparisons and final results remain. Product defaults
-are unchanged.
+Status: complete for the unique-Worker experiment. Ten live cases measured 288
+operations at 0/15/30/90-second delays. Immediate routing is unsafe; inactive DO
+resets also occurred after 90 seconds. Results and a repeatable harness are ready
+for review; all cloud resources were restored/retired and leases released.
+The separate rested-slot/tagging experiment and full-OS adoption remain future work.
 
 ## Ask and assumptions
 
@@ -51,15 +52,24 @@ unchanged unless a later explicit adoption task changes them.
   *`experiments/preview-worker-per-run/worker-per-run.e2e.test.ts`; three scenarios.*
 - [x] Acquire an isolated preview slot and record its original route state.
   *Semaphore leases, explicit preview credentials, and route snapshots in local evidence.*
-- [ ] Measure unique Worker direct requests, stable-host cutovers, and handoff timing
+- [x] Measure unique Worker direct requests, stable-host cutovers, and handoff timing
   with multiple real changed builds. Preserve failed first calls and final DO state.
-- [ ] Verify original routing restored, experimental namespaces retired, and lease released.
-- [ ] Trace how a unique OS name changes real deployment resources; if the route
+  *All four timing groups complete; 24 measured rounds, 288 unretried operations.*
+- [x] Verify original routing restored, experimental namespaces retired, and lease released.
+  *Final independent audits: ten original route owners, 35 parked Workers, zero
+  owned namespaces, and zero remaining owned leases.*
+- [x] Trace how a unique OS name changes real deployment resources; if the route
   experiment supports proceeding, exercise a representative OS deployment/smoke
   without silently reusing an old run's Durable Objects.
-- [ ] Write a concise results table with timings, failure categories, limitations,
+  *`RESULTS.md` maps buckets, services and container bootstrap. Immediate and
+  15-second failures rule out immediate adoption; no full-OS/CI result is claimed.*
+- [x] Write a concise results table with timings, failure categories, limitations,
   and an adopt/reject/further-test recommendation. Run appropriate local checks.
-- [ ] Commit and push the experiment, with proposed PR body in commit messages; no PR.
+  *`experiments/preview-worker-per-run/RESULTS.md`; targeted typecheck, lint,
+  formatting and opt-out discovery verified. No full-OS or main-CI result claimed.*
+- [x] Commit and push the experiment, with proposed PR body in commit messages; no PR.
+  *`codex/experiment-preview-worker-per-run`, based on the existing repro branch;
+  spec and harness commits followed by the final results commit.*
 
 ## Implementation log
 
@@ -75,3 +85,27 @@ unchanged unless a later explicit adoption task changes them.
   returning immediately on a match. Added an explicit settling-time variable and
   soft operation assertions so failed first writes remain red without discarding
   subsequent rounds. No write retries. Inspecting live logs after cleanup.
+
+- 2026-09-18: Repeated immediate handoffs exposed 18 successful writes on the wrong
+  build, explicit resets during old-Worker retirement, and an inactive-instance
+  reset inside a fresh Worker. The latter left persisted progress unfinished.
+- 2026-09-18: The 15-second matrix completed 107/108 operations correctly. One new
+  DO still became inactive with no concurrent retirement; logs confirm the version
+  and the record remained started at progress 38. Increased the next comparison to
+  30 seconds rather than pursuing a shorter 5-second candidate.
+- 2026-09-18: Added an explicit account namespace audit after retirement. Strengthened
+  route restoration to compare the saved public response as well as the route owner.
+
+- 2026-09-18: The 30-second run also interrupted a fresh DO, leaving progress 59.
+  Added a 90-second deployment-age control with old Workers left live; the fixture
+  bounds the explicit experiment delay to 90 seconds. This changes no product gate.
+- 2026-09-18: Independent read-only audit of the first nine cases confirmed 31
+  parked Workers, zero remaining owned namespaces, and all original route owners.
+
+- 2026-09-18: The 90-second control also interrupted one fresh DO (progress 34,
+  unchanged code version, new boot ID). All delayed groups routed to the intended
+  build, but none establishes a reliable operation-completion guarantee. The
+  inactive-instance cause and repeated third-round pattern remain unresolved.
+- 2026-09-18: Final independent audits confirm all ten route owners restored,
+  all 35 experimental Workers parked, no owned DO namespaces, and no owned leases.
+  Root worktree and product deployment policy were left untouched; no PR opened.

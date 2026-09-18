@@ -128,7 +128,7 @@ class Probe {
   /** Record the scenario; credentials and lease are resolved only after the explicit opt-in. */
   private constructor(handoff: string) {
     expect(Number.isInteger(this.rounds) && this.rounds >= 1 && this.rounds <= 10).toBe(true);
-    expect(Number.isInteger(this.settleMs) && this.settleMs >= 0 && this.settleMs <= 30_000).toBe(
+    expect(Number.isInteger(this.settleMs) && this.settleMs >= 0 && this.settleMs <= 90_000).toBe(
       true,
     );
     this.evidence = {
@@ -457,10 +457,12 @@ class Probe {
           "/health",
           (r) =>
             r.status === this.evidence.originalResponse.status &&
-            r.data.experiment !== "worker-per-run",
+            JSON.stringify(r.data) === JSON.stringify(this.evidence.originalResponse.data),
         );
-        expect(attempts.at(-1)).toMatchObject({ status: this.evidence.originalResponse.status });
-        expect(attempts.at(-1)!.data.experiment).not.toBe("worker-per-run");
+        expect(attempts.at(-1)).toMatchObject({
+          status: this.evidence.originalResponse.status,
+          data: this.evidence.originalResponse.data,
+        });
         this.evidence.cleanup.route = { restored, attempts };
       } catch (error) {
         errors.push(`route restoration: ${String(error)}`);

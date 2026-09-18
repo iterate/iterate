@@ -3,7 +3,7 @@
 This tests whether a new Worker/DO identity for each run can avoid the rollout
 failures reproduced in `../durable-object-rollout`. It does not change OS deployment,
 Semaphore policy, or the 90-second CI wait. Passing samples are not a global rollout
-guarantee. Failed first operations stay red.
+guarantee. Failed first operations stay red. See [measured results](RESULTS.md).
 
 Run from this worktree root:
 
@@ -21,10 +21,13 @@ Doppler values. Without the opt-in, all cases skip without acquiring resources.
 Use `-t 'keep-old'` (or `direct`, `park-old`) to select one scenario.
 Set `WORKER_PER_RUN_SETTLE_MS=15000` to compare a 15-second delay after exact-version
 readiness with the default immediate writes. The chosen delay is saved in evidence.
-Rounds are bounded to 1–10, settling to 0–30 seconds, and read polling to 90 seconds
+Rounds are bounded to 1–10, settling to 0–90 seconds, and read polling to 90 seconds
 (plus at most one 5-second request). Polling returns on the first match; it does not
 wait 90 seconds unconditionally. This longer measurement window was added after the
 first run exhausted its original 30-read/~15-second cap while still seeing old code.
+`WORKER_PER_RUN_SETTLE_MS=90000` provides an aged-deployment control: after 30-second
+runs also reset fresh objects, this checks whether waiting the existing CI gate's
+length avoids the same failure. It still uses fresh DO names for every operation.
 Operation assertions are soft so a failure does not discard later rounds; the test
 still fails if any first operation fails. No work request is retried.
 
@@ -68,7 +71,7 @@ not an OS agent-smoke run. OS's name currently also determines R2 buckets,
 Artifacts namespace, typechecker and bundler sidecars, self identity, and container
 applications. In addition, a brand-new OS Worker gets a **container-class bootstrap
 upload before the real application upload**, so merely adding a suffix does not
-produce the single-upload lifecycle tested by `direct`.
+produce the single live-deployment lifecycle tested by `direct`.
 
 If the basic route handoff works, those differences need representative OS evidence
 before proposing adoption. The sibling idea of lease tags and aged parked slots
