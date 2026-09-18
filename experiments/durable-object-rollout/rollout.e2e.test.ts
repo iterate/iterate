@@ -65,6 +65,108 @@ test(
 );
 
 test(
+  "fresh objects complete work after Worker and DO readiness following class recreation",
+  {
+    skip: process.env.RUN_DO_ROLLOUT !== "1",
+  },
+  async () => {
+    await using probe = await Probe.create("retire-recreate-ready");
+    await probe.bootstrap();
+
+    for (let round = 1; round <= probe.evidence.rounds; round++) {
+      const previousNamespace = await probe.readNamespaceId();
+      expect(previousNamespace).toEqual(expect.any(String));
+      // Use the same erase/recreate sequence as the immediate-use baseline above.
+      await probe.deploy(`retired-${round}`, "retired");
+      expect(await probe.readNamespaceId()).toBeNull();
+      const deployment = await probe.deploy(`retire-recreate-ready-${round}`, "live");
+      const expectedIdentity = { build: deployment.build, versionId: deployment.versionId };
+      const readinessId = `readiness-${randomUUID()}`;
+      // "Not parked" could still mean the pre-retirement build. Require BOTH the Worker
+      // and a separate DO to report the exact new version in the same response.
+      const readiness = await probe.observeState(
+        `/state/${readinessId}`,
+        deployment,
+        (r) =>
+          r.status === 200 &&
+          r.data.worker?.versionId === deployment.versionId &&
+          r.data.object?.versionId === deployment.versionId,
+      );
+      probe.evidence.checks.push({
+        kind: "worker-and-do-readiness",
+        round,
+        id: readinessId,
+        waitMs: readiness.at(-1)!.finishedAt - deployment.finishedAt,
+        attempts: readiness,
+      });
+      expect(readiness.at(-1), "Both Worker and DO must reach the new deployment").toMatchObject({
+        status: 200,
+        data: { worker: expectedIdentity, object: expectedIdentity, record: null },
+      });
+      // Start fresh names immediately after this one successful probe. No extra settling
+      // time or write retries: a later failure disproves readiness as a sufficient barrier.
+      const operations = await Promise.all(
+        Array.from({ length: 12 }, async (_, i) => {
+          const id = `${String.fromCharCode("a".charCodeAt(0) + i).repeat(3)}-${randomUUID()}`;
+          const response = await probe.request(`/work/${id}`, { durationMs: 15_000 }, deployment);
+          return {
+            id,
+            response,
+            stateObservations: [] as Awaited<ReturnType<typeof probe.observeState>>,
+          };
+        }),
+      );
+      const trial = {
+        round,
+        deployment: deployment.build,
+        previousNamespace,
+        readinessId,
+        namespace: await probe.readNamespaceId(),
+        operations,
+      };
+      probe.evidence.trials.push(trial);
+      for (const operation of operations) {
+        operation.stateObservations = await probe.observeState(
+          `/state/${operation.id}`,
+          deployment,
+          (r) =>
+            r.status === 200 &&
+            r.data.worker?.versionId === deployment.versionId &&
+            r.data.object?.versionId === deployment.versionId,
+        );
+      }
+      expect(trial.namespace).toEqual(expect.any(String));
+      expect(trial.namespace).not.toBe(previousNamespace);
+      for (const operation of operations) {
+        expect({
+          id: operation.id,
+          response: operation.response,
+          state: operation.stateObservations.at(-1),
+        }).toMatchObject({
+          id: operation.id,
+          response: {
+            status: 200,
+            data: {
+              worker: expectedIdentity,
+              object: expectedIdentity,
+              record: { ...expectedIdentity, status: "completed" },
+            },
+          },
+          state: {
+            status: 200,
+            data: {
+              worker: expectedIdentity,
+              object: expectedIdentity,
+              record: { ...expectedIdentity, status: "completed" },
+            },
+          },
+        });
+      }
+    }
+  },
+);
+
+test(
   "fresh objects complete work immediately after an ordinary redeploy",
   {
     skip: process.env.RUN_DO_ROLLOUT !== "1",

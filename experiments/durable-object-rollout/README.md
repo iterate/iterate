@@ -1,7 +1,7 @@
 # Durable Object deployment reset probe
 
 A manual, standalone Vitest e2e test against real Cloudflare. It embeds its entire Worker and Durable Object,
-writes temporary Wrangler configs, and gives each of its three top-level tests
+writes temporary Wrangler configs, and gives each of its four top-level tests
 its own isolated Worker and disposable cleanup. Tests share no deployed state.
 It imports only Vitest and Node builtins: no Iterate runtime, deployment helpers, auth service, or fixtures.
 
@@ -23,7 +23,7 @@ The script sets `RUN_DO_ROLLOUT=1` and uses the dedicated `vitest.config.ts`.
 Outside this repo, install Vitest, put `wrangler` on PATH and supply `CLOUDFLARE_API_TOKEN` and
 `CLOUDFLARE_ACCOUNT_ID`. The test deliberately allows only our preview account;
 change that assertion to use your own account. Without `RUN_DO_ROLLOUT=1` it reports
-three explicit skips. This test is manual and is not part of CI or `pnpm test`.
+four explicit skips. This test is manual and is not part of CI or `pnpm test`.
 To check discovery without deploying anything:
 
 ```sh
@@ -34,18 +34,33 @@ There are no test retries. Deploys and requests have their own deadlines, and re
 have a fixed attempt limit. The config disables Vitest’s overall test timeout so
 its default five-second deadline cannot cut off deployment or disposable cleanup.
 
-| Case                  | What happens                                                                                                         | What it can establish                                                        |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| Ordinary redeploy     | Deploy changed code, then first-touch 12 unique DO names immediately after Wrangler exits                            | Whether fresh objects encounter deployment errors without namespace deletion |
-| Retire/recreate       | Deploy the class as deleted, verify its binding is absent, redeploy the live class, then first-touch 12 unique names | Whether new objects in a new namespace encounter deployment errors           |
-| Active-object control | Start a 90-second operation, observe its durable started marker, then deploy changed code while it runs              | Whether the probe can capture a reset interrupting existing work             |
+| Case                           | What happens                                                                                                           | What it can establish                                                        |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Ordinary redeploy              | Deploy changed code, then first-touch 12 unique DO names immediately after Wrangler exits                              | Whether fresh objects encounter deployment errors without namespace deletion |
+| Retire/recreate                | Deploy the class as deleted, verify its binding is absent, redeploy the live class, then first-touch 12 unique names   | Whether new objects in a new namespace encounter deployment errors           |
+| Retire/recreate with readiness | Recreate the class, poll until Worker and a separate DO report the exact new version, then first-touch 12 unique names | Whether one successful readiness probe predicts fresh-operation success      |
+| Active-object control          | Start a 90-second operation, observe its durable started marker, then deploy changed code while it runs                | Whether the probe can capture a reset interrupting existing work             |
 
-The first two tests each run up to three rounds, stopping at the first failed
+The three fresh-object tests each run up to three rounds, stopping at the first failed
 round. `ROLLOUT_ROUNDS=1` through `10` changes that limit. A failed test does not
 prevent the other tests from running. Fresh work lasts 15 seconds, repeatedly
 writing progress to storage.
-Only the initial, unmeasured Worker deployment waits for the new hostname to become
-reachable. Measured deployments have **no health check or delay before the writes**.
+The immediate-use baselines wait for the initial, unmeasured Worker hostname to become
+reachable, then perform measured deployments with **no health check or delay before writes**.
+The readiness case instead polls a separate DO until one response identifies the
+exact new version of both the Worker and DO, then immediately starts the 12 fresh
+operations. It retains every readiness attempt and records the wait since Wrangler
+exit. It also requires successful operations to have used that new version.
+
+Run just the readiness experiment (three rounds by default):
+
+```sh
+doppler run --project os --config preview_11 -- \
+  pnpm test:e2e:do-rollout -t 'Worker and DO readiness'
+```
+
+A passing readiness case is evidence for these sampled requests, not proof that
+all subsequent requests or other client locations have converged.
 
 Every operation runs once. Follow-up reads retry at most 30 times and keep every
 response, including errors. Responses record the caller's Worker version separately

@@ -161,3 +161,45 @@ Workers were parked, their DO bindings removed, and telemetry queries succeeded.
 Raw evidence remains under `evidence.ignoreme/`. The embedded Worker is unchanged.
 The explicit-skip run, standalone typecheck, targeted lint, formatting, and frozen
 lockfile install also passed.
+
+## Exact Worker + DO readiness — counterexample
+
+Added a separate retire/recreate test that polls `/state/<readiness-id>` until
+**one response** reports the deployed version ID for both Worker and DO. The
+12 measured operations use different, fresh names and start immediately after
+that response, without write retries. Every readiness attempt is retained.
+
+Run `79ebb231`, 18 September 2026, 15:27–15:29 UTC:
+
+| Round | Readiness after Wrangler exit | Poll attempts | Completed operations | Failures                                                        |
+| ----- | ----------------------------- | ------------- | -------------------- | --------------------------------------------------------------- |
+| 1     | 286 ms                        | 1             | 12/12                | None                                                            |
+| 2     | 867 ms                        | 1             | 12/12                | None                                                            |
+| 3     | 1,741 ms                      | 3             | 7/12                 | 3 parked responses, 1 inactive-instance reset, 1 internal error |
+
+Round 3 first returned two internal errors from the new Worker. Its third read
+succeeded with both Worker and DO on version `98166e74-d923-48c4-9dba-86dcbf8eb2ce`.
+The fresh writes began 1–3 ms after that response. Despite the successful probe:
+
+- `ddd`, `eee`, and `fff` reached `retired-3`, returning `{ parked: true }`.
+  Later reads on the expected new version found no work record.
+- `kkk` started work on the expected new version, then returned HTTP 500:
+  `Connection closed: this Durable Object instance is no longer active. Reconnect or retry the request.`
+  The error had `durableObjectReset: true`; its durable record remained `started`
+  with progress 22. A later read had a different boot ID but the same version.
+  This is an interrupted operation, **not the explicit code-update error**;
+  these observations do not establish why that instance reset.
+- `lll` returned an internal error; its later durable record was null.
+
+**One successful exact-version readiness probe did not make subsequent requests
+safe.** It ruled out accepting the old pre-retirement build as ready, but did not
+prevent later requests from reaching the parked build. This run does not establish
+an alternative wait threshold or the failure rate of another readiness policy.
+
+Vitest correctly exited 1 after the third round. All three rounds used new
+namespace IDs. Cleanup retired the final namespace and confirmed `cleanup-parked`;
+the telemetry query succeeded. Evidence and runner output remain local at
+`evidence.ignoreme/79ebb231/evidence.json` and
+`evidence.ignoreme/readiness-vitest-run.log`. Existing tests and the embedded Worker
+are unchanged. Typecheck, targeted lint, formatting, and four-test opt-in discovery
+passed.
