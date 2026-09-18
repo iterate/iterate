@@ -50,7 +50,8 @@ tests assert that their single attempt and durable completion both succeeded.
 A control-only reproduction does **not** reproduce an error affecting fresh objects.
 A successful fresh-object run does **not** establish a safe deployment wait threshold.
 
-Evidence is written to `evidence.ignoreme/<run-id>/evidence.json` beside the test,
+Generated evidence stays local and is not committed. It is written to
+`evidence.ignoreme/<run-id>/evidence.json` beside the test,
 or `ROLLOUT_EVIDENCE_DIR/<run-id>/evidence.json` when set. Each test prints its own
 evidence path, and the JSON identifies its scenario. It includes deployment command output, timestamps,
 actual request age since Wrangler exit, namespace IDs, responses, follow-up reads,

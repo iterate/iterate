@@ -1,5 +1,8 @@
 # Recorded results — 18 September 2026
 
+Raw run output is local-only in `evidence.ignoreme/`; the paths below are not
+checked into Git. This file is the written summary.
+
 **Reproduced without Iterate code:** an object first touched after Wrangler exited
 started on the old DO version, even though its caller was already on the new Worker
 version. Its operation was interrupted by a code-update reset and never completed.
@@ -9,7 +12,7 @@ asserts that a reset is observed; that is separate from the fresh-object asserti
 
 ## Full run: `26dae30f`
 
-[Complete evidence](evidence/2026-09-18-26dae30f.json). Ran 10:05:15–10:09:05 UTC,
+Complete evidence (`evidence.ignoreme/26dae30f/evidence.json`). Ran 10:05:15–10:09:05 UTC,
 about 230 seconds. All 72 fresh requests started 0–2ms after Wrangler exited.
 Each row below contains 12 unique first-use DO names; writes were never retried.
 
@@ -69,7 +72,7 @@ survived the erase.
 
 ## Final-file verification
 
-[Run `7e1fce92`](evidence/2026-09-18-7e1fce92.json) exercised the final file with
+Run `7e1fce92` (`evidence.ignoreme/7e1fce92/evidence.json`) exercised the final file with
 `ROLLOUT_ROUNDS=1`, from 10:09:53–10:11:36 UTC (about 104 seconds). Setup/cleanup
 now lives in a disposable fixture below the test; the embedded Worker and
 probing sequence are unchanged. Requests again started 0–2ms after deploy exit.
@@ -103,7 +106,7 @@ of the platform's general failure rate.
 - No live tail attached. Observability was enabled in the initial deploy. The final
   query captured 10 of the first run's 11 client-observed resets; log ingestion can
   lag, so the client responses and durable records are the primary evidence. A
-  [later verification](evidence/2026-09-18-verification.json) captured all 11 and
+  later verification (`evidence.ignoreme/2026-09-18-verification.json`) captured all 11 and
   5 resets from the two runs, matching the client counts including controls.
 - This is one client location and a small sample. It does not choose or justify
   a 30/60/90-second wait, or measure the last possible reset after deployment.
@@ -128,11 +131,11 @@ above describe the previous combined runner and remain unchanged.
 
 Ran the refactored file with `ROLLOUT_ROUNDS=1` on 18 September, 12:02–12:04 UTC:
 
-| Test                  | Evidence                                      | Result                                                                    |
-| --------------------- | --------------------------------------------- | ------------------------------------------------------------------------- |
-| Ordinary redeploy     | [594811da](evidence/2026-09-18-594811da.json) | Passed: all 12 operations completed.                                      |
-| Retire/recreate       | [37254f99](evidence/2026-09-18-37254f99.json) | Failed: 9 parked responses, 2 internal errors, 1 completed operation.     |
-| Active-object control | [389c028d](evidence/2026-09-18-389c028d.json) | Passed: code-update reset, unfinished durable work, changed boot/version. |
+| Test                  | Evidence                                              | Result                                                                    |
+| --------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------- |
+| Ordinary redeploy     | 594811da (`evidence.ignoreme/594811da/evidence.json`) | Passed: all 12 operations completed.                                      |
+| Retire/recreate       | 37254f99 (`evidence.ignoreme/37254f99/evidence.json`) | Failed: 9 parked responses, 2 internal errors, 1 completed operation.     |
+| Active-object control | 389c028d (`evidence.ignoreme/389c028d/evidence.json`) | Passed: code-update reset, unfinished durable work, changed boot/version. |
 
 Node reported **3 tests, 2 passed, 1 failed**, with exit code 1 in 139 seconds.
 The control ran after the failed retirement test, confirming their independence.
