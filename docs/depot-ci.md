@@ -382,13 +382,13 @@ run named "autofix.ci"`, the real signal is that autofix found a diff to apply
 the Depot run with a GitHub Actions run. Look at the `git diff` output in the
 job logs, apply the same fix locally (usually `pnpm format`), and push.
 
-## Preview overlap experiment
+## Preview coordination
 
-PR #2659 starts preparation, app tests and six Playwright shards together. Test
+Preview preparation starts alongside planning; app tests and six Playwright shards start when the plan requests tests. Test
 jobs reconcile dependencies and browsers before waiting for `preview-ready`.
 Preparation uploads the immutable deployment plan before publishing that GitHub
-commit status. `scripts/ci/status.ts` scopes the signal to the Depot workflow,
-execution, producer job and attempt, and checks producer liveness on each poll.
+commit status. `scripts/ci/status.ts` names signals `<milestone> <attemptId>` and
+checks the exact workflow, checkout and current producer attempt on each poll.
 The command surface is a default-exported class exposed by
 `pnpm exec trpc-cli scripts/ci/status.ts` (`set`, `wait-for`, `wait-for-jobs`).
 A terminated producer without its signal fails the wait. Reaching a milestone
@@ -404,9 +404,31 @@ Coordination reads Depot's API with the existing Doppler-managed
 `DEPOT_CI_TELEMETRY_TOKEN` from `_shared/preview`; it does not introduce a Depot
 secret or copy a personal token. GitHub milestones use the job token with
 `statuses: write`. The organization token has broad scope, as documented above.
-For this experiment, use a fresh push or workflow dispatch, not retry/rerun:
-individual test retries would reuse an erased deployment, and old plan artifacts
-must not be accepted. Normal Playwright/Vitest test retries are unchanged.
+New pushes do not cancel the active Preview automatically. A small coordinator
+runs outside the per-PR lifecycle lock. It preserves ancestors that docs or
+test-only changes can use; a proven product-change barrier cancels obsolete app
+and browser test jobs. Preparation and cleanup keep their lock until their writes
+finish. Unknown ancestry, including a force-push, is not proof of obsolescence.
+Closed PRs stop tests through the same coordinator before ordinary slot cleanup.
+
+A docs-only push can wait for a running ancestor, including its post-test cleanup,
+and inherit success or failure. A test-only push can reuse its restored deployment
+after the existing lease/version checks. GitHub's early green is not this signal:
+the finalizer publishes `set preview-settled --values
+'{"tests":"success","deployment":"restored"}'` only after restoration.
+
+Existing `wait-for prepare preview-ready` calls target the current workflow/SHA.
+Use `--workflow-id ID --commit SHA` for a different producer, and
+`--timeout-seconds N` for a longer bounded wait. Successful retained prerequisites
+are valid; queued reruns cannot borrow their old attempts' statuses.
+
+A full workflow rerun prepares afresh. An explicitly requested partial Preview
+retry is upgraded to a full rerun: its guard starts `preview-retry.yml`, which
+stops test consumers, lets preparation/finalization settle, and restarts the whole
+workflow. Recovery requests serialize by target workflow and check the expected
+execution, so duplicate requests become no-ops. Internal plan/result artifacts
+include that execution's ID. No failed run retries itself automatically; ordinary
+Playwright/Vitest test retries are unchanged.
 
 ## Interactive trace reports
 

@@ -78,3 +78,11 @@ on the parent branch.
   a descendant-wait deadlock, and externally consumed artifact-name compatibility.
 - Local evidence so far: scripts typecheck, targeted lint and 85 focused tests pass.
   Raw Depot API confirmed basename workflow paths and ascending attempt arrays.
+
+- First live implementation run (`m93ntlm7zj`, `7fa4d5322`) stopped before
+  deployment: trpc-cli ignored a class with constructor arguments, and its
+  zero-argument command schema did not invoke the guard. Fixed in `4cd98a94b`;
+  real CLI tests now exercise publication and guard output through a local API.
+- Pending-docs acceptance: this documentation commit is pushed while
+  `pxsf5zjflf` (`4cd98a94b`) is preparing its preview. Expected: preserve that
+  run through restoration, then inherit its conclusive result.
