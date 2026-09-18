@@ -4,6 +4,7 @@ import { createCli } from "trpc-cli";
 import { osNextEnvs } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import { removeWorkerSecrets } from "../../../scripts/lib/deploy-helpers.ts";
+import { build } from "./build.ts";
 
 /** Worker secrets earlier deploys wrote that this code no longer reads. `wrangler deploy
  *  --secrets-file` preserves a secret it does not name, so a deploy removes these from the live
@@ -32,12 +33,33 @@ export default async function deploy(options: { env?: string } = {}) {
       "APP_CONFIG_SECRETS_KEY",
     ],
     optionalSecrets: ["APP_CONFIG_GOOGLE_CLIENT_ID", "APP_CONFIG_GOOGLE_CLIENT_SECRET"],
+    // wrangler bundles src/worker.ts itself: the deploy is `wrangler deploy --config wrangler.jsonc
+    // --env <name>` on the generated config's env block; `prepare` writes that config, the generated
+    // modules and the console bundle (scripts/build.ts) first.
+    build: "checked-in-config",
     async prepare(ctx) {
+      await build();
       const sql = readFileSync(new URL("../src/control-plane.sql", import.meta.url), "utf8");
-      await ctx.cf(`/d1/database/${ctx.env.resources.directoryDbId}/query`, {
-        method: "POST",
-        body: JSON.stringify({ sql }),
+      const query = (sql: string) =>
+        ctx.cf(`/d1/database/${ctx.env.resources.directoryDbId}/query`, {
+          method: "POST",
+          body: JSON.stringify({ sql }),
+        });
+      await query(sql);
+      // 2026-09-18: a project's id is minted (prj_<hex>) and its slug a column of its own. A
+      // directory from before has slug-ids and no slug column; bring it over once — the old rows
+      // keep their slugs and get new ids (their contexts start over: the id names the DO). Delete
+      // this once every deployed directory (prd, the preview slots) has been through a deploy.
+      await query("ALTER TABLE projects ADD COLUMN slug text").catch((error: unknown) => {
+        if (!/duplicate column/.test(String(error))) throw error;
       });
+      // (substr, not LIKE: `_` is LIKE's one-character wildcard, and the e2e fixtures' slugs begin
+      // `prj-`; a slug never holds an underscore, so `prj_` marks a minted id exactly)
+      await query(
+        `UPDATE projects SET slug = id WHERE slug IS NULL;
+UPDATE projects SET id = 'prj_' || lower(hex(randomblob(16))) WHERE substr(id, 1, 4) <> 'prj_';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_slug ON projects (slug);`,
+      );
     },
     smokes: (env) => [
       { url: `${env.baseUrl}/version`, ok: (status) => status === 200, label: "version" },

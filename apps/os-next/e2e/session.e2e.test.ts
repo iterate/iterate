@@ -19,7 +19,7 @@ import {
 import { oauthSession } from "./support/principal.ts";
 import {
   fetchProjectHost,
-  freshDnsSafeProjectId,
+  freshDnsSafeProjectSlug,
   projectHostnameBase,
   projectHostsAreLocal,
   registerProject,
@@ -27,9 +27,9 @@ import {
 import { SOURCES } from "./support/sources.ts";
 
 test("an OAuth grant: identity, unforgeable append attribution, project boundary and revocation", async () => {
-  const projectId = freshDnsSafeProjectId("identity");
-  const member = { email: `${projectId}@example.com` };
-  await registerProject(projectId, member);
+  const slug = freshDnsSafeProjectSlug("identity");
+  const member = { email: `${slug}@example.com` };
+  const projectId = await registerProject(slug, member);
   const { api, token, principal } = await oauthSession(projectId, member);
   expect(principal.email).toBe(member.email);
   const itx = api.projects.get(projectId);
@@ -74,9 +74,9 @@ test("a socket opened BARE authenticates in-band — the token in the authentica
   // THE STATIC-PAGE ARCHETYPE (apps/spa): a browser cannot put a header on a WebSocket, so the page
   // opens /api with no credential and presents its OAuth access token IN `authenticate` — capnweb's
   // own pattern. The same gate, the same session; nothing is reachable before the call resolves.
-  const project = freshDnsSafeProjectId("in-band");
-  const member = { email: `${project}@example.com` };
-  await registerProject(project, member);
+  const slug = freshDnsSafeProjectSlug("in-band");
+  const member = { email: `${slug}@example.com` };
+  const project = await registerProject(slug, member);
   const { token, principal, issuerHeaders } = await oauthSession(project, member);
   // THE BARE SOCKET: /api with no credential on the upgrade — what a browser can open.
   const url = new URL(workerUrl("/api"));
@@ -125,9 +125,9 @@ test("a socket opened BARE authenticates in-band — the token in the authentica
 });
 
 test("revoking a grant closes its live public socket and held capability within one minute", async () => {
-  const project = freshDnsSafeProjectId("live-revoke");
-  const member = { email: `${project}@example.com` };
-  await registerProject(project, member);
+  const slug = freshDnsSafeProjectSlug("live-revoke");
+  const member = { email: `${slug}@example.com` };
+  const project = await registerProject(slug, member);
   const { api, token } = await oauthSession(project, member);
   const url = new URL(workerUrl("/api"));
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -162,9 +162,9 @@ test("revoking a grant closes its live public socket and held capability within 
 }, 75_000);
 
 test("the built-in cd carries the OAuth principal to a sibling context", async () => {
-  const projectId = freshDnsSafeProjectId("cd-who");
-  const member = { email: `${projectId}@example.com` };
-  await registerProject(projectId, member);
+  const slug = freshDnsSafeProjectSlug("cd-who");
+  const member = { email: `${slug}@example.com` };
+  const projectId = await registerProject(slug, member);
   const { api, principal } = await oauthSession(projectId, member);
   const itx = api.projects.get(projectId);
   await itx.invoke("itx.cd('/sibling').append({ type: 'note', payload: { via: 'cd' } })");
@@ -187,11 +187,11 @@ export default class Echo extends WorkerEntrypoint {
 };
 
 test("a personal access token — one OAuth grant the account mints — is the user's bearer on /api, /mcp and a covered project host; an uncovered project is FORBIDDEN; grants.end refuses it on /api, /mcp and the project host", async () => {
-  const projectId = freshDnsSafeProjectId("personal");
-  const other = freshDnsSafeProjectId("personal-other");
-  const member = { email: `${projectId}@example.com` };
-  await registerProject(projectId, member);
-  await registerProject(other, member); // the same org: the USER reaches it, the token will not
+  const slug = freshDnsSafeProjectSlug("personal");
+  const otherSlug = freshDnsSafeProjectSlug("personal-other");
+  const member = { email: `${slug}@example.com` };
+  const projectId = await registerProject(slug, member);
+  const other = await registerProject(otherSlug, member); // the same org: the USER reaches it, the token will not
   await openItx(projectId).provide("itx.apps.echo", [
     "itx",
     "workers",
@@ -239,10 +239,10 @@ test("a personal access token — one OAuth grant the account mints — is the u
   // the token does not cover is refused before any Durable Object is dialled
   const base = projectHostnameBase();
   const bearer = { Authorization: `Bearer ${token}` };
-  const covered = await fetchProjectHost(`echo--${projectId}.${base}`, "/", bearer);
+  const covered = await fetchProjectHost(`echo--${slug}.${base}`, "/", bearer);
   expect(covered.status, covered.text).toBe(200);
   expect(JSON.parse(covered.text)).toEqual({ principal, authorization: null });
-  expect((await fetchProjectHost(`echo--${other}.${base}`, "/", bearer)).status).toBe(403);
+  expect((await fetchProjectHost(`echo--${otherSlug}.${base}`, "/", bearer)).status).toBe(403);
 
   // the account lists it as what it is …
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory read on the account session.
@@ -264,16 +264,16 @@ test("a personal access token — one OAuth grant the account mints — is the u
   const endedMcp = await fetch(mcp, { method: "POST", headers: mcpHeaders, body: "{}" });
   expect(endedMcp.status).toBe(401);
   await endedMcp.body?.cancel();
-  expect((await fetchProjectHost(`echo--${projectId}.${base}`, "/", bearer)).status).toBe(401);
+  expect((await fetchProjectHost(`echo--${slug}.${base}`, "/", bearer)).status).toBe(401);
 });
 
 // ── the doors ──
 
 test("one-shot HTTP batch whoami at /api, an inline-source worker, and a dotted .fetch(request) through a rewrite rule", async () => {
   // The batch and the live session share ONE ctx (one project DO).
-  const ctx = freshDnsSafeProjectId("edge");
-  const member = { email: `${ctx}@example.com` };
-  await registerProject(ctx, member);
+  const slug = freshDnsSafeProjectSlug("edge");
+  const member = { email: `${slug}@example.com` };
+  const ctx = await registerProject(slug, member);
   const { token } = await oauthSession(ctx, member);
 
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- A public bearer also admits a bounded socketless batch.

@@ -1,5 +1,6 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
-import css from "../style.css?url";
+import { AppProviders } from "@iterate-com/ui/apps/providers";
+import css from "../styles.css?url";
 export const Route = createRootRoute({
   head: () => ({
     meta: [
@@ -10,12 +11,15 @@ export const Route = createRootRoute({
     links: [{ rel: "stylesheet", href: css }],
   }),
   component: () => (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
         <HeadContent />
       </head>
-      <body>
-        <Outlet />
+      <body className="min-h-svh bg-background font-sans antialiased">
+        {/* light only, like every os-next app: no theme picker, no system theme */}
+        <AppProviders config={{}} devtools={null} forcedTheme="light">
+          <Outlet />
+        </AppProviders>
         <Scripts />
       </body>
     </html>

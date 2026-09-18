@@ -17,7 +17,7 @@ Each app runs the same `appAuth` adapter and `BrowserSession` Durable Object.
 The browser holds only an opaque HttpOnly cookie; the DO holds tokens and makes
 public HTTP token exchanges. `/api` proxies those tokens through ordinary
 admission. Same-origin checks protect cookie-backed API calls and logout.
-Authenticated TanStack routes use one shared browser client and Cap’n Web socket.
+Authenticated console pages use one shared browser client and Cap’n Web socket.
 The console and independently hosted Notes dashboard import the same component
 and loader. Project ingress is independent of the fixed console routes.
 
@@ -40,7 +40,7 @@ through an existing Google browser login.
 
 Version 2 grant kinds are `issuer`, `app`, and `personal`. Only verified sign-in
 can mint `issuer`. Public consent always mints `app`, even when the requesting
-client copies the console's CIMD ID or asks for account scope. PAT issuance mints
+client copies the issuer's CIMD ID or asks for account scope. PAT issuance mints
 `personal`, grants only selected reachable projects and refuses refresh.
 
 ## First consent and capabilities

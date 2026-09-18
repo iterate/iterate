@@ -13,7 +13,6 @@ vi.mock("cloudflare:workers", () => ({
   RpcProperty: class {},
 }));
 import { DurableObjectNameCodec, resourceScope } from "./iterate-context.ts";
-import { projectSlug } from "./directory.ts";
 
 // ── durable object names ── the codec's projectId charset gate, applied at parse:
 // `[A-Za-z0-9_-]` only, because a ":" in a projectId would breach the `${projectId}:` kv/secret
@@ -103,8 +102,8 @@ test("a global owner's id keeps the codec's charset (the `:`/`.` delimiters cann
   ]) {
     const { id } = resourceScope("global", path);
     expect(() => DurableObjectNameCodec.address({ projectId: id, path: "/" })).not.toThrow();
-    // a project's id is its slug, and a slug collapses every dash run — `global--…` is unspellable
-    expect(projectSlug(id)).not.toBe(id);
+    // a project's id is minted, `prj_<hex>` — never a global scope's id
+    expect(id).not.toMatch(/^prj_/);
   }
   expect(() => resourceScope("global", "/users/a:b")).toThrow(/only \[A-Za-z0-9_-\]/);
   expect(() => resourceScope("global", "/organizations/o.1")).toThrow(/only \[A-Za-z0-9_-\]/);

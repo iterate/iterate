@@ -20,9 +20,9 @@ import { identityDoor } from "./identity.ts";
 import { isSecretOAuthState, SECRET_OAUTH_CALLBACK_PATH } from "./secret-oauth.ts";
 import type { Reach } from "./directory.ts";
 import { oauthResponse } from "./api.ts";
-import { consoleHandler } from "./control-plane.ts";
+import { issuerHandler, issuerPagePaths } from "./control-plane.ts";
 import { appConfigOf } from "./app-config.ts";
-import { projectHostOf, hostnameLabelsUnderBase } from "./hosts.ts";
+import { customProjectHostOf, projectHostOf, hostnameLabelsUnderBase } from "./hosts.ts";
 import { FILES_APP_LABEL, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
 import { directory } from "./directory.ts";
@@ -148,7 +148,7 @@ async function secretOAuthCallback(
   if (!authorization)
     return answer(
       401,
-      "Sign in to Iterate in this browser first, then open this link again — the tokens go into a project you must be a member of.",
+      "Sign in to iterate in this browser first, then open this link again — the tokens go into a project you must be a member of.",
     );
   const owner = secretOwnerOf(claims.owner);
   if (!(await reachesSecretOwner(sessionInput.directory, authorization.reach, owner)))
@@ -242,13 +242,16 @@ export default {
       directory: directory(env.DB),
       appConfig,
     };
-    const projectHost = projectHostOf(url.hostname, projectHostnameBase);
+    // A project host under the base, or one of the deployment's custom hostnames (a project's apex).
+    const projectHost =
+      projectHostOf(url.hostname, projectHostnameBase) ??
+      customProjectHostOf(url.hostname, appConfig.projectCustomHostnames);
     if (projectHost) {
       // ADMISSION, before any Durable Object is dialled: a context is created on first touch, so a
       // hostname whose project the in-process directory does not know must never reach one — else
       // any label under the wildcard would mint durable storage from the public internet. One
-      // directory read — the row resolves the host's label (an id or a slug) to the project's id;
-      // an unknown project is 421.
+      // directory read — the row resolves the host's label (a slug, an id would do too) to the
+      // project's id; an unknown label is 421.
       const project = await sessionInput.directory.getProject(projectHost.project);
       if (!project)
         return new Response(
@@ -361,21 +364,12 @@ export default {
     if (browserResponse) return browserResponse;
     if (url.pathname.startsWith("/api")) return new Response("Not found", { status: 404 });
 
-    // THE STATIC ASSETS — the console's client bundle (dist/client, `vite build`) — are the PLATFORM
-    // HOST's. Every request runs
-    // worker-first (wrangler.jsonc `run_worker_first: true` — the patterns are paths, never hostnames,
-    // so "every host but a project host" is spelled by asking the binding HERE, after the project
-    // hosts and the platform's own doors): no asset ever answers on a project host, and a miss falls
-    // through to the control plane — the console's SSR. Absent in the workers lane.
-    if ((request.method === "GET" || request.method === "HEAD") && env.ASSETS) {
-      const asset = await env.ASSETS.fetch(request);
-      if (asset.status !== 404) return asset;
-    }
-
+    // The issuer's own paths are open to a browser that is not signed in yet: the pages and their
+    // files (control-plane.ts `issuerPagePaths`), the token and registration endpoints, discovery.
     const issuerRoute =
-      ["/login", "/authorize", "/oauth/token", "/oauth/register"].includes(url.pathname) ||
-      url.pathname.startsWith("/.well-known/") ||
-      url.pathname.startsWith("/_serverFn/");
+      issuerPagePaths.includes(url.pathname) ||
+      ["/oauth/token", "/oauth/register"].includes(url.pathname) ||
+      url.pathname.startsWith("/.well-known/");
     if (!issuerRoute) {
       const authorization = await browserAuthorization(env, request, ctx);
       const headers = new Headers(request.headers);
@@ -386,7 +380,7 @@ export default {
     }
 
     // Everything else on the platform host is the CONTROL PLANE, in-process (src/control-plane.ts
-    // lists its doors: the OAuth AS, /mcp, the console). One worker, one front door.
-    return oauthResponse(request, env, ctx, consoleHandler);
+    // lists its handlers: the OAuth AS, /mcp, the issuer's pages). One worker, one entry point.
+    return oauthResponse(request, env, ctx, issuerHandler);
   },
 };

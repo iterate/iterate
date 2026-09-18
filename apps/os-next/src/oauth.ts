@@ -20,6 +20,11 @@ export const GrantProps = z.object({
   version: z.literal(2),
   userId: z.string().startsWith("user_"),
   email: z.string(),
+  /** the identity provider's picture and display name of the person (Google's), shown where the
+   *  grant's session is — the consent page's "signed in as"; the name seeds the onboarding step's
+   *  organization name */
+  picture: z.string().optional(),
+  name: z.string().optional(),
   projects: z.array(z.string()).nullable(),
   deadline: z.number().int().positive(),
 });
@@ -113,7 +118,13 @@ export async function authorizationOf(env: Env, props: unknown): Promise<Authori
     principal: { actor: grant.userId, email: grant.email },
     // oxlint-disable-next-line iterate/simple-truthiness-check -- `reach` is discriminated with `"projectIds" in reach` (session.ts, directory.ts) and TS narrows on that key, so a present-but-undefined key would both misread as a bound grant and break the narrowing; the conditional spread stays (grant.projects is string[] | null)
     reach: { userId: grant.userId, ...(grant.projects && { projectIds: grant.projects }) },
-    grant,
+    // The issuer's own session is the person at the issuer, not a consent: it holds every scope,
+    // whatever list it was minted with — a cookie from before a scope existed still creates
+    // organizations on the consent page.
+    grant:
+      grant.kind === "issuer"
+        ? { ...grant, scope: ["iterate", "account", "organizations:write"] }
+        : grant,
   };
 }
 

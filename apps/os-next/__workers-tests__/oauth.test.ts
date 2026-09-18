@@ -91,7 +91,9 @@ async function tool(token: string, name: string, args: object = {}) {
 }
 
 /** Local HTTPS client metadata is not public. Only registration is a fixture;
- * consent, PKCE, exchange, refresh and resource admission all use the real server. */
+ * consent, PKCE, exchange, refresh and resource admission all use the real server. The person
+ * holds two projects, `oauth-a` and `oauth-b` (their rows come back); the consent ticks the
+ * `projects` named by slug — `oauth-a` alone by default. */
 async function grant(resources: string[], projects: string[] = ["oauth-a"]) {
   const login = await call("/login", {
     method: "POST",
@@ -99,8 +101,8 @@ async function grant(resources: string[], projects: string[] = ["oauth-a"]) {
   });
   const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
   const user = await directory(bindings.DB).upsertUser("oauth-new@example.com");
-  await directory(bindings.DB).createProject({ userId: user.id }, "oauth-a");
-  await directory(bindings.DB).createProject({ userId: user.id }, "oauth-b");
+  const oauthA = await directory(bindings.DB).createProject({ userId: user.id }, "oauth-a");
+  const oauthB = await directory(bindings.DB).createProject({ userId: user.id }, "oauth-b");
   const client = await helpers().createClient({
     clientName: "OAuth integration",
     redirectUris: ["https://client.test/callback"],
@@ -132,12 +134,25 @@ async function grant(resources: string[], projects: string[] = ["oauth-a"]) {
     new Request(ORIGIN, { headers: { cookie } }),
   )!;
   const { root: approver } = await rpc((await issuerSession.bearer())!);
-  const approval = await approver.consent.approve({ query: `?${query}`, projects });
+  // a ticked box submits the project's id
+  const approval = await approver.consent.approve({
+    query: `?${query}`,
+    projects: [oauthA, oauthB]
+      .filter((project) => projects.includes(project.slug))
+      .map((project) => project.id),
+  });
   if ("error" in approval) throw new Error(approval.error);
   const redirect = new URL(approval.redirectTo);
   const code = redirect.searchParams.get("code");
   if (!code)
-    return { error: redirect.searchParams.get("error"), cookie, clientId: client.clientId, user };
+    return {
+      error: redirect.searchParams.get("error"),
+      cookie,
+      clientId: client.clientId,
+      user,
+      oauthA,
+      oauthB,
+    };
   const tokenResponse = await call("/oauth/token", {
     method: "POST",
     body: new URLSearchParams({
@@ -150,7 +165,7 @@ async function grant(resources: string[], projects: string[] = ["oauth-a"]) {
   });
   const token = await tokenResponse.json<{ access_token: string; refresh_token: string }>();
   expect(tokenResponse.status, JSON.stringify(token)).toBe(200);
-  return { token, cookie, clientId: client.clientId, user };
+  return { token, cookie, clientId: client.clientId, user, oauthA, oauthB };
 }
 
 test("discovery advertises CIMD AND DCR: the registration endpoint is published and registers a client", async () => {
@@ -182,7 +197,8 @@ test("discovery advertises CIMD AND DCR: the registration endpoint is published 
     ).toMatchObject({
       resource: `${ORIGIN}/${protocol}`,
       authorization_servers: [ORIGIN],
-      scopes_supported: protocol === "mcp" ? ["iterate"] : ["iterate", "account"],
+      scopes_supported:
+        protocol === "mcp" ? ["iterate"] : ["iterate", "account", "organizations:write"],
     });
     const challenge = await call(`/${protocol}`);
     expect(challenge.status).toBe(401);
@@ -213,17 +229,26 @@ test("one provider grant can cover MCP and Cap'n Web while retaining membership 
   const token = flow.token!.access_token;
   const { root } = await rpc(token);
   expect(await root.whoami()).toEqual({ actor: flow.user.id, email: flow.user.email });
-  expect((await root.projects.list()).map((p: { id: string }) => p.id)).toEqual(["oauth-a"]);
-  await expect(root.projects.get("oauth-b")).rejects.toThrow(/outside/);
+  expect(
+    (await root.projects.list()).map((p: { id: string; slug: string }) => [p.id, p.slug]),
+  ).toEqual([[flow.oauthA.id, "oauth-a"]]);
+  await expect(root.projects.get(flow.oauthB.id)).rejects.toThrow(/outside/);
+  // the slug names the project too (a URL's /projects/<slug>): the directory resolves it to the id
+  using bySlug = await root.projects.get("oauth-a");
+  expect((await bySlug.whoami()).projectId).toBe(flow.oauthA.id);
   expect((await tool(token, "run", { script: "async () => 1" })).status).toBe(200);
-  const org = (await directory(bindings.DB).getProject("oauth-a"))!.orgId;
+  const org = flow.oauthA.orgId;
   await bindings.DB.prepare("DELETE FROM org_members WHERE user_id = ? AND org_id = ?")
     .bind(flow.user.id, org)
     .run();
   expect(await root.projects.list()).toEqual([]);
   expect(
-    (await tool(token, "run", { project: "oauth-a", script: "async (itx) => itx.kv.get('x')" }))
-      .body.result.isError,
+    (
+      await tool(token, "run", {
+        project: flow.oauthA.id,
+        script: "async (itx) => itx.kv.get('x')",
+      })
+    ).body.result.isError,
   ).toBe(true);
   await bindings.DB.prepare("INSERT INTO org_members (user_id, org_id) VALUES (?, ?)")
     .bind(flow.user.id, org)
@@ -322,7 +347,7 @@ test.each(["revoked", "membership"])(
   async (reason) => {
     const flow = await grant([`${ORIGIN}/api`]);
     const { root } = await rpc(flow.token!.access_token);
-    using context = await root.projects.get("oauth-a");
+    using context = await root.projects.get(flow.oauthA.id);
     const native = (await context.invoke(
       `itx.workers.get({source: {"cap.js": "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class extends WorkerEntrypoint { ping() { return 'pong'; } }"}})`,
     )) as unknown as { ping(): Promise<string> };
@@ -342,7 +367,7 @@ test.each(["revoked", "membership"])(
       ping(): Promise<string>;
     };
     expect(await lent.ping()).toBe("lent");
-    const org = (await directory(bindings.DB).getProject("oauth-a"))!.orgId;
+    const org = flow.oauthA.orgId;
     const [, grantId] = flow.token!.access_token.split(":");
     if (reason === "revoked") {
       await bindings.DB.prepare(
@@ -392,8 +417,8 @@ test("console and project browsers use the same CIMD flow and independent grants
   });
   const issuerCookie = issuerLogin.headers.get("set-cookie")!.split(";")[0]!;
   const user = await directory(bindings.DB).upsertUser("browser@example.com");
-  await directory(bindings.DB).createProject({ userId: user.id }, "browser-a");
-  await directory(bindings.DB).createProject({ userId: user.id }, "browser-b");
+  const browserA = await directory(bindings.DB).createProject({ userId: user.id }, "browser-a");
+  const browserB = await directory(bindings.DB).createProject({ userId: user.id }, "browser-b");
   const logins = [];
   try {
     for (const origin of [ORIGIN, "https://notes--browser-a.projects.test"]) {
@@ -413,7 +438,7 @@ test("console and project browsers use the same CIMD flow and independent grants
         const { root: approver } = await rpc((await issuer.bearer())!);
         const approve = await approver.consent.approve({
           query: authorize.search,
-          projects: ["*", "browser-a", "browser-b"],
+          projects: ["*", browserA.id, browserB.id],
         });
         if ("error" in approve) throw new Error(approve.error);
         for (const field of ["state", "iss"]) {
@@ -442,8 +467,15 @@ test("console and project browsers use the same CIMD flow and independent grants
       sessions.push(transport);
       const root = transport.authenticate({ type: "from-server-cookie" });
       expect(await root.whoami()).toEqual({ actor: user.id, email: user.email });
-      expect((await root.projects.list()).map((p: { id: string }) => p.id).sort()).toEqual(
-        origin === ORIGIN ? ["browser-a", "browser-b"] : ["browser-a"],
+      expect(
+        (await root.projects.list()).map((p: { id: string; slug: string }) => [p.id, p.slug]),
+      ).toEqual(
+        origin === ORIGIN
+          ? [
+              [browserA.id, "browser-a"],
+              [browserB.id, "browser-b"],
+            ]
+          : [[browserA.id, "browser-a"]],
       );
       // The cookie's authority is same-origin only: a cross-site request goes on BARE and meets the
       // OAuth gate's 401 (a bare WebSocket would authenticate in-band instead — e2e/session).
@@ -468,11 +500,11 @@ test("console and project browsers use the same CIMD flow and independent grants
     expect((await helpers().listUserGrants(user.id)).items).toHaveLength(2);
     const personal = await consoleLogin.root.grants.mint({
       name: "My CLI",
-      projects: ["browser-a"],
+      projects: [browserA.id],
     });
     await expect(logins[1]!.root.grants.list()).rejects.toThrow(/Account permission/);
     await expect(
-      logins[1]!.root.grants.mint({ name: "Denied", projects: ["browser-a"] }),
+      logins[1]!.root.grants.mint({ name: "Denied", projects: [browserA.id] }),
     ).rejects.toThrow(/Account permission/);
     await expect(logins[1]!.root.grants.end("foreign-grant")).rejects.toThrow(/Account permission/);
     const storedPersonal = await helpers().unwrapToken(personal.token);
@@ -485,15 +517,15 @@ test("console and project browsers use the same CIMD flow and independent grants
         (await tool(personal.token, "run", { script: "async (itx) => itx.whoami()" })).body.result
           .content[0].text,
       ),
-    ).toEqual({ projectId: "browser-a", path: "/" });
+    ).toEqual({ projectId: browserA.id, path: "/" });
     const { root: personalApi } = await rpc(personal.token);
     expect((await personalApi.projects.list()).map((p: { id: string }) => p.id)).toEqual([
-      "browser-a",
+      browserA.id,
     ]);
     // A device says `bearer` for the same act: the token rode the upgrade, hand me that session.
     const { root: bearerApi } = await rpc(personal.token, "bearer");
     expect((await bearerApi.projects.list()).map((p: { id: string }) => p.id)).toEqual([
-      "browser-a",
+      browserA.id,
     ]);
     // Bound to a project, the token opens none of the person's own: no `.user` context.
     await expect(Promise.resolve().then(() => personalApi.user.whoami())).rejects.toThrow(
@@ -502,7 +534,7 @@ test("console and project browsers use the same CIMD flow and independent grants
     // A device's token: `expiresAt` asks for years, capped at ten; the provider's token agrees.
     const device = await consoleLogin.root.grants.mint({
       name: "Kit HAVPE",
-      projects: ["browser-a"],
+      projects: [browserA.id],
       expiresAt: Date.now() + 20 * 365 * 24 * 3600_000,
     });
     expect(device.expiresAt - Date.now()).toBeGreaterThan(9 * 365 * 24 * 3600_000);
@@ -510,7 +542,7 @@ test("console and project browsers use the same CIMD flow and independent grants
     const storedDevice = await helpers().unwrapToken(device.token);
     expect(Math.abs(storedDevice!.expiresAt * 1000 - device.expiresAt)).toBeLessThan(2000);
     await expect(
-      consoleLogin.root.grants.mint({ name: "Stale", projects: ["browser-a"], expiresAt: 1 }),
+      consoleLogin.root.grants.mint({ name: "Stale", projects: [browserA.id], expiresAt: 1 }),
     ).rejects.toThrow(/at least a minute/);
     expect(
       (
@@ -542,7 +574,7 @@ test("console and project browsers use the same CIMD flow and independent grants
     ).toBeNull();
     await consoleLogin.root.grants.end(personalId!);
     expect(
-      (await tool(personal.token, "run", { project: "browser-a", script: "async () => 1" })).status,
+      (await tool(personal.token, "run", { project: browserA.id, script: "async () => 1" })).status,
     ).toBe(401);
     const cookieRequest = new Request(`${ORIGIN}/`, { headers: { cookie: consoleLogin.cookie } });
     const heldSession = appSession(bindings.BROWSER_SESSION, cookieRequest)!;

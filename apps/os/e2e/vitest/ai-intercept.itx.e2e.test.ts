@@ -264,6 +264,8 @@ createFailing(
 createFailing(
   test,
   /expected .*Response\|locked\|consumed\|used.*Promise did not settle within 2000ms/,
+  // a fresh project + interception on a cold preview has run past the wrapper's default 30 s
+  { timeoutMs: 90_000 },
 )("an interceptor returning a locked body rejects without losing the session", async () => {
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });

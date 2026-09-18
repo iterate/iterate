@@ -1,6 +1,6 @@
 // playwright.config.ts — the BROWSER E2E, apps/os-shaped. Playwright boots a real local worker
-// (`wrangler dev`) and drives the hosted /demo page through Chromium: a real browser → the capnweb
-// fork → a real worker → a userspace processor facet → reduced ⊕ runtime live state in the DOM.
+// (`wrangler dev`) and drives the issuer's pages (the consent flow) and a project host's mini-app
+// through Chromium: a real browser → the capnweb fork → a real worker.
 //
 // SWAPPABLE by design: point DEMO_BASE_URL at a preview/live deployment (or a self-hosted runtime)
 // and the same spec runs against it — no local worker booted. That is the whole reason these are

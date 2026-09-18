@@ -28,7 +28,7 @@ import { beforeAll, describe, expect, test } from "vitest";
 import { adminCredentials, freshCtx, openItx, workerUrl } from "./support/client.ts";
 import {
   deployedOnly,
-  freshDnsSafeProjectId,
+  freshDnsSafeProjectSlug,
   projectHostnameBase,
   registerProject,
 } from "./support/project-host.ts";
@@ -37,9 +37,8 @@ import { SOURCES } from "./support/sources.ts";
 deployedOnly(
   "a loaded worker serves capnweb behind a project host, dialed with connectToCapnweb over the batch transport — the path arriving verbatim",
   async () => {
-    const projectId = freshDnsSafeProjectId("capnweb-host");
-    await registerProject(projectId);
-    const itx = openItx(projectId);
+    const slug = freshDnsSafeProjectSlug("capnweb-host");
+    const itx = openItx(await registerProject(slug));
     await itx.provide("itx.apps.rpc", [
       "itx",
       "workers",
@@ -47,7 +46,7 @@ deployedOnly(
     ]);
     // the context dials its own project's host from inside — no credential: the app is public
     const connection = await itx.connectToCapnweb(
-      `https://rpc--${projectId}.${projectHostnameBase()}/rpc/v1`,
+      `https://rpc--${slug}.${projectHostnameBase()}/rpc/v1`,
       { transport: "batch" },
     );
     expect(await connection.hello("host")).toBe("hello host");

@@ -621,8 +621,18 @@ export interface OsNextEnv {
    *  pinned apart from `workerName` because the worker was renamed after they existed; `ensure-resources` and
    *  the wrangler generator derive names from this, never from the worker name. */
   resourceNamePrefix: string;
-  /** Unverified email sign-in for this isolated test deployment. Never enable for real user data. */
+  /** The test code 424242 signs anyone in beside the mailed one — the specs' way in on a deployment
+   *  they may drive. Never enable for real user data. */
   testEmailLogin?: boolean;
+  /** The address the sign-in code is mailed from, on a domain onboarded for Email Sending in the
+   *  deployment's account (iterate2.com is, on prd: `cf-bounce.iterate2.com` MX/SPF, DKIM, DMARC).
+   *  Unset ⇒ no email sign-in (beyond the test code). */
+  loginEmailFrom?: string;
+  /** Hostnames of this deployment's own that ARE a project's apex — `{ "iterate2.com": "iterate" }`:
+   *  a request there lands on that project's config worker `fetch`, exactly as `<project>.<base>`
+   *  does (apps/os-next/src/hosts.ts `customProjectHostOf`). The wrangler generator adds the zone
+   *  route, ensure-resources the DNS record. */
+  projectCustomHostnames?: Record<string, string>;
   resources: { directoryDbId: string; oauthKvId: string; itxKvId: string };
 }
 export const osNextEnvs: Record<string, OsNextEnv> = {
@@ -646,12 +656,18 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
     workerName: "os-next-prd",
+    // THE HEADLESS PLATFORM: sign-in, consent, `/api`, the OAuth endpoints — two no-build pages and
+    // the OAuth endpoints, nothing else a person looks at. `dash.iterate2.com` is the dash (apps/dash): sessions,
+    // projects and organizations — an ordinary OAuth client of this issuer, like every other app.
     baseUrl: "https://os.iterate2.com",
     mcpBaseUrl: "https://mcp.iterate2.com",
     projectHostnameBase: "iterate2.app",
+    // The apex is the `iterate` project's: its config worker's `fetch` serves iterate2.com.
+    projectCustomHostnames: { "iterate2.com": "iterate" },
     artifactsNamespace: "project-worker-prd-repos",
     resourceNamePrefix: "project-worker-prd",
     testEmailLogin: true,
+    loginEmailFrom: "iterate <login@iterate2.com>",
     resources: {
       directoryDbId: "be6a3789-726a-4786-8b50-ef150c583b4e",
       oauthKvId: "a1a12d1cf1c342f8a389e5bf9dc5b760",
@@ -659,6 +675,18 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
     },
   },
 };
+/** apps/dash — THE DASH: sessions and personal access tokens, projects and organizations — the
+ *  fat first-party TanStack Start app (README there), an ordinary OAuth client of the headless
+ *  platform at os.iterate2.com, on the one custom domain among the apps. */
+export const dashEnvs = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "dash",
+    baseUrl: "https://dash.iterate2.com",
+  },
+};
+
 /** apps/agents — the agents page (README there); the notes app's shape: its own workers.dev origin. */
 export const agentsEnvs = {
   prd: {
@@ -674,9 +702,8 @@ export const notesEnvs = {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
     workerName: "notes",
-    // Its own workers.dev subdomain — NOT a custom domain. iterate2.com is reserved to become a
-    // project custom hostname (the iterate project in iterate.iterate2.app), mirroring production
-    // where os.iterate.com maps to a project. A workers.dev baseUrl adds no custom route (below).
+    // Its own workers.dev subdomain — NOT a custom domain (iterate2.com is the iterate project's
+    // apex, osNextEnvs.prd.projectCustomHostnames). A workers.dev baseUrl adds no custom route (below).
     baseUrl: "https://notes.iterate.workers.dev",
   },
 };
@@ -686,9 +713,8 @@ export const voiceEnvs = {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
     workerName: "voice",
-    // Its own workers.dev subdomain — NOT a custom domain. iterate2.com is reserved to become a
-    // project custom hostname (the iterate project in iterate.iterate2.app), mirroring production
-    // where os.iterate.com maps to a project. A workers.dev baseUrl adds no custom route (below).
+    // Its own workers.dev subdomain — NOT a custom domain (iterate2.com is the iterate project's
+    // apex, osNextEnvs.prd.projectCustomHostnames). A workers.dev baseUrl adds no custom route (below).
     baseUrl: "https://voice.iterate.workers.dev",
   },
 };

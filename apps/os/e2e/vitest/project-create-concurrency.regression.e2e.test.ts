@@ -2,7 +2,8 @@ import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { test } from "vitest";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
-createFailing(test, /CONCURRENT CREATE SPLITS IDENTITY/)(
+// concurrent creates on a cold preview have run past the wrapper's default 30 s deadline
+createFailing(test, /CONCURRENT CREATE SPLITS IDENTITY/, { timeoutMs: 90_000 })(
   "DESIRED: concurrent creates of one slug adopt the same project identity",
   { retry: 0 },
   async ({ expect }) => {

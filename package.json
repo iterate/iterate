@@ -36,6 +36,7 @@
     "@iterate-com/test-support": "workspace:*",
     "@playwright/test": "1.60.0",
     "@tanstack/eslint-plugin-router": "^1.139.0",
+    "@tanstack/router-generator": "1.166.17",
     "@types/node": "^24.10.1",
     "@typescript/native-preview": "7.0.0-dev.20260624.1",
     "dedent": "^1.7.0",

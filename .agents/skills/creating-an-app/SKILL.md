@@ -19,6 +19,11 @@ primitives in `scripts/lib/` (see `scripts/lib/deploy-app.ts`):
   root `envs.ts`
 - `test:e2e` if the app has live preview tests
 
+A TanStack Start app on Workers with no server data of its own (dash, agents,
+notes, voice) does not copy these: it declares itself in `scripts/app.ts` (see
+`apps/notes/scripts/app.ts`) and gets every script from
+`scripts/lib/start-app.ts`.
+
 The package scripts should own only the app action. Doppler selection belongs
 outside the app script (`doppler run --config <env> -- pnpm run deploy`).
 

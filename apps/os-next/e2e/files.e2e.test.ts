@@ -9,7 +9,7 @@ import { expect, test } from "vitest";
 import { freshCtx, openItx, rejection } from "./support/client.ts";
 import {
   fetchProjectHost,
-  freshDnsSafeProjectId,
+  freshDnsSafeProjectSlug,
   registerProject,
 } from "./support/project-host.ts";
 
@@ -119,16 +119,15 @@ const hostAndPath = (url: string): [string, string] => {
 };
 
 test("a signed URL downloads the file from the project host — content type, etag, Range — and a signed PUT uploads one; a bad, expired or wrong-method token is refused", async () => {
-  const projectId = freshDnsSafeProjectId("files-url");
-  await registerProject(projectId);
-  const itx = openItx(projectId);
+  const slug = freshDnsSafeProjectSlug("files-url");
+  const itx = openItx(await registerProject(slug));
   await itx.files
     .get("/docs/readme.md")
     .put({ contentType: "text/markdown", data: bytesOf("# hello world") });
 
   const download = await itx.files.get("/docs/readme.md").url();
   expect(download.url).toMatch(
-    new RegExp(`^https?://files--${projectId}\\.[^/]+/docs/readme\\.md\\?token=`),
+    new RegExp(`^https?://files--${slug}\\.[^/]+/docs/readme\\.md\\?token=`),
   );
   expect(Date.parse(download.expiresAt)).toBeGreaterThan(Date.now() + 6 * 24 * 3600 * 1000);
   const [host, path] = hostAndPath(download.url);
@@ -177,7 +176,7 @@ test("a signed URL downloads the file from the project host — content type, et
   const [ehost, epath] = hostAndPath(empty.url);
   expect((await fetchProjectHost(ehost, epath)).status).toBe(404);
   // Another project's host with this project's token: the claim names the wrong project.
-  const other = freshDnsSafeProjectId("files-url-other");
+  const other = freshDnsSafeProjectSlug("files-url-other");
   await registerProject(other);
-  expect((await fetchProjectHost(host.replace(projectId, other), path)).status).toBe(403);
+  expect((await fetchProjectHost(host.replace(slug, other), path)).status).toBe(403);
 });

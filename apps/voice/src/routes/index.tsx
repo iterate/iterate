@@ -1,8 +1,12 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
+import { LogInWithIterate } from "@iterate-com/ui/components/log-in-with-iterate";
 
-/** The app is its one page: signed in lands on the phone, signed out is sent to sign in by it. */
+/** The landing page, for a browser without a session (a signed-in one is sent to /call by the
+ *  worker): the one recognisable button, centred. */
 export const Route = createFileRoute("/")({
-  beforeLoad: () => {
-    throw redirect({ to: "/call" });
-  },
+  component: () => (
+    <main className="flex min-h-svh items-center justify-center p-6">
+      <LogInWithIterate next="/projects" />
+    </main>
+  ),
 });
