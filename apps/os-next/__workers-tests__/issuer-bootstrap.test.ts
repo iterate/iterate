@@ -56,7 +56,7 @@ test("first consent creates organization and project through the ordinary sessio
   const next = flow.url.pathname + flow.url.search;
   // the picture Google's sign-in brings rides the issuer grant to the consent page's "signed in as"
   const picture = "https://lh3.googleusercontent.com/a/bootstrap=s96-c";
-  const login = await startIssuerSession(bindings, user, next, picture);
+  const login = await startIssuerSession(bindings, user, next, { picture });
   expect(login.location).toBe(next);
   expect(login.setCookie).toMatch(/^__Host-itx-session=[\da-f-]+; HttpOnly; Secure;/);
   const headers = { Cookie: login.setCookie.split(";")[0]!, Origin: origin };

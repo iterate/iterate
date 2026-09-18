@@ -8,7 +8,13 @@ import { oauthAddresses, oauthHelpers, parseAuthorization, type GrantProps } fro
  * Its grant is the issuer's sole browser identity: ordinary storage, public token
  * exchange, admission, expiry and revocation. No separate identity cookie. `picture` is the
  * identity provider's picture of the person, when it gave one (Google does). */
-export async function startIssuerSession(env: Env, user: User, next: string, picture?: string) {
+export async function startIssuerSession(
+  env: Env,
+  user: User,
+  next: string,
+  /** what the identity provider said about the person (Google's profile); an email sign-in has none */
+  profile: { picture?: string; name?: string } = {},
+) {
   const { issuer, api } = oauthAddresses(env);
   // The issuer's own session holds every scope: it is the person at the issuer, and the consent
   // page creates organizations and projects through it.
@@ -35,7 +41,8 @@ export async function startIssuerSession(env: Env, user: User, next: string, pic
       version: 2,
       userId: user.id,
       email: user.email,
-      picture,
+      picture: profile.picture,
+      name: profile.name,
       projects: null,
       deadline: Date.now() + 30 * 24 * 3600_000,
     } satisfies GrantProps,

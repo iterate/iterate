@@ -312,11 +312,26 @@ async function authorizeHandler(
       }
       // an empty project name is refused before a new organization is made for it
       if (!action.project.trim()) return json({ error: "Enter a project name." }, 400);
-      orgId = action.org || (await session.createOrg(action.newOrg || "")).id;
+      // The page sends `newOrg` — typed or still empty — only with "New organization…" chosen, so
+      // an empty one is refused rather than becoming the person's first organization; with neither
+      // named, the project goes to their first (made from their email when they have none).
+      orgId =
+        action.org ||
+        ("newOrg" in action ? (await session.createOrg(action.newOrg || "")).id : undefined);
       // the new project's context is the session's to hold; the teardown below lets it go
       await session.projects.create({ project: action.project, orgId });
     } catch (error) {
-      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+      // A refusal after a new organization was made (the slug taken, say) answers with the fresh
+      // view and that organization's id: the page offers it next, rather than minting another
+      // on the retry.
+      return json(
+        {
+          error: error instanceof Error ? error.message : String(error),
+          orgId,
+          view: await session.consent.describe(query),
+        },
+        400,
+      );
     }
     return json({ view: await session.consent.describe(query), orgId });
   } finally {

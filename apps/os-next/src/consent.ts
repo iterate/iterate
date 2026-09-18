@@ -1,6 +1,7 @@
 import { AuthorizationError, CimdFetchError } from "@cloudflare/workers-oauth-provider";
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
+import { suggestOrganizationName } from "@iterate-com/shared/name-suggestions";
 import { codedError } from "iterate/next/lib";
 import { OAuthScope, OAuthScopes } from "iterate/next/oauth-scopes";
 import type { Env } from "./control-plane.ts";
@@ -31,6 +32,12 @@ export type ConsentView =
       projectBound: boolean;
       scopes: string[];
       denyLocation: string;
+      /** where a project's own site lives — `<slug>.<base>` — for the New project form's hint;
+       *  blank when the deployment serves no project hosts */
+      projectHostnameBase: string;
+      /** the onboarding step's first draft of an organization name (apps/auth's heuristic): from
+       *  the person's display name, else their email's company domain or local part */
+      suggestedOrganizationName: string;
     }
   | { kind: "redirect"; location: string }
   | { kind: "invalid"; description: string };
@@ -113,6 +120,11 @@ export class Consent extends RpcTarget {
         picture: this.#grant.picture,
         scopes: request.scope,
         orgs: await directory(env.DB).listOrgs(this.#grant.userId),
+        projectHostnameBase: appConfigOf(env).projectHostnameBase,
+        suggestedOrganizationName: suggestOrganizationName({
+          name: this.#grant.name,
+          email: this.#grant.email,
+        }),
         ...(await projectsForClient(env, request.clientId, this.#grant.userId)),
       };
     } catch (error) {

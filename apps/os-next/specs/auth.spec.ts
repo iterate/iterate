@@ -76,6 +76,8 @@ test("first Claude consent creates the organization and project on the consent p
   const origin = new URL(baseURL!).origin;
   const resource = process.env.MCP_BASE_URL || `${origin}/mcp`;
   const email = `consent-${stamp()}@example.com`;
+  // the organization the onboarding step makes with the first project
+  const firstOrg = "First consent studio";
   const project = `consent-${stamp()}`;
   const otherProject = `unselected-${stamp()}`;
   const thirdProject = `third-${stamp()}`;
@@ -114,20 +116,47 @@ test("first Claude consent creates the organization and project on the consent p
     await page.goto(flow.url.href);
     await signIn(page, origin, email, flow.url.pathname + flow.url.search);
     await Promise.race([
-      page.getByRole("heading", { name: "Authorize Claude Code", exact: true }).waitFor(),
+      page.getByRole("heading", { name: "Create a project", exact: true }).waitFor(),
       callback.then((url) => {
         throw new Error(
           `Authorization ended before consent: ${url.searchParams.get("error")}: ${url.searchParams.get("error_description")}`,
         );
       }),
     ]);
-    await page.getByRole("heading", { name: "Create your first project", exact: true }).waitFor();
     expect(new URL(page.url()).search).toBe(flow.url.search);
     // the page with no projects has optional parts left out — none may render as the text "null"
     expect(await page.getByText("null", { exact: true }).count()).toBe(0);
-    // nothing to approve yet: the first project (and its organization) is created right here
+    // The onboarding step, before consent, for a person with no project yet: the organization's
+    // name and the first project's slug — typed "Consent Studio …", it reads consent-studio-… —
+    // with where it will live. Continue makes both and the consent page follows.
+    expect(await page.getByRole("button", { name: "Approve", exact: true }).count()).toBe(0);
+    // both start filled the way apps/auth fills them — the organization from the email's domain
+    // (example.com → "Example"), the slug from the organization, following it until edited
+    const orgField = page.getByRole("textbox", { name: "Organization name", exact: true });
+    const projectField = page.getByRole("textbox", { name: "Project slug", exact: true });
+    expect(await orgField.inputValue()).toBe("Example");
+    expect(await projectField.inputValue()).toBe("example");
+    await orgField.fill(firstOrg);
+    expect(await projectField.inputValue()).toBe("first-consent-studio");
+    await projectField.fill(`Consent Studio ${project}`);
+    expect(await projectField.inputValue()).toBe(`consent-studio-${project}`);
+    await page.getByText(`Your project will be hosted at consent-studio-${project}.`).waitFor();
+    // A refused first try — "global" is the reserved namespace, refused after the organization is
+    // made — answers with that organization: the retry offers it, chosen, rather than naming a
+    // second one (the inventory at the end counts one).
+    await projectField.fill("global");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page
+      .getByRole("alert")
+      .filter({ hasText: /not a project name/ })
+      .waitFor();
+    const madeOrg = page.getByRole("combobox", { name: "Organization", exact: true });
+    expect(await madeOrg.locator("option:checked").textContent()).toBe(firstOrg);
+    expect(await orgField.isVisible()).toBe(false);
+    await projectField.fill(project);
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByRole("heading", { name: "Authorize Claude Code", exact: true }).waitFor();
     const approve = page.getByRole("button", { name: "Approve", exact: true });
-    expect(await approve.isDisabled()).toBe(true);
     // Task-based consent: `iterate` is fixed, the account permission is optional — untick it; the
     // choice survives every round trip below and the grant carries `iterate` alone.
     const projectAccess = page.getByRole("checkbox", {
@@ -142,15 +171,7 @@ test("first Claude consent creates the organization and project on the consent p
     });
     expect(await accountAccess.isChecked()).toBe(true);
     await accountAccess.uncheck();
-    await page.getByRole("textbox", { name: "Project name", exact: true }).fill(project);
-    await page
-      .getByRole("textbox", { name: "Organization name", exact: true })
-      .fill("First consent studio");
-    await page.getByRole("button", { name: "Create project", exact: true }).click();
-    const choice = page.getByRole("checkbox", {
-      name: `${project} in First consent studio`,
-      exact: true,
-    });
+    const choice = page.getByRole("checkbox", { name: `${project} in ${firstOrg}`, exact: true });
     await choice.waitFor();
     expect(await choice.isChecked()).toBe(true);
     // The either/or: one checkbox for every project now and later, else the projects ticked —
@@ -165,13 +186,14 @@ test("first Claude consent creates the organization and project on the consent p
     // A second project in a NEW organization, named inside "New project" — the one place the
     // consent flow creates one. Refreshing the directory must preserve the choices made so far.
     await page.getByRole("button", { name: "New project", exact: true }).click();
-    await page.getByRole("textbox", { name: "Project name", exact: true }).fill(otherProject);
+    await page.getByRole("textbox", { name: "Project slug", exact: true }).fill(otherProject);
+    // the new organization's name field opens for "New organization…" alone
+    const organization = page.getByRole("textbox", { name: "Organization name", exact: true });
+    expect(await organization.isVisible()).toBe(false);
     await page
       .getByRole("combobox", { name: "Organization", exact: true })
       .selectOption({ label: "New organization…" });
-    await page
-      .getByRole("textbox", { name: "Organization name", exact: true })
-      .fill("Second studio");
+    await organization.fill("Second studio");
     await page.getByRole("button", { name: "Create project", exact: true }).click();
     const otherChoice = page.getByRole("checkbox", {
       name: `${otherProject} in Second studio`,
@@ -180,7 +202,7 @@ test("first Claude consent creates the organization and project on the consent p
     await otherChoice.waitFor();
     expect(await otherChoice.isChecked()).toBe(true);
     expect(await choice.isChecked()).toBe(false);
-    await page.getByRole("region", { name: "First consent studio", exact: true }).waitFor();
+    await page.getByRole("region", { name: firstOrg, exact: true }).waitFor();
     await page.getByRole("region", { name: "Second studio", exact: true }).waitFor();
     await page
       .getByRole("status")
@@ -198,13 +220,13 @@ test("first Claude consent creates the organization and project on the consent p
     // FIRST organization, so the boxes' order (grouped by organization) differs from the projects'
     // creation order — the ticks must come back to the right boxes.
     await page.getByRole("button", { name: "New project", exact: true }).click();
-    await page.getByRole("textbox", { name: "Project name", exact: true }).fill(thirdProject);
+    await page.getByRole("textbox", { name: "Project slug", exact: true }).fill(thirdProject);
     await page
       .getByRole("combobox", { name: "Organization", exact: true })
-      .selectOption({ label: "First consent studio" });
+      .selectOption({ label: firstOrg });
     await page.getByRole("button", { name: "Create project", exact: true }).click();
     const thirdChoice = page.getByRole("checkbox", {
-      name: `${thirdProject} in First consent studio`,
+      name: `${thirdProject} in ${firstOrg}`,
       exact: true,
     });
     await thirdChoice.waitFor();
@@ -266,9 +288,13 @@ test("first Claude consent creates the organization and project on the consent p
     const headers = await cookieHeaders(context, origin);
     // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory assertion after the UI flow.
     using api = newHttpBatchRpcSession<IterateRpcTarget>(new Request(`${origin}/api`, { headers }));
-    const inventory = await api.authenticate({ type: "from-server-cookie" }).grants.list();
+    // one batch: an HTTP batch session ends with its first round trip
+    const session = api.authenticate({ type: "from-server-cookie" });
+    const [inventory, orgs] = await Promise.all([session.grants.list(), session.orgs()]);
     expect(inventory.items).toHaveLength(2);
     expect(inventory.items.filter((item) => item.current)).toHaveLength(1);
+    // the onboarding step's refused first try made ONE organization, not one per try
+    expect(orgs.map((org) => org.name).sort()).toEqual([firstOrg, "Second studio"]);
     expect(errors).toEqual([]);
   } finally {
     listener.closeAllConnections();

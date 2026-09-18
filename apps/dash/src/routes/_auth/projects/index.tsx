@@ -8,7 +8,7 @@ import { ArrowUpRight, Building2, Plus } from "lucide-react";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@iterate-com/ui/components/card";
-import { Field, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import {
@@ -140,12 +140,15 @@ function NewProjectForm({
   setPending: (pending: boolean) => void;
   onCreated: () => Promise<void>;
 }) {
-  const { api } = shell.useRouteContext();
+  const { api, info } = shell.useRouteContext();
   const router = useRouter();
+  // a project is its slug — its id and its hostname's label: lowercased as typed, anything but
+  // a-z, 0-9 and dashes becoming a dash (the platform slugs it the same way)
   const [name, setName] = useState("");
+  const host = projectHostOf(info, name || "my-project");
   // the chosen organization's id; "new" — the select's last option — the one named below; "" when
-  // there is none to choose and none may be made (the platform then picks the person's default)
-  const [orgId, setOrgId] = useState(orgs[0]?.id ?? (canCreateOrg ? "new" : ""));
+  // there is none yet (the platform then makes the person's first, from their email)
+  const [orgId, setOrgId] = useState(orgs[0]?.id ?? "");
   const [orgName, setOrgName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const creatingOrg = orgId === "new";
@@ -181,21 +184,27 @@ function NewProjectForm({
       <SheetHeader className="border-b">
         <SheetTitle>New project</SheetTitle>
         <SheetDescription>
-          A project is a workspace of its own — its site, repos and agents. An organization is made
-          with its first project.
+          A project is a workspace of its own — its site, repos and agents.
         </SheetDescription>
       </SheetHeader>
       <FieldGroup className="flex-1 p-4">
         <Field>
-          <FieldLabel htmlFor="project-name">Project name</FieldLabel>
+          <FieldLabel htmlFor="project">Project slug</FieldLabel>
           <Input
-            id="project-name"
-            placeholder="new-project-slug"
+            id="project"
+            placeholder="my-project"
             autoComplete="off"
+            autoCapitalize="off"
+            spellCheck={false}
             value={name}
-            onChange={(event) => setName(event.target.value)}
+            onChange={(event) =>
+              setName(event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"))
+            }
             required
           />
+          {host ? (
+            <FieldDescription>Your project will be hosted at {new URL(host).host}</FieldDescription>
+          ) : null}
         </Field>
         {orgs.length ? (
           <Field>

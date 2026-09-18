@@ -1,13 +1,15 @@
 // public/authorize.js — the consent page's script. /authorize.json (control-plane.ts) describes the
 // request — the client, the signed-in person, their projects and organizations, the scopes asked
-// for — and this renders the page: iterate ⇄ the client, who is signed in, the permissions, the
-// projects. The projects are an either/or — one checkbox for every project now and later, else the
-// ones ticked — with
-// "New project" (in one of the person's organizations, or in a new one named right there) posting
-// to /authorize and answering the refreshed description with every choice kept. Approve posts the
-// projects and scopes left ticked and ends in the client's redirect. Consent is task-based: every
-// scope but `iterate` may be unticked, and the grant carries what stays ticked. Plain DOM, no
-// framework — the roles and strings here are what specs/auth.spec.ts drives.
+// for — and this renders one of two pages. A person with no project yet gets the onboarding step
+// first (like apps/auth's): their organization's name and their first project's slug, one form,
+// Continue. Then the consent page: iterate ⇄ the client, who is signed in, the permissions, the
+// projects as an either/or — one checkbox for every project now and later, else the ones ticked —
+// with "New project" (in one of the person's organizations, or in a new one named right there)
+// posting to /authorize and answering the refreshed description with every choice kept. Approve
+// posts the projects and scopes left ticked and ends in the client's redirect. Consent is
+// task-based: every scope but `iterate` may be unticked, and the grant carries what stays ticked.
+// Plain DOM, no framework — the roles and strings here are what specs/auth.spec.ts drives; every
+// bit of motion is issuer.css's.
 (() => {
   const card = document.getElementById("consent");
   const query = location.search;
@@ -45,7 +47,7 @@
     all: false,
     /** optional scopes the person unticked */
     declined: new Set(),
-    /** the New project form is open (it is, on its own, while there is no project) */
+    /** the New project form is open */
     creating: false,
     /** the organization the last create made or used — the form offers it first next time */
     lastOrgId: null,
@@ -92,19 +94,193 @@
       state.all = !data.view.projectBound && data.view.scopes.includes("organizations:write");
     state.view = data.view;
   }
-  /** One action at a time: the buttons go quiet for the round trip (no re-render — what the person
-   *  is typing meanwhile stays put), then the page renders the answer once. */
+  /** One action at a time: the form's buttons go quiet for the round trip (no re-render — what the
+   *  person is typing meanwhile stays put), then the page renders the answer once. Switch account,
+   *  outside the form and built once, stays live. */
   async function act(body) {
     if (state.busy) return;
     state.busy = true;
     state.error = null;
-    for (const button of card.querySelectorAll("button")) button.disabled = true;
+    for (const button of card.querySelectorAll("#consent-form button, #onboarding-form button"))
+      button.disabled = true;
     const data = await call("POST", body);
     apply(data);
     state.busy = false;
     // a project created closes the form; a refused one keeps it open, with what was typed
     if (body.action === "create-project" && !data.error) state.creating = false;
     render();
+  }
+
+  /** The project field — a slug, the project's id and its hostname's label: lowercased as it is
+   *  typed, anything but a-z, 0-9 and dashes becoming a dash (the directory slugs it the same way)
+   *  — with the line saying where the project will live. What was typed survives a re-render (a
+   *  refused create answers while the person may already be correcting a field). */
+  const slugField = (base) => {
+    const input = el("input", {
+      type: "text",
+      name: "slug",
+      placeholder: "my-project",
+      autocomplete: "off",
+      autocapitalize: "off",
+      spellcheck: "false",
+    });
+    input.value = card.querySelector('[name="slug"]')?.value || "";
+    const host = el("span", { class: "muted consent-host" });
+    const show = () => {
+      const slug = input.value.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+      if (slug !== input.value) input.value = slug;
+      host.hidden = !base;
+      host.textContent = `Your project will be hosted at ${slug || "my-project"}.${base}`;
+    };
+    input.addEventListener("input", show);
+    show();
+    const set = (value) => {
+      input.value = value;
+      show();
+    };
+    // the hostname line sits beside the label, not in it: the field's name stays "Project slug"
+    return { input, set, field: el("div", {}, el("label", {}, "Project slug ", input), host) };
+  };
+  /** The directory's slugging, for a slug proposed from a name: lowercase, anything else → a dash,
+   *  runs collapsed, ends trimmed. */
+  const slugOf = (name) =>
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-+|-+$/g, "");
+  /** Which organization a project goes to: one of the person's (a select — the one the last create
+   *  made or used comes first, so a refused create's retry lands where the first try went) or a new
+   *  one named right there, its name field opening for "New organization…" alone. With no
+   *  organization yet, the name field alone — filled with the suggestion when `suggest`. `value()`
+   *  is what /authorize's create-project takes; `chosenName()` is what a slug may follow. */
+  const orgChoice = (view, { suggest }) => {
+    const previous = {
+      select: card.querySelector('[name="org"]'),
+      name: card.querySelector('[name="new-org"]'),
+    };
+    const previousName =
+      previous.select && previous.select.value
+        ? previous.select.selectedOptions[0].textContent
+        : (previous.name?.value ?? null);
+    const name = el("input", {
+      type: "text",
+      name: "new-org",
+      autocomplete: "organization",
+      placeholder: "Acme",
+    });
+    name.value = previous.name
+      ? previous.name.value
+      : suggest
+        ? view.suggestedOrganizationName
+        : "";
+    const nameField = el("label", {}, "Organization name ", name);
+    if (!view.orgs.length)
+      return {
+        name,
+        previousName,
+        fields: [nameField],
+        value: () => ({ newOrg: name.value }),
+        chosenName: () => name.value,
+      };
+    const select = el("select", { name: "org" });
+    for (const candidate of view.orgs)
+      select.append(el("option", { value: candidate.id, text: candidate.name }));
+    select.append(el("option", { value: "", text: "New organization…" }));
+    select.value = previous.select ? previous.select.value : state.lastOrgId || view.orgs[0].id;
+    const reveal = () => (nameField.hidden = select.value !== "");
+    select.addEventListener("change", reveal);
+    reveal();
+    return {
+      name,
+      select,
+      previousName,
+      fields: [el("label", {}, "Organization ", select), nameField],
+      value: () => (select.value ? { org: select.value } : { newOrg: name.value }),
+      chosenName: () =>
+        select.value
+          ? view.orgs.find((candidate) => candidate.id === select.value)?.name || ""
+          : name.value,
+    };
+  };
+  const errorLine = () =>
+    state.error ? el("p", { role: "alert", "data-type": "error", text: state.error }) : null;
+  /** Who is signed in — the person's picture (or initial), the address, Switch account. */
+  const signedInAs = (email, picture) => {
+    const initial = el("span", {
+      class: "consent-avatar",
+      "aria-hidden": "true",
+      text: email.slice(0, 1).toUpperCase(),
+    });
+    return el(
+      "section",
+      { class: "consent-account", "aria-label": "Signed-in account" },
+      picture ? pictured(initial, picture) : initial,
+      el(
+        "div",
+        {},
+        el("span", { class: "muted", text: "Signed in as" }),
+        el("strong", { text: email }),
+      ),
+      el(
+        "form",
+        { method: "post", action: `/.auth/logout?next=${encodeURIComponent(loginAgain)}` },
+        el("button", { class: "consent-quiet", type: "submit", text: "Switch account" }),
+      ),
+    );
+  };
+
+  /** The onboarding step — a person with no project yet: their organization (its name; or, once
+   *  they have one — a refused first try made it — the choice of it) and their first project's
+   *  slug, one form; Continue posts both and the consent page follows. Both start filled the way
+   *  apps/auth fills them: the name from the person's display name or email, the slug from the
+   *  name — following it until the person edits the slug (then it is theirs, even emptied), and a
+   *  refused create keeps what was typed. */
+  function renderOnboarding(view) {
+    document.title = "Create a project — iterate";
+    const shownSlug = card.querySelector('[name="slug"]');
+    const org = orgChoice(view, { suggest: true });
+    const project = slugField(view.projectHostnameBase);
+    let follows = !shownSlug || shownSlug.value === slugOf(org.previousName || "");
+    const follow = () => {
+      if (follows) project.set(slugOf(org.chosenName()));
+    };
+    follow();
+    org.name.addEventListener("input", follow);
+    org.select?.addEventListener("change", follow);
+    project.input.addEventListener("input", () => {
+      follows = false;
+    });
+    const form = el("form", { id: "onboarding-form" });
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      act({ action: "create-project", project: project.input.value, ...org.value() });
+    });
+    form.append(
+      ...org.fields,
+      project.field,
+      el(
+        "footer",
+        {},
+        errorLine(),
+        el(
+          "div",
+          { class: "consent-actions" },
+          el("a", { class: "button", href: view.denyLocation, text: "Cancel" }),
+          el("button", { class: "primary", type: "submit", text: "Continue" }),
+        ),
+      ),
+    );
+    card.replaceChildren(
+      el(
+        "header",
+        {},
+        el("img", { class: "issuer-mark", src: "/iterate-logo.svg", alt: "" }),
+        el("h1", { text: "Create a project" }),
+      ),
+      signedInAs(view.email, view.picture),
+      form,
+    );
   }
 
   function render() {
@@ -121,14 +297,12 @@
       );
       return;
     }
+    if (!view.projectBound && !view.projects.length) return renderOnboarding(view);
     const { clientName, email, picture, projects, orgs, projectBound, scopes, denyLocation } = view;
     document.title = `Authorize ${clientName} — iterate`;
     const names = new Map(orgs.map((org) => [org.id, org.name]));
     const orgIds = [...new Set(projects.map((project) => project.orgId))];
     const ticked = (id) => state.all || !state.excluded.has(id);
-    // what is typed into the New project form survives a re-render (a refused create answers
-    // while the person may already be correcting a field)
-    const typed = (name) => card.querySelector(`[name="${name}"]`)?.value || "";
     const form = el("form", { id: "consent-form" });
     form.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -161,15 +335,14 @@
 
     // Which projects — an either/or, one checkbox: every project now and later, or the ones
     // ticked in the list below it (a client bound to one project has no such choice)
-    const all =
-      !projectBound && projects.length
-        ? el("input", {
-            type: "checkbox",
-            name: "all",
-            value: "1",
-            "aria-label": "All my projects, now and future",
-          })
-        : null;
+    const all = projectBound
+      ? null
+      : el("input", {
+          type: "checkbox",
+          name: "all",
+          value: "1",
+          "aria-label": "All my projects, now and future",
+        });
     if (all) all.checked = state.all;
     const future = all
       ? el(
@@ -189,7 +362,6 @@
       "aria-label": "Projects it may reach",
     });
     for (const orgId of orgIds) {
-      const group = projects.filter((project) => project.orgId === orgId);
       const orgName = names.get(orgId) || orgId;
       list.append(
         el(
@@ -197,16 +369,23 @@
           { class: "consent-org", "aria-label": orgName },
           // the organization's name only when there is more than one to tell apart
           orgIds.length > 1 ? el("h3", { text: orgName }) : null,
-          ...group.map((project) => {
-            const box = el("input", {
-              type: "checkbox",
-              name: "project",
-              value: project.id,
-              "aria-label": `${project.id} in ${orgName}`,
-            });
-            box.checked = ticked(project.id);
-            return el("label", { class: "consent-project" }, box, el("span", { text: project.id }));
-          }),
+          ...projects
+            .filter((project) => project.orgId === orgId)
+            .map((project) => {
+              const box = el("input", {
+                type: "checkbox",
+                name: "project",
+                value: project.id,
+                "aria-label": `${project.id} in ${orgName}`,
+              });
+              box.checked = ticked(project.id);
+              return el(
+                "label",
+                { class: "consent-project" },
+                box,
+                el("span", { text: project.id }),
+              );
+            }),
         ),
       );
     }
@@ -216,56 +395,33 @@
       );
 
     // New project — in one of the person's organizations, or in a new one named right here: the
-    // only place the consent flow creates an organization. Open on its own while there is no
-    // project (nothing to approve until there is one).
-    const creating = !projectBound && (state.creating || !projects.length);
-    const add =
-      projectBound || !projects.length
-        ? null
-        : el(
-            "button",
-            { class: "consent-add", type: "button", "aria-expanded": String(creating) },
-            el("span", { "aria-hidden": "true", text: "+" }),
-            "New project",
-          );
+    // only place the consent flow creates an organization.
+    const creating = !projectBound && state.creating;
+    const add = projectBound
+      ? null
+      : el(
+          "button",
+          { class: "consent-add", type: "button", "aria-expanded": String(creating) },
+          el("span", { "aria-hidden": "true", text: "+" }),
+          "New project",
+        );
     add?.addEventListener("click", () => {
       state.creating = !creating;
       render();
     });
     let create = null;
     if (creating) {
-      const projectName = el("input", { type: "text", name: "project-name", autocomplete: "off" });
-      projectName.value = typed("project-name");
-      const orgName = el("input", { type: "text", name: "org-name", autocomplete: "off" });
-      orgName.value = typed("org-name");
-      const orgNameField = el("label", {}, "Organization name ", orgName);
-      let org = null;
-      if (orgs.length) {
-        org = el("select", { name: "org" });
-        for (const candidate of orgs)
-          org.append(el("option", { value: candidate.id, text: candidate.name }));
-        org.append(el("option", { value: "", text: "New organization…" }));
-        const before = card.querySelector('[name="org"]');
-        org.value = before ? before.value : state.lastOrgId || orgs[0].id;
-        const showOrgName = () => (orgNameField.hidden = org.value !== "");
-        org.addEventListener("change", showOrgName);
-        showOrgName();
-      }
+      const project = slugField(view.projectHostnameBase);
+      const org = orgChoice(view, { suggest: false });
       const createProject = el("button", { type: "button", text: "Create project" });
       createProject.addEventListener("click", () =>
-        act({
-          action: "create-project",
-          project: projectName.value,
-          ...(org && org.value ? { org: org.value } : { newOrg: orgName.value }),
-        }),
+        act({ action: "create-project", project: project.input.value, ...org.value() }),
       );
       create = el(
         "section",
         { class: "consent-create", "aria-label": "New project" },
-        el("h2", { text: projects.length ? "New project" : "Create your first project" }),
-        el("label", {}, "Project name ", projectName),
-        org ? el("label", {}, "Organization ", org) : null,
-        orgNameField,
+        el("h2", { text: "New project" }),
+        el("div", { class: "consent-fields" }, project.field, ...org.fields),
         createProject,
       );
     }
@@ -285,12 +441,12 @@
           add,
         ),
         future,
-        projects.length || projectBound ? list : null,
+        list,
         create,
         el(
           "footer",
           {},
-          state.error ? el("p", { role: "alert", "data-type": "error", text: state.error }) : null,
+          errorLine(),
           el(
             "div",
             { class: "consent-actions" },
@@ -307,7 +463,7 @@
     // parked ticks are in the boxes' own (organization-grouped) order, never the projects array's
     let parked = state.all ? boxes().map((box) => !state.excluded.has(box.value)) : null;
     const sync = () => {
-      // no either/or (no project yet, or the client's one project): the default stands
+      // no either/or (the client's one project): the default stands
       const every = all ? all.checked : state.all;
       if (every && !parked) {
         parked = boxes().map((box) => box.checked);
@@ -332,21 +488,20 @@
       // the count of ticked projects; with "all" ticked the checkbox says it, so nothing else does
       status.hidden = !projects.length || every;
       status.textContent = `${count} selected`;
-      // nothing to approve without a project: the first one is created right here
-      approve.disabled = state.busy || !projects.length || (!every && count === 0);
+      approve.disabled = state.busy || (!every && count === 0);
       for (const button of form.querySelectorAll("button[type=button]"))
         button.disabled = state.busy;
     };
     form.addEventListener("change", sync);
     sync();
 
-    const initial = el("span", {
-      class: "consent-avatar",
-      "aria-hidden": "true",
-      text: email.slice(0, 1).toUpperCase(),
-    });
+    // The hero (iterate ⇄ the client: its picture — /client-icon — or its initials) and who is
+    // signed in are built once; every later render swaps the form alone, so the entrance in
+    // issuer.css plays once and the pictures stay put.
+    const shown = card.querySelector("#consent-form");
+    if (shown) return shown.replaceWith(form);
+    form.classList.add("consent-enter");
     card.replaceChildren(
-      // the hero: iterate ⇄ the client (its picture — /client-icon — or its initials)
       el(
         "header",
         {},
@@ -366,22 +521,7 @@
         ),
         el("h1", { text: `Authorize ${clientName}` }),
       ),
-      el(
-        "section",
-        { class: "consent-account", "aria-label": "Signed-in account" },
-        picture ? pictured(initial, picture) : initial,
-        el(
-          "div",
-          {},
-          el("span", { class: "muted", text: "Signed in as" }),
-          el("strong", { text: email }),
-        ),
-        el(
-          "form",
-          { method: "post", action: `/.auth/logout?next=${encodeURIComponent(loginAgain)}` },
-          el("button", { class: "consent-quiet", type: "submit", text: "Switch account" }),
-        ),
-      ),
+      signedInAs(email, picture),
       form,
     );
   }
