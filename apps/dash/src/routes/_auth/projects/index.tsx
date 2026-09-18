@@ -143,22 +143,31 @@ function NewProjectForm({
   const { api } = shell.useRouteContext();
   const router = useRouter();
   const [name, setName] = useState("");
-  // an org id (`org_…`), or "new" — the select's last option, the organization named below
-  const [orgId, setOrgId] = useState(orgs[0]?.id ?? "new");
+  // the chosen organization's id; "new" — the select's last option — the one named below; "" when
+  // there is none to choose and none may be made (the platform then picks the person's default)
+  const [orgId, setOrgId] = useState(orgs[0]?.id ?? (canCreateOrg ? "new" : ""));
   const [orgName, setOrgName] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const creatingOrg = canCreateOrg && orgId === "new";
+  const creatingOrg = orgId === "new";
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
     setPending(true);
     try {
-      // the organization just named, or the one chosen; neither (none to choose from, none
-      // allowed): the platform picks the person's default
-      const org = creatingOrg
-        ? await api.createOrg(orgName.trim())
-        : orgs.find((candidate) => candidate.id === orgId);
-      using _created = await api.projects.create({ project: name.trim(), orgId: org?.id });
+      let chosenOrgId = orgId;
+      if (creatingOrg) {
+        const created = await api.createOrg(orgName.trim());
+        // the new organization stays chosen for the rest of the sheet's life: a refused project
+        // name, retried, lands in it rather than minting a second one (names are not unique). The
+        // shell's loader lists it, so the select has its option.
+        chosenOrgId = created.id;
+        setOrgId(created.id);
+        await router.invalidate();
+      }
+      using _created = await api.projects.create({
+        project: name.trim(),
+        orgId: chosenOrgId || undefined,
+      });
       await router.invalidate();
       await onCreated();
     } catch (caught) {
