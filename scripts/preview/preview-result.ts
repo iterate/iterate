@@ -1,5 +1,6 @@
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
+import { Depot, currentAttempt, latestExecution } from "../ci/depot.ts";
 import type { PreviewResult } from "./change-plan.ts";
 import { previewPlaywrightShards } from "./playwright-capacity-reporter.ts";
 import { splitRepositoryFullName, withGithubRetry } from "./github.ts";
@@ -20,7 +21,9 @@ export async function findPreviewResult(
     }),
   );
   if (
-    !statuses.some((status) => status.context === "preview-settled" && status.state === "success")
+    !statuses.some(
+      (status) => /^preview-settled(?: |$)/.test(status.context) && status.state === "success",
+    )
   )
     return null;
   const checks = await withGithubRetry("checks.listForRef (preview result)", () =>
@@ -32,7 +35,33 @@ export async function findPreviewResult(
       per_page: 100,
     }),
   );
-  return previewResultFromChecks(commit, checks, statuses);
+  const result = previewResultFromChecks(commit, checks, statuses);
+  if (!result) return null;
+  // GitHub's check can already be green during cleanup, or briefly retain its
+  // previous conclusion when Depot queues a retry. Depot is the liveness source.
+  const source = new URL(result.url);
+  const [, org, workflowId] = source.pathname.match(/^\/orgs\/([^/]+)\/workflows\/([^/]+)$/)!;
+  const depot = new Depot({ org, token: process.env.DEPOT_CI_TELEMETRY_TOKEN || "" });
+  const workflow = await depot.workflow(workflowId);
+  if (workflow.repo !== github.repositoryFullName || workflow.headSha !== commit) return null;
+  const producers = workflow.jobs.filter((job) =>
+    /:(prepare|apps|playwright:matrix-[0-5]|finish)$/.test(job.jobKey),
+  );
+  if (
+    producers.length !== 9 ||
+    producers.some((job) => !["finished", "failed"].includes(job.status))
+  )
+    return null;
+  const finalizer = workflow.jobs.find((job) => job.jobId === source.searchParams.get("job"));
+  if (!finalizer || currentAttempt(finalizer)?.attemptId !== source.searchParams.get("attempt"))
+    return null;
+  const attempt = currentAttempt(finalizer);
+  if (
+    !attempt?.startedAt ||
+    Date.parse(attempt.startedAt) < Date.parse(latestExecution(workflow).createdAt)
+  )
+    return null;
+  return result;
 }
 
 /** Inherit only an explicit settled result belonging to the newest complete run. */
@@ -91,15 +120,22 @@ export function previewResultFromChecks(
   const settled = z
     .array(SettledStatus)
     .parse(statuses)
-    .filter((status) => status.context === "preview-settled")
+    .filter((status) => /^preview-settled(?: |$)/.test(status.context))
     .sort((a, b) => b.id - a.id)[0];
   if (!settled || settled.state !== "success" || !settled.target_url) return null;
-  const description = /^tests=(success|failure); deployment=restored; check=(\d+)$/.exec(
+  const description = /^tests=(success|failure); deployment=restored(?:; check=(\d+))?$/.exec(
     settled.description || "",
   );
-  if (!description || description[2] !== String(finish.id)) return null;
+  if (!description) return null;
+  // Accept earlier deployments while the parent branch still publishes the old form.
+  if (settled.context === "preview-settled" && description[2] !== String(finish.id)) return null;
   const source = new URL(settled.target_url);
   const check = new URL(finish.details_url);
+  if (
+    settled.context !== "preview-settled" &&
+    settled.context !== `preview-settled ${source.searchParams.get("attempt")}`
+  )
+    return null;
   if (
     source.origin !== check.origin ||
     source.pathname !== check.pathname ||

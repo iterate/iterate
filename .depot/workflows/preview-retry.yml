@@ -1,0 +1,49 @@
+# Partial retries cannot reuse the preparation that post-test cleanup retired.
+# Requests can be duplicated; the execution guard makes later requests no-ops.
+name: Recover preview retry
+on:
+  workflow_dispatch:
+    inputs:
+      workflow-id:
+        required: true
+      execution-id:
+        required: true
+      head-sha:
+        required: true
+      pull-request-number:
+        required: true
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  recover:
+    name: Restart partial Preview retry
+    concurrency:
+      group: preview-retry-${{ inputs.workflow-id }}
+      cancel-in-progress: false
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 55
+    env:
+      CI_HEAD_SHA: ${{ inputs.head-sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ inputs.head-sha }}
+          fetch-depth: 0
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Drain deployment and cleanup, then start fresh
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          TARGET_WORKFLOW: ${{ inputs.workflow-id }}
+          TARGET_EXECUTION: ${{ inputs.execution-id }}
+          TARGET_COMMIT: ${{ inputs.head-sha }}
+          TARGET_PR: ${{ inputs.pull-request-number }}
+        run: >-
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          pnpm exec trpc-cli scripts/preview/coordination.ts recover
+          "$TARGET_WORKFLOW" "$TARGET_EXECUTION" "$TARGET_COMMIT" "$TARGET_PR"

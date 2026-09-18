@@ -8,11 +8,9 @@
 # file with complementary `if:`s, the `closed`-event run re-reported
 # "Preview / deploy + e2e" as skipped, clobbering the earlier success on every
 # merged PR (GitHub displays the latest check run per name). The two workflows
-# still coordinate through the same concurrency groups (copied verbatim in the
-# cleanup file): closing a PR mid-deploy cancels the in-flight deploy run
-# (cancel-in-progress on the shared workflow-level group) and the job-level
-# lifecycle group serializes whatever remains. The two never race the same
-# preview slot.
+# share the job-level lifecycle lock. New pushes keep useful ancestors alive;
+# the coordinator cancels only tests made obsolete by a product-change barrier.
+# Deployment and cleanup retain the lock until their writes have finished.
 #
 # Depot registers automatic triggers when this file is on the default branch —
 # branch-only changes to the `on:` block do not take effect until merged. Test
@@ -47,12 +45,33 @@ on:
         description: PR number to deploy + test
         required: true
 
-# Keep existing lock keys: older branches and close-PR cleanup share them.
-concurrency:
-  group: cloudflare-previews-${{ github.event.pull_request.number || inputs.pull-request-number }}
-  cancel-in-progress: true
-
+# Only the called workflow owns the lifecycle lock. A workflow-level lock would
+# also queue the coordinator, preventing it from stopping obsolete work.
 jobs:
+  coordinate:
+    name: Coordinate preview runs
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 50
+    env:
+      CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Keep useful ancestors and stop obsolete tests
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          pnpm exec trpc-cli scripts/preview/coordination.ts coordinate
+          ${{ github.event.pull_request.number || inputs.pull-request-number }}
   preview:
     name: Preview / deploy + e2e
     # Hold the lifecycle lock for the entire called workflow, including all

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expect, test } from "vitest";
 import { CommitHistory } from "./commit-history.ts";
+import { obsoletePreview } from "./run-policy.ts";
 import { classifyChanges, planPreview } from "./change-plan.ts";
 
 test("a docs commit inherits its failed product parent's result", async () => {
@@ -299,6 +300,19 @@ test("docs inherit a tested merge even when main is its second parent", async ()
     }),
   ).toMatchObject({ action: "inherit", result: { commit: merge } });
 });
+
+test.each(["README.md", "specs/new.spec.ts", "apps/os/index.ts"])(
+  "cancellation requires a product barrier, not merely a newer commit (%s)",
+  (path) => {
+    using repo = repository();
+    repo.commit({ "README.md": "base" });
+    repo.git("switch", "-c", "feature");
+    const ancestor = repo.commit({ "apps/os/index.ts": "product" });
+    repo.commit({ [path]: "new" });
+    expect(obsoletePreview(repo.history(), ancestor)).toBe(path.startsWith("apps/"));
+    expect(obsoletePreview(repo.history(), "unknown-or-force-pushed-away")).toBe(false);
+  },
+);
 
 function repository() {
   const directory = mkdtempSync(join(tmpdir(), "preview-change-plan-"));

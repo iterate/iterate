@@ -119,6 +119,22 @@ test("a stale late publication from an older workflow cannot replace a newer set
   ).toBeNull();
 });
 
+test("generic attempt-scoped settlement certifies its own finalizer", () => {
+  const signal = {
+    ...settled("run", 9, "success"),
+    context: "preview-settled finish-attempt",
+    description: "tests=success; deployment=restored",
+  };
+  expect(previewResultFromChecks("candidate", checks("run", 1, "success"), [signal])).toMatchObject(
+    { conclusion: "success" },
+  );
+  expect(
+    previewResultFromChecks("candidate", checks("run", 1, "success"), [
+      { ...signal, context: "preview-settled another-attempt" },
+    ]),
+  ).toBeNull();
+});
+
 function checks(workflow: string, firstId: number, outcome: string) {
   return [
     "Deploy and readiness",

@@ -6,8 +6,8 @@ base: codex/preview-change-types-v3
 
 # Keep useful preview runs, stop obsolete work, and wait across commits
 
-Stacked follow-up to draft PR #2712. Specification committed first; implementation
-and live acceptance follow. The existing change planner and lease renewal remain
+Stacked follow-up to draft PR #2712. Implementation is ready for its first live run; focused coordination checks pass.
+Live cancellation, pending inheritance and retry recovery are still to validate. The existing change planner and lease renewal remain
 on the parent branch.
 
 ## Request
@@ -64,3 +64,17 @@ on the parent branch.
 - Stack starts at `e091e928c` on `codex/preview-change-types-v3` (PR #2712).
   Baseline already proved full → docs-only → tests-only work selection and
   near-expiry lease renewal. This follow-up owns pending runs and retries.
+
+- Generic waits now select the highest current attempt, ignore queued old
+  attempts, accept retained prerequisites and support an explicit workflow/SHA.
+- A coordinator runs outside the lifecycle lock. It cancels only obsolete test
+  consumers; preparation/cleanup retain ownership. Closed PR cleanup uses the
+  same policy. Pending waits are restricted to the caller's actual ancestors.
+- Partial retries request `preview-retry.yml`: serialize recovery by workflow,
+  let prepare/finalizer settle, then rerun everything. Duplicate requests check
+  the expected execution and become no-ops after recovery. Full reruns get fresh
+  preparation and execution-scoped internal artifacts.
+- Independent design/code review found and corrected queued-finalizer cancellation,
+  a descendant-wait deadlock, and externally consumed artifact-name compatibility.
+- Local evidence so far: scripts typecheck, targeted lint and 85 focused tests pass.
+  Raw Depot API confirmed basename workflow paths and ascending attempt arrays.

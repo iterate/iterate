@@ -29,6 +29,7 @@ env:
   BASH_ENV: ${{ github.workspace }}/scripts/ci/tracing/shell.sh
   CI_TRACE_ENABLED: "1"
   CI_HEAD_SHA: ${{ inputs.head-sha }}
+  PREVIEW_PR_NUMBER: ${{ inputs.pull-request-number }}
   TEST_TELEMETRY_HEAD_SHA: ${{ inputs.head-sha }}
   PREVIEW_TARGET_ARGS: ${{ inputs.pull-request-number && format('--pull-request-number {0}', inputs.pull-request-number) || format('--commit {0}', inputs.head-sha) }}
   TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
@@ -52,6 +53,14 @@ jobs:
           fetch-depth: 0
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
+      - name: Verify preview retry generation
+        id: coordination
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          pnpm exec trpc-cli scripts/preview/coordination.ts verify
       - name: Decide preview work from the head commit
         id: plan
         env:
@@ -62,7 +71,7 @@ jobs:
           pnpm preview ci-plan $PREVIEW_TARGET_ARGS
           ${{ inputs.all-apps && '--all-apps' || '' }}
       - name: Signal preview plan (including inherited failures)
-        if: always() && steps.plan.outputs.tests != ''
+        if: always() && steps.coordination.outcome == 'success' && steps.plan.outputs.tests != ''
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -85,9 +94,18 @@ jobs:
         with:
           clean: false
           ref: ${{ inputs.head-sha }}
+          fetch-depth: 0
       - name: Reconcile dependencies (baked)
         id: install_dependencies
         run: node scripts/depot-ci/dependencies.mjs install
+      - name: Verify preview retry generation
+        id: coordination
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          pnpm exec trpc-cli scripts/preview/coordination.ts verify
       - name: Wait for preview plan
         id: plan
         env:
@@ -143,7 +161,7 @@ jobs:
         if: steps.plan.outputs.tests == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: preview-ci-plan
+          name: preview-ci-${{ steps.coordination.outputs.execution }}-plan
           path: test-results/preview-ci-plan.json
           if-no-files-found: error
       - name: Signal prepared preview
@@ -157,13 +175,13 @@ jobs:
           pnpm exec trpc-cli scripts/ci/status.ts set preview-ready
       - name: Collect test artifacts
         id: collect_artifacts
-        if: always() && steps.plan.outputs.tests == 'true'
+        if: always() && steps.coordination.outcome == 'success' && steps.plan.outputs.tests == 'true'
         run: scripts/preview/collect-test-artifacts.sh test-results
       - name: Upload results
-        if: always() && steps.plan.outputs.tests == 'true'
+        if: always() && steps.coordination.outcome == 'success' && steps.plan.outputs.tests == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: preview-ci-prepare
+          name: preview-ci-${{ steps.coordination.outputs.execution }}-prepare
           path: test-results
           include-hidden-files: true
           if-no-files-found: error
@@ -181,9 +199,18 @@ jobs:
         with:
           clean: false
           ref: ${{ inputs.head-sha }}
+          fetch-depth: 0
       - name: Reconcile dependencies (baked)
         id: install_dependencies
         run: node scripts/depot-ci/dependencies.mjs install
+      - name: Verify preview retry generation
+        id: coordination
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          pnpm exec trpc-cli scripts/preview/coordination.ts verify
       - name: Reset test artifacts
         id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
@@ -201,7 +228,7 @@ jobs:
       - name: Download prepared deployment identity
         uses: actions/download-artifact@v4
         with:
-          name: preview-ci-plan
+          name: preview-ci-${{ steps.coordination.outputs.execution }}-plan
           path: test-results
       - name: Run app tests alongside browser shards
         id: app_tests
@@ -213,13 +240,13 @@ jobs:
           pnpm preview ci-test $PREVIEW_TARGET_ARGS
       - name: Collect test artifacts
         id: collect_artifacts
-        if: always()
+        if: always() && steps.coordination.outcome == 'success'
         run: scripts/preview/collect-test-artifacts.sh test-results
       - name: Upload results
-        if: always()
+        if: always() && steps.coordination.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
-          name: preview-ci-apps
+          name: preview-ci-${{ steps.coordination.outputs.execution }}-apps
           path: test-results
           include-hidden-files: true
           if-no-files-found: error
@@ -248,9 +275,18 @@ jobs:
         with:
           clean: false
           ref: ${{ inputs.head-sha }}
+          fetch-depth: 0
       - name: Reconcile dependencies (baked)
         id: install_dependencies
         run: node scripts/depot-ci/dependencies.mjs install
+      - name: Verify preview retry generation
+        id: coordination
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          pnpm exec trpc-cli scripts/preview/coordination.ts verify
       - name: Reset test artifacts
         id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
@@ -291,7 +327,7 @@ jobs:
       - name: Download prepared deployment identity
         uses: actions/download-artifact@v4
         with:
-          name: preview-ci-plan
+          name: preview-ci-${{ steps.coordination.outputs.execution }}-plan
           path: test-results
       - name: Run Playwright shard
         id: playwright
@@ -304,7 +340,7 @@ jobs:
           --shard ${{ matrix.shard }}
       - name: Stop mobile web server and print logs
         id: stop_mobile_web
-        if: always()
+        if: always() && steps.coordination.outcome == 'success'
         env:
           MOBILE_WEB_PID: ${{ steps.start_mobile_web.outputs.pid }}
         run: |-
@@ -315,10 +351,10 @@ jobs:
             cat "$MOBILE_WEB_LOG"
           fi
       - name: Upload results
-        if: always()
+        if: always() && steps.coordination.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
-          name: preview-ci-playwright-${{ matrix.shard }}
+          name: preview-ci-${{ steps.coordination.outputs.execution }}-playwright-${{ matrix.shard }}
           path: test-results
           include-hidden-files: true
           if-no-files-found: error
@@ -337,9 +373,18 @@ jobs:
         with:
           clean: false
           ref: ${{ inputs.head-sha }}
+          fetch-depth: 0
       - name: Reconcile dependencies (baked)
         id: install_dependencies
         run: node scripts/depot-ci/dependencies.mjs install
+      - name: Verify preview retry generation
+        id: coordination
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          pnpm exec trpc-cli scripts/preview/coordination.ts verify
       - name: Reset test artifacts
         id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
@@ -356,15 +401,15 @@ jobs:
           playwright:matrix-0 playwright:matrix-1 playwright:matrix-2
           playwright:matrix-3 playwright:matrix-4 playwright:matrix-5
       - name: Download every test result
-        if: always() && steps.consumers.outputs.settled == 'true'
+        if: always() && steps.coordination.outcome == 'success' && steps.consumers.outputs.settled == 'true'
         uses: actions/download-artifact@v4
         with:
-          pattern: preview-ci-*
+          pattern: preview-ci-${{ steps.coordination.outputs.execution }}-*
           merge-multiple: true
           path: test-results
       - name: Merge reports and publish full preview result
         id: merge_reports
-        if: always() && steps.consumers.outputs.settled == 'true' && needs.prepare.result == 'success'
+        if: always() && steps.coordination.outcome == 'success' && steps.consumers.outputs.settled == 'true' && needs.prepare.result == 'success'
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -383,7 +428,7 @@ jobs:
           "All preview tests passed. Cleanup and restoration run afterwards; their final outcome is reflected in this check. See Depot for current cleanup progress."
       - name: Collect preparation and test trace
         id: trace
-        if: always() && steps.consumers.outputs.settled == 'true'
+        if: always() && steps.coordination.outcome == 'success' && steps.consumers.outputs.settled == 'true'
         timeout-minutes: 5
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -395,16 +440,25 @@ jobs:
           doppler run --project _shared --config preview --
           pnpm exec trpc-cli scripts/ci/tracing/cli.ts current ci-trace.ignoreme
       - name: Upload public CI trace
-        if: always() && steps.trace.outcome == 'success'
+        if: always() && steps.coordination.outcome == 'success' && steps.trace.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.trace.outputs.artifact-name }}
           path: ci-trace.ignoreme/trace.*
           if-no-files-found: error
           retention-days: 30
+      - name: Check whether the preview is still useful
+        id: useful
+        if: always() && steps.coordination.outcome == 'success' && steps.consumers.outputs.settled == 'true'
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          pnpm exec trpc-cli scripts/preview/coordination.ts needed
       - name: Retire test data and restore the preview
         id: erase
-        if: always() && steps.consumers.outputs.settled == 'true'
+        if: always() && steps.coordination.outcome == 'success' && steps.consumers.outputs.settled == 'true'
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -414,31 +468,33 @@ jobs:
           doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
           pnpm preview erase $PREVIEW_TARGET_ARGS
           --ran-head-sha "${{ inputs.head-sha }}"
-          ${{ needs.prepare.result == 'success' && '--restore --prepared-ci-plan' || '' }}
+          ${{ needs.prepare.result == 'success' && steps.useful.outputs.needed != 'false' && '--restore --prepared-ci-plan' || '' }}
       - name: Normalize and send preview test telemetry
         id: telemetry
-        if: always()
+        if: always() && steps.coordination.outcome == 'success'
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry.ts --workflow-scope --flake-suites preview ${{ cancelled() && '--cancelled' || '' }}
       - name: Upload results
-        if: always()
+        if: always() && steps.coordination.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: preview-os-test-artifacts
+          overwrite: true
           path: test-results
           include-hidden-files: true
           if-no-files-found: error
       - name: Upload public Playwright HTML report
-        if: ${{ always() && hashFiles('test-results/playwright-html/index.html') != '' }}
+        if: ${{ always() && steps.coordination.outcome == 'success' && hashFiles('test-results/playwright-html/index.html') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: public-playwright-report
+          overwrite: true
           path: test-results/playwright-html
           if-no-files-found: error
           retention-days: 30
       - name: Upload specs flake records
-        if: always()
+        if: always() && steps.coordination.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: flake-records-specs
@@ -446,7 +502,7 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
       - name: Upload preview e2e flake records
-        if: always()
+        if: always() && steps.coordination.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: flake-records-preview-e2e
@@ -455,7 +511,7 @@ jobs:
           overwrite: true
       - name: Require preparation and every consumer to succeed
         id: outcome
-        if: always()
+        if: always() && steps.coordination.outcome == 'success'
         env:
           PREPARE_RESULT: ${{ needs.prepare.result }}
           CONSUMERS_SETTLED: ${{ steps.consumers.outputs.settled }}
@@ -468,11 +524,11 @@ jobs:
         id: settled
         # Publish no pending status, and keep test failures red. Missing reports
         # or a skipped/failed restoration cannot certify an inheritable result.
-        if: always() && !cancelled() && steps.erase.outcome == 'success' && steps.erase.outputs.restored == 'true' && steps.merge_reports.outputs.test_outcome != ''
+        if: always() && steps.coordination.outcome == 'success' && !cancelled() && steps.erase.outcome == 'success' && steps.erase.outputs.restored == 'true' && steps.merge_reports.outputs.test_outcome != ''
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
-          pnpm exec trpc-cli scripts/ci/status.ts set-preview-settled
-          "${{ steps.merge_reports.outputs.test_outcome }}"
+          pnpm exec trpc-cli scripts/ci/status.ts set preview-settled
+          --values '{"tests":"${{ steps.merge_reports.outputs.test_outcome }}","deployment":"restored"}'

@@ -1,26 +1,21 @@
 import { appendFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
+import { Workflow, currentAttempt, terminal } from "./depot.ts";
 
 /** GitHub milestones, guarded by Depot job liveness. Run with trpc-cli. */
 export default class CiStatus {
-  private env = z
-    .object({
-      DEPOT_CI_TELEMETRY_TOKEN: z.string().min(1),
-      GITHUB_TOKEN: z.string().min(1),
-      DEPOT_JOB_URL: z.string().url(),
-      GITHUB_REPOSITORY: z.string().min(1),
-      CI_HEAD_SHA: z.string().min(1),
-      GITHUB_OUTPUT: z.string().min(1),
-    })
-    .parse(process.env);
-  private signal = AbortSignal.timeout(20 * 60_000);
+  private env: z.infer<typeof Environment>;
+  private fetch: typeof fetch;
+  private signal = AbortSignal.timeout(60 * 60_000);
   private org: string;
   private workflowId: string;
   private jobId: string;
   private attemptId: string;
 
-  constructor() {
+  constructor(environment = process.env, fetcher = fetch) {
+    this.env = Environment.parse(environment);
+    this.fetch = fetcher;
     const url = new URL(this.env.DEPOT_JOB_URL);
     const path = /^\/orgs\/([^/]+)\/workflows\/([^/]+)$/.exec(url.pathname);
     if (!path) throw new Error("DEPOT_JOB_URL must identify the current workflow and job attempt");
@@ -56,16 +51,19 @@ export default class CiStatus {
   }
 
   /** Wait for a milestone and write its values to step outputs; fail if its producer stops. */
-  async waitFor(producer: string, milestone: string) {
+  async waitFor(producer: string, milestone: string, options: WaitTarget = {}) {
+    const signal = AbortSignal.timeout((options.timeoutSeconds || 1200) * 1000);
+    const workflowId = options.workflowId || this.workflowId;
+    const commit = options.commit || this.env.CI_HEAD_SHA;
     console.log(`[ci:status] waiting for ${producer}/${milestone}`);
     let linked = false;
     while (true) {
-      const workflow = await this.workflow();
+      const workflow = await this.workflow(options);
       const jobs = workflow.jobs.filter((job) => job.jobKey.endsWith(`:${producer}`));
       if (jobs.length !== 1)
         throw new Error(`Expected exactly one producer ${producer}; found ${jobs.length}`);
       const job = jobs[0];
-      const attempt = job.attempts[0];
+      const attempt = currentAttempt(job);
       if (attempt) {
         if (!linked && process.env.CI_TRACE_ENABLED === "1") {
           console.log(
@@ -80,13 +78,20 @@ export default class CiStatus {
           const { statuses } = Statuses.parse(
             await this.request(
               "github",
-              `/repos/${this.env.GITHUB_REPOSITORY}/commits/${this.env.CI_HEAD_SHA}/status?per_page=100&page=${page}`,
+              `/repos/${this.env.GITHUB_REPOSITORY}/commits/${commit}/status?per_page=100&page=${page}`,
               null,
             ),
           );
           const status = statuses.find((entry) => entry.context === context);
           if (status?.state === "success") {
+            const confirmed = await this.workflow(options);
+            if (
+              currentAttempt(confirmed.jobs.find((entry) => entry.jobId === job.jobId)!)
+                ?.attemptId !== attempt.attemptId
+            )
+              break;
             const description = z.string().parse(status.description);
+            parseMilestoneValues(description);
             await appendFile(this.env.GITHUB_OUTPUT, description.replace(/; ?/g, "\n") + "\n");
             console.log(`[ci:status] reached ${context}`);
             return { producer, attemptId: attempt.attemptId, description };
@@ -98,9 +103,9 @@ export default class CiStatus {
       }
       if (terminal.has(job.status))
         throw new Error(
-          `Producer ${producer} ${job.status} without ${milestone}: ${this.env.DEPOT_JOB_URL.replace(this.jobId, job.jobId).replace(this.attemptId, attempt?.attemptId || "")}`,
+          `Producer ${producer} ${job.status} without ${milestone}: ${`https://depot.dev/orgs/${this.org}/workflows/${workflowId}?job=${job.jobId}&attempt=${attempt?.attemptId || ""}`}`,
         );
-      await delay(5_000, undefined, { signal: this.signal });
+      await delay(5_000, undefined, { signal });
     }
   }
 
@@ -122,7 +127,7 @@ export default class CiStatus {
       });
       if (process.env.CI_TRACE_ENABLED === "1") {
         for (const job of jobs) {
-          const attempt = job.attempts[0];
+          const attempt = currentAttempt(job);
           // A queued job has no trace span yet. A skipped/cancelled job may never run.
           if (!attempt && !terminal.has(job.status)) continue;
           const targetId = attempt?.attemptId || job.jobId;
@@ -154,7 +159,7 @@ export default class CiStatus {
       throw new Error("Cannot publish success before every preview producer has succeeded");
     const check = await this.ownCheck();
     if (check.status !== "in_progress") throw new Error("This GitHub check is no longer running");
-    const response = await fetch(
+    const response = await this.fetch(
       `https://api.github.com/repos/${this.env.GITHUB_REPOSITORY}/check-runs/${check.id}`,
       {
         method: "PATCH",
@@ -185,28 +190,6 @@ export default class CiStatus {
     return { checkId: check.id };
   }
 
-  /** Publish reusable evidence after complete test collection and successful restoration. */
-  async setPreviewSettled(tests: "success" | "failure") {
-    const workflow = await this.workflow();
-    const self = workflow.jobs.find((job) => job.jobId === this.jobId);
-    if (!self?.jobKey.endsWith(":finish") || self.status !== "running")
-      throw new Error("Only the running preview finalizer can publish preview-settled");
-    if (workflow.jobs.some((job) => job !== self && !["finished", "failed"].includes(job.status)))
-      throw new Error("Cannot publish preview-settled with unfinished or cancelled jobs");
-    const check = await this.ownCheck();
-    await this.request(
-      "github",
-      `/repos/${this.env.GITHUB_REPOSITORY}/statuses/${this.env.CI_HEAD_SHA}`,
-      {
-        context: "preview-settled",
-        state: "success",
-        description: `tests=${tests}; deployment=restored; check=${check.id}`,
-        target_url: this.env.DEPOT_JOB_URL,
-      },
-    );
-    console.log(`[ci:status] preview-settled: tests=${tests}; deployment=restored`);
-  }
-
   private async ownCheck() {
     const checks = [];
     for (let page = 1; ; page++) {
@@ -229,43 +212,37 @@ export default class CiStatus {
         url.searchParams.get("job") === this.jobId
       );
     });
-    if (matches.length !== 1) throw new Error("Expected one GitHub check for this exact Depot job");
-    return matches[0];
+    const latest = matches.toSorted((a, b) => b.id - a.id)[0];
+    if (!latest) throw new Error("No GitHub check for this exact Depot job");
+    return latest;
   }
 
-  private async workflow() {
+  private async workflow(options: WaitTarget = {}) {
+    if (options.workflowId && options.workflowId !== this.workflowId) await this.workflow();
+    const workflowId = options.workflowId || this.workflowId;
+    const commit = options.commit || this.env.CI_HEAD_SHA;
     const data = Workflow.parse(
       await this.request("depot", "/depot.ci.v1.CIService/GetWorkflow", {
-        workflowId: this.workflowId,
+        workflowId,
       }),
     );
     if (
-      data.workflowId !== this.workflowId ||
+      data.workflowId !== workflowId ||
       data.repo !== this.env.GITHUB_REPOSITORY ||
-      data.headSha !== this.env.CI_HEAD_SHA
+      data.headSha !== commit
     )
       throw new Error("Depot workflow does not match this checkout/repository");
-    // Retrying only a test job after cleanup reuses an erased environment. This
-    // experiment accepts fresh runs only; it never follows a replacement attempt.
-    if (
-      data.executions.length !== 1 ||
-      data.executions[0].execution !== 1 ||
-      data.jobs.some(
-        (job) => job.attempts.length > 1 || job.attempts.some((attempt) => attempt.attempt !== 1),
-      )
-    )
-      throw new Error(
-        "Preview coordination requires a fresh workflow run, not a retry of an erased deployment",
-      );
-    const self = data.jobs.find((job) => job.jobId === this.jobId);
-    if (!self?.attempts.some((attempt) => attempt.attemptId === this.attemptId))
-      throw new Error("Current job attempt is absent from this workflow");
+    if (workflowId === this.workflowId) {
+      const self = data.jobs.find((job) => job.jobId === this.jobId);
+      if (!self || currentAttempt(self)?.attemptId !== this.attemptId || self.status !== "running")
+        throw new Error("Current job attempt is no longer active in this workflow");
+    }
     return data;
   }
 
   private async request(service: "depot" | "github", path: string, body: object | null) {
     const depot = service === "depot";
-    const response = await fetch(
+    const response = await this.fetch(
       `${depot ? "https://api.depot.dev" : "https://api.github.com"}${path}`,
       {
         method: body ? "POST" : "GET",
@@ -285,31 +262,6 @@ export default class CiStatus {
   }
 }
 
-const State = z.enum([
-  "queued",
-  "waiting",
-  "running",
-  "finished",
-  "failed",
-  "cancelled",
-  "skipped",
-]);
-const Workflow = z.object({
-  workflowId: z.string(),
-  repo: z.string(),
-  headSha: z.string(),
-  executions: z.array(z.object({ execution: z.number() })),
-  jobs: z.array(
-    z.object({
-      jobId: z.string(),
-      jobKey: z.string(),
-      status: State,
-      attempts: z
-        .array(z.object({ attemptId: z.string(), attempt: z.number(), status: State }))
-        .default([]),
-    }),
-  ),
-});
 const Statuses = z.object({
   statuses: z.array(
     z.object({
@@ -332,7 +284,6 @@ const Values = z.record(
       "Step output values cannot contain semicolons or newlines",
     ),
 );
-const terminal = new Set(["finished", "failed", "cancelled", "skipped"]);
 
 const CheckRuns = z.object({
   check_runs: z.array(
@@ -344,3 +295,33 @@ const CheckRuns = z.object({
     }),
   ),
 });
+
+const Environment = z.object({
+  DEPOT_CI_TELEMETRY_TOKEN: z.string().min(1),
+  GITHUB_TOKEN: z.string().min(1),
+  DEPOT_JOB_URL: z.string().url(),
+  GITHUB_REPOSITORY: z.string().min(1),
+  CI_HEAD_SHA: z.string().min(1),
+  GITHUB_OUTPUT: z.string().min(1),
+});
+
+type WaitTarget = {
+  /** Defaults to the caller's workflow. A different commit must also be specified. */
+  workflowId?: string;
+  /** Require the target workflow to have checked out this commit. */
+  commit?: string;
+  /** Bound the entire wait, including queued producers. Defaults to twenty minutes. */
+  timeoutSeconds?: number;
+};
+
+export function parseMilestoneValues(description: string) {
+  return Values.parse(
+    Object.fromEntries(
+      description.split(/; ?/).map((entry) => {
+        const separator = entry.indexOf("=");
+        if (separator < 1) throw new Error("Milestone description must contain key=value pairs");
+        return [entry.slice(0, separator), entry.slice(separator + 1)];
+      }),
+    ),
+  );
+}

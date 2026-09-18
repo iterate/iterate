@@ -76,7 +76,7 @@ export function classifyChanges(paths: string[]) {
   return changes;
 }
 
-function getActionsNeeded(changes: Partial<Record<ChangeType, string[]>>) {
+export function getActionsNeeded(changes: Partial<Record<ChangeType, string[]>>) {
   const types = Object.keys(changes);
   return {
     test: types.some((type) => type !== "Docs"),

@@ -72,6 +72,7 @@ import {
 import { previewPlaywrightShards } from "./playwright-capacity-reporter.ts";
 import { CommitHistory } from "./commit-history.ts";
 import { planPreview } from "./change-plan.ts";
+import { previewUsefulness } from "./run-policy.ts";
 import { findPreviewResult } from "./preview-result.ts";
 import { servesRecordedWorkerVersion } from "./deployed-version.ts";
 
@@ -146,7 +147,8 @@ async function resolvePreviewCommandSetup(
     githubToken,
     repositoryFullName: github.repositoryFullName,
     workflowRunUrl: makeDefaultWorkflowRunUrl(runtime.commandEnvironment) || pullRequest.url,
-    headSha: pullRequest.headSha,
+    // The lifecycle lock pins this runner; a docs/test push can still need it.
+    headSha: runtime.commandEnvironment.CI_HEAD_SHA || pullRequest.headSha,
     branch: pullRequest.branch,
     holder: pullRequestHolder(pullRequest.number),
     pullRequestNumber: pullRequest.number,
@@ -385,12 +387,24 @@ export async function ciPlan(options: DeployCommandOptions = {}) {
   });
   const history = new CommitHistory(runtime.repositoryRoot, "HEAD", "origin/main");
   if (history.head !== target.run.headSha) throw new Error("Preview head changed before planning.");
-  const decision =
-    options.allApps || !target.run.pullRequestNumber
+  const usefulness = target.run.pullRequestNumber
+    ? await previewUsefulness({
+        commit: history.head,
+        pullRequest: target.run.pullRequestNumber,
+        repository: target.run.repositoryFullName,
+        token: target.run.githubToken,
+        directory: runtime.repositoryRoot,
+      })
+    : { obsolete: false, reason: "Main preview." };
+  const decision = usefulness.obsolete
+    ? { action: "superseded" as const, changes: {}, reason: usefulness.reason }
+    : options.allApps ||
+        !target.run.pullRequestNumber ||
+        Number(process.env.PREVIEW_EXECUTION_NUMBER) > 1
       ? {
           action: "deploy" as const,
           changes: {},
-          reason: "Full preview requested (main or manual dispatch).",
+          reason: "Full preview requested (main, manual dispatch or workflow rerun).",
         }
       : await planPreview(history, {
           findPreviewResult: (commit) => findPreviewResult(commit, target.run),
@@ -406,7 +420,7 @@ export async function ciPlan(options: DeployCommandOptions = {}) {
       : decision.action === "reuse"
         ? { commit: decision.deployment.commit, slot: decision.deployment.slot }
         : { commit: history.head }),
-    tests: decision.action !== "inherit",
+    tests: decision.action === "deploy" || decision.action === "reuse",
     deploy: decision.action === "deploy",
   };
   if (process.env.GITHUB_OUTPUT) {
@@ -448,6 +462,17 @@ export async function ciPrepare(
     requireCleanCheckout: true,
   });
   const { run } = target;
+  if (run.pullRequestNumber) {
+    const usefulness = await previewUsefulness({
+      commit: run.headSha,
+      pullRequest: run.pullRequestNumber,
+      repository: run.repositoryFullName,
+      token: run.githubToken,
+      directory: runtime.repositoryRoot,
+    });
+    if (usefulness.obsolete)
+      throw new Error(`Preview preparation is obsolete: ${usefulness.reason}`);
+  }
   const checkedOutSha = execFileSync("git", ["rev-parse", "HEAD"], {
     cwd: runtime.repositoryRoot,
     encoding: "utf8",
@@ -493,7 +518,7 @@ export async function ciPrepare(
     const plan = PreviewCiPlan.parse({
       headSha: run.headSha,
       runId: process.env.GITHUB_RUN_ID,
-      runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+      runAttempt: process.env.PREVIEW_EXECUTION_ID || process.env.GITHUB_RUN_ATTEMPT,
       slot: slot.slug,
       holder: run.holder,
       branch: run.branch,
@@ -896,7 +921,10 @@ async function readPreviewCiPlan(target: PreviewTarget, runtime: PreviewRuntime)
   assertPreviewCiIdentity(plan, {
     headSha: run.headSha,
     runId: z.string().min(1).parse(process.env.GITHUB_RUN_ID),
-    runAttempt: z.string().min(1).parse(process.env.GITHUB_RUN_ATTEMPT),
+    runAttempt: z
+      .string()
+      .min(1)
+      .parse(process.env.PREVIEW_EXECUTION_ID || process.env.GITHUB_RUN_ATTEMPT),
     slot: plan.slot,
   });
   if (plan.holder !== run.holder || plan.branch !== run.branch)
@@ -1910,7 +1938,7 @@ export async function erase(options: EraseOptions = {}) {
         ...run,
         pullRequestNumber: run.pullRequestNumber,
       });
-      if (latest.headSha !== options.ranHeadSha)
+      if (!runtime.commandEnvironment.PREVIEW_EXECUTION_ID && latest.headSha !== options.ranHeadSha)
         throw new Error("PR head changed during restoration; the next run will reset its slot.");
     }
     const entries = await Promise.all(

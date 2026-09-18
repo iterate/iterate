@@ -408,13 +408,13 @@ describe("Depot validation capacity", () => {
     );
 
     expect(finalizer, `${file} must normalize and send telemetry`).toMatchObject({
-      if: "always()",
+      if: expect.stringContaining("always()"),
     });
     expect(finalizer?.run, `${file} must not send cancelled runs as test failures`).toContain(
       "cancelled() && '--cancelled'",
     );
     expect(upload, `${file} must retain raw and normalized telemetry`).toMatchObject({
-      if: "always()",
+      if: expect.stringContaining("always()"),
       with: expect.objectContaining({
         path: expect.stringContaining("test-results"),
         "if-no-files-found": "error",
