@@ -5,8 +5,10 @@ size: medium
 
 # Experiment: a new OS Worker name for each preview run
 
-Status: specified; implementation and live measurements remain. This is an
-experiment, not a proposal to remove the 90-second CI wait without evidence.
+Status: harness implemented and live runs are in progress. Initial measurements
+reproduce stale routing and resets during retirement, even after exact-version
+readiness. Settling-time comparisons and final results remain. Product defaults
+are unchanged.
 
 ## Ask and assumptions
 
@@ -44,9 +46,11 @@ unchanged unless a later explicit adoption task changes them.
 
 ## Work
 
-- [ ] Build a manual Vitest experiment with an explicit opt-in, bounded operations,
+- [x] Build a manual Vitest experiment with an explicit opt-in, bounded operations,
   stable-host route changes, exact-version assertions and disposable cleanup.
-- [ ] Acquire an isolated preview slot and record its original route state.
+  *`experiments/preview-worker-per-run/worker-per-run.e2e.test.ts`; three scenarios.*
+- [x] Acquire an isolated preview slot and record its original route state.
+  *Semaphore leases, explicit preview credentials, and route snapshots in local evidence.*
 - [ ] Measure unique Worker direct requests, stable-host cutovers, and handoff timing
   with multiple real changed builds. Preserve failed first calls and final DO state.
 - [ ] Verify original routing restored, experimental namespaces retired, and lease released.
@@ -62,3 +66,12 @@ unchanged unless a later explicit adoption task changes them.
 - 2026-09-18: Existing tests reproduced both explicit code-update resets and
   stale parked responses after a successful exact Worker+DO readiness check.
   This experiment changes Worker identity rather than retrying those writes.
+
+- 2026-09-18: Initial matrix: direct new hostname returned 7/24 operation 404s;
+  keep-old exhausted the original ~15-second readiness cap; park-old returned
+  two explicit resets from the previous Worker, a platform script-not-found 500,
+  and one internal error from the new Worker. All slots restored/released.
+- 2026-09-18: Extended the observation cap to 90 seconds to measure convergence,
+  returning immediately on a match. Added an explicit settling-time variable and
+  soft operation assertions so failed first writes remain red without discarding
+  subsequent rounds. No write retries. Inspecting live logs after cleanup.
