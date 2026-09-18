@@ -10,7 +10,6 @@ import {
   BreadcrumbSeparator,
 } from "@iterate-com/ui/components/breadcrumb";
 import { Button } from "@iterate-com/ui/components/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { Field, FieldLabel } from "@iterate-com/ui/components/field";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 
@@ -54,44 +53,24 @@ function NotesPage() {
     <AppShell
       app="Notes"
       projects={data.projects}
-      activeProjectId={data.project?.id || null}
+      activeProjectId={data.project.id}
       projectHref={(item) => `/projects/${item.slug}`}
       header={
-        data.project ? (
-          <Breadcrumb>
-            <BreadcrumbList>
-              <BreadcrumbItem className="hidden md:inline-flex">Notes</BreadcrumbItem>
-              <BreadcrumbSeparator className="hidden md:inline-flex" />
-              <BreadcrumbItem>
-                <BreadcrumbPage className="font-mono">{data.project.slug}</BreadcrumbPage>
-              </BreadcrumbItem>
-            </BreadcrumbList>
-          </Breadcrumb>
-        ) : null
+        <Breadcrumb>
+          <BreadcrumbList>
+            <BreadcrumbItem className="hidden md:inline-flex">Notes</BreadcrumbItem>
+            <BreadcrumbSeparator className="hidden md:inline-flex" />
+            <BreadcrumbItem>
+              <BreadcrumbPage className="font-mono">{data.project.slug}</BreadcrumbPage>
+            </BreadcrumbItem>
+          </BreadcrumbList>
+        </Breadcrumb>
       }
       account={{ email: info.principal.email || info.principal.actor }}
       locationKey={href}
     >
-      {data.project ? (
-        <Editor
-          key={data.project.id}
-          project={data.project.id}
-          initial={data.note}
-          tip={data.tip}
-        />
-      ) : (
-        <Empty>
-          <EmptyHeader>
-            <EmptyTitle>No projects yet</EmptyTitle>
-            <EmptyDescription>
-              <a href="https://dash.iterate2.com/projects" className="underline underline-offset-4">
-                Create a project
-              </a>{" "}
-              in the dash to give a note a home.
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      )}
+      {/* the loader sends a sign-in the project is missing from off to sign in again */}
+      <Editor key={data.project.id} project={data.project.id} initial={data.note} tip={data.tip} />
     </AppShell>
   );
 }
