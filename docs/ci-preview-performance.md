@@ -103,6 +103,9 @@ serially because they intentionally share one warm container.
   smoke still receives the absolute deadline so its own project creation
   respects the same clock. Reused old deployments wait zero seconds for age.
   Improving the readiness condition is separate from choosing where to wait.
+  The [rollout-delay experiment](ci-rollout-delay-experiment.md) measured 22
+  fresh deployments at 0/15/30/60/90s. Thirty seconds cut median smoke to 46.6s,
+  but unresolved retries prevented accepting a lower default.
 - **Warm OS deploys skip only proven-unchanged container work.** Wrangler
   otherwise builds and reconciles the six stock sandbox image applications
   serially even when all six report `no changes`. The orchestrator requests

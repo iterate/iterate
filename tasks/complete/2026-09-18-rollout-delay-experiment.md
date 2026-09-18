@@ -1,14 +1,18 @@
 ---
-status: in-progress
+status: complete-with-reliability-limits
 size: medium
 ---
 
 # Find the shortest defensible preview rollout delay
 
-Status: ten full 30s trials are complete. Median smoke46.6s versus111.4s in
-90s controls; all ten workflows passed, three with retries. Memory errors
-appeared in3/10 at30s versus0/2 queried90s controls. Comparing60s next before
-recommending a default. All19 completed deployments erased/restored. No PR.
+Status: experiment complete with reliability limits. Twenty-two measured
+fresh deployments are retained, including failures. Thirty seconds cut median
+smoke from 111.4s to 46.6s across ten full runs, but unresolved retries prevent
+acceptance. The final diff retains 90s and adds wait timing plus the evidence
+report. All measured deployments erased/restored; no PR. Remaining work is a
+separate diagnosis of the cross-project reset wave and oversized-journal
+memory failures before accepting a lower default.
+
 
 ## Request and assumptions
 
@@ -46,12 +50,12 @@ permission to claim reliability from a few green smoke tests.
 - [x] Commit this specification before implementation and push the branch. *Commit `fc4599939`.*
 - [x] Record a fresh 90-second control through the canonical Depot workflow. *`4s9c5w1gmf` finished; smoke 115.43s, wait 87.05s, first project age 91.20s. One workspace test retried, so this is not a retry-free control.*
 - [x] Make the rollout wait visible as its own smoke phase. *`agent-smoke.ts` records the deployment wait separately from connection and project creation.*
-- [ ] Run shorter-delay experiments; retain a per-run evidence ledger.
-- [ ] Inspect deployment/version-reset telemetry and explain observed failures.
-- [ ] Repeat the best candidate against fresh deployments and all suites.
-- [ ] Record a recommendation, tradeoffs, sample limitations and reproduction steps.
-- [ ] Run appropriate tests/checks, commit and push the final result.
-- [ ] Confirm experiment cleanup, move this task to complete and return a compare link.
+- [x] Run shorter-delay experiments; retain a per-run evidence ledger. *22 measured deployments at 0/15/30/60/90s; all preserved in `docs/ci-rollout-delay-evidence.json`.*
+- [x] Inspect deployment/version-reset telemetry; separate explained and unresolved failures. *Zero rejected after the smoke code-update reset; storage/memory correlations and unresolved retries are explicit in the report.*
+- [x] Repeat the best candidate against fresh deployments and all suites. *Ten full 30s deployments include all three noisy runs; three 60s comparisons did not establish a reliability advantage.*
+- [x] Record a recommendation, tradeoffs, sample limitations and reproduction steps. *Thirty seconds remains a lead; retain 90s until unresolved failures can be explained. No unconditional reliability claim.*
+- [x] Run appropriate tests/checks, commit and push the final result. *216 preview tests, scripts typecheck, repository lint, formatting and evidence checks passed; final findings and restored 90s are committed/pushed with the proposed PR body.*
+- [x] Confirm experiment cleanup, move this task to complete and return a compare link. *All 22 measured deployments erased/restored; temporary publisher trigger and control ref removed; final compare link is the handoff.*
 
 ## Implementation log
 
@@ -254,7 +258,7 @@ Codex task: `01a0b054-bdd8-7d52-9c01-30d9b92576c8`.
   no framework retries, unexpected wrapper errors, initial-connection
   recoveries, code-update or memory-limit resets. Smoke54.230s, wait27.551s,
   first project31.290s. Three absorbed storage references remain recorded.
-  Erase/restore succeeded. Five full30s trials now collected including the
+  Erase/restore succeeded. Five full 30s trials now collected including the
   first noisy one; second expanded trial `6whwknjr01` is running.
 
 - 2026-09-17 22:41 UTC: expanded trial2 `6whwknjr01` passed after three
@@ -271,7 +275,7 @@ Codex task: `01a0b054-bdd8-7d52-9c01-30d9b92576c8`.
   matches oversized-reset-341596f5, traceb7eb8f80e797d13012f00ce169df8f90.
   No explicit code-update reset, initial-connection or wrapper recovery.
   Smoke46.638s, wait28.009s, project31.071s; erase/restore succeeded.
-  Seven full30s trials collected (11,0,0,0,0,3,4 retries). Resume finalthree
+  Seven full 30s trials collected (11,0,0,0,0,3,4 retries). Resume finalthree
   while retaining all failures; no reliability recommendation yet.
 
 - 2026-09-17 23:07 UTC: `mbph95cv0d` passed all suites without framework
@@ -280,14 +284,14 @@ Codex task: `01a0b054-bdd8-7d52-9c01-30d9b92576c8`.
   first project age 30.890s. Streams storage-reset telemetry remains; cleanup
   succeeded. Eight full 30s trials collected; ninth `3kqx2pr9gv` is running.
 
-- 2026-09-17 23:14 UTC: ninth full30s trial `3kqx2pr9gv` passed without test
+- 2026-09-17 23:14 UTC: ninth full 30s trial `3kqx2pr9gv` passed without test
   retries, unexpected wrapper errors or code-update resets. Smoke45.125s,
   wait28.078s, project30.972s. Two memory-limit records in one trace match
   oversized-reset-58b1325c at86.601/86.656s; generic Streams storage telemetry
   remains. Cleanup succeeded. Tenth fulltrial `ds35cnqskh` is running on
   unchanged5cd027543, then assess the complete sample before finalizing.
 
-- Tenth full30s trial `ds35cnqskh` passed without framework retries, unexpected
+- Tenth full 30s trial `ds35cnqskh` passed without framework retries, unexpected
   wrapper errors, initial-connection recoveries, code-update or memory-limit
   reset records. Smoke46.128s, wait28.117s, project31.146s; cleanup succeeded.
 - Complete30s sample:10 full workflows passed,3 had18 reported retries total,
@@ -303,3 +307,48 @@ Codex task: `01a0b054-bdd8-7d52-9c01-30d9b92576c8`.
 
 - 60s candidate validation passed: all 216 preview tests, scripts typecheck,
   and changed-file lint. Publishing a fresh revision before three full trials.
+
+- Published experiment revision `7e18735d8`; session 64418 waits for exact-head
+  package publication [35287023504](https://github.com/iterate/iterate/actions/runs/35287023504),
+  then runs three fresh 60s canonical workflows. Log: `sixty-probe.log`. Keep
+  the branch fixed while this controller runs; inspect before resuming after
+  any failure or recovery. No PR.
+
+- 2026-09-17 23:46 UTC: first full60s trial `xx1qlqh727` passed after three
+  retries (child-agent orphaning, browser DO connection closed, reactivity
+  storage reset). Reactivity reference matches trace5501d7d98fda0318811e4aba64345489
+  at OS age99.010s. Four memory records across three traces include the
+  oversized-journal test at116.508s; two other victims remain unidentified.
+  No explicit code-update reset or wrapper recovery. Smoke82.374s, wait 57.193s,
+  project 61.226s; erase/restore succeeded. Controller stopped as designed.
+  Retain this noisy result and resume the other two60s comparisons.
+
+- Session30694 runs the remaining two60s probes on unchanged7e18735d8, log
+  `sixty-final-two.log`. No publication needed for the same tested revision.
+
+- 2026-09-17 23:57 UTC: second60s trial `grk8nr083z` passed all suites, no
+  framework retries, unexpected wrapper errors, initial-connection recoveries,
+  code-update or memory-limit reset records. Smoke78.145s, wait 57.693s, project
+  age62.009s. Two Streams storage references remain; cleanup succeeded.
+  Controller30694 started final60s probe `z1bmhp605p` on unchanged7e18735d8.
+
+- 2026-09-18: third 60s trial `z1bmhp605p` passed all suites without reported
+  retries, wrapper recoveries, code-update or memory-limit resets. Smoke 74.665s,
+  wait 57.915s, project 61.342s; erase/restore succeeded. All batches have exited.
+- Final decision: 30s is the strongest speed lead, but the initial WebSocket
+  failure wave is still unexplained. 60s also retained storage/memory errors.
+  Restore 90s, retaining the smoke wait phase and all tested revisions. This
+  completes the bounded experiment without pretending a lower delay is accepted.
+- Removed the temporary publisher branch trigger and restored the original 90s
+  spec exactly. Final preview suite: 216 tests passed; scripts typecheck passed.
+  Evidence checks confirm 22 distinct versions for each of six apps, 21 full
+  deployments, 20 full passes, all 22 cleanups, and matching retry/wrapper/reset
+  values from retained summaries. No credential markers found in the export.
+
+- Final repository lint passed: 0 warnings/errors across 2,252 files. Formatting
+  and diff checks passed. The temporary control ref was removed only after
+  verifying its expected SHA; its commit remains reachable in experiment history.
+- Final handoff: [compare experiment branch](https://github.com/iterate/iterate/compare/main...codex/rollout-delay-experiment),
+  [report](../../docs/ci-rollout-delay-experiment.md),
+  [sanitized evidence](../../docs/ci-rollout-delay-evidence.json).
+  No PR. Root worktree unchanged. The completion heartbeat is paused after push.

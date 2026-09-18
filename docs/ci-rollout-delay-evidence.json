@@ -1,5 +1,5 @@
 {
-  "status": "in-progress",
+  "status": "complete-with-reliability-limits",
   "excludedRuns": [
     {
       "runId": "zl16nw5xv4",
@@ -3241,6 +3241,513 @@
         "restored": true
       },
       "classification": "Tenth full30s workflow passed without framework retries, unexpected wrapper errors, initial-connection recoveries, code-update resets or observed memory-limit resets. Generic storage-reset telemetry remains, including absorbed product recoveries. Erase/restore succeeded. Completes predeclared ten-full-deployment sample including three noisy runs."
+    },
+    {
+      "runId": "xx1qlqh727",
+      "url": "https://depot.dev/orgs/0p91s0lz49/workflows/zfql1sjx19",
+      "headSha": "7e18735d8f41a5ecd2fa98209e51d347cff8f303",
+      "minimumAgeSeconds": 60,
+      "slot": "preview-11",
+      "workflowStatus": "finished",
+      "fullSuiteCoverage": true,
+      "apps": {
+        "os": {
+          "deployedAt": "2026-09-17T23:32:26.713Z",
+          "deployedWorkerName": "os-preview-11",
+          "deployedWorkerVersion": "c9625432-aa4b-4a88-b0ee-8d070ecc670a"
+        },
+        "docs": {
+          "deployedAt": "2026-09-17T23:31:42.663Z",
+          "deployedWorkerName": "docs-preview-11",
+          "deployedWorkerVersion": "9dcc2a4c-f9e9-4657-b959-e370edd03720"
+        },
+        "semaphore": {
+          "deployedAt": "2026-09-17T23:31:37.905Z",
+          "deployedWorkerName": "semaphore-preview-11",
+          "deployedWorkerVersion": "78307666-9ceb-4dc8-a93b-24aaf8073df1"
+        },
+        "auth": {
+          "deployedAt": "2026-09-17T23:31:48.877Z",
+          "deployedWorkerName": "auth-preview-11",
+          "deployedWorkerVersion": "57a99e7e-922f-41ef-8b51-332d4a305a5a"
+        },
+        "streams-example-app": {
+          "deployedAt": "2026-09-17T23:31:39.103Z",
+          "deployedWorkerName": "streams-example-app-preview-11",
+          "deployedWorkerVersion": "16ddb3d2-1769-4a49-96ce-c0b7820835d6"
+        },
+        "dummy-petshop": {
+          "deployedAt": "2026-09-17T23:31:43.951Z",
+          "deployedWorkerName": "dummy-petshop-preview-11",
+          "deployedWorkerVersion": "2b4619b9-ab52-4815-8b91-9cbd147734ff"
+        }
+      },
+      "timing": {
+        "smokeMs": 82374,
+        "rolloutWaitMs": 57193,
+        "firstProjectAgeMs": 61226,
+        "sharedReadinessMs": 84167,
+        "prepareFirstLogAt": "2026-09-17T23:30:11.547000+00:00",
+        "testsFinishedAt": "2026-09-17T23:36:17.565Z",
+        "workflowFinishedAt": "2026-09-17T23:37:35Z",
+        "prepareToTestsFinishedMs": 366018,
+        "prepareToWorkflowFinishedMs": 443453
+      },
+      "tests": {
+        "passed": 532,
+        "skipped": 9,
+        "failed": 3
+      },
+      "testRetries": 3,
+      "retriedTests": [
+        {
+          "name": "explicit child-agent delegation pipelines from an agent scope (relative path + create + message)",
+          "firstFailure": "Script execution orphaned: the incarnation running it went away before completing (eviction mid-run). It may have partially executed; it was NOT re-run."
+        },
+        {
+          "name": "web \u203a repo-ide-json-schema.spec.ts \u203a flags a package.json schema violation with a red squiggle",
+          "firstFailure": "Error: Connection closed: this Durable Object instance is no longer active. Reconnect or retry the request."
+        },
+        {
+          "name": "web \u203a reactivity.spec.ts \u203a reactivity page repaints from a stream subscription after a page action",
+          "firstFailure": "Error: stream-unavailable: Internal error in Durable Object storage caused object to be reset; reference = s41vu3uchv97a2q2egp4c3sf"
+        }
+      ],
+      "unexpectedWrapperErrors": [],
+      "knownFlakeOutcomes": [
+        {
+          "name": "explicit child-agent delegation pipelines from an agent scope (relative path + create + message)",
+          "kind": "unknown",
+          "outcome": "retried-pass",
+          "pattern": null
+        },
+        {
+          "name": "a userspace facet rebuilds on a source commit and only on a source commit",
+          "kind": "flake",
+          "outcome": "flake-fail",
+          "pattern": "SAME-BOOT STALENESS"
+        },
+        {
+          "name": "an SSE producer error reaches the reader",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "ReadableStream received over RPC disc"
+        },
+        {
+          "name": "cancelling an SSE reader cancels the interceptor producer",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "producer should observe cancellation"
+        },
+        {
+          "name": "disconnecting the interceptor session errors the reader and cancels the producer",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "producer should observe cancellation"
+        },
+        {
+          "name": "an interceptor returning a locked body rejects without losing the session",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "expected .*Response\\|locked\\|consumed\\|used.*Promise did not settle within 2000ms"
+        },
+        {
+          "name": "an interceptor returning a consumed body rejects without losing the session",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "expected .*Response\\|locked\\|consumed\\|used.*Promise did not settle within 2000ms"
+        },
+        {
+          "name": "the source-version pin tells a facet that recycled from one the commit rebuilt",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "PIN CANNOT TELL RECYCLE FROM REBUILD"
+        },
+        {
+          "name": "DESIRED: concurrent creates of one slug adopt the same project identity",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "CONCURRENT CREATE SPLITS IDENTITY"
+        },
+        {
+          "name": "a disposed test project stops waking its Durable Objects",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "woke \\d+ times after dispose"
+        },
+        {
+          "name": "flake sentinel (e2e)",
+          "kind": "flake",
+          "outcome": "pass",
+          "pattern": "monthly flake sentinel"
+        },
+        {
+          "name": "photos share a mosaic row; tall solo on a blurred backdrop",
+          "kind": "flake",
+          "outcome": "pass",
+          "pattern": "Timeout \\d+ms exceeded[\\s\\S]*waiting for getByLabel\\('phone-screenshot\\.png'\\)"
+        },
+        {
+          "name": "flags a package.json schema violation with a red squiggle",
+          "kind": "unknown",
+          "outcome": "retried-pass",
+          "pattern": null
+        },
+        {
+          "name": "review a workspace document in the seeded Docs app",
+          "kind": "flake",
+          "outcome": "pass",
+          "pattern": "locator\\.waitFor[\\s\\S]*cm-markdown-table-cell[\\s\\S]*Approved|Docs review: both persisted comment threads|locator\\.click: Timeout 1000ms exceeded"
+        },
+        {
+          "name": "reactivity page repaints from a stream subscription after a page action",
+          "kind": "unknown",
+          "outcome": "retried-pass",
+          "pattern": null
+        },
+        {
+          "name": "flake sentinel (specs)",
+          "kind": "flake",
+          "outcome": "pass",
+          "pattern": "monthly flake sentinel"
+        }
+      ],
+      "initialConnectionRecoveries": 0,
+      "telemetry": {
+        "fromMs": 1789687946713,
+        "toMs": 1789688177565,
+        "errorRecords": 495,
+        "codeUpdateResetRecords": 0,
+        "memoryLimitResetRecords": 4,
+        "memoryLimitTraceIds": [
+          "354cb0ea6b0106acb1e98a9904a9a324",
+          "ebfdcae67f791a9e29fbd4ebe9793fd7",
+          "f82a13dcc38baf78a1528cd3e8f5a006"
+        ],
+        "codeUpdateTraceIds": []
+      },
+      "cleanup": {
+        "erased": true,
+        "restored": true
+      },
+      "classification": "First full60s workflow passed after three retries: child-agent script orphaned mid-run, repo schema browser test lost a DO instance, and reactivity browser test hit storage reference s41vu3uchv97a2q2egp4c3sf. The latter matches trace5501d7d98fda0318811e4aba64345489 at OS age99010ms during project creation. Four memory-limit records across three traces: oversized-reset-d0a3efa1 at116508ms (f82a13dcc38baf78a1528cd3e8f5a006), feed alarm at119072ms (ebfdcae67f791a9e29fbd4ebe9793fd7), plus two records at152171ms (354cb0ea6b0106acb1e98a9904a9a324); last two victims unidentified. No explicit code-update reset or wrapper recovery. Extra delay did not eliminate memory/storage failures; causality of the other retries remains unproven. Cleanup succeeded."
+    },
+    {
+      "runId": "grk8nr083z",
+      "url": "https://depot.dev/orgs/0p91s0lz49/workflows/c89x30d7q5",
+      "headSha": "7e18735d8f41a5ecd2fa98209e51d347cff8f303",
+      "minimumAgeSeconds": 60,
+      "slot": "preview-11",
+      "workflowStatus": "finished",
+      "fullSuiteCoverage": true,
+      "apps": {
+        "os": {
+          "deployedAt": "2026-09-17T23:47:15.868Z",
+          "deployedWorkerName": "os-preview-11",
+          "deployedWorkerVersion": "758c2269-9283-42c4-b838-e132c125927a"
+        },
+        "docs": {
+          "deployedAt": "2026-09-17T23:46:22.887Z",
+          "deployedWorkerName": "docs-preview-11",
+          "deployedWorkerVersion": "aad6f2f4-aba1-40de-bf28-015314f1668b"
+        },
+        "semaphore": {
+          "deployedAt": "2026-09-17T23:46:23.977Z",
+          "deployedWorkerName": "semaphore-preview-11",
+          "deployedWorkerVersion": "3ec9af54-b371-4a95-b759-95c5f9cc9710"
+        },
+        "auth": {
+          "deployedAt": "2026-09-17T23:46:31.654Z",
+          "deployedWorkerName": "auth-preview-11",
+          "deployedWorkerVersion": "ac953ab9-aa8e-42b7-ac4b-1772120161d9"
+        },
+        "streams-example-app": {
+          "deployedAt": "2026-09-17T23:46:31.223Z",
+          "deployedWorkerName": "streams-example-app-preview-11",
+          "deployedWorkerVersion": "a6214d8f-6972-4c29-8da1-4fc30f4dc0d2"
+        },
+        "dummy-petshop": {
+          "deployedAt": "2026-09-17T23:46:30.453Z",
+          "deployedWorkerName": "dummy-petshop-preview-11",
+          "deployedWorkerVersion": "9db9614a-efaf-462c-8a24-36fcb4d40237"
+        }
+      },
+      "timing": {
+        "smokeMs": 78145,
+        "rolloutWaitMs": 57693,
+        "firstProjectAgeMs": 62009,
+        "sharedReadinessMs": 79349,
+        "prepareFirstLogAt": "2026-09-17T23:45:30.862000+00:00",
+        "testsFinishedAt": "2026-09-17T23:50:33.873Z",
+        "workflowFinishedAt": "2026-09-17T23:52:11Z",
+        "prepareToTestsFinishedMs": 303011,
+        "prepareToWorkflowFinishedMs": 400138
+      },
+      "tests": {
+        "passed": 532,
+        "failed": 3,
+        "skipped": 9
+      },
+      "testRetries": 0,
+      "retriedTests": [],
+      "unexpectedWrapperErrors": [],
+      "knownFlakeOutcomes": [
+        {
+          "name": "flake sentinel (specs)",
+          "kind": "flake",
+          "outcome": "pass",
+          "pattern": "monthly flake sentinel"
+        },
+        {
+          "name": "review a workspace document in the seeded Docs app",
+          "kind": "flake",
+          "outcome": "pass",
+          "pattern": "locator\\.waitFor[\\s\\S]*cm-markdown-table-cell[\\s\\S]*Approved|Docs review: both persisted comment threads|locator\\.click: Timeout 1000ms exceeded"
+        },
+        {
+          "name": "a userspace facet rebuilds on a source commit and only on a source commit",
+          "kind": "flake",
+          "outcome": "flake-fail",
+          "pattern": "SAME-BOOT STALENESS"
+        },
+        {
+          "name": "an SSE producer error reaches the reader",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "ReadableStream received over RPC disc"
+        },
+        {
+          "name": "cancelling an SSE reader cancels the interceptor producer",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "producer should observe cancellation"
+        },
+        {
+          "name": "disconnecting the interceptor session errors the reader and cancels the producer",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "producer should observe cancellation"
+        },
+        {
+          "name": "an interceptor returning a locked body rejects without losing the session",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "expected .*Response\\|locked\\|consumed\\|used.*Promise did not settle within 2000ms"
+        },
+        {
+          "name": "an interceptor returning a consumed body rejects without losing the session",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "expected .*Response\\|locked\\|consumed\\|used.*Promise did not settle within 2000ms"
+        },
+        {
+          "name": "the source-version pin tells a facet that recycled from one the commit rebuilt",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "PIN CANNOT TELL RECYCLE FROM REBUILD"
+        },
+        {
+          "name": "a disposed test project stops waking its Durable Objects",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "woke \\d+ times after dispose"
+        },
+        {
+          "name": "DESIRED: concurrent creates of one slug adopt the same project identity",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "CONCURRENT CREATE SPLITS IDENTITY"
+        },
+        {
+          "name": "flake sentinel (e2e)",
+          "kind": "flake",
+          "outcome": "flake-fail",
+          "pattern": "monthly flake sentinel"
+        },
+        {
+          "name": "photos share a mosaic row; tall solo on a blurred backdrop",
+          "kind": "flake",
+          "outcome": "pass",
+          "pattern": "Timeout \\d+ms exceeded[\\s\\S]*waiting for getByLabel\\('phone-screenshot\\.png'\\)"
+        }
+      ],
+      "initialConnectionRecoveries": 0,
+      "telemetry": {
+        "fromMs": 1789688835868,
+        "toMs": 1789689033873,
+        "errorRecords": 518,
+        "codeUpdateResetRecords": 0,
+        "memoryLimitResetRecords": 0,
+        "memoryLimitTraceIds": [],
+        "codeUpdateTraceIds": []
+      },
+      "cleanup": {
+        "erased": true,
+        "restored": true
+      },
+      "classification": "Second full60s workflow passed without framework retries, unexpected wrapper errors, initial-connection recoveries, explicit code-update resets or observed memory-limit resets. Streams storage references51t7441d6ul7fep5agc1os0t at OS age109124ms and0amo9924e1dm5kade5b16qqp at116490ms remain in absorbed recovery telemetry. Smoke78.145s; erase/restore succeeded."
+    },
+    {
+      "runId": "z1bmhp605p",
+      "url": "https://depot.dev/orgs/0p91s0lz49/workflows/krcc5r0lh8",
+      "headSha": "7e18735d8f41a5ecd2fa98209e51d347cff8f303",
+      "minimumAgeSeconds": 60,
+      "slot": "preview-11",
+      "workflowStatus": "finished",
+      "fullSuiteCoverage": true,
+      "apps": {
+        "os": {
+          "deployedAt": "2026-09-17T23:55:38.094Z",
+          "deployedWorkerName": "os-preview-11",
+          "deployedWorkerVersion": "0d7a8e19-6f79-441d-8cb4-dc597402b4e5"
+        },
+        "docs": {
+          "deployedAt": "2026-09-17T23:54:52.355Z",
+          "deployedWorkerName": "docs-preview-11",
+          "deployedWorkerVersion": "0f16daf8-cdd3-4892-b6f1-2a2bf9d47704"
+        },
+        "semaphore": {
+          "deployedAt": "2026-09-17T23:54:48.630Z",
+          "deployedWorkerName": "semaphore-preview-11",
+          "deployedWorkerVersion": "5e6054fe-a179-41db-9bc7-8c2125e443a6"
+        },
+        "auth": {
+          "deployedAt": "2026-09-17T23:54:58.700Z",
+          "deployedWorkerName": "auth-preview-11",
+          "deployedWorkerVersion": "cd7e516a-95c6-4bc7-ad80-0102dd9c6157"
+        },
+        "streams-example-app": {
+          "deployedAt": "2026-09-17T23:54:49.272Z",
+          "deployedWorkerName": "streams-example-app-preview-11",
+          "deployedWorkerVersion": "3d5b6e91-1aaf-4397-9926-8c54e253adbc"
+        },
+        "dummy-petshop": {
+          "deployedAt": "2026-09-17T23:54:55.200Z",
+          "deployedWorkerName": "dummy-petshop-preview-11",
+          "deployedWorkerVersion": "7e3dcdca-6379-4744-a4a7-1fdbcdc3f028"
+        }
+      },
+      "timing": {
+        "smokeMs": 74665,
+        "rolloutWaitMs": 57915,
+        "firstProjectAgeMs": 61342,
+        "sharedReadinessMs": 75460,
+        "prepareFirstLogAt": "2026-09-17T23:53:11.728000+00:00",
+        "testsFinishedAt": "2026-09-17T23:58:55.650Z",
+        "workflowFinishedAt": "2026-09-18T00:00:23Z",
+        "prepareToTestsFinishedMs": 343922,
+        "prepareToWorkflowFinishedMs": 431272
+      },
+      "tests": {
+        "passed": 532,
+        "failed": 3,
+        "skipped": 9
+      },
+      "testRetries": 0,
+      "retriedTests": [],
+      "unexpectedWrapperErrors": [],
+      "knownFlakeOutcomes": [
+        {
+          "name": "flake sentinel (specs)",
+          "kind": "flake",
+          "outcome": "pass",
+          "pattern": "monthly flake sentinel"
+        },
+        {
+          "name": "review a workspace document in the seeded Docs app",
+          "kind": "flake",
+          "outcome": "pass",
+          "pattern": "locator\\.waitFor[\\s\\S]*cm-markdown-table-cell[\\s\\S]*Approved|Docs review: both persisted comment threads|locator\\.click: Timeout 1000ms exceeded"
+        },
+        {
+          "name": "photos share a mosaic row; tall solo on a blurred backdrop",
+          "kind": "flake",
+          "outcome": "pass",
+          "pattern": "Timeout \\d+ms exceeded[\\s\\S]*waiting for getByLabel\\('phone-screenshot\\.png'\\)"
+        },
+        {
+          "name": "a userspace facet rebuilds on a source commit and only on a source commit",
+          "kind": "flake",
+          "outcome": "flake-fail",
+          "pattern": "SAME-BOOT STALENESS"
+        },
+        {
+          "name": "an SSE producer error reaches the reader",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "ReadableStream received over RPC disc"
+        },
+        {
+          "name": "cancelling an SSE reader cancels the interceptor producer",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "producer should observe cancellation"
+        },
+        {
+          "name": "an interceptor returning a consumed body rejects without losing the session",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "expected .*Response\\|locked\\|consumed\\|used.*Promise did not settle within 2000ms"
+        },
+        {
+          "name": "disconnecting the interceptor session errors the reader and cancels the producer",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "producer should observe cancellation"
+        },
+        {
+          "name": "an interceptor returning a locked body rejects without losing the session",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "expected .*Response\\|locked\\|consumed\\|used.*Promise did not settle within 2000ms"
+        },
+        {
+          "name": "the source-version pin tells a facet that recycled from one the commit rebuilt",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "PIN CANNOT TELL RECYCLE FROM REBUILD"
+        },
+        {
+          "name": "a disposed test project stops waking its Durable Objects",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "woke \\d+ times after dispose"
+        },
+        {
+          "name": "DESIRED: concurrent creates of one slug adopt the same project identity",
+          "kind": "failing",
+          "outcome": "pinned-fail",
+          "pattern": "CONCURRENT CREATE SPLITS IDENTITY"
+        },
+        {
+          "name": "flake sentinel (e2e)",
+          "kind": "flake",
+          "outcome": "pass",
+          "pattern": "monthly flake sentinel"
+        }
+      ],
+      "initialConnectionRecoveries": 0,
+      "telemetry": {
+        "fromMs": 1789689338094,
+        "toMs": 1789689535650,
+        "errorRecords": 411,
+        "codeUpdateResetRecords": 0,
+        "memoryLimitResetRecords": 0,
+        "memoryLimitTraceIds": [],
+        "codeUpdateTraceIds": []
+      },
+      "cleanup": {
+        "erased": true,
+        "restored": true
+      },
+      "classification": "Third full60s workflow passed without framework retries, unexpected wrapper errors, initial-connection recoveries, explicit code-update resets or observed memory-limit resets. No explicit internal-storage-reset messages matched the retained lifecycle query; other error telemetry still includes deliberate error tests and product outcomes, not an error-free proof. Smoke74.665s; erase/restore succeeded. Completes three60s comparisons (3,0,0 retries; memory records4,0,0)."
     }
-  ]
+  ],
+  "decision": {
+    "acceptedMinimumAgeSeconds": 90,
+    "candidateMinimumAgeSeconds": 30,
+    "candidateSha": "5cd0275438cc6d4d58d6e41f9ea03c3b2a5ba932",
+    "candidateFullTrials": 10,
+    "reason": "30s is the strongest speed lead, but unexplained retries prevent an unconditional reliability recommendation. Keep the original90s default pending targeted diagnosis; zero is rejected by a confirmed smoke code-update reset."
+  }
 }

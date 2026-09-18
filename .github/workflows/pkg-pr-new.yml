@@ -30,8 +30,6 @@ on:
   push:
     branches:
       - main
-      # Experiment-only: publish exact-head SDKs without opening a PR.
-      - codex/rollout-delay-experiment
   pull_request:
 jobs:
   publish:
