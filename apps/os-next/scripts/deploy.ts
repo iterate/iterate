@@ -53,9 +53,11 @@ export default async function deploy(options: { env?: string } = {}) {
       await query("ALTER TABLE projects ADD COLUMN slug text").catch((error: unknown) => {
         if (!/duplicate column/.test(String(error))) throw error;
       });
+      // (substr, not LIKE: `_` is LIKE's one-character wildcard, and the e2e fixtures' slugs begin
+      // `prj-`; a slug never holds an underscore, so `prj_` marks a minted id exactly)
       await query(
         `UPDATE projects SET slug = id WHERE slug IS NULL;
-UPDATE projects SET id = 'prj_' || lower(hex(randomblob(16))) WHERE id NOT LIKE 'prj_%';
+UPDATE projects SET id = 'prj_' || lower(hex(randomblob(16))) WHERE substr(id, 1, 4) <> 'prj_';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_slug ON projects (slug);`,
       );
     },
