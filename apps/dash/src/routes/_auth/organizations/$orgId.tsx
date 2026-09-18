@@ -81,8 +81,10 @@ function OrganizationSettings() {
     setDeleting(true);
     try {
       await api.deleteOrg(org.id);
+      // leave first: reloading this route's matches would resolve the deleted organization to
+      // not-found mid-reload; the list reloads once it is the page
+      await navigate({ to: "/organizations", replace: true });
       await router.invalidate();
-      await navigate({ to: "/organizations" });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       setDeleting(false);
