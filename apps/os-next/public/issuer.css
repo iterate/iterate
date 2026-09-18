@@ -182,11 +182,6 @@ button,
   > :is(header, form, footer) {
     padding: 0 0 1.5rem;
   }
-  /* the onboarding step's header: the mark, the title, one line under it */
-  > header > p {
-    text-align: center;
-    margin: -0.75rem 0 0;
-  }
   form {
     margin: 0;
   }

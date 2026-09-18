@@ -141,6 +141,18 @@ test("first Claude consent creates the organization and project on the consent p
     await projectField.fill(`Consent Studio ${project}`);
     expect(await projectField.inputValue()).toBe(`consent-studio-${project}`);
     await page.getByText(`Your project will be hosted at consent-studio-${project}.`).waitFor();
+    // A refused first try — "global" is the reserved namespace, refused after the organization is
+    // made — answers with that organization: the retry offers it, chosen, rather than naming a
+    // second one (the inventory at the end counts one).
+    await projectField.fill("global");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page
+      .getByRole("alert")
+      .filter({ hasText: /not a project name/ })
+      .waitFor();
+    const madeOrg = page.getByRole("combobox", { name: "Organization", exact: true });
+    expect(await madeOrg.locator("option:checked").textContent()).toBe(firstOrg);
+    expect(await orgField.isVisible()).toBe(false);
     await projectField.fill(project);
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByRole("heading", { name: "Authorize Claude Code", exact: true }).waitFor();
@@ -276,9 +288,13 @@ test("first Claude consent creates the organization and project on the consent p
     const headers = await cookieHeaders(context, origin);
     // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory assertion after the UI flow.
     using api = newHttpBatchRpcSession<IterateRpcTarget>(new Request(`${origin}/api`, { headers }));
-    const inventory = await api.authenticate({ type: "from-server-cookie" }).grants.list();
+    // one batch: an HTTP batch session ends with its first round trip
+    const session = api.authenticate({ type: "from-server-cookie" });
+    const [inventory, orgs] = await Promise.all([session.grants.list(), session.orgs()]);
     expect(inventory.items).toHaveLength(2);
     expect(inventory.items.filter((item) => item.current)).toHaveLength(1);
+    // the onboarding step's refused first try made ONE organization, not one per try
+    expect(orgs.map((org) => org.name).sort()).toEqual([firstOrg, "Second studio"]);
     expect(errors).toEqual([]);
   } finally {
     listener.closeAllConnections();

@@ -321,7 +321,17 @@ async function authorizeHandler(
       // the new project's context is the session's to hold; the teardown below lets it go
       await session.projects.create({ project: action.project, orgId });
     } catch (error) {
-      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+      // A refusal after a new organization was made (the slug taken, say) answers with the fresh
+      // view and that organization's id: the page offers it next, rather than minting another
+      // on the retry.
+      return json(
+        {
+          error: error instanceof Error ? error.message : String(error),
+          orgId,
+          view: await session.consent.describe(query),
+        },
+        400,
+      );
     }
     return json({ view: await session.consent.describe(query), orgId });
   } finally {

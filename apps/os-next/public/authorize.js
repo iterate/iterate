@@ -111,12 +111,10 @@
     render();
   }
 
-  // what is typed into a form survives a re-render (a refused create answers while the person may
-  // already be correcting a field)
-  const typed = (name) => card.querySelector(`[name="${name}"]`)?.value || "";
   /** The project field — a slug, the project's id and its hostname's label: lowercased as it is
    *  typed, anything but a-z, 0-9 and dashes becoming a dash (the directory slugs it the same way)
-   *  — with the line saying where the project will live. */
+   *  — with the line saying where the project will live. What was typed survives a re-render (a
+   *  refused create answers while the person may already be correcting a field). */
   const slugField = (base) => {
     const input = el("input", {
       type: "text",
@@ -126,7 +124,7 @@
       autocapitalize: "off",
       spellcheck: "false",
     });
-    input.value = typed("slug");
+    input.value = card.querySelector('[name="slug"]')?.value || "";
     const host = el("span", { class: "muted consent-host" });
     const show = () => {
       const slug = input.value.toLowerCase().replace(/[^a-z0-9-]/g, "-");
@@ -151,15 +149,59 @@
       .replace(/[^a-z0-9-]/g, "-")
       .replace(/-+/g, "-")
       .replace(/^-+|-+$/g, "");
-  const orgNameField = () => {
-    const input = el("input", {
+  /** Which organization a project goes to: one of the person's (a select — the one the last create
+   *  made or used comes first, so a refused create's retry lands where the first try went) or a new
+   *  one named right there, its name field opening for "New organization…" alone. With no
+   *  organization yet, the name field alone — filled with the suggestion when `suggest`. `value()`
+   *  is what /authorize's create-project takes; `chosenName()` is what a slug may follow. */
+  const orgChoice = (view, { suggest }) => {
+    const previous = {
+      select: card.querySelector('[name="org"]'),
+      name: card.querySelector('[name="new-org"]'),
+    };
+    const previousName =
+      previous.select && previous.select.value
+        ? previous.select.selectedOptions[0].textContent
+        : (previous.name?.value ?? null);
+    const name = el("input", {
       type: "text",
       name: "new-org",
       autocomplete: "organization",
       placeholder: "Acme",
     });
-    input.value = typed("new-org");
-    return { input, field: el("label", {}, "Organization name ", input) };
+    name.value = previous.name
+      ? previous.name.value
+      : suggest
+        ? view.suggestedOrganizationName
+        : "";
+    const nameField = el("label", {}, "Organization name ", name);
+    if (!view.orgs.length)
+      return {
+        name,
+        previousName,
+        fields: [nameField],
+        value: () => ({ newOrg: name.value }),
+        chosenName: () => name.value,
+      };
+    const select = el("select", { name: "org" });
+    for (const candidate of view.orgs)
+      select.append(el("option", { value: candidate.id, text: candidate.name }));
+    select.append(el("option", { value: "", text: "New organization…" }));
+    select.value = previous.select ? previous.select.value : state.lastOrgId || view.orgs[0].id;
+    const reveal = () => (nameField.hidden = select.value !== "");
+    select.addEventListener("change", reveal);
+    reveal();
+    return {
+      name,
+      select,
+      previousName,
+      fields: [el("label", {}, "Organization ", select), nameField],
+      value: () => (select.value ? { org: select.value } : { newOrg: name.value }),
+      chosenName: () =>
+        select.value
+          ? view.orgs.find((candidate) => candidate.id === select.value)?.name || ""
+          : name.value,
+    };
   };
   const errorLine = () =>
     state.error ? el("p", { role: "alert", "data-type": "error", text: state.error }) : null;
@@ -188,35 +230,34 @@
     );
   };
 
-  /** The onboarding step — a person with no project yet: their organization's name and their first
-   *  project's slug, one form; Continue posts both and the consent page follows. Both fields start
-   *  filled the way apps/auth fills them: the name from the person's display name or email, the
-   *  slug from the name — following it until the person edits the slug (then it is theirs, even
-   *  emptied), and a refused create keeps what was typed. */
+  /** The onboarding step — a person with no project yet: their organization (its name; or, once
+   *  they have one — a refused first try made it — the choice of it) and their first project's
+   *  slug, one form; Continue posts both and the consent page follows. Both start filled the way
+   *  apps/auth fills them: the name from the person's display name or email, the slug from the
+   *  name — following it until the person edits the slug (then it is theirs, even emptied), and a
+   *  refused create keeps what was typed. */
   function renderOnboarding(view) {
     document.title = "Create a project — iterate";
-    const before = {
-      org: card.querySelector('[name="new-org"]'),
-      slug: card.querySelector('[name="slug"]'),
-    };
-    const org = orgNameField();
-    if (!before.org) org.input.value = view.suggestedOrganizationName;
+    const shownSlug = card.querySelector('[name="slug"]');
+    const org = orgChoice(view, { suggest: true });
     const project = slugField(view.projectHostnameBase);
-    let follows = !before.slug || before.slug.value === slugOf(before.org?.value || "");
-    if (follows) project.set(slugOf(org.input.value));
-    org.input.addEventListener("input", () => {
-      if (follows) project.set(slugOf(org.input.value));
-    });
+    let follows = !shownSlug || shownSlug.value === slugOf(org.previousName || "");
+    const follow = () => {
+      if (follows) project.set(slugOf(org.chosenName()));
+    };
+    follow();
+    org.name.addEventListener("input", follow);
+    org.select?.addEventListener("change", follow);
     project.input.addEventListener("input", () => {
       follows = false;
     });
     const form = el("form", { id: "onboarding-form" });
     form.addEventListener("submit", (event) => {
       event.preventDefault();
-      act({ action: "create-project", project: project.input.value, newOrg: org.input.value });
+      act({ action: "create-project", project: project.input.value, ...org.value() });
     });
     form.append(
-      org.field,
+      ...org.fields,
       project.field,
       el(
         "footer",
@@ -236,7 +277,6 @@
         {},
         el("img", { class: "issuer-mark", src: "/iterate-logo.svg", alt: "" }),
         el("h1", { text: "Create a project" }),
-        el("p", { class: "muted", text: `${view.clientName} works in a project of yours.` }),
       ),
       signedInAs(view.email, view.picture),
       form,
@@ -372,36 +412,16 @@
     let create = null;
     if (creating) {
       const project = slugField(view.projectHostnameBase);
-      const org = el("select", { name: "org" });
-      for (const candidate of orgs)
-        org.append(el("option", { value: candidate.id, text: candidate.name }));
-      org.append(el("option", { value: "", text: "New organization…" }));
-      const before = card.querySelector('[name="org"]');
-      org.value = before ? before.value : state.lastOrgId || orgs[0].id;
-      const newOrg = orgNameField();
-      // the new organization's name field opens for "New organization…" alone
-      const reveal = () => (newOrg.field.hidden = org.value !== "");
-      org.addEventListener("change", reveal);
-      reveal();
+      const org = orgChoice(view, { suggest: false });
       const createProject = el("button", { type: "button", text: "Create project" });
       createProject.addEventListener("click", () =>
-        act({
-          action: "create-project",
-          project: project.input.value,
-          ...(org.value ? { org: org.value } : { newOrg: newOrg.input.value }),
-        }),
+        act({ action: "create-project", project: project.input.value, ...org.value() }),
       );
       create = el(
         "section",
         { class: "consent-create", "aria-label": "New project" },
         el("h2", { text: "New project" }),
-        el(
-          "div",
-          { class: "consent-fields" },
-          project.field,
-          el("label", {}, "Organization ", org),
-          newOrg.field,
-        ),
+        el("div", { class: "consent-fields" }, project.field, ...org.fields),
         createProject,
       );
     }
