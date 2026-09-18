@@ -1,6 +1,6 @@
 # EXPERIMENT: replace a preview, then retire its old slot
 
-This is a manual experiment, not a production CI change. It uses real Semaphore
+Read [the measured results](RESULTS.md) first. This is a manual experiment, not a production CI change. It uses real Semaphore
 leases, the six existing app deployment scripts, and a single-attempt version of
 CI's project/agent/reply smoke. The old preview stays published until the new
 fleet and smoke succeed. Cleanup runs in a separate process and owns the old
@@ -30,7 +30,7 @@ RUN_LEASE_CYCLING=1 doppler run --project _shared --config prd -- \
 failed retirement. `deploy <id> <slot> <wait-ms>` deploys an already held slot;
 `smoke <id> <slot>` is an explicitly new measurement, never an automatic retry.
 `status <id>` reads the local published preview/cleanup queue.
-`finish <id>` removes the current pointer and starts its retirement.
+`finish <id>` removes the current pointer and starts its retirement. Always finish a live experiment, then check `status` until the cleanup queue is empty and verify the recorded releases. Resume a failed retirement with `cleanup`; do not abandon held slots or treat an expired lease as permission to mutate.
 
 The registry is local to `evidence.ignoreme/<id>/`, including lease tokens and
 recovery checkpoints; do not commit it. A cleanup launch is independent of the
