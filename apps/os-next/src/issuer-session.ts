@@ -47,13 +47,7 @@ export async function startIssuerSession(
       deadline: Date.now() + 30 * 24 * 3600_000,
     } satisfies GrantProps,
   });
-  const callback = new URL(approved.redirectTo).searchParams;
-  const result = await flow.session.complete({
-    state: callback.get("state") || "",
-    issuer: callback.get("iss") || "",
-    code: callback.get("code") || "",
-    error: callback.get("error") || "",
-  });
+  const result = await flow.session.complete(new URL(approved.redirectTo).search);
   if (result.error) throw new Error(result.error);
   return { setCookie: flow.setCookie, location: result.next! };
 }

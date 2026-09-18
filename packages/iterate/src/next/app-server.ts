@@ -201,12 +201,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
   }
   if (url.pathname === "/.auth/callback") {
     if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
-    const result = await session?.complete({
-      state: url.searchParams.get("state") || "",
-      issuer: url.searchParams.get("iss") || "",
-      code: url.searchParams.get("code") || "",
-      error: url.searchParams.get("error") || "",
-    });
+    const result = await session?.complete(url.search);
     if (!result || result.error)
       return new Response(result?.error || "Sign-in does not match this browser.", {
         status: 400,
