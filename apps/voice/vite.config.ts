@@ -4,9 +4,10 @@ import { cloudflare } from "@cloudflare/vite-plugin";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
 import viteReact from "@vitejs/plugin-react";
-import { writeWranglerConfig } from "./scripts/generate-wrangler-config.ts";
+import { writeWranglerConfig } from "../../scripts/lib/start-app.ts";
+import { voice } from "./scripts/app.ts";
 
-writeWranglerConfig();
+writeWranglerConfig(voice);
 export default defineConfig({
   plugins: [
     cloudflare({ viteEnvironment: { name: "ssr" } }),

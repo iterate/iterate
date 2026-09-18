@@ -22,7 +22,10 @@ small set of rhyming imperative scripts in `apps/<app>/scripts/`:
 
 Small apps skip pieces they don't need (tunnels has a hand-written,
 committed wrangler.jsonc and no generator; streams-example-app has no
-secrets). Generated configs are gitignored — envs.ts is what you review.
+secrets). The TanStack Start apps (dash, agents, notes, voice) are identical
+here, so they share one implementation, `scripts/lib/start-app.ts`; each
+carries only `scripts/app.ts`, which names the app and its envs.ts map.
+Generated configs are gitignored — envs.ts is what you review.
 
 ## Environment selection is explicit
 
