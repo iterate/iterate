@@ -8,6 +8,63 @@ import { setTimeout as delay } from "node:timers/promises";
 import { expect, test } from "vitest";
 
 test(
+  "fresh objects complete work immediately after retiring and recreating their class",
+  {
+    skip: process.env.RUN_DO_ROLLOUT !== "1",
+  },
+  async () => {
+    await using probe = await Probe.create("retire-recreate");
+    await probe.bootstrap();
+
+    for (let round = 1; round <= probe.evidence.rounds; round++) {
+      const previousNamespace = await probe.readNamespaceId();
+      expect(previousNamespace).toEqual(expect.any(String));
+      // Erase the namespace, then recreate the class under a new namespace ID. Old Workers
+      // may still answer during rollout, so failures here do not prove old DOs survived erasure.
+      await probe.deploy(`retired-${round}`, "retired");
+      expect(await probe.readNamespaceId()).toBeNull();
+      const deployment = await probe.deploy(`retire-recreate-${round}`, "live");
+      // First-touch unique names immediately after Wrangler exits. Never retry a write.
+      const operations = await Promise.all(
+        Array.from({ length: 12 }, async (_, i) => {
+          const id = `${String.fromCharCode("a".charCodeAt(0) + i).repeat(3)}-${randomUUID()}`;
+          const response = await probe.request(`/work/${id}`, { durationMs: 15_000 }, deployment);
+          return { id, response, stateObservations: [] as any[] };
+        }),
+      );
+      const trial = {
+        round,
+        deployment: deployment.build,
+        previousNamespace,
+        namespace: await probe.readNamespaceId(),
+        operations,
+      };
+      probe.evidence.trials.push(trial);
+      for (const operation of operations) {
+        operation.stateObservations = await probe.observeState(
+          `/state/${operation.id}`,
+          deployment,
+          (r) => r.status === 200 && r.data.object?.build === deployment.build,
+        );
+      }
+      expect(trial.namespace).toEqual(expect.any(String));
+      expect(trial.namespace).not.toBe(previousNamespace);
+      for (const operation of operations) {
+        expect({
+          id: operation.id,
+          response: operation.response,
+          state: operation.stateObservations.at(-1),
+        }).toMatchObject({
+          id: operation.id,
+          response: { status: 200, data: { record: { status: "completed" } } },
+          state: { status: 200, data: { record: { status: "completed" } } },
+        });
+      }
+    }
+  },
+);
+
+test(
   "fresh objects complete work immediately after an ordinary redeploy",
   {
     skip: process.env.RUN_DO_ROLLOUT !== "1",
@@ -53,63 +110,6 @@ test(
       expect(trial).toMatchObject({ namespace: previousNamespace });
       // Both the first call and durable record should say 'completed'. A later healthy
       // read must not turn a failed first call green; recorded runs hit code-update resets here.
-      for (const operation of operations) {
-        expect({
-          id: operation.id,
-          response: operation.response,
-          state: operation.stateObservations.at(-1),
-        }).toMatchObject({
-          id: operation.id,
-          response: { status: 200, data: { record: { status: "completed" } } },
-          state: { status: 200, data: { record: { status: "completed" } } },
-        });
-      }
-    }
-  },
-);
-
-test(
-  "fresh objects complete work immediately after retiring and recreating their class",
-  {
-    skip: process.env.RUN_DO_ROLLOUT !== "1",
-  },
-  async () => {
-    await using probe = await Probe.create("retire-recreate");
-    await probe.bootstrap();
-
-    for (let round = 1; round <= probe.evidence.rounds; round++) {
-      const previousNamespace = await probe.readNamespaceId();
-      expect(previousNamespace).toEqual(expect.any(String));
-      // Erase the namespace, then recreate the class under a new namespace ID. Old Workers
-      // may still answer during rollout, so failures here do not prove old DOs survived erasure.
-      await probe.deploy(`retired-${round}`, "retired");
-      expect(await probe.readNamespaceId()).toBeNull();
-      const deployment = await probe.deploy(`retire-recreate-${round}`, "live");
-      // First-touch unique names immediately after Wrangler exits. Never retry a write.
-      const operations = await Promise.all(
-        Array.from({ length: 12 }, async (_, i) => {
-          const id = `${String.fromCharCode("a".charCodeAt(0) + i).repeat(3)}-${randomUUID()}`;
-          const response = await probe.request(`/work/${id}`, { durationMs: 15_000 }, deployment);
-          return { id, response, stateObservations: [] as any[] };
-        }),
-      );
-      const trial = {
-        round,
-        deployment: deployment.build,
-        previousNamespace,
-        namespace: await probe.readNamespaceId(),
-        operations,
-      };
-      probe.evidence.trials.push(trial);
-      for (const operation of operations) {
-        operation.stateObservations = await probe.observeState(
-          `/state/${operation.id}`,
-          deployment,
-          (r) => r.status === 200 && r.data.object?.build === deployment.build,
-        );
-      }
-      expect(trial.namespace).toEqual(expect.any(String));
-      expect(trial.namespace).not.toBe(previousNamespace);
       for (const operation of operations) {
         expect({
           id: operation.id,
