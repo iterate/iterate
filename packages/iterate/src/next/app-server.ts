@@ -1,4 +1,7 @@
+// eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded read for the Sign-in-again page, no live capabilities.
+import { newHttpBatchRpcSession } from "capnweb";
 import type { BrowserHost, BrowserSession } from "./app-session.ts";
+import type { IterateApi } from "./api.ts";
 import { cookieValueOf } from "./principal.ts";
 import { isSameOriginBrowserRequest, sameOriginPath } from "./lib.ts";
 import { OAuthScopes } from "./oauth-scopes.ts";
@@ -29,21 +32,76 @@ export async function startAppSession(
   return { session, location, setCookie };
 }
 
+/** What the app's own sign-in currently is, for the Sign-in-again page to show: who it is signed in
+ *  as, and the projects it reaches — its grant, the thing that turned out not to include the project
+ *  the page named. One bounded HTTP-batch read of the platform (the logout path's shape), best
+ *  effort: a slow or failed read simply leaves those lines off, the page still works. */
+async function grantSummary(resource: string, bearer: string) {
+  // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded read, no live capabilities.
+  using api = newHttpBatchRpcSession<IterateApi>(
+    new Request(resource, {
+      headers: { Authorization: `Bearer ${bearer}` },
+      signal: AbortSignal.timeout(5_000),
+    }),
+  );
+  using session = api.authenticate({ type: "from-server-cookie" });
+  const info = session.info();
+  const projects = session.projects.list();
+  const [{ principal }, list] = await Promise.all([info, projects]);
+  return { email: principal.email, projects: list.map((project) => project.slug) };
+}
+
+/** What each scope is, to the person, in one or two words — the Sign-in-again page's permissions
+ *  line. The consent page (public/authorize.js) spells the same three at sentence length. */
+const scopeLabels: Record<string, string> = {
+  iterate: "your projects",
+  account: "your account",
+  "organizations:write": "your organizations",
+};
+
 /** The sign-in this browser holds does not cover what the page needs: a project the page named
  *  (`?project=`, the page's own word — its `/projects/<ref>` was absent from the session's list; the
  *  page is not verified, it only offers a sign-out the person must click) or a permission the app
  *  asks for. One page for both, on the app's origin because ending its session is a same-origin
- *  POST, dressed by the issuer's stylesheet: it is the next page of the same sign-in. The button
+ *  POST, dressed by the issuer's stylesheet: it is the next page of the same sign-in. It shows who
+ *  the app is signed in as and the projects that sign-in reaches (its grant), then one button that
  *  ends this app's session and comes straight back to `/.auth/login`, which starts a fresh one —
  *  the issuer still knows the person, so they land on consent: the project to tick, or Switch
  *  account — and returns to the page that sent them. */
-function signInAgainPage(url: URL, issuer: string, project: string | null) {
+async function signInAgainPage(input: {
+  url: URL;
+  issuer: string;
+  resource: string;
+  bearer: string;
+  scopes: string[];
+  project: string | null;
+}) {
+  const { url, issuer, resource, bearer, scopes, project } = input;
   const text = (value: string) => value.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
   const lacks = project
     ? `does not include a project called <code>${text(project)}</code>`
     : "does not include a permission this app asks for";
+  const grant = await grantSummary(resource, bearer).catch(() => null);
+  const reaches = grant
+    ? grant.projects.length
+      ? `It reaches ${grant.projects
+          .slice(0, 12)
+          .map((slug) => `<code>${text(slug)}</code>`)
+          .join(
+            ", ",
+          )}${grant.projects.length > 12 ? ` and ${grant.projects.length - 12} more` : ""}.`
+      : "It reaches no projects yet."
+    : "";
+  const permissions = `Permissions: ${scopes.map((scope) => scopeLabels[scope] || scope).join(", ")}.`;
+  const signedIn = [
+    grant?.email ? `Signed in as <strong>${text(grant.email)}</strong>.` : "",
+    reaches,
+    permissions,
+  ]
+    .filter(Boolean)
+    .join(" ");
   return new Response(
-    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in again</title><link rel="stylesheet" href="${issuer}/issuer.css"><link rel="icon" href="${issuer}/iterate-logo.svg" type="image/svg+xml"></head><body><main class="issuer-card"><img class="issuer-mark" src="${issuer}/iterate-logo.svg" alt="" width="56" height="56"><h1>Sign in again</h1><p>Your sign-in to <strong>${text(url.host)}</strong> ${lacks}.</p><p class="muted">Signing in again brings you back here. At consent, tick the project — or switch account.</p><form method="post" action="/.auth/logout?next=${encodeURIComponent(url.pathname + url.search)}"><button class="primary" type="submit">Sign in again</button></form></main></body></html>`,
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in again</title><link rel="stylesheet" href="${issuer}/issuer.css"><link rel="icon" href="${issuer}/iterate-logo.svg" type="image/svg+xml"></head><body><main class="issuer-card"><img class="issuer-mark" src="${issuer}/iterate-logo.svg" alt="" width="56" height="56"><h1>Sign in again</h1><p>Your sign-in to <strong>${text(url.host)}</strong> ${lacks}.</p><p class="muted">${signedIn}</p><p class="muted">Signing in again brings you back here. At consent, tick the project — or switch account.</p><form method="post" action="/.auth/logout?next=${encodeURIComponent(url.pathname + url.search)}"><button class="primary" type="submit">Sign in again</button></form></main></body></html>`,
     {
       headers: {
         "Content-Type": "text/html; charset=utf-8",
@@ -114,7 +172,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
             headers: { Location: next, "Cache-Control": "no-store" },
           });
         // Only a deliberate POST can replace a valid grant. GET never signs out.
-        return signInAgainPage(url, issuer, project);
+        return signInAgainPage({ url, issuer, resource, bearer, scopes: heldScopes, project });
       }
       await session!.discard();
     }
