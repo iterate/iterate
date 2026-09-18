@@ -6,9 +6,9 @@ base: codex/preview-change-types-v3
 
 # Keep useful preview runs, stop obsolete work, and wait across commits
 
-Stacked follow-up to draft PR #2712. Implementation is ready for its first live run; focused coordination checks pass.
-Live cancellation, pending inheritance and retry recovery are still to validate. The existing change planner and lease renewal remain
-on the parent branch.
+Stacked follow-up to draft PR #2712. Core implementation and local checks pass;
+live workflow exclusion and cross-commit waiting are proved. Retry recovery and
+obsolete-test cancellation are the remaining acceptance checks.
 
 ## Request
 
@@ -97,3 +97,12 @@ on the parent branch.
 - Second pending-docs acceptance: push while `x8lrhr8zfx` (`8f058d6da`)
   prepares. The separate coordinator was automatically triggered by Depot on
   this branch; no manual dispatch was necessary. Expect only one live preparation.
+
+- `x8lrhr8zfx` (`8f058d6da`) passed all preview tests and restoration while
+  docs successor `r9jq256fkb` queued. At 13:53:03Z GitHub was green but the new
+  evidence reader returned no result; at 13:54:13Z it returned settled success.
+  The coordinator correctly waited across commits. Depot's expanded reusable
+  check names exposed a reader mismatch; a red/green regression fixes that.
+- Full local `pnpm test` passed, including 486 scripts tests. Subsequent focused
+  retry/race tests and scripts typecheck pass. CI lint found one import-order
+  change, now corrected. Pending acceptance uses the corrected check-name reader.

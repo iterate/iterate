@@ -6,8 +6,8 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import CiStatus from "./status.ts";
 import PreviewCoordination from "../preview/coordination.ts";
+import CiStatus from "./status.ts";
 
 test("a retried consumer can read a successful retained prerequisite", async () => {
   await using ci = await coordination();
@@ -66,6 +66,21 @@ test("a stopped producer without its milestone fails immediately", async () => {
   await using ci = await coordination();
   ci.workflow.jobs[0].status = "failed";
   await expect(new CiStatus().waitFor("prepare", "ready")).rejects.toThrow("failed without ready");
+});
+
+test("a wait follows a producer retried while its old signal was being read", async () => {
+  await using ci = await coordination();
+  ci.workflow.jobs[0].status = "failed";
+  ci.statuses.push({ context: "ready producer-1", state: "success", description: "slot=old" });
+  ci.onStatusRead = () => {
+    ci.workflow.jobs[0].status = "finished";
+    ci.workflow.jobs[0].attempts.push({ attemptId: "producer-2", attempt: 2, status: "finished" });
+    ci.statuses.push({ context: "ready producer-2", state: "success", description: "slot=new" });
+  };
+  await expect(new CiStatus().waitFor("prepare", "ready")).resolves.toMatchObject({
+    attemptId: "producer-2",
+  });
+  expect(await readFile(ci.env.GITHUB_OUTPUT, "utf8")).toBe("slot=new\n");
 });
 
 test("a cross-workflow wait rejects the wrong commit", async () => {
@@ -175,7 +190,7 @@ async function coordination() {
   };
   const statuses: any[] = [];
   const requests: any[] = [];
-  const state = { external: null as any };
+  const state = { external: null as any, onStatusRead: null as (() => void) | null };
   const server = createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
@@ -189,6 +204,10 @@ async function coordination() {
         createdAt: "2026-09-18T01:00:00Z",
       });
       workflow.workflowStatus = "queued";
+    }
+    if (request.url?.includes("/status?")) {
+      state.onStatusRead?.();
+      state.onStatusRead = null;
     }
     response.setHeader("content-type", "application/json");
     response.end(
@@ -230,6 +249,9 @@ async function coordination() {
       state.external = value;
     },
     env,
+    set onStatusRead(callback: () => void) {
+      state.onStatusRead = callback;
+    },
     async [Symbol.asyncDispose]() {
       for (const key of Object.keys(env)) {
         if (previous[key] === undefined) delete process.env[key];

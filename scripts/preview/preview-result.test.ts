@@ -135,6 +135,16 @@ test("generic attempt-scoped settlement certifies its own finalizer", () => {
   ).toBeNull();
 });
 
+test("reusable-workflow check-name prefixes do not hide settled evidence", () => {
+  const run = checks("run", 1, "success").map((check) => ({
+    ...check,
+    name: check.name.replace("Preview / ", "Preview / Preview / deploy + e2e / "),
+  }));
+  expect(previewResultFromChecks("candidate", run, [settled("run", 9, "success")])).toMatchObject({
+    conclusion: "success",
+  });
+});
+
 function checks(workflow: string, firstId: number, outcome: string) {
   return [
     "Deploy and readiness",

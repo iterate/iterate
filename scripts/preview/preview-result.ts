@@ -45,11 +45,27 @@ export async function findPreviewResult(
   const workflow = await depot.workflow(workflowId);
   if (workflow.repo !== github.repositoryFullName || workflow.headSha !== commit) return null;
   const producers = workflow.jobs.filter((job) =>
-    /:(prepare|apps|playwright:matrix-[0-5]|finish)$/.test(job.jobKey),
+    /:(plan|prepare|apps|playwright:matrix-[0-5]|finish)$/.test(job.jobKey),
   );
   if (
-    producers.length !== 9 ||
+    producers.length !== 10 ||
     producers.some((job) => !["finished", "failed"].includes(job.status))
+  )
+    return null;
+  const settled = statuses.find(
+    (status) => status.target_url === result.url && /^preview-settled(?: |$)/.test(status.context),
+  );
+  if (!settled) return null;
+  const settledAt = Date.parse(settled.created_at);
+  // GitHub may still show the old green check while a partial retry has failed
+  // its guard. Every producer must still be the work that this signal settled.
+  if (
+    producers.some((job) => {
+      if (result.conclusion === "success" && job.status !== "finished") return true;
+      if (job.jobId === source.searchParams.get("job")) return false;
+      const attempt = currentAttempt(job);
+      return !attempt?.finishedAt || Date.parse(attempt.finishedAt) > settledAt;
+    })
   )
     return null;
   const finalizer = workflow.jobs.find((job) => job.jobId === source.searchParams.get("job"));
@@ -93,7 +109,8 @@ export function previewResultFromChecks(
   if (!latest) return null;
   const jobs = new Map<string, z.infer<typeof Check>>();
   for (const check of latest.sort((a, b) => b.id - a.id)) {
-    const name = check.name.replace(/^Preview(?: Main)? \/ /, "");
+    // Depot sometimes includes the reusable caller's display name as well.
+    const name = check.name.split(" / ").at(-1)!;
     if (!jobs.has(name)) jobs.set(name, check);
   }
   const finish = jobs.get("Collect results and clean up");

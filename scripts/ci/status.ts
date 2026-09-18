@@ -54,7 +54,7 @@ export default class CiStatus {
     const commit = options.commit || this.env.CI_HEAD_SHA;
     console.log(`[ci:status] waiting for ${producer}/${milestone}`);
     let linked = false;
-    while (true) {
+    wait: while (true) {
       const workflow = await this.workflow(options);
       const jobs = workflow.jobs.filter((job) => job.jobKey.endsWith(`:${producer}`));
       if (jobs.length !== 1)
@@ -86,7 +86,7 @@ export default class CiStatus {
               currentAttempt(confirmed.jobs.find((entry) => entry.jobId === job.jobId)!)
                 ?.attemptId !== attempt.attemptId
             )
-              break;
+              continue wait;
             const description = z.string().parse(status.description);
             parseMilestoneValues(description);
             await appendFile(this.env.GITHUB_OUTPUT, description.replace(/; ?/g, "\n") + "\n");
@@ -98,10 +98,20 @@ export default class CiStatus {
           if (status || statuses.length < 100) break;
         }
       }
-      if (terminal.has(job.status))
+      if (terminal.has(job.status)) {
+        // A retry can start between the liveness read and the status read.
+        const confirmed = await this.workflow(options);
+        const current = confirmed.jobs.find((entry) => entry.jobId === job.jobId);
+        if (!current) throw new Error(`Producer ${producer} disappeared`);
+        if (
+          current.status !== job.status ||
+          currentAttempt(current)?.attemptId !== attempt?.attemptId
+        )
+          continue;
         throw new Error(
           `Producer ${producer} ${job.status} without ${milestone}: ${`https://depot.dev/orgs/${this.org}/workflows/${workflowId}?job=${job.jobId}&attempt=${attempt?.attemptId || ""}`}`,
         );
+      }
       await delay(5_000, undefined, { signal });
     }
   }
