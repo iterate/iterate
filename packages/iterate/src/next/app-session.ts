@@ -242,7 +242,12 @@ export class BrowserSession extends DurableObject {
       clientId,
       next,
       phase: "active",
-      scopes: OAuthScopes.parse((tokens.scope || "").split(" ").filter(Boolean)),
+      // An omitted `scope` means unchanged (RFC 6749 §5.1) — keep what the grant already holds; a
+      // present one (even empty) is authoritative. Never silently narrow to `iterate`.
+      scopes:
+        tokens.scope !== undefined
+          ? OAuthScopes.parse(tokens.scope.split(" ").filter(Boolean))
+          : data.scopes,
       accessToken: tokens.access_token,
       refreshToken,
       expiresAt: started + (tokens.expires_in ?? 0) * 1000,
