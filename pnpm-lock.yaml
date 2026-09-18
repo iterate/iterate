@@ -982,6 +982,9 @@ importers:
 
   apps/notes:
     dependencies:
+      '@iterate-com/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       '@tanstack/react-router':
         specifier: 1.168.3
         version: 1.168.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -997,6 +1000,9 @@ importers:
       react-dom:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
+      tailwindcss:
+        specifier: ^4.3.2
+        version: 4.3.2
       zod:
         specifier: ^4.1.5
         version: 4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5)
@@ -1007,6 +1013,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: ^5.20260831.1
         version: 5.20260911.1
+      '@tailwindcss/vite':
+        specifier: ^4.3.2
+        version: 4.3.2(vite@8.0.16(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0))
       '@tanstack/router-generator':
         specifier: 1.166.17
         version: 1.166.17
@@ -1673,6 +1682,9 @@ importers:
 
   apps/voice:
     dependencies:
+      '@iterate-com/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       '@tanstack/react-router':
         specifier: 1.168.3
         version: 1.168.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -1682,12 +1694,18 @@ importers:
       iterate:
         specifier: workspace:*
         version: link:../../packages/iterate
+      lucide-react:
+        specifier: ^0.553.0
+        version: 0.553.0(@types/react@19.2.17)(react@19.2.7)
       react:
         specifier: ^19.2.7
         version: 19.2.7
       react-dom:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
+      tailwindcss:
+        specifier: ^4.3.2
+        version: 4.3.2
       zod:
         specifier: ^4.1.5
         version: 4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5)
@@ -1698,6 +1716,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: ^5.20260831.1
         version: 5.20260911.1
+      '@tailwindcss/vite':
+        specifier: ^4.3.2
+        version: 4.3.2(vite@8.0.16(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0))
       '@tanstack/router-generator':
         specifier: 1.166.17
         version: 1.166.17

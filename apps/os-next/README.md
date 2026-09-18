@@ -85,8 +85,7 @@ scopes (`iterate`; `account` for sessions and personal access tokens; `organizat
 organizations), the person may untick every one but `iterate`, and the grant carries what stayed
 ticked — an app reads `session.info().scopes` and offers a step-up link for what it lacks. Everything
 else — the dash (sessions, projects, organizations), agents, notes — is an app on its own origin holding
-an OAuth grant (`kind: "app"`); only the issuer's own grant (`kind: "issuer"`) can approve consent. The
-dashboard component and loader are also used verbatim by the independently hosted Notes app.
+an OAuth grant (`kind: "app"`); only the issuer's own grant (`kind: "issuer"`) can approve consent.
 
 Google login proves identity to our issuer. Its callback establishes one ordinary, revocable
 issuer grant through the same `BrowserSession` used by other apps. There is no separate

@@ -1,4 +1,4 @@
-import { appAuth } from "iterate/next/app-server";
+import { appAuth, appSession } from "iterate/next/app-server";
 import type { BrowserSession } from "iterate/next/app-session";
 import entry from "@tanstack/react-start/server-entry";
 export { BrowserSession } from "iterate/next/app-session";
@@ -14,7 +14,8 @@ export default {
       ITERATE_ORIGIN: string;
     },
   ) {
-    if (new URL(request.url).pathname === "/healthz") return new Response("ok");
+    const url = new URL(request.url);
+    if (url.pathname === "/healthz") return new Response("ok");
     const auth = await appAuth(request, {
       sessions: env.BROWSER_SESSION,
       issuer: env.ITERATE_ORIGIN,
@@ -22,6 +23,15 @@ export default {
       api: (request) => fetch(request),
     });
     if (auth) return auth;
+    // A signed-in browser landing on `/` goes to the phone; the landing page is for signing in.
+    if (url.pathname === "/" && request.method === "GET") {
+      const bearer = await appSession(env.BROWSER_SESSION, request)?.bearer();
+      if (bearer)
+        return new Response(null, {
+          status: 302,
+          headers: { Location: "/call", "Cache-Control": "no-store" },
+        });
+    }
     const asset = await env.ASSETS.fetch(request);
     if (asset.status !== 404) return asset;
     return entry.fetch(request);

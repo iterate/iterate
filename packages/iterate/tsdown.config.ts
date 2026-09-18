@@ -216,8 +216,6 @@ export default defineConfig([
       "next/app-session": "src/next/app-session.ts",
       "next/client": "src/next/client/live-state.ts",
       "next/react": "src/next/client/react.tsx",
-      "next/dashboard": "src/next/client/dashboard.tsx",
-      "next/dashboard-data": "src/next/client/dashboard-data.ts",
       "next/api": "src/next/api.ts",
       "next/lib": "src/next/lib.ts",
       "next/expression": "src/next/expression.ts",

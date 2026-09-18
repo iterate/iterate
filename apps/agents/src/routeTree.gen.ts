@@ -11,7 +11,6 @@
 import { Route as rootRouteImport } from "./routes/__root.tsx";
 import { Route as AuthRouteImport } from "./routes/_auth.tsx";
 import { Route as IndexRouteImport } from "./routes/index.tsx";
-import { Route as AuthDashboardRouteImport } from "./routes/_auth/dashboard.tsx";
 import { Route as AuthAgentsRouteImport } from "./routes/_auth/agents.tsx";
 
 const AuthRoute = AuthRouteImport.update({
@@ -23,11 +22,6 @@ const IndexRoute = IndexRouteImport.update({
   path: "/",
   getParentRoute: () => rootRouteImport,
 } as any);
-const AuthDashboardRoute = AuthDashboardRouteImport.update({
-  id: "/dashboard",
-  path: "/dashboard",
-  getParentRoute: () => AuthRoute,
-} as any);
 const AuthAgentsRoute = AuthAgentsRouteImport.update({
   id: "/agents",
   path: "/agents",
@@ -37,26 +31,23 @@ const AuthAgentsRoute = AuthAgentsRouteImport.update({
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute;
   "/agents": typeof AuthAgentsRoute;
-  "/dashboard": typeof AuthDashboardRoute;
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute;
   "/agents": typeof AuthAgentsRoute;
-  "/dashboard": typeof AuthDashboardRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/": typeof IndexRoute;
   "/_auth": typeof AuthRouteWithChildren;
   "/_auth/agents": typeof AuthAgentsRoute;
-  "/_auth/dashboard": typeof AuthDashboardRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: "/" | "/agents" | "/dashboard";
+  fullPaths: "/" | "/agents";
   fileRoutesByTo: FileRoutesByTo;
-  to: "/" | "/agents" | "/dashboard";
-  id: "__root__" | "/" | "/_auth" | "/_auth/agents" | "/_auth/dashboard";
+  to: "/" | "/agents";
+  id: "__root__" | "/" | "/_auth" | "/_auth/agents";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -80,13 +71,6 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof IndexRouteImport;
       parentRoute: typeof rootRouteImport;
     };
-    "/_auth/dashboard": {
-      id: "/_auth/dashboard";
-      path: "/dashboard";
-      fullPath: "/dashboard";
-      preLoaderRoute: typeof AuthDashboardRouteImport;
-      parentRoute: typeof AuthRoute;
-    };
     "/_auth/agents": {
       id: "/_auth/agents";
       path: "/agents";
@@ -99,12 +83,10 @@ declare module "@tanstack/react-router" {
 
 interface AuthRouteChildren {
   AuthAgentsRoute: typeof AuthAgentsRoute;
-  AuthDashboardRoute: typeof AuthDashboardRoute;
 }
 
 const AuthRouteChildren: AuthRouteChildren = {
   AuthAgentsRoute: AuthAgentsRoute,
-  AuthDashboardRoute: AuthDashboardRoute,
 };
 
 const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren);

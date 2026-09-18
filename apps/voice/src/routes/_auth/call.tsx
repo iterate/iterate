@@ -1,7 +1,19 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useRouterState } from "@tanstack/react-router";
 import { useState } from "react";
+import { CircleIcon } from "lucide-react";
 import { z } from "zod";
 import { useLiveState } from "iterate/next/react";
+import { AppShell } from "@iterate-com/ui/components/app-shell";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@iterate-com/ui/components/breadcrumb";
+import { Button } from "@iterate-com/ui/components/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
+import { cn } from "@iterate-com/ui/lib/utils";
 import { openAudio, type AudioSession } from "../../audio.ts";
 import { startCall, type Call, type CallFact } from "../../call.ts";
 
@@ -17,15 +29,65 @@ type VoiceLiveView = z.infer<typeof VoiceLiveView>;
 
 export const Route = createFileRoute("/_auth/call")({
   validateSearch: z.object({ project: z.string().optional() }),
-  loader: async ({ context }) => ({ projects: await context.api.projects.list() }),
+  loaderDeps: ({ search }) => search,
+  loader: async ({ context, deps }) => {
+    const projects = await context.api.projects.list();
+    const project = deps.project ? projects.find((item) => item.id === deps.project) : projects[0];
+    if (deps.project && !project) throw new Error("This session cannot access that project.");
+    return { projects, project };
+  },
   component: CallPage,
 });
 
 function CallPage() {
-  const { api, info } = Route.useRouteContext();
-  const { projects } = Route.useLoaderData();
-  const search = Route.useSearch();
-  const [projectId, setProjectId] = useState(search.project || projects[0]?.id || "");
+  const { info } = Route.useRouteContext();
+  const { projects, project } = Route.useLoaderData();
+  const href = useRouterState({ select: (state) => state.location.href });
+  return (
+    <AppShell
+      app="Voice"
+      projects={projects}
+      activeProjectId={project?.id || null}
+      projectHref={(projectId) => `/call?project=${encodeURIComponent(projectId)}`}
+      header={
+        project ? (
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem className="hidden md:inline-flex">Voice</BreadcrumbItem>
+              <BreadcrumbSeparator className="hidden md:inline-flex" />
+              <BreadcrumbItem>
+                <BreadcrumbPage className="font-mono">{project.id}</BreadcrumbPage>
+              </BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
+        ) : null
+      }
+      account={{ email: info.principal.email || info.principal.actor }}
+      locationKey={href}
+    >
+      {project ? (
+        <Phone key={project.id} project={project.id} />
+      ) : (
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>No projects yet</EmptyTitle>
+            <EmptyDescription>
+              <a href="https://dash.iterate2.com/projects" className="underline underline-offset-4">
+                Create a project
+              </a>{" "}
+              in the dash, install its voice agent, then call it here.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )}
+    </AppShell>
+  );
+}
+
+/** The phone: Call opens the microphone inside the click (the browser wants the gesture) and
+ *  places the call; Hang up ends it and reports what this browser saw. */
+function Phone({ project }: { project: string }) {
+  const { api } = Route.useRouteContext();
   const [audio, setAudio] = useState<AudioSession>();
   const [call, setCall] = useState<Call>();
   const [facts, setFacts] = useState<CallFact[]>([]);
@@ -50,7 +112,7 @@ function CallPage() {
       setAudio(opened);
       const started = await startCall({
         api,
-        projectId,
+        projectId: project,
         audio: opened,
         onFact: (fact) => setFacts((previous) => [...previous.slice(-19), fact]),
       });
@@ -84,58 +146,74 @@ function CallPage() {
     }
   };
   return (
-    <main>
-      <p className="eyebrow">VOICE · {info.principal.email || info.principal.actor}</p>
-      <h1>{call ? phaseTitle(view) : "Talk to your project"}</h1>
-      {!call && (
-        <label>
-          Project{" "}
-          <select value={projectId} onChange={(e) => setProjectId(e.target.value)} disabled={busy}>
-            {projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.id}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      <p>
+    <div className="mx-auto flex w-full max-w-xl flex-col gap-6 p-4 md:p-8">
+      <p className="text-2xl font-semibold">{call ? phaseTitle(view) : "Talk to your project"}</p>
+      <div>
         {call ? (
-          <button onClick={onHangUp} disabled={busy}>
+          <Button
+            size="lg"
+            variant="destructive"
+            className="rounded-full px-8"
+            onClick={onHangUp}
+            disabled={busy}
+          >
             Hang up
-          </button>
+          </Button>
         ) : (
-          <button onClick={onCall} disabled={busy || !projectId}>
+          <Button size="lg" className="rounded-full px-8" onClick={onCall} disabled={busy}>
             {busy ? "Connecting…" : "Call"}
-          </button>
+          </Button>
         )}
-      </p>
-      {error && <p role="alert">{error}</p>}
-      {!call && lastStats && <p className="facts">{lastStats}</p>}
-      {call && (
-        <section aria-label="Live state">
-          <p>
-            <span className={`dot ${view?.answering ? "on" : ""}`} />
-            {live.status === "live" ? (view?.phase ?? "live") : live.status}
-            {view?.answering ? " · speaking" : ""}
-            {view?.lastEnd ? ` · ${view.lastEnd.reason}` : ""}
-            {live.error ? ` · ${live.error}` : ""}
+      </div>
+      {error ? (
+        <p role="alert" className="text-sm break-words text-destructive">
+          {error}
+        </p>
+      ) : null}
+      {!call && lastStats ? (
+        <p className="font-mono text-xs break-words text-muted-foreground">{lastStats}</p>
+      ) : null}
+      {call ? (
+        <section aria-label="Live state" className="flex flex-col gap-4">
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <CircleIcon
+              className={cn(
+                "size-2 shrink-0",
+                view?.answering
+                  ? "fill-emerald-500 text-emerald-500"
+                  : "fill-muted-foreground/40 text-muted-foreground/40",
+              )}
+            />
+            <span>
+              {live.status === "live" ? (view?.phase ?? "live") : live.status}
+              {view?.answering ? " · speaking" : ""}
+              {view?.lastEnd ? ` · ${view.lastEnd.reason}` : ""}
+              {live.error ? ` · ${live.error}` : ""}
+            </span>
           </p>
-          <ol className="transcript">
+          <ol className="flex flex-col gap-2">
             {(view?.transcript ?? []).map((turn, index) => (
-              <li key={index} className={turn.role}>
+              <li
+                key={index}
+                className={cn(
+                  "max-w-[85%] rounded-2xl px-3.5 py-2 text-sm break-words",
+                  turn.role === "listener"
+                    ? "self-end bg-primary text-primary-foreground"
+                    : "self-start bg-muted",
+                )}
+              >
                 {turn.text}
               </li>
             ))}
           </ol>
-          <ul className="facts">
+          <ul className="flex flex-col gap-1 font-mono text-xs break-words text-muted-foreground">
             {facts.map((fact) => (
               <li key={fact.at}>{fact.text}</li>
             ))}
           </ul>
         </section>
-      )}
-    </main>
+      ) : null}
+    </div>
   );
 }
 
