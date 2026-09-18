@@ -236,7 +236,7 @@ function ProjectSwitcher({
 
 /** A plain left click — not a modified one (cmd/ctrl/shift/alt: a new tab or window), not the
  *  middle button, not one something else already handled. */
-function plainLeftClick(event: MouseEvent<HTMLAnchorElement>): boolean {
+function plainLeftClick(event: MouseEvent<HTMLAnchorElement>) {
   return (
     !event.defaultPrevented &&
     event.button === 0 &&
