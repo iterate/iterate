@@ -221,6 +221,7 @@ export class SessionRpcTarget extends RpcTarget {
       scopes: this.#authority.scopes ?? [],
       platformOrigin: this.#input.appConfig.platformOrigin,
       projectHostnameBase: this.#input.appConfig.projectHostnameBase,
+      mcpOrigin: this.#input.appConfig.mcpOrigin,
     };
   }
 

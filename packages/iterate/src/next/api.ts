@@ -215,6 +215,8 @@ export interface IterateSessionApi {
     scopes: string[];
     platformOrigin: string;
     projectHostnameBase: string;
+    /** the MCP server's origin (the dash's connect page) — "" when this deployment serves none */
+    mcpOrigin: string;
   };
   /** The organizations this session reaches. */
   orgs(): Promise<OrgRecord[]>;

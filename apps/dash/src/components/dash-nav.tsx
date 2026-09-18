@@ -2,7 +2,14 @@
 // overview and its site; outside one the projects, organizations and sessions pages and the other
 // first-party apps.
 import { Link, useMatchRoute } from "@tanstack/react-router";
-import { Building2, ExternalLink, FolderKanban, KeyRound, LayoutDashboard } from "lucide-react";
+import {
+  Building2,
+  ExternalLink,
+  FolderKanban,
+  KeyRound,
+  LayoutDashboard,
+  Plug,
+} from "lucide-react";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -24,7 +31,8 @@ export function DashNav({
   return project ? <ProjectNav project={project} host={host} /> : <TopLevelNav />;
 }
 
-/** Inside a project: its overview, its own site, and the first-party apps opened on it — every app
+/** Inside a project: its overview, how to connect over MCP, its own site, and the first-party apps
+ *  opened on it — every app
  *  serves `/projects/<slug>`, so the links are the convention, and a signed-out click proves the
  *  apps' OAuth returns to the deep link. */
 function ProjectNav({
@@ -53,6 +61,22 @@ function ProjectNav({
             >
               <LayoutDashboard />
               <span>Overview</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="MCP"
+              isActive={Boolean(
+                matchRoute({
+                  to: "/projects/$slug/mcp",
+                  params: { slug: project.slug },
+                  fuzzy: false,
+                }),
+              )}
+              render={<Link to="/projects/$slug/mcp" params={{ slug: project.slug }} />}
+            >
+              <Plug />
+              <span>MCP</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
           {host ? (
