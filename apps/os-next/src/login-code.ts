@@ -62,12 +62,41 @@ export function emailSignInOffered(env: Env): boolean {
   return Boolean(env.EMAIL && config.loginEmailFrom) || config.testEmailLogin;
 }
 
-/** Start: mail a code to `email` and remember its hash; the cookie returned names the challenge. */
-export async function startLoginCode(env: Env, email: string): Promise<{ setCookie: string }> {
+/** How often a code may go OUT: three to one address, and twenty from one client, in ten minutes —
+ *  a counter per subject that expires with the window. KV counts are eventually consistent, so a
+ *  burst at two edges may pass the cap by a little; what it protects is an inbox from a flood and
+ *  the account's daily sending quota from one abuser. Only a mailed code counts (a reserved-domain
+ *  address, or a deployment without a mailbox, sends nothing). */
+async function mailAllowed(env: Env, address: string, client: string | null): Promise<boolean> {
+  for (const [subject, limit] of [
+    [`address:${address}`, 3],
+    [`client:${client || "unknown"}`, 20],
+  ] as const) {
+    const key = `login-code-rate:${subject}`;
+    const count = Number(await env.OAUTH_KV.get(key)) || 0;
+    if (count >= limit) return false;
+    await env.OAUTH_KV.put(key, String(count + 1), { expirationTtl: LIFETIME_MS / 1000 });
+  }
+  return true;
+}
+
+/** Start: mail a code to `email` and remember its hash; the cookie returned names the challenge.
+ *  `client` is the caller's address (`cf-connecting-ip`), for the sending cap. */
+export async function startLoginCode(
+  env: Env,
+  email: string,
+  client: string | null = null,
+): Promise<{ setCookie: string }> {
   const config = appConfigOf(env);
   if (!emailSignInOffered(env)) throw codedError("UNAUTHENTICATED", "Sign in with Google.");
   const address = email.trim().toLowerCase();
   if (!z.email().safeParse(address).success) throw codedError("INVALID_INPUT", "Enter an email.");
+  const mailing = Boolean(env.EMAIL && config.loginEmailFrom && !reservedDomain.test(address));
+  if (mailing && !(await mailAllowed(env, address, client)))
+    throw codedError(
+      "INVALID_INPUT",
+      "Too many codes were sent for that address just now. Wait a few minutes and try again.",
+    );
   const id = crypto.randomUUID();
   const code = String(crypto.getRandomValues(new Uint32Array(1))[0]! % 1_000_000).padStart(6, "0");
   await putChallenge(env, id, {
@@ -76,9 +105,9 @@ export async function startLoginCode(env: Env, email: string): Promise<{ setCook
     tries: 0,
     expiresAt: Date.now() + LIFETIME_MS,
   });
-  if (env.EMAIL && config.loginEmailFrom && !reservedDomain.test(address)) {
+  if (mailing) {
     try {
-      const sent = await env.EMAIL.send({
+      const sent = await env.EMAIL!.send({
         to: address,
         from: config.loginEmailFrom,
         subject: `${code} is your iterate sign-in code`,

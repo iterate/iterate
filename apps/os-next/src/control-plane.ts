@@ -205,7 +205,8 @@ async function loginFormPost(request: Request, env: Env): Promise<Response | nul
       const { setCookie, location } = await signIn(env, request, { email, next });
       return new Response(null, { status: 302, headers: { location, "set-cookie": setCookie } });
     }
-    return back(undefined, (await startLoginCode(env, email)).setCookie);
+    const started = await startLoginCode(env, email, request.headers.get("cf-connecting-ip"));
+    return back(undefined, started.setCookie);
   } catch (error) {
     const code = errorCode(error);
     if (code === "INVALID_INPUT")

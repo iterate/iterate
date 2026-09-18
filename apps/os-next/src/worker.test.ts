@@ -34,6 +34,7 @@ const MINIMAL_CONFIG = {
   platformOrigin: "https://control.test",
   googleClientId: "",
   googleClientSecret: "",
+  loginEmailFrom: "",
   testEmailLogin: false,
   mcpOrigin: "",
   environmentName: "poc",

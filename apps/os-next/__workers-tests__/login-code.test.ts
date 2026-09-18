@@ -17,7 +17,7 @@ const withCookie = (setCookie: string) =>
 /** What login-code.ts hands the mailbox: the builder shape of `SendEmail.send`. */
 type Mail = { to: string; from: string; subject: string; text: string; html: string };
 
-test("the mailed code signs in; the test code does not without test mode; five wrong tries end the challenge; a reserved test domain gets no mail", async () => {
+test("the mailed code signs in; the test code does not without test mode; five wrong tries end the challenge; three codes per address per window; a reserved test domain gets no mail", async () => {
   const send = vi.fn<(mail: Mail) => Promise<{ messageId: string }>>(async () => ({
     messageId: "message-1",
   }));
@@ -60,9 +60,13 @@ test("the mailed code signs in; the test code does not without test mode; five w
   expect(await finishLoginCode(mailbox, withCookie(second.setCookie), secondCode)).toMatchObject({
     restart: true,
   });
-  // a reserved test domain is never mailed — its challenge still exists, for the test code
+  // three codes to one address in the window, then the address rests; a reserved test domain is
+  // never mailed and never counts — its challenge still exists, for the test code
+  await startLoginCode(mailbox, "person@real-mailbox.dev");
+  expect(send).toHaveBeenCalledTimes(3);
+  await expect(startLoginCode(mailbox, "Person@Real-Mailbox.dev")).rejects.toThrow(/Too many/);
   send.mockClear();
-  await startLoginCode(mailbox, "nobody@example.com");
+  for (let round = 0; round < 4; round++) await startLoginCode(mailbox, "nobody@example.com");
   expect(send).not.toHaveBeenCalled();
   // no cookie at all: nothing to finish
   expect(
