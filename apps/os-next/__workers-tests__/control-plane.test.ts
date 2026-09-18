@@ -151,7 +151,7 @@ test("operator RPC accepts only its administrator credential; issuer login uses 
   ).toBe(403);
 });
 
-test("email sign-in: the email, then the code (this lane's test code), then an ordinary user session; without a mailbox or test mode there is no email sign-in", async () => {
+test("email sign-in: the email, then the code (this config's test code), then an ordinary user session; without a mailbox or test mode there is no email sign-in", async () => {
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
     SELF.fetch(new Request(input, init)),
   );

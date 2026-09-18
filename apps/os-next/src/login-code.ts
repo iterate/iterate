@@ -68,15 +68,20 @@ export function emailSignInOffered(env: Env): boolean {
  *  the account's daily sending quota from one abuser. Only a mailed code counts (a reserved-domain
  *  address, or a deployment without a mailbox, sends nothing). */
 async function mailAllowed(env: Env, address: string, client: string | null): Promise<boolean> {
-  for (const [subject, limit] of [
-    [`address:${address}`, 3],
-    [`client:${client || "unknown"}`, 20],
-  ] as const) {
-    const key = `login-code-rate:${subject}`;
-    const count = Number(await env.OAUTH_KV.get(key)) || 0;
-    if (count >= limit) return false;
-    await env.OAUTH_KV.put(key, String(count + 1), { expirationTtl: LIFETIME_MS / 1000 });
-  }
+  const caps = [
+    [`login-code-rate:address:${address}`, 3],
+    [`login-code-rate:client:${client || "unknown"}`, 20],
+  ] as const;
+  // both counters are read before either is charged: a refusal costs nothing
+  const counts = await Promise.all(caps.map(([key]) => env.OAUTH_KV.get(key)));
+  if (caps.some(([, limit], i) => (Number(counts[i]) || 0) >= limit)) return false;
+  await Promise.all(
+    caps.map(([key], i) =>
+      env.OAUTH_KV.put(key, String((Number(counts[i]) || 0) + 1), {
+        expirationTtl: LIFETIME_MS / 1000,
+      }),
+    ),
+  );
   return true;
 }
 

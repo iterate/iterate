@@ -44,8 +44,8 @@ export interface Env extends DurableObjectEnv {
   /** The issuer's pages and their files — public/ (wrangler.jsonc `assets`, `run_worker_first`: this
    *  worker sees every request first and asks the binding only for `issuerPagePaths`). */
   ASSETS: Fetcher;
-  /** Email Sending (wrangler `send_email`) — the sign-in code's way out (login-code.ts). Simulated
-   *  by wrangler dev and the test lanes; absent where a deployment has no mailbox. */
+  /** Email Sending (wrangler `send_email`) — how the sign-in code reaches the person (login-code.ts).
+   *  Simulated by wrangler dev and the test configs; absent where a deployment has no mailbox. */
   EMAIL?: SendEmail;
 }
 
