@@ -259,7 +259,7 @@ export class SessionRpcTarget extends RpcTarget {
 
   get consent() {
     if (!this.#authority.consent)
-      throw codedError("FORBIDDEN", "Sign in to Iterate to approve access.");
+      throw codedError("FORBIDDEN", "Sign in to iterate to approve access.");
     return this.#authority.consent;
   }
 

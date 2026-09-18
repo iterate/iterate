@@ -24,6 +24,9 @@ async function signIn(page: Page, origin: string, email: string, next = "/") {
   if (isLocal(origin) || process.env.TEST_EMAIL_LOGIN === "true") {
     await page.getByRole("textbox", { name: "Email", exact: true }).fill(email);
     await page.getByRole("button", { name: "Continue", exact: true }).click();
+    // the code step: a test deployment accepts 424242 beside the code it mailed
+    await page.getByRole("textbox", { name: "Code", exact: true }).fill("424242");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
     return;
   }
   await page.getByRole("link", { name: "Continue with Google", exact: true }).waitFor();
@@ -326,7 +329,7 @@ test("the same Notes app and dashboard work on their own origin and through a pr
     projectContext.provide("itx.apps.notes", ["itx", "worker"]),
   ]);
   await page.goto(notesOrigin);
-  await page.getByRole("link", { name: "Log in with Iterate", exact: true }).click();
+  await page.getByRole("link", { name: "Log in with iterate", exact: true }).click();
   await page
     .getByRole("heading", { name: `Authorize ${new URL(notesOrigin).host}`, exact: true })
     .waitFor();

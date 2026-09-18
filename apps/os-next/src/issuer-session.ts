@@ -28,7 +28,7 @@ export async function startIssuerSession(env: Env, user: User, next: string, pic
     request,
     userId: user.id,
     scope: request.scope,
-    metadata: { clientName: "Iterate" },
+    metadata: { clientName: "iterate" },
     revokeExistingGrants: false,
     props: {
       kind: "issuer",

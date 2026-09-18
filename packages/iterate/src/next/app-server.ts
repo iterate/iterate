@@ -79,7 +79,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
       );
       await probe.body?.cancel();
       if (probe.status !== 401) {
-        if (!probe.ok) throw new Error(`Iterate API check failed (${probe.status})`);
+        if (!probe.ok) throw new Error(`iterate API check failed (${probe.status})`);
         const heldScopes = await session!.scopes();
         if (scopes.every((scope) => heldScopes.includes(scope)))
           return new Response(null, {

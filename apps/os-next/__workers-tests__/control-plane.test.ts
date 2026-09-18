@@ -1,7 +1,8 @@
 import { env, SELF } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
-import { signIn, type Env } from "../src/control-plane.ts";
+import type { Env } from "../src/control-plane.ts";
+import { startLoginCode } from "../src/login-code.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { directory } from "../src/directory.ts";
 import { applyDirectorySchema, SRC_ECHO_APP } from "./support.ts";
@@ -150,22 +151,51 @@ test("operator RPC accepts only its administrator credential; issuer login uses 
   ).toBe(403);
 });
 
-test("unverified email login requires test mode and creates an ordinary user session", async () => {
+test("email sign-in: the email, then the code (this config's test code), then an ordinary user session; without a mailbox or test mode there is no email sign-in", async () => {
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
     SELF.fetch(new Request(input, init)),
   );
   const bindings = env as unknown as Env;
-  const request = new Request(`${origin}/login`, { method: "POST" });
-  const input = { email: "Test-Login@directory.test", next: "/sessions" };
-  await expect(signIn(bindings, request, input)).rejects.toThrow(/Sign in with Google/);
-  const login = await signIn({ ...bindings, APP_CONFIG_TEST_EMAIL_LOGIN: "true" }, request, input);
-  expect(login.location).toBe("/sessions");
+  // no mailbox binding and no test flag: the deployment offers no email sign-in at all
+  await expect(
+    startLoginCode(
+      { ...bindings, EMAIL: undefined, APP_CONFIG_TEST_EMAIL_LOGIN: "false" },
+      "someone@directory.test",
+    ),
+  ).rejects.toThrow(/Sign in with Google/);
+  const post = (form: Record<string, string>, cookie?: string) =>
+    SELF.fetch(`${origin}/login`, {
+      method: "POST",
+      redirect: "manual",
+      headers: cookie ? { Origin: origin, cookie } : { Origin: origin },
+      body: new URLSearchParams(form),
+    });
+  const started = await post({ email: "Test-Login@directory.test", next: "/sessions" });
+  expect(started.status).toBe(303);
+  expect(started.headers.get("location")).toBe("/login?next=%2Fsessions");
+  const loginCookie = started.headers.get("set-cookie")!.split(";")[0]!;
+  expect(loginCookie).toMatch(/^__Host-itx-login=/);
+  // the page learns whom the code went to
+  const state = await (
+    await SELF.fetch(`${origin}/login.json?next=/sessions`, { headers: { cookie: loginCookie } })
+  ).json<{ codeSentTo: string | null; emailSignIn: boolean }>();
+  expect(state).toMatchObject({ codeSentTo: "test-login@directory.test", emailSignIn: true });
+  // a wrong code goes back to the code step with the reason, and makes no session
+  const wrong = await post({ code: "000000", next: "/sessions" }, loginCookie);
+  expect(wrong.status).toBe(303);
+  expect(new URL(wrong.headers.get("location")!, origin).searchParams.get("error")).toBe(
+    "That code is not right. Try again.",
+  );
+  expect(wrong.headers.get("set-cookie")).toBeNull();
+  // the right one (the test code, here) is the session; the login cookie ends with it
+  const login = await post({ code: "424242", next: "/sessions" }, loginCookie);
+  expect(login.status).toBe(302);
+  expect(login.headers.get("location")).toBe("/sessions");
+  const cookies = login.headers.getSetCookie();
+  expect(cookies.some((cookie) => cookie.startsWith("__Host-itx-login=;"))).toBe(true);
+  const session = cookies.find((cookie) => cookie.startsWith("__Host-itx-session="))!;
   const response = await SELF.fetch(`${origin}/api`, {
-    headers: {
-      Upgrade: "websocket",
-      Origin: origin,
-      Cookie: login.setCookie.split(";")[0]!,
-    },
+    headers: { Upgrade: "websocket", Origin: origin, Cookie: session.split(";")[0]! },
   });
   expect(response.status).toBe(101);
   response.webSocket!.accept();

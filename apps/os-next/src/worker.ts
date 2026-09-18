@@ -148,7 +148,7 @@ async function secretOAuthCallback(
   if (!authorization)
     return answer(
       401,
-      "Sign in to Iterate in this browser first, then open this link again — the tokens go into a project you must be a member of.",
+      "Sign in to iterate in this browser first, then open this link again — the tokens go into a project you must be a member of.",
     );
   const owner = secretOwnerOf(claims.owner);
   if (!(await reachesSecretOwner(sessionInput.directory, authorization.reach, owner)))

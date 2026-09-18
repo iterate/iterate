@@ -97,7 +97,7 @@ export function createIterateClient(options: { scopes?: string[] } = {}): Iterat
     });
     await probe.body?.cancel();
     if (probe.status === 401) return leaveForLogin(login);
-    if (!probe.ok) throw new Error(`Iterate is unavailable (${probe.status}). Please retry.`);
+    if (!probe.ok) throw new Error(`iterate is unavailable (${probe.status}). Please retry.`);
     if (!live) adopt(await openSocketWithRetry(socketUrl()));
     // Consent is task-based: the person may have granted fewer scopes than the app asked for
     // (every scope but `iterate` is optional on the consent page). The granted set is

@@ -79,7 +79,7 @@ export class Consent extends RpcTarget {
   constructor(env: Env, grant: AccessGrant) {
     super();
     if (grant.kind !== "issuer")
-      throw codedError("FORBIDDEN", "Sign in to Iterate to approve access.");
+      throw codedError("FORBIDDEN", "Sign in to iterate to approve access.");
     this.#env = env;
     this.#grant = grant;
   }
