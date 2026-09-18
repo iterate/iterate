@@ -73,12 +73,14 @@ test("first consent creates organization and project through the ordinary sessio
     projects: [],
   });
   const org = await api.createOrg("First organization");
-  using _project = await api.projects.create({ project: "first-consent-project", orgId: org.id });
+  using project = await api.projects.create({ project: "first-consent-project", orgId: org.id });
+  const projectId = (await project.whoami()).projectId;
   const other = await api.createOrg("Other organization");
-  using _excluded = await api.projects.create({
+  using excluded = await api.projects.create({
     project: "unselected-consent-project",
     orgId: other.id,
   });
+  const excludedId = (await excluded.whoami()).projectId;
   const view = await api.consent.describe(flow.url.search);
   expect(view).toMatchObject({
     kind: "consent",
@@ -86,14 +88,20 @@ test("first consent creates organization and project through the ordinary sessio
     email: user.email,
     scopes: ["iterate"],
   });
+  // the page lists a project by its slug; what a ticked box submits is its id
+  if (view.kind !== "consent") throw new Error(`expected consent, got ${JSON.stringify(view)}`);
+  expect(view.projects.map(({ id, slug }) => ({ id, slug }))).toEqual([
+    { id: projectId, slug: "first-consent-project" },
+    { id: excludedId, slug: "unselected-consent-project" },
+  ]);
   expect((await api.orgs()).map((org) => org.name)).toEqual([
     "First organization",
     "Other organization",
   ]);
-  const approval = await api.consent.approve({
-    query: flow.url.search,
-    projects: ["first-consent-project"],
-  });
+  expect(
+    await api.consent.approve({ query: flow.url.search, projects: ["first-consent-project"] }),
+  ).toEqual({ error: "Choose at least one project you can access." });
+  const approval = await api.consent.approve({ query: flow.url.search, projects: [projectId] });
   if ("error" in approval) throw new Error(approval.error);
   const callback = new URL(approval.redirectTo);
   expect(callback.searchParams.get("state")).toBe(flow.state);
@@ -113,8 +121,8 @@ test("first consent creates organization and project through the ordinary sessio
   const tokens = await exchange.json<{ access_token: string }>();
   expect(tokens.access_token.split(":")[0]).toBe(user.id);
   // The one MCP tool is `run`. The grant reaches the CONSENTED project and no other, proven at the
-  // tool: a run in `first-consent-project` succeeds (itx.whoami() names it); a run in the project the
-  // consent did NOT select is refused before it evaluates ("outside this token's grant").
+  // tool: a run in `first-consent-project` succeeds (itx.whoami() names its id); a run in the
+  // project the consent did NOT select is refused before it evaluates ("outside this token's grant").
   const runTool = (project: string) =>
     SELF.fetch(`${origin}/mcp`, {
       method: "POST",
@@ -130,11 +138,11 @@ test("first consent creates organization and project through the ordinary sessio
         params: { name: "run", arguments: { project, script: "async (itx) => itx.whoami()" } },
       }),
     });
-  const selected = await runTool("first-consent-project");
+  const selected = await runTool(projectId);
   expect(selected.status).toBe(200);
   const selectedBody = await selected.text();
-  expect(selectedBody).toContain("first-consent-project");
-  const unselectedBody = await (await runTool("unselected-consent-project")).text();
+  expect(selectedBody).toContain(projectId);
+  const unselectedBody = await (await runTool(excludedId)).text();
   expect(unselectedBody).toContain("outside this token");
   expect((await api.grants.list()).items).toHaveLength(2);
   await api.logout();
@@ -142,9 +150,9 @@ test("first consent creates organization and project through the ordinary sessio
   await expect(api.consent.approve({ query: flow.url.search, projects: ["*"] })).rejects.toThrow(
     /session has ended/,
   );
-  await expect(
-    api.grants.mint({ name: "Too late", projects: ["first-consent-project"] }),
-  ).rejects.toThrow(/session has ended/);
+  await expect(api.grants.mint({ name: "Too late", projects: [projectId] })).rejects.toThrow(
+    /session has ended/,
+  );
   expect((await SELF.fetch(`${origin}/api`, { method: "POST", body: "", headers })).status).toBe(
     401,
   );
@@ -275,7 +283,10 @@ test("a browser landing on the platform origin is told it is headless and where 
 
 test("a client on a project's custom apex is bound to that project at consent, like one under the hostname base", async () => {
   const user = await directory(bindings.DB).upsertUser("custom-apex@example.com");
-  await directory(bindings.DB).createProject({ userId: user.id }, "custom-apex-project");
+  const apexProject = await directory(bindings.DB).createProject(
+    { userId: user.id },
+    "custom-apex-project",
+  );
   await directory(bindings.DB).createProject({ userId: user.id }, "custom-apex-other");
   const login = await startIssuerSession(bindings, user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
@@ -288,7 +299,10 @@ test("a client on a project's custom apex is bound to that project at consent, l
   const view = await issuer.consent.describe(flow.url.search);
   if (view.kind !== "consent") throw new Error(`expected consent, got ${JSON.stringify(view)}`);
   expect(view.projectBound).toBe(true);
-  expect(view.projects.map((project) => project.id)).toEqual(["custom-apex-project"]);
+  // the apex map names the project by slug; the view's row carries the id a ticked box submits
+  expect(view.projects.map(({ id, slug }) => ({ id, slug }))).toEqual([
+    { id: apexProject.id, slug: "custom-apex-project" },
+  ]);
 });
 
 test("consent grants only the scopes left ticked; organizations:write, not project reach, is what creates an organization", async () => {
@@ -296,7 +310,8 @@ test("consent grants only the scopes left ticked; organizations:write, not proje
   const login = await startIssuerSession(bindings, user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
   const org = await issuer.createOrg("Ticked scopes organization");
-  await issuer.projects.create({ project: "ticked-scopes-project", orgId: org.id });
+  using project = await issuer.projects.create({ project: "ticked-scopes-project", orgId: org.id });
+  const projectId = (await project.whoami()).projectId;
   // the same request three scopes wide, approved for ONE project with the scopes given
   async function grant(scopes: string[]) {
     const flow = await authorizationCodeRequest({
@@ -308,7 +323,7 @@ test("consent grants only the scopes left ticked; organizations:write, not proje
     });
     const approved = await issuer.consent.approve({
       query: flow.url.search,
-      projects: ["ticked-scopes-project"],
+      projects: [projectId],
       scopes,
     });
     if ("error" in approved) throw new Error(approved.error);
@@ -342,8 +357,8 @@ test("consent grants only the scopes left ticked; organizations:write, not proje
   const created = await full.createOrg("Created by a project-narrowed grant");
   expect((await issuer.orgs()).map((candidate) => candidate.id)).toContain(created.id);
   expect((await full.orgs()).map((candidate) => candidate.id)).toContain(created.id);
-  expect((await full.projects.list()).map((candidate) => candidate.id)).toEqual([
-    "ticked-scopes-project",
+  expect((await full.projects.list()).map(({ id, slug }) => ({ id, slug }))).toEqual([
+    { id: projectId, slug: "ticked-scopes-project" },
   ]);
 });
 
