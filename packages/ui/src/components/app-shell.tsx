@@ -3,7 +3,7 @@
 // menu in its footer, the rail) and the page beside it under a header row that carries the phone's
 // sidebar trigger. apps/os's frame on this package's shadcn Sidebar. Router-agnostic on purpose:
 // the app hands over hrefs and its current location, nothing from TanStack comes in here.
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, type MouseEvent, type ReactNode } from "react";
 import { CheckIcon, ChevronsLeftIcon, ChevronsUpDownIcon, LogOutIcon } from "lucide-react";
 import { Avatar, AvatarFallback } from "./avatar.tsx";
 import {
@@ -41,9 +41,12 @@ export function AppShell({
   projects,
   activeProjectId,
   projectHref,
+  onNavigate,
+  switcherActions,
   nav,
   header,
   account,
+  accountActions,
   locationKey,
   children,
 }: {
@@ -52,14 +55,20 @@ export function AppShell({
   /** the projects this session lists; grouped by `org` when the app names one */
   projects: AppShellProject[];
   activeProjectId: string | null;
-  /** where the app shows a project — a same-origin href; switching is a full navigation */
+  /** where the app shows a project — a same-origin href; switching is a full navigation unless
+   *  `onNavigate` takes it (an app with a client router prevents the default and navigates itself) */
   projectHref: (projectId: string) => string;
+  onNavigate?: (href: string, event: MouseEvent<HTMLAnchorElement>) => void;
+  /** the app's own items at the end of the switcher menu — `DropdownMenuItem`s, after a separator */
+  switcherActions?: ReactNode;
   /** the app's own navigation, its `SidebarGroup`s */
   nav?: ReactNode;
   /** what sits beside the phone's sidebar trigger in the header row */
   header?: ReactNode;
   /** the signed-in person; "Sign out" posts to `logoutPath`, the SDK's `/.auth/logout` unless told */
   account: { email: string; logoutPath?: string };
+  /** the app's own items in the account menu, before Sign out — `DropdownMenuItem`s */
+  accountActions?: ReactNode;
   /** the router's current href — a change closes the phone's sidebar sheet */
   locationKey: string;
   children: ReactNode;
@@ -76,12 +85,18 @@ export function AppShell({
             projects={projects}
             activeProjectId={activeProjectId}
             projectHref={projectHref}
+            onNavigate={onNavigate}
+            actions={switcherActions}
           />
         </SidebarHeader>
         <SidebarContent>{nav}</SidebarContent>
         <SidebarFooter>
           <CollapseButton />
-          <AccountMenu email={account.email} logoutPath={account.logoutPath || "/.auth/logout"} />
+          <AccountMenu
+            email={account.email}
+            logoutPath={account.logoutPath || "/.auth/logout"}
+            actions={accountActions}
+          />
         </SidebarFooter>
         <SidebarRail />
       </Sidebar>
@@ -116,11 +131,15 @@ function ProjectSwitcher({
   projects,
   activeProjectId,
   projectHref,
+  onNavigate,
+  actions,
 }: {
   app: string;
   projects: AppShellProject[];
   activeProjectId: string | null;
   projectHref: (projectId: string) => string;
+  onNavigate?: (href: string, event: MouseEvent<HTMLAnchorElement>) => void;
+  actions?: ReactNode;
 }) {
   const { isMobile } = useSidebar();
   // one group per organization, in order of first appearance; a bare list when the app names none
@@ -175,7 +194,15 @@ function ProjectSwitcher({
                       key={project.id}
                       className="gap-2 p-2"
                       render={
-                        <a href={projectHref(project.id)} aria-label={`Switch to ${project.id}`} />
+                        <a
+                          href={projectHref(project.id)}
+                          aria-label={`Switch to ${project.id}`}
+                          onClick={
+                            onNavigate
+                              ? (event) => onNavigate(projectHref(project.id), event)
+                              : undefined
+                          }
+                        />
                       }
                     >
                       <span className="flex size-6 items-center justify-center rounded-md border text-xs font-medium text-muted-foreground">
@@ -187,6 +214,12 @@ function ProjectSwitcher({
                   ))}
               </DropdownMenuGroup>
             ))}
+            {actions ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuGroup>{actions}</DropdownMenuGroup>
+              </>
+            ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>
@@ -217,7 +250,15 @@ function CollapseButton() {
 
 /** The signed-in person, and sign out: a POST to the app's own logout, which ends this browser's
  *  grant at the issuer. */
-function AccountMenu({ email, logoutPath }: { email: string; logoutPath: string }) {
+function AccountMenu({
+  email,
+  logoutPath,
+  actions,
+}: {
+  email: string;
+  logoutPath: string;
+  actions?: ReactNode;
+}) {
   const { isMobile } = useSidebar();
   const logout = useRef<HTMLFormElement>(null);
   const initials = email.slice(0, 2).toUpperCase();
@@ -249,6 +290,7 @@ function AccountMenu({ email, logoutPath }: { email: string; logoutPath: string 
             {/* Base UI: a menu label lives inside a group, never bare in the menu */}
             <DropdownMenuGroup>
               <DropdownMenuLabel className="truncate font-normal">{email}</DropdownMenuLabel>
+              {actions}
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
