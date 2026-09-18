@@ -94,3 +94,6 @@ on the parent branch.
   Preview queues. Close cleanup shares that same workflow-level group.
 - The documentation successor also hit a pkg.pr.new network publish failure;
   deployment correctly refused to use missing commit-pinned packages.
+- Second pending-docs acceptance: push while `x8lrhr8zfx` (`8f058d6da`)
+  prepares. The separate coordinator was automatically triggered by Depot on
+  this branch; no manual dispatch was necessary. Expect only one live preparation.
