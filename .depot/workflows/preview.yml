@@ -64,5 +64,5 @@ jobs:
     with:
       pull-request-number: ${{ format('{0}', github.event.pull_request.number || inputs.pull-request-number) }}
       head-sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      all-apps: ${{ github.event_name == 'workflow_dispatch' }}
+      all-apps: ${{ vars.PREVIEW_FORCE_ALL_APPS == 'true' || github.event_name == 'workflow_dispatch' }}
     secrets: inherit
