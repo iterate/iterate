@@ -1,6 +1,18 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, useRouterState } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { z } from "zod";
+import { AppShell } from "@iterate-com/ui/components/app-shell";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@iterate-com/ui/components/breadcrumb";
+import { Button } from "@iterate-com/ui/components/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
+import { Field, FieldLabel } from "@iterate-com/ui/components/field";
+import { Textarea } from "@iterate-com/ui/components/textarea";
 
 // The note is a FILE in the project's config repo, edited through a workspace: the loader brings
 // the repo and the workspace into being (`create()` is idempotent), reads the file through the
@@ -38,32 +50,33 @@ export const Route = createFileRoute("/_auth/notes")({
   },
   component: NotesPage,
 });
+
 function NotesPage() {
   const data = Route.useLoaderData();
   const { info } = Route.useRouteContext();
+  const href = useRouterState({ select: (state) => state.location.href });
   return (
-    <main>
-      <header>
-        <div>
-          <p className="eyebrow">NOTES</p>
-          <h1>A little room to think.</h1>
-        </div>
-        <form method="post" action="/.auth/logout">
-          <button type="submit">Log out</button>
-        </form>
-      </header>
-      <p id="identity">{info.principal.email || info.principal.actor}</p>
-      {data.projects.length > 1 && (
-        <nav aria-label="Projects">
-          {data.projects.map((project) => (
-            <span key={project.id}>
-              <Link to="/notes" search={{ project: project.id }}>
-                {project.id}
-              </Link>{" "}
-            </span>
-          ))}
-        </nav>
-      )}
+    <AppShell
+      app="Notes"
+      projects={data.projects}
+      activeProjectId={data.project?.id || null}
+      projectHref={(projectId) => `/notes?project=${encodeURIComponent(projectId)}`}
+      header={
+        data.project ? (
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem className="hidden md:inline-flex">Notes</BreadcrumbItem>
+              <BreadcrumbSeparator className="hidden md:inline-flex" />
+              <BreadcrumbItem>
+                <BreadcrumbPage className="font-mono">{data.project.id}</BreadcrumbPage>
+              </BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
+        ) : null
+      }
+      account={{ email: info.principal.email || info.principal.actor }}
+      locationKey={href}
+    >
       {data.project ? (
         <Editor
           key={data.project.id}
@@ -72,17 +85,24 @@ function NotesPage() {
           tip={data.tip}
         />
       ) : (
-        <p>
-          No projects yet. <Link to="/dashboard">Create a project</Link>.
-        </p>
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>No projects yet</EmptyTitle>
+            <EmptyDescription>
+              <a href="https://dash.iterate2.com/projects" className="underline underline-offset-4">
+                Create a project
+              </a>{" "}
+              in the dash to give a note a home.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       )}
-      <p>
-        <Link to="/dashboard">Project dashboard</Link>
-      </p>
-    </main>
+    </AppShell>
   );
 }
+
 const Commit = z.object({ commitOid: z.string().nullable(), changedPaths: z.array(z.string()) });
+
 function Editor({
   project,
   initial,
@@ -127,18 +147,31 @@ function Editor({
     }
   }
   return (
-    <form onSubmit={save}>
-      <label htmlFor="note">
-        {project} · {FILE}
-      </label>
-      <textarea id="note" value={note} onChange={(event) => setNote(event.target.value)} />
-      <div className="actions">
-        <button type="submit" disabled={pending}>
-          Save and commit
-        </button>
-        <span role="status">{status}</span>
+    <form onSubmit={save} className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 md:p-8">
+      <Field>
+        <FieldLabel htmlFor="note" className="font-mono text-xs text-muted-foreground">
+          {FILE}
+        </FieldLabel>
+        <Textarea
+          id="note"
+          value={note}
+          onChange={(event) => setNote(event.target.value)}
+          className="min-h-80 p-4 font-mono text-sm"
+        />
+      </Field>
+      <div className="flex flex-wrap items-center gap-4">
+        <Button type="submit" disabled={pending}>
+          Save
+        </Button>
+        <span role="status" className="text-sm text-muted-foreground">
+          {status}
+        </span>
       </div>
-      {error && <p role="alert">{error}</p>}
+      {error ? (
+        <p role="alert" className="text-sm break-words text-destructive">
+          {error}
+        </p>
+      ) : null}
     </form>
   );
 }

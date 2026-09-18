@@ -58,8 +58,6 @@
     "./next/app-session": "./src/next/app-session.ts",
     "./next/client": "./src/next/client/live-state.ts",
     "./next/react": "./src/next/client/react.tsx",
-    "./next/dashboard": "./src/next/client/dashboard.tsx",
-    "./next/dashboard-data": "./src/next/client/dashboard-data.ts",
     "./next/api": "./src/next/api.ts",
     "./next/lib": "./src/next/lib.ts",
     "./next/expression": "./src/next/expression.ts",
@@ -229,14 +227,6 @@
       "./next/react": {
         "types": "./dist/next/client/react.d.ts",
         "import": "./dist/next/react.mjs"
-      },
-      "./next/dashboard": {
-        "types": "./dist/next/client/dashboard.d.ts",
-        "import": "./dist/next/dashboard.mjs"
-      },
-      "./next/dashboard-data": {
-        "types": "./dist/next/client/dashboard-data.d.ts",
-        "import": "./dist/next/dashboard-data.mjs"
       },
       "./next/api": {
         "types": "./dist/next/api.d.ts",

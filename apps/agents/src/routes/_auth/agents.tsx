@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CircleIcon } from "lucide-react";
 import { z } from "zod";
@@ -9,8 +9,15 @@ import {
   ConversationContent,
   ConversationScrollButton,
 } from "@iterate-com/ui/components/ai-elements/conversation";
+import { AppShell } from "@iterate-com/ui/components/app-shell";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@iterate-com/ui/components/breadcrumb";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
@@ -18,8 +25,7 @@ import type { Event } from "@iterate-com/ui/components/events/types";
 import type { AgentUiLlmStep } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
 import { EventsList, InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
-import { AgentsSidebar } from "../../components/agents-sidebar.tsx";
-import { CloseMobileSidebarOnNavigate } from "../../components/close-mobile-sidebar-on-navigate.tsx";
+import { AgentsNav } from "../../components/agents-nav.tsx";
 import { AgentComposer, type StreamInterrupt } from "../../components/composer.tsx";
 import { QueuedMessagesPanel } from "../../components/queued-messages.tsx";
 import { reduceAgentFeed, toAgentEvent, traceOffsetByMessage } from "../../lib/agent-events.ts";
@@ -71,60 +77,70 @@ function AgentsPage() {
   const { api, info } = Route.useRouteContext();
   const navigate = useNavigate();
   const router = useRouter();
-  if (!data.project)
-    return (
-      <Empty className="min-h-svh">
-        <EmptyHeader>
-          <EmptyTitle>No projects yet</EmptyTitle>
-          <EmptyDescription>
-            <a href="/dashboard" className="underline underline-offset-4">
-              Create a project
-            </a>{" "}
-            to give an agent a home.
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-    );
-  const project = data.project.id;
+  const href = useRouterState({ select: (state) => state.location.href });
+  const project = data.project?.id || null;
   return (
-    <SidebarProvider className="h-svh">
-      {/* outside <Sidebar>: on a phone its children live in a Sheet that remounts when opened */}
-      <CloseMobileSidebarOnNavigate />
-      <AgentsSidebar
-        projects={data.projects}
-        project={project}
-        agents={data.agents}
-        agent={data.agent}
-        account={info.principal.email || info.principal.actor}
-        onCreate={async () => {
-          // an agent is its path; a new one is born at the moment's path, as in apps/os
-          const path = newWebAgentPath(new Date());
-          using itx = await api.projects.get(project);
-          await itx.invoke(["itx", "agents", ["get", path], ["create", {}]]);
-          await router.invalidate();
-          await navigate({ to: "/agents", search: { project, agent: path } });
-        }}
-      />
-      <SidebarInset className="min-w-0 overflow-hidden">
-        {data.agent ? (
-          <AgentConversation key={`${project}${data.agent}`} project={project} path={data.agent} />
-        ) : (
-          <div className="flex h-full flex-col">
-            <header className="flex shrink-0 items-center gap-3 px-4 pb-1 pt-2.5">
-              <SidebarTrigger className="-ml-1 md:hidden" />
-            </header>
-            <Empty className="flex-1">
-              <EmptyHeader>
-                <EmptyTitle>No agents yet</EmptyTitle>
-                <EmptyDescription>
-                  Create one in the sidebar, then talk to it here.
-                </EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          </div>
-        )}
-      </SidebarInset>
-    </SidebarProvider>
+    <AppShell
+      app="Agents"
+      projects={data.projects}
+      activeProjectId={project}
+      projectHref={(projectId) => `/agents?project=${encodeURIComponent(projectId)}`}
+      nav={
+        project ? (
+          <AgentsNav
+            project={project}
+            agents={data.agents}
+            agent={data.agent}
+            onCreate={async () => {
+              // an agent is its path; a new one is born at the moment's path, as in apps/os
+              const path = newWebAgentPath(new Date());
+              using itx = await api.projects.get(project);
+              await itx.invoke(["itx", "agents", ["get", path], ["create", {}]]);
+              await router.invalidate();
+              await navigate({ to: "/agents", search: { project, agent: path } });
+            }}
+          />
+        ) : null
+      }
+      header={
+        data.agent ? (
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem className="hidden md:inline-flex">Agents</BreadcrumbItem>
+              <BreadcrumbSeparator className="hidden md:inline-flex" />
+              <BreadcrumbItem>
+                <BreadcrumbPage className="font-mono">{data.agent}</BreadcrumbPage>
+              </BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
+        ) : null
+      }
+      account={{ email: info.principal.email || info.principal.actor }}
+      locationKey={href}
+    >
+      {!project ? (
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>No projects yet</EmptyTitle>
+            <EmptyDescription>
+              <a href="https://dash.iterate2.com/projects" className="underline underline-offset-4">
+                Create a project
+              </a>{" "}
+              in the dash to give an agent a home.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : data.agent ? (
+        <AgentConversation key={`${project}${data.agent}`} project={project} path={data.agent} />
+      ) : (
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>No agents yet</EmptyTitle>
+            <EmptyDescription>Create one in the sidebar, then talk to it here.</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )}
+    </AppShell>
   );
 }
 
@@ -345,10 +361,9 @@ function AgentConversation({ project, path }: { project: string; path: string })
             ? { text: "About to think", tone: "live" as const }
             : { text: "Idle", tone: "muted" as const };
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 items-center gap-3 px-4 pb-1 pt-2.5">
-        <SidebarTrigger className="-ml-1 md:hidden" />
-        <span className="truncate font-mono text-sm">{path}</span>
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* the shell's header names the agent; this strip is its live status and the two views */}
+      <div className="flex shrink-0 items-center gap-3 px-4 py-1">
         <span
           className="flex min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground"
           title={live.error}
@@ -387,7 +402,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
             </TabsTrigger>
           </TabsList>
         </Tabs>
-      </header>
+      </div>
       {error ? <p className="px-4 py-2 text-sm text-destructive">{error}</p> : null}
       {view === "events" ? (
         <div className="min-h-0 flex-1 overflow-y-auto">

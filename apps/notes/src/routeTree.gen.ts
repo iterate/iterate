@@ -12,7 +12,6 @@ import { Route as rootRouteImport } from "./routes/__root.tsx";
 import { Route as AuthRouteImport } from "./routes/_auth.tsx";
 import { Route as IndexRouteImport } from "./routes/index.tsx";
 import { Route as AuthNotesRouteImport } from "./routes/_auth/notes.tsx";
-import { Route as AuthDashboardRouteImport } from "./routes/_auth/dashboard.tsx";
 
 const AuthRoute = AuthRouteImport.update({
   id: "/_auth",
@@ -28,35 +27,27 @@ const AuthNotesRoute = AuthNotesRouteImport.update({
   path: "/notes",
   getParentRoute: () => AuthRoute,
 } as any);
-const AuthDashboardRoute = AuthDashboardRouteImport.update({
-  id: "/dashboard",
-  path: "/dashboard",
-  getParentRoute: () => AuthRoute,
-} as any);
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute;
-  "/dashboard": typeof AuthDashboardRoute;
   "/notes": typeof AuthNotesRoute;
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute;
-  "/dashboard": typeof AuthDashboardRoute;
   "/notes": typeof AuthNotesRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/": typeof IndexRoute;
   "/_auth": typeof AuthRouteWithChildren;
-  "/_auth/dashboard": typeof AuthDashboardRoute;
   "/_auth/notes": typeof AuthNotesRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: "/" | "/dashboard" | "/notes";
+  fullPaths: "/" | "/notes";
   fileRoutesByTo: FileRoutesByTo;
-  to: "/" | "/dashboard" | "/notes";
-  id: "__root__" | "/" | "/_auth" | "/_auth/dashboard" | "/_auth/notes";
+  to: "/" | "/notes";
+  id: "__root__" | "/" | "/_auth" | "/_auth/notes";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -87,23 +78,14 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthNotesRouteImport;
       parentRoute: typeof AuthRoute;
     };
-    "/_auth/dashboard": {
-      id: "/_auth/dashboard";
-      path: "/dashboard";
-      fullPath: "/dashboard";
-      preLoaderRoute: typeof AuthDashboardRouteImport;
-      parentRoute: typeof AuthRoute;
-    };
   }
 }
 
 interface AuthRouteChildren {
-  AuthDashboardRoute: typeof AuthDashboardRoute;
   AuthNotesRoute: typeof AuthNotesRoute;
 }
 
 const AuthRouteChildren: AuthRouteChildren = {
-  AuthDashboardRoute: AuthDashboardRoute,
   AuthNotesRoute: AuthNotesRoute,
 };
 

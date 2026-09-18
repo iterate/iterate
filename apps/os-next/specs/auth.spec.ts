@@ -282,7 +282,7 @@ test("first Claude consent creates the organization and project on the consent p
   }
 });
 
-test("the same Notes app and dashboard work on their own origin and through a project config worker", async ({
+test("the Notes app works on its own origin and through a project config worker", async ({
   page,
   context,
   baseURL,
@@ -296,6 +296,8 @@ test("the same Notes app and dashboard work on their own origin and through a pr
   const email = `notes-${stamp()}@example.com`;
   const project = `notes-${stamp()}`;
   const note = `Written on the independent app: ${stamp()}`;
+  // the note's textbox is named by the file it edits (apps/notes/src/routes/_auth/notes.tsx)
+  const noteFile = "/repos/config/notes/log.md";
   await page.goto(`${origin}/login`);
   await signIn(page, origin, email);
   await page.getByRole("textbox", { name: "New project" }).fill(project);
@@ -334,33 +336,30 @@ test("the same Notes app and dashboard work on their own origin and through a pr
     .getByRole("heading", { name: `Authorize ${new URL(notesOrigin).host}`, exact: true })
     .waitFor();
   await page.getByRole("button", { name: "Approve", exact: true }).click();
-  await page.getByRole("textbox", { name: project, exact: true }).fill(note);
-  await page.getByRole("button", { name: "Save note", exact: true }).click();
+  await page.getByRole("textbox", { name: noteFile, exact: true }).fill(note);
+  await page.getByRole("button", { name: "Save", exact: true }).click();
   await page
     .getByRole("status")
-    .filter({ hasText: /^Saved$/ })
+    .filter({ hasText: /^Committed / })
     .waitFor();
   await page.reload();
-  expect(await page.getByRole("textbox", { name: project, exact: true }).inputValue()).toBe(note);
-  await page.getByRole("link", { name: "Project dashboard", exact: true }).click();
-  await page.getByRole("heading", { name: `Signed in as ${email}`, exact: true }).waitFor();
-  await page.getByRole("link", { name: "open", exact: true }).waitFor();
+  expect(await page.getByRole("textbox", { name: noteFile, exact: true }).inputValue()).toBe(note);
   await page.goto(`${appOrigin}/notes`);
   await page
     .getByRole("heading", { name: `Authorize ${new URL(appOrigin).host}`, exact: true })
     .waitFor();
   await page.getByRole("button", { name: "Approve", exact: true }).click();
-  expect(await page.getByRole("textbox", { name: project, exact: true }).inputValue()).toBe(note);
+  expect(await page.getByRole("textbox", { name: noteFile, exact: true }).inputValue()).toBe(note);
   await page
-    .getByRole("textbox", { name: project, exact: true })
+    .getByRole("textbox", { name: noteFile, exact: true })
     .fill(`${note}; edited through the project proxy`);
-  await page.getByRole("button", { name: "Save note", exact: true }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
   await page
     .getByRole("status")
-    .filter({ hasText: /^Saved$/ })
+    .filter({ hasText: /^Committed / })
     .waitFor();
   await page.goto(`${notesOrigin}/notes`);
-  expect(await page.getByRole("textbox", { name: project, exact: true }).inputValue()).toBe(
+  expect(await page.getByRole("textbox", { name: noteFile, exact: true }).inputValue()).toBe(
     `${note}; edited through the project proxy`,
   );
   await page.goto(`${origin}/sessions`);
@@ -372,7 +371,7 @@ test("the same Notes app and dashboard work on their own origin and through a pr
     .waitFor();
   // The independently granted Notes session remains usable after proxy revocation.
   await page.goto(`${notesOrigin}/notes`);
-  await page.getByRole("textbox", { name: project, exact: true }).waitFor();
+  await page.getByRole("textbox", { name: noteFile, exact: true }).waitFor();
   const cookies = await context.cookies();
   expect(
     cookies
