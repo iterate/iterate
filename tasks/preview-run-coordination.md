@@ -8,7 +8,7 @@ base: codex/preview-change-types-v3
 
 Stacked draft PR #2741, based on #2712. Implementation and local checks pass.
 Live runs prove exclusive cleanup, cross-commit waiting, smart cancellation and
-active-job retry recovery. Terminal retry and final inheritance acceptance remain.
+both forms of job retry recovery. Final pending inheritance acceptance remains.
 
 ## Request
 
@@ -125,3 +125,14 @@ active-job retry recovery. Terminal retry and final inheritance acceptance remai
   schema loading exceeded a 5s individual-test deadline; schemas now load once
   during test-file collection, while real CLI invocation/assertions remain inside
   each test. No timeout increase or product change.
+
+- Terminal retry acceptance: after `dsr4rt0rdh` completed cleanup/restoration,
+  retrying its cancelled shard created execution 2 `jg2msr3qtv` with old
+  prerequisites. The guard refused it before test setup; recovery `0kv9871rcs`
+  started full execution 3 `lbdzcj6sdd` at 14:18:21Z. Both active and terminal
+  partial retry cases therefore recover with fresh preparation.
+- Merged parent review fixes `83c4e345b` without rewriting history; all 489
+  scripts tests, scripts typecheck and affected-file lint pass.
+- Final pending-docs trial: push this documentation while the merged implementation
+  is running. The ancestor must finish restoration; this successor must inherit its
+  conclusive outcome without deploying or testing again.
