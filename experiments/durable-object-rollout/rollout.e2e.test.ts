@@ -23,8 +23,8 @@ test(
       // First-touch new names as soon as deploy returns: /work saves 'started', does 15s
       // of work, then saves 'completed'. No readiness wait and no write retries.
       const operations = await Promise.all(
-        Array.from({ length: 12 }, async () => {
-          const id = randomUUID();
+        Array.from({ length: 12 }, async (_, i) => {
+          const id = `${String.fromCharCode("a".charCodeAt(0) + i).repeat(3)}-${randomUUID()}`;
           const response = await probe.request(`/work/${id}`, { durationMs: 15_000 }, deployment);
           return {
             id,
@@ -55,9 +55,11 @@ test(
       // read must not turn a failed first call green; recorded runs hit code-update resets here.
       for (const operation of operations) {
         expect({
+          id: operation.id,
           response: operation.response,
           state: operation.stateObservations.at(-1),
         }).toMatchObject({
+          id: operation.id,
           response: { status: 200, data: { record: { status: "completed" } } },
           state: { status: 200, data: { record: { status: "completed" } } },
         });
@@ -85,8 +87,8 @@ test(
       const deployment = await probe.deploy(`retire-recreate-${round}`, true);
       // First-touch unique names immediately after Wrangler exits. Never retry a write.
       const operations = await Promise.all(
-        Array.from({ length: 12 }, async () => {
-          const id = randomUUID();
+        Array.from({ length: 12 }, async (_, i) => {
+          const id = `${String.fromCharCode("a".charCodeAt(0) + i).repeat(3)}-${randomUUID()}`;
           const response = await probe.request(`/work/${id}`, { durationMs: 15_000 }, deployment);
           return { id, response, stateObservations: [] as any[] };
         }),
@@ -110,9 +112,11 @@ test(
       expect(trial.namespace).not.toBe(previousNamespace);
       for (const operation of operations) {
         expect({
+          id: operation.id,
           response: operation.response,
           state: operation.stateObservations.at(-1),
         }).toMatchObject({
+          id: operation.id,
           response: { status: 200, data: { record: { status: "completed" } } },
           state: { status: 200, data: { record: { status: "completed" } } },
         });
