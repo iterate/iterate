@@ -8,15 +8,15 @@ import { partialRetryReason, previewUsefulness } from "./run-policy.ts";
 
 /** Preserve useful ancestors, stop obsolete tests, and recover partial Preview retries. */
 export default class PreviewCoordination {
-  private env = Environment.parse(process.env);
-  private url = new URL(this.env.DEPOT_JOB_URL);
-  private org = z.string().min(1).parse(this.url.pathname.split("/")[2]);
-  private workflowId = z.string().min(1).parse(this.url.pathname.split("/")[4]);
-  private depot = new Depot({ org: this.org, token: this.env.DEPOT_CI_TELEMETRY_TOKEN });
-  private signal = AbortSignal.timeout(50 * 60_000);
-
   /** Runs outside the lifecycle lock, so a newer push can stop obsolete tests immediately. */
   async coordinate(pullRequest: number) {
+    const current = await previewUsefulness({
+      commit: this.env.CI_HEAD_SHA,
+      pullRequest,
+      repository: this.env.GITHUB_REPOSITORY,
+      token: this.env.GITHUB_TOKEN,
+      directory: process.cwd(),
+    });
     const candidates = z
       .object({
         workflows: z
@@ -28,15 +28,19 @@ export default class PreviewCoordination {
       .parse(
         await this.depot.request("ListWorkflows", {
           repo: this.env.GITHUB_REPOSITORY,
-          pr: String(pullRequest),
+          // Depot's PR filter excludes manual dispatches. Inspect active Preview
+          // workflows, then prove membership using the PR ref/branch below.
+          name: "Preview",
           status: ["running", "queued"],
           pageSize: 200,
         }),
       );
     const ancestors = new Set(
-      new CommitHistory(process.cwd(), this.env.CI_HEAD_SHA, "origin/main")
-        .throughMergeBase()
-        .slice(1),
+      current.obsolete
+        ? []
+        : new CommitHistory(process.cwd(), this.env.CI_HEAD_SHA, "origin/main")
+            .throughMergeBase()
+            .slice(1),
     );
     let ancestor: Workflow | undefined;
     for (const candidate of candidates.workflows) {
@@ -47,6 +51,14 @@ export default class PreviewCoordination {
         continue;
       const workflow = await this.depot.workflow(candidate.workflowId);
       this.assertPreview(workflow);
+      if (
+        ![
+          `refs/pull/${pullRequest}/merge`,
+          `refs/heads/${current.branch}`,
+          current.branch,
+        ].includes(workflow.ref)
+      )
+        continue;
       const usefulness = await this.usefulness(workflow, pullRequest);
       console.log(`[preview] ${workflow.workflowId}: ${usefulness.reason}`);
       if (usefulness.obsolete) await this.stopConsumers(workflow);
@@ -166,6 +178,13 @@ export default class PreviewCoordination {
     console.log(`[preview] ${result.reason}`);
     return !result.obsolete;
   }
+
+  private env = Environment.parse(process.env);
+  private url = new URL(this.env.DEPOT_JOB_URL);
+  private org = z.string().min(1).parse(this.url.pathname.split("/")[2]);
+  private workflowId = z.string().min(1).parse(this.url.pathname.split("/")[4]);
+  private depot = new Depot({ org: this.org, token: this.env.DEPOT_CI_TELEMETRY_TOKEN });
+  private signal = AbortSignal.timeout(50 * 60_000);
 
   private assertPreview(workflow: Workflow) {
     if (

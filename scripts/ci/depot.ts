@@ -4,12 +4,10 @@ import { z } from "zod";
 export class Depot {
   private token: string;
   private org: string;
-  private fetch: typeof fetch;
 
-  constructor(options: { token: string; org: string }, fetcher = fetch) {
+  constructor(options: { token: string; org: string }) {
     this.token = z.string().min(1).parse(options.token);
     this.org = z.string().min(1).parse(options.org);
-    this.fetch = fetcher;
   }
 
   async workflow(workflowId: string) {
@@ -17,7 +15,7 @@ export class Depot {
   }
 
   async request(method: string, body: object): Promise<unknown> {
-    const response = await this.fetch(
+    const response = await fetch(
       `${process.env.DEPOT_API_URL || "https://api.depot.dev"}/depot.ci.v1.CIService/${method}`,
       {
         method: "POST",

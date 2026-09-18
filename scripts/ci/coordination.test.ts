@@ -1,11 +1,9 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
+import { createCli } from "trpc-cli";
 import PreviewCoordination from "../preview/coordination.ts";
 import CiStatus from "./status.ts";
 
@@ -103,19 +101,16 @@ test("a superseded publisher cannot publish a milestone", async () => {
 
 test("the actual trpc-cli publishes a milestone", async () => {
   await using ci = await coordination();
-  const cli = fileURLToPath(import.meta.resolve("trpc-cli/dist/bin.js"));
-  await promisify(execFile)(
-    process.execPath,
-    [
-      cli,
-      fileURLToPath(new URL("./status.ts", import.meta.url)),
-      "set",
-      "preview-settled",
-      "--values",
-      '{"tests":"success","deployment":"restored"}',
-    ],
-    { env: process.env },
-  );
+  await expect(
+    createCli({ filename: new URL("./status.ts", import.meta.url), jsonInput: "auto" }).run({
+      argv: ["set", "preview-settled", "--values", '{"tests":"success","deployment":"restored"}'],
+      process: {
+        exit(code) {
+          throw Object.assign(new Error("CLI exited"), { exitCode: code });
+        },
+      },
+    }),
+  ).rejects.toMatchObject({ exitCode: 0 });
   expect(ci.requests).toContainEqual({
     path: "/repos/iterate/iterate/statuses/head",
     body: expect.objectContaining({
@@ -129,13 +124,56 @@ test("the actual trpc-cli executes the preview retry guard", async () => {
   await using ci = await coordination();
   ci.workflow.jobs[1].attempts[0].startedAt = "2026-09-18T00:01:00Z";
   ci.workflow.jobs[0].attempts[0].startedAt = "2026-09-18T00:00:30Z";
-  const cli = fileURLToPath(import.meta.resolve("trpc-cli/dist/bin.js"));
-  await promisify(execFile)(
-    process.execPath,
-    [cli, fileURLToPath(new URL("../preview/coordination.ts", import.meta.url)), "verify", "0"],
-    { env: process.env },
-  );
+  await expect(
+    createCli({
+      filename: new URL("../preview/coordination.ts", import.meta.url),
+      jsonInput: "auto",
+    }).run({
+      argv: ["verify", "0"],
+      process: {
+        exit(code) {
+          throw Object.assign(new Error("CLI exited"), { exitCode: code });
+        },
+      },
+    }),
+  ).rejects.toMatchObject({ exitCode: 0 });
   expect(await readFile(ci.env.GITHUB_ENV, "utf8")).toContain("PREVIEW_EXECUTION_ID=execution-1");
+});
+
+test("an active partial retry requests recovery before it can use old preparation", async () => {
+  await using ci = await coordination();
+  ci.workflow.workflowPath = "preview-main.yml";
+  ci.workflow.jobs[0].attempts[0].startedAt = "2026-09-18T00:00:30Z";
+  ci.workflow.jobs[1].attempts[0] = {
+    attemptId: "consumer-1",
+    attempt: 1,
+    status: "failed",
+    startedAt: "2026-09-18T00:01:00Z",
+  };
+  ci.workflow.jobs[1].attempts.push({
+    attemptId: "consumer-2",
+    attempt: 2,
+    status: "running",
+    startedAt: "2026-09-18T00:02:00Z",
+  });
+  process.env.DEPOT_JOB_URL = ci.url("consumer", "consumer-2");
+  await expect(new PreviewCoordination().verify(0)).rejects.toThrow(
+    "Requested a fresh full Preview run",
+  );
+  expect(ci.requests).toContainEqual({
+    path: "/depot.ci.v1.CIService/DispatchWorkflow",
+    body: expect.objectContaining({
+      workflow: "preview-retry.yml",
+      ref: "main",
+      inputs: {
+        "workflow-id": "workflow",
+        "execution-id": "execution-1",
+        "head-sha": "head",
+        "pull-request-number": "0",
+      },
+    }),
+  });
+  await expect(readFile(ci.env.GITHUB_ENV, "utf8")).rejects.toThrow("ENOENT");
 });
 
 test("partial retry recovery requests are idempotent for an execution", async () => {
@@ -152,6 +190,37 @@ test("partial retry recovery requests are idempotent for an execution", async ()
   await new PreviewCoordination().recover("workflow", "execution-1", "head", 0);
   await new PreviewCoordination().recover("workflow", "execution-1", "head", 0);
   expect(ci.requests.filter((request) => request.path.endsWith("/RerunWorkflow"))).toHaveLength(1);
+});
+
+test("recovery stops cancelling consumers when the workflow execution changes", async () => {
+  await using ci = await coordination();
+  ci.workflow.workflowPath = "preview-main.yml";
+  ci.workflow.jobs.push(
+    {
+      jobId: "shard",
+      jobKey: "preview-run.yml:playwright:matrix-0",
+      status: "running",
+      attempts: [],
+    },
+    { jobId: "finish", jobKey: "preview-run.yml:finish", status: "finished", attempts: [] },
+  );
+  ci.onRequest = (request) => {
+    if (request.path.endsWith("/CancelJob")) {
+      ci.workflow.executions.push({
+        executionId: "new-execution",
+        execution: 2,
+        createdAt: "2026-09-18T01:00:00Z",
+      });
+      ci.workflow.workflowStatus = "queued";
+    }
+  };
+  await expect(
+    new PreviewCoordination().recover("workflow", "execution-1", "head", 0),
+  ).resolves.toMatchObject({ recovered: false });
+  expect(ci.requests.filter((request) => request.path.endsWith("/CancelJob"))).toHaveLength(1);
+  expect(
+    ci.requests.filter((request) => /\/(CancelWorkflow|RerunWorkflow)$/.test(request.path)),
+  ).toHaveLength(0);
 });
 
 test("recovery validates its PR scope before cancelling anything", async () => {
@@ -190,13 +259,18 @@ async function coordination() {
   };
   const statuses: any[] = [];
   const requests: any[] = [];
-  const state = { external: null as any, onStatusRead: null as (() => void) | null };
+  const state = {
+    external: null as any,
+    onStatusRead: null as (() => void) | null,
+    onRequest: null as ((request: any) => void) | null,
+  };
   const server = createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     const text = Buffer.concat(chunks).toString();
     const body = text ? JSON.parse(text) : null;
     requests.push({ path: request.url, body });
+    state.onRequest?.({ path: request.url, body });
     if (request.url?.endsWith("/RerunWorkflow")) {
       workflow.executions.push({
         executionId: "execution-2",
@@ -249,6 +323,9 @@ async function coordination() {
       state.external = value;
     },
     env,
+    set onRequest(callback: (request: any) => void) {
+      state.onRequest = callback;
+    },
     set onStatusRead(callback: () => void) {
       state.onStatusRead = callback;
     },

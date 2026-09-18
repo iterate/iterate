@@ -5,23 +5,6 @@ import { Workflow, currentAttempt, terminal } from "./depot.ts";
 
 /** GitHub milestones, guarded by Depot job liveness. Run with trpc-cli. */
 export default class CiStatus {
-  private env = Environment.parse(process.env);
-  private signal = AbortSignal.timeout(60 * 60_000);
-  private org: string;
-  private workflowId: string;
-  private jobId: string;
-  private attemptId: string;
-
-  constructor() {
-    const url = new URL(this.env.DEPOT_JOB_URL);
-    const path = /^\/orgs\/([^/]+)\/workflows\/([^/]+)$/.exec(url.pathname);
-    if (!path) throw new Error("DEPOT_JOB_URL must identify the current workflow and job attempt");
-    this.org = path[1];
-    this.workflowId = path[2];
-    this.jobId = z.string().min(1).parse(url.searchParams.get("job"));
-    this.attemptId = z.string().min(1).parse(url.searchParams.get("attempt"));
-  }
-
   /** Publish a milestone and optional step outputs for this exact job attempt. */
   async set(milestone: string, options: { values?: Record<string, string> } = {}) {
     const values = Values.parse(options.values || { milestone });
@@ -53,7 +36,7 @@ export default class CiStatus {
     const workflowId = options.workflowId || this.workflowId;
     const commit = options.commit || this.env.CI_HEAD_SHA;
     console.log(`[ci:status] waiting for ${producer}/${milestone}`);
-    let linked = false;
+    const linked = new Set<string>();
     wait: while (true) {
       const workflow = await this.workflow(options);
       const jobs = workflow.jobs.filter((job) => job.jobKey.endsWith(`:${producer}`));
@@ -62,11 +45,11 @@ export default class CiStatus {
       const job = jobs[0];
       const attempt = currentAttempt(job);
       if (attempt) {
-        if (!linked && process.env.CI_TRACE_ENABLED === "1") {
+        if (!linked.has(attempt.attemptId) && process.env.CI_TRACE_ENABLED === "1") {
           console.log(
             `@@ci-trace ${JSON.stringify({ kind: "dependency", targetId: attempt.attemptId, milestone })}`,
           );
-          linked = true;
+          linked.add(attempt.attemptId);
         }
         const context = `${milestone} ${attempt.attemptId}`;
         // Read the signal AFTER liveness. A final status write followed by job
@@ -195,6 +178,23 @@ export default class CiStatus {
       `[ci:status] check ${check.id} set green at ${new Date(greenAt).toISOString()}; job continues`,
     );
     return { checkId: check.id };
+  }
+
+  private env = Environment.parse(process.env);
+  private signal = AbortSignal.timeout(60 * 60_000);
+  private org: string;
+  private workflowId: string;
+  private jobId: string;
+  private attemptId: string;
+
+  constructor() {
+    const url = new URL(this.env.DEPOT_JOB_URL);
+    const path = /^\/orgs\/([^/]+)\/workflows\/([^/]+)$/.exec(url.pathname);
+    if (!path) throw new Error("DEPOT_JOB_URL must identify the current workflow and job attempt");
+    this.org = path[1];
+    this.workflowId = path[2];
+    this.jobId = z.string().min(1).parse(url.searchParams.get("job"));
+    this.attemptId = z.string().min(1).parse(url.searchParams.get("attempt"));
   }
 
   private async ownCheck() {

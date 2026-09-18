@@ -27,7 +27,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           clean: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # Close events must use current cleanup/coordination tooling even for
+          # a PR whose old head predates these scripts.
+          ref: ${{ github.event.action == 'closed' && github.event.repository.default_branch || github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install

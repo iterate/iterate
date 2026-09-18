@@ -369,8 +369,9 @@ local workflow validation and `depot ci dispatch` for `workflow_dispatch`
 coverage.
 
 `workflow_dispatch` and automatic PR runs can share concurrency groups. For the
-preview workflow, a manual dispatch and an automatic PR run for the same PR can
-cancel each other. When validating previews, use one path at a time.
+Preview workflow, a manual dispatch and an automatic PR run for the same PR
+queue behind the same lifecycle lock. Depot's `ListWorkflows` PR filter omits
+manual dispatches, so coordination also checks matching branch refs.
 
 `depot ci logs` accepts a run id, job id, or attempt id. When a run has multiple
 jobs, pass `--job <job-key>` or use `depot ci status <run-id> --output json` to
@@ -405,7 +406,10 @@ Coordination reads Depot's API with the existing Doppler-managed
 secret or copy a personal token. GitHub milestones use the job token with
 `statuses: write`. The organization token has broad scope, as documented above.
 New pushes do not cancel the active Preview automatically. A small coordinator
-runs outside the per-PR lifecycle lock. It preserves ancestors that docs or
+runs in `preview-coordinate.yml`, outside the per-PR workflow lock shared by
+`preview.yml` and close cleanup. The lock must cover the entire workflow: Depot
+ignored concurrency on the reusable caller job in our live overlap test.
+The coordinator preserves ancestors that docs or
 test-only changes can use; a proven product-change barrier cancels obsolete app
 and browser test jobs. Preparation and cleanup keep their lock until their writes
 finish. Unknown ancestry, including a force-push, is not proof of obsolescence.
@@ -429,6 +433,10 @@ workflow. Recovery requests serialize by target workflow and check the expected
 execution, so duplicate requests become no-ops. Internal plan/result artifacts
 include that execution's ID. No failed run retries itself automatically; ordinary
 Playwright/Vitest test retries are unchanged.
+
+If the same SHA has multiple separately created Preview workflows, result
+selection conservatively prefers the newest-created workflow. Rerunning an older
+one may cause a later commit to deploy again instead of inheriting it.
 
 ## Interactive trace reports
 

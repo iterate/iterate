@@ -106,3 +106,13 @@ obsolete-test cancellation are the remaining acceptance checks.
 - Full local `pnpm test` passed, including 486 scripts tests. Subsequent focused
   retry/race tests and scripts typecheck pass. CI lint found one import-order
   change, now corrected. Pending acceptance uses the corrected check-name reader.
+- Active retry acceptance: cancelled a waiting shard in `m5c0nmbxbt`, then
+  retried it. Depot kept execution `lf0cmlswq4` and made attempt 2. The guard
+  refused stale preparation and dispatched recovery `ctbngk1ssc`; recovery
+  cancelled the remaining consumers, preserved preparation/finalization, and
+  started fresh execution `4p0dr1mhn8` only after restoration finished.
+- CLI tests now invoke trpc-cli's real file loader/parser in-process. Cold child
+  Node startup exceeded 5s under CI contention; no timeout increase was needed.
+  Full local tests pass again, and the cancellation-generation regression passes.
+- This code push also exercises product obsolescence against that active full
+  rerun: stop its consumers, preserve cleanup, queue the replacement workflow.
