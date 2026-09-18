@@ -29,6 +29,32 @@ export async function startAppSession(
   return { session, location, setCookie };
 }
 
+/** The sign-in this browser holds does not cover what the page needs: a project the page named
+ *  (`?project=`, the page's own word — its `/projects/<ref>` was absent from the session's list; the
+ *  page is not verified, it only offers a sign-out the person must click) or a permission the app
+ *  asks for. One page for both, on the app's origin because ending its session is a same-origin
+ *  POST, dressed by the issuer's stylesheet: it is the next page of the same sign-in. The button
+ *  ends this app's session and comes straight back to `/.auth/login`, which starts a fresh one —
+ *  the issuer still knows the person, so they land on consent: the project to tick, or Switch
+ *  account — and returns to the page that sent them. */
+function signInAgainPage(url: URL, issuer: string, project: string | null) {
+  const text = (value: string) => value.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  const lacks = project
+    ? `does not include a project called <code>${text(project)}</code>`
+    : "does not include a permission this app asks for";
+  return new Response(
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in again</title><link rel="stylesheet" href="${issuer}/issuer.css"><link rel="icon" href="${issuer}/iterate-logo.svg" type="image/svg+xml"></head><body><main class="issuer-card"><img class="issuer-mark" src="${issuer}/iterate-logo.svg" alt="" width="56" height="56"><h1>Sign in again</h1><p>Your sign-in to <strong>${text(url.host)}</strong> ${lacks}.</p><p class="muted">Signing in again brings you back here. At consent, tick the project — or switch account.</p><form method="post" action="/.auth/logout?next=${encodeURIComponent(url.pathname + url.search)}"><button class="primary" type="submit">Sign in again</button></form></main></body></html>`,
+    {
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "frame-ancestors 'none'",
+        "X-Frame-Options": "DENY",
+      },
+    },
+  );
+}
+
 type AppAuth = {
   sessions: DurableObjectNamespace<BrowserSession>;
   issuer: string;
@@ -81,23 +107,14 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
       if (probe.status !== 401) {
         if (!probe.ok) throw new Error(`iterate API check failed (${probe.status})`);
         const heldScopes = await session!.scopes();
-        if (scopes.every((scope) => heldScopes.includes(scope)))
+        const project = url.searchParams.get("project");
+        if (!project && scopes.every((scope) => heldScopes.includes(scope)))
           return new Response(null, {
             status: 303,
             headers: { Location: next, "Cache-Control": "no-store" },
           });
         // Only a deliberate POST can replace a valid grant. GET never signs out.
-        return new Response(
-          `<!doctype html><html lang="en"><meta charset="utf-8"><title>Update permissions</title><h1>Update app permissions</h1><p>This app needs additional permissions. Continue to sign in and review them.</p><form method="post" action="/.auth/logout?next=${encodeURIComponent(url.pathname + url.search)}"><button type="submit">Continue</button></form></html>`,
-          {
-            headers: {
-              "Content-Type": "text/html; charset=utf-8",
-              "Cache-Control": "no-store",
-              "Content-Security-Policy": "frame-ancestors 'none'",
-              "X-Frame-Options": "DENY",
-            },
-          },
-        );
+        return signInAgainPage(url, issuer, project);
       }
       await session!.discard();
     }

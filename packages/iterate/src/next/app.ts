@@ -8,6 +8,11 @@ import { OAuthScopes } from "./oauth-scopes.ts";
 export type AuthenticatedApp = {
   api: RpcStub<IterateSessionApi>;
   info: ReturnType<IterateSessionApi["info"]>;
+  /** The page names a project this sign-in does not include — its `/projects/<ref>` is absent from
+   *  `api.projects.list()`: leave for `/.auth/login`, whose page offers to sign in again (the
+   *  project ticked at consent, or another account) and returns to this very URL. Never settles,
+   *  like `authenticate`'s own leave for login. */
+  signInFor(project: string): Promise<never>;
 };
 export type IterateClient = { authenticate(next?: string): Promise<AuthenticatedApp> };
 
@@ -86,8 +91,10 @@ export function createIterateClient(options: { scopes?: string[] } = {}): Iterat
       return Reflect.get(connection.api as object, property);
     },
   });
+  const loginUrl = (params: Record<string, string>) =>
+    `/.auth/login?${new URLSearchParams({ scope: scopes.join(" "), ...params })}`;
   async function connect(next: string): Promise<AuthenticatedApp> {
-    const login = `/.auth/login?${new URLSearchParams({ next, scope: scopes.join(" ") })}`;
+    const login = loginUrl({ next });
     // HTTP distinguishes 401 from outages; a failed WebSocket is not evidence
     // that the visitor needs to log in. Errors reach the route's error boundary.
     const probe = await fetch("/api", {
@@ -104,7 +111,11 @@ export function createIterateClient(options: { scopes?: string[] } = {}): Iterat
     // `info.scopes` — an app reads it and offers a step-up link (`/.auth/login?scope=…`) for what
     // it lacks; it is never bounced back to consent for a permission the person declined.
     const info = await api.info();
-    return { api, info };
+    return {
+      api,
+      info,
+      signInFor: (project) => leaveForLogin(loginUrl({ next: window.location.href, project })),
+    };
   }
   return {
     authenticate(next = "/") {

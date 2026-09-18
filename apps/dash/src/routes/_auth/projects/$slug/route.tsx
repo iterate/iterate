@@ -1,6 +1,7 @@
 // /projects/<slug> — the project layout: the project resolved from the session's list by its slug
-// (its id works too; one the session does not reach is not found), handed to every section below.
-import { createFileRoute, notFound, Outlet } from "@tanstack/react-router";
+// (its id works too; one this sign-in lacks sends the browser to sign in again), handed to every
+// section below.
+import { createFileRoute, Outlet } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/_auth/projects/$slug")({
   beforeLoad: async ({ context, params }) => {
@@ -8,7 +9,7 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
     const project = projects.find(
       (candidate) => candidate.slug === params.slug || candidate.id === params.slug,
     );
-    if (!project) throw notFound();
+    if (!project) return context.signInFor(params.slug);
     return { project };
   },
   component: Outlet,

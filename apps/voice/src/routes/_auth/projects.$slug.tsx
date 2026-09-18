@@ -30,9 +30,9 @@ type VoiceLiveView = z.infer<typeof VoiceLiveView>;
 export const Route = createFileRoute("/_auth/projects/$slug")({
   loader: async ({ context, params }) => {
     const projects = await context.api.projects.list();
-    // the URL names the project by slug (its id works too); one the session cannot see is refused
+    // the URL names the project by slug (its id works too); one this sign-in lacks → sign in again
     const project = projects.find((item) => item.slug === params.slug || item.id === params.slug);
-    if (!project) throw new Error("This session cannot access that project.");
+    if (!project) return context.signInFor(params.slug);
     return { projects, project };
   },
   component: CallPage,
