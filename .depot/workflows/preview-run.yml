@@ -53,7 +53,8 @@ jobs:
         with:
           clean: false
           ref: ${{ inputs.head-sha }}
-          fetch-depth: 0
+          # Full previews bypass ancestry planning; PR reuse needs the merge base.
+          fetch-depth: ${{ inputs.all-apps && 10 || 0 }}
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Decide preview work from the head commit
