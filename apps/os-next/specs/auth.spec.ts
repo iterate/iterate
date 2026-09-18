@@ -192,10 +192,8 @@ test("first Claude consent creates the organization and project on the consent p
     expect(await choice.isChecked()).toBe(true);
     expect(await otherChoice.isChecked()).toBe(true);
     expect(await otherChoice.isDisabled()).toBe(true);
-    await page
-      .getByRole("status")
-      .filter({ hasText: /^All current and future projects$/ })
-      .waitFor();
+    // with "all" ticked the checkbox says it: the count is hidden
+    await page.getByRole("status").waitFor({ state: "hidden" });
     // A create while "all" is chosen re-renders the parked list; the new project goes into the
     // FIRST organization, so the boxes' order (grouped by organization) differs from the projects'
     // creation order — the ticks must come back to the right boxes.

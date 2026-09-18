@@ -2,7 +2,8 @@
  * authorize.html), a file the assets binding serves: one centred column, phone-first, the same
  * controls on every page. The consent page's own parts come after. */
 :root {
-  color-scheme: light dark;
+  /* light only, like every os-next app — light-dark() below resolves to its first colour */
+  color-scheme: light;
   --line: light-dark(#e4e4e7, #343438);
   --soft: light-dark(#f6f6f7, #232326);
   --ink: light-dark(#18181b, #f4f4f5);
@@ -281,9 +282,8 @@ button:not(:disabled):hover,
 }
 .consent-projects {
   padding: 0;
-  margin: 0.5rem 0 0;
+  margin: 0.25rem 0 0;
   border: 0;
-  border-bottom: 1px solid var(--line);
   min-width: 0;
 }
 .consent-projects:disabled {
@@ -302,10 +302,13 @@ button:not(:disabled):hover,
   display: flex;
   align-items: center;
   gap: 0.65rem;
-  padding: 0.7rem 0;
+  padding: 0.6rem 0;
   margin: 0;
-  border-top: 1px solid var(--line);
   cursor: pointer;
+}
+/* a rule between rows, never around them: one project has no rules at all */
+.consent-project + .consent-project {
+  border-top: 1px solid var(--line);
 }
 /* New project: a small panel under the list — the name, the organization (or a new one's name). */
 .consent-create {

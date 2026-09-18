@@ -195,7 +195,8 @@
         el(
           "section",
           { class: "consent-org", "aria-label": orgName },
-          el("h3", { text: orgName }),
+          // the organization's name only when there is more than one to tell apart
+          orgIds.length > 1 ? el("h3", { text: orgName }) : null,
           ...group.map((project) => {
             const box = el("input", {
               type: "checkbox",
@@ -328,8 +329,9 @@
       );
       const count = boxes().filter((box) => box.checked).length;
       list.disabled = every;
-      status.hidden = !projects.length;
-      status.textContent = every ? "All current and future projects" : `${count} selected`;
+      // the count of ticked projects; with "all" ticked the checkbox says it, so nothing else does
+      status.hidden = !projects.length || every;
+      status.textContent = `${count} selected`;
       // nothing to approve without a project: the first one is created right here
       approve.disabled = state.busy || !projects.length || (!every && count === 0);
       for (const button of form.querySelectorAll("button[type=button]"))
