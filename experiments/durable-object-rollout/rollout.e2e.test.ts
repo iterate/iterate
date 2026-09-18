@@ -26,7 +26,7 @@ test(
         Array.from({ length: 12 }, async () => {
           const id = randomUUID();
           const response = await probe.request(`/work/${id}`, { durationMs: 15_000 }, deployment);
-          return { id, response, followup: [] as any[] };
+          return { id, response, followup: [] as Awaited<ReturnType<typeof probe.observe>> };
         }),
       );
       const trial = {
