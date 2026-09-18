@@ -1,5 +1,5 @@
-// /projects — the app's front door after sign-in: the first project the session lists, at its
-// slug (`/projects/<slug>` is the shape of a project URL in every app); none → a line.
+// /projects — where a sign-in lands: the first project the session lists, at its slug
+// (`/projects/<slug>` is the shape of a project URL in every app); none → a line.
 import { createFileRoute, redirect } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/_auth/projects/")({

@@ -32,7 +32,8 @@ function Copyable({ value }: { value: string }) {
 function ProjectMcp() {
   const { project } = projectRoute.useRouteContext();
   const { info } = shell.useRouteContext();
-  const server = info.mcpOrigin ? `${info.mcpOrigin}/` : null;
+  // the MCP server: its own origin when the deployment has one, else `/mcp` on the platform's
+  const server = info.mcpOrigin ? `${info.mcpOrigin}/` : `${info.platformOrigin}/mcp`;
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
       <div className="flex flex-col gap-1">
@@ -42,62 +43,56 @@ function ProjectMcp() {
           grant.
         </p>
       </div>
-      {server ? (
-        <>
-          <Card>
-            <CardHeader>
-              <CardTitle>Server</CardTitle>
-              <CardDescription>
-                The platform's MCP server. It authenticates with the same sign-in as the dash.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Copyable value={server} />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Claude Code</CardTitle>
-              <CardDescription>
-                Add the server, then sign in from inside Claude Code: run <code>/mcp</code>, pick{" "}
-                <code>iterate</code>, Authenticate. At consent, tick <code>{project.slug}</code> (or
-                every project).
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-2">
-              <Copyable value={`claude mcp add --transport http iterate ${server}`} />
-              <Copyable value="/mcp" />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Codex CLI</CardTitle>
-              <CardDescription>
-                Add the server, then sign in — the same consent, this project ticked.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-2">
-              <Copyable value={`codex mcp add iterate --url ${server}`} />
-              <Copyable value="codex mcp login iterate" />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Which project</CardTitle>
-              <CardDescription>
-                With one project in the grant, <code>run</code> needs no <code>project</code>.
-                Otherwise name this one — by slug or by id.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-2">
-              <Identifier value={project.slug} />
-              <Identifier value={project.id} />
-            </CardContent>
-          </Card>
-        </>
-      ) : (
-        <p className="text-sm text-muted-foreground">This deployment serves no MCP server.</p>
-      )}
+      <Card>
+        <CardHeader>
+          <CardTitle>Server</CardTitle>
+          <CardDescription>
+            The platform's MCP server. It authenticates with the same sign-in as the dash.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Copyable value={server} />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Claude Code</CardTitle>
+          <CardDescription>
+            Add the server, then sign in from inside Claude Code: run <code>/mcp</code>, pick{" "}
+            <code>iterate</code>, Authenticate. At consent, tick <code>{project.slug}</code> (or
+            every project).
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2">
+          <Copyable value={`claude mcp add --transport http iterate ${server}`} />
+          <Copyable value="/mcp" />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Codex CLI</CardTitle>
+          <CardDescription>
+            Add the server, then sign in — the same consent, this project ticked.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2">
+          <Copyable value={`codex mcp add iterate --url ${server}`} />
+          <Copyable value="codex mcp login iterate" />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Which project</CardTitle>
+          <CardDescription>
+            With one project in the grant, <code>run</code> needs no <code>project</code>. Otherwise
+            name this one — by slug or by id.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-2">
+          <Identifier value={project.slug} />
+          <Identifier value={project.id} />
+        </CardContent>
+      </Card>
     </div>
   );
 }
