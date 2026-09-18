@@ -179,6 +179,7 @@ class Probe {
   #touchedCloud = false;
   evidence: any;
 
+  /** Validate preview credentials and prepare this scenario's evidence record. */
   private constructor(scenario: string) {
     // This repo's preview account. Never target production, or reuse an existing Worker.
     assert.equal(this.#account, "376ef7ed81b0573f93524de763666c15");
@@ -198,12 +199,14 @@ class Probe {
     };
   }
 
+  /** Return an initialized probe whose resources are owned by await using. */
   static async create(scenario: string) {
     const probe = new Probe(scenario);
     await probe.#init();
     return probe;
   }
 
+  /** Check the Worker name is unused and prepare its URL and local directories. */
   async #init() {
     const existing = await this.#api(`/workers/scripts/${this.#workerName}/settings`, null);
     assert.equal(existing.status, 404, "Refuse to overwrite any existing Worker");
@@ -215,6 +218,7 @@ class Probe {
     this.#directory = await mkdtemp(join(tmpdir(), `${this.#workerName}-`));
   }
 
+  /** Call the Cloudflare account API, keeping HTTP status and JSON error details. */
   async #api(path: string, body: any) {
     const response = await fetch(`${this.#apiBase}${path}`, {
       method: body ? "POST" : "GET",
@@ -229,6 +233,7 @@ class Probe {
     return { status: response.status, ...data };
   }
 
+  /** Send one Worker request without retries, recording deployment age and failures. */
   async request(path: string, body: any, deployment: any) {
     const startedAt = Date.now();
     try {
@@ -264,6 +269,7 @@ class Probe {
     }
   }
 
+  /** Deploy a live DO or retired class with Wrangler and record its version and timing. */
   async deploy(build: string, live: boolean) {
     await writeFile(
       join(this.#directory, "worker.js"),
@@ -314,6 +320,7 @@ class Probe {
     return deployment;
   }
 
+  /** Read the currently bound DO namespace ID, or null after retirement. */
   async namespace() {
     const settings = await this.#api(`/workers/scripts/${this.#workerName}/settings`, null);
     assert.equal(settings.success, true, JSON.stringify(settings.errors));
@@ -323,6 +330,7 @@ class Probe {
     );
   }
 
+  /** Poll a read-only endpoint up to 30 times, retaining every response. */
   async observe(path: string, deployment: any, accepts: (response: any) => boolean) {
     const attempts = [];
     // Read-only follow-ups may retry; every response is kept. Never retry an operation.
@@ -335,6 +343,7 @@ class Probe {
     return attempts;
   }
 
+  /** Deploy the initial Worker and wait for its hostname before measured redeploys. */
   async bootstrap() {
     const initial = await this.deploy("bootstrap", true);
     // Provision the new hostname before measuring a deployment. No measured deploy waits here.
@@ -348,6 +357,7 @@ class Probe {
     return initial;
   }
 
+  /** Retire the DO class, park the Worker, and save local evidence before cleanup. */
   async [Symbol.asyncDispose]() {
     // Preserve partial failures, and retire only our new class. Never delete Workers.
     if (this.#touchedCloud) {
@@ -405,6 +415,7 @@ class Probe {
   }
 }
 
+/** Run a bounded CLI command and capture its output, exit code, and finish time. */
 async function command(executable: string, args: string[], cwd: string) {
   return await new Promise<{ exitCode: number | null; finishedAt: number; output: string }>(
     (resolve, reject) => {
