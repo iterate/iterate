@@ -112,6 +112,13 @@ test("first Claude consent creates the organization and project on the consent p
   const errors: string[] = [];
   page.on("websocket", (socket) => sockets.push(socket.url()));
   page.on("pageerror", (error) => errors.push(error.message));
+  // a slug the deployment's own organization holds — the onboarding step's refused first try below
+  const takenSlug = `taken-${stamp()}`;
+  // eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
+  using operator = newHttpBatchRpcSession<IterateRpcTarget>(`${origin}/internal/rpc`);
+  using _taken = await operator
+    .authenticate({ type: "admin-secret", secret: adminSecret(origin) })
+    .projects.create({ project: takenSlug });
   try {
     await page.goto(flow.url.href);
     await signIn(page, origin, email, flow.url.pathname + flow.url.search);
@@ -141,14 +148,14 @@ test("first Claude consent creates the organization and project on the consent p
     await projectField.fill(`Consent Studio ${project}`);
     expect(await projectField.inputValue()).toBe(`consent-studio-${project}`);
     await page.getByText(`Your project will be hosted at consent-studio-${project}.`).waitFor();
-    // A refused first try — "global" is the reserved namespace, refused after the organization is
+    // A refused first try — a slug another organization holds, refused after the organization is
     // made — answers with that organization: the retry offers it, chosen, rather than naming a
     // second one (the inventory at the end counts one).
-    await projectField.fill("global");
+    await projectField.fill(takenSlug);
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page
       .getByRole("alert")
-      .filter({ hasText: /not a project name/ })
+      .filter({ hasText: /already taken/ })
       .waitFor();
     const madeOrg = page.getByRole("combobox", { name: "Organization", exact: true });
     expect(await madeOrg.locator("option:checked").textContent()).toBe(firstOrg);
