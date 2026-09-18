@@ -153,14 +153,12 @@ test("first Claude consent creates the organization and project on the consent p
     });
     await choice.waitFor();
     expect(await choice.isChecked()).toBe(true);
-    // The either/or: the projects ticked, or every project now and later — a Claude grant starts
-    // with the ticked ones.
-    const chosen = page.getByRole("radio", { name: "Chosen projects", exact: true });
-    const future = page.getByRole("radio", {
+    // The either/or: one checkbox for every project now and later, else the projects ticked —
+    // a Claude grant starts with the ticked ones.
+    const future = page.getByRole("checkbox", {
       name: "All my projects, now and future",
       exact: true,
     });
-    expect(await chosen.isChecked()).toBe(true);
     expect(await future.isChecked()).toBe(false);
     await choice.uncheck();
     expect(await approve.isDisabled()).toBe(true);
@@ -214,7 +212,7 @@ test("first Claude consent creates the organization and project on the consent p
     await thirdChoice.waitFor();
     expect(await thirdChoice.isChecked()).toBe(true);
     expect(await thirdChoice.isDisabled()).toBe(true);
-    await chosen.check();
+    await future.uncheck();
     expect(await choice.isChecked()).toBe(true);
     expect(await thirdChoice.isChecked()).toBe(true);
     expect(await otherChoice.isChecked()).toBe(false);

@@ -264,42 +264,20 @@ button:not(:disabled):hover,
   font-size: 17px;
   line-height: 1;
 }
-.consent-modes {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2px;
-  padding: 3px;
+/* The either/or: one checkbox row above the list — every project now and later. */
+.consent-future {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
   margin: 0.75rem 0 0.25rem;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--soft);
-}
-.consent-mode {
-  position: relative;
-  margin: 0;
-  padding: 0.45rem 0.5rem;
-  border-radius: 7px;
-  text-align: center;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--quiet);
   cursor: pointer;
 }
-.consent-mode input {
-  position: absolute;
-  inset: 0;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
+.consent-future input {
+  margin-top: 0.15rem;
 }
-.consent-mode:has(input:checked) {
-  background: light-dark(#fff, #18181b);
-  color: var(--ink);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-}
-.consent-mode:has(input:focus-visible) {
-  outline: 2px solid #3b82f6;
-  outline-offset: 2px;
+.consent-future .muted {
+  display: block;
+  margin-top: 0.15rem;
 }
 .consent-projects {
   padding: 0;

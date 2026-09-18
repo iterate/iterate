@@ -1,7 +1,8 @@
 // public/authorize.js — the consent page's script. /authorize.json (control-plane.ts) describes the
 // request — the client, the signed-in person, their projects and organizations, the scopes asked
 // for — and this renders the page: iterate ⇄ the client, who is signed in, the permissions, the
-// projects. The projects are an either/or — the ones ticked, or every project now and later — with
+// projects. The projects are an either/or — one checkbox for every project now and later, else the
+// ones ticked — with
 // "New project" (in one of the person's organizations, or in a new one named right there) posting
 // to /authorize and answering the refreshed description with every choice kept. Approve posts the
 // projects and scopes left ticked and ends in the client's redirect. Consent is task-based: every
@@ -158,21 +159,31 @@
     const status = el("p", { class: "muted", role: "status" });
     const approve = el("button", { class: "primary", type: "submit", text: "Approve" });
 
-    // Which projects — an either/or: the ones ticked below, or every project now and later
-    const mode = (value, text) => {
-      const input = el("input", { type: "radio", name: "mode", value });
-      input.checked = (value === "all") === state.all;
-      return el("label", { class: "consent-mode" }, input, el("span", { text }));
-    };
-    const modes =
+    // Which projects — an either/or, one checkbox: every project now and later, or the ones
+    // ticked in the list below it (a client bound to one project has no such choice)
+    const all =
       !projectBound && projects.length
-        ? el(
-            "div",
-            { class: "consent-modes", role: "radiogroup", "aria-label": "Which projects" },
-            mode("chosen", "Chosen projects"),
-            mode("all", "All my projects, now and future"),
-          )
+        ? el("input", {
+            type: "checkbox",
+            name: "all",
+            value: "1",
+            "aria-label": "All my projects, now and future",
+          })
         : null;
+    if (all) all.checked = state.all;
+    const future = all
+      ? el(
+          "label",
+          { class: "consent-future" },
+          all,
+          el(
+            "span",
+            {},
+            el("strong", { text: "All my projects, now and future" }),
+            el("span", { class: "muted", text: "Includes projects you create or join later." }),
+          ),
+        )
+      : null;
     const list = el("fieldset", {
       class: "consent-projects",
       "aria-label": "Projects it may reach",
@@ -272,7 +283,7 @@
           el("div", {}, el("h2", { text: "Projects" }), status),
           add,
         ),
-        modes,
+        future,
         projects.length || projectBound ? list : null,
         create,
         el(
@@ -289,16 +300,14 @@
       ].filter(Boolean),
     );
 
-    // The boxes are the state: every change re-reads them. "All" parks the list — the ticks come
-    // back when "Chosen projects" is picked again.
+    // The boxes are the state: every change re-reads them. "All my projects" parks the list — the
+    // ticks come back when it is unticked.
     const boxes = () => Array.from(form.querySelectorAll('input[name="project"]'));
     // parked ticks are in the boxes' own (organization-grouped) order, never the projects array's
     let parked = state.all ? boxes().map((box) => !state.excluded.has(box.value)) : null;
     const sync = () => {
       // no either/or (no project yet, or the client's one project): the default stands
-      const every = modes
-        ? form.querySelector('input[name="mode"]:checked').value === "all"
-        : state.all;
+      const every = all ? all.checked : state.all;
       if (every && !parked) {
         parked = boxes().map((box) => box.checked);
         for (const box of boxes()) box.checked = true;
