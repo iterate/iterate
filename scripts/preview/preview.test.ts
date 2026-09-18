@@ -763,11 +763,16 @@ describe("preview workflow scope", () => {
   });
 });
 
-describe("preview workflow dispatch", () => {
-  test("a manual dispatch redeploys the full fleet", () => {
-    const workflow = readFileSync(resolve(repoRoot, ".depot/workflows/preview.yml"), "utf8");
+describe("preview workflow overrides", () => {
+  test("the Depot override or a manual dispatch redeploys the full fleet", () => {
+    const workflow = parseYaml(
+      readFileSync(resolve(repoRoot, ".depot/workflows/preview.yml"), "utf8"),
+    );
 
-    expect(workflow).toContain("all-apps: ${{ github.event_name == 'workflow_dispatch' }}");
+    expect(workflow.jobs.preview.with).toMatchObject({
+      "all-apps":
+        "${{ vars.PREVIEW_FORCE_ALL_APPS == 'true' || github.event_name == 'workflow_dispatch' }}",
+    });
   });
 });
 
