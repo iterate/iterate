@@ -6,9 +6,9 @@ base: codex/preview-change-types-v3
 
 # Keep useful preview runs, stop obsolete work, and wait across commits
 
-Stacked follow-up to draft PR #2712. Core implementation and local checks pass;
-live workflow exclusion and cross-commit waiting are proved. Retry recovery and
-obsolete-test cancellation are the remaining acceptance checks.
+Stacked draft PR #2741, based on #2712. Implementation and local checks pass.
+Live runs prove exclusive cleanup, cross-commit waiting, smart cancellation and
+active-job retry recovery. Terminal retry and final inheritance acceptance remain.
 
 ## Request
 
@@ -47,12 +47,12 @@ obsolete-test cancellation are the remaining acceptance checks.
 
 ## Work
 
-- [ ] Verify Depot execution/attempt, cancellation, retry and artifact semantics.
-- [ ] Define and test generic producer selection and cross-workflow waiting.
-- [ ] Replace special settlement publication and update evidence readers.
-- [ ] Pin preview identity and support pending-ancestor inheritance/reuse.
-- [ ] Implement conservative cancellation and preserve cleanup/lease exclusion.
-- [ ] Support retry recovery and reject stale artifacts/results with clear reasons.
+- [x] Verify Depot execution/attempt, cancellation, retry and artifact semantics. *Live Depot calls distinguished active retries from full executions; artifacts include execution IDs.*
+- [x] Define and test generic producer selection and cross-workflow waiting. *status.ts follows current producer attempts and supports workflow/SHA targets.*
+- [x] Replace special settlement publication and update evidence readers. *Ordinary set publishes preview-settled; the reader verifies all current producers.*
+- [x] Pin preview identity and support pending-ancestor inheritance/reuse. *Pinned checkout SHA and workflow-level exclusion preserve useful ancestors.*
+- [x] Implement conservative cancellation and preserve cleanup/lease exclusion. *The independent coordinator cancels proven-obsolete consumers and preserves both mutators.*
+- [x] Support retry recovery and reject stale artifacts/results with clear reasons. *Partial attempts stop at the guard; recovery drains then requests a full rerun.*
 - [ ] Validate types, lint, formatting and relevant/full required tests.
 - [ ] Exercise live pending docs inheritance, useful ancestor preservation,
       obsolete-work cancellation, full rerun and partial retry behavior.
@@ -116,3 +116,12 @@ obsolete-test cancellation are the remaining acceptance checks.
   Full local tests pass again, and the cancellation-generation regression passes.
 - This code push also exercises product obsolescence against that active full
   rerun: stop its consumers, preserve cleanup, queue the replacement workflow.
+
+- Product-obsolescence acceptance: coordinator `l12kfph70w` cancelled all seven
+  consumers in `m5c0nmbxbt` at 14:06:20–22Z. Preparation finished; finalizer
+  `rlgzw5gcq4` erased preview-17 at 14:07:43Z and skipped obsolete restoration.
+  Replacement `dsr4rt0rdh` stayed queued until the old lifecycle released its lock.
+- All local required checks pass. Under CI contention, even in-process trpc-cli
+  schema loading exceeded a 5s individual-test deadline; schemas now load once
+  during test-file collection, while real CLI invocation/assertions remain inside
+  each test. No timeout increase or product change.

@@ -102,14 +102,17 @@ test("a superseded publisher cannot publish a milestone", async () => {
 test("the actual trpc-cli publishes a milestone", async () => {
   await using ci = await coordination();
   await expect(
-    createCli({ filename: new URL("./status.ts", import.meta.url), jsonInput: "auto" }).run({
-      argv: ["set", "preview-settled", "--values", '{"tests":"success","deployment":"restored"}'],
-      process: {
-        exit(code) {
-          throw Object.assign(new Error("CLI exited"), { exitCode: code });
+    statusCli.run(
+      {
+        argv: ["set", "preview-settled", "--values", '{"tests":"success","deployment":"restored"}'],
+        process: {
+          exit(code) {
+            throw Object.assign(new Error("CLI exited"), { exitCode: code });
+          },
         },
       },
-    }),
+      statusProgram,
+    ),
   ).rejects.toMatchObject({ exitCode: 0 });
   expect(ci.requests).toContainEqual({
     path: "/repos/iterate/iterate/statuses/head",
@@ -125,17 +128,17 @@ test("the actual trpc-cli executes the preview retry guard", async () => {
   ci.workflow.jobs[1].attempts[0].startedAt = "2026-09-18T00:01:00Z";
   ci.workflow.jobs[0].attempts[0].startedAt = "2026-09-18T00:00:30Z";
   await expect(
-    createCli({
-      filename: new URL("../preview/coordination.ts", import.meta.url),
-      jsonInput: "auto",
-    }).run({
-      argv: ["verify", "0"],
-      process: {
-        exit(code) {
-          throw Object.assign(new Error("CLI exited"), { exitCode: code });
+    coordinationCli.run(
+      {
+        argv: ["verify", "0"],
+        process: {
+          exit(code) {
+            throw Object.assign(new Error("CLI exited"), { exitCode: code });
+          },
         },
       },
-    }),
+      coordinationProgram,
+    ),
   ).rejects.toMatchObject({ exitCode: 0 });
   expect(await readFile(ci.env.GITHUB_ENV, "utf8")).toContain("PREVIEW_EXECUTION_ID=execution-1");
 });
@@ -231,6 +234,19 @@ test("recovery validates its PR scope before cancelling anything", async () => {
   ).rejects.toThrow("A PR number cannot target the main preview workflow");
   expect(ci.requests.filter((request) => /Cancel|Rerun/.test(request.path))).toHaveLength(0);
 });
+
+// Load the real command schemas once during collection, like static imports.
+// Command execution stays inside each test and its disposable environment.
+const statusCli = createCli({
+  filename: new URL("./status.ts", import.meta.url),
+  jsonInput: "auto",
+});
+const coordinationCli = createCli({
+  filename: new URL("../preview/coordination.ts", import.meta.url),
+  jsonInput: "auto",
+});
+const statusProgram = await statusCli.buildProgram();
+const coordinationProgram = await coordinationCli.buildProgram();
 
 async function coordination() {
   const directory = await mkdtemp(join(tmpdir(), "ci-coordination-"));
