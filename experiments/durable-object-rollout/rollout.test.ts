@@ -245,7 +245,7 @@ class Probe {
   }
 
   /** Send one Worker request without retries, recording deployment age and failures. */
-  async request(path: string, body: any, deployment: any) {
+  async request(path: string, body: any, deployment: Awaited<ReturnType<typeof this.deploy>>) {
     const startedAt = Date.now();
     try {
       const response = await fetch(`${this.#origin}${path}`, {
@@ -318,6 +318,7 @@ class Probe {
       build,
       live,
       startedAt: Date.now(),
+      finishedAt: NaN,
       output: "",
       exitCode: undefined as number | undefined,
       versionId: undefined as string | undefined,
