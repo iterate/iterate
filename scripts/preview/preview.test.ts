@@ -706,15 +706,13 @@ describe("preview workflow scope", () => {
     const deployWorkflow = PreviewWorkflowConcurrency.parse(parseYaml(deployWorkflowText));
     const cleanupWorkflow = PreviewWorkflowConcurrency.parse(parseYaml(cleanupWorkflowText));
 
-    expect(deployWorkflow.concurrency).toBeUndefined();
-    expect(cleanupWorkflow.concurrency).toBeUndefined();
-    expect(deployWorkflow.jobs.preview.concurrency).toEqual({
+    expect(deployWorkflow.concurrency).toEqual({
       group:
-        "cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}",
+        "cloudflare-previews-${{ github.event.pull_request.number || inputs.pull-request-number }}",
       "cancel-in-progress": false,
     });
-    expect(cleanupWorkflow.jobs.cleanup.concurrency).toEqual({
-      group: "cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}",
+    expect(cleanupWorkflow.concurrency).toEqual({
+      group: "cloudflare-previews-${{ github.event.pull_request.number }}",
       "cancel-in-progress": false,
     });
     expect(deployWorkflowText).not.toContain("cloudflare-preview-fleet-auth-rpc-cutover");

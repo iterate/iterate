@@ -86,3 +86,11 @@ on the parent branch.
 - Pending-docs acceptance: this documentation commit is pushed while
   `pxsf5zjflf` (`4cd98a94b`) is preparing its preview. Expected: preserve that
   run through restoration, then inherit its conclusive result.
+
+- Live overlap test exposed that Depot ignores concurrency on a reusable caller
+  job. Both preparations stopped before any new test run; manual erase of our
+  preview-17 retired all DOs and wiped test data. The fix uses workflow-level
+  serialization plus a separate coordinator workflow, which is free to act while
+  Preview queues. Close cleanup shares that same workflow-level group.
+- The documentation successor also hit a pkg.pr.new network publish failure;
+  deployment correctly refused to use missing commit-pinned packages.

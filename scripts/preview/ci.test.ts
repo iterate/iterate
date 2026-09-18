@@ -106,8 +106,14 @@ test("the lifecycle owner encloses every fixed shard and cleanup waits for their
   );
   expect(caller.jobs.preview).toMatchObject({
     uses: "./.depot/workflows/preview-run.yml",
-    concurrency: { "cancel-in-progress": false },
   });
+  expect(caller.concurrency).toMatchObject({ "cancel-in-progress": false });
+  expect(caller.jobs.preview.concurrency).toBeUndefined();
+  const coordinator = parse(
+    readFileSync(resolve(root, ".depot/workflows/preview-coordinate.yml"), "utf8"),
+  );
+  expect(coordinator.concurrency).toBeUndefined();
+  expect(coordinator.on.pull_request.types).toContain("closed");
   expect(workflow.jobs.playwright).toMatchObject({
     strategy: { "fail-fast": false, matrix: { shard: previewPlaywrightShards } },
   });

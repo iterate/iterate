@@ -1,0 +1,41 @@
+# Runs outside Preview's workflow lock, so a new push can stop obsolete tests
+# immediately even while its own Preview is queued. Never cancels deployment or
+# cleanup writes. On PR close, the same policy stops consumers before cleanup.
+name: Coordinate preview runs
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+  workflow_dispatch:
+    inputs:
+      pull-request-number:
+        description: PR whose preview runs should be reconciled
+        required: true
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: read
+jobs:
+  coordinate:
+    name: Coordinate preview runs
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 50
+    env:
+      CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Keep useful ancestors and stop obsolete tests
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          pnpm exec trpc-cli scripts/preview/coordination.ts coordinate
+          ${{ github.event.pull_request.number || inputs.pull-request-number }}

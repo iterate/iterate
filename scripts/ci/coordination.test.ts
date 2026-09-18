@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import CiStatus from "./status.ts";
+import PreviewCoordination from "../preview/coordination.ts";
 
 test("a retried consumer can read a successful retained prerequisite", async () => {
   await using ci = await coordination();
@@ -85,10 +86,8 @@ test("a superseded publisher cannot publish a milestone", async () => {
   expect(ci.requests.some((request) => request.path.includes("/statuses/"))).toBe(false);
 });
 
-test("the actual trpc-cli publishes a milestone and executes the preview retry guard", async () => {
+test("the actual trpc-cli publishes a milestone", async () => {
   await using ci = await coordination();
-  ci.workflow.jobs[1].attempts[0].startedAt = "2026-09-18T00:01:00Z";
-  ci.workflow.jobs[0].attempts[0].startedAt = "2026-09-18T00:00:30Z";
   const cli = fileURLToPath(import.meta.resolve("trpc-cli/dist/bin.js"));
   await promisify(execFile)(
     process.execPath,
@@ -109,12 +108,44 @@ test("the actual trpc-cli publishes a milestone and executes the preview retry g
       description: "tests=success; deployment=restored",
     }),
   });
+});
+
+test("the actual trpc-cli executes the preview retry guard", async () => {
+  await using ci = await coordination();
+  ci.workflow.jobs[1].attempts[0].startedAt = "2026-09-18T00:01:00Z";
+  ci.workflow.jobs[0].attempts[0].startedAt = "2026-09-18T00:00:30Z";
+  const cli = fileURLToPath(import.meta.resolve("trpc-cli/dist/bin.js"));
   await promisify(execFile)(
     process.execPath,
     [cli, fileURLToPath(new URL("../preview/coordination.ts", import.meta.url)), "verify", "0"],
     { env: process.env },
   );
   expect(await readFile(ci.env.GITHUB_ENV, "utf8")).toContain("PREVIEW_EXECUTION_ID=execution-1");
+});
+
+test("partial retry recovery requests are idempotent for an execution", async () => {
+  await using ci = await coordination();
+  ci.workflow.workflowPath = "preview-main.yml";
+  ci.workflow.workflowStatus = "failed";
+  ci.workflow.jobs[1].status = "failed";
+  ci.workflow.jobs.push({
+    jobId: "finish",
+    jobKey: "preview-run.yml:finish",
+    status: "finished",
+    attempts: [],
+  });
+  await new PreviewCoordination().recover("workflow", "execution-1", "head", 0);
+  await new PreviewCoordination().recover("workflow", "execution-1", "head", 0);
+  expect(ci.requests.filter((request) => request.path.endsWith("/RerunWorkflow"))).toHaveLength(1);
+});
+
+test("recovery validates its PR scope before cancelling anything", async () => {
+  await using ci = await coordination();
+  ci.workflow.workflowPath = "preview-main.yml";
+  await expect(
+    new PreviewCoordination().recover("workflow", "execution-1", "head", 7),
+  ).rejects.toThrow("A PR number cannot target the main preview workflow");
+  expect(ci.requests.filter((request) => /Cancel|Rerun/.test(request.path))).toHaveLength(0);
 });
 
 async function coordination() {
@@ -151,6 +182,14 @@ async function coordination() {
     const text = Buffer.concat(chunks).toString();
     const body = text ? JSON.parse(text) : null;
     requests.push({ path: request.url, body });
+    if (request.url?.endsWith("/RerunWorkflow")) {
+      workflow.executions.push({
+        executionId: "execution-2",
+        execution: 2,
+        createdAt: "2026-09-18T01:00:00Z",
+      });
+      workflow.workflowStatus = "queued";
+    }
     response.setHeader("content-type", "application/json");
     response.end(
       JSON.stringify(

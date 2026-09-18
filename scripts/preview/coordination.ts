@@ -118,6 +118,7 @@ export default class PreviewCoordination {
       if (workflow.headSha !== commit) throw new Error("Recovery target commit changed");
       if (latestExecution(workflow).executionId !== executionId)
         return { recovered: false, reason: "Another recovery already advanced this workflow." };
+      const usefulness = await this.usefulness(workflow, pullRequest);
       await this.stopConsumers(workflow);
       // Never kill a deployment or restoration halfway through a Cloudflare write.
       const mutators = workflow.jobs.filter((job) => /:(prepare|finish)$/.test(job.jobKey));
@@ -127,7 +128,6 @@ export default class PreviewCoordination {
         await delay(5_000, undefined, { signal: this.signal });
         continue;
       }
-      const usefulness = await this.usefulness(workflow, pullRequest);
       if (!terminal.has(workflow.workflowStatus)) {
         // Check the generation again immediately before cancellation. Depot has
         // no conditional cancellation API, so a manual concurrent rerun is rejected
@@ -181,6 +181,8 @@ export default class PreviewCoordination {
         throw new Error("PR Preview coordination requires the PR number");
       return { obsolete: false, reason: "Main preview baseline.", branch: "main" };
     }
+    if (workflow.workflowPath.split("/").at(-1) !== "preview.yml")
+      throw new Error("A PR number cannot target the main preview workflow");
     const result = await previewUsefulness({
       commit: workflow.headSha,
       pullRequest,
@@ -201,10 +203,23 @@ export default class PreviewCoordination {
     for (const job of workflow.jobs) {
       if (!/:(apps|playwright:matrix-[0-5])$/.test(job.jobKey) || terminal.has(job.status))
         continue;
+      const confirmed = await this.depot.workflow(workflow.workflowId);
+      if (latestExecution(confirmed).executionId !== latestExecution(workflow).executionId) return;
+      const current = confirmed.jobs.find((candidate) => candidate.jobId === job.jobId);
+      if (!current || terminal.has(current.status)) continue;
       console.log(
         `[preview] Cancel ${job.jobKey} in ${workflow.workflowId}; preserve deployment and cleanup.`,
       );
-      await this.depot.request("CancelJob", { workflowId: workflow.workflowId, jobId: job.jobId });
+      try {
+        await this.depot.request("CancelJob", {
+          workflowId: workflow.workflowId,
+          jobId: job.jobId,
+        });
+      } catch (error) {
+        const updated = await this.depot.workflow(workflow.workflowId);
+        const target = updated.jobs.find((candidate) => candidate.jobId === job.jobId);
+        if (!target || !terminal.has(target.status)) throw error;
+      }
     }
   }
 }

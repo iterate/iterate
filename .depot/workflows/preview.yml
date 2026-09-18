@@ -8,7 +8,7 @@
 # file with complementary `if:`s, the `closed`-event run re-reported
 # "Preview / deploy + e2e" as skipped, clobbering the earlier success on every
 # merged PR (GitHub displays the latest check run per name). The two workflows
-# share the job-level lifecycle lock. New pushes keep useful ancestors alive;
+# share the workflow-level lifecycle lock. New pushes keep useful ancestors alive;
 # the coordinator cancels only tests made obsolete by a product-change barrier.
 # Deployment and cleanup retain the lock until their writes have finished.
 #
@@ -45,40 +45,15 @@ on:
         description: PR number to deploy + test
         required: true
 
-# Only the called workflow owns the lifecycle lock. A workflow-level lock would
-# also queue the coordinator, preventing it from stopping obsolete work.
+# This must be workflow-level: Depot does not apply concurrency on a reusable
+# caller job. The separate coordinator can run while this workflow is queued.
+concurrency:
+  group: cloudflare-previews-${{ github.event.pull_request.number || inputs.pull-request-number }}
+  cancel-in-progress: false
+
 jobs:
-  coordinate:
-    name: Coordinate preview runs
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 50
-    env:
-      CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          clean: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
-      - name: Keep useful ancestors and stop obsolete tests
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ github.token }}
-        run: >-
-          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
-          pnpm exec trpc-cli scripts/preview/coordination.ts coordinate
-          ${{ github.event.pull_request.number || inputs.pull-request-number }}
   preview:
     name: Preview / deploy + e2e
-    # Hold the lifecycle lock for the entire called workflow, including all
-    # shards and final cleanup. Putting this lock on each shard serializes them.
-    concurrency:
-      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}
-      cancel-in-progress: false
     uses: ./.depot/workflows/preview-run.yml
     with:
       pull-request-number: ${{ format('{0}', github.event.pull_request.number || inputs.pull-request-number) }}
