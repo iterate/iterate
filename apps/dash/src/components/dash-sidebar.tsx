@@ -157,9 +157,9 @@ function ProjectSwitcher({
             )}
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <DropdownMenuItem render={<Link to="/projects" hash="new" />}>
+              <DropdownMenuItem render={<Link to="/projects" search={{ new: 1 }} />}>
                 <Plus />
-                <span>Create project</span>
+                <span>New project</span>
               </DropdownMenuItem>
               <DropdownMenuItem render={<Link to="/projects" />}>
                 <ArrowLeft />
