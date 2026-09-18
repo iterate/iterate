@@ -9,83 +9,141 @@ import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 
 test(
-  "deploy, then immediately use Durable Objects",
+  "fresh objects complete work immediately after an ordinary redeploy",
   {
     skip: process.env.RUN_DO_ROLLOUT !== "1" && "Manual cloud experiment: set RUN_DO_ROLLOUT=1",
   },
-  async (t) => {
-    await using probe = await createProbe();
+  async () => {
+    await using probe = await createProbe("ordinary-redeploy");
     const { evidence, deploy, request, observe, namespace } = probe;
-    const bootstrap = await deploy("bootstrap", true);
-    // Only first-time hostname provisioning gets a readiness check, before any measured deploy.
-    const readiness = await observe(
-      "/health",
-      bootstrap,
-      (r) => r.data.worker?.build === "bootstrap",
-    );
-    evidence.checks.push({ kind: "bootstrap", attempts: readiness });
-    assert.equal(readiness.at(-1)?.data.worker?.build, "bootstrap");
-    let lastNamespace = await namespace();
-    assert.ok(lastNamespace);
+    await probe.bootstrap();
+    const previousNamespace = await namespace();
+    assert.ok(previousNamespace);
 
-    for (const kind of ["ordinary-redeploy", "retire-recreate"]) {
-      for (let round = 1; round <= evidence.rounds; round++) {
-        const previousNamespace = lastNamespace;
-        if (kind === "retire-recreate") {
-          await deploy(`retired-${round}`, false);
-          assert.equal(await namespace(), null);
-        }
-        const deployment = await deploy(`${kind}-${round}`, true);
-        // Nothing between Wrangler exit and first requests: no health check, API call, or wait.
-        const operations = await Promise.all(
-          Array.from({ length: 12 }, async () => {
-            const id = randomUUID(); // Never touched before this deployment completed.
-            const response = await request(`/work/${id}`, { durationMs: 15_000 }, deployment);
-            return { id, response };
-          }),
+    for (let round = 1; round <= evidence.rounds; round++) {
+      const deployment = await deploy(`ordinary-redeploy-${round}`, true);
+      // First-touch unique names immediately after Wrangler exits. Never retry a write.
+      const operations = await Promise.all(
+        Array.from({ length: 12 }, async () => {
+          const id = randomUUID();
+          const response = await request(`/work/${id}`, { durationMs: 15_000 }, deployment);
+          return { id, response, followup: [] as any[] };
+        }),
+      );
+      const trial = {
+        round,
+        deployment: deployment.build,
+        previousNamespace,
+        namespace: await namespace(),
+        operations,
+      };
+      evidence.trials.push(trial);
+      for (const operation of operations) {
+        operation.followup = await observe(
+          `/state/${operation.id}`,
+          deployment,
+          (r) => r.status === 200 && r.data.object?.build === deployment.build,
         );
-        const trial: any = {
-          kind,
-          round,
-          deployment: deployment.build,
-          previousNamespace,
-          operations,
-        };
-        evidence.trials.push(trial);
-        lastNamespace = await namespace();
-        trial.namespace = lastNamespace;
-        assert.ok(lastNamespace);
-        if (kind === "retire-recreate") assert.notEqual(lastNamespace, previousNamespace);
-        else assert.equal(lastNamespace, previousNamespace);
-        for (const operation of operations) {
-          Object.assign(operation, {
-            followup: await observe(
-              `/state/${operation.id}`,
-              deployment,
-              (r) => r.status === 200 && r.data.object?.build === deployment.build,
-            ),
-          });
-        }
-        console.log(
-          `${deployment.build}: ${operations.filter((op) => op.response.data.record?.status === "completed").length}/12 operations completed`,
+      }
+      assert.equal(trial.namespace, previousNamespace);
+      for (const operation of operations) {
+        assert.equal(operation.response.status, 200, JSON.stringify(operation));
+        assert.equal(
+          operation.response.data.record?.status,
+          "completed",
+          JSON.stringify(operation),
+        );
+        assert.equal(
+          operation.followup.at(-1).data.record?.status,
+          "completed",
+          JSON.stringify(operation),
         );
       }
     }
+  },
+);
 
-    const current = evidence.deployments.at(-1);
+test(
+  "fresh objects complete work immediately after retiring and recreating their class",
+  {
+    skip: process.env.RUN_DO_ROLLOUT !== "1" && "Manual cloud experiment: set RUN_DO_ROLLOUT=1",
+  },
+  async () => {
+    await using probe = await createProbe("retire-recreate");
+    const { evidence, deploy, request, observe, namespace } = probe;
+    await probe.bootstrap();
+
+    for (let round = 1; round <= evidence.rounds; round++) {
+      const previousNamespace = await namespace();
+      assert.ok(previousNamespace);
+      await deploy(`retired-${round}`, false);
+      assert.equal(await namespace(), null);
+      const deployment = await deploy(`retire-recreate-${round}`, true);
+      // First-touch unique names immediately after Wrangler exits. Never retry a write.
+      const operations = await Promise.all(
+        Array.from({ length: 12 }, async () => {
+          const id = randomUUID();
+          const response = await request(`/work/${id}`, { durationMs: 15_000 }, deployment);
+          return { id, response, followup: [] as any[] };
+        }),
+      );
+      const trial = {
+        round,
+        deployment: deployment.build,
+        previousNamespace,
+        namespace: await namespace(),
+        operations,
+      };
+      evidence.trials.push(trial);
+      for (const operation of operations) {
+        operation.followup = await observe(
+          `/state/${operation.id}`,
+          deployment,
+          (r) => r.status === 200 && r.data.object?.build === deployment.build,
+        );
+      }
+      assert.ok(trial.namespace);
+      assert.notEqual(trial.namespace, previousNamespace);
+      for (const operation of operations) {
+        assert.equal(operation.response.status, 200, JSON.stringify(operation));
+        assert.equal(
+          operation.response.data.record?.status,
+          "completed",
+          JSON.stringify(operation),
+        );
+        assert.equal(
+          operation.followup.at(-1).data.record?.status,
+          "completed",
+          JSON.stringify(operation),
+        );
+      }
+    }
+  },
+);
+
+test(
+  "an active operation is interrupted by a code-update reset during redeploy",
+  {
+    skip: process.env.RUN_DO_ROLLOUT !== "1" && "Manual cloud experiment: set RUN_DO_ROLLOUT=1",
+  },
+  async () => {
+    await using probe = await createProbe("active-object-control");
+    const { evidence, deploy, request, observe } = probe;
+    const initial = await probe.bootstrap();
     const id = randomUUID();
-    const inFlight = request(`/work/${id}`, { durationMs: 90_000 }, current);
+    const inFlight = request(`/work/${id}`, { durationMs: 90_000 }, initial);
     const started = await observe(
       `/state/${id}`,
-      current,
+      initial,
       (r) => r.data.record?.status === "started",
     );
     evidence.checks.push({ kind: "control-started", attempts: started });
     assert.equal(
       started.at(-1)?.data.record?.status,
       "started",
-      "Positive control must be active before redeploy",
+      "Work must be active before redeploy",
     );
+
     const replacement = await deploy("active-object-control", true);
     const response = await inFlight;
     const followup = await observe(
@@ -93,40 +151,22 @@ test(
       replacement,
       (r) => r.status === 200 && r.data.object?.build === replacement.build,
     );
-    evidence.trials.push({
-      kind: "active-object-control",
-      deployment: replacement.build,
-      operations: [{ id, response, followup }],
-    });
-    for (const trial of evidence.trials) {
-      await t.test(`${trial.kind}${trial.round ? ` ${trial.round}` : ""}`, () => {
-        for (const op of trial.operations) {
-          const state = op.followup.at(-1).data;
-          if (trial.kind === "active-object-control") {
-            assert.match(
-              op.response.data.error?.message || "",
-              /Durable Object reset because its code was updated/,
-              JSON.stringify(op),
-            );
-            assert.equal(
-              state.record?.status,
-              "started",
-              "Interrupted work must remain unfinished",
-            );
-            assert.notEqual(state.object.bootId, state.record.bootId);
-            assert.notEqual(state.object.versionId, state.record.versionId);
-          } else {
-            assert.equal(op.response.status, 200, JSON.stringify(op));
-            assert.equal(op.response.data.record?.status, "completed", JSON.stringify(op));
-            assert.equal(state.record?.status, "completed", JSON.stringify(op));
-          }
-        }
-      });
-    }
+    const operation = { id, response, followup };
+    evidence.trials.push({ deployment: replacement.build, operations: [operation] });
+
+    assert.match(
+      response.data.error?.message || "",
+      /Durable Object reset because its code was updated/,
+      JSON.stringify(operation),
+    );
+    const state = followup.at(-1).data;
+    assert.equal(state.record?.status, "started", "Interrupted work must remain unfinished");
+    assert.notEqual(state.object.bootId, state.record.bootId);
+    assert.notEqual(state.object.versionId, state.record.versionId);
   },
 );
 
-async function createProbe() {
+async function createProbe(scenario: string) {
   const account = process.env.CLOUDFLARE_ACCOUNT_ID;
   // This repo's preview account. Never target production, or reuse an existing Worker.
   assert.equal(account, "376ef7ed81b0573f93524de763666c15");
@@ -137,12 +177,14 @@ async function createProbe() {
   const workerName = `do-rollout-probe-${runId}`;
   const directory = await mkdtemp(join(tmpdir(), `${workerName}-`));
   const evidenceDirectory = resolvePath(
-    process.env.ROLLOUT_EVIDENCE_DIR || join(import.meta.dirname, "evidence.ignoreme", runId),
+    process.env.ROLLOUT_EVIDENCE_DIR || join(import.meta.dirname, "evidence.ignoreme"),
+    runId,
   );
   await mkdir(evidenceDirectory, { recursive: true });
   const token = randomUUID();
   const evidence: any = {
     runId,
+    scenario,
     workerName,
     startedAt: Date.now(),
     rounds,
@@ -283,6 +325,18 @@ async function createProbe() {
     request,
     observe,
     namespace,
+    async bootstrap() {
+      const initial = await deploy("bootstrap", true);
+      // Provision the new hostname before measuring a deployment. No measured deploy waits here.
+      const readiness = await observe(
+        "/health",
+        initial,
+        (r) => r.data.worker?.build === "bootstrap",
+      );
+      evidence.checks.push({ kind: "bootstrap", attempts: readiness });
+      assert.equal(readiness.at(-1)?.data.worker?.build, "bootstrap");
+      return initial;
+    },
     async [Symbol.asyncDispose]() {
       // Preserve partial failures, and retire only our new class. Never delete Workers.
       if (touchedCloud) {

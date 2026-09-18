@@ -1,0 +1,1055 @@
+{
+  "runId": "594811da",
+  "scenario": "ordinary-redeploy",
+  "workerName": "do-rollout-probe-594811da",
+  "startedAt": 1789732937315,
+  "rounds": 1,
+  "deployments": [
+    {
+      "build": "bootstrap",
+      "live": true,
+      "startedAt": 1789732939497,
+      "exitCode": 0,
+      "finishedAt": 1789732948921,
+      "output": "\n ⛅️ wrangler 4.107.0\n────────────────────\nTotal Upload: 2.64 KiB / gzip: 1.08 KiB\n\nDurable Object exports reconciliation:\n  Created: Probe\n\nWorker Startup Time: 2 ms\nYour Worker has access to the following bindings:\nBinding                                                       Resource                     \nenv.PROBE (Probe)                                             Durable Object               \nenv.VERSION                                                   Worker Version Metadata      \nenv.PROBE_TOKEN ([redacted])\n\nUploaded do-rollout-probe-594811da (3.22 sec)\nDeployed do-rollout-probe-594811da triggers (3.08 sec)\n  https://do-rollout-probe-594811da.iterate-dev-preview.workers.dev\nCurrent Version ID: 8616feea-6f89-493f-9774-79f25912d724\n",
+      "versionId": "8616feea-6f89-493f-9774-79f25912d724"
+    },
+    {
+      "build": "ordinary-redeploy-1",
+      "live": true,
+      "startedAt": 1789732950151,
+      "exitCode": 0,
+      "finishedAt": 1789732958243,
+      "output": "\n ⛅️ wrangler 4.107.0 (update available 4.134.0)\n───────────────────────────────────────────────\nTotal Upload: 2.65 KiB / gzip: 1.09 KiB\nWorker Startup Time: 1 ms\nYour Worker has access to the following bindings:\nBinding                                                       Resource                     \nenv.PROBE (Probe)                                             Durable Object               \nenv.VERSION                                                   Worker Version Metadata      \nenv.PROBE_TOKEN ([redacted])\n\nUploaded do-rollout-probe-594811da (2.95 sec)\nDeployed do-rollout-probe-594811da triggers (2.70 sec)\n  https://do-rollout-probe-594811da.iterate-dev-preview.workers.dev\nCurrent Version ID: 4e291c3c-68b8-498e-836e-03c8b52a4f1e\n",
+      "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+    },
+    {
+      "build": "cleanup-parked",
+      "live": false,
+      "startedAt": 1789732977739,
+      "exitCode": 0,
+      "finishedAt": 1789732985718,
+      "output": "\n ⛅️ wrangler 4.107.0 (update available 4.134.0)\n───────────────────────────────────────────────\nTotal Upload: 0.19 KiB / gzip: 0.16 KiB\n\nDurable Object exports reconciliation:\n  Deleted: Probe\n\nWorker Startup Time: 1 ms\nYour Worker has access to the following bindings:\nBinding             Resource                     \nenv.VERSION         Worker Version Metadata      \n\nUploaded do-rollout-probe-594811da (3.59 sec)\nDeployed do-rollout-probe-594811da triggers (2.63 sec)\n  https://do-rollout-probe-594811da.iterate-dev-preview.workers.dev\nCurrent Version ID: ccdd5c13-abf3-47c1-b5f1-557efe40267b\n",
+      "versionId": "ccdd5c13-abf3-47c1-b5f1-557efe40267b"
+    }
+  ],
+  "trials": [
+    {
+      "round": 1,
+      "deployment": "ordinary-redeploy-1",
+      "previousNamespace": "ac23e66d3eb64bbc9ccc36081a191ad5",
+      "namespace": "ac23e66d3eb64bbc9ccc36081a191ad5",
+      "operations": [
+        {
+          "id": "3b2fb6f3-bc64-48c1-9aef-9c24727182f1",
+          "response": {
+            "startedAt": 1789732958243,
+            "deployAgeMs": 0,
+            "finishedAt": 1789732975445,
+            "status": 200,
+            "data": {
+              "worker": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+              },
+              "object": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "85902473-b095-4c22-94f4-d6e312f1d774"
+              },
+              "record": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "85902473-b095-4c22-94f4-d6e312f1d774",
+                "status": "completed",
+                "startedAt": 1789732960428,
+                "progress": 60,
+                "completedAt": 1789732975428
+              }
+            }
+          },
+          "followup": [
+            {
+              "startedAt": 1789732976400,
+              "deployAgeMs": 18157,
+              "finishedAt": 1789732976499,
+              "status": 200,
+              "data": {
+                "worker": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+                },
+                "object": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "85902473-b095-4c22-94f4-d6e312f1d774"
+                },
+                "record": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "85902473-b095-4c22-94f4-d6e312f1d774",
+                  "status": "completed",
+                  "startedAt": 1789732960428,
+                  "progress": 60,
+                  "completedAt": 1789732975428
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "1dbf16f7-a839-42d4-8c1a-f115a7efe3bd",
+          "response": {
+            "startedAt": 1789732958243,
+            "deployAgeMs": 0,
+            "finishedAt": 1789732974174,
+            "status": 200,
+            "data": {
+              "worker": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+              },
+              "object": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "7e4477d5-624a-4fad-b772-dbe32d1dd3af"
+              },
+              "record": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "7e4477d5-624a-4fad-b772-dbe32d1dd3af",
+                "status": "completed",
+                "startedAt": 1789732959165,
+                "progress": 60,
+                "completedAt": 1789732974165
+              }
+            }
+          },
+          "followup": [
+            {
+              "startedAt": 1789732976499,
+              "deployAgeMs": 18256,
+              "finishedAt": 1789732976604,
+              "status": 200,
+              "data": {
+                "worker": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+                },
+                "object": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "7e4477d5-624a-4fad-b772-dbe32d1dd3af"
+                },
+                "record": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "7e4477d5-624a-4fad-b772-dbe32d1dd3af",
+                  "status": "completed",
+                  "startedAt": 1789732959165,
+                  "progress": 60,
+                  "completedAt": 1789732974165
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "55575a99-e47a-42a6-9268-3b586d9aa846",
+          "response": {
+            "startedAt": 1789732958244,
+            "deployAgeMs": 1,
+            "finishedAt": 1789732974017,
+            "status": 200,
+            "data": {
+              "worker": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+              },
+              "object": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "40768a02-f664-4aaf-9b31-304574f0c813"
+              },
+              "record": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "40768a02-f664-4aaf-9b31-304574f0c813",
+                "status": "completed",
+                "startedAt": 1789732959007,
+                "progress": 60,
+                "completedAt": 1789732974007
+              }
+            }
+          },
+          "followup": [
+            {
+              "startedAt": 1789732976605,
+              "deployAgeMs": 18362,
+              "finishedAt": 1789732976710,
+              "status": 200,
+              "data": {
+                "worker": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+                },
+                "object": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "40768a02-f664-4aaf-9b31-304574f0c813"
+                },
+                "record": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "40768a02-f664-4aaf-9b31-304574f0c813",
+                  "status": "completed",
+                  "startedAt": 1789732959007,
+                  "progress": 60,
+                  "completedAt": 1789732974007
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "5771ffba-fd7d-4ce5-9adb-93c6710e18ea",
+          "response": {
+            "startedAt": 1789732958244,
+            "deployAgeMs": 1,
+            "finishedAt": 1789732973980,
+            "status": 200,
+            "data": {
+              "worker": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+              },
+              "object": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "0acc9b6e-ee66-4cb0-8679-8c2e40ff13f0"
+              },
+              "record": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "0acc9b6e-ee66-4cb0-8679-8c2e40ff13f0",
+                "status": "completed",
+                "startedAt": 1789732958969,
+                "progress": 60,
+                "completedAt": 1789732973969
+              }
+            }
+          },
+          "followup": [
+            {
+              "startedAt": 1789732976710,
+              "deployAgeMs": 18467,
+              "finishedAt": 1789732976840,
+              "status": 200,
+              "data": {
+                "worker": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+                },
+                "object": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "0acc9b6e-ee66-4cb0-8679-8c2e40ff13f0"
+                },
+                "record": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "0acc9b6e-ee66-4cb0-8679-8c2e40ff13f0",
+                  "status": "completed",
+                  "startedAt": 1789732958969,
+                  "progress": 60,
+                  "completedAt": 1789732973969
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "35e13d38-4860-443c-89cb-93919b6c0555",
+          "response": {
+            "startedAt": 1789732958244,
+            "deployAgeMs": 1,
+            "finishedAt": 1789732973927,
+            "status": 200,
+            "data": {
+              "worker": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+              },
+              "object": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "771a584f-4ec1-48a3-8219-5bc0f9c4f338"
+              },
+              "record": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "771a584f-4ec1-48a3-8219-5bc0f9c4f338",
+                "status": "completed",
+                "startedAt": 1789732958918,
+                "progress": 60,
+                "completedAt": 1789732973918
+              }
+            }
+          },
+          "followup": [
+            {
+              "startedAt": 1789732976840,
+              "deployAgeMs": 18597,
+              "finishedAt": 1789732976973,
+              "status": 200,
+              "data": {
+                "worker": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+                },
+                "object": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "771a584f-4ec1-48a3-8219-5bc0f9c4f338"
+                },
+                "record": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "771a584f-4ec1-48a3-8219-5bc0f9c4f338",
+                  "status": "completed",
+                  "startedAt": 1789732958918,
+                  "progress": 60,
+                  "completedAt": 1789732973918
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "a3cd9658-665d-474a-851c-ef292c8a427c",
+          "response": {
+            "startedAt": 1789732958244,
+            "deployAgeMs": 1,
+            "finishedAt": 1789732973832,
+            "status": 200,
+            "data": {
+              "worker": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+              },
+              "object": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "d1a8e69b-4de8-4e34-884a-ecbc875baacf"
+              },
+              "record": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "d1a8e69b-4de8-4e34-884a-ecbc875baacf",
+                "status": "completed",
+                "startedAt": 1789732958827,
+                "progress": 60,
+                "completedAt": 1789732973827
+              }
+            }
+          },
+          "followup": [
+            {
+              "startedAt": 1789732976973,
+              "deployAgeMs": 18730,
+              "finishedAt": 1789732977093,
+              "status": 200,
+              "data": {
+                "worker": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+                },
+                "object": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "d1a8e69b-4de8-4e34-884a-ecbc875baacf"
+                },
+                "record": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "d1a8e69b-4de8-4e34-884a-ecbc875baacf",
+                  "status": "completed",
+                  "startedAt": 1789732958827,
+                  "progress": 60,
+                  "completedAt": 1789732973827
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "90f7cb24-5a58-46cb-88ee-4450618f31b7",
+          "response": {
+            "startedAt": 1789732958244,
+            "deployAgeMs": 1,
+            "finishedAt": 1789732975044,
+            "status": 200,
+            "data": {
+              "worker": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+              },
+              "object": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "97e7b9dc-072f-431d-9f2d-f8f43de7b2d2"
+              },
+              "record": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "97e7b9dc-072f-431d-9f2d-f8f43de7b2d2",
+                "status": "completed",
+                "startedAt": 1789732960038,
+                "progress": 60,
+                "completedAt": 1789732975038
+              }
+            }
+          },
+          "followup": [
+            {
+              "startedAt": 1789732977093,
+              "deployAgeMs": 18850,
+              "finishedAt": 1789732977231,
+              "status": 200,
+              "data": {
+                "worker": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+                },
+                "object": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "97e7b9dc-072f-431d-9f2d-f8f43de7b2d2"
+                },
+                "record": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "97e7b9dc-072f-431d-9f2d-f8f43de7b2d2",
+                  "status": "completed",
+                  "startedAt": 1789732960038,
+                  "progress": 60,
+                  "completedAt": 1789732975038
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "c67d60e6-0aac-4c43-bc40-9b0165e28923",
+          "response": {
+            "startedAt": 1789732958244,
+            "deployAgeMs": 1,
+            "finishedAt": 1789732973933,
+            "status": 200,
+            "data": {
+              "worker": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+              },
+              "object": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "cd9398cb-771c-407c-af46-96635a92b43c"
+              },
+              "record": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "cd9398cb-771c-407c-af46-96635a92b43c",
+                "status": "completed",
+                "startedAt": 1789732958924,
+                "progress": 60,
+                "completedAt": 1789732973924
+              }
+            }
+          },
+          "followup": [
+            {
+              "startedAt": 1789732977231,
+              "deployAgeMs": 18988,
+              "finishedAt": 1789732977358,
+              "status": 200,
+              "data": {
+                "worker": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+                },
+                "object": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "cd9398cb-771c-407c-af46-96635a92b43c"
+                },
+                "record": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "cd9398cb-771c-407c-af46-96635a92b43c",
+                  "status": "completed",
+                  "startedAt": 1789732958924,
+                  "progress": 60,
+                  "completedAt": 1789732973924
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "bf1765d7-3083-4eee-83cf-d7b3119b4745",
+          "response": {
+            "startedAt": 1789732958245,
+            "deployAgeMs": 2,
+            "finishedAt": 1789732974226,
+            "status": 200,
+            "data": {
+              "worker": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+              },
+              "object": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "9acaa4ce-cc7b-482c-ac32-4ae37b38447e"
+              },
+              "record": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "9acaa4ce-cc7b-482c-ac32-4ae37b38447e",
+                "status": "completed",
+                "startedAt": 1789732959220,
+                "progress": 60,
+                "completedAt": 1789732974220
+              }
+            }
+          },
+          "followup": [
+            {
+              "startedAt": 1789732977358,
+              "deployAgeMs": 19115,
+              "finishedAt": 1789732977461,
+              "status": 200,
+              "data": {
+                "worker": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+                },
+                "object": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "9acaa4ce-cc7b-482c-ac32-4ae37b38447e"
+                },
+                "record": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "9acaa4ce-cc7b-482c-ac32-4ae37b38447e",
+                  "status": "completed",
+                  "startedAt": 1789732959220,
+                  "progress": 60,
+                  "completedAt": 1789732974220
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "f0a4cd64-66c4-4e46-ab18-88a97ebb6186",
+          "response": {
+            "startedAt": 1789732958245,
+            "deployAgeMs": 2,
+            "finishedAt": 1789732974865,
+            "status": 200,
+            "data": {
+              "worker": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+              },
+              "object": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "5d2595b8-894c-4a5f-961d-6be1e4b72f92"
+              },
+              "record": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "5d2595b8-894c-4a5f-961d-6be1e4b72f92",
+                "status": "completed",
+                "startedAt": 1789732959857,
+                "progress": 60,
+                "completedAt": 1789732974857
+              }
+            }
+          },
+          "followup": [
+            {
+              "startedAt": 1789732977461,
+              "deployAgeMs": 19218,
+              "finishedAt": 1789732977526,
+              "status": 200,
+              "data": {
+                "worker": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+                },
+                "object": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "5d2595b8-894c-4a5f-961d-6be1e4b72f92"
+                },
+                "record": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "5d2595b8-894c-4a5f-961d-6be1e4b72f92",
+                  "status": "completed",
+                  "startedAt": 1789732959857,
+                  "progress": 60,
+                  "completedAt": 1789732974857
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "4422cfc5-2c8b-4fab-8f6f-8d7b418d2766",
+          "response": {
+            "startedAt": 1789732958245,
+            "deployAgeMs": 2,
+            "finishedAt": 1789732974690,
+            "status": 200,
+            "data": {
+              "worker": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+              },
+              "object": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "c2ce26ff-d0d0-424c-9b79-6d2c6b11b953"
+              },
+              "record": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "c2ce26ff-d0d0-424c-9b79-6d2c6b11b953",
+                "status": "completed",
+                "startedAt": 1789732959677,
+                "progress": 60,
+                "completedAt": 1789732974677
+              }
+            }
+          },
+          "followup": [
+            {
+              "startedAt": 1789732977526,
+              "deployAgeMs": 19283,
+              "finishedAt": 1789732977641,
+              "status": 200,
+              "data": {
+                "worker": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+                },
+                "object": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "c2ce26ff-d0d0-424c-9b79-6d2c6b11b953"
+                },
+                "record": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "c2ce26ff-d0d0-424c-9b79-6d2c6b11b953",
+                  "status": "completed",
+                  "startedAt": 1789732959677,
+                  "progress": 60,
+                  "completedAt": 1789732974677
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "06920b9a-4a31-4ca0-bd97-0c691a11fb41",
+          "response": {
+            "startedAt": 1789732958245,
+            "deployAgeMs": 2,
+            "finishedAt": 1789732974759,
+            "status": 200,
+            "data": {
+              "worker": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+              },
+              "object": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "ea8bc293-77fe-428b-8fd8-12532aae0f9e"
+              },
+              "record": {
+                "build": "ordinary-redeploy-1",
+                "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                "bootId": "ea8bc293-77fe-428b-8fd8-12532aae0f9e",
+                "status": "completed",
+                "startedAt": 1789732959753,
+                "progress": 60,
+                "completedAt": 1789732974753
+              }
+            }
+          },
+          "followup": [
+            {
+              "startedAt": 1789732977641,
+              "deployAgeMs": 19398,
+              "finishedAt": 1789732977738,
+              "status": 200,
+              "data": {
+                "worker": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+                },
+                "object": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "ea8bc293-77fe-428b-8fd8-12532aae0f9e"
+                },
+                "record": {
+                  "build": "ordinary-redeploy-1",
+                  "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e",
+                  "bootId": "ea8bc293-77fe-428b-8fd8-12532aae0f9e",
+                  "status": "completed",
+                  "startedAt": 1789732959753,
+                  "progress": 60,
+                  "completedAt": 1789732974753
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "kind": "bootstrap",
+      "attempts": [
+        {
+          "startedAt": 1789732948922,
+          "deployAgeMs": 1,
+          "finishedAt": 1789732949324,
+          "status": 200,
+          "data": {
+            "worker": {
+              "build": "bootstrap",
+              "versionId": "8616feea-6f89-493f-9774-79f25912d724"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "cleanup": {
+    "remainingNamespace": null,
+    "attempts": [
+      {
+        "startedAt": 1789732985718,
+        "deployAgeMs": 0,
+        "finishedAt": 1789732985864,
+        "status": 200,
+        "data": {
+          "worker": {
+            "build": "ordinary-redeploy-1",
+            "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+          }
+        }
+      },
+      {
+        "startedAt": 1789732986365,
+        "deployAgeMs": 647,
+        "finishedAt": 1789732986430,
+        "status": 200,
+        "data": {
+          "worker": {
+            "build": "ordinary-redeploy-1",
+            "versionId": "4e291c3c-68b8-498e-836e-03c8b52a4f1e"
+          }
+        }
+      },
+      {
+        "startedAt": 1789732986930,
+        "deployAgeMs": 1212,
+        "finishedAt": 1789732987047,
+        "status": 200,
+        "data": {
+          "parked": true,
+          "build": "cleanup-parked"
+        }
+      }
+    ]
+  },
+  "origin": "https://do-rollout-probe-594811da.iterate-dev-preview.workers.dev",
+  "finishedAt": 1789732987959,
+  "telemetry": {
+    "status": 200,
+    "success": true,
+    "errors": [],
+    "messages": [
+      {
+        "message": "Successful request"
+      }
+    ],
+    "result": {
+      "run": {
+        "id": "bah0y6k58h3fiz15ldkyl5oi",
+        "query": {
+          "id": "rollout-594811da",
+          "description": "",
+          "name": "",
+          "generated": false,
+          "parameters": {
+            "datasets": [],
+            "filters": [
+              {
+                "key": "$metadata.service",
+                "operation": "eq",
+                "value": "do-rollout-probe-594811da",
+                "type": "string"
+              }
+            ],
+            "needle": {
+              "value": "code was updated",
+              "matchCase": false
+            }
+          },
+          "workspaceId": "376ef7ed81b0573f93524de763666c15",
+          "environmentId": "cloudflare",
+          "userId": "263285f4a7f06cac4ce1290d60c8995d",
+          "created": "2026-09-18T12:03:08.284Z",
+          "updated": "2026-09-18T12:03:08.284Z"
+        },
+        "accountId": "376ef7ed81b0573f93524de763666c15",
+        "timeframe": {
+          "from": 1789732937315,
+          "to": 1789732987959
+        },
+        "userId": "263285f4a7f06cac4ce1290d60c8995d",
+        "status": "COMPLETED",
+        "granularity": 1000,
+        "dry": true,
+        "statistics": {
+          "elapsed": 0.055151041,
+          "rows_read": 969920,
+          "bytes_read": 84474074,
+          "abr_level": 1
+        }
+      },
+      "events": {
+        "events": [],
+        "fields": [],
+        "count": 0,
+        "series": [
+          {
+            "time": "2026-09-18 12:02:19",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:20",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:21",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:22",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:23",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:24",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:25",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:26",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:27",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:28",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:29",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:30",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:31",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:32",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:33",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:34",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:35",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:36",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:37",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:38",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:39",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:40",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:41",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:42",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:43",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:44",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:45",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:46",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:47",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:48",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:49",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:50",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:51",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:52",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:53",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:54",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:55",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:56",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:57",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:58",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:02:59",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:03:00",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:03:01",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:03:02",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:03:03",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:03:04",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:03:05",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:03:06",
+            "data": []
+          },
+          {
+            "time": "2026-09-18 12:03:07",
+            "data": []
+          }
+        ]
+      },
+      "statistics": {
+        "elapsed": 0.055151041,
+        "rows_read": 969920,
+        "bytes_read": 84474074,
+        "abr_level": 1
+      }
+    }
+  }
+}

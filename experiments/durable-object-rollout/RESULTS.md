@@ -117,3 +117,26 @@ of the platform's general failure rate.
   to either probe; both public health endpoints returned `cleanup-parked`. The two
   failed setup attempts were also confirmed never to have created Workers. No
   production or existing preview Worker was modified. No PR was opened.
+
+## Three independent tests — refactor verification
+
+The file now declares three top-level `test(...)` cases. Each provisions its own
+Worker, asserts its own outcome, and disposes its own deployment. There are no
+nested tests or shared deployed state. Fresh-case assertions run after each batch;
+a failed round ends that test, while the other tests still run. Earlier run tables
+above describe the previous combined runner and remain unchanged.
+
+Ran the refactored file with `ROLLOUT_ROUNDS=1` on 18 September, 12:02–12:04 UTC:
+
+| Test                  | Evidence                                      | Result                                                                    |
+| --------------------- | --------------------------------------------- | ------------------------------------------------------------------------- |
+| Ordinary redeploy     | [594811da](evidence/2026-09-18-594811da.json) | Passed: all 12 operations completed.                                      |
+| Retire/recreate       | [37254f99](evidence/2026-09-18-37254f99.json) | Failed: 9 parked responses, 2 internal errors, 1 completed operation.     |
+| Active-object control | [389c028d](evidence/2026-09-18-389c028d.json) | Passed: code-update reset, unfinished durable work, changed boot/version. |
+
+Node reported **3 tests, 2 passed, 1 failed**, with exit code 1 in 139 seconds.
+The control ran after the failed retirement test, confirming their independence.
+All three evidence files show cleanup removed the DO binding and the public
+endpoint returned `cleanup-parked`. The embedded Worker source is unchanged.
+TypeScript, targeted lint, formatting, and the non-cloud name-filter check passed.
+Without the opt-in, the runner reports three explicit skips.

@@ -1,8 +1,9 @@
 # Durable Object deployment reset probe
 
 A manual, standalone Cloudflare test. It embeds its entire Worker and Durable Object,
-writes a temporary Wrangler config, and deploys a new, isolated Worker. It imports
-only Node builtins: no Iterate runtime, deployment helpers, auth service, or fixtures.
+writes temporary Wrangler configs, and gives each of its three top-level tests
+its own isolated Worker and disposable cleanup. Tests share no deployed state.
+It imports only Node builtins: no Iterate runtime, deployment helpers, auth service, or fixtures.
 
 From the repo root (Node 26 and Wrangler 4.107.0 used for the recorded run):
 
@@ -11,10 +12,18 @@ RUN_DO_ROLLOUT=1 doppler run --project os --config preview_11 -- \
   pnpm --dir apps/os exec node --test ../../experiments/durable-object-rollout/rollout.test.ts
 ```
 
+To run just one test, add `--test-name-pattern` before the filename, for example:
+
+```sh
+RUN_DO_ROLLOUT=1 ROLLOUT_ROUNDS=1 doppler run --project os --config preview_11 -- \
+  pnpm --dir apps/os exec node --test --test-name-pattern='ordinary redeploy' \
+  ../../experiments/durable-object-rollout/rollout.test.ts
+```
+
 Outside this repo, put `wrangler` on PATH and supply `CLOUDFLARE_API_TOKEN` and
 `CLOUDFLARE_ACCOUNT_ID`. The test deliberately allows only our preview account;
 change that assertion to use your own account. Without `RUN_DO_ROLLOUT=1` it reports
-an explicit skip. This test is manual and is not part of CI or `pnpm test`.
+three explicit skips. This test is manual and is not part of CI or `pnpm test`.
 
 | Case                  | What happens                                                                                                         | What it can establish                                                        |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
@@ -22,8 +31,10 @@ an explicit skip. This test is manual and is not part of CI or `pnpm test`.
 | Retire/recreate       | Deploy the class as deleted, verify its binding is absent, redeploy the live class, then first-touch 12 unique names | Whether new objects in a new namespace encounter deployment errors           |
 | Active-object control | Start a 90-second operation, observe its durable started marker, then deploy changed code while it runs              | Whether the probe can capture a reset interrupting existing work             |
 
-The first two cases each run three times. `ROLLOUT_ROUNDS=1` through `10` changes
-that count. Fresh work lasts 15 seconds, repeatedly writing progress to storage.
+The first two tests each run up to three rounds, stopping at the first failed
+round. `ROLLOUT_ROUNDS=1` through `10` changes that limit. A failed test does not
+prevent the other tests from running. Fresh work lasts 15 seconds, repeatedly
+writing progress to storage.
 Only the initial, unmeasured Worker deployment waits for the new hostname to become
 reachable. Measured deployments have **no health check or delay before the writes**.
 
@@ -35,12 +46,13 @@ identity that started the work even if a later constructor reads it.
 A reset reproduction needs the actual error and unfinished work; a boot ID change
 alone does not identify its cause. The control asserts the code-update error,
 started-but-unfinished durable record, and changed DO boot/version. Fresh-object
-subtests assert that their single attempt and durable completion both succeeded.
+tests assert that their single attempt and durable completion both succeeded.
 A control-only reproduction does **not** reproduce an error affecting fresh objects.
 A successful fresh-object run does **not** establish a safe deployment wait threshold.
 
 Evidence is written to `evidence.ignoreme/<run-id>/evidence.json` beside the test,
-or `ROLLOUT_EVIDENCE_DIR` when set. It includes deployment command output, timestamps,
+or `ROLLOUT_EVIDENCE_DIR/<run-id>/evidence.json` when set. Each test prints its own
+evidence path, and the JSON identifies its scenario. It includes deployment command output, timestamps,
 actual request age since Wrangler exit, namespace IDs, responses, follow-up reads,
 and an after-run Workers Logs query for `code was updated`. No `wrangler tail` is
 attached: enabling a tail can itself cause a DO software update. The log query is
