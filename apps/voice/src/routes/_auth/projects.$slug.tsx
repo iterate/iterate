@@ -12,7 +12,6 @@ import {
   BreadcrumbSeparator,
 } from "@iterate-com/ui/components/breadcrumb";
 import { Button } from "@iterate-com/ui/components/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { openAudio, type AudioSession } from "../../audio.ts";
 import { startCall, type Call, type CallFact } from "../../call.ts";
@@ -46,39 +45,24 @@ function CallPage() {
     <AppShell
       app="Voice"
       projects={projects}
-      activeProjectId={project?.id || null}
+      activeProjectId={project.id}
       projectHref={(item) => `/projects/${item.slug}`}
       header={
-        project ? (
-          <Breadcrumb>
-            <BreadcrumbList>
-              <BreadcrumbItem className="hidden md:inline-flex">Voice</BreadcrumbItem>
-              <BreadcrumbSeparator className="hidden md:inline-flex" />
-              <BreadcrumbItem>
-                <BreadcrumbPage className="font-mono">{project.slug}</BreadcrumbPage>
-              </BreadcrumbItem>
-            </BreadcrumbList>
-          </Breadcrumb>
-        ) : null
+        <Breadcrumb>
+          <BreadcrumbList>
+            <BreadcrumbItem className="hidden md:inline-flex">Voice</BreadcrumbItem>
+            <BreadcrumbSeparator className="hidden md:inline-flex" />
+            <BreadcrumbItem>
+              <BreadcrumbPage className="font-mono">{project.slug}</BreadcrumbPage>
+            </BreadcrumbItem>
+          </BreadcrumbList>
+        </Breadcrumb>
       }
       account={{ email: info.principal.email || info.principal.actor }}
       locationKey={href}
     >
-      {project ? (
-        <Phone key={project.id} project={project.id} />
-      ) : (
-        <Empty>
-          <EmptyHeader>
-            <EmptyTitle>No projects yet</EmptyTitle>
-            <EmptyDescription>
-              <a href="https://dash.iterate2.com/projects" className="underline underline-offset-4">
-                Create a project
-              </a>{" "}
-              in the dash, install its voice agent, then call it here.
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      )}
+      {/* the loader sends a sign-in the project is missing from off to sign in again */}
+      <Phone key={project.id} project={project.id} />
     </AppShell>
   );
 }

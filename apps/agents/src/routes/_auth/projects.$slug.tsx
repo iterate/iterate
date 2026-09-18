@@ -75,7 +75,8 @@ function AgentsPage() {
   const navigate = useNavigate();
   const router = useRouter();
   const href = useRouterState({ select: (state) => state.location.href });
-  const project = data.project?.id || null;
+  // the loader sends a sign-in the project is missing from off to sign in again, so it is here
+  const project = data.project.id;
   return (
     <AppShell
       app="Agents"
@@ -83,25 +84,23 @@ function AgentsPage() {
       activeProjectId={project}
       projectHref={(item) => `/projects/${item.slug}`}
       nav={
-        project ? (
-          <AgentsNav
-            slug={data.project.slug}
-            agents={data.agents}
-            agent={data.agent}
-            onCreate={async () => {
-              // an agent is its path; a new one is born at the moment's path, as in apps/os
-              const path = newWebAgentPath(new Date());
-              using itx = await api.projects.get(project);
-              await itx.invoke(["itx", "agents", ["get", path], ["create", {}]]);
-              await router.invalidate();
-              await navigate({
-                to: "/projects/$slug",
-                params: { slug: data.project.slug },
-                search: { agent: path },
-              });
-            }}
-          />
-        ) : null
+        <AgentsNav
+          slug={data.project.slug}
+          agents={data.agents}
+          agent={data.agent}
+          onCreate={async () => {
+            // an agent is its path; a new one is born at the moment's path, as in apps/os
+            const path = newWebAgentPath(new Date());
+            using itx = await api.projects.get(project);
+            await itx.invoke(["itx", "agents", ["get", path], ["create", {}]]);
+            await router.invalidate();
+            await navigate({
+              to: "/projects/$slug",
+              params: { slug: data.project.slug },
+              search: { agent: path },
+            });
+          }}
+        />
       }
       header={
         data.agent ? (
@@ -119,19 +118,7 @@ function AgentsPage() {
       account={{ email: info.principal.email || info.principal.actor }}
       locationKey={href}
     >
-      {!project ? (
-        <Empty>
-          <EmptyHeader>
-            <EmptyTitle>No projects yet</EmptyTitle>
-            <EmptyDescription>
-              <a href="https://dash.iterate2.com/projects" className="underline underline-offset-4">
-                Create a project
-              </a>{" "}
-              in the dash to give an agent a home.
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      ) : data.agent ? (
+      {data.agent ? (
         <AgentConversation key={`${project}${data.agent}`} project={project} path={data.agent} />
       ) : (
         <Empty>
