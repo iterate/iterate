@@ -1,5 +1,6 @@
-// The path in the shell's header: Projects › <organization> › <project>. Read from the route params,
-// so every page under /projects gets it for free; the leading segments hide on narrow screens.
+// The path in the shell's header: Projects › <organization> › <project>, or Organizations ›
+// <organization>. Read from the route params, so every page under /projects and /organizations gets
+// it for free; the leading segments hide on narrow screens.
 import { Link, useParams } from "@tanstack/react-router";
 import {
   Breadcrumb,
@@ -18,19 +19,24 @@ export function DashBreadcrumbs({
 }: {
   orgs: Org[];
   projects: Project[];
-  /** the label of a page outside /projects (Sessions) */
+  /** the label of a page outside /projects and /organizations (Sessions) */
   page?: string;
 }) {
-  const { projectId } = useParams({ strict: false });
+  const { projectId, orgId } = useParams({ strict: false });
   const project = projects.find((candidate) => candidate.id === projectId);
-  const org = project ? orgs.find((candidate) => candidate.id === project.orgId) : undefined;
+  const org = orgs.find((candidate) => candidate.id === (project ? project.orgId : orgId));
   const crumbs: { label: string; to?: string; hideOnMobile?: boolean }[] = projectId
     ? [
         { label: "Projects", to: "/projects", hideOnMobile: true },
         ...(org ? [{ label: org.name, hideOnMobile: true }] : []),
         { label: project?.slug || projectId },
       ]
-    : [{ label: page || "Projects" }];
+    : orgId
+      ? [
+          { label: "Organizations", to: "/organizations", hideOnMobile: true },
+          { label: org?.name || orgId },
+        ]
+      : [{ label: page || "Projects" }];
   return (
     <Breadcrumb>
       <BreadcrumbList>

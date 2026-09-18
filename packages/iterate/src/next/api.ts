@@ -209,7 +209,15 @@ export interface IterateSessionApi {
   };
   /** The organizations this session reaches. */
   orgs(): Promise<{ id: string; name: string; role?: string }[]>;
+  /** A new organization — `organizations:write`; the person is its owner. */
   createOrg(name: string): Promise<{ id: string; name: string; role?: string }>;
+  /** Rename an organization the person owns — `organizations:write`. */
+  updateOrg(
+    orgId: string,
+    input: { name: string },
+  ): Promise<{ id: string; name: string; role?: string }>;
+  /** Delete an organization the person owns, while it holds no project — `organizations:write`. */
+  deleteOrg(orgId: string): Promise<void>;
   /** OAuth grants this session may manage (a signed-in person's): list, end, mint one for a device. */
   grants: {
     list(cursor?: string): Promise<{

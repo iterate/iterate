@@ -1,7 +1,8 @@
 // The dash's own navigation inside the shared shell (`AppShell`, packages/ui): inside a project its
-// overview and its site; outside one the projects and sessions pages and the other first-party apps.
+// overview and its site; outside one the projects, organizations and sessions pages and the other
+// first-party apps.
 import { Link, useMatchRoute } from "@tanstack/react-router";
-import { ExternalLink, FolderKanban, KeyRound, LayoutDashboard } from "lucide-react";
+import { Building2, ExternalLink, FolderKanban, KeyRound, LayoutDashboard } from "lucide-react";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -70,7 +71,8 @@ function ProjectNav({ projectId, host }: { projectId: string; host: string | nul
   );
 }
 
-/** Outside a project: the projects list, the account pages, and the other first-party apps. */
+/** Outside a project: the projects and organizations lists, the account pages, and the other
+ *  first-party apps. */
 function TopLevelNav() {
   const matchRoute = useMatchRoute();
   return (
@@ -86,6 +88,16 @@ function TopLevelNav() {
               >
                 <FolderKanban />
                 <span>Projects</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                tooltip="Organizations"
+                isActive={Boolean(matchRoute({ to: "/organizations", fuzzy: true }))}
+                render={<Link to="/organizations" />}
+              >
+                <Building2 />
+                <span>Organizations</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>

@@ -139,7 +139,7 @@ test("lent stub WebSocket fetch: a plain eyeball WebSocket on the project host o
 test("a hop count the platform never wrote (an app spelling `NaN` to defeat the budget) is over budget on arrival: 508, never a loop", async () => {
   // before admission — the count is read first, so the project need not exist
   const response = await fetchProjectHost(
-    `site--${freshDnsSafeProjectSlug("lane-nan-hops")}.${projectHostnameBase()}`,
+    `site--${freshDnsSafeProjectSlug("nan-hops")}.${projectHostnameBase()}`,
     "/",
     { "x-itx-expression-hops": "NaN" },
   );

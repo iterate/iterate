@@ -235,20 +235,40 @@ export class SessionRpcTarget extends RpcTarget {
     return orgs.filter((org) => projects.some((project) => project.orgId === org.id));
   }
 
-  /** Creating an organization is the `organizations:write` scope's: a user grant whose consent kept
-   *  it ticked (the dash asks for it; the consent page lets the person untick it), the issuer's own
-   *  session, or the operator acting as a user. The grant's project reach is beside the point — the
-   *  new organization is the person's, and the grant reaches what it reached before. */
-  createOrg(name: string) {
+  /** Creating, renaming or deleting an organization is the `organizations:write` scope's: a user
+   *  grant whose consent kept it ticked (the dash asks for it; the consent page lets the person
+   *  untick it), the issuer's own session, or the operator acting as a user. The grant's project
+   *  reach is beside the point — an organization is the person's, and the grant reaches what it
+   *  reached before. The person behind the grant, for the directory. */
+  #organizationsWriter(verb: string): { userId: string } {
     const { reach, scopes } = this.#authority;
     if (reach === "every" || !("userId" in reach))
-      throw codedError("FORBIDDEN", "A user session is required to create an organization.");
+      throw codedError("FORBIDDEN", `A user session is required to ${verb} an organization.`);
     if (!scopes?.includes("organizations:write"))
       throw codedError(
         "FORBIDDEN",
-        "The organizations:write permission is required to create an organization.",
+        `The organizations:write permission is required to ${verb} an organization.`,
       );
-    return this.#input.directory.createOrg(reach.userId, z.string().trim().min(1).parse(name));
+    return reach;
+  }
+
+  /** A new organization named `name`, the person its owner. */
+  createOrg(name: string) {
+    const { userId } = this.#organizationsWriter("create");
+    return this.#input.directory.createOrg(userId, z.string().trim().min(1).parse(name));
+  }
+
+  /** Rename an organization the person owns. */
+  updateOrg(orgId: string, input: { name: string }) {
+    const { userId } = this.#organizationsWriter("rename");
+    const data = z.object({ name: z.string().trim().min(1) }).parse(input);
+    return this.#input.directory.renameOrg(userId, z.string().min(1).parse(orgId), data.name);
+  }
+
+  /** Delete an organization the person owns, while it holds no project. */
+  deleteOrg(orgId: string) {
+    const { userId } = this.#organizationsWriter("delete");
+    return this.#input.directory.deleteOrg(userId, z.string().min(1).parse(orgId));
   }
 
   get consent() {

@@ -107,6 +107,20 @@ test("onboarding creates owned organizations atomically and checks the selected 
   expect(
     await db.prepare("SELECT id FROM orgs WHERE name = ?").bind("No orphan organization").first(),
   ).toBeNull();
+  // rename and delete are the owner's: a member who owns nothing is refused, and an organization
+  // that still holds a project stays
+  expect(await catalog.renameOrg(user.id, first.id, "  A renamed organization ")).toEqual({
+    ...first,
+    name: "A renamed organization",
+  });
+  expect((await catalog.listOrgs(user.id)).map((org) => org.name)).toEqual([
+    "A renamed organization",
+    "Z selected organization",
+  ]);
+  await expect(catalog.renameOrg(other.id, first.id, "Not mine")).rejects.toThrow(/owner/);
+  await expect(catalog.deleteOrg(user.id, chosen.id)).rejects.toThrow(/still holds 1 project/);
+  await catalog.deleteOrg(user.id, first.id);
+  expect((await catalog.listOrgs(user.id)).map((org) => org.id)).toEqual([chosen.id]);
 });
 
 test("operator RPC accepts only its administrator credential; issuer login uses the public API", async () => {

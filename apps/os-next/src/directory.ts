@@ -116,6 +116,39 @@ AND NOT EXISTS (SELECT 1 FROM users WHERE email = ? AND id != ?) RETURNING id, e
       return org;
     },
 
+    /** Rename an org — its owner's to do; the name stays free text. */
+    async renameOrg(userId: string, orgId: string, name: string): Promise<Org> {
+      const trimmed = name.trim();
+      if (!trimmed) throw codedError("INVALID_INPUT", "Enter an organization name.");
+      const org = (await d1Directory.listOrgs(userId)).find((entry) => entry.id === orgId);
+      if (org?.role !== "owner")
+        throw codedError("FORBIDDEN", "Only an owner can rename an organization.");
+      await db.prepare("UPDATE orgs SET name = ? WHERE id = ?").bind(trimmed, orgId).run();
+      return { ...org, name: trimmed };
+    },
+
+    /** Delete an org — its owner's to do, and only while it holds no project (a project is its
+     *  organization's; nothing here deletes one). The memberships go with it. */
+    async deleteOrg(userId: string, orgId: string): Promise<void> {
+      const org = (await d1Directory.listOrgs(userId)).find((entry) => entry.id === orgId);
+      if (org?.role !== "owner")
+        throw codedError("FORBIDDEN", "Only an owner can delete an organization.");
+      const held = await db
+        .prepare("SELECT count(*) AS n FROM projects WHERE org_id = ?")
+        .bind(orgId)
+        .first<{ n: number }>();
+      if (held?.n)
+        throw codedError(
+          "INVALID_INPUT",
+          `This organization still holds ${held.n} project${held.n === 1 ? "" : "s"}.`,
+        );
+      // D1 batch is transactional: the memberships and the organization go together.
+      await db.batch([
+        db.prepare("DELETE FROM org_members WHERE org_id = ?").bind(orgId),
+        db.prepare("DELETE FROM orgs WHERE id = ?").bind(orgId),
+      ]);
+    },
+
     /** Orgs the user belongs to. */
     async listOrgs(userId: string): Promise<Org[]> {
       const { results } = await db
