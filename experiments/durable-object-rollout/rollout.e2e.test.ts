@@ -15,7 +15,7 @@ test(
   async () => {
     await using probe = await Probe.create("ordinary-redeploy");
     await probe.bootstrap();
-    const previousNamespace = await probe.namespace();
+    const previousNamespace = await probe.readNamespaceId();
     expect(previousNamespace).toEqual(expect.any(String));
 
     for (let round = 1; round <= probe.evidence.rounds; round++) {
@@ -26,21 +26,25 @@ test(
         Array.from({ length: 12 }, async () => {
           const id = randomUUID();
           const response = await probe.request(`/work/${id}`, { durationMs: 15_000 }, deployment);
-          return { id, response, followup: [] as Awaited<ReturnType<typeof probe.observe>> };
+          return {
+            id,
+            response,
+            stateObservations: [] as Awaited<ReturnType<typeof probe.observeState>>,
+          };
         }),
       );
       const trial = {
         round,
         deployment: deployment.build,
         previousNamespace,
-        namespace: await probe.namespace(),
+        namespace: await probe.readNamespaceId(),
         operations,
       };
       probe.evidence.trials.push(trial);
       // Read back through a DO on the new build. Its record survives restarts and keeps
       // the boot/version that started the work; object describes the instance reading it now.
       for (const operation of operations) {
-        operation.followup = await probe.observe(
+        operation.stateObservations = await probe.observeState(
           `/state/${operation.id}`,
           deployment,
           (r) => r.status === 200 && r.data.object?.build === deployment.build,
@@ -50,7 +54,10 @@ test(
       // Both the first call and durable record should say 'completed'. A later healthy
       // read must not turn a failed first call green; recorded runs hit code-update resets here.
       for (const operation of operations) {
-        expect({ response: operation.response, state: operation.followup.at(-1) }).toMatchObject({
+        expect({
+          response: operation.response,
+          state: operation.stateObservations.at(-1),
+        }).toMatchObject({
           response: { status: 200, data: { record: { status: "completed" } } },
           state: { status: 200, data: { record: { status: "completed" } } },
         });
@@ -69,31 +76,31 @@ test(
     await probe.bootstrap();
 
     for (let round = 1; round <= probe.evidence.rounds; round++) {
-      const previousNamespace = await probe.namespace();
+      const previousNamespace = await probe.readNamespaceId();
       expect(previousNamespace).toEqual(expect.any(String));
       // Erase the namespace, then recreate the class under a new namespace ID. Old Workers
       // may still answer during rollout, so failures here do not prove old DOs survived erasure.
       await probe.deploy(`retired-${round}`, false);
-      expect(await probe.namespace()).toBeNull();
+      expect(await probe.readNamespaceId()).toBeNull();
       const deployment = await probe.deploy(`retire-recreate-${round}`, true);
       // First-touch unique names immediately after Wrangler exits. Never retry a write.
       const operations = await Promise.all(
         Array.from({ length: 12 }, async () => {
           const id = randomUUID();
           const response = await probe.request(`/work/${id}`, { durationMs: 15_000 }, deployment);
-          return { id, response, followup: [] as any[] };
+          return { id, response, stateObservations: [] as any[] };
         }),
       );
       const trial = {
         round,
         deployment: deployment.build,
         previousNamespace,
-        namespace: await probe.namespace(),
+        namespace: await probe.readNamespaceId(),
         operations,
       };
       probe.evidence.trials.push(trial);
       for (const operation of operations) {
-        operation.followup = await probe.observe(
+        operation.stateObservations = await probe.observeState(
           `/state/${operation.id}`,
           deployment,
           (r) => r.status === 200 && r.data.object?.build === deployment.build,
@@ -102,7 +109,10 @@ test(
       expect(trial.namespace).toEqual(expect.any(String));
       expect(trial.namespace).not.toBe(previousNamespace);
       for (const operation of operations) {
-        expect({ response: operation.response, state: operation.followup.at(-1) }).toMatchObject({
+        expect({
+          response: operation.response,
+          state: operation.stateObservations.at(-1),
+        }).toMatchObject({
           response: { status: 200, data: { record: { status: "completed" } } },
           state: { status: 200, data: { record: { status: "completed" } } },
         });
@@ -123,7 +133,7 @@ test(
     // Unlike the fresh-object cases, start work BEFORE redeploy and confirm its durable
     // 'started' marker, so the deployment interrupts an operation we know is already active.
     const inFlight = probe.request(`/work/${id}`, { durationMs: 90_000 }, initial);
-    const started = await probe.observe(
+    const started = await probe.observeState(
       `/state/${id}`,
       initial,
       (r) => r.data.record?.status === "started",
@@ -136,7 +146,7 @@ test(
 
     const replacement = await probe.deploy("active-object-control", true);
     const response = await inFlight;
-    const followup = await probe.observe(
+    const followup = await probe.observeState(
       `/state/${id}`,
       replacement,
       (r) => r.status === 200 && r.data.object?.build === replacement.build,
@@ -337,7 +347,7 @@ class Probe {
   }
 
   /** Read the currently bound DO namespace ID, or null after retirement. */
-  async namespace() {
+  async readNamespaceId(): Promise<string | null> {
     const settings = await this.#api(`/workers/scripts/${this.#workerName}/settings`, null);
     expect(settings).toMatchObject({ success: true });
     return (
@@ -347,7 +357,7 @@ class Probe {
   }
 
   /** Poll a read-only endpoint up to 30 times, retaining every response. */
-  async observe(
+  async observeState(
     path: string,
     deployment: Awaited<ReturnType<typeof this.deploy>>,
     accepts: (response: any) => boolean,
@@ -367,7 +377,7 @@ class Probe {
   async bootstrap() {
     const initial = await this.deploy("bootstrap", true);
     // Provision the new hostname before measuring a deployment. No measured deploy waits here.
-    const readiness = await this.observe(
+    const readiness = await this.observeState(
       "/health",
       initial,
       (r) => r.data.worker?.build === "bootstrap",
@@ -386,12 +396,12 @@ class Probe {
     if (this.#touchedCloud) {
       try {
         const parked = await this.deploy("cleanup-parked", false);
-        const attempts = await this.observe(
+        const attempts = await this.observeState(
           "/health",
           parked,
           (r) => r.data.build === "cleanup-parked",
         );
-        const remainingNamespace = await this.namespace();
+        const remainingNamespace = await this.readNamespaceId();
         this.evidence.cleanup = { remainingNamespace, attempts };
         expect({ remainingNamespace, response: attempts.at(-1) }).toMatchObject({
           remainingNamespace: null,
