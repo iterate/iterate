@@ -182,6 +182,8 @@ export type ConsentAnswer =
       scopes: string[];
       denyLocation: string;
       projectHostnameBase: string;
+      /** the onboarding step's first draft of an organization name, from the person's name or email */
+      suggestedOrganizationName: string;
     }
   | { kind: "redirect"; location: string }
   | { kind: "invalid"; description: string };

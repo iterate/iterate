@@ -116,7 +116,7 @@ test("first Claude consent creates the organization and project on the consent p
     await page.goto(flow.url.href);
     await signIn(page, origin, email, flow.url.pathname + flow.url.search);
     await Promise.race([
-      page.getByRole("heading", { name: "Create your organization", exact: true }).waitFor(),
+      page.getByRole("heading", { name: "Create a project", exact: true }).waitFor(),
       callback.then((url) => {
         throw new Error(
           `Authorization ended before consent: ${url.searchParams.get("error")}: ${url.searchParams.get("error_description")}`,
@@ -130,8 +130,14 @@ test("first Claude consent creates the organization and project on the consent p
     // name and the first project's slug — typed "Consent Studio …", it reads consent-studio-… —
     // with where it will live. Continue makes both and the consent page follows.
     expect(await page.getByRole("button", { name: "Approve", exact: true }).count()).toBe(0);
-    await page.getByRole("textbox", { name: "Organization name", exact: true }).fill(firstOrg);
+    // both start filled the way apps/auth fills them — the organization from the email's domain
+    // (example.com → "Example"), the slug from the organization, following it until edited
+    const orgField = page.getByRole("textbox", { name: "Organization name", exact: true });
     const projectField = page.getByRole("textbox", { name: "Project slug", exact: true });
+    expect(await orgField.inputValue()).toBe("Example");
+    expect(await projectField.inputValue()).toBe("example");
+    await orgField.fill(firstOrg);
+    expect(await projectField.inputValue()).toBe("first-consent-studio");
     await projectField.fill(`Consent Studio ${project}`);
     expect(await projectField.inputValue()).toBe(`consent-studio-${project}`);
     await page.getByText(`Your project will be hosted at consent-studio-${project}.`).waitFor();

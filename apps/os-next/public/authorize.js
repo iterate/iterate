@@ -136,9 +136,21 @@
     };
     input.addEventListener("input", show);
     show();
+    const set = (value) => {
+      input.value = value;
+      show();
+    };
     // the hostname line sits beside the label, not in it: the field's name stays "Project slug"
-    return { input, field: el("div", {}, el("label", {}, "Project slug ", input), host) };
+    return { input, set, field: el("div", {}, el("label", {}, "Project slug ", input), host) };
   };
+  /** The directory's slugging, for a slug proposed from a name: lowercase, anything else → a dash,
+   *  runs collapsed, ends trimmed. */
+  const slugOf = (name) =>
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-+|-+$/g, "");
   const orgNameField = () => {
     const input = el("input", {
       type: "text",
@@ -177,11 +189,27 @@
   };
 
   /** The onboarding step — a person with no project yet: their organization's name and their first
-   *  project's slug, one form; Continue posts both and the consent page follows. */
+   *  project's slug, one form; Continue posts both and the consent page follows. Both fields start
+   *  filled the way apps/auth fills them: the name from the person's display name or email, the
+   *  slug from the name — following it until the person edits the slug (then it is theirs, even
+   *  emptied), and a refused create keeps what was typed. */
   function renderOnboarding(view) {
-    document.title = "Create your organization — iterate";
+    document.title = "Create a project — iterate";
+    const before = {
+      org: card.querySelector('[name="new-org"]'),
+      slug: card.querySelector('[name="slug"]'),
+    };
     const org = orgNameField();
+    if (!before.org) org.input.value = view.suggestedOrganizationName;
     const project = slugField(view.projectHostnameBase);
+    let follows = !before.slug || before.slug.value === slugOf(before.org?.value || "");
+    if (follows) project.set(slugOf(org.input.value));
+    org.input.addEventListener("input", () => {
+      if (follows) project.set(slugOf(org.input.value));
+    });
+    project.input.addEventListener("input", () => {
+      follows = false;
+    });
     const form = el("form", { id: "onboarding-form" });
     form.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -207,7 +235,7 @@
         "header",
         {},
         el("img", { class: "issuer-mark", src: "/iterate-logo.svg", alt: "" }),
-        el("h1", { text: "Create your organization" }),
+        el("h1", { text: "Create a project" }),
         el("p", { class: "muted", text: `${view.clientName} works in a project of yours.` }),
       ),
       signedInAs(view.email, view.picture),
