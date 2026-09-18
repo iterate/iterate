@@ -189,7 +189,7 @@ function NewProjectForm({
       </SheetHeader>
       <FieldGroup className="flex-1 p-4">
         <Field>
-          <FieldLabel htmlFor="project">Project</FieldLabel>
+          <FieldLabel htmlFor="project">Project slug</FieldLabel>
           <Input
             id="project"
             placeholder="my-project"

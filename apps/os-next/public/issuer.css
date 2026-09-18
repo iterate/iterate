@@ -81,6 +81,8 @@ select {
   background: var(--paper);
   color: inherit;
   font: inherit;
+  /* never under 16px: iOS Safari zooms the page into any smaller field it focuses */
+  font-size: max(1em, 16px);
   padding: 0.55rem 0.65rem;
   margin: 0.3rem 0 0;
   box-sizing: border-box;
@@ -179,6 +181,11 @@ button,
   overflow-wrap: anywhere;
   > :is(header, form, footer) {
     padding: 0 0 1.5rem;
+  }
+  /* the onboarding step's header: the mark, the title, one line under it */
+  > header > p {
+    text-align: center;
+    margin: -0.75rem 0 0;
   }
   form {
     margin: 0;
@@ -349,10 +356,14 @@ button,
   align-items: center;
   padding: 0.65rem 0;
   margin: 0;
-  animation: consent-rise 0.3s both;
-  animation-delay: calc(sibling-index() * 30ms);
   & + & {
     border-top: 1px solid var(--line);
+  }
+  /* the rows rise in, staggered, on the page's first form alone — a later render swaps the form
+     in place, and its rows had better stay put */
+  .consent-enter & {
+    animation: consent-rise 0.3s both;
+    animation-delay: calc(sibling-index() * 30ms);
   }
 }
 @keyframes consent-rise {
