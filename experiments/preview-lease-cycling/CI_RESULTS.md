@@ -90,3 +90,13 @@ A separate observer sampled the control preview 78 times, from 21:22:07.199 to 2
 ## What to do with this result
 
 Continue the pool-lifecycle experiment: the real parallel CI path saved about 95s with a pre-rested slot. Keep the production 90s default while investigating the control alarm incident and treatment retries and collecting more representative runs. Automated retirement, slot metadata, exhaustion handling and proof that human previews remain useful between commits are still separate implementation work; this branch does not claim to deliver them.
+
+## Follow-up: depth-ten Plan checkout
+
+Plan now uses `fetch-depth: 10` unconditionally. If the fetched graph has no common ancestor with main, or main is not present, the planner selects a fresh deploy before looking up inherited results or reusable deployments. Available ancestry still supports reuse; unrelated Git failures still throw.
+
+At head `d22ce69c0`, a [Plan-only Depot probe](https://depot.dev/orgs/0p91s0lz49/workflows/1gr09jtb7s) passed (run `z22nr9pnbp`). It copied the actual Plan job and runner image, supplied full-preview inputs and explicit branch metadata, and omitted deployment/test jobs. Fetching took **1.008s** (21:53:34.707–21:53:35.715 UTC), versus **28.165s** in the earlier full-history treatment Plan job. This measures checkout, not another end-to-end CI speedup.
+
+24 focused workflow/planner tests, scripts typecheck and focused lint passed. Real shallow-clone tests cover absent main, a merge base beyond the ten-commit window, and successful inheritance when the merge base is available. The two missing-history cases failed before the change.
+
+Three earlier isolated probes (`jkd793dfj8`, `g6q37pk1hv`, `z5x988xldw`) failed while wiring dispatch inputs/branch metadata; they did not deploy anything. The successful probe supplies the branch directly to the command because the local-run provider overrides the workflow-level GitHub ref environment. Raw probe YAML, statuses and logs remain in `evidence.ignoreme/depth10/`. No PR.
