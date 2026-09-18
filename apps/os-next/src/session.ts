@@ -15,19 +15,14 @@ import {
   type IterateContextNamespace,
   type WaitUntil,
 } from "./iterate-context.ts";
-import {
-  describeReach,
-  projectSlug,
-  type Directory,
-  type Project,
-  type Reach,
-} from "./directory.ts";
+import { describeReach, type Directory, type Project, type Reach } from "./directory.ts";
 import type { AppConfig } from "./app-config.ts";
 import type { AuthenticationFact } from "./account/contract.ts";
 
-/** One DNS-safe name — the directory row, the DO name, the host label; in this deployment a project's
- *  id IS its slug. */
-export type ProjectIdOrSlug = string;
+/** A project as a caller names it: its minted id (`prj_<hex>`) or its slug (a URL's
+ *  `/projects/<slug>`, a hostname's label) — the directory resolves either (`projectIdOf`), and the
+ *  id alone goes on: the DO name's host, a grant's list, `whoami()`. */
+export type ProjectRef = string;
 
 /** What `IterateRpcTarget.authenticate` accepts. `from-server-cookie` is the browser and `bearer` is
  *  a device or script whose token rode the upgrade: the OAuth gate already resolved the session from
@@ -226,6 +221,7 @@ export class SessionRpcTarget extends RpcTarget {
       scopes: this.#authority.scopes ?? [],
       platformOrigin: this.#input.appConfig.platformOrigin,
       projectHostnameBase: this.#input.appConfig.projectHostnameBase,
+      mcpOrigin: this.#input.appConfig.mcpOrigin,
     };
   }
 
@@ -241,20 +237,40 @@ export class SessionRpcTarget extends RpcTarget {
     return orgs.filter((org) => projects.some((project) => project.orgId === org.id));
   }
 
-  /** Creating an organization is the `organizations:write` scope's: a user grant whose consent kept
-   *  it ticked (the dash asks for it; the consent page lets the person untick it), the issuer's own
-   *  session, or the operator acting as a user. The grant's project reach is beside the point — the
-   *  new organization is the person's, and the grant reaches what it reached before. */
-  createOrg(name: string) {
+  /** Creating, renaming or deleting an organization is the `organizations:write` scope's: a user
+   *  grant whose consent kept it ticked (the dash asks for it; the consent page lets the person
+   *  untick it), the issuer's own session, or the operator acting as a user. The grant's project
+   *  reach is beside the point — an organization is the person's, and the grant reaches what it
+   *  reached before. The person behind the grant, for the directory. */
+  #organizationsWriter(verb: string): { userId: string } {
     const { reach, scopes } = this.#authority;
     if (reach === "every" || !("userId" in reach))
-      throw codedError("FORBIDDEN", "A user session is required to create an organization.");
+      throw codedError("FORBIDDEN", `A user session is required to ${verb} an organization.`);
     if (!scopes?.includes("organizations:write"))
       throw codedError(
         "FORBIDDEN",
-        "The organizations:write permission is required to create an organization.",
+        `The organizations:write permission is required to ${verb} an organization.`,
       );
-    return this.#input.directory.createOrg(reach.userId, z.string().trim().min(1).parse(name));
+    return reach;
+  }
+
+  /** A new organization named `name`, the person its owner. */
+  createOrg(name: string) {
+    const { userId } = this.#organizationsWriter("create");
+    return this.#input.directory.createOrg(userId, z.string().trim().min(1).parse(name));
+  }
+
+  /** Rename an organization the person owns. */
+  updateOrg(orgId: string, input: { name: string }) {
+    const { userId } = this.#organizationsWriter("rename");
+    const data = z.object({ name: z.string().trim().min(1) }).parse(input);
+    return this.#input.directory.renameOrg(userId, z.string().min(1).parse(orgId), data.name);
+  }
+
+  /** Delete an organization the person owns, while it holds no project. */
+  deleteOrg(orgId: string) {
+    const { userId } = this.#organizationsWriter("delete");
+    return this.#input.directory.deleteOrg(userId, z.string().min(1).parse(orgId));
   }
 
   get consent() {
@@ -388,22 +404,14 @@ class ProjectCollection extends RpcTarget {
     return this.#input.directory.reachableProjects(this.#reach);
   }
 
-  /** Create the project named `project` (slugified: that IS its id) — in the user's org (the first
+  /** Create the project named `project` (slugified into its hostname label; its id is minted —
+   *  the returned context's `whoami()` says it, so does `list()`) — in the user's org (the first
    *  by name when they have several, created on first use when they have none), or in the
    *  deployment's own org for the admin secret — and vend its root context. A grant narrowed to
-   *  named projects creates none: FORBIDDEN. A name ANY org already holds is refused, coded
-   *  (PROJECT_NAME_TAKEN); the same org's again is idempotent. The global namespace's id is a
-   *  RESERVED word (PROJECT_NAME_RESERVED): a project could otherwise address `(global, "/")`. */
-  async create(input: {
-    project: ProjectIdOrSlug;
-    orgId?: string;
-  }): Promise<IterateContextRpcTarget> {
+   *  named projects creates none: FORBIDDEN. A slug ANY org already holds is refused, coded
+   *  (PROJECT_NAME_TAKEN); the same org's again is idempotent. */
+  async create(input: { project: string; orgId?: string }): Promise<IterateContextRpcTarget> {
     const data = z.object({ project: z.string(), orgId: z.string().optional() }).parse(input);
-    if (projectSlug(data.project) === GLOBAL_PROJECT_ID)
-      throw codedError(
-        "PROJECT_NAME_RESERVED",
-        `projects.create: ${JSON.stringify(GLOBAL_PROJECT_ID)} is the deployment-global namespace, not a project name`,
-      );
     const project = await this.#input.directory.createProject(
       this.#reach,
       data.project,
@@ -412,9 +420,11 @@ class ProjectCollection extends RpcTarget {
     return this.#context(project.id);
   }
 
-  /** The project's root context ("/"). A project only — a context name belongs to `cd`. Outside
-   *  this session's reach is FORBIDDEN; so is the global namespace's id (it is no project). */
-  async get(project: ProjectIdOrSlug): Promise<IterateContextRpcTarget> {
+  /** The project's root context ("/"), by its slug or its id. A project only — a context name
+   *  belongs to `cd`. Outside this session's reach is FORBIDDEN; so is the global namespace's id (it
+   *  is no project). The admin secret alone addresses a project the directory never heard of, by
+   *  id (a fresh context of its own). */
+  async get(project: ProjectRef): Promise<IterateContextRpcTarget> {
     const address = DurableObjectNameCodec.parse(project);
     if (address.path !== "/")
       throw new Error(
@@ -425,12 +435,13 @@ class ProjectCollection extends RpcTarget {
         "FORBIDDEN",
         `projects.get(${JSON.stringify(project)}): the deployment-global namespace is no project — a global context is reached by identity (session.user, session.organizations)`,
       );
-    if (!(await this.#input.directory.reachesProject(this.#reach, address.projectId)))
+    const id = await this.#input.directory.projectIdOf(address.projectId);
+    if (!(await this.#input.directory.reachesProject(this.#reach, id)))
       throw codedError(
         "FORBIDDEN",
         `projects.get(${JSON.stringify(project)}): outside this session's reach — ${describeReach(this.#reach)}`,
       );
-    return this.#context(address.projectId);
+    return this.#context(id);
   }
 
   #context(projectId: string): IterateContextRpcTarget {

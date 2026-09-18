@@ -33,7 +33,7 @@ import {
 
 /** A project as the switcher lists it; `org` is its organization, when the app knows it — grouped
  *  by the id (two organizations may share a name), labelled by the name. */
-export type AppShellProject = { id: string; org?: { id: string; name: string } };
+export type AppShellProject = { id: string; slug: string; org?: { id: string; name: string } };
 
 /** Frames a signed-in page. Client-only, like every page that frames itself in it: it reads the
  *  `sidebar_state` cookie shadcn's provider writes, so the sidebar reopens the way it was left. */
@@ -56,11 +56,12 @@ export function AppShell({
   /** the projects this session lists; grouped by `org` when the app names one */
   projects: AppShellProject[];
   activeProjectId: string | null;
-  /** where the app shows a project — a same-origin href; switching is a full navigation unless
+  /** where the app shows a project (`/projects/<slug>` by convention) — a same-origin href;
+   *  switching is a full navigation unless
    *  `onNavigate` takes it (an app with a client router prevents the default and navigates itself).
    *  Only a plain left click is handed over: a modified or middle click keeps the anchor's own
    *  behaviour (a new tab). */
-  projectHref: (projectId: string) => string;
+  projectHref: (project: AppShellProject) => string;
   onNavigate?: (href: string, event: MouseEvent<HTMLAnchorElement>) => void;
   /** the app's own items at the end of the switcher menu — `DropdownMenuItem`s, after a separator */
   switcherActions?: ReactNode;
@@ -140,7 +141,7 @@ function ProjectSwitcher({
   app: string;
   projects: AppShellProject[];
   activeProjectId: string | null;
-  projectHref: (projectId: string) => string;
+  projectHref: (project: AppShellProject) => string;
   onNavigate?: (href: string, event: MouseEvent<HTMLAnchorElement>) => void;
   actions?: ReactNode;
 }) {
@@ -165,7 +166,8 @@ function ProjectSwitcher({
                 <span className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">{app}</span>
                   <span className="truncate text-xs text-muted-foreground">
-                    {activeProjectId || "(select project)"}
+                    {projects.find((project) => project.id === activeProjectId)?.slug ||
+                      "(select project)"}
                   </span>
                 </span>
                 <ChevronsUpDownIcon className="ml-auto" />
@@ -199,13 +201,13 @@ function ProjectSwitcher({
                       className="gap-2 p-2"
                       render={
                         <a
-                          href={projectHref(project.id)}
-                          aria-label={`Switch to ${project.id}`}
+                          href={projectHref(project)}
+                          aria-label={`Switch to ${project.slug}`}
                           onClick={
                             onNavigate
                               ? (event) => {
                                   if (!plainLeftClick(event)) return;
-                                  onNavigate(projectHref(project.id), event);
+                                  onNavigate(projectHref(project), event);
                                 }
                               : undefined
                           }
@@ -213,9 +215,9 @@ function ProjectSwitcher({
                       }
                     >
                       <span className="flex size-6 items-center justify-center rounded-md border text-xs font-medium text-muted-foreground">
-                        {project.id.slice(0, 1)}
+                        {project.slug.slice(0, 1)}
                       </span>
-                      <span className="truncate">{project.id}</span>
+                      <span className="truncate">{project.slug}</span>
                       {project.id === activeProjectId ? <CheckIcon className="ml-auto" /> : null}
                     </DropdownMenuItem>
                   ))}

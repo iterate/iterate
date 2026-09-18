@@ -15,12 +15,13 @@ import {
 import { toast } from "@iterate-com/ui/components/sonner";
 
 export function AgentsNav({
-  project,
+  slug,
   agents,
   agent,
   onCreate,
 }: {
-  project: string;
+  /** the project's slug — its URL (`/projects/<slug>`) */
+  slug: string;
   agents: { path: string }[];
   agent: string | undefined;
   /** Births an agent at a fresh path; the page navigates to it once it exists. */
@@ -69,7 +70,9 @@ export function AgentsNav({
                 <SidebarMenuButton
                   isActive={item.path === agent}
                   tooltip={item.path}
-                  render={<Link to="/agents" search={{ project, agent: item.path }} />}
+                  render={
+                    <Link to="/projects/$slug" params={{ slug }} search={{ agent: item.path }} />
+                  }
                 >
                   <BotIcon />
                   <span className="truncate font-mono text-xs">{item.path}</span>

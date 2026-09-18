@@ -1,14 +1,15 @@
-// /projects — every project the session reaches, by organization, and the one way to make one: the
-// "New project" sheet (`?new=1`, so the switcher and a shared link open it too). An organization is
-// made with its first project — "New organization…" inside the sheet when the grant holds
-// `organizations:write`, a step-up link in its place otherwise.
+// /projects — every project the session reaches, a table (the slug → its overview, the id, its
+// organization → its settings, its site) in the organizations page's layout, and the one way to
+// make one: the "New project" sheet (`?new=1`, so the switcher and a shared link open it too) —
+// "New organization…" inside it when the grant holds `organizations:write`, a step-up link in its
+// place otherwise.
 import { useState, type FormEvent } from "react";
 import { createFileRoute, getRouteApi, Link, useNavigate, useRouter } from "@tanstack/react-router";
-import { ArrowUpRight, Building2, Plus } from "lucide-react";
+import { ArrowUpRight, Plus } from "lucide-react";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
-import { Card, CardDescription, CardHeader, CardTitle } from "@iterate-com/ui/components/card";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
+import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import {
@@ -21,7 +22,17 @@ import {
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
 import { Spinner } from "@iterate-com/ui/components/spinner";
-import { projectsByOrg, type Org } from "../../../lib/projects.ts";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@iterate-com/ui/components/table";
+import { AllowOrganizations } from "../../../components/allow-organizations.tsx";
+import { ListPage } from "../../../components/list-page.tsx";
+import type { Org } from "../../../lib/projects.ts";
 import { projectHostOf } from "../../_auth.tsx";
 
 const shell = getRouteApi("/_auth");
@@ -37,68 +48,78 @@ function ProjectsPage() {
   const search = Route.useSearch();
   const navigate = useNavigate();
   const [pending, setPending] = useState(false);
-  const groups = projectsByOrg(orgs, projects);
-  const hostOf = (projectId: string) => projectHostOf(info, projectId);
   const closeSheet = () => navigate({ to: "/projects", search: {}, replace: true });
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Projects</h1>
-        <Button onClick={() => navigate({ to: "/projects", search: { new: 1 } })}>
-          <Plus data-icon="inline-start" />
-          New project
-        </Button>
-      </div>
-      {groups.length ? (
-        groups.map((group) => (
-          <section key={group.org.id || "other"} className="flex flex-col gap-3">
-            <h2 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-              <Building2 className="size-4" />
-              {group.org.name}
-              {group.org.role ? (
-                <span className="text-xs font-normal">({group.org.role})</span>
-              ) : null}
-            </h2>
-            <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {group.projects.map((project) => (
-                <li key={project.id}>
-                  {/* relative: the title link stretches over THIS card, not the page */}
-                  <Card size="sm" className="relative h-full transition-colors hover:bg-accent/50">
-                    <CardHeader>
-                      <CardTitle className="truncate font-mono text-sm">
-                        <Link
-                          to="/projects/$projectId"
-                          params={{ projectId: project.id }}
-                          className="after:absolute after:inset-0"
-                        >
-                          {project.id}
-                        </Link>
-                      </CardTitle>
-                      <CardDescription className="flex items-center gap-2">
-                        {hostOf(project.id) ? (
-                          <a
-                            href={hostOf(project.id)!}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="relative z-10 inline-flex items-center gap-1 hover:text-foreground"
-                          >
-                            open
-                            <ArrowUpRight className="size-3" />
-                          </a>
-                        ) : null}
-                      </CardDescription>
-                    </CardHeader>
-                  </Card>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          No projects yet — “New project” creates the first.
-        </p>
-      )}
+    <>
+      <ListPage
+        title="Projects"
+        action={
+          <Button onClick={() => navigate({ to: "/projects", search: { new: 1 } })}>
+            <Plus data-icon="inline-start" />
+            New project
+          </Button>
+        }
+        empty={projects.length ? undefined : "No projects yet — “New project” creates the first."}
+      >
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Project</TableHead>
+              <TableHead>Id</TableHead>
+              <TableHead>Organization</TableHead>
+              <TableHead>Site</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {projects.map((project) => {
+              const org = orgs.find((candidate) => candidate.id === project.orgId);
+              const host = projectHostOf(info, project.slug);
+              return (
+                <TableRow key={project.id}>
+                  <TableCell className="font-mono font-medium">
+                    <Link
+                      to="/projects/$slug"
+                      params={{ slug: project.slug }}
+                      className="underline-offset-4 hover:underline"
+                    >
+                      {project.slug}
+                    </Link>
+                  </TableCell>
+                  <TableCell>
+                    <Identifier value={project.id} textClassName="text-xs" />
+                  </TableCell>
+                  <TableCell>
+                    {org ? (
+                      <Link
+                        to="/organizations/$orgId"
+                        params={{ orgId: org.id }}
+                        className="underline-offset-4 hover:underline"
+                      >
+                        {org.name}
+                      </Link>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {host ? (
+                      <a
+                        href={host}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                      >
+                        {new URL(host).host}
+                        <ArrowUpRight className="size-3" />
+                      </a>
+                    ) : null}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </ListPage>
       {/* apps/os's create-project sheet: the right edge, full width on a phone, dismiss refused
           while the create is in flight so Escape and the backdrop cannot race it */}
       <Sheet
@@ -122,7 +143,7 @@ function ProjectsPage() {
           />
         </SheetContent>
       </Sheet>
-    </div>
+    </>
   );
 }
 
@@ -142,7 +163,7 @@ function NewProjectForm({
 }) {
   const { api, info } = shell.useRouteContext();
   const router = useRouter();
-  // a project is its slug — its id and its hostname's label: lowercased as typed, anything but
+  // the project's slug — its hostname's label (its id is minted): lowercased as typed, anything but
   // a-z, 0-9 and dashes becoming a dash (the platform slugs it the same way)
   const [name, setName] = useState("");
   const host = projectHostOf(info, name || "my-project");
@@ -239,7 +260,7 @@ function NewProjectForm({
             />
           </Field>
         ) : null}
-        {canCreateOrg ? null : <AllowOrganizations />}
+        {canCreateOrg ? null : <AllowOrganizations next="/projects?new=1" />}
         {error ? (
           <p role="alert" className="text-sm text-destructive">
             {error}
@@ -259,23 +280,5 @@ function NewProjectForm({
         </Button>
       </SheetFooter>
     </form>
-  );
-}
-
-/** The dash asked for `organizations:write` and the person unticked it at consent: `/.auth/login`
- *  with the scope asked for again re-consents and lands back in this sheet; the granted set is what
- *  `info.scopes` says. */
-function AllowOrganizations() {
-  const stepUp = `/.auth/login?${new URLSearchParams({
-    next: "/projects?new=1",
-    scope: "iterate account organizations:write",
-  })}`;
-  return (
-    <p className="text-sm text-muted-foreground">
-      This session may not create organizations.{" "}
-      <a href={stepUp} className="underline underline-offset-4 hover:text-foreground">
-        Allow the dash to create organizations
-      </a>
-    </p>
   );
 }

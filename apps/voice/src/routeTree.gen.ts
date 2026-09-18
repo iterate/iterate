@@ -11,7 +11,8 @@
 import { Route as rootRouteImport } from "./routes/__root.tsx";
 import { Route as AuthRouteImport } from "./routes/_auth.tsx";
 import { Route as IndexRouteImport } from "./routes/index.tsx";
-import { Route as AuthCallRouteImport } from "./routes/_auth/call.tsx";
+import { Route as AuthProjectsIndexRouteImport } from "./routes/_auth/projects.index.tsx";
+import { Route as AuthProjectsSlugRouteImport } from "./routes/_auth/projects.$slug.tsx";
 
 const AuthRoute = AuthRouteImport.update({
   id: "/_auth",
@@ -22,32 +23,45 @@ const IndexRoute = IndexRouteImport.update({
   path: "/",
   getParentRoute: () => rootRouteImport,
 } as any);
-const AuthCallRoute = AuthCallRouteImport.update({
-  id: "/call",
-  path: "/call",
+const AuthProjectsIndexRoute = AuthProjectsIndexRouteImport.update({
+  id: "/projects/",
+  path: "/projects/",
+  getParentRoute: () => AuthRoute,
+} as any);
+const AuthProjectsSlugRoute = AuthProjectsSlugRouteImport.update({
+  id: "/projects/$slug",
+  path: "/projects/$slug",
   getParentRoute: () => AuthRoute,
 } as any);
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute;
-  "/call": typeof AuthCallRoute;
+  "/projects/$slug": typeof AuthProjectsSlugRoute;
+  "/projects/": typeof AuthProjectsIndexRoute;
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute;
-  "/call": typeof AuthCallRoute;
+  "/projects/$slug": typeof AuthProjectsSlugRoute;
+  "/projects": typeof AuthProjectsIndexRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/": typeof IndexRoute;
   "/_auth": typeof AuthRouteWithChildren;
-  "/_auth/call": typeof AuthCallRoute;
+  "/_auth/projects/$slug": typeof AuthProjectsSlugRoute;
+  "/_auth/projects/": typeof AuthProjectsIndexRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: "/" | "/call";
+  fullPaths: "/" | "/projects/$slug" | "/projects/";
   fileRoutesByTo: FileRoutesByTo;
-  to: "/" | "/call";
-  id: "__root__" | "/" | "/_auth" | "/_auth/call";
+  to: "/" | "/projects/$slug" | "/projects";
+  id:
+    | "__root__"
+    | "/"
+    | "/_auth"
+    | "/_auth/projects/$slug"
+    | "/_auth/projects/";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -71,22 +85,31 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof IndexRouteImport;
       parentRoute: typeof rootRouteImport;
     };
-    "/_auth/call": {
-      id: "/_auth/call";
-      path: "/call";
-      fullPath: "/call";
-      preLoaderRoute: typeof AuthCallRouteImport;
+    "/_auth/projects/": {
+      id: "/_auth/projects/";
+      path: "/projects";
+      fullPath: "/projects/";
+      preLoaderRoute: typeof AuthProjectsIndexRouteImport;
+      parentRoute: typeof AuthRoute;
+    };
+    "/_auth/projects/$slug": {
+      id: "/_auth/projects/$slug";
+      path: "/projects/$slug";
+      fullPath: "/projects/$slug";
+      preLoaderRoute: typeof AuthProjectsSlugRouteImport;
       parentRoute: typeof AuthRoute;
     };
   }
 }
 
 interface AuthRouteChildren {
-  AuthCallRoute: typeof AuthCallRoute;
+  AuthProjectsSlugRoute: typeof AuthProjectsSlugRoute;
+  AuthProjectsIndexRoute: typeof AuthProjectsIndexRoute;
 }
 
 const AuthRouteChildren: AuthRouteChildren = {
-  AuthCallRoute: AuthCallRoute,
+  AuthProjectsSlugRoute: AuthProjectsSlugRoute,
+  AuthProjectsIndexRoute: AuthProjectsIndexRoute,
 };
 
 const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren);

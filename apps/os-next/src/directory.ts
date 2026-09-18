@@ -1,11 +1,12 @@
 import { codedError } from "iterate/next/lib";
 
 // ── directory ── the control plane IS the directory. One D1 store, strongly consistent (no KV
-// list() lag), relational and org-centric: users → orgs (via org_members) → projects. A project's id is
-// ONE DNS-safe name (control-plane.sql): the directory row, the context DO's name and the project-host
-// label — nothing a caller can mint escapes it. The statements below are the control plane's whole
-// SQL, each spelled once at its one call site and bound positionally; the three row interfaces are
-// the rows D1 hands back (`org_id` is selected `AS orgId`).
+// list() lag), relational and org-centric: users → orgs (via org_members) → projects. A project is
+// addressed by its minted id everywhere (control-plane.sql): the context DO's name, a grant's list,
+// the API; its slug is the label of its hostnames and its name to a person — nothing a caller can
+// mint escapes the id. The statements below are the control plane's whole SQL, each spelled once at
+// its one call site and bound positionally; the three row interfaces are the rows D1 hands back
+// (`org_id` is selected `AS orgId`).
 
 /** A `users` row. */
 export interface User {
@@ -17,18 +18,19 @@ export interface Org {
   id: string; // org_<hex>
   name: string;
   role?: string;
+  /** how many projects it holds — every one of them, not only those the reader's grant lists */
+  projects: number;
 }
 /** A `projects` row, with the reader's `role` when read through `org_members`. */
 export interface Project {
-  id: string; // the DNS-safe name — the DO name and the host label
+  id: string; // prj_<hex>, minted — the DO name's host, the kv/secret prefix, what a grant names
+  slug: string; // the DNS label of its hostnames (`<app>--<slug>.<base>`), unique; a name, not an address
   orgId: string;
   role?: string;
 }
 
-/** Slugify as @iterate-com/shared/slug normalizes (lowercase, non-alphanumeric → dash, trimmed). A
- *  PROJECT has no minted id — its slug IS its id; an org has no slug at all. */
-/** A project's id from its name — the ONE slugging (`createProject` here, the reserved-word guard
- *  in session.ts `projects.create`). Empty when nothing DNS-safe survives. */
+/** A project's slug from its name — the ONE slugging (`createProject` here): lowercase,
+ *  non-alphanumeric → dash, runs collapsed, ends trimmed. Empty when nothing DNS-safe survives. */
 export const projectSlug = (name: string) =>
   name
     .trim()
@@ -104,7 +106,7 @@ AND NOT EXISTS (SELECT 1 FROM users WHERE email = ? AND id != ?) RETURNING id, e
     /** Create an org (a minted org_ id; the name is free text, two orgs may share one) and make the
      *  creator its owner. */
     async createOrg(userId: string, name: string): Promise<Org> {
-      const org = { id: newOrgId(), name: name.trim(), role: "owner" };
+      const org = { id: newOrgId(), name: name.trim(), role: "owner", projects: 0 };
       if (!org.name) throw codedError("INVALID_INPUT", "Enter an organization name.");
       // D1 batch is transactional: an organization never survives without its owner.
       await db.batch([
@@ -116,11 +118,44 @@ AND NOT EXISTS (SELECT 1 FROM users WHERE email = ? AND id != ?) RETURNING id, e
       return org;
     },
 
+    /** Rename an org — its owner's to do; the name stays free text. */
+    async renameOrg(userId: string, orgId: string, name: string): Promise<Org> {
+      const trimmed = name.trim();
+      if (!trimmed) throw codedError("INVALID_INPUT", "Enter an organization name.");
+      const org = (await d1Directory.listOrgs(userId)).find((entry) => entry.id === orgId);
+      if (org?.role !== "owner")
+        throw codedError("FORBIDDEN", "Only an owner can rename an organization.");
+      await db.prepare("UPDATE orgs SET name = ? WHERE id = ?").bind(trimmed, orgId).run();
+      return { ...org, name: trimmed };
+    },
+
+    /** Delete an org — its owner's to do, and only while it holds no project (a project is its
+     *  organization's; nothing here deletes one). The memberships go with it. */
+    async deleteOrg(userId: string, orgId: string): Promise<void> {
+      const org = (await d1Directory.listOrgs(userId)).find((entry) => entry.id === orgId);
+      if (org?.role !== "owner")
+        throw codedError("FORBIDDEN", "Only an owner can delete an organization.");
+      const held = await db
+        .prepare("SELECT count(*) AS n FROM projects WHERE org_id = ?")
+        .bind(orgId)
+        .first<{ n: number }>();
+      if (held?.n)
+        throw codedError(
+          "INVALID_INPUT",
+          `This organization still holds ${held.n} project${held.n === 1 ? "" : "s"}.`,
+        );
+      // D1 batch is transactional: the memberships and the organization go together.
+      await db.batch([
+        db.prepare("DELETE FROM org_members WHERE org_id = ?").bind(orgId),
+        db.prepare("DELETE FROM orgs WHERE id = ?").bind(orgId),
+      ]);
+    },
+
     /** Orgs the user belongs to. */
     async listOrgs(userId: string): Promise<Org[]> {
       const { results } = await db
         .prepare(
-          `SELECT o.id, o.name, m.role
+          `SELECT o.id, o.name, m.role, (SELECT count(*) FROM projects p WHERE p.org_id = o.id) AS projects
 FROM orgs o
 JOIN org_members m ON m.org_id = o.id
 WHERE m.user_id = ?
@@ -131,23 +166,29 @@ ORDER BY o.name ASC;`,
       return results;
     },
 
-    /** Create a globally unique project slug in the selected member organization.
-     * Without a selection, use the user's first/default organization or the admin
-     * organization. Fixed project grants cannot create projects. Repeating a name
-     * in its owning organization is idempotent; another organization is refused. */
+    /** Create the project slugged from `name` — a minted id, the slug globally unique — in the
+     * selected member organization. Without a selection, use the user's first/default organization
+     * or the admin organization. Fixed project grants cannot create projects. Repeating a name in
+     * its owning organization is idempotent (the row comes back); another organization is refused. */
     async createProject(reach: Reach, name: string, orgId?: string): Promise<Project> {
       if (typeof reach === "object" && "projectIds" in reach)
         throw codedError(
           "FORBIDDEN",
           `this session is ${describeReach(reach)} — creating a project needs a signed-in user or the admin secret`,
         );
-      const id = projectSlug(name);
-      if (!id) throw new Error("project name is empty or invalid");
+      const slug = projectSlug(name);
+      if (!slug) throw new Error("project name is empty or invalid");
       let org: Org | null | undefined;
       if (orgId)
         org =
           reach === "every"
-            ? await db.prepare("SELECT id, name FROM orgs WHERE id = ?").bind(orgId).first<Org>()
+            ? await db
+                .prepare(
+                  `SELECT o.id, o.name, (SELECT count(*) FROM projects p WHERE p.org_id = o.id) AS projects
+FROM orgs o WHERE o.id = ?;`,
+                )
+                .bind(orgId)
+                .first<Org>()
             : (await d1Directory.listOrgs(reach.userId)).find((entry) => entry.id === orgId);
       else
         org =
@@ -155,18 +196,27 @@ ORDER BY o.name ASC;`,
             ? await d1Directory.adminOrg()
             : await d1Directory.ensureOrg(reach.userId);
       if (!org) throw codedError("FORBIDDEN", "You cannot create a project in that organization.");
-      await db
-        .prepare(
-          `INSERT INTO projects (id, org_id) VALUES (?, ?)
-ON CONFLICT DO NOTHING;`,
-        )
-        .bind(id, org.id)
-        .run();
-      const project = await d1Directory.getProject(id);
-      if (!project) throw new Error(`failed to create project '${id}'`);
-      if (project.orgId !== org.id)
-        throw codedError("PROJECT_NAME_TAKEN", `project name '${id}' is already taken`);
-      return project;
+      const existing = await d1Directory.getProject(slug);
+      if (existing) {
+        if (existing.orgId !== org.id)
+          throw codedError("PROJECT_NAME_TAKEN", `project name '${slug}' is already taken`);
+        return existing;
+      }
+      const id = `prj_${crypto.randomUUID().replaceAll("-", "")}`;
+      try {
+        await db
+          .prepare(`INSERT INTO projects (id, slug, org_id) VALUES (?, ?, ?);`)
+          .bind(id, slug, org.id)
+          .run();
+        return { id, slug, orgId: org.id };
+      } catch (error) {
+        // two creates racing on one slug: the unique slug refuses the second, which reads the first
+        if (!/UNIQUE constraint failed: projects\.slug/.test(String(error))) throw error;
+        const winner = await d1Directory.getProject(slug);
+        if (!winner || winner.orgId !== org.id)
+          throw codedError("PROJECT_NAME_TAKEN", `project name '${slug}' is already taken`);
+        return winner;
+      }
     },
 
     /** The user's first org — named after their email's local part (`jonas` for jonas@…), with them
@@ -186,29 +236,31 @@ ON CONFLICT DO NOTHING;`,
     async listProjects(userId: string): Promise<Project[]> {
       const { results } = await db
         .prepare(
-          `SELECT p.id, p.org_id AS orgId, m.role
+          `SELECT p.id, p.slug, p.org_id AS orgId, m.role
 FROM projects p
 JOIN org_members m ON m.org_id = p.org_id
 WHERE m.user_id = ?
-ORDER BY p.id ASC;`,
+ORDER BY p.slug ASC;`,
         )
         .bind(userId)
         .all<Project>();
       return results;
     },
 
-    /** A project by id (its org), or null — the edge's admission (worker.ts). */
-    async getProject(id: string): Promise<Project | null> {
+    /** A project by id or by slug — THE lookup: a URL's `/projects/<slug>`, a hostname's label, an
+     *  API call's `project`, a grant's id all resolve here, and nothing else tells the two apart
+     *  (a slug never spells `prj_…`). Null when the directory has neither. */
+    async getProject(ref: string): Promise<Project | null> {
       return db
-        .prepare(`SELECT id, org_id AS orgId FROM projects WHERE id = ?;`)
-        .bind(id)
+        .prepare(`SELECT id, slug, org_id AS orgId FROM projects WHERE id = ? OR slug = ?;`)
+        .bind(ref, ref)
         .first<Project>();
     },
 
     /** EVERY project in the directory, no role — the admin secret's catalog. */
     async listAllProjects(): Promise<Project[]> {
       const { results } = await db
-        .prepare(`SELECT id, org_id AS orgId FROM projects ORDER BY id ASC;`)
+        .prepare(`SELECT id, slug, org_id AS orgId FROM projects ORDER BY slug ASC;`)
         .all<Project>();
       return results;
     },
@@ -233,13 +285,20 @@ ORDER BY p.id ASC;`,
     /** Whether `reach` reaches `projectId` — the admission behind `projects.get` (session.ts) and a
      *  `/mcp` tool's `project`. The admin reaches a project the directory never heard of (the door
      *  is the admin's); a named reach is its list; a user's is one membership read. */
-    async reachesProject(reach: Reach, projectId: string): Promise<boolean> {
+    /** The id a ref names: an id is self-evident (`prj_…` — a slug never holds an underscore), a
+     *  slug resolves through the directory, and a slug it lacks passes through for the reach check
+     *  to refuse. The ONE slug-or-id rule (`projects.get`, the MCP `project`, every reach check). */
+    async projectIdOf(ref: string): Promise<string> {
+      if (ref.startsWith("prj_")) return ref;
+      return (await d1Directory.getProject(ref))?.id ?? ref;
+    },
+
+    async reachesProject(reach: Reach, ref: string): Promise<boolean> {
       if (reach === "every") return true;
-      if (reach.projectIds && !reach.projectIds.includes(projectId)) return false;
+      const id = await d1Directory.projectIdOf(ref);
+      if (reach.projectIds && !reach.projectIds.includes(id)) return false;
       if (!("userId" in reach)) return true;
-      return (await d1Directory.listProjects(reach.userId)).some(
-        (project) => project.id === projectId,
-      );
+      return (await d1Directory.listProjects(reach.userId)).some((row) => row.id === id);
     },
 
     /** The deployment's own org — `org_admin`, created on first use, no members: where the admin
@@ -251,7 +310,13 @@ ORDER BY p.id ASC;`,
           `INSERT INTO orgs (id, name) VALUES ('org_admin', 'admin') ON CONFLICT DO NOTHING;`,
         )
         .run();
-      return { id: "org_admin", name: "admin" };
+      const row = await db
+        .prepare(
+          `SELECT o.id, o.name, (SELECT count(*) FROM projects p WHERE p.org_id = o.id) AS projects
+FROM orgs o WHERE o.id = 'org_admin';`,
+        )
+        .first<Org>();
+      return row!;
     },
   };
 

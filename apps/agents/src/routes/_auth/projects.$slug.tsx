@@ -48,20 +48,20 @@ const AgentList = z.array(z.object({ path: z.string(), createdAt: z.string() }))
  *  into the answer being written. */
 const FEED_SUBSCRIPTION = ["*", "events.iterate.com/agent/llm-response-chunks"];
 
-export const Route = createFileRoute("/_auth/agents")({
+export const Route = createFileRoute("/_auth/projects/$slug")({
   validateSearch: z.object({
-    project: z.string().optional(),
     agent: z.string().optional(),
     view: z.enum(["chat", "events"]).optional(),
     llmRequest: z.number().int().positive().optional(),
     scriptExecution: z.string().optional(),
     event: z.number().int().positive().optional(),
   }),
-  loaderDeps: ({ search }) => ({ project: search.project, agent: search.agent }),
-  loader: async ({ context, deps }) => {
+  loaderDeps: ({ search }) => ({ agent: search.agent }),
+  loader: async ({ context, params, deps }) => {
     const projects = await context.api.projects.list();
-    const project = deps.project ? projects.find((item) => item.id === deps.project) : projects[0];
-    if (deps.project && !project) throw new Error("This session cannot access that project.");
+    // the URL names the project by slug (its id works too); one the session cannot see is refused
+    const project = projects.find((item) => item.slug === params.slug || item.id === params.slug);
+    if (!project) throw new Error("This session cannot access that project.");
     let agents: z.infer<typeof AgentList> = [];
     if (project) {
       using itx = await context.api.projects.get(project.id);
@@ -84,11 +84,11 @@ function AgentsPage() {
       app="Agents"
       projects={data.projects}
       activeProjectId={project}
-      projectHref={(projectId) => `/agents?project=${encodeURIComponent(projectId)}`}
+      projectHref={(item) => `/projects/${item.slug}`}
       nav={
         project ? (
           <AgentsNav
-            project={project}
+            slug={data.project.slug}
             agents={data.agents}
             agent={data.agent}
             onCreate={async () => {
@@ -97,7 +97,11 @@ function AgentsPage() {
               using itx = await api.projects.get(project);
               await itx.invoke(["itx", "agents", ["get", path], ["create", {}]]);
               await router.invalidate();
-              await navigate({ to: "/agents", search: { project, agent: path } });
+              await navigate({
+                to: "/projects/$slug",
+                params: { slug: data.project.slug },
+                search: { agent: path },
+              });
             }}
           />
         ) : null
@@ -254,6 +258,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
   const { api } = Route.useRouteContext();
   const search = Route.useSearch();
   const navigate = useNavigate();
+  const { slug } = Route.useParams();
   const { context, events, caughtUp, error } = useAgentLog(api, project, path);
   const live = useLiveState<unknown>(context, {
     key: "agent",
@@ -293,7 +298,8 @@ function AgentConversation({ project, path }: { project: string; path: string })
   const onInspect = useCallback(
     (next: Inspected) =>
       void navigate({
-        to: "/agents",
+        to: "/projects/$slug",
+        params: { slug },
         search: (prev) => ({
           ...prev,
           llmRequest: next?.kind === "llmRequest" ? next.llmRequestOffset : undefined,
@@ -302,7 +308,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
         }),
         replace: true,
       }),
-    [navigate],
+    [navigate, slug],
   );
   const inspect = useMemo<Inspect>(
     () => ({
@@ -383,7 +389,8 @@ function AgentConversation({ project, path }: { project: string; path: string })
           value={view}
           onValueChange={(value) =>
             void navigate({
-              to: "/agents",
+              to: "/projects/$slug",
+              params: { slug },
               search: (prev) => ({ ...prev, view: value === "chat" ? undefined : "events" }),
               replace: true,
             })

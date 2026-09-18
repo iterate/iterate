@@ -24,13 +24,16 @@ export const DEFAULT_FILE_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
 /** The reserved app label a signed file URL hangs under: `files--<project>.<base>`. */
 export const FILES_APP_LABEL = "files";
 
-/** Mint a signed URL for `key` in `project`'s slice of the bucket. Refused without a project-host
- *  base (a deployment with no project ingress cannot serve one). */
+/** Mint a signed URL for `key` in `project`'s slice of the bucket: the claim names the project by
+ *  id, the URL hangs under `files--<host>.<base>` — `host` the project's slug, the label the edge
+ *  admits a project host by. Refused without a project-host base (a deployment with no project
+ *  ingress cannot serve one). */
 export async function signedFileUrl(input: {
   secret: string;
   platformOrigin: string;
   projectHostnameBase: string;
   project: string;
+  host: string;
   key: string;
   method: "GET" | "PUT";
   expiresInSeconds?: number;
@@ -48,7 +51,7 @@ export async function signedFileUrl(input: {
   const { protocol } = new URL(input.platformOrigin);
   const path = input.key.split("/").map(encodeURIComponent).join("/");
   return {
-    url: `${protocol}//${FILES_APP_LABEL}--${input.project}.${input.projectHostnameBase}/${path}?token=${token}`,
+    url: `${protocol}//${FILES_APP_LABEL}--${input.host}.${input.projectHostnameBase}/${path}?token=${token}`,
     expiresAt: new Date(exp * 1000).toISOString(),
   };
 }

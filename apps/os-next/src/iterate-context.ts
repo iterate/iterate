@@ -403,8 +403,8 @@ const PROJECT_ID = /^[A-Za-z0-9_-]+$/;
  *  is an ORDINARY context at this projectId: same codec, same built-ins, same surface as a project's
  *  (`session.user` is exactly `session.projects.get(...)` one namespace over) — except that it is NOT
  *  NAVIGABLE: `cd` is refused on a global edge handle (IterateContextRpcTarget.cd) and, for a
- *  principal, inside a global DO (built-ins.ts `cd`). A project's id is its slug, so the word is
- *  RESERVED at the project catalog (session.ts `projects.create` / `projects.get`). */
+ *  principal, inside a global DO (built-ins.ts `cd`). A project's id is minted (`prj_<hex>`), so the word is never one;
+ *  `projects.get` refuses it all the same. */
 export const GLOBAL_PROJECT_ID = "global";
 
 /** THE RESOURCE OWNER of a context: `id` is the half every project-scoped resource key is prefixed
@@ -421,7 +421,7 @@ export type ResourceScope = { id: string; rootPath: string };
  *  path) is `{ id: "global", rootPath: "/" }`, the kernel's own. The `--` join is the project-host
  *  label convention (`<app>--<project>`); the owner id is held to the projectId charset, so the
  *  joined id stays inside `[A-Za-z0-9_-]` and the `:` and `.` delimiters still cannot collide, and
- *  no project can spell it (directory.ts `projectSlug` collapses a dash run to one dash). User
+ *  no project can spell it (a project id is minted, `prj_<hex>`). User
  *  A's `itx.kv.put('k')` is never user B's `itx.kv.get('k')`, and a user's context IS its own
  *  secrets root. */
 export function resourceScope(projectId: string, path: string): ResourceScope {
