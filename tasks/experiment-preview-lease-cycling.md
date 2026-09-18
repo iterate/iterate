@@ -1,6 +1,6 @@
 # EXPERIMENT: rotate previews into rested slots
 
-Status: starting. Based on main `97ffd6fd65` including #2712. No production policy changes or PR. The existing Worker-per-run experiment is parked.
+Status: live measurements underway. The isolated harness and 14 lifecycle tests are complete. Two control agent runs passed; full-deletion trial 1 hit a container-creation HTTP 500 while preserving the old preview. The parked-slot zero-wait agent run and container probe passed; live handoff started old-slot retirement independently. Longer-rest full deletion, final resource cleanup and final results remain. Based on main `97ffd6fd65` including #2712; no production policy changes or PR.
 
 ## Agreed behavior and assumptions
 
@@ -12,9 +12,9 @@ Assumptions while the user is AFK: begin with an isolated, manually invoked expe
 
 ## Work
 
-- [ ] Inspect #2712 and deployment, cleanup, lease, settlement dependencies.
-- [ ] Write behavior tests for replacement failure, ordered publication, cleanup ownership and selection/reuse.
-- [ ] Build an opt-in experiment with bounded cleanup, evidence checkpoints and recovery commands.
+- [x] Inspect #2712 and deployment, cleanup, lease, settlement dependencies. *The README records inheritance/reuse/restoration constraints; 39 existing planner/settlement/CI tests pass.*
+- [x] Write behavior tests for replacement failure, ordered publication, cleanup ownership and selection/reuse. *14 lifecycle/receipt tests cover the experiment; existing #2712 tests remain unchanged.*
+- [x] Build an opt-in experiment with bounded cleanup, evidence checkpoints and recovery commands. *The experiment CLI retains leases, journals transitions, fences publication and launches independent local cleanup processes.*
 - [ ] Exercise actual preview deploy/park/delete/recreate and 0/short/90-second smoke gates on exclusively leased slots.
 - [ ] Record total timing, slot occupancy, version/route evidence and any counterexamples; keep an old preview healthy until replacement readiness.
 - [ ] Verify final resource/lease disposition and document reproducible commands and adoption constraints.
@@ -44,3 +44,5 @@ Session: Codex `01a0b054-bdd8-7d52-9c01-30d9b92576c8`.
 - Full-deletion trial 1 failed before smoke: OS uploaded successfully but the first container application creation returned HTTP 500, “can't create application at this time”. The old preview remained current; failed candidate cleanup was queued independently. No zero-wait agent result exists for this failed deploy.
 - A settled preview-15 Project.create probe timed out after 91.849s (offset 8), before reaching sandbox creation. Recorded separately in `tasks/project-create-offset-eight-timeout.md`; another fresh agent smoke then passed in 22.7s. Original durable agent events remained readable without version pins after replacement failure.
 - Added a parked-and-aged comparison on exclusively leased preview-17, while preview-10 is deleted/cooled for another full-recreation measurement. At most three slots are held; no other holder was evicted.
+
+- Aged parked preview-17 passed its first zero-gate agent run (process started at OS age 1.454s, completed in 30.055s), then a separate container create/exec/destroy probe (22.797s). Publication moved from 15 to 17 only after agent success; retirement of 15 began independently. Initial inspection: 15 namespaces, six container apps, zero postdeploy error-level log events.
