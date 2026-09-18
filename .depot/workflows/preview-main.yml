@@ -15,7 +15,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: preview-main
+  # EXPERIMENT: branch dispatches must not serialize with or cancel main.
+  group: ${{ github.ref_name == 'codex/experiment-preview-lease-cycling' && 'preview-lease-cycling' || 'preview-main' }}
   cancel-in-progress: false
 
 jobs:
