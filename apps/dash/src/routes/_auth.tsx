@@ -59,11 +59,15 @@ function Shell() {
       app="iterate"
       // the switcher lists projects by organization, in the organizations' order
       projects={projectsByOrg(orgs, projects).flatMap((group) =>
-        group.projects.map((project) => ({ id: project.id, org: group.org.name })),
+        group.projects.map((project) => ({
+          id: project.id,
+          org: { id: group.org.id, name: group.org.name },
+        })),
       )}
       activeProjectId={projectId || null}
       projectHref={(id) => `/projects/${id}`}
-      // the dash has a client router: a switch is a route change, not a page load
+      // the dash has a client router: a plain click on a switcher item is a route change, not a
+      // page load (the shell leaves modified and middle clicks to the anchor)
       onNavigate={(to, event) => {
         event.preventDefault();
         void router.navigate({ href: to });

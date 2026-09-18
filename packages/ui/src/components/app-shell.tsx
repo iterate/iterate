@@ -31,8 +31,9 @@ import {
   useSidebar,
 } from "./sidebar.tsx";
 
-/** A project as the switcher lists it; `org` is the organization's name, when the app knows it. */
-export type AppShellProject = { id: string; org?: string };
+/** A project as the switcher lists it; `org` is its organization, when the app knows it — grouped
+ *  by the id (two organizations may share a name), labelled by the name. */
+export type AppShellProject = { id: string; org?: { id: string; name: string } };
 
 /** Frames a signed-in page. Client-only, like every page that frames itself in it: it reads the
  *  `sidebar_state` cookie shadcn's provider writes, so the sidebar reopens the way it was left. */
@@ -56,7 +57,9 @@ export function AppShell({
   projects: AppShellProject[];
   activeProjectId: string | null;
   /** where the app shows a project — a same-origin href; switching is a full navigation unless
-   *  `onNavigate` takes it (an app with a client router prevents the default and navigates itself) */
+   *  `onNavigate` takes it (an app with a client router prevents the default and navigates itself).
+   *  Only a plain left click is handed over: a modified or middle click keeps the anchor's own
+   *  behaviour (a new tab). */
   projectHref: (projectId: string) => string;
   onNavigate?: (href: string, event: MouseEvent<HTMLAnchorElement>) => void;
   /** the app's own items at the end of the switcher menu — `DropdownMenuItem`s, after a separator */
@@ -142,8 +145,9 @@ function ProjectSwitcher({
   actions?: ReactNode;
 }) {
   const { isMobile } = useSidebar();
-  // one group per organization, in order of first appearance; a bare list when the app names none
-  const orgs = [...new Set(projects.map((project) => project.org))];
+  // one group per organization (by id), in order of first appearance; a bare list when the app
+  // names none
+  const orgs = [...new Map(projects.map((project) => [project.org?.id, project.org])).values()];
   return (
     <SidebarMenu>
       <SidebarMenuItem>
@@ -180,15 +184,15 @@ function ProjectSwitcher({
               </DropdownMenuItem>
             ) : null}
             {orgs.map((org) => (
-              <DropdownMenuGroup key={org || ""}>
+              <DropdownMenuGroup key={org?.id || ""}>
                 {/* Base UI: a menu label lives inside a group, never bare in the menu */}
                 {org ? (
                   <DropdownMenuLabel className="text-xs text-muted-foreground">
-                    {org}
+                    {org.name}
                   </DropdownMenuLabel>
                 ) : null}
                 {projects
-                  .filter((project) => project.org === org)
+                  .filter((project) => project.org?.id === org?.id)
                   .map((project) => (
                     <DropdownMenuItem
                       key={project.id}
@@ -199,7 +203,10 @@ function ProjectSwitcher({
                           aria-label={`Switch to ${project.id}`}
                           onClick={
                             onNavigate
-                              ? (event) => onNavigate(projectHref(project.id), event)
+                              ? (event) => {
+                                  if (!plainLeftClick(event)) return;
+                                  onNavigate(projectHref(project.id), event);
+                                }
                               : undefined
                           }
                         />
@@ -224,6 +231,19 @@ function ProjectSwitcher({
         </DropdownMenu>
       </SidebarMenuItem>
     </SidebarMenu>
+  );
+}
+
+/** A plain left click — not a modified one (cmd/ctrl/shift/alt: a new tab or window), not the
+ *  middle button, not one something else already handled. */
+function plainLeftClick(event: MouseEvent<HTMLAnchorElement>): boolean {
+  return (
+    !event.defaultPrevented &&
+    event.button === 0 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey
   );
 }
 
