@@ -19,7 +19,7 @@ test(
     expect(previousNamespace).toEqual(expect.any(String));
 
     for (let round = 1; round <= probe.evidence.rounds; round++) {
-      const deployment = await probe.deploy(`ordinary-redeploy-${round}`, true);
+      const deployment = await probe.deploy(`ordinary-redeploy-${round}`, "live");
       // First-touch new names as soon as deploy returns: /work saves 'started', does 15s
       // of work, then saves 'completed'. No readiness wait and no write retries.
       const operations = await Promise.all(
@@ -82,9 +82,9 @@ test(
       expect(previousNamespace).toEqual(expect.any(String));
       // Erase the namespace, then recreate the class under a new namespace ID. Old Workers
       // may still answer during rollout, so failures here do not prove old DOs survived erasure.
-      await probe.deploy(`retired-${round}`, false);
+      await probe.deploy(`retired-${round}`, "retired");
       expect(await probe.readNamespaceId()).toBeNull();
-      const deployment = await probe.deploy(`retire-recreate-${round}`, true);
+      const deployment = await probe.deploy(`retire-recreate-${round}`, "live");
       // First-touch unique names immediately after Wrangler exits. Never retry a write.
       const operations = await Promise.all(
         Array.from({ length: 12 }, async (_, i) => {
@@ -148,7 +148,7 @@ test(
       data: { record: { status: "started" } },
     });
 
-    const replacement = await probe.deploy("active-object-control", true);
+    const replacement = await probe.deploy("active-object-control", "live");
     const response = await inFlight;
     const followup = await probe.observeState(
       `/state/${id}`,
@@ -293,10 +293,10 @@ class Probe {
   }
 
   /** Deploy a live DO or retired class with Wrangler and record its version and timing. */
-  async deploy(build: string, live: boolean) {
+  async deploy(build: string, action: "live" | "retired") {
     await writeFile(
       join(this.#directory, "worker.js"),
-      live
+      action === "live"
         ? `const build = ${JSON.stringify(build)};\n${workerSource}`
         : `export default { fetch() { return Response.json({ parked: true, build: ${JSON.stringify(build)} }); } };`,
     );
@@ -312,15 +312,14 @@ class Probe {
           preview_urls: false,
           observability: { enabled: true, head_sampling_rate: 1 },
           version_metadata: { binding: "VERSION" },
-          ...(live && {
+          ...(action === "live" && {
             vars: { PROBE_TOKEN: this.#token },
             durable_objects: { bindings: [{ name: "PROBE", class_name: "Probe" }] },
+            exports: { Probe: { type: "durable-object", storage: "sqlite" } },
           }),
-          exports: {
-            Probe: live
-              ? { type: "durable-object", storage: "sqlite" }
-              : { type: "durable-object", state: "deleted" },
-          },
+          ...(action === "retired" && {
+            exports: { Probe: { type: "durable-object", state: "deleted" } },
+          }),
         },
         null,
         2,
@@ -328,7 +327,7 @@ class Probe {
     );
     const deployment = {
       build,
-      live,
+      action,
       startedAt: Date.now(),
       finishedAt: NaN,
       output: "",
@@ -379,7 +378,7 @@ class Probe {
 
   /** Deploy the initial Worker and wait for its hostname before measured redeploys. */
   async bootstrap() {
-    const initial = await this.deploy("bootstrap", true);
+    const initial = await this.deploy("bootstrap", "live");
     // Provision the new hostname before measuring a deployment. No measured deploy waits here.
     const readiness = await this.observeState(
       "/health",
@@ -399,7 +398,7 @@ class Probe {
     // Preserve partial failures, and retire only our new class. Never delete Workers.
     if (this.#touchedCloud) {
       try {
-        const parked = await this.deploy("cleanup-parked", false);
+        const parked = await this.deploy("cleanup-parked", "retired");
         const attempts = await this.observeState(
           "/health",
           parked,
