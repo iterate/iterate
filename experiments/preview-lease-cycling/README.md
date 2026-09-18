@@ -1,5 +1,7 @@
 # EXPERIMENT: replace a preview, then retire its old slot
 
+The follow-up now runs the actual parallel CI pipeline: see [CI comparison and dispatch commands](CI_RESULTS.md). The original local harness and measurements below are separate. Its deploy command deliberately refuses the later CI script changes because that harness pins the earlier product revision.
+
 Read [the measured results](RESULTS.md) first. This is a manual experiment, not a production CI change. It uses real Semaphore
 leases, the six existing app deployment scripts, and a single-attempt version of
 CI's project/agent/reply smoke. The old preview stays published until the new

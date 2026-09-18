@@ -13,6 +13,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      lease-cycling-receipt:
+        description: "EXPERIMENT branch only: JSON receipt for a pre-erased, aged parked slot; blank keeps the normal 90s control"
+        required: false
+        default: ""
 
 concurrency:
   # EXPERIMENT: branch dispatches must not serialize with or cancel main.
@@ -26,4 +31,5 @@ jobs:
     with:
       head-sha: ${{ github.sha }}
       all-apps: true
+      lease-cycling-receipt: ${{ inputs.lease-cycling-receipt }}
     secrets: inherit

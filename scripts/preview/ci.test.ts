@@ -128,6 +128,23 @@ test("the lifecycle owner encloses every fixed shard and cleanup waits for their
   });
 });
 
+test("the shared workflow keeps the experiment disabled unless a dispatch supplies a receipt", () => {
+  const root = resolve(import.meta.dirname, "../..");
+  const caller = parse(readFileSync(resolve(root, ".depot/workflows/preview-main.yml"), "utf8"));
+  const workflow = parse(readFileSync(resolve(root, ".depot/workflows/preview-run.yml"), "utf8"));
+  expect(caller.on.workflow_dispatch.inputs["lease-cycling-receipt"]).toMatchObject({
+    required: false,
+    default: "",
+  });
+  expect(workflow.on.workflow_call.inputs["lease-cycling-receipt"]).toMatchObject({
+    type: "string",
+    default: "",
+  });
+  expect(workflow.env).toMatchObject({
+    PREVIEW_LEASE_CYCLING_RECEIPT: "${{ inputs.lease-cycling-receipt }}",
+  });
+});
+
 test("result collection retains failures and rejects missing or foreign shard receipts", async () => {
   const identity = { headSha: "candidate", runId: "run", runAttempt: "1", slot: "preview-2" };
   const directory = await mkdtemp(join(tmpdir(), "preview-receipts-"));
