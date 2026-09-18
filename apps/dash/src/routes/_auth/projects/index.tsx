@@ -78,8 +78,8 @@ function ProjectsPage() {
                 <TableRow key={project.id}>
                   <TableCell className="font-mono font-medium">
                     <Link
-                      to="/projects/$projectId"
-                      params={{ projectId: project.id }}
+                      to="/projects/$slug"
+                      params={{ slug: project.slug }}
                       className="underline-offset-4 hover:underline"
                     >
                       {project.slug}

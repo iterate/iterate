@@ -27,9 +27,12 @@ async function projectOfToolCall(
       throw new Error(
         `project: got a context name ${JSON.stringify(requested)} — pass the project and cd(path) in the expression`,
       );
-    if (!(await d1Directory.reachesProject(reach, projectId)))
+    // a slug or an id (session.ts `projects.get`): the directory's row says the id
+    const row = await d1Directory.getProject(projectId);
+    const id = row?.id ?? (reach === "every" ? projectId : null);
+    if (!id || !(await d1Directory.reachesProject(reach, id)))
       throw new Error(`project ${JSON.stringify(requested)} is outside this token's grant`);
-    return projectId;
+    return id;
   }
   if (reach === "every") throw new Error("the admin secret reaches every project — pass project");
   const reachable = (await d1Directory.reachableProjects(reach)).map((project) => project.id);
@@ -66,7 +69,7 @@ function buildServer(env: Env, authorization: Authorization): McpServer {
             project: {
               type: "string",
               description:
-                "The project's id (prj_…). Optional when this token reaches exactly one; required for the admin secret.",
+                "The project — its slug or its id. Optional when this token reaches exactly one; required for the admin secret.",
             },
             script: {
               type: "string",

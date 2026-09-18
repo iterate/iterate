@@ -177,7 +177,7 @@ export type ConsentAnswer =
       clientName: string;
       email: string;
       projects: ProjectRecord[];
-      orgs: { id: string; name: string; role?: string }[];
+      orgs: OrgRecord[];
       projectBound: boolean;
       scopes: string[];
       denyLocation: string;
@@ -187,6 +187,15 @@ export type ConsentAnswer =
     }
   | { kind: "redirect"; location: string }
   | { kind: "invalid"; description: string };
+
+/** An organization as the session lists it: its minted id, its free-text name, the person's role
+ *  in it, and how many projects it holds (every one of them, not only those this grant lists). */
+export interface OrgRecord {
+  id: string;
+  name: string;
+  role?: string;
+  projects: number;
+}
 
 /** A project as the catalog lists it: addressed by `id` everywhere (`projects.get`, a grant's list,
  *  an MCP call's `project`, an app's URL); `slug` is the label of its hostnames and its name to a
@@ -208,14 +217,11 @@ export interface IterateSessionApi {
     projectHostnameBase: string;
   };
   /** The organizations this session reaches. */
-  orgs(): Promise<{ id: string; name: string; role?: string }[]>;
+  orgs(): Promise<OrgRecord[]>;
   /** A new organization — `organizations:write`; the person is its owner. */
-  createOrg(name: string): Promise<{ id: string; name: string; role?: string }>;
+  createOrg(name: string): Promise<OrgRecord>;
   /** Rename an organization the person owns — `organizations:write`. */
-  updateOrg(
-    orgId: string,
-    input: { name: string },
-  ): Promise<{ id: string; name: string; role?: string }>;
+  updateOrg(orgId: string, input: { name: string }): Promise<OrgRecord>;
   /** Delete an organization the person owns, while it holds no project — `organizations:write`. */
   deleteOrg(orgId: string): Promise<void>;
   /** OAuth grants this session may manage (a signed-in person's): list, end, mint one for a device. */
@@ -240,7 +246,7 @@ export interface IterateSessionApi {
   };
   projects: {
     list(): Promise<ProjectRecord[]>;
-    /** the project's root context, by its id */
+    /** the project's root context, by its slug or its id */
     get(project: string): Promise<IterateContextApi>;
     /** a new project: `project` is slugged into its hostname label, its id is minted — the returned
      *  context's `whoami()` says it, so does `list()` */

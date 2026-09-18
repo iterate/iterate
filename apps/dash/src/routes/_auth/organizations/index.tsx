@@ -39,7 +39,7 @@ export const Route = createFileRoute("/_auth/organizations/")({
 });
 
 function OrganizationsPage() {
-  const { orgs, projects } = shell.useLoaderData();
+  const { orgs } = shell.useLoaderData();
   const { info } = shell.useRouteContext();
   const search = Route.useSearch();
   const navigate = useNavigate();
@@ -83,9 +83,7 @@ function OrganizationsPage() {
                   <Identifier value={org.id} textClassName="text-xs" />
                 </TableCell>
                 <TableCell className="text-muted-foreground">{org.role || "—"}</TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {projects.filter((project) => project.orgId === org.id).length}
-                </TableCell>
+                <TableCell className="text-right tabular-nums">{org.projects}</TableCell>
               </TableRow>
             ))}
           </TableBody>

@@ -54,7 +54,9 @@ function Shell() {
   const { info } = Route.useRouteContext();
   const router = useRouter();
   const href = useRouterState({ select: (state) => state.location.href });
-  const { projectId } = useParams({ strict: false });
+  const { slug } = useParams({ strict: false });
+  // the URL names a project by slug (its id works too)
+  const active = projects.find((project) => project.slug === slug || project.id === slug);
   const matches = useMatches();
   const page = matches
     .map((match) => match.staticData.page)
@@ -71,8 +73,8 @@ function Shell() {
           org: { id: group.org.id, name: group.org.name },
         })),
       )}
-      activeProjectId={projectId || null}
-      projectHref={(id) => `/projects/${id}`}
+      activeProjectId={active?.id || null}
+      projectHref={(project) => `/projects/${project.slug}`}
       // the dash has a client router: a plain click on a switcher item is a route change, not a
       // page load (the shell leaves modified and middle clicks to the anchor)
       onNavigate={(to, event) => {
@@ -92,14 +94,7 @@ function Shell() {
         </>
       }
       nav={
-        <DashNav
-          projectId={projectId || null}
-          // a project's site is at its slug, never its id
-          projectHost={(id) => {
-            const slug = projects.find((project) => project.id === id)?.slug;
-            return slug ? projectHostOf(info, slug) : null;
-          }}
-        />
+        <DashNav project={active || null} host={active ? projectHostOf(info, active.slug) : null} />
       }
       header={<DashBreadcrumbs orgs={orgs} projects={projects} page={page} />}
       account={{ email: info.principal.email || info.principal.actor }}

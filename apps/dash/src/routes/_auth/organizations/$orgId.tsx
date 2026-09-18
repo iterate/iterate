@@ -54,7 +54,8 @@ function OrganizationSettings() {
   const { projects } = shell.useLoaderData();
   const router = useRouter();
   const navigate = useNavigate();
-  const held = projects.filter((project) => project.orgId === org.id);
+  // the projects this session reaches in it, for the links; `org.projects` counts every one
+  const reached = projects.filter((project) => project.orgId === org.id);
   const canWrite = info.scopes.includes("organizations:write");
   const owner = org.role === "owner";
   const [name, setName] = useState(org.name);
@@ -150,18 +151,22 @@ function OrganizationSettings() {
         <CardHeader>
           <CardTitle>Projects</CardTitle>
           <CardDescription>
-            {held.length
-              ? `${held.length} project${held.length === 1 ? "" : "s"} in this organization.`
+            {org.projects
+              ? `${org.projects} project${org.projects === 1 ? "" : "s"} in this organization${
+                  reached.length < org.projects
+                    ? `, ${reached.length} of them in this session's grant`
+                    : ""
+                }.`
               : "No projects in this organization yet."}
           </CardDescription>
         </CardHeader>
-        {held.length ? (
+        {reached.length ? (
           <CardContent className="flex flex-wrap gap-x-4 gap-y-2 font-mono text-sm">
-            {held.map((project) => (
+            {reached.map((project) => (
               <Link
                 key={project.id}
-                to="/projects/$projectId"
-                params={{ projectId: project.id }}
+                to="/projects/$slug"
+                params={{ slug: project.slug }}
                 className="underline-offset-4 hover:underline"
               >
                 {project.slug}
@@ -182,7 +187,7 @@ function OrganizationSettings() {
         <CardHeader>
           <CardTitle>Delete organization</CardTitle>
           <CardDescription>
-            {held.length
+            {org.projects
               ? "An organization is deleted once it holds no project."
               : "Deletes the organization and its memberships. There is no undo."}
           </CardDescription>
@@ -191,7 +196,7 @@ function OrganizationSettings() {
           <AlertDialog>
             <AlertDialogTrigger
               render={<Button variant="destructive" />}
-              disabled={deleting || !owner || !canWrite || held.length > 0}
+              disabled={deleting || !owner || !canWrite || org.projects > 0}
             >
               {deleting ? <Spinner data-icon="inline-start" /> : null}
               Delete organization

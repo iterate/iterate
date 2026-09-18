@@ -19,9 +19,10 @@ import { describeReach, type Directory, type Project, type Reach } from "./direc
 import type { AppConfig } from "./app-config.ts";
 import type { AuthenticationFact } from "./account/contract.ts";
 
-/** A project's minted id (`prj_<hex>`) — the one way a project is addressed: the DO name's host, a
- *  grant's list, `projects.get`. Its slug is a hostname label and a name, never an address. */
-export type ProjectId = string;
+/** A project as a caller names it: its minted id (`prj_<hex>`) or its slug (a URL's
+ *  `/projects/<slug>`, a hostname's label) — the directory resolves either (`getProject`), and the
+ *  id alone goes on: the DO name's host, a grant's list, `whoami()`. */
+export type ProjectRef = string;
 
 /** What `IterateRpcTarget.authenticate` accepts. `from-server-cookie` is the browser and `bearer` is
  *  a device or script whose token rode the upgrade: the OAuth gate already resolved the session from
@@ -418,9 +419,11 @@ class ProjectCollection extends RpcTarget {
     return this.#context(project.id);
   }
 
-  /** The project's root context ("/"), by its id. A project only — a context name belongs to `cd`.
-   *  Outside this session's reach is FORBIDDEN; so is the global namespace's id (it is no project). */
-  async get(project: ProjectId): Promise<IterateContextRpcTarget> {
+  /** The project's root context ("/"), by its slug or its id. A project only — a context name
+   *  belongs to `cd`. Outside this session's reach is FORBIDDEN; so is the global namespace's id (it
+   *  is no project). The admin secret alone addresses a project the directory never heard of, by
+   *  id (a fresh context of its own). */
+  async get(project: ProjectRef): Promise<IterateContextRpcTarget> {
     const address = DurableObjectNameCodec.parse(project);
     if (address.path !== "/")
       throw new Error(
@@ -431,12 +434,14 @@ class ProjectCollection extends RpcTarget {
         "FORBIDDEN",
         `projects.get(${JSON.stringify(project)}): the deployment-global namespace is no project — a global context is reached by identity (session.user, session.organizations)`,
       );
-    if (!(await this.#input.directory.reachesProject(this.#reach, address.projectId)))
+    const row = await this.#input.directory.getProject(address.projectId);
+    const id = row?.id ?? (this.#reach === "every" ? address.projectId : null);
+    if (!id || !(await this.#input.directory.reachesProject(this.#reach, id)))
       throw codedError(
         "FORBIDDEN",
         `projects.get(${JSON.stringify(project)}): outside this session's reach — ${describeReach(this.#reach)}`,
       );
-    return this.#context(address.projectId);
+    return this.#context(id);
   }
 
   #context(projectId: string): IterateContextRpcTarget {

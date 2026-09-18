@@ -18,6 +18,8 @@ export interface Org {
   id: string; // org_<hex>
   name: string;
   role?: string;
+  /** how many projects it holds — every one of them, not only those the reader's grant lists */
+  projects: number;
 }
 /** A `projects` row, with the reader's `role` when read through `org_members`. */
 export interface Project {
@@ -104,7 +106,7 @@ AND NOT EXISTS (SELECT 1 FROM users WHERE email = ? AND id != ?) RETURNING id, e
     /** Create an org (a minted org_ id; the name is free text, two orgs may share one) and make the
      *  creator its owner. */
     async createOrg(userId: string, name: string): Promise<Org> {
-      const org = { id: newOrgId(), name: name.trim(), role: "owner" };
+      const org = { id: newOrgId(), name: name.trim(), role: "owner", projects: 0 };
       if (!org.name) throw codedError("INVALID_INPUT", "Enter an organization name.");
       // D1 batch is transactional: an organization never survives without its owner.
       await db.batch([
@@ -153,7 +155,7 @@ AND NOT EXISTS (SELECT 1 FROM users WHERE email = ? AND id != ?) RETURNING id, e
     async listOrgs(userId: string): Promise<Org[]> {
       const { results } = await db
         .prepare(
-          `SELECT o.id, o.name, m.role
+          `SELECT o.id, o.name, m.role, (SELECT count(*) FROM projects p WHERE p.org_id = o.id) AS projects
 FROM orgs o
 JOIN org_members m ON m.org_id = o.id
 WHERE m.user_id = ?
@@ -180,7 +182,13 @@ ORDER BY o.name ASC;`,
       if (orgId)
         org =
           reach === "every"
-            ? await db.prepare("SELECT id, name FROM orgs WHERE id = ?").bind(orgId).first<Org>()
+            ? await db
+                .prepare(
+                  `SELECT o.id, o.name, (SELECT count(*) FROM projects p WHERE p.org_id = o.id) AS projects
+FROM orgs o WHERE o.id = ?;`,
+                )
+                .bind(orgId)
+                .first<Org>()
             : (await d1Directory.listOrgs(reach.userId)).find((entry) => entry.id === orgId);
       else
         org =
@@ -188,11 +196,10 @@ ORDER BY o.name ASC;`,
             ? await d1Directory.adminOrg()
             : await d1Directory.ensureOrg(reach.userId);
       if (!org) throw codedError("FORBIDDEN", "You cannot create a project in that organization.");
-      const taken = () =>
-        codedError("PROJECT_NAME_TAKEN", `project name '${slug}' is already taken`);
-      const existing = await d1Directory.getProjectBySlug(slug);
+      const existing = await d1Directory.getProject(slug);
       if (existing) {
-        if (existing.orgId !== org.id) throw taken();
+        if (existing.orgId !== org.id)
+          throw codedError("PROJECT_NAME_TAKEN", `project name '${slug}' is already taken`);
         return existing;
       }
       const id = `prj_${crypto.randomUUID().replaceAll("-", "")}`;
@@ -205,8 +212,9 @@ ORDER BY o.name ASC;`,
       } catch (error) {
         // two creates racing on one slug: the unique slug refuses the second, which reads the first
         if (!/UNIQUE constraint failed: projects\.slug/.test(String(error))) throw error;
-        const winner = await d1Directory.getProjectBySlug(slug);
-        if (!winner || winner.orgId !== org.id) throw taken();
+        const winner = await d1Directory.getProject(slug);
+        if (!winner || winner.orgId !== org.id)
+          throw codedError("PROJECT_NAME_TAKEN", `project name '${slug}' is already taken`);
         return winner;
       }
     },
@@ -239,20 +247,13 @@ ORDER BY p.slug ASC;`,
       return results;
     },
 
-    /** A project by id (its slug, its org), or null — `projects.get` and every reach check. */
-    async getProject(id: string): Promise<Project | null> {
+    /** A project by id or by slug — THE lookup: a URL's `/projects/<slug>`, a hostname's label, an
+     *  API call's `project`, a grant's id all resolve here, and nothing else tells the two apart
+     *  (a slug never spells `prj_…`). Null when the directory has neither. */
+    async getProject(ref: string): Promise<Project | null> {
       return db
-        .prepare(`SELECT id, slug, org_id AS orgId FROM projects WHERE id = ?;`)
-        .bind(id)
-        .first<Project>();
-    },
-
-    /** A project by slug — the label of its hostnames — or null: the edge's admission (worker.ts,
-     *  consent.ts). */
-    async getProjectBySlug(slug: string): Promise<Project | null> {
-      return db
-        .prepare(`SELECT id, slug, org_id AS orgId FROM projects WHERE slug = ?;`)
-        .bind(slug)
+        .prepare(`SELECT id, slug, org_id AS orgId FROM projects WHERE id = ? OR slug = ?;`)
+        .bind(ref, ref)
         .first<Project>();
     },
 
@@ -284,13 +285,14 @@ ORDER BY p.slug ASC;`,
     /** Whether `reach` reaches `projectId` — the admission behind `projects.get` (session.ts) and a
      *  `/mcp` tool's `project`. The admin reaches a project the directory never heard of (the door
      *  is the admin's); a named reach is its list; a user's is one membership read. */
-    async reachesProject(reach: Reach, projectId: string): Promise<boolean> {
+    async reachesProject(reach: Reach, ref: string): Promise<boolean> {
       if (reach === "every") return true;
-      if (reach.projectIds && !reach.projectIds.includes(projectId)) return false;
+      // a slug or an id: the row's id is what a grant and a membership name
+      const project = await d1Directory.getProject(ref);
+      if (!project) return false;
+      if (reach.projectIds && !reach.projectIds.includes(project.id)) return false;
       if (!("userId" in reach)) return true;
-      return (await d1Directory.listProjects(reach.userId)).some(
-        (project) => project.id === projectId,
-      );
+      return (await d1Directory.listProjects(reach.userId)).some((row) => row.id === project.id);
     },
 
     /** The deployment's own org — `org_admin`, created on first use, no members: where the admin
@@ -302,7 +304,13 @@ ORDER BY p.slug ASC;`,
           `INSERT INTO orgs (id, name) VALUES ('org_admin', 'admin') ON CONFLICT DO NOTHING;`,
         )
         .run();
-      return { id: "org_admin", name: "admin" };
+      const row = await db
+        .prepare(
+          `SELECT o.id, o.name, (SELECT count(*) FROM projects p WHERE p.org_id = o.id) AS projects
+FROM orgs o WHERE o.id = 'org_admin';`,
+        )
+        .first<Org>();
+      return row!;
     },
   };
 

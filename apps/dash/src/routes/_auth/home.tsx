@@ -8,7 +8,7 @@ export const Route = createFileRoute("/_auth/home")({
     const projects = await context.api.projects.list();
     throw redirect(
       projects.length === 1
-        ? { to: "/projects/$projectId", params: { projectId: projects[0]!.id } }
+        ? { to: "/projects/$slug", params: { slug: projects[0]!.slug } }
         : { to: "/projects" },
     );
   },

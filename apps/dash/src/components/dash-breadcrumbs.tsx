@@ -22,14 +22,15 @@ export function DashBreadcrumbs({
   /** the label of a page outside /projects and /organizations (Sessions) */
   page?: string;
 }) {
-  const { projectId, orgId } = useParams({ strict: false });
-  const project = projects.find((candidate) => candidate.id === projectId);
+  const { slug, orgId } = useParams({ strict: false });
+  // the URL names a project by slug (its id works too)
+  const project = projects.find((candidate) => candidate.slug === slug || candidate.id === slug);
   const org = orgs.find((candidate) => candidate.id === (project ? project.orgId : orgId));
-  const crumbs: { label: string; to?: string; hideOnMobile?: boolean }[] = projectId
+  const crumbs: { label: string; to?: string; hideOnMobile?: boolean }[] = slug
     ? [
         { label: "Projects", to: "/projects", hideOnMobile: true },
         ...(org ? [{ label: org.name, hideOnMobile: true }] : []),
-        { label: project?.slug || projectId },
+        { label: project?.slug || slug },
       ]
     : orgId
       ? [

@@ -22,13 +22,12 @@ const REPO = "/repos/config";
 const WORKSPACE = "/workspaces/notes";
 const FILE = `${REPO}/notes/log.md`;
 
-export const Route = createFileRoute("/_auth/notes")({
-  validateSearch: z.object({ project: z.string().optional() }),
-  loaderDeps: ({ search }) => search,
-  loader: async ({ context, deps }) => {
+export const Route = createFileRoute("/_auth/projects/$slug")({
+  loader: async ({ context, params }) => {
     const projects = await context.api.projects.list();
-    const project = deps.project ? projects.find((item) => item.id === deps.project) : projects[0];
-    if (deps.project && !project) throw new Error("This session cannot access that project.");
+    // the URL names the project by slug (its id works too); one the session cannot see is refused
+    const project = projects.find((item) => item.slug === params.slug || item.id === params.slug);
+    if (!project) throw new Error("This session cannot access that project.");
     let note = "";
     let tip: string | null = null;
     if (project) {
@@ -60,7 +59,7 @@ function NotesPage() {
       app="Notes"
       projects={data.projects}
       activeProjectId={data.project?.id || null}
-      projectHref={(projectId) => `/notes?project=${encodeURIComponent(projectId)}`}
+      projectHref={(item) => `/projects/${item.slug}`}
       header={
         data.project ? (
           <Breadcrumb>

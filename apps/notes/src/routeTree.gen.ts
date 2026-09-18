@@ -11,7 +11,8 @@
 import { Route as rootRouteImport } from "./routes/__root.tsx";
 import { Route as AuthRouteImport } from "./routes/_auth.tsx";
 import { Route as IndexRouteImport } from "./routes/index.tsx";
-import { Route as AuthNotesRouteImport } from "./routes/_auth/notes.tsx";
+import { Route as AuthProjectsIndexRouteImport } from "./routes/_auth/projects.index.tsx";
+import { Route as AuthProjectsSlugRouteImport } from "./routes/_auth/projects.$slug.tsx";
 
 const AuthRoute = AuthRouteImport.update({
   id: "/_auth",
@@ -22,32 +23,45 @@ const IndexRoute = IndexRouteImport.update({
   path: "/",
   getParentRoute: () => rootRouteImport,
 } as any);
-const AuthNotesRoute = AuthNotesRouteImport.update({
-  id: "/notes",
-  path: "/notes",
+const AuthProjectsIndexRoute = AuthProjectsIndexRouteImport.update({
+  id: "/projects/",
+  path: "/projects/",
+  getParentRoute: () => AuthRoute,
+} as any);
+const AuthProjectsSlugRoute = AuthProjectsSlugRouteImport.update({
+  id: "/projects/$slug",
+  path: "/projects/$slug",
   getParentRoute: () => AuthRoute,
 } as any);
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute;
-  "/notes": typeof AuthNotesRoute;
+  "/projects/$slug": typeof AuthProjectsSlugRoute;
+  "/projects/": typeof AuthProjectsIndexRoute;
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute;
-  "/notes": typeof AuthNotesRoute;
+  "/projects/$slug": typeof AuthProjectsSlugRoute;
+  "/projects": typeof AuthProjectsIndexRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/": typeof IndexRoute;
   "/_auth": typeof AuthRouteWithChildren;
-  "/_auth/notes": typeof AuthNotesRoute;
+  "/_auth/projects/$slug": typeof AuthProjectsSlugRoute;
+  "/_auth/projects/": typeof AuthProjectsIndexRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: "/" | "/notes";
+  fullPaths: "/" | "/projects/$slug" | "/projects/";
   fileRoutesByTo: FileRoutesByTo;
-  to: "/" | "/notes";
-  id: "__root__" | "/" | "/_auth" | "/_auth/notes";
+  to: "/" | "/projects/$slug" | "/projects";
+  id:
+    | "__root__"
+    | "/"
+    | "/_auth"
+    | "/_auth/projects/$slug"
+    | "/_auth/projects/";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -71,22 +85,31 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof IndexRouteImport;
       parentRoute: typeof rootRouteImport;
     };
-    "/_auth/notes": {
-      id: "/_auth/notes";
-      path: "/notes";
-      fullPath: "/notes";
-      preLoaderRoute: typeof AuthNotesRouteImport;
+    "/_auth/projects/": {
+      id: "/_auth/projects/";
+      path: "/projects";
+      fullPath: "/projects/";
+      preLoaderRoute: typeof AuthProjectsIndexRouteImport;
+      parentRoute: typeof AuthRoute;
+    };
+    "/_auth/projects/$slug": {
+      id: "/_auth/projects/$slug";
+      path: "/projects/$slug";
+      fullPath: "/projects/$slug";
+      preLoaderRoute: typeof AuthProjectsSlugRouteImport;
       parentRoute: typeof AuthRoute;
     };
   }
 }
 
 interface AuthRouteChildren {
-  AuthNotesRoute: typeof AuthNotesRoute;
+  AuthProjectsSlugRoute: typeof AuthProjectsSlugRoute;
+  AuthProjectsIndexRoute: typeof AuthProjectsIndexRoute;
 }
 
 const AuthRouteChildren: AuthRouteChildren = {
-  AuthNotesRoute: AuthNotesRoute,
+  AuthProjectsSlugRoute: AuthProjectsSlugRoute,
+  AuthProjectsIndexRoute: AuthProjectsIndexRoute,
 };
 
 const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren);

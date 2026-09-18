@@ -16,8 +16,8 @@ import { Route as AuthHomeRouteImport } from "./routes/_auth/home.tsx";
 import { Route as AuthProjectsIndexRouteImport } from "./routes/_auth/projects/index.tsx";
 import { Route as AuthOrganizationsIndexRouteImport } from "./routes/_auth/organizations/index.tsx";
 import { Route as AuthOrganizationsOrgIdRouteImport } from "./routes/_auth/organizations/$orgId.tsx";
-import { Route as AuthProjectsProjectIdRouteRouteImport } from "./routes/_auth/projects/$projectId/route.tsx";
-import { Route as AuthProjectsProjectIdIndexRouteImport } from "./routes/_auth/projects/$projectId/index.tsx";
+import { Route as AuthProjectsSlugRouteRouteImport } from "./routes/_auth/projects/$slug/route.tsx";
+import { Route as AuthProjectsSlugIndexRouteImport } from "./routes/_auth/projects/$slug/index.tsx";
 
 const AuthRoute = AuthRouteImport.update({
   id: "/_auth",
@@ -53,28 +53,26 @@ const AuthOrganizationsOrgIdRoute = AuthOrganizationsOrgIdRouteImport.update({
   path: "/organizations/$orgId",
   getParentRoute: () => AuthRoute,
 } as any);
-const AuthProjectsProjectIdRouteRoute =
-  AuthProjectsProjectIdRouteRouteImport.update({
-    id: "/projects/$projectId",
-    path: "/projects/$projectId",
-    getParentRoute: () => AuthRoute,
-  } as any);
-const AuthProjectsProjectIdIndexRoute =
-  AuthProjectsProjectIdIndexRouteImport.update({
-    id: "/",
-    path: "/",
-    getParentRoute: () => AuthProjectsProjectIdRouteRoute,
-  } as any);
+const AuthProjectsSlugRouteRoute = AuthProjectsSlugRouteRouteImport.update({
+  id: "/projects/$slug",
+  path: "/projects/$slug",
+  getParentRoute: () => AuthRoute,
+} as any);
+const AuthProjectsSlugIndexRoute = AuthProjectsSlugIndexRouteImport.update({
+  id: "/",
+  path: "/",
+  getParentRoute: () => AuthProjectsSlugRouteRoute,
+} as any);
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute;
   "/home": typeof AuthHomeRoute;
   "/sessions": typeof AuthSessionsRoute;
-  "/projects/$projectId": typeof AuthProjectsProjectIdRouteRouteWithChildren;
+  "/projects/$slug": typeof AuthProjectsSlugRouteRouteWithChildren;
   "/organizations/$orgId": typeof AuthOrganizationsOrgIdRoute;
   "/organizations/": typeof AuthOrganizationsIndexRoute;
   "/projects/": typeof AuthProjectsIndexRoute;
-  "/projects/$projectId/": typeof AuthProjectsProjectIdIndexRoute;
+  "/projects/$slug/": typeof AuthProjectsSlugIndexRoute;
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute;
@@ -83,7 +81,7 @@ export interface FileRoutesByTo {
   "/organizations/$orgId": typeof AuthOrganizationsOrgIdRoute;
   "/organizations": typeof AuthOrganizationsIndexRoute;
   "/projects": typeof AuthProjectsIndexRoute;
-  "/projects/$projectId": typeof AuthProjectsProjectIdIndexRoute;
+  "/projects/$slug": typeof AuthProjectsSlugIndexRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
@@ -91,11 +89,11 @@ export interface FileRoutesById {
   "/_auth": typeof AuthRouteWithChildren;
   "/_auth/home": typeof AuthHomeRoute;
   "/_auth/sessions": typeof AuthSessionsRoute;
-  "/_auth/projects/$projectId": typeof AuthProjectsProjectIdRouteRouteWithChildren;
+  "/_auth/projects/$slug": typeof AuthProjectsSlugRouteRouteWithChildren;
   "/_auth/organizations/$orgId": typeof AuthOrganizationsOrgIdRoute;
   "/_auth/organizations/": typeof AuthOrganizationsIndexRoute;
   "/_auth/projects/": typeof AuthProjectsIndexRoute;
-  "/_auth/projects/$projectId/": typeof AuthProjectsProjectIdIndexRoute;
+  "/_auth/projects/$slug/": typeof AuthProjectsSlugIndexRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
@@ -103,11 +101,11 @@ export interface FileRouteTypes {
     | "/"
     | "/home"
     | "/sessions"
-    | "/projects/$projectId"
+    | "/projects/$slug"
     | "/organizations/$orgId"
     | "/organizations/"
     | "/projects/"
-    | "/projects/$projectId/";
+    | "/projects/$slug/";
   fileRoutesByTo: FileRoutesByTo;
   to:
     | "/"
@@ -116,18 +114,18 @@ export interface FileRouteTypes {
     | "/organizations/$orgId"
     | "/organizations"
     | "/projects"
-    | "/projects/$projectId";
+    | "/projects/$slug";
   id:
     | "__root__"
     | "/"
     | "/_auth"
     | "/_auth/home"
     | "/_auth/sessions"
-    | "/_auth/projects/$projectId"
+    | "/_auth/projects/$slug"
     | "/_auth/organizations/$orgId"
     | "/_auth/organizations/"
     | "/_auth/projects/"
-    | "/_auth/projects/$projectId/";
+    | "/_auth/projects/$slug/";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -186,41 +184,40 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthOrganizationsOrgIdRouteImport;
       parentRoute: typeof AuthRoute;
     };
-    "/_auth/projects/$projectId": {
-      id: "/_auth/projects/$projectId";
-      path: "/projects/$projectId";
-      fullPath: "/projects/$projectId";
-      preLoaderRoute: typeof AuthProjectsProjectIdRouteRouteImport;
+    "/_auth/projects/$slug": {
+      id: "/_auth/projects/$slug";
+      path: "/projects/$slug";
+      fullPath: "/projects/$slug";
+      preLoaderRoute: typeof AuthProjectsSlugRouteRouteImport;
       parentRoute: typeof AuthRoute;
     };
-    "/_auth/projects/$projectId/": {
-      id: "/_auth/projects/$projectId/";
+    "/_auth/projects/$slug/": {
+      id: "/_auth/projects/$slug/";
       path: "/";
-      fullPath: "/projects/$projectId/";
-      preLoaderRoute: typeof AuthProjectsProjectIdIndexRouteImport;
-      parentRoute: typeof AuthProjectsProjectIdRouteRoute;
+      fullPath: "/projects/$slug/";
+      preLoaderRoute: typeof AuthProjectsSlugIndexRouteImport;
+      parentRoute: typeof AuthProjectsSlugRouteRoute;
     };
   }
 }
 
-interface AuthProjectsProjectIdRouteRouteChildren {
-  AuthProjectsProjectIdIndexRoute: typeof AuthProjectsProjectIdIndexRoute;
+interface AuthProjectsSlugRouteRouteChildren {
+  AuthProjectsSlugIndexRoute: typeof AuthProjectsSlugIndexRoute;
 }
 
-const AuthProjectsProjectIdRouteRouteChildren: AuthProjectsProjectIdRouteRouteChildren =
-  {
-    AuthProjectsProjectIdIndexRoute: AuthProjectsProjectIdIndexRoute,
-  };
+const AuthProjectsSlugRouteRouteChildren: AuthProjectsSlugRouteRouteChildren = {
+  AuthProjectsSlugIndexRoute: AuthProjectsSlugIndexRoute,
+};
 
-const AuthProjectsProjectIdRouteRouteWithChildren =
-  AuthProjectsProjectIdRouteRoute._addFileChildren(
-    AuthProjectsProjectIdRouteRouteChildren,
+const AuthProjectsSlugRouteRouteWithChildren =
+  AuthProjectsSlugRouteRoute._addFileChildren(
+    AuthProjectsSlugRouteRouteChildren,
   );
 
 interface AuthRouteChildren {
   AuthHomeRoute: typeof AuthHomeRoute;
   AuthSessionsRoute: typeof AuthSessionsRoute;
-  AuthProjectsProjectIdRouteRoute: typeof AuthProjectsProjectIdRouteRouteWithChildren;
+  AuthProjectsSlugRouteRoute: typeof AuthProjectsSlugRouteRouteWithChildren;
   AuthOrganizationsOrgIdRoute: typeof AuthOrganizationsOrgIdRoute;
   AuthOrganizationsIndexRoute: typeof AuthOrganizationsIndexRoute;
   AuthProjectsIndexRoute: typeof AuthProjectsIndexRoute;
@@ -229,7 +226,7 @@ interface AuthRouteChildren {
 const AuthRouteChildren: AuthRouteChildren = {
   AuthHomeRoute: AuthHomeRoute,
   AuthSessionsRoute: AuthSessionsRoute,
-  AuthProjectsProjectIdRouteRoute: AuthProjectsProjectIdRouteRouteWithChildren,
+  AuthProjectsSlugRouteRoute: AuthProjectsSlugRouteRouteWithChildren,
   AuthOrganizationsOrgIdRoute: AuthOrganizationsOrgIdRoute,
   AuthOrganizationsIndexRoute: AuthOrganizationsIndexRoute,
   AuthProjectsIndexRoute: AuthProjectsIndexRoute,

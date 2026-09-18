@@ -233,8 +233,9 @@ test("one provider grant can cover MCP and Cap'n Web while retaining membership 
     (await root.projects.list()).map((p: { id: string; slug: string }) => [p.id, p.slug]),
   ).toEqual([[flow.oauthA.id, "oauth-a"]]);
   await expect(root.projects.get(flow.oauthB.id)).rejects.toThrow(/outside/);
-  // the slug is a hostname label, not an address: the grant's own project is not reached by it
-  await expect(root.projects.get("oauth-a")).rejects.toThrow(/outside/);
+  // the slug names the project too (a URL's /projects/<slug>): the directory resolves it to the id
+  using bySlug = await root.projects.get("oauth-a");
+  expect((await bySlug.whoami()).projectId).toBe(flow.oauthA.id);
   expect((await tool(token, "run", { script: "async () => 1" })).status).toBe(200);
   const org = flow.oauthA.orgId;
   await bindings.DB.prepare("DELETE FROM org_members WHERE user_id = ? AND org_id = ?")

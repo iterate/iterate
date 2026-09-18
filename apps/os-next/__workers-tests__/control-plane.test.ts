@@ -46,8 +46,9 @@ test("the directory keeps creation, listing, membership and event attribution co
   expect((await ada.projects.list()).map(({ id, slug }) => ({ id, slug }))).toEqual([
     { id: adasProjectId, slug: "adas-directory" },
   ]);
-  // the slug is a hostname label, not an address: not even its owner reaches the project by it
-  await expect(ada.projects.get("adas-directory")).rejects.toThrow(/outside/);
+  // the slug names the project too (a URL's /projects/<slug>): the directory resolves it to the id
+  using bySlug = await ada.projects.get("adas-directory");
+  expect(await bySlug.whoami()).toEqual({ projectId: adasProjectId, path: "/" });
   const [event] = await project.append({
     type: "note",
     source: { principal: { actor: "forged" } },
@@ -92,7 +93,7 @@ test("onboarding creates owned organizations atomically and checks the selected 
   // the same name in its own organization is the same project; the id reads it, so does the slug
   expect(await catalog.createProject(reach, "selected-org-project", chosen.id)).toEqual(selected);
   expect(await catalog.getProject(selected.id)).toEqual(selected);
-  expect(await catalog.getProjectBySlug("selected-org-project")).toEqual(selected);
+  expect(await catalog.getProject("selected-org-project")).toEqual(selected);
   expect((await catalog.listOrgs(user.id)).map((org) => org.id)).toEqual([first.id, chosen.id]);
   const other = await catalog.upsertUser("other-onboarding@directory.test");
   await expect(
@@ -101,8 +102,8 @@ test("onboarding creates owned organizations atomically and checks the selected 
   await expect(
     catalog.createProject({ ...reach, projectIds: [selected.id] }, "bound-new-project", chosen.id),
   ).rejects.toThrow(/creating a project needs/);
-  expect(await catalog.getProjectBySlug("foreign-org-project")).toBeNull();
-  expect(await catalog.getProjectBySlug("bound-new-project")).toBeNull();
+  expect(await catalog.getProject("foreign-org-project")).toBeNull();
+  expect(await catalog.getProject("bound-new-project")).toBeNull();
   await expect(catalog.createOrg("missing-owner", "No orphan organization")).rejects.toThrow();
   expect(
     await db.prepare("SELECT id FROM orgs WHERE name = ?").bind("No orphan organization").first(),

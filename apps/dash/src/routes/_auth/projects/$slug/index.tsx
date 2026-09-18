@@ -10,7 +10,7 @@ import { projectHostOf } from "../../../_auth.tsx";
 
 const shell = getRouteApi("/_auth");
 
-export const Route = createFileRoute("/_auth/projects/$projectId/")({
+export const Route = createFileRoute("/_auth/projects/$slug/")({
   component: ProjectOverview,
 });
 

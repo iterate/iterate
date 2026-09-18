@@ -55,7 +55,7 @@ async function projectsForClient(env: Env, clientId: string, userId: string) {
         customProjectHostOf(url.hostname, config.projectCustomHostnames))
       : null;
   if (!host) return { projects, projectBound: false };
-  const project = await directory(env.DB).getProjectBySlug(host.project);
+  const project = await directory(env.DB).getProject(host.project);
   return { projects: projects.filter((p) => p.id === project?.id), projectBound: true };
 }
 

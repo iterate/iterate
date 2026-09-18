@@ -56,11 +56,12 @@ export function AppShell({
   /** the projects this session lists; grouped by `org` when the app names one */
   projects: AppShellProject[];
   activeProjectId: string | null;
-  /** where the app shows a project — a same-origin href; switching is a full navigation unless
+  /** where the app shows a project (`/projects/<slug>` by convention) — a same-origin href;
+   *  switching is a full navigation unless
    *  `onNavigate` takes it (an app with a client router prevents the default and navigates itself).
    *  Only a plain left click is handed over: a modified or middle click keeps the anchor's own
    *  behaviour (a new tab). */
-  projectHref: (projectId: string) => string;
+  projectHref: (project: AppShellProject) => string;
   onNavigate?: (href: string, event: MouseEvent<HTMLAnchorElement>) => void;
   /** the app's own items at the end of the switcher menu — `DropdownMenuItem`s, after a separator */
   switcherActions?: ReactNode;
@@ -140,7 +141,7 @@ function ProjectSwitcher({
   app: string;
   projects: AppShellProject[];
   activeProjectId: string | null;
-  projectHref: (projectId: string) => string;
+  projectHref: (project: AppShellProject) => string;
   onNavigate?: (href: string, event: MouseEvent<HTMLAnchorElement>) => void;
   actions?: ReactNode;
 }) {
@@ -200,13 +201,13 @@ function ProjectSwitcher({
                       className="gap-2 p-2"
                       render={
                         <a
-                          href={projectHref(project.id)}
+                          href={projectHref(project)}
                           aria-label={`Switch to ${project.slug}`}
                           onClick={
                             onNavigate
                               ? (event) => {
                                   if (!plainLeftClick(event)) return;
-                                  onNavigate(projectHref(project.id), event);
+                                  onNavigate(projectHref(project), event);
                                 }
                               : undefined
                           }
