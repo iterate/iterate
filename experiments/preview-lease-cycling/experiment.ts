@@ -19,7 +19,7 @@ import { createSemaphoreTokenProvider } from "../../scripts/auth/semaphore-token
 import { resolveEnvContext, CloudflareApiError } from "../../scripts/lib/env-context.ts";
 import { getWorkerDoNamespaces, resetWorkerDurableObjects } from "../../scripts/lib/do-reset.ts";
 import { cloudflarePreviewApps } from "../../scripts/preview/preview.ts";
-import { replacePreview, retirePreview } from "./lifecycle.ts";
+import { replacePreview, retirePreview, releasedCleanup } from "./lifecycle.ts";
 
 const root = resolve(import.meta.dirname, "../..");
 const leaseMs = 3 * 60 * 60_000;
@@ -38,7 +38,7 @@ type Slot = {
   acquired: number;
   source: string;
   stage: string;
-  priorCleanup: { completedAt: number; releasedAt: number } | null;
+  priorCleanup: { completedAt: number; releasedAt: number | null } | null;
   parkedAt: number | null;
   deletedAt: number | null;
   releasedAt: number | null;
@@ -128,10 +128,6 @@ export class Experiment {
       } catch (error: any) {
         if (error.code !== "ENOENT") throw error;
       }
-      const clean =
-        previous?.stage === "released" &&
-        previous.releasedAt === resource.lastReleasedAt &&
-        previous.acquired === resource.lastAcquiredAt;
       const lease = await semaphore.acquireSpecific({
         type: resourceType,
         slug: resource.slug,
@@ -150,10 +146,7 @@ export class Experiment {
           encoding: "utf8",
         }).trim(),
         stage: "acquired",
-        priorCleanup:
-          clean && current.lastReleasedAt === resource.lastReleasedAt
-            ? { completedAt: previous!.deletedAt!, releasedAt: previous!.releasedAt! }
-            : null,
+        priorCleanup: releasedCleanup(previous, resource.lastReleasedAt, current.lastReleasedAt),
         parkedAt: null,
         deletedAt: null,
         releasedAt: null,
@@ -256,6 +249,26 @@ export class Experiment {
       clearTimeout(timer);
       clearInterval(heartbeat);
     }
+  }
+
+  /** Re-establish a missing receipt from live absence, then observe cooling while exclusively leased. */
+  async restDeleted(slug: string) {
+    const state = await this.owned(slug);
+    assert.equal(state.stage, "acquired");
+    const ctx = await this.context(slug);
+    const names = Object.values(cloudflarePreviewApps).map(
+      (a) => a.resolvePreviewAppConfig(slug.replace("-", "_")).workerName,
+    );
+    const observedAt = Date.now();
+    for (let check = 0; check < 2; check++) {
+      const scripts = await ctx.cf<{ id: string }[]>("/workers/scripts");
+      assert(!scripts.some((s) => names.includes(s.id)), "Cannot certify a slot with live Workers");
+      for (const name of names) assert.deepEqual(await getWorkerDoNamespaces(ctx, name), []);
+      await this.record("observed-deleted", { slug, observedAt, check, names });
+      if (!check) await this.waitOwned(slug, observedAt + 150_000);
+    }
+    state.priorCleanup = { completedAt: observedAt, releasedAt: null };
+    await this.save(slug, state);
   }
 
   /** Existing erase scripts stop spend and wipe identities before a dirty slot can be deployed. */
@@ -620,7 +633,7 @@ export class Experiment {
   }
 
   /** Publish only the latest requested generation, retaining the previous preview through deployment and smoke. */
-  async replace(allowed: string[], waitMs: number) {
+  async replace(allowed: string[], waitMs: number, acquired: string | null) {
     const generation = await this.registry((r) => ++r.generation);
     const old = await this.registry((r) => r.current);
     if (old) await this.owned(old);
@@ -634,7 +647,12 @@ export class Experiment {
       : null;
     try {
       return await replacePreview({
-        acquire: () => this.acquire(allowed),
+        acquire: async () => {
+          if (!acquired) return this.acquire(allowed);
+          const state = await this.owned(acquired);
+          assert.equal(state.stage, "acquired", "Only an undeployed checkpoint can be resumed");
+          return acquired;
+        },
         deploy: async (slug) => {
           await this.deploy(slug, waitMs);
           if (oldLeaseFailure) throw oldLeaseFailure;
@@ -663,7 +681,10 @@ if (process.argv[1] === import.meta.filename) {
   const experiment = await Experiment.create(id);
   if (action === "acquire") console.log(await experiment.acquire(arg.split(",")));
   else if (action === "replace")
-    console.log(await experiment.replace(arg.split(","), Number(wait)));
+    console.log(await experiment.replace(arg.split(","), Number(wait), null));
+  else if (action === "replace-owned")
+    console.log(await experiment.replace([arg], Number(wait), arg));
+  else if (action === "rest-deleted") await experiment.restDeleted(arg);
   else if (action === "deploy") await experiment.deploy(arg, Number(wait));
   else if (action === "inspect") await experiment.inspect(arg);
   else if (action === "watch") await experiment.watch(arg, Number(wait));

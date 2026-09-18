@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { replacePreview, retirePreview } from "./lifecycle.ts";
+import { replacePreview, retirePreview, releasedCleanup } from "./lifecycle.ts";
 
 test("a failed replacement leaves the published preview usable and retires only the candidate", async () => {
   const events: string[] = [];
@@ -181,4 +181,16 @@ test("losing ownership during cooling refuses deletion and release", async () =>
     }),
   ).rejects.toThrow("lease expired");
   expect(events).toEqual(["park", "wait"]);
+});
+
+test("a renewed cleanup lease still has a valid release receipt", () => {
+  expect(
+    releasedCleanup({ stage: "released", deletedAt: 100, releasedAt: 400 }, 400, 400),
+  ).toMatchObject({ completedAt: 100, releasedAt: 400 });
+});
+
+test("a lease taken and released between selection and acquisition invalidates cleanup evidence", () => {
+  expect(
+    releasedCleanup({ stage: "released", deletedAt: 100, releasedAt: 400 }, 400, 900),
+  ).toBeNull();
 });

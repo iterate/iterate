@@ -5,6 +5,13 @@ import { connectItx } from "iterate/node";
 import { cloudflareWorkerVersionOverrideHeaders } from "../../packages/shared/src/test-support/cloudflare-worker-version-overrides.ts";
 
 const startedAt = Date.now();
+console.log(
+  JSON.stringify({
+    phase: "start",
+    at: startedAt,
+    versions: process.env.E2E_CLOUDFLARE_WORKERS_VERSION_OVERRIDES,
+  }),
+);
 using session = connectItx({
   baseUrl: process.env.EXPERIMENT_ORIGIN!,
   headers: cloudflareWorkerVersionOverrideHeaders(process.env),

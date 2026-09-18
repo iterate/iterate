@@ -44,3 +44,15 @@ export async function retirePreview(runtime: {
   await runtime.verifyRemoved();
   await runtime.release();
 }
+
+/** Release is the generation marker: renewal also changes Semaphore's misleading lastAcquiredAt. */
+export function releasedCleanup(
+  receipt: { stage: string; deletedAt: number | null; releasedAt: number | null } | null,
+  releasedBeforeClaim: number | null,
+  releasedAfterClaim: number | null,
+) {
+  if (receipt?.stage !== "released" || !receipt.deletedAt || !receipt.releasedAt) return null;
+  if (receipt.releasedAt !== releasedBeforeClaim || releasedBeforeClaim !== releasedAfterClaim)
+    return null;
+  return { completedAt: receipt.deletedAt, releasedAt: receipt.releasedAt };
+}

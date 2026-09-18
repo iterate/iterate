@@ -41,8 +41,7 @@ requires the explicit recovery command. A stale `.mutation.lock` or
 process is running. Expired/lost leases forbid recovery mutations.
 
 Available slots are ordered by the service's `lastReleasedAt`. A prior cleanup
-receipt is trusted only while the service's acquisition/release timestamps still
-match it. Unknown slots get the normal entry erase. Known deleted slots skip
+receipt is trusted only while the service's release timestamp still matches it, including after acquisition. Unknown slots get the normal entry erase. Known deleted slots skip
 that erase, preserving their rest. Receipts are experiment-local; this does not
 implement production slot tags or deploy a new Semaphore version.
 
@@ -76,3 +75,9 @@ run unchanged to check the starting assumptions.
 moves to a replacement (maximum 15 minutes). `inspect <id> <slot>` saves route,
 namespace, container and sampled Worker Logs evidence without attaching a live
 tail. Request/log samples do not establish worldwide propagation.
+
+`replace-owned <id> <slot> <wait-ms>` resumes a candidate reserved by `acquire`.
+`rest-deleted <id> <slot>` verifies an already absent fleet and observes another
+150 seconds under ownership when a cleanup receipt is missing. It never treats
+unknown age as old. Semaphore renewals update `lastAcquiredAt`; only the release
+timestamp is used to invalidate receipts on an intervening acquisition/release.
