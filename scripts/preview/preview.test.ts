@@ -22,8 +22,8 @@ const WorkflowConcurrency = z.object({
 });
 
 const PreviewWorkflowConcurrency = z.object({
-  concurrency: WorkflowConcurrency,
-  jobs: z.record(z.string(), z.object({ concurrency: WorkflowConcurrency })),
+  concurrency: WorkflowConcurrency.optional(),
+  jobs: z.record(z.string(), z.object({ concurrency: WorkflowConcurrency.optional() })),
 });
 
 const {
@@ -706,12 +706,8 @@ describe("preview workflow scope", () => {
     const deployWorkflow = PreviewWorkflowConcurrency.parse(parseYaml(deployWorkflowText));
     const cleanupWorkflow = PreviewWorkflowConcurrency.parse(parseYaml(cleanupWorkflowText));
 
-    expect(deployWorkflow.concurrency).toEqual({
-      group:
-        "cloudflare-previews-${{ github.event.pull_request.number || inputs.pull-request-number }}",
-      "cancel-in-progress": true,
-    });
-    expect(cleanupWorkflow.concurrency).toEqual(deployWorkflow.concurrency);
+    expect(deployWorkflow.concurrency).toBeUndefined();
+    expect(cleanupWorkflow.concurrency).toBeUndefined();
     expect(deployWorkflow.jobs.preview.concurrency).toEqual({
       group:
         "cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}",
@@ -741,7 +737,12 @@ describe("preview workflow scope", () => {
     // PR-head checkout reintroduces old bugs (e.g. bail-before-release);
     // cleanup tooling must come from the default branch.
     expect(cleanupWorkflowText).toContain("github.event.repository.default_branch");
-    expect(cleanupWorkflowText).not.toContain("github.event.pull_request.head.sha");
+    const checkouts = (parseYaml(cleanupWorkflowText) as any).jobs;
+    for (const job of Object.values(checkouts) as any[]) {
+      expect(job.steps.find((step: any) => step.uses === "actions/checkout@v4").with.ref).toBe(
+        "${{ github.event.repository.default_branch }}",
+      );
+    }
   });
 
   test("sweeps expired leases on a schedule from default-branch tooling", () => {

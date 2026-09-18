@@ -69,7 +69,7 @@ export default class PreviewCoordination {
   }
 
   /** First step after installation in every Preview job; full reruns remain ordinary runs. */
-  async verify() {
+  async verify(pullRequest: number) {
     const workflow = await this.depot.workflow(this.workflowId);
     this.assertPreview(workflow);
     if (workflow.headSha !== this.env.CI_HEAD_SHA)
@@ -88,7 +88,6 @@ export default class PreviewCoordination {
       );
       return;
     }
-    const pullRequest = Number(this.env.PREVIEW_PR_NUMBER || 0);
     const usefulness = await this.usefulness(workflow, pullRequest);
     if (usefulness.obsolete) throw new Error(`Retry is obsolete: ${usefulness.reason}`);
     const execution = latestExecution(workflow);
@@ -159,10 +158,10 @@ export default class PreviewCoordination {
   }
 
   /** Allow a prepared ancestor to finish; skip obsolete deployment and restoration work. */
-  async needed() {
+  async needed(pullRequest: number) {
     const workflow = await this.depot.workflow(this.workflowId);
     this.assertPreview(workflow);
-    const result = await this.usefulness(workflow, Number(this.env.PREVIEW_PR_NUMBER || 0));
+    const result = await this.usefulness(workflow, pullRequest);
     await appendFile(this.env.GITHUB_OUTPUT, `needed=${!result.obsolete}\n`);
     console.log(`[preview] ${result.reason}`);
     return !result.obsolete;
@@ -217,5 +216,4 @@ const Environment = z.object({
   GITHUB_REPOSITORY: z.string().min(1),
   CI_HEAD_SHA: z.string().min(1),
   GITHUB_OUTPUT: z.string().min(1),
-  PREVIEW_PR_NUMBER: z.string().optional(),
 });

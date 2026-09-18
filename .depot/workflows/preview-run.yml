@@ -29,7 +29,6 @@ env:
   BASH_ENV: ${{ github.workspace }}/scripts/ci/tracing/shell.sh
   CI_TRACE_ENABLED: "1"
   CI_HEAD_SHA: ${{ inputs.head-sha }}
-  PREVIEW_PR_NUMBER: ${{ inputs.pull-request-number }}
   TEST_TELEMETRY_HEAD_SHA: ${{ inputs.head-sha }}
   PREVIEW_TARGET_ARGS: ${{ inputs.pull-request-number && format('--pull-request-number {0}', inputs.pull-request-number) || format('--commit {0}', inputs.head-sha) }}
   TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
@@ -60,14 +59,15 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
-          pnpm exec trpc-cli scripts/preview/coordination.ts verify
+          pnpm exec trpc-cli scripts/preview/coordination.ts verify ${{ inputs.pull-request-number || 0 }}
       - name: Decide preview work from the head commit
         id: plan
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
-          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN,DEPOT_CI_TELEMETRY_TOKEN --
           pnpm preview ci-plan $PREVIEW_TARGET_ARGS
           ${{ inputs.all-apps && '--all-apps' || '' }}
       - name: Signal preview plan (including inherited failures)
@@ -105,7 +105,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
-          pnpm exec trpc-cli scripts/preview/coordination.ts verify
+          pnpm exec trpc-cli scripts/preview/coordination.ts verify ${{ inputs.pull-request-number || 0 }}
       - name: Wait for preview plan
         id: plan
         env:
@@ -154,7 +154,8 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
-          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN,DEPOT_CI_TELEMETRY_TOKEN --
           pnpm preview ci-prepare $PREVIEW_TARGET_ARGS
           ${{ steps.plan.outputs.deploy == 'false' && format('--reuse-commit {0} --reuse-slot {1}', steps.plan.outputs.commit, steps.plan.outputs.slot) || '' }}
       - name: Publish prepared deployment identity
@@ -210,7 +211,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
-          pnpm exec trpc-cli scripts/preview/coordination.ts verify
+          pnpm exec trpc-cli scripts/preview/coordination.ts verify ${{ inputs.pull-request-number || 0 }}
       - name: Reset test artifacts
         id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
@@ -286,7 +287,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
-          pnpm exec trpc-cli scripts/preview/coordination.ts verify
+          pnpm exec trpc-cli scripts/preview/coordination.ts verify ${{ inputs.pull-request-number || 0 }}
       - name: Reset test artifacts
         id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
@@ -384,7 +385,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
-          pnpm exec trpc-cli scripts/preview/coordination.ts verify
+          pnpm exec trpc-cli scripts/preview/coordination.ts verify ${{ inputs.pull-request-number || 0 }}
       - name: Reset test artifacts
         id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
@@ -455,7 +456,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
-          pnpm exec trpc-cli scripts/preview/coordination.ts needed
+          pnpm exec trpc-cli scripts/preview/coordination.ts needed ${{ inputs.pull-request-number || 0 }}
       - name: Retire test data and restore the preview
         id: erase
         if: always() && steps.coordination.outcome == 'success' && steps.consumers.outputs.settled == 'true'

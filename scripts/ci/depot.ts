@@ -17,16 +17,19 @@ export class Depot {
   }
 
   async request(method: string, body: object): Promise<unknown> {
-    const response = await this.fetch(`https://api.depot.dev/depot.ci.v1.CIService/${method}`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.token}`,
-        "content-type": "application/json",
-        "x-depot-org": this.org,
+    const response = await this.fetch(
+      `${process.env.DEPOT_API_URL || "https://api.depot.dev"}/depot.ci.v1.CIService/${method}`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.token}`,
+          "content-type": "application/json",
+          "x-depot-org": this.org,
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(15_000),
       },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(15_000),
-    });
+    );
     if (!response.ok) throw new Error(`Depot ${method} returned HTTP ${response.status}`);
     return response.json();
   }

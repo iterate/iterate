@@ -5,17 +5,14 @@ import { Workflow, currentAttempt, terminal } from "./depot.ts";
 
 /** GitHub milestones, guarded by Depot job liveness. Run with trpc-cli. */
 export default class CiStatus {
-  private env: z.infer<typeof Environment>;
-  private fetch: typeof fetch;
+  private env = Environment.parse(process.env);
   private signal = AbortSignal.timeout(60 * 60_000);
   private org: string;
   private workflowId: string;
   private jobId: string;
   private attemptId: string;
 
-  constructor(environment = process.env, fetcher = fetch) {
-    this.env = Environment.parse(environment);
-    this.fetch = fetcher;
+  constructor() {
     const url = new URL(this.env.DEPOT_JOB_URL);
     const path = /^\/orgs\/([^/]+)\/workflows\/([^/]+)$/.exec(url.pathname);
     if (!path) throw new Error("DEPOT_JOB_URL must identify the current workflow and job attempt");
@@ -159,8 +156,8 @@ export default class CiStatus {
       throw new Error("Cannot publish success before every preview producer has succeeded");
     const check = await this.ownCheck();
     if (check.status !== "in_progress") throw new Error("This GitHub check is no longer running");
-    const response = await this.fetch(
-      `https://api.github.com/repos/${this.env.GITHUB_REPOSITORY}/check-runs/${check.id}`,
+    const response = await fetch(
+      `${this.env.GITHUB_API_URL}/repos/${this.env.GITHUB_REPOSITORY}/check-runs/${check.id}`,
       {
         method: "PATCH",
         headers: {
@@ -242,8 +239,8 @@ export default class CiStatus {
 
   private async request(service: "depot" | "github", path: string, body: object | null) {
     const depot = service === "depot";
-    const response = await this.fetch(
-      `${depot ? "https://api.depot.dev" : "https://api.github.com"}${path}`,
+    const response = await fetch(
+      `${depot ? this.env.DEPOT_API_URL : this.env.GITHUB_API_URL}${path}`,
       {
         method: body ? "POST" : "GET",
         headers: {
@@ -303,6 +300,8 @@ const Environment = z.object({
   GITHUB_REPOSITORY: z.string().min(1),
   CI_HEAD_SHA: z.string().min(1),
   GITHUB_OUTPUT: z.string().min(1),
+  GITHUB_API_URL: z.url().default("https://api.github.com"),
+  DEPOT_API_URL: z.url().default("https://api.depot.dev"),
 });
 
 type WaitTarget = {
@@ -314,7 +313,7 @@ type WaitTarget = {
   timeoutSeconds?: number;
 };
 
-export function parseMilestoneValues(description: string) {
+function parseMilestoneValues(description: string) {
   return Values.parse(
     Object.fromEntries(
       description.split(/; ?/).map((entry) => {

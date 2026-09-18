@@ -89,7 +89,7 @@ test("the lifecycle owner encloses every fixed shard and cleanup waits for their
   }
   expect(workflow.jobs.plan.steps.at(-1)).toMatchObject({
     // Inherited red still publishes its decision before the producer stops.
-    if: "always() && steps.plan.outputs.tests != ''",
+    if: "always() && steps.coordination.outcome == 'success' && steps.plan.outputs.tests != ''",
     run: expect.stringContaining('set preview-plan --values "$PLAN_VALUES"'),
   });
   // The shell tracer adds ci-trace-end to every step's outputs. Publish only
@@ -133,7 +133,7 @@ test("the lifecycle owner encloses every fixed shard and cleanup waits for their
   expect(cleanup).toBeGreaterThan(trace);
   expect(workflow.jobs.trace).toBeUndefined();
   expect(steps[trace]).toMatchObject({
-    if: "always() && steps.consumers.outputs.settled == 'true'",
+    if: "always() && steps.coordination.outcome == 'success' && steps.consumers.outputs.settled == 'true'",
     "timeout-minutes": 5,
     env: {
       CI_TRACE_GREEN: "${{ steps.tests_passed.outputs.ci-trace-green }}",
@@ -145,15 +145,15 @@ test("the lifecycle owner encloses every fixed shard and cleanup waits for their
     if: "success() && needs.prepare.result == 'success' && steps.consumers.outputs.succeeded == 'true' && steps.merge_reports.outcome == 'success'",
   });
   expect(steps[cleanup]).toMatchObject({
-    if: "always() && steps.consumers.outputs.settled == 'true'",
+    if: "always() && steps.coordination.outcome == 'success' && steps.consumers.outputs.settled == 'true'",
   });
   expect(steps[cleanup].run).toContain("--restore --prepared-ci-plan");
   const settled = steps.findIndex((step: any) => step.id === "settled");
   expect(settled).toBe(steps.length - 1);
   expect(settled).toBeGreaterThan(cleanup);
   expect(steps[settled]).toMatchObject({
-    if: "always() && !cancelled() && steps.erase.outcome == 'success' && steps.erase.outputs.restored == 'true' && steps.merge_reports.outputs.test_outcome != ''",
-    run: expect.stringContaining("set-preview-settled"),
+    if: "always() && steps.coordination.outcome == 'success' && !cancelled() && steps.erase.outcome == 'success' && steps.erase.outputs.restored == 'true' && steps.merge_reports.outputs.test_outcome != ''",
+    run: expect.stringContaining("set preview-settled"),
   });
 });
 
