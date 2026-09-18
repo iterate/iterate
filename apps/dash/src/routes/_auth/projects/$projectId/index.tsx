@@ -4,6 +4,7 @@ import { createFileRoute, getRouteApi } from "@tanstack/react-router";
 import { ArrowUpRight } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { buttonVariants } from "@iterate-com/ui/components/button";
+import { Identifier } from "@iterate-com/ui/components/identifier";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { projectHostOf } from "../../../_auth.tsx";
 
@@ -38,6 +39,18 @@ function ProjectOverview() {
           </a>
         ) : null}
       </div>
+      {/* the ids, copyable: the project's, and its organization's beside the name */}
+      <dl className="grid gap-x-8 gap-y-2 text-sm sm:grid-cols-[auto_1fr]">
+        <dt className="text-muted-foreground">Project id</dt>
+        <dd>
+          <Identifier value={project.id} />
+        </dd>
+        <dt className="text-muted-foreground">Organization</dt>
+        <dd className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {org?.name ? <span>{org.name}</span> : null}
+          <Identifier value={project.orgId} />
+        </dd>
+      </dl>
     </div>
   );
 }

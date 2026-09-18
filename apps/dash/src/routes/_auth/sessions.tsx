@@ -17,6 +17,7 @@ import {
   CardTitle,
 } from "@iterate-com/ui/components/card";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
+import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { Label } from "@iterate-com/ui/components/label";
 import { cn } from "@iterate-com/ui/lib/utils";
@@ -74,7 +75,7 @@ type MintedPersonalAccessToken = { name: string; token: string; expiresAt: numbe
 function SessionsPage() {
   const data = Route.useLoaderData();
   const { cursor } = Route.useSearch();
-  const { api } = Route.useRouteContext();
+  const { api, info } = Route.useRouteContext();
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [tokenName, setTokenName] = useState("");
@@ -121,7 +122,14 @@ function SessionsPage() {
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
       <form ref={logout} method="post" action="/.auth/logout" hidden />
-      <h1 className="text-2xl font-semibold tracking-tight">Sessions</h1>
+      <div className="flex flex-col gap-1">
+        <h1 className="text-2xl font-semibold tracking-tight">Sessions</h1>
+        {/* whose: the address and the person's id, copyable */}
+        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+          {info.principal.email ? <span>{info.principal.email}</span> : null}
+          <Identifier value={info.principal.actor} textClassName="text-xs" />
+        </p>
+      </div>
       {error && (
         <p role="alert" className="text-sm text-destructive">
           {error}

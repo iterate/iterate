@@ -15,7 +15,12 @@ import {
 import { ArrowLeft, KeyRound, Plus } from "lucide-react";
 import { createIterateClient } from "iterate/next/app";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
-import { DropdownMenuItem } from "@iterate-com/ui/components/dropdown-menu";
+import {
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+} from "@iterate-com/ui/components/dropdown-menu";
+import { Identifier } from "@iterate-com/ui/components/identifier";
 import { DashBreadcrumbs } from "../components/dash-breadcrumbs.tsx";
 import { DashNav } from "../components/dash-nav.tsx";
 import { projectsByOrg } from "../lib/projects.ts";
@@ -32,15 +37,16 @@ export const Route = createFileRoute("/_auth")({
   component: Shell,
 });
 
-/** A project's own site: `<project>.<base>` on the platform's scheme and port — null when the
- *  deployment serves no project hosts. */
+/** A project's own site: `<slug>.<base>` on the platform's scheme and port — null when the
+ *  deployment serves no project hosts. The slug, never the id: the id is how a project is addressed,
+ *  the slug is its hostname's label. */
 export function projectHostOf(
   info: { platformOrigin: string; projectHostnameBase: string | null | undefined },
-  projectId: string,
+  slug: string,
 ) {
   if (!info.projectHostnameBase) return null;
   const origin = new URL(info.platformOrigin);
-  return `${origin.protocol}//${projectId}.${info.projectHostnameBase}${origin.port ? `:${origin.port}` : ""}/`;
+  return `${origin.protocol}//${slug}.${info.projectHostnameBase}${origin.port ? `:${origin.port}` : ""}/`;
 }
 
 function Shell() {
@@ -98,10 +104,18 @@ function Shell() {
       header={<DashBreadcrumbs orgs={orgs} projects={projects} page={page} />}
       account={{ email: info.principal.email || info.principal.actor }}
       accountActions={
-        <DropdownMenuItem render={<Link to="/sessions" />}>
-          <KeyRound />
-          <span>Sessions</span>
-        </DropdownMenuItem>
+        <>
+          {/* the person's id, copyable (Base UI: a menu label lives inside a group) */}
+          <DropdownMenuGroup>
+            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+              <Identifier value={info.principal.actor} textClassName="text-xs" />
+            </DropdownMenuLabel>
+          </DropdownMenuGroup>
+          <DropdownMenuItem render={<Link to="/sessions" />}>
+            <KeyRound />
+            <span>Sessions</span>
+          </DropdownMenuItem>
+        </>
       }
       locationKey={href}
     >

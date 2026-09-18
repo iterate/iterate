@@ -9,6 +9,7 @@ import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@iterate-com/ui/components/card";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
+import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import {
@@ -58,6 +59,9 @@ function ProjectsPage() {
               {group.org.role ? (
                 <span className="text-xs font-normal">({group.org.role})</span>
               ) : null}
+              {group.org.id ? (
+                <Identifier value={group.org.id} textClassName="text-xs" className="ml-auto" />
+              ) : null}
             </h2>
             <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {group.projects.map((project) => (
@@ -74,7 +78,13 @@ function ProjectsPage() {
                           {project.slug}
                         </Link>
                       </CardTitle>
-                      <CardDescription className="flex items-center gap-2">
+                      <CardDescription className="flex items-center gap-3">
+                        {/* above the card's stretched link, so the copy button takes the click */}
+                        <Identifier
+                          value={project.id}
+                          textClassName="text-xs"
+                          className="relative z-10 min-w-0"
+                        />
                         {hostOf(project.slug) ? (
                           <a
                             href={hostOf(project.slug)!}
