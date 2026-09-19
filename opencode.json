@@ -29,6 +29,11 @@
       "url": "https://mcp-eu.posthog.com/mcp",
       "enabled": true,
       "oauth": {}
+    },
+    "you": {
+      "type": "remote",
+      "url": "https://api.you.com/mcp?profile=free",
+      "enabled": true
     }
   }
 }
