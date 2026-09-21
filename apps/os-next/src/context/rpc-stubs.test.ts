@@ -167,7 +167,7 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
     () => {}, // waitUntil
   );
 
-  // A long-lived, active device: five page/quiesce cycles, each lending a fresh stub.
+  // A long-lived, active device: five page/release cycles, each lending a fresh stub.
   const PAGES = 5;
   for (let i = 0; i < PAGES; i++) pager.page();
 

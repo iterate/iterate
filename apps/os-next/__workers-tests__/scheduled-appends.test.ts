@@ -2,7 +2,7 @@ import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "c
 import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/next/stream/processor";
 import { scheduledAppendFacetSource } from "../e2e/support/scheduled-append-facet.ts";
-import { stub, quiesce, until } from "./support.ts";
+import { stub, releasePins, until } from "./support.ts";
 
 const at = "2035-01-01T00:00:00Z";
 async function fire(ctx: string, now = Date.parse(at)) {
@@ -43,7 +43,7 @@ test.each([{ principal: { actor: "admin" } }, { processor: { slug: "reminders", 
   },
 );
 
-test("a facet's deadline survives quiesce and eviction; duplicate alarms append one batch", async () => {
+test("a facet's deadline survives the release and eviction; duplicate alarms append one batch", async () => {
   const ctx = "prj_scheduled_eviction";
   const s = stub(ctx);
   await s.invoke([
@@ -56,7 +56,7 @@ test("a facet's deadline survives quiesce and eviction; duplicate alarms append 
     ],
   ]);
   await s.invoke(["itx", "facets", ["get", "deadlines"], ["start", "invoice", { at }]]);
-  await quiesce(ctx);
+  await releasePins(ctx);
   await evictDurableObject(s);
   // A new incarnation's delivery watchdog must not replace the earlier scheduled deadline.
   await runInDurableObject(s, async (_instance, state) => {

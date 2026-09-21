@@ -533,8 +533,8 @@ export class SubscriptionDelivery {
           .finally(() => this.#deliveryCharsInFlight.release(chars));
         return;
       }
-      // A FACET owns its checkpoint: push, AWAITED, so this facet's batches stay in order and the
-      // quiesce never aborts it mid-reduce. The DO's facet watchdog (#invokeFacet, 60 s) bounds a
+      // A FACET owns its checkpoint: push, AWAITED, so this facet's batches stay in order and no
+      // release aborts it mid-reduce (`releasePins` waits for the in-flight count). The DO's facet watchdog (#invokeFacet, 60 s) bounds a
       // hung facet; its own gap repair covers a dropped push.
       try {
         const chars = serializedChars(events);
