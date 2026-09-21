@@ -25,6 +25,7 @@
 //   subscriptions — a literal `subscription-configured` event, THE SUBSCRIPTIONS TABLE's one command (the rows are core state)
 
 import {
+  itxExpressionStepName,
   normalizedItxExpression,
   type ItxExpressionInput,
   parseItxExpressionPrefix,
@@ -39,10 +40,9 @@ import { normalizeIngressConfigured } from "../context/ingress.ts";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
 import { isRefreshKind, type SecretCatalogEntry } from "../secrets.ts";
 import {
+  BUILT_IN_ROOTS,
   implicitRootsAt,
-  implicitRowBeneath,
   isBuiltInsRooted,
-  isImplicitRow,
   normalizeRewriteRuleConfigured,
   resolveItxExpression,
   type ItxExpressionRewriteRule,
@@ -503,8 +503,10 @@ export function reduceCoreEvent(
         // SHORTER row with a target (the parent link `itx ⇒ itx.builtins.cd('/agents/a')`, a granted
         // root `itx.repos ⇒ …`): the call is refused, not answered. A plain deletion anywhere else
         // (a mask there would equal a deletion and only grow the table).
+        const root = matchPrefix.length === 1 ? undefined : itxExpressionStepName(matchPrefix[1]);
         const answeredBeneath =
-          implicitRowBeneath(matchPrefix, implicitRoots) ||
+          matchPrefix.length === 1 || // beneath the bare `itx`: every implicit row here
+          (!!root && implicitRoots.has(root)) ||
           Object.values(state.itxExpressionRewriteRules).some(
             (row) =>
               !!row.target &&
@@ -525,11 +527,15 @@ export function reduceCoreEvent(
       // after). At a child, a project root's physical target is a grant either way.
       const wall =
         matchPrefix.length > 1 && state.itxExpressionRewriteRules["itx"]?.target === null;
-      if (
-        !wall &&
-        isImplicitRow(matchPrefix, implicitRoots) &&
-        jsonEqual(target, ["itx", "builtins", ...matchPrefix.slice(1)])
-      )
+      // The implicit row of THIS match: `itx.<root>` with `root` implicit here, or the bare `itx`
+      // where every root is (the owner root) — nothing longer, nothing pinned.
+      const isImplicitRow =
+        matchPrefix.length === 1
+          ? implicitRoots.size === BUILT_IN_ROOTS.length
+          : matchPrefix.length === 2 &&
+            typeof matchPrefix[1] === "string" &&
+            implicitRoots.has(matchPrefix[1]);
+      if (!wall && isImplicitRow && jsonEqual(target, ["itx", "builtins", ...matchPrefix.slice(1)]))
         return existing ? withRule(undefined) : undefined;
       return withRule({ match: matchPrefix, target, ...description });
     }

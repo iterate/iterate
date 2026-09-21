@@ -85,9 +85,8 @@ reads: the WHOLE event — no policies, no flags.
 
 One dispatch path: parse → RULES FIRST: the most SPECIFIC matching row — the context's own, and
 the implicit rows `itx.<root> ⇒ itx.builtins.<root>` (every root at the owner root; only the
-fourteen context roots — `whoami`, `url`, `append`, `readEvents`, `waitForEvent`, `cd`, `facets`,
-`subscriptions`, `processors`, `schedules`, `rewriteRules`, `rpcStubs`, `workers`, `run` —
-everywhere else) — rewrites the call (longest match, then most pinned args; a match step may pin
+fourteen context roots — `CONTEXT_ROOTS`, listed in docs/itx-surface-as-built.md §5 — everywhere
+else) — rewrites the call (longest match, then most pinned args; a match step may pin
 literal args — `itx.ai.run('gpt-5')` — which are CONSUMED; a bare `itx` row with a target claims
 what no implicit row claims, which is how a child reaches its creator: `itx ⇒
 itx.builtins.cd('<creator>')`, one hop into that context's table), and rewriting repeats until the

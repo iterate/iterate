@@ -32,7 +32,6 @@ import {
 import type { WithItx } from "iterate/next/sdk";
 import type { RewriteRuleListEntry } from "iterate/next/api";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
-import type { BuiltInScope } from "../context/built-ins.ts";
 import type { RunSettlement } from "../stream/core-processor.ts";
 import {
   AgentContract,
@@ -120,17 +119,6 @@ export function renderCapabilityTree(rows: RewriteRuleListEntry[]): string | nul
     "`itx` IS THIS CONTEXT'S CAPABILITY TREE (`await itx.rewriteRules.list()`) — every name below is one you can spell inside a tag; nothing else resolves:",
     ...body,
   ].join("\n");
-}
-
-/** The sandbox's own fixed point, reached over the `cd` handle's dotted proxy. An InvokeHandle
- *  answers ANY name at runtime (the sibling context does the answering); the assertion is how
- *  TypeScript learns the two words this loop spells there — nothing here can check it, so an
- *  assertion is the only way to say it (library.ts's facet handles, the same). */
-function sandboxBuiltins(
-  itx: ItxEntrypointScope,
-  sandbox: string,
-): Pick<BuiltInScope, "rewriteRules" | "append"> {
-  return (itx.builtins.cd(sandbox) as unknown as { builtins: BuiltInScope }).builtins;
 }
 
 /** How a non-image (or gone) attachment is named to the model. */
@@ -380,7 +368,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       }),
     );
     await this.deps.withItx(async (itx) => {
-      const there = sandboxBuiltins(itx, sandbox);
+      const there = itx.cd(sandbox).builtins;
       if (await there.rewriteRules.get("itx")) return;
       await there.append({
         type: "events.iterate.com/itx/rewrite-rule-configured",
@@ -869,7 +857,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         this.#sandboxAsserted = true;
       }
       const tree = await this.deps.withItx((itx) =>
-        sandboxBuiltins(itx, `${path}/sandbox`).rewriteRules.list(),
+        itx.cd(`${path}/sandbox`).builtins.rewriteRules.list(),
       );
       const items = state.contextItems.filter((item) => item.offset < open.requestedAtOffset);
       // The images the model will see: read now, the freshest bytes at the request; one that is

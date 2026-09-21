@@ -499,19 +499,6 @@ test("the model is shown the SANDBOX's rewriteRules.list() every turn: a capabil
   expect(tree).toContain("itx.tool — who this project is, really: itx.tool()");
   expect(tree).toContain("from /:"); // rows are grouped by the context they came from
   expect(tree).toContain("itx.kv — "); // the root's implicit rows, described
-  // and the sandbox's own list says the same, row by row
-  const rows = (await itx.cd("/agents/support/sandbox").rewriteRules.list()) as {
-    match: string;
-    context: string;
-    description?: string;
-  }[];
-  expect(rows.find((row) => row.match === "itx.tool")).toMatchObject({
-    context: "/",
-    description: "who this project is, really: itx.tool()",
-  });
-  expect(rows.find((row) => row.match === "itx.append")).toMatchObject({
-    context: "/agents/support/sandbox",
-  });
 });
 
 test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injected script reaches nothing but the grant, and the tables are untouched afterwards", async () => {

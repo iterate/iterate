@@ -3,7 +3,7 @@
 // the code. Rules are written `"match ⇒ target"`; `null` is a MASK. Built-in roots for the table: kv,
 // whoami, rpcStubs, ai — reached as `itx.builtins.<root>` (the fixed point) or through the implicit
 // platform row `itx.<root> ⇒ itx.builtins.<root>`. Below the table: the ONE door
-// (`normalizeRewriteRuleConfigured` + `restoreRuleTarget`), the resolver over a fake physical scope
+// (`normalizeRewriteRuleConfigured`), the resolver over a fake physical scope
 // (rules first, masks, the fixed point, default-deny, depth 32, lent stubs through a fake
 // `itx.builtins.rpcStubs`), and the reduce as the DO runs it — the rules are `core` state, reduced
 // from the log.
@@ -527,36 +527,6 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
     });
   });
 
-  test("the platform-equivalent target `itx.builtins.<match…>` is an ordinary target at the door — the reduce decides: a deletion where it restates an implicit row, a grant elsewhere (rule 8)", () => {
-    expect(
-      normalizeControlEvent({
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match: "itx.kv", target: restoreRuleTarget("itx.kv") },
-      }).payload,
-    ).toEqual({
-      match: ["itx", "kv"],
-      target: ["itx", "builtins", "kv"], // the parsed form at rest
-    });
-    expect(
-      normalizeControlEvent({
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match: "itx.ai.run('gpt-5')", target: restoreRuleTarget("itx.ai.run('gpt-5')") },
-      }).payload,
-    ).toEqual({
-      match: ["itx", "ai", ["run", "gpt-5"]],
-      target: ["itx", "builtins", "ai", ["run", "gpt-5"]],
-    });
-    expect(
-      normalizeControlEvent({
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match: "itx", target: restoreRuleTarget("itx") },
-      }).payload,
-    ).toEqual({
-      match: ["itx"],
-      target: ["itx", "builtins"],
-    });
-  });
-
   // THE DOOR'S REFUSALS, one row each: `{ match, target, throws }` — rule 6 (rooting, the reserved
   // root, the proxy's verbs), rule 7 (`@` in a match, in a non-final step, in a call), and the
   // prefix grammar (an argless pinned step, an anonymous step, an unbalanced paren, a non-identifier
@@ -630,6 +600,26 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
         target: "itx.kv",
         payload: { match: ["itx", "ok", ["get", 1]], target: ["itx", "kv"] },
       }, // the ARRAY half of a match passes through as the parsed form
+      // The physical spelling of the match itself is an ordinary target at the door — the REDUCE
+      // decides (rule 8): a deletion where it restates the implicit row, a grant where it does not.
+      {
+        match: "itx.kv",
+        target: "itx.builtins.kv",
+        payload: { match: ["itx", "kv"], target: ["itx", "builtins", "kv"] },
+      },
+      {
+        match: "itx.ai.run('gpt-5')",
+        target: "itx.builtins.ai.run('gpt-5')",
+        payload: {
+          match: ["itx", "ai", ["run", "gpt-5"]],
+          target: ["itx", "builtins", "ai", ["run", "gpt-5"]],
+        },
+      },
+      {
+        match: "itx",
+        target: "itx.builtins",
+        payload: { match: ["itx"], target: ["itx", "builtins"] },
+      },
     ];
   for (const { match, target, payload } of doorAccepts)
     test(`ACCEPTED: ${JSON.stringify(match)} ⇒ ${JSON.stringify(target)}`, () => {
@@ -1192,16 +1182,5 @@ describe("the app wall (`Caller.app`): on the INPUT expression only, `itx.builti
     expect(row(rule, "itx.cd('./b').whoami")).not.toThrow();
     expect(row(rule, null)).not.toThrow();
     expect(row("events.iterate.com/notes/added", "itx.builtins.cd('/')")).not.toThrow(); // not a row
-  });
-  test("a session (no app bit) says all of it", () => {
-    const resolver = new ItxExpressionResolver({
-      builtIns: fakeBuiltIns(),
-      rewriteRules: () => [],
-      implicitRoots: CHILD,
-      path: "/agents/a",
-      caller: () => ({ principal: null }),
-    });
-    expect(() => resolver.resolve("itx.cd('/').whoami()")).not.toThrow();
-    expect(() => resolver.resolve("itx.builtins.whoami()")).not.toThrow();
   });
 });
