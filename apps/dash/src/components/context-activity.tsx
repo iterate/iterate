@@ -6,6 +6,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { useIterateContext, type IterateContextHandle } from "iterate/next/react";
 import { ContextView } from "@iterate-com/ui/components/context-view/context-view";
+import type { ContextViewState } from "@iterate-com/ui/components/context-view/context-view-search";
 import { factRenderers } from "../lib/fact-renderers.tsx";
 import { LiveStateValue } from "./live-state-value.tsx";
 
@@ -19,10 +20,15 @@ export function ContextActivity({
   itx,
   title,
   ensureProcessor,
+  state,
+  onStateChange,
 }: {
   itx: ActivityItx | undefined;
   title: ReactNode;
   ensureProcessor?: string;
+  /** The view's state — the route's search (`validateSearch: ContextViewState`), so the page is a link. */
+  state: ContextViewState;
+  onStateChange: (patch: Partial<ContextViewState>) => void;
 }) {
   // `liveState` omitted: the hook opens the core reduce's live state and every hosted facet's as the
   // processors table it holds loads — exactly what the panel shows.
@@ -52,6 +58,8 @@ export function ContextActivity({
       presence={iterateContext.presence}
       renderCoreState={() => <LiveStateValue state={iterateContext.liveState.core} />}
       renderLiveState={(name) => <LiveStateValue state={iterateContext.liveState[name]} />}
+      state={state}
+      onStateChange={onStateChange}
     />
   );
 }

@@ -1,7 +1,6 @@
 // The context view's vocabulary: a committed event as the view reads it (structural — the itx
 // envelope is a superset), the renderers an app plugs in per event type, and the rows the panels
-// show. Pure types: this directory renders data the SDK's hooks (`iterate/next/react`:
-// useContextLog, useContextProcessors, useContextPresence, useLiveState) hand it.
+// show. Pure types: this directory renders data the SDK's hooks (`iterate/next/react`) hand it.
 import type { ReactNode } from "react";
 
 export type ContextViewEvent = {

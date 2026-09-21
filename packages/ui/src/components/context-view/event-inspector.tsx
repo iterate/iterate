@@ -47,7 +47,7 @@ export function EventInspector({
         {event ? (
           <>
             <SheetHeader>
-              <SheetTitle className="text-sm [&_*]:inline">
+              <SheetTitle className="line-clamp-2 text-sm [&_*]:inline">
                 {sentence ?? <span className="font-mono">{shortEventType(event.type)}</span>}
               </SheetTitle>
               <SheetDescription className="font-mono text-xs">
