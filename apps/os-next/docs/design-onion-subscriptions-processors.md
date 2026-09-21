@@ -224,7 +224,7 @@ Nothing reduces them (ephemerals never reach an inline reduce). A UI subscribes 
 
 ## 3. Layer 1 — itx-expression rewrite rules
 
-AS BUILT (`context/itx-expression-rewriting.ts`): a rewrite rule is `{ match, target }` — a call
+AS BUILT (`context/itx-expression-rewriting.ts`): a rewrite rule is `{ match, target, description? }` — a call
 that starts with `match` runs as the same call with `match` replaced by `target`; `match` is an
 `ItxExpressionPrefix` (dotted names, any step may pin literal args, which the match CONSUMES),
 `target` an `itx.…` expression. ONE event, `itx/rewrite-rule-configured { match, target | null }`
@@ -262,7 +262,7 @@ replaces the pager and is not a close).
 ### 4.1 Events and reduce
 
 Three events of the layer's own, reduced by the ONE core reduce (`stream/core-processor.ts`,
-the core reduce (`reduceCoreEventBatch`), slug `core`, contract 8.0.0 — the `subscriptions` slice beside
+the core reduce (`reduceCoreEventBatch`), slug `core`, contract 13.0.0 — the `subscriptions` slice beside
 `itxExpressionRewriteRules`). DECIDED 2026-09-02, reversing this doc's earlier "own inline reduce
 beside `core` and a separate rule reduce" (§8): the layering lives in the EVENTS, and one reduce
 serves every synchronous reader — the append door, the dispatcher, the delivery loop. Jonas: "a core

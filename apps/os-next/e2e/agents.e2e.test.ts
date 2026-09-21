@@ -124,9 +124,9 @@ test("the loop: a person's words → the model → a script run against itx → 
     offset: expect.any(Number),
   });
 
-  // Wait for the LAST derived fact: the plain-response handler's run-settled, appended a
-  // beat after the prose's web-message-sent it follows — reading at the prose raced it on the
-  // deployed worker (17 of the 18 events, twice on main).
+  // Wait for the LAST derived fact: the bare reply's web-message-sent (appended directly, no script),
+  // a beat after the script's run-settled — reading at the prose raced it on the deployed worker
+  // (17 of the 18 events, twice on main).
   const log = await until("the settle that ends the turn", async () => {
     const all = await readAll(support);
     const count = (type: string) =>

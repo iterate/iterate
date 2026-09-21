@@ -168,7 +168,7 @@ packages/v3/project-worker/
       processor.ts               the PURE half every loaded worker bundles: StreamProcessor (the author
                                  class), ProcessorEngine, consumesEvent, StreamEventInput / StreamEvent,
                                  the reduce checkpoint, LiveState<S>, defineProcessorContract (zod)
-      core-processor.ts          the core reduce (slug core, 8.0.0): created/woken/paused/resumed
+      core-processor.ts          the core reduce (slug core, 13.0.0): created/woken/paused/resumed
                                  + the rewrite rules (a map) + the subscriptions + the secrets catalog,
                                  one reduce (reduceCoreEventBatch: each table copied once per batch, a draft);
                                  subscriptionConfiguredEvent ({ name, target | null, consumes?, afterOffset? })
@@ -759,7 +759,7 @@ by itx expression, so a facet can be aborted at any time with nothing to lose.
 
 One reduce-only processor is always on and runs **inline** in the commit
 transaction: the core reduce (`src/stream/core-processor.ts`, slug `core`,
-contract 8.0.0), owned by the `Stream` itself (`stream.coreReducedState`). It reduces the context's own control
+contract 13.0.0), owned by the `Stream` itself (`stream.coreReducedState`). It reduces the context's own control
 events — and nothing else — into everything the DO needs synchronously at its
 doors: who it is, which incarnation runs, whether appends are paused, the
 rewrite rules every call goes through, the subscriptions every commit is sent
@@ -1633,8 +1633,8 @@ deletion: the row goes only while it is still the one the stub wrote, and never 
 — decided DO-side because only the DO knows the truth: a reconnect REPLACES
 the pager and is never a detach, so a reconnected session's rule survives a
 late-dying old session, while a genuine last close un-sets it exactly once.
-Only an EXPRESSION rule's handle appends the removal spelling itself (and only while the row is
-still its own); an un-set on a
+Only an EXPRESSION rule's handle appends the un-set itself — `null` with `ifTarget`, rule 8's
+compare-and-set delete (and only while the row is still its own); an un-set on a
 match with no row is a no-op in the reduce. `RPC_STUB_OFFLINE` is what a call
 answers when a rule names a key nobody has lent right now — a rule appended
 raw by hand, or the window before the un-set lands (a paused stream refuses

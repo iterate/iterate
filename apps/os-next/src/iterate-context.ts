@@ -508,9 +508,11 @@ export class ItxEntrypoint extends WorkerEntrypoint<
   Env,
   { iterateContextName: string; platform?: true }
 > {
-  /** THE handoff: the genuine itx scope — the SAME `IterateContextRpcTarget` RpcTarget a capnweb client gets
-   *  from `projects.get(id)` (capnweb's RpcTarget IS the native `cloudflare:workers` RpcTarget on
-   *  workerd), so loaded code writes plain dotted access and mid-chain handles pipeline natively. A
+  /** THE handoff: the genuine itx scope — the same `IterateContextRpcTarget` class a capnweb client
+   *  gets from `projects.get(id)` (capnweb's RpcTarget IS the native `cloudflare:workers` RpcTarget
+   *  on workerd), under `Caller.app` unless minted `platform: true`, so loaded code writes plain
+   *  dotted access and mid-chain handles pipeline natively while the fixed point and a `cd` above
+   *  its context are refused. A
    *  fresh SessionTeardown per call: this hop lends nothing session-long (a loaded worker's callbacks
    *  ride as Workers-RPC stubs through the call args, never the pager). Re-resolved per call — never
    *  a stub held across calls (the back-channel rule). */

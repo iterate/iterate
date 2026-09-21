@@ -62,7 +62,7 @@ log-derived where there is one: a subscription's id is the offset of its subscri
 fact; a rewrite rule has no identity beyond its `match` (one map entry per match).
 
 ONE reduce runs INLINE at the commit point: `reduceCoreEventBatch` (core-processor.ts)
-(`stream/core-processor.ts`, slug `core`, contract 8.0.0), owned by the `Stream` itself (`#coreReducedState`) with
+(`stream/core-processor.ts`, slug `core`, contract 13.0.0), owned by the `Stream` itself (`#coreReducedState`) with
 zero runner apparatus. It reduces a whole batch at once (each table copied ONCE per batch,
 on first touch, then mutated in place) — the context's own control events into
 `{ projectId, path, createdAt, incarnation, paused, itxExpressionRewriteRules, subscriptions, secrets }`

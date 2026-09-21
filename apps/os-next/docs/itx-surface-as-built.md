@@ -406,7 +406,7 @@ leaves no grant behind. `description` rides the row. No stack, no offset, no ide
 match.
 
 **The one event** `events.iterate.com/itx/rewrite-rule-configured { match: string, target:
-ItxExpression | null }`. The match is the printed prefix — a short canonical key; the target is AT REST
+ItxExpression | null, description?: string }`. The match is the printed prefix — a short canonical key; the target is AT REST
 IN THE PARSED FORM (the array half), because a target may carry a facet's whole source as data and the
 reduce must never push that through the string codec again (wave 0, 2026-09-07: stock json5 allocates per
 character and a multi-megabyte literal kills a 128 MiB isolate). Both halves go through the codec's one
@@ -461,7 +461,7 @@ the stream runs lives in ONE typed module, `src/stream/stream.ts`, over `ctx.sto
 (`node-sqlite-durable-object-storage.ts` is its 41-line node shim for the unit lane).
 
 ONE reduce runs INLINE at the commit point: `reduceCoreEventBatch` (core-processor.ts)
-(slug `core`, contract `8.0.0`). It reduces a whole batch at once: each core table is
+(slug `core`, contract `13.0.0`). It reduces a whole batch at once: each core table is
 copied ONCE per batch, on its first touch (a draft), and mutated in place from then on, so a page of N
 control events costs one copy, not N; the contract's single-event `reduce` stays pure (every touch
 copies). Its state is everything the DO needs synchronously:
@@ -545,14 +545,14 @@ initializer is one line over the scope:
 
 **Lifetimes.**
 
-| Thing                        | Made by                                 | Dies when                                                                                                                                   |
-| ---------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| a lent rpc stub              | `provide(match, stub)`, `subscribe(fn)` | handle disposed, or the session ends                                                                                                        |
-| a rule for a live stub       | `provide(match, stub)`                  | the stub's last pager closes (the DO un-sets it)                                                                                            |
-| a rule for an expression     | `provide(match, expression)`            | handle disposed, or the session ends (the handle appends the removal spelling `itx.builtins.<match…>`, only while the row is still its own) |
-| a subscription (expression)  | `subscribe`                             | same as above                                                                                                                               |
-| a processor                  | `itx.processors.enable`                 | its `null` event (`processors.disable`, or raw), which also deletes the facet it hosted                                                     |
-| anything spelled as an event | `itx.append(event)`                     | its `null` event                                                                                                                            |
+| Thing                        | Made by                                 | Dies when                                                                                                                                                 |
+| ---------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| a lent rpc stub              | `provide(match, stub)`, `subscribe(fn)` | handle disposed, or the session ends                                                                                                                      |
+| a rule for a live stub       | `provide(match, stub)`                  | the stub's last pager closes (the DO un-sets it)                                                                                                          |
+| a rule for an expression     | `provide(match, expression)`            | handle disposed, or the session ends (the handle appends `null` with `ifTarget`, a compare-and-set delete — rule 8 — only while the row is still its own) |
+| a subscription (expression)  | `subscribe`                             | same as above                                                                                                                                             |
+| a processor                  | `itx.processors.enable`                 | its `null` event (`processors.disable`, or raw), which also deletes the facet it hosted                                                                   |
+| anything spelled as an event | `itx.append(event)`                     | its `null` event                                                                                                                                          |
 
 **Fetch** (`src/context/rpc-stubs.ts`, parked). A fetch-shaped capability is
 always called through a terminal `.fetch(request)`. Two doors: a terminal `.fetch` inside a session,
@@ -975,8 +975,9 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
   everywhere else; nothing project-level is ambient below the root. A bare `itx` row with a target
   claims what no implicit row claims (`itx ⇒ itx.builtins.cd('<creator>')` is the creator's
   surface; `itx ⇒ itx.builtins` the whole local one); a bare `null` denies all. The library's three
-  create paths (`agents.get`, `repos.get`, `workspaces.get` → `create()`, `src/library.ts`) append
-  the child's bare row targeting the creator, described, keyed `itx@<creator>`; a context merely
+  creations (`itx.agents.create(path)`, `itx.repos.create(path)`, `itx.workspaces.create(path)` —
+  `src/library.ts` `createEntity`, before the collection's saga) append the child's bare row
+  targeting the creator, described, keyed `itx@<creator>`; a context merely
   `cd`-ed into is naked. `null` deletes, and is kept as a mask only where an implicit row lies
   beneath at that path; a `null` with `ifTarget` is a compare-and-set deletion, what every handle
   and every dead stub append. Gone: the physical-spelling door check, the whole-context-override
@@ -986,19 +987,23 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
   the door caps the line at 500 chars. `rewriteRules.list()` is async and returns
   `{ match, target, description?, context }` — own rows, the implicit rows with the platform's
   one-liners, a bare hop row followed to a depth cap. The agent's prompt is rendered from the
-  sandbox's `list()` each turn; the static example block of the default system prompt is gone; the
-  MCP `run` tool's description says to read the list first (`src/mcp.ts`).
+  sandbox's `list()` each turn; the per-verb catalogue leaves the default system prompt (its codemode
+  example and the website work's rules of the road stay); the MCP `run` tool's description says to
+  read the list first (`src/mcp.ts`).
 - **`itx.builtins` is not loaded code's word.** `Caller.app` is stamped by `ItxEntrypoint.get()`
   unless its props say `platform: true`, which only the SDK's first-party mint passes, from the
   Durable Object's own exports (`packages/iterate/src/next/sdk/index.ts`); under it the resolver
   refuses a `builtins` step and any `cd` that is not self-or-descendant on the INPUT expression,
   never on a rewrite; `provide`/`subscribe` throw `FORBIDDEN`; a raw `fetch()` resolves `itx.fetch`
   through the table before egress; `builtins` left `IterateContextApi`.
-- **Scripts run in a sandbox.** `runScript` is `itx.cd("./sandbox").builtins.run(code)` on the
-  agent facet's platform handle (`src/agent/durable-object.ts`); `create()` appends the sandbox's
-  bare row targeting the agent, keyed `itx@<agentPath>`; a jail replaces it with `null` and appends
-  its grants in the same batch. A bare reply is `agents/web-message-sent` with its
-  `llmRequestOffset`, directly; `plainResponse` and the `chat` library root are deleted.
+- **Scripts run in a sandbox.** The agent's creation saga (`src/agent/processor.ts`
+  `#assertSandbox`) appends `itx.run ⇒ itx.builtins.cd('<agent>/sandbox').builtins.run` on the
+  agent — the runner resolves `itx.run` through the table before executing — and the sandbox's bare
+  row targeting the agent, keyed `itx@<agentPath>`, the latter only while the sandbox has no bare
+  `itx` row; both are asserted again once per incarnation before the first model call. A jail
+  replaces that row with `null` and appends its grants beside it. A bare reply is
+  `agent/web-message-sent` with its `llmRequestOffset`, directly; `plainResponse` and the `chat`
+  library root are deleted.
 - **D, `cd` on the edge and in the built-ins: keep both.** The edge `cd` is a session's pure
   addressing; the built-in `cd` is the hop every rewrite onto another context takes, and the door
   loaded code's `cd` goes through.

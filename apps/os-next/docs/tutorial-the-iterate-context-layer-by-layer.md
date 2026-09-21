@@ -887,7 +887,7 @@ expect((await itx.invoke(`itx.append({ type: 'hello' })`))[0].offset).toBe(6);
 ```
 
 THE CORE REDUCE is the stream's own state, reduced inside every commit. One reduce-only processor
-(`src/stream/core-processor.ts`, slug `core`, contract 8.0.0) folds the context's control events
+(`src/stream/core-processor.ts`, slug `core`, contract 13.0.0) folds the context's control events
 into `{ projectId, path, createdAt, incarnation, paused, itxExpressionRewriteRules, subscriptions,
 secrets }` — the rule table of chapter 3 is one slice, the subscription rows of chapter 5 another.
 Runtime state IS reduced state, and its snapshot is a facet-shaped door:
@@ -1391,7 +1391,9 @@ the one prop `iterateContextName`. Two doors and nothing else:
 ```ts
 // iterate-context.ts — a loaded worker's WHOLE WORLD, abridged
 export class ItxEntrypoint extends WorkerEntrypoint<Env, { iterateContextName: string }> {
-  /** THE handoff: the genuine itx scope — the SAME `IterateContext` RpcTarget a capnweb client gets. */
+  /** THE handoff: the genuine itx scope — the same `IterateContext` class a capnweb client gets, under
+   *  `Caller.app`: the dotted lines are the same, but `itx.builtins` and a `cd` above this context are
+   *  refused, and `provide`/`subscribe` lend a live object only (a row is `itx.append`'s). */
   get(): IterateContext {
     return new IterateContext(
       this.env.ITERATE_CONTEXT,
@@ -1411,8 +1413,8 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, { iterateContextName: s
 }
 ```
 
-`await this.env.ITX.get()` is the real `IterateContext`; loaded code writes the same dotted lines a
-client does, and `waitForEvent`, `append`, `demo.timer.callLater(cb)` all work from inside
+`await this.env.ITX.get()` is the real `IterateContext`, marked as loaded code (`Caller.app`): the
+same dotted lines a client writes, minus the fixed point and any `cd` above its own context, and `waitForEvent`, `append`, `demo.timer.callLater(cb)` all work from inside
 (`e2e/stream.e2e.test.ts`, `e2e/rpc-stubs-values.e2e.test.ts`). The
 context it forwards to is a PROP of the stub, not a binding the loaded code could reach around.
 
@@ -1779,9 +1781,10 @@ principal: loaded code speaks for the project, never for a person, so an append 
 `itx.builtins` refused, `cd` down only, no `provide` and no `subscribe`. A text that is not one
 function expression fails at load, in the loader's words, and does not poison the isolate id.
 
-An agent's scripts run this way in `<agent>/sandbox`, a child the agent's `create()` births with
-one row, the bare row targeting the agent (`src/agent/durable-object.ts`: `runScript` is
-`itx.cd("./sandbox").builtins.run(code)` on the facet's platform handle). So a script sees the
+An agent's scripts run this way in `<agent>/sandbox`: the agent's creation saga (`src/agent/processor.ts`
+`#assertSandbox`) writes `itx.run ⇒ itx.builtins.cd('<agent>/sandbox').builtins.run` on the agent —
+the runner resolves `itx.run` through the table — and the sandbox's one row, the bare row targeting
+the agent, asserted again once per incarnation before the first model call. So a script sees the
 agent's tree — sandbox, agent, creator, root, one hop per row — and appends to the sandbox's own
 log. An owner who replaces that row with `null` and appends grants beside it, in one batch, has a
 jail: the scripts reach the granted rows and nothing else. The agent's prompt is that child's
