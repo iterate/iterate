@@ -9,6 +9,7 @@
     "./globals.css": "./src/styles/globals.css",
     "./styles.css": "./src/styles/globals.css",
     "./components/ai-elements/*": "./src/components/ai-elements/*.tsx",
+    "./components/context-view/*": "./src/components/context-view/*.tsx",
     "./components/events/agent-ui-reducer": "./src/components/events/agent-ui-reducer.ts",
     "./components/*": "./src/components/*.tsx",
     "./lib/*": "./src/lib/*.ts",
