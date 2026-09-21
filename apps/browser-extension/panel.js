@@ -149,10 +149,13 @@ const tabs = new Map();
 const grant = (tabId) =>
   tabs.get(tabId) ?? tabs.set(tabId, { attached: false, attaching: null }).get(tabId);
 
-/** Let every tab go: on sign-out, and when the panel moves to another project. */
+/** Let every tab go: on sign-out, and when the panel moves to another project. An attach still in
+ *  flight settles first, so it cannot leave the debugger on a tab nobody tracks any more. */
 async function releaseTabs() {
-  for (const [tabId, known] of tabs)
+  for (const [tabId, known] of tabs) {
+    await known.attaching?.catch(() => undefined);
     if (known.attached) await chrome.debugger.detach({ tabId }).catch(console.error);
+  }
   tabs.clear();
 }
 /** Where the browser's facts go: the connected root context's append, set by `connect`. */
