@@ -443,6 +443,28 @@ test("a set refused by a paused stream on the secret's path leaves no value behi
   expect(await res.text()).toContain('no stored project secret for getSecret("/secrets/ghost")');
 });
 
+test("loaded code may write a secret: a script run in a child context (through its creator's link) sets, lists and deletes one — the platform's hops to the secret's context are its own, never the script's spelling; the fact speaks for the project (no principal)", async () => {
+  const itx = openItx(freshCtx("secrets-script"));
+  const child = itx.cd("/agents/writer");
+  await child.provide("itx", "itx.builtins.cd('/')");
+  const urls = ["https://api.example.com"];
+  expect(
+    await child.run(
+      `async (itx) => itx.secrets.set("/secrets/fromscript", "v", { urls: ${JSON.stringify(urls)} })`,
+    ),
+  ).toEqual({ path: "/secrets/fromscript" });
+  const row = { path: "/secrets/fromscript", urls, createdAt: expect.any(String) };
+  expect(await child.run("async (itx) => itx.secrets.list()")).toEqual([row]);
+  expect(await itx.secrets.list()).toEqual([row]);
+  const set = (await readAll(itx.cd("/secrets/fromscript"))).find((e) => e.type === SET);
+  expect(set?.payload).toEqual({ path: "/secrets/fromscript", urls });
+  expect(set?.source?.principal).toBeUndefined(); // loaded code speaks for the project
+  expect(await child.run('async (itx) => itx.secrets.delete("/secrets/fromscript")')).toEqual({
+    path: "/secrets/fromscript",
+  });
+  expect(await itx.secrets.list()).toEqual([]);
+});
+
 test("one request, one secret: a request naming two secrets is refused at egress, before either secret's context is dialled", async () => {
   const itx = openItx(freshCtx("secrets-two"));
   const urls = ["https://egress.invalid"];

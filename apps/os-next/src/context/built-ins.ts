@@ -462,6 +462,15 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   // catalog, in the root's log). Acquire the root context PER CALL: a stub cached across calls
   // stays broken after a root DO failure (Cloudflare's DO error-handling requires re-acquiring). And
   // forward `deps.caller()` so the durable change event keeps the child call's authenticated principal.
+  /** THE PLATFORM'S OWN HOP: the caller rides — principal and grant (the facts stay attributed),
+   *  path and origin — but never its `app`: the app wall (itx-expression-rewriting.ts `#admit`) is
+   *  for what LOADED CODE spells on its input, and the expressions below are the platform's, fixed
+   *  here, their arguments validated here. A script's `itx.secrets.set(…)` reaches this built-in
+   *  through its creator's link and is answered exactly as a session's would be. */
+  const hopCaller = (): Caller => {
+    const { app: _loadedCode, ...caller } = deps.caller();
+    return caller;
+  };
   const onSecretContext = <T>(
     secretPath: string,
     call: ItxExpressionStep,
@@ -474,7 +483,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         // arguments), so its answer has `here`'s type; `invoke` is untyped across the DO hop.
         (deps
           .context(contextPath)
-          .invoke(["itx", "builtins", "secrets", call], [], deps.caller()) as Promise<T>);
+          .invoke(["itx", "builtins", "secrets", call], [], hopCaller()) as Promise<T>);
   };
   /** The owner root's facet — where the catalog is folded from the certificates cross-posted there
    *  (src/project/contract.ts; src/account/contract.ts and src/organization/contract.ts for the
@@ -491,22 +500,22 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   /** The `secret` processor row on the secret's context — the facet hosted with a row, so the
    *  engine pushes it every fact (idempotent at the door: a second enable of the same row is a no-op). */
   const enableSecretRow = (secret: ReachableContext) =>
-    secret.invoke(["itx", "builtins", "processors", ["enable", "secret"]], [], deps.caller());
+    secret.invoke(["itx", "builtins", "processors", ["enable", "secret"]], [], hopCaller());
   /** The secret's facet on its own context — `write`, `clear`, `beginOAuth`, `completeOAuth`
    *  (secret/durable-object.ts) — reached through the facet door; hosted on its first call. */
   const secretFacet = (secret: ReachableContext, call: ItxExpressionStep) =>
-    secret.invoke(["itx", "facets", ["get", "secret"], call], [], deps.caller());
+    secret.invoke(["itx", "facets", ["get", "secret"], call], [], hopCaller());
   /** The fact of a write or a deletion: on the secret's own path (`secret`), attributed to the
    *  caller, then cross-posted to the owner's root for the catalog. */
   const crossPostSecretFact = (event: StreamEventInput) =>
-    deps.context(owner.rootPath).invoke(["itx", "builtins", ["append", event]], [], deps.caller());
+    deps.context(owner.rootPath).invoke(["itx", "builtins", ["append", event]], [], hopCaller());
   const secretFact = async (secret: ReachableContext, event: StreamEventInput): Promise<void> => {
     await secret.append(stampCaller(event, deps.caller()));
     await crossPostSecretFact(event);
   };
   /** The `secret` processor rows on the secret's context — one while the secret lives. */
   const secretRows = (secret: ReachableContext) =>
-    secret.invoke(["itx", "builtins", "processors", ["list"]], [], deps.caller()) as Promise<
+    secret.invoke(["itx", "builtins", "processors", ["list"]], [], hopCaller()) as Promise<
       { name: string }[]
     >;
 
@@ -645,26 +654,22 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         });
       },
       // The facet FIRST here (the exchange most often fails on the provider's side — a junk code, a
-      // stale attempt — and must leave no fact), then the facts. A refused append undoes the write
-      // THIS call made (`exchanged`), so what `list()` says and what egress finds never disagree; a
-      // replayed callback (the facet answers it idempotently) undoes nothing — the log may already
-      // say so, and a failed re-append must not erase live material — so a retried callback after
-      // a lost fact catches the log up.
+      // stale attempt — and must leave no fact), then the facts. A refused fact (a paused stream, a
+      // lost cross-post) is the OAuth exception to "fail loud, never a live secret without its
+      // row": the tokens stay — the person's consent cannot be re-obtained by a retry, and the code
+      // was spent — the callback answers the error, and its replay (a refreshed tab; the facet
+      // completes the attempt it completed idempotently, no second exchange) lands the facts and
+      // catches the log up. Until then `list()` does not show the secret while egress already honours it.
       completeOAuth: (secretPath, input) =>
         onSecretContext(secretPath, ["completeOAuth", secretPath, input], async (secret) => {
-          const { urls, exchanged } = (await secretFacet(secret, ["completeOAuth", input])) as {
+          const { urls } = (await secretFacet(secret, ["completeOAuth", input])) as {
             urls: string[];
             exchanged: boolean;
           };
-          try {
-            await secretFact(secret, {
-              type: "events.iterate.com/secret/set",
-              payload: { path: secretPath, urls, refresh: "oauth-refresh-token" },
-            });
-          } catch (error) {
-            if (exchanged) await secretFacet(secret, ["clear"]);
-            throw error;
-          }
+          await secretFact(secret, {
+            type: "events.iterate.com/secret/set",
+            payload: { path: secretPath, urls, refresh: "oauth-refresh-token" },
+          });
           return { path: secretPath };
         }),
       // The facet FIRST here, the reverse of `set`: each verb runs its steps in the order whose
@@ -683,7 +688,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           const { state } = (await secret.invoke(
             ["itx", "facets", ["get", "secret"], ["snapshot"]],
             [],
-            deps.caller(),
+            hopCaller(),
           )) as { state: SecretState };
           if (!state.material && !state.deletion)
             throw new Error(`secret ${secretPath}: never set — nothing to delete`);
@@ -700,7 +705,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             await secret.invoke(
               ["itx", "builtins", "processors", ["disable", "secret"]],
               [],
-              deps.caller(),
+              hopCaller(),
             );
           return { path: secretPath };
         }),
@@ -709,11 +714,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       list: async () => {
         const { state } = (await deps
           .context(owner.rootPath)
-          .invoke(
-            ["itx", "facets", ["get", ownerRootFacet()], ["snapshot"]],
-            [],
-            deps.caller(),
-          )) as { state: { secrets: Record<string, Omit<SecretCatalogEntry, "path">> } };
+          .invoke(["itx", "facets", ["get", ownerRootFacet()], ["snapshot"]], [], hopCaller())) as {
+          state: { secrets: Record<string, Omit<SecretCatalogEntry, "path">> };
+        };
         return Object.entries(state.secrets).map(([path, row]) => ({ path, ...row }));
       },
     },

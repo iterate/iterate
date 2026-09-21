@@ -259,9 +259,17 @@ test("beginOAuth, confidential client, in a directory-registered project: author
   const forged = new URL(back);
   forged.searchParams.set("state", "not-signed-by-us");
   expect((await fetch(forged)).status).toBe(400);
-  // the member's callback: the exchange happens inside the secret's Durable Object, and the catalog
-  // learns of the secret now
+  // the member's callback: the exchange happens inside the secret's facet — and when the fact that
+  // follows it is REFUSED (the secret's stream paused), the tokens stay: the code is spent and the
+  // consent cannot be re-obtained by a retry, so the callback answers the error and its replay
+  // lands the facts (the facet completes the attempt it completed idempotently — no second exchange)
   const member = { headers: { authorization: `Bearer ${adminCredentials().secret}` } };
+  const secret = itx.cd("/secrets/petshop");
+  await secret.append({ type: "events.iterate.com/stream/paused" });
+  const refused = await fetch(back, member);
+  expect(refused.status, await refused.text()).toBe(400);
+  expect(await itx.secrets.list()).toEqual([]); // no fact yet — the tokens are in the facet
+  await secret.append({ type: "events.iterate.com/stream/resumed" });
   const done = await fetch(back, member);
   const said = await done.text();
   expect(done.status, said).toBe(200);
@@ -273,8 +281,8 @@ test("beginOAuth, confidential client, in a directory-registered project: author
     createdAt: expect.any(String),
   };
   expect(await itx.secrets.list()).toEqual([row]);
-  // the exchange's `secret/set` is on the secret's path — the platform's own write, no principal
-  const secret = itx.cd("/secrets/petshop");
+  // the exchange's `secret/set` is on the secret's path — the platform's own write, no principal —
+  // ONCE: the refused callback landed nothing, the replay landed it
   const sets = (await readAll(secret)).filter(
     (e: any) => e.type === "events.iterate.com/secret/set",
   );
