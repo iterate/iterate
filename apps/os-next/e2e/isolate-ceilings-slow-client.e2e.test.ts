@@ -24,7 +24,9 @@ deployedOnly(
     });
     const producer = openItx(ctx);
     let reset: any;
-    for (let i = 0; i < 300; i++) {
+    // 160 × 1 MiB: past the 128 MiB isolate (the born-red version reset at ~125 MiB retained) with a
+    // quarter's margin — the row is pure upload time (~180 ms per MiB), so the count IS the row.
+    for (let i = 0; i < 160; i++) {
       const r = await settle(
         append(producer, { type: "chunk", ephemeral: true, payload: { i, blob: blob(1 * MiB) } }),
       );
