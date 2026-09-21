@@ -2,8 +2,9 @@
 // RPC_STUB_OFFLINE and `subscription-delivery.deliver` / `.cursor` for a delivery that threw; these tests assert
 // those lines do NOT appear — a property no client-side observation can stand in for (a facet's
 // cold catch-up would heal a dropped push before a snapshot could tell). Logs are worker-global, so
-// this file boots its OWN worker (support/log-harness.ts) and runs its tests sequentially; every
-// other e2e file speaks to the shared worker through support/client.ts.
+// this file boots its OWN worker (support/log-harness.ts) and every row is `test.sequential`: a
+// sibling running at the same time would write into the very log these rows count. Every other e2e
+// file speaks to the shared worker through support/client.ts, its rows concurrent.
 
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
@@ -48,7 +49,7 @@ const durableCountsByType = (events: any[]): Record<string, number> => {
   return counts;
 };
 
-test("enabling a processor on a quiet stream is clean — zero delivery errors, its first delivered batch is its own enablement commit", async () => {
+test.sequential("enabling a processor on a quiet stream is clean — zero delivery errors, its first delivered batch is its own enablement commit", async () => {
   // Identity is `ctx.props`, minted at materialization — there is no configure window in which the
   // enablement commit's drive could reach a facet that does not know itself yet.
   const itx = await worker.itx(freshCtx("quietenable"));
@@ -66,7 +67,7 @@ test("enabling a processor on a quiet stream is clean — zero delivery errors, 
   expect(deliveryErrors() - before).toBe(0);
 });
 
-test("disable mid-drive: appends survive, no ongoing error storm, re-enable rebuilds an exact reduce", async () => {
+test.sequential("disable mid-drive: appends survive, no ongoing error storm, re-enable rebuilds an exact reduce", async () => {
   const itx = await worker.itx(freshCtx("middrive"));
   await enableFixtureProcessor(itx, "tally");
   await append(itx, { type: "warm" }); // one delivery so the facet exists
@@ -125,7 +126,7 @@ function stallableWebSocket(url: string): StallableWebSocket {
   return new WsWebSocket(url) as StallableWebSocket;
 }
 
-test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT closed by local workerd — the DO drops pushes past its in-flight budget instead, the stub stays online, and a real socket close drops its stub instantly and removes the row", async () => {
+test.sequential("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT closed by local workerd — the DO drops pushes past its in-flight budget instead, the stub stays online, and a real socket close drops its stub instantly and removes the row", async () => {
   // The loop's design comment (subscription-delivery.ts): a push is fire-and-forget; the socket
   // buffer is the only queue. Ran to ground against local workerd: 60.0MiB of payload flooded into
   // a TCP-paused subscriber produces NO close and NO RPC_STUB_OFFLINE — workerd buffers the outgoing
