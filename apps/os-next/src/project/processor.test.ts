@@ -28,6 +28,10 @@ const agentBorn = (path: string) => ({
   type: "events.iterate.com/agent/created",
   payload: { path },
 });
+const committed = (path: string, commitOid: string) => ({
+  type: "events.iterate.com/repo/commit-completed",
+  payload: { path, commitOid, message: "m", changedPaths: ["worker.ts"] },
+});
 const secretSet = (path: string, urls: string[], refresh?: string) => ({
   type: "events.iterate.com/secret/set",
   payload: { path, urls, refresh },
@@ -45,6 +49,7 @@ const empty: ProjectState = {
   agents: {},
   mcpConnections: {},
   secrets: {},
+  configRepoTip: null,
 };
 
 describe("ProjectProcessor — the reduce", () => {
@@ -75,6 +80,15 @@ describe("ProjectProcessor — the reduce", () => {
       state: { ...empty, creation: { status: "created", offset: 2 } },
     },
     {
+      name: "the config repo's commits move the tip the apex follows — the latest one, by its oid and the fact's offset; another repo's commit is ignored",
+      events: [
+        committed("/repos/config", "aaa"),
+        committed("/repos/other", "bbb"),
+        committed("/repos/config", "ccc"),
+      ],
+      state: { ...empty, configRepoTip: { commitOid: "ccc", offset: 3 } },
+    },
+    {
       name: "a repo's, a workspace's and an agent's certificates each add one entry, by path, stamped with the event's time — the project's own creation untouched",
       events: [
         requested,
@@ -90,6 +104,7 @@ describe("ProjectProcessor — the reduce", () => {
         agents: { "/agents/support": { createdAt: expect.any(String) } },
         mcpConnections: {},
         secrets: {},
+        configRepoTip: null,
       },
     },
     {
@@ -182,4 +197,59 @@ describe("ProjectProcessor — the reduce", () => {
   ];
   for (const { name, events, state } of rows)
     test(name, () => expect(reduceProcessor(processor(), events)).toEqual(state));
+});
+
+// THE APEX FOLLOWS THE CONFIG REPO — the effect, driven by hand: `processEvent` with the kernel's
+// arguments faked (an `append` that records and can be held open; `runInBackground` runs the work at
+// once). Pinned: a tip that lands WHILE an append is in flight is published by the same attempt once
+// the append settles — no further delivery needed (an idempotent hit lands no fresh event to deliver).
+describe("ProjectProcessor — the apex follows the config repo", () => {
+  const tip = (commitOid: string, offset: number) => ({ commitOid, offset });
+  const deliver = (
+    processor: ProjectProcessor,
+    state: ProjectState,
+    append: (...events: unknown[]) => Promise<unknown>,
+  ) =>
+    processor.processEvent({
+      event: null,
+      state,
+      previousState: state,
+      delivery: { caughtUp: true },
+      append: append as never,
+      appendTo: (async () => []) as never,
+      blockProcessorWhile: () => {},
+      runInBackground: (work) => void work(),
+    });
+
+  test("each tip is published once, keyed by its commit; a tip that lands during an in-flight append is published when it settles", async () => {
+    const processor = new ProjectProcessor(() => Promise.reject(new Error("unused")));
+    const appended: { idempotencyKey?: string; payload?: { target?: unknown } }[] = [];
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let calls = 0;
+    const append = async (...events: unknown[]) => {
+      calls += 1;
+      if (calls === 1) await held; // the first append stays in flight
+      appended.push(...(events as typeof appended));
+      return [];
+    };
+    deliver(processor, { ...empty, configRepoTip: tip("aaa", 5) }, append);
+    // A second commit lands while the first publication is in flight: dropped by the guard, kept as the newest tip.
+    deliver(processor, { ...empty, configRepoTip: tip("bbb", 7) }, append);
+    expect(appended).toEqual([]);
+    release();
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(appended.map((e) => e.idempotencyKey)).toEqual([
+      "project/ingress-configured:aaa",
+      "project/ingress-configured:bbb",
+    ]);
+    // The target names the commit twice: the source read at it, the cache keyed by it.
+    expect(JSON.stringify(appended[1]!.payload!.target)).toContain('"commitOid":"bbb"');
+    expect(JSON.stringify(appended[1]!.payload!.target)).toContain('"cacheKey":"bbb"');
+    // Delivered again over the same tip: nothing more.
+    deliver(processor, { ...empty, configRepoTip: tip("bbb", 7) }, append);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(appended).toHaveLength(2);
+  });
 });

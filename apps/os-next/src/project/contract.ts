@@ -19,10 +19,10 @@ import { SecretContract } from "../secret/contract.ts";
 export const ProjectContract = defineProcessorContract({
   slug: "project",
   // 2: the catalog grew `agents`; 3: `mcpConnections`; 4: the state grew `creation`, and the certificates
-  // it folds were renamed (`repo/created`, `agent/created`); 5: the catalog grew `secrets`. A checkpoint
-  // reduced under an older version is reused as-is by the engine, so the bump is what re-reduces
-  // every existing root log.
-  version: "5",
+  // it folds were renamed (`repo/created`, `agent/created`); 5: the catalog grew `secrets`; 6: the state
+  // grew `configRepoTip` — the apex follows the config repo's commits. A checkpoint reduced under an
+  // older version is reused as-is by the engine, so the bump is what re-reduces every existing root log.
+  version: "6",
   description:
     "The project: where its own creation stands, and the catalog of every repo, workspace, agent and secret born under it (from the certificates cross-posted to /) and every MCP connection born under it.",
   /** THE REDUCED STATE — what the reduce keeps between events: where the project's OWN creation
@@ -61,6 +61,13 @@ export const ProjectContract = defineProcessorContract({
         }),
       )
       .default({}),
+    /** The config repo's tip as its commits reach `/`: the latest `repo/commit-completed` from
+     *  `/repos/config` — the commit the apex follows — by its oid (what the ingress target names) and
+     *  the OFFSET of the fact (the publication the processor owes for it). Null until the seed. */
+    configRepoTip: z
+      .object({ commitOid: z.string().min(1), offset: z.number().int().positive() })
+      .nullable()
+      .default(null),
   }),
   events: {
     "events.iterate.com/project/create-requested": {
@@ -101,11 +108,13 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/agent/deleted",
     "events.iterate.com/secret/set",
     "events.iterate.com/secret/deleted",
+    "events.iterate.com/repo/commit-completed",
   ],
   emits: [
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
-    // the core's: the saga points the project's apex at the seeded config repo's commit
+    // the core's: the saga points the project's apex at the seeded config repo's commit, and the
+    // processor re-points it at every later commit of the config repo (a commit IS its publication)
     "events.iterate.com/project/ingress-configured",
   ],
 });

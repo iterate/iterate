@@ -67,8 +67,10 @@ export const RepoContract = defineProcessorContract({
       payloadSchema: z.object({ path: z.string().min(1) }),
     },
     "events.iterate.com/repo/commit-completed": {
-      description: "A commit landed on the repo's main through the repo facet.",
+      description:
+        "A commit landed on the repo's main through the repo facet: on the repo's path, and cross-posted to / — hence it names the path — where the project processor follows the config repo's commits with the apex (a commit to /repos/config IS its publication).",
       payloadSchema: z.object({
+        path: z.string().min(1),
         commitOid: z.string().min(1),
         message: z.string(),
         changedPaths: z.array(z.string()),

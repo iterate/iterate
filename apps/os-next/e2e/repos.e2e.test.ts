@@ -9,7 +9,7 @@
 // certificate into the catalog `itx.repos.list()` reads — or `repo/create-failed` (the error the
 // Artifacts proxy threw), which `create` throws; a later `create` is a new attempt, and one on a
 // created repo answers at once, appending nothing. Every other method refuses until the certificate.
-// Every commit that lands through the facet is a `repo/commit-completed` fact on its path. The facet
+// Every commit that lands through the facet is a `repo/commit-completed` fact on its path, cross-posted to `/`. The facet
 // is the ONLY thing that speaks git (git protocol v2 over HTTP, src/repo/git-wire.ts): `itx.cfArtifacts`
 // — the binding proxy, by the same path — hands it a token and the remote URL; the tip's snapshot is
 // memoized under its oid — one `ls-refs` per read, the pack only when the tip moved. Locally the
@@ -150,11 +150,19 @@ localOnly(
     });
     expect(artifacts.remoteFiles("/repos/config")).toEqual({ "worker.ts": "export default 1;\n" }); // the remote agrees
     expect(artifacts.snapshots).toBe(0);
+    const fact = {
+      path: "/repos/config",
+      commitOid: first.commitOid,
+      message: "write worker.ts",
+      changedPaths: ["worker.ts"],
+    };
     const committed = (await readAll(itx.cd("/repos/config"))).filter((e) => e.type === COMMITTED);
-    expect(committed.map((e) => e.payload)).toEqual([
-      { commitOid: first.commitOid, message: "write worker.ts", changedPaths: ["worker.ts"] },
+    expect(committed.map((e) => e.payload)).toEqual([fact]);
+    // …and cross-posted to `/`, where the project processor follows the config repo's commits with
+    // the apex (website-publication.e2e.test.ts is that proof).
+    expect((await readAll(itx)).filter((e) => e.type === COMMITTED).map((e) => e.payload)).toEqual([
+      fact,
     ]);
-
     // The first read after a commit fetches the tip; reads at the same tip fetch nothing more (an
     // ls-refs each, which is not a fetch).
     expect(await repo.readFile("worker.ts")).toBe("export default 1;\n");
@@ -222,6 +230,69 @@ localOnly(
     expect(
       (await readAll(itx.cd("/repos/config"))).filter((e) => e.type === COMMITTED),
     ).toHaveLength(2);
+  },
+);
+
+// LOCAL ONLY: the fake remote listens on this machine's loopback (see localOnly).
+localOnly(
+  "a commit whose facts were lost heals on the next commit: the push landed but the cross-post to / was refused (the root paused) and the commit threw; the next commit — the same one again, or a different one — settles the owed fact first, word for word, once, keyed by the commit, so the apex still follows",
+  async () => {
+    const itx = openItx(freshCtx("repo"));
+    const artifacts = await FakeArtifacts.start();
+    await itx.cd("/repos/config").provide("itx.cfArtifacts", artifacts);
+    await itx.repos.create("/repos/config");
+    const repo = itx.repos.get("/repos/config");
+    const first = await repo.writeFile("worker.ts", "export default 1;\n");
+    const facts = async (ctx: any) =>
+      (await readAll(ctx)).filter((e) => e.type === COMMITTED).map((e) => e.payload);
+    const fact = {
+      path: "/repos/config",
+      commitOid: first.commitOid,
+      message: "write worker.ts",
+      changedPaths: ["worker.ts"],
+    };
+    expect(await facts(itx)).toEqual([fact]);
+
+    await itx.append({ type: "events.iterate.com/stream/paused" });
+    await expect(repo.writeFile("worker.ts", "export default 2;\n")).rejects.toThrow();
+    expect(artifacts.remoteFiles("/repos/config")).toEqual({ "worker.ts": "export default 2;\n" }); // the push landed
+    expect(await facts(itx)).toEqual([fact]); // no fact for it anywhere yet
+    await itx.append({ type: "events.iterate.com/stream/resumed" });
+
+    const healed = await repo.writeFile("worker.ts", "export default 2;\n");
+    expect(healed).toEqual({ commitOid: artifacts.remoteTip("/repos/config"), changedPaths: [] });
+    const healedFact = {
+      path: "/repos/config",
+      commitOid: healed.commitOid,
+      message: "write worker.ts",
+      changedPaths: ["worker.ts"], // the fact the push owed, not the retry's empty diff
+    };
+    expect(await facts(itx)).toEqual([fact, healedFact]);
+    expect(await facts(itx.cd("/repos/config"))).toEqual([fact, healedFact]);
+    // …and once only: the same retry again lands nothing (keyed by the commit).
+    await repo.writeFile("worker.ts", "export default 2;\n");
+    expect(await facts(itx)).toHaveLength(2);
+
+    // A DIFFERENT commit after a lost fact settles the debt first, then lands its own: both facts,
+    // in order — the debt is never overwritten by the commit that follows it.
+    await itx.append({ type: "events.iterate.com/stream/paused" });
+    await expect(repo.writeFile("worker.ts", "export default 3;\n")).rejects.toThrow();
+    const lost = artifacts.remoteTip("/repos/config");
+    await itx.append({ type: "events.iterate.com/stream/resumed" });
+    const fourth = await repo.writeFile("worker.ts", "export default 4;\n");
+    expect(fourth.changedPaths).toEqual(["worker.ts"]);
+    expect((await facts(itx)).map((f) => f.commitOid)).toEqual([
+      first.commitOid,
+      healed.commitOid,
+      lost,
+      fourth.commitOid,
+    ]);
+    expect((await facts(itx.cd("/repos/config"))).map((f) => f.commitOid)).toEqual([
+      first.commitOid,
+      healed.commitOid,
+      lost,
+      fourth.commitOid,
+    ]);
   },
 );
 
