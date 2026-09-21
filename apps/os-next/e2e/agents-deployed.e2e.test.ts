@@ -17,8 +17,8 @@ deployedOnly(
       consumes: ["events.iterate.com/agent/llm-response-chunks"],
       target: windows.fn,
     });
+    await itx.agents.create("/agents/support");
     const agent = itx.agents.get("/agents/support");
-    await agent.create();
     await agent.message(
       "Reply with the single word: pong, then one sentence about what a pong is. No code block.",
     );
@@ -61,8 +61,8 @@ deployedOnly(
   "DEPLOYED: the default model SEES an attached image — a red square is called red",
   async () => {
     const itx = openItx(freshCtx("agent-vision-real"));
+    await itx.agents.create("/agents/support");
     const agent = itx.agents.get("/agents/support");
-    await agent.create();
     await agent.message({
       message: "What colour is this image? Answer with one word, no code block.",
       files: [{ contentType: "image/png", filename: "square.png", data: RED_PNG_BASE64 }],
@@ -85,8 +85,8 @@ deployedOnly(
   async () => {
     const itx = openItx(freshCtx("agent-vision-cf"));
     const support = itx.cd("/agents/support");
+    await itx.agents.create("/agents/support");
     const agent = itx.agents.get("/agents/support");
-    await agent.create();
     await onWorkersAi(support);
     await agent.message({
       message: "What colour is this image? Answer with one word, no code block.",

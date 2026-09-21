@@ -76,7 +76,7 @@ const AgentContract = defineProcessorContract({
         "The agent's birth certificate (src/agent/contract.ts): cross-posted to / first, landed here last.",
       payloadSchema: z.object({ path: z.string().min(1) }),
     },
-    "events.iterate.com/agents/context-added": {
+    "events.iterate.com/agent/context-added": {
       description: "Additional messages supplied to the conversation.",
       payloadSchema: ContextMessage,
     },
@@ -112,13 +112,13 @@ const AgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/call-started",
     /* Its own certificate: consumed so the fold knows it is born. */
     "events.iterate.com/agent/created",
-    "events.iterate.com/agents/context-added",
+    "events.iterate.com/agent/context-added",
     "events.iterate.com/voice-agent/delegation-requested",
     /* Its own answer: consumed so the pending row it settles leaves the fold. */
     "events.iterate.com/voice-agent/commentary",
   ],
   emits: [
-    "events.iterate.com/agents/context-added",
+    "events.iterate.com/agent/context-added",
     "events.iterate.com/agent/created",
     "events.iterate.com/voice-agent/commentary",
     "events.iterate.com/voice-agent/thinking",
@@ -158,7 +158,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, ConsumedEvent<Ag
       case "events.iterate.com/agent/created":
         return state.created ? state : { ...state, created: true };
 
-      case "events.iterate.com/agents/context-added":
+      case "events.iterate.com/agent/context-added":
         return { ...state, context: [...state.context, event.payload] };
 
       case "events.iterate.com/voice-agent/delegation-requested": {
@@ -234,7 +234,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, ConsumedEvent<Ag
           remember: (messages) =>
             append(
               ...messages.map((payload) => ({
-                type: "events.iterate.com/agents/context-added",
+                type: "events.iterate.com/agent/context-added",
                 payload,
               })),
             ),

@@ -230,7 +230,7 @@ export function buildStartApp(app: StartApp, env: string): Promise<void> {
  *  of the built config (dist/server/wrangler.json, the `preview` env flattened) — the shape of
  *  cloudflare-os's `buildPreviewConfigs`. An app on top of the platform is an OAuth client and
  *  nothing else: no secrets, no data of its own, one Durable Object class for the browser session,
- *  and ONE var — the issuer, which for a preview is the same PR's os-next preview. The top level is
+ *  and its vars with the issuer swapped for the same PR's os-next preview. The top level is
  *  the parent worker (what `wrangler preview` branches from; deployed from this same config the
  *  first time it is missing) with the class as a legacy `migrations` entry, because the pkg.pr.new
  *  wrangler build that provisions previews predates `exports`; the `previews` block is the one
@@ -255,7 +255,9 @@ export function startAppPreviewConfig(
     previews: {
       observability: config.observability,
       durable_objects: config.durable_objects,
-      vars: { ITERATE_ORIGIN: input.issuer },
+      // Every var the built worker carries (ITERATE_DENY_ZONES among them), the issuer swapped for this
+      // PR's os-next preview.
+      vars: { ...config.vars, ITERATE_ORIGIN: input.issuer },
     },
   };
 }

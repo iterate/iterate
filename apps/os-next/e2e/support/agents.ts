@@ -24,7 +24,7 @@ export class ScriptedAi extends RpcTarget {
 
 export const short = (log: { type: string }[]) =>
   log
-    .filter((e) => /agent|context-added|context\/run/.test(e.type) && !/subscription/.test(e.type))
+    .filter((e) => /^events\.iterate\.com\/(agent\/|context\/run-)/.test(e.type))
     .map((e) => e.type.replace("events.iterate.com/", ""));
 /** The default model is OpenAI's astra; a local story pins Workers AI so the fake `itx.ai` answers. */
 export const WORKERS_AI_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
@@ -39,7 +39,7 @@ export const onWorkersAi = (
 
 export const assistantWords = (log: { type: string; payload?: unknown }[]) =>
   log
-    .filter((e) => e.type === "events.iterate.com/agents/context-added")
+    .filter((e) => e.type === "events.iterate.com/agent/context-added")
     .map((e) => e.payload as { role: string; content: string })
     .filter((p) => p.role === "assistant")
     .map((p) => p.content);

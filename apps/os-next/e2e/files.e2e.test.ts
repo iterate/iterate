@@ -8,9 +8,9 @@
 import { expect, test } from "vitest";
 import { freshCtx, openItx, rejection } from "./support/client.ts";
 import {
-  fetchProjectHost,
+  fetchProjectUrl,
   freshDnsSafeProjectSlug,
-  onProjectHost,
+  projectUrl,
   registerProject,
 } from "./support/project-host.ts";
 
@@ -113,74 +113,63 @@ test("a script reaches the files too — put from inside a run, read from outsid
   expect(textOf(await itx.files.get("/from-script.txt").bytes())).toBe("ran");
 });
 
-/** The host and path+query of a signed URL, as fetchProjectHost takes them. */
-const hostAndPath = (url: string): [string, string] => {
-  const u = new URL(url);
-  return [u.host, `${u.pathname}${u.search}`];
-};
+test("a signed URL downloads the file from the project host — content type, etag, Range — and a signed PUT uploads one; a bad, expired or wrong-method token is refused", async () => {
+  const slug = freshDnsSafeProjectSlug("files-url");
+  const itx = openItx(await registerProject(slug));
+  await itx.files
+    .get("/docs/readme.md")
+    .put({ contentType: "text/markdown", data: bytesOf("# hello world") });
 
-onProjectHost(
-  "a signed URL downloads the file from the project host — content type, etag, Range — and a signed PUT uploads one; a bad, expired or wrong-method token is refused",
-  async () => {
-    const slug = freshDnsSafeProjectSlug("files-url");
-    const itx = openItx(await registerProject(slug));
-    await itx.files
-      .get("/docs/readme.md")
-      .put({ contentType: "text/markdown", data: bytesOf("# hello world") });
+  const download = await itx.files.get("/docs/readme.md").url();
+  // the `files` app's address for that path under the worker's routing, plus the token
+  const signed = new URL(download.url);
+  const address = projectUrl({ project: slug, app: "files", path: "/docs/readme.md" });
+  expect(`${signed.origin}${signed.pathname}`).toBe(`${address.origin}${address.pathname}`);
+  expect(signed.searchParams.get("token")).toBeTruthy();
+  expect(Date.parse(download.expiresAt)).toBeGreaterThan(Date.now() + 6 * 24 * 3600 * 1000);
+  const got = await fetchProjectUrl(download.url);
+  expect(got.status).toBe(200);
+  expect(got.text).toBe("# hello world");
+  expect(got.headers["content-type"]).toBe("text/markdown");
+  expect(got.headers["etag"]).toMatch(/^".+"$/);
+  expect(got.headers["accept-ranges"]).toBe("bytes");
+  const ranged = await fetchProjectUrl(download.url, { range: "bytes=2-6" });
+  expect(ranged.status).toBe(206);
+  expect(ranged.text).toBe("hello");
+  expect(ranged.headers["content-range"]).toBe("bytes 2-6/13");
+  expect((await fetchProjectUrl(download.url, {}, { method: "HEAD" })).status).toBe(200);
 
-    const download = await itx.files.get("/docs/readme.md").url();
-    expect(download.url).toMatch(
-      new RegExp(`^https?://files--${slug}\\.[^/]+/docs/readme\\.md\\?token=`),
-    );
-    expect(Date.parse(download.expiresAt)).toBeGreaterThan(Date.now() + 6 * 24 * 3600 * 1000);
-    const [host, path] = hostAndPath(download.url);
-    const got = await fetchProjectHost(host, path);
-    expect(got.status).toBe(200);
-    expect(got.text).toBe("# hello world");
-    expect(got.headers["content-type"]).toBe("text/markdown");
-    expect(got.headers["etag"]).toMatch(/^".+"$/);
-    expect(got.headers["accept-ranges"]).toBe("bytes");
-    const ranged = await fetchProjectHost(host, path, { range: "bytes=2-6" });
-    expect(ranged.status).toBe(206);
-    expect(ranged.text).toBe("hello");
-    expect(ranged.headers["content-range"]).toBe("bytes 2-6/13");
-    expect((await fetchProjectHost(host, path, {}, { method: "HEAD" })).status).toBe(200);
+  // An upload: the signed PUT stores the body under the path with the request's content type.
+  const upload = await itx.files
+    .get("/uploads/note.txt")
+    .url({ method: "PUT", expiresInSeconds: 60 });
+  const put = await fetchProjectUrl(
+    upload.url,
+    { "content-type": "text/plain" },
+    { method: "PUT", body: "uploaded" },
+  );
+  expect(put.status).toBe(200);
+  expect(JSON.parse(put.text)).toEqual({
+    path: "/uploads/note.txt",
+    contentType: "text/plain",
+    size: 8,
+  });
+  expect(textOf(await itx.files.get("/uploads/note.txt").bytes())).toBe("uploaded");
 
-    // An upload: the signed PUT stores the body under the path with the request's content type.
-    const upload = await itx.files
-      .get("/uploads/note.txt")
-      .url({ method: "PUT", expiresInSeconds: 60 });
-    const [uhost, upath] = hostAndPath(upload.url);
-    const put = await fetchProjectHost(
-      uhost,
-      upath,
-      { "content-type": "text/plain" },
-      { method: "PUT", body: "uploaded" },
-    );
-    expect(put.status).toBe(200);
-    expect(JSON.parse(put.text)).toEqual({
-      path: "/uploads/note.txt",
-      contentType: "text/plain",
-      size: 8,
-    });
-    expect(textOf(await itx.files.get("/uploads/note.txt").bytes())).toBe("uploaded");
+  // A TTL that is not a whole number still mints a URL that works (the claim's exp is floored).
+  const fractional = await itx.files.get("/docs/readme.md").url({ expiresInSeconds: 90.5 });
+  expect((await fetchProjectUrl(fractional.url)).status).toBe(200);
 
-    // A TTL that is not a whole number still mints a URL that works (the claim's exp is floored).
-    const fractional = await itx.files.get("/docs/readme.md").url({ expiresInSeconds: 90.5 });
-    expect((await fetchProjectHost(...hostAndPath(fractional.url))).status).toBe(200);
-
-    // Refusals: a GET token used to PUT, a PUT token used to GET, a tampered token, a missing one.
-    expect((await fetchProjectHost(host, path, {}, { method: "PUT", body: "x" })).status).toBe(403);
-    expect((await fetchProjectHost(uhost, upath)).status).toBe(403);
-    expect((await fetchProjectHost(host, `${path}x`)).status).toBe(403);
-    expect((await fetchProjectHost(host, "/docs/readme.md")).status).toBe(400);
-    // A token for a path that holds nothing: 404, not a refusal.
-    const empty = await itx.files.get("/docs/missing.md").url();
-    const [ehost, epath] = hostAndPath(empty.url);
-    expect((await fetchProjectHost(ehost, epath)).status).toBe(404);
-    // Another project's host with this project's token: the claim names the wrong project.
-    const other = freshDnsSafeProjectSlug("files-url-other");
-    await registerProject(other);
-    expect((await fetchProjectHost(host.replace(slug, other), path)).status).toBe(403);
-  },
-);
+  // Refusals: a GET token used to PUT, a PUT token used to GET, a tampered token, a missing one.
+  expect((await fetchProjectUrl(download.url, {}, { method: "PUT", body: "x" })).status).toBe(403);
+  expect((await fetchProjectUrl(upload.url)).status).toBe(403);
+  expect((await fetchProjectUrl(`${download.url}x`)).status).toBe(403);
+  expect((await fetchProjectUrl(address)).status).toBe(400);
+  // A token for a path that holds nothing: 404, not a refusal.
+  const empty = await itx.files.get("/docs/missing.md").url();
+  expect((await fetchProjectUrl(empty.url)).status).toBe(404);
+  // Another project's address with this project's token: the claim names the wrong project.
+  const other = freshDnsSafeProjectSlug("files-url-other");
+  await registerProject(other);
+  expect((await fetchProjectUrl(download.url.replace(slug, other))).status).toBe(403);
+});

@@ -1,32 +1,34 @@
-// src/organization/contract.ts — the organization context's vocabulary and pure reducer (the
-// triplet's first: processor.ts is the fold, durable-object.ts the host). The control-plane FACTS
-// that happen TO an organization — created, renamed, deleted, a project created in it — are
-// appended to its own context, `/organizations/<orgId>` in the deployment-global namespace, by the
-// session verb that did it (session.ts `publishGlobalFact`), stamped with the caller — principal
-// and grant: the audit lives where it happened, attributed to who did it and through which
-// connection. The `OrganizationProcessor` folds them into a view a member reads through
-// `session.organizations.get(orgId)` — the same StreamProcessor kernel every project processor
-// uses, hosted on demand like the account's. No D1: the directory stays the truth for membership
-// and the current name; this is the record of what was done, when, by whom.
+// src/organization/contract.ts — THE ORGANIZATION: its context, `/organizations/<orgId>` in the
+// deployment-global namespace, where the control-plane FACTS about it land — created, renamed,
+// deleted, a project created in it — each appended by the session verb that did it (session.ts
+// `publishGlobalFact`), stamped with the caller — principal and grant: the audit lives where it
+// happened, attributed to who did it and through which connection. This file is the only place
+// those events and their payloads are spelled; processor.ts folds them into the record a member
+// reads through `session.organizations.get(orgId)`, durable-object.ts hosts it as the first-party
+// facet `organization` (first-party-facets.ts), the row enabled where the first fact is published.
+// No D1: the directory stays the truth for membership and the current name; this is the record of
+// what was done, when, by whom. Every type is derived:
+//   OrganizationState = ProcessorState<typeof OrganizationContract>   the reduced state below
+//   ConsumedEvent<typeof OrganizationContract>                         what the reduce sees
 import { z } from "zod";
-import { defineProcessorContract } from "iterate/next/stream/processor";
-
-export const OrganizationView = z.object({
-  /** The name as last set — created, then renamed; null until the first fact lands. */
-  name: z.string().nullable().default(null),
-  deletedAt: z.string().nullable().default(null),
-  /** Every project created in the organization, by id: its slug and when. */
-  projects: z.record(z.string(), z.object({ slug: z.string(), createdAt: z.string() })).default({}),
-});
-/** The organization's reduced state: its record. */
-export type OrganizationView = z.infer<typeof OrganizationView>;
+import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
 
 export const OrganizationContract = defineProcessorContract({
   slug: "organization",
   version: "1",
   description:
     "The organization's record: created, renamed, deleted, and every project created in it.",
-  stateSchema: OrganizationView,
+  /** THE REDUCED STATE — the organization's record, folded from the facts below: what a member
+   *  reads through live state. */
+  stateSchema: z.object({
+    /** The name as last set — created, then renamed; null until the first fact lands. */
+    name: z.string().nullable().default(null),
+    deletedAt: z.string().nullable().default(null),
+    /** Every project created in the organization, by id: its slug and when. */
+    projects: z
+      .record(z.string(), z.object({ slug: z.string(), createdAt: z.string() }))
+      .default({}),
+  }),
   events: {
     "events.iterate.com/organization/created": {
       description: "The organization was created; the caller is its owner (platform fact).",
@@ -54,3 +56,6 @@ export const OrganizationContract = defineProcessorContract({
   ],
   emits: [],
 });
+
+/** The organization's reduced state: its record (the contract's `stateSchema`). */
+export type OrganizationState = ProcessorState<typeof OrganizationContract>;

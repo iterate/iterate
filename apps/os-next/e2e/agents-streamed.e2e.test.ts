@@ -15,8 +15,8 @@ test("streamed: the answer reaches a live subscriber as ephemeral chunk windows 
     consumes: ["events.iterate.com/agent/llm-response-chunks"],
     target: windows.fn,
   });
+  await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.create();
   await onWorkersAi(support);
   await agent.message("Say four words.");
   const log = await until("the settled request", async () => {

@@ -4,6 +4,7 @@
 // the handful of idioms every file used to copy (poll-until, must-reject, the delivery collector).
 // A project host — the one HTTP way into a project — is support/project-host.ts.
 
+import crypto from "node:crypto";
 import { newWebSocketRpcSession } from "capnweb";
 import { WebSocket as UndiciWebSocket } from "undici";
 import type { IterateRpcTarget, SessionCredentials } from "../../src/session.ts";
@@ -49,9 +50,12 @@ export const workerUrl = (path: string): string => new URL(path, baseUrl()).toSt
  *  land on the same project, repo or account, however many run at once. */
 let memoRunId = "";
 export const runId = (): string =>
-  (memoRunId ||= (process.env.E2E_RUN_ID || crypto.randomUUID())
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "")
+  // Hashed, not truncated: CI pins `<run id>-<attempt>`, and two consecutive GitHub run ids share
+  // their leading digits — the first eight characters would name the same run twice.
+  (memoRunId ||= crypto
+    .createHash("sha1")
+    .update(process.env.E2E_RUN_ID || crypto.randomUUID())
+    .digest("hex")
     .slice(0, 8));
 
 /** THIS vitest worker process, within the run. Files run in parallel in separate processes, each

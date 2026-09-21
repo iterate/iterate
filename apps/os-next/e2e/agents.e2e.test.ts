@@ -1,8 +1,10 @@
 // e2e/agents.e2e.test.ts — AN AGENT IS A DOMAIN OBJECT (src/agent/): a conversation on the context at
-// any path, driven by a model that acts by writing scripts against that context's `itx`. `create()`
-// births it — the processor row, then `agent/created` on `/` (the catalog `itx.agents.list()` reads) and
-// on its path with the system prompt; `message(text)` is a person's words. Everything the loop does is
-// an event on the path, so the stories read the log: request → settled + assistant → script requested →
+// any path, driven by a model that acts by writing scripts against that context's `itx`.
+// `itx.agents.create(path)` births it — the processor row, `agent/create-requested`, then the saga
+// lands `agent/created` on `/` (the catalog `itx.agents.list()` reads) and on its path with the
+// default system prompt; an operator's instructions are their own `agent/context-added` through the
+// handle's typed `append`; `message(text)` is a person's words. Everything the loop does is an event
+// on the path, so the stories read the log: request → settled + assistant → script requested →
 // script settled → developer result → request → settled + assistant prose → idle. The model is `itx.ai`
 // under the agent's rules, so a test LENDS a scripted fake there (Misha's shadow, ai-root-shadow); the
 // deployed lane runs ONE real turn through Workers AI.
@@ -17,25 +19,39 @@ import {
   short,
 } from "./support/agents.ts";
 
-test("create() births the agent — the processor row, the certificate on / and on its path with the prompt — the catalog lists it, and an agent not created refuses message()", async () => {
+test("itx.agents.create(path) births the agent — the processor row, the request, the certificate on / and on its path with the default prompt; an operator's prompt is its own append; the catalog lists it; an agent not created refuses message()", async () => {
   const itx = openItx(freshCtx("agent"));
   expect(await itx.agents.list()).toEqual([]);
   const agent = itx.agents.get("/agents/support");
-  await expect(agent.message("hi")).rejects.toThrow(/not created — call create\(\) first/);
-  expect(await agent.create({ systemPrompt: "Be terse." })).toEqual({ path: "/agents/support" });
-  const own = await readAll(itx.cd("/agents/support"));
-  expect(short(own)).toEqual(["agent/created", "agents/context-added"]);
-  // The caller's prompt is ADDED to the platform's rules — an agent told only "be terse" still
-  // knows the codemode format and the itx surface.
-  const systemItem = own.filter((e) => e.type === "events.iterate.com/agents/context-added")[0]
-    .payload as { role: string; content: string };
-  expect(systemItem.role).toBe("system");
-  expect(systemItem.content).toMatch(/^You are an agent on the iterate platform/);
-  expect(systemItem.content).toMatch(/<codemode/);
-  expect(systemItem.content).toMatch(
-    /INSTRUCTIONS FROM THE OPERATOR[^\n]*\nBe terse\.\nCURRENT PROJECT:/,
+  await expect(agent.message("hi")).rejects.toThrow(
+    /not created — itx\.agents\.create\("\/agents\/support"\) first/,
   );
-  expect(systemItem.content).toContain(JSON.stringify(await itx.cd("/agents/support").whoami()));
+  expect(await itx.agents.create("/agents/support")).toEqual({ path: "/agents/support" });
+  // The operator's instructions ADD to the platform's rules — their own keyed item after the
+  // birth, through the handle's typed append; a system item raises no turn.
+  await agent.append({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "system", content: "Be terse." },
+    idempotencyKey: "operator-prompt:v1",
+  });
+  const own = await readAll(itx.cd("/agents/support"));
+  expect(short(own)).toEqual([
+    "agent/create-requested",
+    "agent/created",
+    "agent/context-added", // the default prompt, beside the certificate
+    "agent/context-added", // the operator's
+  ]);
+  const [defaultPrompt, operatorPrompt] = own
+    .filter((e) => e.type === "events.iterate.com/agent/context-added")
+    .map((e) => e.payload as { role: string; content: string });
+  // The default prompt: the codemode format, the itx surface, and which project this is.
+  expect(defaultPrompt!.role).toBe("system");
+  expect(defaultPrompt!.content).toMatch(/^You are an agent on the iterate platform/);
+  expect(defaultPrompt!.content).toMatch(/<codemode/);
+  expect(defaultPrompt!.content).toContain(
+    `\nCURRENT PROJECT: ${JSON.stringify(await itx.cd("/agents/support").whoami())}`,
+  );
+  expect(operatorPrompt).toEqual({ role: "system", content: "Be terse." });
   // One explicit processor row for the agent; no automatic config subscription.
   expect(
     own
@@ -46,7 +62,7 @@ test("create() births the agent — the processor row, the certificate on / and 
   expect(await itx.agents.list()).toEqual([
     { path: "/agents/support", createdAt: expect.any(String) },
   ]);
-  await agent.create(); // created once: answers at once, appends nothing
+  await itx.agents.create("/agents/support"); // created once: answers at once, appends nothing
   expect(await readAll(itx.cd("/agents/support"))).toHaveLength(own.length);
   expect(await itx.repos.list()).toEqual([]);
 });
@@ -59,12 +75,17 @@ test("the loop: a person's words → the model → a script run against itx → 
     "Stored 42 under answer.",
   ]);
   await support.provide("itx.ai", ai);
+  await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.create({ systemPrompt: "Be terse." });
+  await agent.append({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "system", content: "Be terse." },
+    idempotencyKey: "operator-prompt:v1",
+  });
   await onWorkersAi(support);
   const asked = await agent.message("Store 42 under the key answer and tell me when done.");
   expect(asked).toMatchObject({
-    type: "events.iterate.com/agents/context-added",
+    type: "events.iterate.com/agent/context-added",
     offset: expect.any(Number),
   });
 
@@ -75,7 +96,7 @@ test("the loop: a person's words → the model → a script run against itx → 
     const all = await readAll(support);
     const count = (type: string) =>
       all.filter((e) => e.type === `events.iterate.com/${type}`).length;
-    return count("agents/web-message-sent") === 2 && count("context/run-settled") === 2
+    return count("agent/web-message-sent") === 2 && count("context/run-settled") === 2
       ? all
       : undefined;
   }).catch(async (error: unknown) => {
@@ -91,27 +112,29 @@ test("the loop: a person's words → the model → a script run against itx → 
     throw error;
   });
   expect(short(log)).toEqual([
+    "agent/create-requested",
     "agent/created",
-    "agents/context-added", // the system prompt
+    "agent/context-added", // the default system prompt
+    "agent/context-added", // the operator's
     "agent/configured", // the story pins Workers AI
-    "agents/context-added", // the person
+    "agent/context-added", // the person
     "agent/llm-request-requested",
     "agent/llm-request-settled",
-    "agents/context-added", // the assistant's raw answer: prose + a tag
+    "agent/context-added", // the assistant's raw answer: prose + a tag
     "agent/summary-updated", // the tag's status
     "context/run-requested", // the tag's body
-    "agents/web-message-sent", // the prose outside the tag
+    "agent/web-message-sent", // the prose outside the tag
     "context/run-settled",
-    "agents/context-added", // the developer: the script's result
+    "agent/context-added", // the developer: the script's result
     "agent/llm-request-requested",
     "agent/llm-request-settled",
-    "agents/context-added", // the assistant: a bare reply (no tag)
+    "agent/context-added", // the assistant: a bare reply (no tag)
     "context/run-requested", // the plain-response handler (itx.chat.sendMessage)
-    "agents/web-message-sent", // its sendMessage
+    "agent/web-message-sent", // its sendMessage
     "context/run-settled",
   ]);
   const said = (type: string) => log.filter((e) => e.type === type).map((e) => e.payload);
-  expect(said("events.iterate.com/agents/web-message-sent")).toEqual([
+  expect(said("events.iterate.com/agent/web-message-sent")).toEqual([
     // The tag's prose is sent directly (with the request it came from); the bare reply is sent by
     // the plain-response handler's sendMessage — a plain message, no request offset.
     { message: "Let me store that.", llmRequestOffset: expect.any(Number) },
@@ -129,16 +152,17 @@ test("the loop: a person's words → the model → a script run against itx → 
     status: "succeeded",
     result: { stored: true },
   });
-  // The second call saw the whole conversation: prompt, person, its own script, the result.
+  // The second call saw the whole conversation: both prompts, person, its own script, the result.
   expect(ai.calls).toHaveLength(2);
   expect(ai.calls[1]!.model).toBe(WORKERS_AI_MODEL);
   expect(ai.calls[1]!.messages.map((m) => m.role)).toEqual([
+    "system",
     "system",
     "user",
     "assistant",
     "system",
   ]);
-  expect(ai.calls[1]!.messages[3]!.content).toContain('"stored": true');
+  expect(ai.calls[1]!.messages[4]!.content).toContain('"stored": true');
   // Idle: no obligation open, one autonomous turn counted, nothing paused.
   expect((await support.facets.get("agent").snapshot()).state).toMatchObject({
     openRequest: null,
@@ -154,8 +178,13 @@ test("debounced: two messages inside the window are answered by ONE request that
   const support = itx.cd("/agents/support");
   const ai = new ScriptedAi(["Both noted.", "Third noted."]);
   await support.provide("itx.ai", ai);
+  await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.create({ systemPrompt: "Be terse." });
+  await agent.append({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "system", content: "Be terse." },
+    idempotencyKey: "operator-prompt:v1",
+  });
   await support.append({
     type: "events.iterate.com/agent/configured",
     payload: { config: { llm: { model: WORKERS_AI_MODEL }, llmRequestDebounceMs: 1_500 } },
@@ -172,12 +201,12 @@ test("debounced: two messages inside the window are answered by ONE request that
   expect(short(first).filter((t) => t === "agent/llm-request-settled")).toHaveLength(1);
   expect(ai.calls).toHaveLength(1);
   // The one call saw both messages — the prompt is built from the log at run time.
-  expect(ai.calls[0]!.messages.map((m) => m.role)).toEqual(["system", "user", "user"]);
+  expect(ai.calls[0]!.messages.map((m) => m.role)).toEqual(["system", "system", "user", "user"]);
   // The window, not a coincidence: the request landed at least the window after the FIRST words
-  // (said[0] is the system prompt).
-  const said = first.filter((e) => e.type === "events.iterate.com/agents/context-added");
+  // (said[0] and said[1] are the two system prompts).
+  const said = first.filter((e) => e.type === "events.iterate.com/agent/context-added");
   const requested = first.find((e) => e.type === "events.iterate.com/agent/llm-request-requested");
-  expect(Date.parse(requested.createdAt) - Date.parse(said[1].createdAt)).toBeGreaterThanOrEqual(
+  expect(Date.parse(requested.createdAt) - Date.parse(said[2].createdAt)).toBeGreaterThanOrEqual(
     1_400,
   );
   // Words after the answer are a new trigger: a second window, a second request.
@@ -198,8 +227,13 @@ test("a script that returns nothing ends the turn: no result item, no further re
     "SHOULD NEVER BE ASKED",
   ]);
   await support.provide("itx.ai", ai);
+  await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.create({ systemPrompt: "Be terse." });
+  await agent.append({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "system", content: "Be terse." },
+    idempotencyKey: "operator-prompt:v1",
+  });
   await onWorkersAi(support);
   await agent.message("Write the note.");
   const settled = await until("the script's settlement", async () => {
@@ -214,9 +248,9 @@ test("a script that returns nothing ends the turn: no result item, no further re
   expect(short(log).filter((t) => t === "agent/llm-request-requested")).toHaveLength(1);
   expect(
     log
-      .filter((e) => e.type === "events.iterate.com/agents/context-added")
+      .filter((e) => e.type === "events.iterate.com/agent/context-added")
       .map((e) => e.payload.role),
-  ).toEqual(["system", "user", "assistant"]);
+  ).toEqual(["system", "system", "user", "assistant"]);
   expect((await support.facets.get("agent").snapshot()).state).toMatchObject({
     pendingLlmRequestTrigger: null,
     openRequest: null,
@@ -232,8 +266,13 @@ test("bounded: a model that never stops scripting trips the autonomous-turn brea
     "itx.ai",
     new ScriptedAi([script, script, script, new Error("model down")]),
   );
+  await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.create({ systemPrompt: "Be terse." });
+  await agent.append({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "system", content: "Be terse." },
+    idempotencyKey: "operator-prompt:v1",
+  });
   await support.append({
     type: "events.iterate.com/agent/configured",
     payload: {
@@ -305,8 +344,13 @@ test("an attached image is stored under the agent's path and SHOWN to the model 
   const support = itx.cd("/agents/support");
   const ai = new ScriptedAi(["A red square and a note."]);
   await support.provide("itx.ai", ai);
+  await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.create({ systemPrompt: "Be terse." });
+  await agent.append({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "system", content: "Be terse." },
+    idempotencyKey: "operator-prompt:v1",
+  });
   await onWorkersAi(support);
   const asked = await agent.message({
     message: "What do you see?",
@@ -342,7 +386,8 @@ test("an attached image is stored under the agent's path and SHOWN to the model 
   expect(assistantWords(log)).toEqual(["A red square and a note."]);
   // The model saw the pixels (a data: URL of the stored bytes) and was told about the note.
   const [call] = ai.calls;
-  const message = call!.messages[1] as unknown as {
+  // the default prompt, the operator's, then the person's words with their attachments
+  const message = call!.messages[2] as unknown as {
     role: string;
     content: { type: string; text?: string; image_url?: { url: string } }[];
   };
@@ -363,8 +408,13 @@ test("interrupted: the person's next words cut the running answer short — sett
   // The first answer takes long enough to be cut short; the second is what the person gets.
   const ai = new ScriptedAi([{ text: "A long answer that never lands.", afterMs: 8_000 }, "Sure."]);
   await support.provide("itx.ai", ai);
+  await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.create({ systemPrompt: "Be terse." });
+  await agent.append({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "system", content: "Be terse." },
+    idempotencyKey: "operator-prompt:v1",
+  });
   await onWorkersAi(support);
   await agent.message("Tell me everything.");
   await until("the request is in flight", async () =>
@@ -375,7 +425,7 @@ test("interrupted: the person's next words cut the running answer short — sett
   await sleep(500); // the runner has dialed the model
   // apps/os's interrupt: a developer item from the person, its policy the cancellation.
   await support.append({
-    type: "events.iterate.com/agents/context-added",
+    type: "events.iterate.com/agent/context-added",
     payload: {
       role: "developer",
       content: "The user interrupted the in-progress response from the web chat.",

@@ -1,5 +1,7 @@
 // Config workers are explicit workers.get targets. Neither loading one nor creating a context
-// subscribes it, configures ingress, or follows repository commits implicitly.
+// subscribes it, configures ingress, or follows repository commits implicitly. The repo a worker's
+// source is read from is born through the collection (`itx.repos.create(path)`) and addressed as
+// `itx.repos.get(path)`.
 import { expect, test } from "vitest";
 import { append, freshCtx, openItx, readAll, until } from "./support/client.ts";
 import { FakeArtifacts } from "./support/fake-artifacts.ts";
@@ -54,8 +56,8 @@ localOnly(
     const artifacts = await FakeArtifacts.start();
     try {
       await root.cd("/repos/config").provide("itx.cfArtifacts", artifacts);
+      await root.repos.create("/repos/config");
       const repo = root.repos.get("/repos/config");
-      await repo.create();
       const first = await repo.writeFile("worker.ts", source("v1"));
       const spec = {
         source: "itx.repos.get('/repos/config').readFile('worker.ts')",
@@ -119,34 +121,27 @@ deployedOnly(
   "a real Artifacts repository supplies an explicit worker source expression",
   async () => {
     const root = openItx(freshCtx("config-artifacts"));
+    await root.repos.create("/repos/config");
     const repo = root.repos.get("/repos/config");
-    await repo.create();
-    // The repository is REAL — one row in the account's Artifacts namespace. Deleted whatever
-    // happens, like every other row that creates one (cfartifacts.e2e.test.ts), so the namespace the
-    // paging proofs read stays the suite's own repos and not a landfill of past runs'.
-    try {
-      const { commitOid } = await repo.writeFile("worker.ts", source("artifacts"));
-      await root.subscribe({
-        name: "config",
-        target: [
-          "itx",
-          "workers",
-          [
-            "get",
-            { source: "itx.repos.get('/repos/config').readFile('worker.ts')", cacheKey: commitOid },
-          ],
-          "processEventBatch",
+    const { commitOid } = await repo.writeFile("worker.ts", source("artifacts"));
+    await root.subscribe({
+      name: "config",
+      target: [
+        "itx",
+        "workers",
+        [
+          "get",
+          { source: "itx.repos.get('/repos/config').readFile('worker.ts')", cacheKey: commitOid },
         ],
-        consumes: [PING],
-      });
-      const [ping] = await append(root, { type: PING });
-      await until("the repo-sourced worker answered", async () =>
-        (await readAll(root)).find(
-          (event) => event.type === PONG && event.payload?.pinged === ping.offset,
-        ),
-      );
-    } finally {
-      await root.cfArtifacts.delete("/repos/config");
-    }
+        "processEventBatch",
+      ],
+      consumes: [PING],
+    });
+    const [ping] = await append(root, { type: PING });
+    await until("the repo-sourced worker answered", async () =>
+      (await readAll(root)).find(
+        (event) => event.type === PONG && event.payload?.pinged === ping.offset,
+      ),
+    );
   },
 );

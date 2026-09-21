@@ -216,7 +216,7 @@ export default class VoiceWorker extends ConfigWorker {
           consumes: [
             "events.iterate.com/voice-agent/call-started",
             "events.iterate.com/agent/created",
-            "events.iterate.com/agents/context-added",
+            "events.iterate.com/agent/context-added",
             "events.iterate.com/voice-agent/delegation-requested",
             "events.iterate.com/voice-agent/commentary",
           ],
@@ -233,7 +233,7 @@ export default class VoiceWorker extends ConfigWorker {
       ...(screenDevice
         ? [
             {
-              type: "events.iterate.com/agents/context-added",
+              type: "events.iterate.com/agent/context-added",
               idempotencyKey: `voice-agent/screen-context:${options.activation}`,
               payload: {
                 role: "developer",

@@ -6,6 +6,7 @@
     "dev": "vite dev",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "deploy": "tsx scripts/app.ts deploy",
     "gen:wrangler": "tsx scripts/app.ts generate-wrangler-config",
     "ensure-resources": "tsx scripts/app.ts ensure-resources",
@@ -38,6 +39,7 @@
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vite": "^8.0.0",
+    "vitest": "^4.1.7",
     "wrangler": "4.131.1"
   }
 }

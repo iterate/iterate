@@ -18,13 +18,15 @@
 
 import { expect, test } from "vitest";
 import { append, codeOf, freshCtx, openItx, readHead, rejection, until } from "./support/client.ts";
-import { fetchProjectHost, ingressHostname, onProjectHost } from "./support/project-host.ts";
+import { fetchProjectHost, ingressHostname, subdomainsOnly } from "./support/project-host.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
 import { SlackReplayTarget, Tools } from "./support/targets.ts";
 
 // ── the built-in roots and the error grammar ──
 
-onProjectHost(
+// SUBDOMAINS ONLY: the 421 is the wildcard's — under paths a label outside the grammar names no project
+// and the request is the platform's own (path-ingress.e2e.test.ts pins an unknown project there).
+subdomainsOnly(
   "a project label outside the DNS grammar is not a project host: the edge names no DO for it — 421, never the control plane",
   async () => {
     // A project host is the one HTTP way into a project, and `projectHostOf` (src/worker.ts) admits a

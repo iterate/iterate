@@ -14,10 +14,11 @@
 //     delete: `list` answers in PATHS and returns ONE namespace-wide page + a cursor (the binding does
 //     not filter by project), so membership is asserted over ALL pages, never page one alone
 //   • isolation: one project never sees another's repos
-//   • THE GIT ROUND TRIP through the facet (`itx.repos.get(path)`) against the real remote: an unborn
-//     `main` reads as no file, the first commit lands parentless, a second lands a write and a delete
-//     onto the tip's tree, a commit that changes nothing commits nothing, `log` is newest-first with
-//     parents
+//   • THE GIT ROUND TRIP through the facet (`itx.repos.get(path)`) against the real remote: born
+//     through the collection (`itx.repos.create(path)`, whose processor saga provisions the Artifacts
+//     repo), an unborn `main` reads as no file, the first commit lands parentless, a second lands a
+//     write and a delete onto the tip's tree, a commit that changes nothing commits nothing, `log` is
+//     newest-first with parents
 
 import { expect } from "vitest";
 import { repoArtifactName } from "../src/context/repos.ts";
@@ -104,8 +105,9 @@ deployedOnly(
     const source = `export default { note: "from a real Artifacts repo ${path}" };\n`;
 
     try {
-      // Created (the Artifacts repo provisioned through the proxy), main unborn: no tip, no file.
-      expect(await repo.create()).toEqual({ path });
+      // Created (the Artifacts repo provisioned through the proxy by the repo processor's saga), main
+      // unborn: no tip, no file.
+      expect(await itx.repos.create(path)).toEqual({ path });
       expect(await repo.tip()).toBeNull();
       expect(await repo.readFile("worker.ts")).toBeNull();
       expect(await repo.listFiles()).toEqual({ commitOid: null, paths: [] });
