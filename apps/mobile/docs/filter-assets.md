@@ -27,20 +27,58 @@ file-origin WebViews can fetch data and save canvases containing remote images.
 Gzip binaries have `application/gzip`, without `Content-Encoding`: the app
 explicitly decompresses them before passing bytes/blob URLs to MediaPipe.
 
-## Updating art or MediaPipe
+## Updating art
 
-1. Run `pnpm generate-filters <command>` from `apps/mobile` (see the script for
-   credentials). Existing art is kept. New binary files go in
-   `website/filter-assets/`; generated TypeScript records contain URLs only.
-2. For a MediaPipe upgrade, update the package and its patch together, then
-   run `node scripts/generate-mediapipe-assets.mjs` from `apps/mobile`.
-   It reads the installed package's loader/WASM and the pinned Google model.
-3. Commit the binary files and generated manifests together.
-4. **Before publishing an OTA with new URLs**, run
-   `pnpm --dir apps/mobile/website run deploy --env prd` from the repo root.
-   Deployment verifies hashes, uploads missing files, deploys the worker, and
-   smoke-tests an asset. Main's existing website deploy workflow does this too.
+Git stores the prompts/settings in `scripts/generate-filters.ts` and small JSON
+manifests in `src/lib/filters/*.generated.json`. Images live only in R2.
+From `apps/mobile`:
+
+```sh
+pnpm generate-filters all
+pnpm generate-filters all --slug cartoon-dog
+pnpm generate-filters all --slug animal-cat --force
+```
+
+The script loads `os/prd` credentials through Doppler. Each selected image:
+
+1. Checks its manifest URL directly in R2. If present, it does nothing: no
+   local file, AI key or generation charge is needed.
+2. If missing (or `--force`), generates from the checked-in recipe, uploads
+   under `<slug>-<sha256>.<ext>`, then atomically updates the manifest.
+3. Keeps successful progress if a later image fails. Authentication/network
+   failures stop the run; they do not count as missing images.
+
+Commit the changed prompts/manifests and review the new art before publishing
+an app update. Changing a prompt alone does not replace approved art; use
+`--force`. Regeneration is nondeterministic and costs AI credits.
+Image resizing currently uses macOS `sips`. Run one generator at a time in a
+checkout; it updates that checkout's manifests.
+
+Animal entries keep their eye/mouth coordinates beside the URL. Regeneration
+runs the vision pass before publishing that entry. Verify new coordinates with
+the harness `?annotate=1` view and correct them in the JSON manifest as needed.
+The current hand-corrected coordinates were preserved during migration.
+
+Individual commands still work: `backdrops`, `animals`, and
+`flashcards --style cartoon|encyclopaedia|photo`, each with `--slug`/`--force`.
+The optional Unsplash `photo` deck stays empty unless explicitly generated;
+it needs `UNSPLASH_ACCESS_KEY`. Other art uses `OPENAI_API_KEY`.
+
+## Updating MediaPipe and deploying
+
+For a MediaPipe upgrade, update the package and its patch together, then run
+`pnpm exec tsx scripts/generate-mediapipe-assets.ts` from `apps/mobile`.
+It reads the installed loader/WASM and pinned Google model, uploads missing
+compressed data, then updates the TypeScript manifest. JavaScript stays bundled.
+
+Website deployment verifies all referenced R2 objects before deploying and
+smoke-tests an asset afterwards. It never generates or uploads art. The worker
+route must be deployed before releasing the first app build using these URLs;
+subsequent artwork changes need only the manual upload and manifest update.
 
 Retain published R2 hashes indefinitely: older app versions still use them.
-The publisher never deletes objects. Files can be removed from the checkout
-when no current manifest uses them; that does not remove their hosted copies.
+The scripts never delete objects. Prompts let us replace lost art, not reproduce
+identical bytes or restore an old URL; protect the bucket accordingly.
+
+The one-time migration verified all 218 existing objects byte-for-byte before
+removing the binaries from Git. All current URLs and artwork are unchanged.

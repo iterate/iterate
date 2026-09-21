@@ -23,12 +23,17 @@ import {
   type FilterContext,
   type FilterCanvas,
 } from "./graphics.ts";
-import { ANIMAL_ANCHORS, type AnimalAnchors } from "./animal-anchors.generated.ts";
-import { ANIMAL_FACE_IMAGES } from "./animal-faces.generated.ts";
-import { FILTER_BACKDROPS } from "./backdrops.generated.ts";
-import { FLASHCARD_IMAGES_CARTOON } from "./flashcards-cartoon.generated.ts";
-import { FLASHCARD_IMAGES_ENCYCLOPAEDIA } from "./flashcards-encyclopaedia.generated.ts";
-import { FLASHCARD_IMAGES_PHOTO } from "./flashcards-photo.generated.ts";
+import animalImages from "./animal-faces.generated.json";
+import backdrops from "./backdrops.generated.json";
+import cartoonImages from "./flashcards-cartoon.generated.json";
+import encyclopaediaImages from "./flashcards-encyclopaedia.generated.json";
+import photoImages from "./flashcards-photo.generated.json";
+
+const ANIMAL_IMAGES: Record<string, (typeof animalImages)["cat"]> = animalImages;
+const FILTER_BACKDROPS: Record<string, string> = backdrops;
+const FLASHCARD_IMAGES_CARTOON: Record<string, string> = cartoonImages;
+const FLASHCARD_IMAGES_ENCYCLOPAEDIA: Record<string, string> = encyclopaediaImages;
+const FLASHCARD_IMAGES_PHOTO: Record<string, string> = photoImages;
 import { FILTER_PICKER } from "./picker.ts";
 import { foldedSemitoneOffset, SOLFEGE } from "./pitch.ts";
 import { ellipseFeature, type FaceFeature, type FaceGeometry } from "./face-geometry.ts";
@@ -261,7 +266,7 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
     // openness, and a dark mouth interior shows in the gap (the classic
     // talking-pet warp).
     const animal = ANIMAL_FACES[args.modeIndex % ANIMAL_FACES.length];
-    const image = cachedImage(`animal-${animal.id}`, ANIMAL_FACE_IMAGES[animal.id]);
+    const image = cachedImage(`animal-${animal.id}`, ANIMAL_IMAGES[animal.id].url);
     const { box } = args.face;
     const angle = box.angle;
     const width = Math.max(box.width, box.height * 0.8) * 2.1 * animal.scale;
@@ -960,82 +965,6 @@ const FLASHCARD_STYLES = [
  * hand-tuned by looking at the images (regenerating the art means
  * re-checking these). eyeWidth/mouthWidth are cutout sizes as fractions of
  * the drawn face width; scale adjusts how large the head sits on yours. */
-/** Hand-corrected anchors override the vision pass where it missed —
- * verified with the harness annotation view (annotate mode). */
-const ANIMAL_ANCHOR_OVERRIDES: Record<string, Partial<AnimalAnchors>> = {
-  cat: {
-    leftEye: { x: 0.335, y: 0.5 },
-    rightEye: { x: 0.665, y: 0.5 },
-    mouth: { x: 0.5, y: 0.735 },
-    eyeWidth: 0.13,
-    mouthWidth: 0.18,
-  },
-  dog: { mouth: { x: 0.5, y: 0.72 }, eyeWidth: 0.11, mouthWidth: 0.22 },
-  goat: {
-    leftEye: { x: 0.25, y: 0.385 },
-    rightEye: { x: 0.75, y: 0.385 },
-    mouth: { x: 0.49, y: 0.755 },
-    eyeWidth: 0.1,
-    mouthWidth: 0.14,
-  },
-  tiger: {
-    leftEye: { x: 0.36, y: 0.435 },
-    rightEye: { x: 0.63, y: 0.435 },
-    mouth: { x: 0.5, y: 0.76 },
-    eyeWidth: 0.12,
-    mouthWidth: 0.2,
-  },
-  bear: {
-    leftEye: { x: 0.395, y: 0.41 },
-    rightEye: { x: 0.605, y: 0.41 },
-    mouth: { x: 0.5, y: 0.735 },
-    eyeWidth: 0.09,
-    mouthWidth: 0.17,
-  },
-  monkey: {
-    leftEye: { x: 0.375, y: 0.375 },
-    rightEye: { x: 0.625, y: 0.375 },
-    mouth: { x: 0.5, y: 0.71 },
-    eyeWidth: 0.1,
-    mouthWidth: 0.2,
-  },
-  gorilla: {
-    leftEye: { x: 0.385, y: 0.415 },
-    rightEye: { x: 0.61, y: 0.415 },
-    mouth: { x: 0.5, y: 0.775 },
-    eyeWidth: 0.1,
-    mouthWidth: 0.18,
-  },
-  lion: {
-    leftEye: { x: 0.395, y: 0.42 },
-    rightEye: { x: 0.625, y: 0.42 },
-    mouth: { x: 0.5, y: 0.755 },
-    eyeWidth: 0.1,
-    mouthWidth: 0.16,
-  },
-  horse: {
-    leftEye: { x: 0.325, y: 0.46 },
-    rightEye: { x: 0.68, y: 0.46 },
-    mouth: { x: 0.5, y: 0.955 },
-    eyeWidth: 0.1,
-    mouthWidth: 0.16,
-  },
-  fox: {
-    leftEye: { x: 0.36, y: 0.545 },
-    rightEye: { x: 0.63, y: 0.545 },
-    mouth: { x: 0.5, y: 0.82 },
-    eyeWidth: 0.11,
-    mouthWidth: 0.15,
-  },
-  mouse: {
-    leftEye: { x: 0.33, y: 0.545 },
-    rightEye: { x: 0.67, y: 0.545 },
-    mouth: { x: 0.5, y: 0.83 },
-    eyeWidth: 0.11,
-    mouthWidth: 0.13,
-  },
-};
-
 const ANIMAL_META: { id: string; label: string; scale: number }[] = [
   { id: "cat", label: "🐱 Cat", scale: 1 },
   { id: "dog", label: "🐶 Dog", scale: 1.05 },
@@ -1050,20 +979,10 @@ const ANIMAL_META: { id: string; label: string; scale: number }[] = [
   { id: "mouse", label: "🐭 Mouse", scale: 1 },
 ];
 
-const ANCHOR_FALLBACK: AnimalAnchors = {
-  leftEye: { x: 0.37, y: 0.42 },
-  rightEye: { x: 0.63, y: 0.42 },
-  mouth: { x: 0.5, y: 0.72 },
-  eyeWidth: 0.12,
-  mouthWidth: 0.18,
-};
-
 /** Exported for the harness annotation view. */
 export const ANIMAL_FACES = ANIMAL_META.map((meta) => ({
   ...meta,
-  ...ANCHOR_FALLBACK,
-  ...(ANIMAL_ANCHORS[meta.id] || {}),
-  ...(ANIMAL_ANCHOR_OVERRIDES[meta.id] || {}),
+  ...ANIMAL_IMAGES[meta.id].anchors,
 }));
 
 export const FILTER_MODES: Record<string, string[]> = {

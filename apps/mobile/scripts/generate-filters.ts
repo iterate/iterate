@@ -1,33 +1,30 @@
-// All the camera-filter asset generation in one trpc-cli module CLI —
-// scene backdrops, the two flashcard decks, the animal mask portraits, and
-// the vision anchor pass. Each command is merge-mode: existing committed
-// art is kept and only missing entries generate, so approved art survives
-// word-list growth. Manual, not CI — needs API keys and is
-// non-deterministic:
-//
-//   cd apps/os && doppler run -- sh -c 'cd ../mobile && pnpm generate-filters <command>'
-//
-//   pnpm generate-filters backdrops
-//   pnpm generate-filters flashcards --style encyclopaedia
-//   pnpm generate-filters animals
-//   pnpm generate-filters animal-anchors
-//
-// cartoon/encyclopaedia/backdrops/animals use OPENAI_API_KEY (gpt-image-1);
-// flashcards --style photo pulls real photographs from Unsplash and needs
-// UNSPLASH_ACCESS_KEY (a free demo key covers the word list).
+// Manual trpc-cli commands; Doppler os/prd supplies Cloudflare and generation keys.
+// Already uploaded assets are no-ops, even without a local copy or an AI key.
+// pnpm generate-filters all
+// pnpm generate-filters all --slug cartoon-dog --force
+// pnpm generate-filters flashcards --style photo
+// See ../docs/filter-assets.md. Never run generation during deployment.
 
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 
-const ASSETS_DIR = new URL("../website/filter-assets/", import.meta.url).pathname;
+import { mobileWebsiteEnvs } from "../../../envs.ts";
+import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
+import { AnimalAnchors, createAssetStore, syncAssetManifest } from "./filter-asset-store.ts";
+
+type Options = {
+  /** Only this full slug, e.g. cartoon-dog or animal-cat. */
+  slug?: string;
+  /** Generate new art even when the current object is already uploaded. */
+  force?: boolean;
+};
 const FILTERS_DIR = new URL("../src/lib/filters/", import.meta.url).pathname;
 
-/** Regenerate the scene backdrop images (backdrops.generated.ts). */
-export async function backdrops() {
+/** Ensure the scene backdrop images are uploaded. */
+export async function backdrops(options: Options = {}) {
   const style =
     "Funny, simple, colorful cartoon illustration, flat shading, portrait orientation, no text, no letters, no people, no faces.";
   const prompts: Record<string, string> = {
@@ -41,15 +38,17 @@ export async function backdrops() {
     "cat-garden": `${style} Sunny garden: green lawn, flowers, a butterfly, a watering can. The center is plain and uncluttered.`,
     "cat-livingroom": `${style} Cozy living room: sofa, houseplant, ball of yarn on the rug, warm lamp light. The center is plain and uncluttered.`,
   };
-  return generateImageRecord({
-    file: "backdrops.generated.ts",
+  return generateImageRecord(options, {
+    file: "backdrops.generated.json",
     assetPrefix: "backdrop",
-    exportName: "FILTER_BACKDROPS",
     mime: "jpeg",
-    header: "AI-generated backdrop images for the camera filters.",
     entries: Object.keys(prompts),
-    generate: (id) =>
-      openaiImage(prompts[id], { size: "1024x1536", quality: "low", format: "jpeg", shrink: 672 }),
+    generate: (id, secrets) =>
+      openaiImage(
+        prompts[id],
+        { size: "1024x1536", quality: "low", format: "jpeg", shrink: 672 },
+        secrets.OPENAI_API_KEY,
+      ).then((bytes) => ({ bytes })),
   });
 }
 
@@ -194,31 +193,34 @@ const FLASHCARD_NOUNS: Record<string, string> = {
 
 const noun = (word: string) => FLASHCARD_NOUNS[word] || `a ${word}`;
 
-/** Regenerate one flashcard style (flashcards-<style>.generated.ts). */
-export async function flashcards(options: {
-  /** which picture style: cartoon | encyclopaedia | photo (photo = Unsplash, needs UNSPLASH_ACCESS_KEY) */
-  style: "cartoon" | "encyclopaedia" | "photo";
-}) {
+/** Ensure one flashcard style is uploaded. */
+export async function flashcards(
+  options: Options & {
+    /** which picture style: cartoon | encyclopaedia | photo (photo = Unsplash, needs UNSPLASH_ACCESS_KEY) */
+    style: "cartoon" | "encyclopaedia" | "photo";
+  },
+) {
   const { style } = options;
-  const generate = async (word: string) => {
-    if (style === "photo") return unsplashImage(word);
+  const generate = async (word: string, secrets: Record<string, string>) => {
+    if (style === "photo")
+      return unsplashImage(word, secrets.UNSPLASH_ACCESS_KEY).then((bytes) => ({ bytes }));
     if (style === "cartoon") {
       return openaiImage(
         `Cute, simple, friendly cartoon illustration of ${noun(word)} for a toddler flashcard. Single object centered, bold outlines, flat bright colors, plain solid very light background, no text, no letters, no people unless the word is baby.`,
         { size: "1024x1024", quality: "low", format: "jpeg", shrink: 448 },
-      );
+        secrets.OPENAI_API_KEY,
+      ).then((bytes) => ({ bytes }));
     }
     return openaiImage(
       `A realistic photograph of ${noun(word)} for a children's picture encyclopedia. Single subject centered and filling most of the frame, plain softly-lit studio background, natural colors and real textures with fine detail, slight natural imperfections, shot on a DSLR. Absolutely not a drawing, painting, or illustration; no airbrushed or artificial look; no text.`,
       { size: "1024x1024", quality: "medium", format: "jpeg", shrink: 448 },
-    );
+      secrets.OPENAI_API_KEY,
+    ).then((bytes) => ({ bytes }));
   };
-  return generateImageRecord({
-    file: `flashcards-${style}.generated.ts`,
+  return generateImageRecord(options, {
+    file: `flashcards-${style}.generated.json`,
     assetPrefix: style,
-    exportName: `FLASHCARD_IMAGES_${style.toUpperCase()}`,
     mime: "jpeg",
-    header: `Toddler flashcard pictures, ${style} style.`,
     entries: FLASHCARD_WORDS,
     generate,
   });
@@ -244,126 +246,63 @@ const ANIMAL_EXPRESSIONS: Record<string, string> = {
   mouse: "a sweet curious expression, bright soft eyes, relaxed whiskers",
 };
 
-/** Regenerate the Animal mask portraits (animal-faces.generated.ts). After
- * regenerating, re-run animal-anchors and verify with the harness
- * ?annotate=1 view — anchors are per-image. */
-export async function animals() {
-  return generateImageRecord({
-    file: "animal-faces.generated.ts",
+/** Ensure animal portraits and their coordinates are uploaded. Verify new art
+ * with the harness ?annotate=1 view; vision-model coordinates may need correction. */
+export async function animals(options: Options = {}) {
+  return generateImageRecord(options, {
+    file: "animal-faces.generated.json",
     assetPrefix: "animal",
-    exportName: "ANIMAL_FACE_IMAGES",
     mime: "png",
-    header:
-      "Photorealistic transparent-background animal face portraits for the Animal mask filter.",
     entries: Object.keys(ANIMAL_EXPRESSIONS),
-    generate: (animal) =>
-      openaiImage(
+    generate: async (animal, secrets) => {
+      const bytes = await openaiImage(
         `A photorealistic portrait of a ${animal}'s face looking directly at the camera, perfectly head-on and symmetrical, both eyes clearly visible and level, mouth closed, with ${ANIMAL_EXPRESSIONS[animal]} — warm soft lighting, kind and approachable, while staying a realistic photograph (not a cartoon or illustration). The head fills most of the frame, on a fully transparent background. Only the head — no body, no text.`,
         { size: "1024x1024", quality: "medium", format: "png", transparent: true, shrink: 448 },
-      ),
+        secrets.OPENAI_API_KEY,
+      );
+      return { bytes, anchors: await detectAnimalAnchors(animal, bytes, secrets.OPENAI_API_KEY) };
+    },
   });
 }
 
-/** Vision-model pass over the animal portraits, writing eye/mouth landmark
- * guesses to animal-anchors.generated.ts. Known-mediocre (it leans on
- * priors) — treat as a base and verify/correct via the harness ?annotate=1
- * view + ANIMAL_ANCHOR_OVERRIDES in definitions.ts. */
-export async function animalAnchors() {
-  const Position = z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) });
-  const Anchors = z.object({
-    leftEye: Position,
-    rightEye: Position,
-    mouth: Position,
-    eyeWidth: z.number().positive().max(1),
-    mouthWidth: z.number().positive().max(1),
-  });
-  const source = readFileSync(join(FILTERS_DIR, "animal-faces.generated.ts"), "utf8");
-  const images = [...source.matchAll(assetEntryPattern())].map((match) => ({
-    id: match[1] || match[2],
-    dataUri: `data:image/png;base64,${readFileSync(join(ASSETS_DIR, match[3])).toString("base64")}`,
-  }));
-  if (images.length === 0) throw new Error("No animal images found — run `animals` first");
-  const results: [string, unknown][] = [];
-  for (const { id, dataUri } of images) {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey()}` },
-      body: JSON.stringify({
-        model: "gpt-4o",
-        temperature: 0,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: `This is a square photo of a ${id}'s face looking at the camera. Find these landmarks precisely and answer with STRICT JSON only:
+/** Coordinates belong to the generated image; save them in the same manifest entry. */
+async function detectAnimalAnchors(id: string, bytes: Buffer, key: string) {
+  const dataUri = `data:image/png;base64,${bytes.toString("base64")}`;
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    signal: AbortSignal.timeout(90_000),
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+    body: JSON.stringify({
+      model: "gpt-4o",
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `This is a square photo of a ${id}'s face looking at the camera. Find these landmarks precisely and answer with STRICT JSON only:
 {"leftEye": {"x": .., "y": ..}, "rightEye": {"x": .., "y": ..}, "mouth": {"x": .., "y": ..}, "eyeWidth": .., "mouthWidth": ..}
 All values are FRACTIONS of the image size between 0 and 1 (x from left edge, y from top edge).
 - leftEye / rightEye: the CENTER of each eyeball (viewer's left = leftEye). Look carefully at where the actual eyes are, not where they usually are on such an animal.
 - mouth: the point where the lips part (the mouth opening), NOT the nose.
 - eyeWidth: one eye's width as a fraction of image width, with ~30% margin.
 - mouthWidth: the mouth's width as a fraction of image width.`,
-              },
-              { type: "image_url", image_url: { url: dataUri, detail: "high" } },
-            ],
-          },
-        ],
-      }),
-    });
-    if (!response.ok) throw new Error(`${id}: ${response.status} ${await response.text()}`);
-    const payload = z
-      .object({
-        choices: z
-          .array(z.object({ message: z.object({ content: z.string().min(1) }) }))
-          .nonempty(),
-      })
-      .parse(await response.json());
-    const anchors = Anchors.parse(JSON.parse(payload.choices[0].message.content));
-    console.log(id, JSON.stringify(anchors));
-    results.push([id, anchors]);
-  }
-  const outPath = join(FILTERS_DIR, "animal-anchors.generated.ts");
-  writeFileSync(
-    outPath,
-    `${generatedHeader("Vision-model-detected eye/mouth landmarks for the Animal mask portraits (hand overrides go in definitions.ts); regenerate whenever the art regenerates.")}
-export type AnimalAnchors = {
-  leftEye: { x: number; y: number };
-  rightEye: { x: number; y: number };
-  mouth: { x: number; y: number };
-  eyeWidth: number;
-  mouthWidth: number;
-};
-
-export const ANIMAL_ANCHORS: Record<string, AnimalAnchors> = ${JSON.stringify(Object.fromEntries(results), null, 2)};
-`,
-  );
-  return { wrote: outPath, detected: results.length };
-}
-
-// ---------------------------------------------------------------------------
-// Shared plumbing
-
-function apiKey() {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) throw new Error("OPENAI_API_KEY is not set (run through doppler)");
-  return key;
-}
-
-const scratchDir = () => mkdtempSync(join(tmpdir(), "generate-filters-"));
-
-function generatedHeader(what: string) {
-  return `// Generated by scripts/generate-filters.ts — do not edit by hand.
-// ${what} Content-hashed files live in website/filter-assets/.
-// Deploy the mobile website before publishing an app update with new URLs.
-
-`;
-}
-
-function assetEntryPattern() {
-  // Tolerates formatter drift; restrict filenames before using them on disk.
-  return /(?:"([^"]+)"|([A-Za-z]\w*)):\s*"https:\/\/mobile\.iterate\.com\/filter-assets\/((?:[a-z0-9]+-)*[a-f0-9]{64}\.(?:png|jpeg))"/g;
+            },
+            { type: "image_url", image_url: { url: dataUri, detail: "high" } },
+          ],
+        },
+      ],
+    }),
+  });
+  if (!response.ok) throw new Error(`${id}: ${response.status} ${await response.text()}`);
+  const payload = z
+    .object({
+      choices: z.array(z.object({ message: z.object({ content: z.string().min(1) }) })).nonempty(),
+    })
+    .parse(await response.json());
+  return AnimalAnchors.parse(JSON.parse(payload.choices[0].message.content));
 }
 
 async function openaiImage(
@@ -375,10 +314,13 @@ async function openaiImage(
     transparent?: boolean;
     shrink: number;
   },
+  key: string,
 ) {
+  if (!key) throw new Error("OPENAI_API_KEY is required for missing or forced images");
   const response = await fetch("https://api.openai.com/v1/images/generations", {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey()}` },
+    signal: AbortSignal.timeout(180_000),
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
     body: JSON.stringify({
       model: "gpt-image-1",
       prompt,
@@ -392,87 +334,91 @@ async function openaiImage(
   const payload = z
     .object({ data: z.array(z.object({ b64_json: z.base64().min(1) })).nonempty() })
     .parse(await response.json());
-  const raw = join(scratchDir(), `image.${options.format}`);
-  writeFileSync(raw, Buffer.from(payload.data[0].b64_json, "base64"));
-  const sipsArgs = ["-Z", String(options.shrink)];
-  if (options.format === "jpeg") sipsArgs.push("-s", "format", "jpeg", "-s", "formatOptions", "62");
-  execFileSync("sips", [...sipsArgs, raw, "--out", raw]);
-  return readFileSync(raw).toString("base64");
+  const directory = mkdtempSync(join(tmpdir(), "generate-filters-"));
+  const raw = join(directory, `image.${options.format}`);
+  try {
+    writeFileSync(raw, Buffer.from(payload.data[0].b64_json, "base64"));
+    const sipsArgs = ["-Z", String(options.shrink)];
+    if (options.format === "jpeg")
+      sipsArgs.push("-s", "format", "jpeg", "-s", "formatOptions", "62");
+    execFileSync("sips", [...sipsArgs, raw, "--out", raw]);
+    return readFileSync(raw);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
-async function unsplashImage(query: string) {
-  const accessKey = process.env.UNSPLASH_ACCESS_KEY;
+async function unsplashImage(query: string, accessKey: string) {
   if (!accessKey) throw new Error("UNSPLASH_ACCESS_KEY is not set");
   const search = await fetch(
     `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&orientation=squarish&per_page=1`,
-    { headers: { Authorization: `Client-ID ${accessKey}` } },
+    { headers: { Authorization: `Client-ID ${accessKey}` }, signal: AbortSignal.timeout(30_000) },
   );
   if (!search.ok) throw new Error(`${query}: ${search.status} ${await search.text()}`);
   const result = (await search.json()).results[0];
   if (!result) throw new Error(`${query}: no Unsplash results`);
-  const image = await fetch(`${result.urls.raw}&w=448&h=448&fit=crop&fm=jpg&q=70`);
+  const image = await fetch(`${result.urls.raw}&w=448&h=448&fit=crop&fm=jpg&q=70`, {
+    signal: AbortSignal.timeout(30_000),
+  });
   console.log(`  ${query}: photo by ${result.user?.name} (unsplash.com/@${result.user?.username})`);
-  const raw = join(scratchDir(), "image.jpg");
-  writeFileSync(raw, Buffer.from(await image.arrayBuffer()));
-  return readFileSync(raw).toString("base64");
+  if (!image.ok) throw new Error(`Unsplash image failed: ${image.status}`);
+  return Buffer.from(await image.arrayBuffer());
 }
 
-/** Merge-mode generation of one `Record<string, asset URL>` module: existing
- * entries are kept verbatim (approved, nondeterministic art), missing ones
- * generate a few at a time. */
-async function generateImageRecord(input: {
-  file: string;
-  assetPrefix: string;
-  exportName: string;
-  mime: "jpeg" | "png";
-  header: string;
-  entries: string[];
-  generate: (id: string) => Promise<string>;
-}) {
-  const outPath = join(FILTERS_DIR, input.file);
-  const existing = new Map<string, string>();
-  if (existsSync(outPath)) {
-    for (const match of readFileSync(outPath, "utf8").matchAll(assetEntryPattern())) {
-      existing.set(match[1] || match[2], match[3]);
-    }
+/** Manual command: ensure the selected published artwork exists. */
+async function generateImageRecord(
+  options: Options,
+  input: {
+    file: string;
+    assetPrefix: string;
+    mime: "jpeg" | "png";
+    entries: string[];
+    generate: (
+      id: string,
+      secrets: Record<string, string>,
+    ) => Promise<{ bytes: Buffer; anchors?: z.infer<typeof AnimalAnchors> }>;
+  },
+) {
+  const recipes = input.entries.map((id) => ({
+    id,
+    slug: `${input.assetPrefix}-${id.replaceAll(" ", "-")}`,
+    extension: input.mime,
+    generate: async () => input.generate(id, ctx.secrets),
+  }));
+  if (options.slug && !recipes.some((recipe) => recipe.slug === options.slug)) {
+    throw new Error(`Unknown ${input.assetPrefix} slug: ${options.slug}`);
   }
-  mkdirSync(ASSETS_DIR, { recursive: true });
-  console.log(`${existing.size} existing entries kept`);
-  const results: [string, string][] = [];
-  const missing = input.entries.filter((id) => !existing.has(id));
-  for (let i = 0; i < missing.length; i += 4) {
-    // Modest parallelism to stay clear of rate limits.
-    const batch = await Promise.all(
-      missing.slice(i, i + 4).map(async (id) => {
-        const base64 = await input.generate(id);
-        console.log(`${id}: ${Math.round((base64.length * 3) / 4 / 1024)}KB`);
-        const bytes = Buffer.from(base64, "base64");
-        const slug = id
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-|-$/g, "");
-        const filename = `${input.assetPrefix}-${slug}-${createHash("sha256").update(bytes).digest("hex")}.${input.mime}`;
-        writeFileSync(join(ASSETS_DIR, filename), bytes);
-        // Fixed pair consumed by Map below.
-        return [id, filename] as [string, string];
-      }),
-    );
-    results.push(...batch);
-  }
-  const merged = new Map([...existing, ...results]);
-  const body = input.entries
-    .filter((id) => merged.has(id))
-    .map(
-      (id) =>
-        `  ${JSON.stringify(id)}:\n    "https://mobile.iterate.com/filter-assets/${merged.get(id)}",`,
-    )
-    .join("\n");
-  writeFileSync(
-    outPath,
-    `${generatedHeader(input.header)}export const ${input.exportName}: Record<string, string> = {
-${body}
-};
-`,
+  const ctx = await resolveEnvContext({
+    envs: mobileWebsiteEnvs,
+    dopplerProject: "os",
+    env: "prd",
+  });
+  const result = await syncAssetManifest({
+    manifestPath: join(FILTERS_DIR, input.file),
+    recipes,
+    store: createAssetStore({
+      objectsUrl: `https://api.cloudflare.com/client/v4/accounts/${ctx.env.cloudflareAccountId}/r2/buckets/${ctx.env.workerName}-state/objects`,
+      token: ctx.secrets.CLOUDFLARE_API_TOKEN,
+    }),
+    slug: options.slug,
+    force: options.force || false,
+  });
+  console.log(
+    `${input.assetPrefix}: ${result.kept} already uploaded, ${result.generated} generated`,
   );
-  return { wrote: outPath, kept: existing.size, generated: results.length };
+  return result;
+}
+
+/** Check all built-in art; generate and upload only missing objects. The optional
+ * Unsplash deck remains opt-in through `flashcards --style photo`. */
+export async function all(options: Options = {}) {
+  if (!options.slug || options.slug.startsWith("backdrop-")) await backdrops(options);
+  if (!options.slug || options.slug.startsWith("animal-")) await animals(options);
+  for (const style of ["cartoon", "encyclopaedia"] as const) {
+    if (!options.slug || options.slug.startsWith(`${style}-`))
+      await flashcards({ ...options, style });
+  }
+  if (options.slug && !/^(backdrop|animal|cartoon|encyclopaedia)-/.test(options.slug)) {
+    throw new Error(`Unknown asset slug: ${options.slug}`);
+  }
 }

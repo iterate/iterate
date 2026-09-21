@@ -7,7 +7,7 @@ import { defineConfig } from "vitest/config";
 // credentials.
 export default defineConfig({
   test: {
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "scripts/**/*.test.ts"],
     exclude: ["src/**/*.e2e.test.ts"],
     environment: "node",
   },

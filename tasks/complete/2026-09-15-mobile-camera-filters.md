@@ -16,7 +16,9 @@ normal composer attachments, filter baked in.
 High-level status: the user tried the native iPhone build and confirmed it works.
 Flashcard preloading and the picker fix are delivered. September 21 review fixes
 protect saving, correct the recording timer, and isolate sound failures; local
-checks pass. The updated Swift requires a refreshed native preview build.
+checks pass and the refreshed native preview build is ready. The asset pipeline
+now keeps prompts/manifests in Git and verifies hosted data; image generation is
+manual. Current artwork and URLs were preserved.
 
 ## Why this shape (assumptions made while AFK)
 
@@ -514,3 +516,23 @@ Start/stop run on the capture serial queue, outside configuration, without synch
 waiting for the main queue. No speculative second queue was added. Device close/reopen
 remains part of native smoke testing. Main's mobile-website deploy uploads the assets
 and deploys their route automatically after merge.
+
+
+## September 21: hosted assets without checked-in binaries
+
+- [x] Verify existing uploads before removing binaries. *All 218 R2 objects
+  matched local bytes; none needed uploading. Removed 14,931,092 bytes from Git.*
+- [x] Store recipes and manifests. *`generate-filters.ts` retains prompts and
+  settings; JSON manifests hold URLs and per-image animal coordinates.*
+- [x] Add no-op, `--slug`, and `--force` behavior. *The trpc-cli commands check R2,
+  upload before saving each manifest entry, and retain every old URL.*
+- [x] Keep deployments free of AI generation. *`verify-filter-assets.ts` checks
+  referenced objects; the separate MediaPipe script uploads its pinned data.*
+- [x] Cover failure semantics. *Script integration tests exercise a local HTTP
+  object store, no-op runs, missing objects, forced selection, and failed reads/uploads.*
+
+Validation: 284 mobile tests and 21 website tests pass; both typechecks, focused
+lint/format, and the iOS export pass. With local binaries removed, the real
+`generate-filters all` run kept all 216 images and generated none. The deployment
+preflight verified all 218 referenced R2 objects. No AI image regeneration or
+production website deployment was needed for this change.
