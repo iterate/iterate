@@ -8,6 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { useWebSocket } from "partysocket/react";
 import { ClipboardAddon } from "@xterm/addon-clipboard";
@@ -47,6 +48,9 @@ const READY_STATE_MAP = {
   [WebSocket.CLOSED]: "disconnected",
 } as Record<number, string>;
 
+/** Nothing to subscribe to: a page's origin never changes short of a full navigation. */
+const subscribeToNothing = () => () => {};
+
 export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
   { wsBase, wsPath = "/api/pty/ws", initialCommand, ptyId, onParamsChange },
   ref,
@@ -83,9 +87,17 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
     ctrlActiveRef.current = ctrlActive;
   }, [ctrlActive]);
 
+  // the page's own origin as a WebSocket base, the default when the caller names no `wsBase` — read
+  // through useSyncExternalStore so the read stays out of render (a server render, which never
+  // dials, gets an empty base)
+  const pageWebSocketBase = useSyncExternalStore(
+    subscribeToNothing,
+    () => `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`,
+    () => "",
+  );
+
   const wsUrl = useMemo(() => {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const base = wsBase || `${protocol}//${window.location.host}`;
+    const base = wsBase || pageWebSocketBase;
     const params = new URLSearchParams();
 
     if (ptyId) params.set("ptyId", ptyId);
@@ -96,7 +108,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
 
     const query = params.toString();
     return `${base}${wsPath}${query ? `?${query}` : ""}`;
-  }, [initialCommand, ptyId, wsBase, wsPath]);
+  }, [initialCommand, ptyId, wsBase, wsPath, pageWebSocketBase]);
 
   const socket = useWebSocket(wsUrl, undefined, {
     maxRetries: MAX_RECONNECTION_ATTEMPTS,
@@ -136,6 +148,11 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
     const container = containerRef.current;
     let terminalReady = false;
     const pendingMessages: MessageEvent[] = [];
+    // every piece of deferred work, cancelled on teardown so nothing fits or focuses a disposed
+    // terminal
+    let readyFrame = 0;
+    let openFrame = 0;
+    let fitFrame = 0;
     const terminal = new XTerm({
       fontSize: isMobileRef.current ? 10 : 14,
       cursorBlink: true,
@@ -201,7 +218,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
       }
     };
 
-    requestAnimationFrame(() => {
+    readyFrame = requestAnimationFrame(() => {
       fitAddon.fit();
       sendResize();
       terminalReady = true;
@@ -218,14 +235,13 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
 
     const handleOpen = () => {
       terminal.reset();
-      requestAnimationFrame(() => {
+      openFrame = requestAnimationFrame(() => {
         fitAddon.fit();
         sendResize();
+        // a phone's keyboard: the caret back in xterm's textarea once the fit has settled
+        if (isMobileRef.current) helperTextarea?.focus();
       });
       terminal.focus();
-      if (isMobileRef.current && helperTextarea) {
-        setTimeout(() => helperTextarea.focus(), 100);
-      }
     };
 
     const handleMessage = (event: MessageEvent) => {
@@ -297,13 +313,17 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
     window.addEventListener("resize", handleWindowResize);
 
     const resizeObserver = new ResizeObserver(() => {
-      requestAnimationFrame(() => {
+      cancelAnimationFrame(fitFrame);
+      fitFrame = requestAnimationFrame(() => {
         fitAddon.fit();
       });
     });
     resizeObserver.observe(container);
 
     return () => {
+      cancelAnimationFrame(readyFrame);
+      cancelAnimationFrame(openFrame);
+      cancelAnimationFrame(fitFrame);
       socket.removeEventListener("open", handleOpen);
       socket.removeEventListener("message", handleMessage);
       socket.removeEventListener("close", handleClose);
@@ -359,6 +379,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
         <button
           type="button"
           ref={containerRef}
+          aria-label="Terminal"
           data-testid="terminal-container"
           data-connection-status={connectionStatus}
           className="absolute inset-0 border-0 bg-transparent p-0"

@@ -53,7 +53,11 @@ catalog already lives — enables the processor row on the path, appends
 `repo/create-requested` and waits for the terminal fact, while `get(path)` stays
 an addressable handle that creates nothing (the facet's verbs plus a typed
 `append`). Addressing and existence stay separate; the collection is simply where
-a list and a birth meet. Everything else in this section holds there too.
+a list and a birth meet. Everything else in this section holds there too — with
+one exception: a secret (`/secrets/<name>`, the `secret` facet) has no
+request/created pair, because a value cannot ride an event; `itx.secrets.set(path,
+…)` is a verb that runs on the secret's own context, lands `secret/set` there and
+cross-posts it to the owner's root, where the `project` facet catalogs it.
 
 ## Creation is an explicit birth certificate
 

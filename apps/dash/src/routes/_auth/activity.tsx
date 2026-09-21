@@ -3,15 +3,20 @@
 // the context view over that log, with the account fold enabled on first visit.
 import { useEffect, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import { ContextViewState } from "@iterate-com/ui/components/context-view/context-view-search";
 import { ContextActivity, type ActivityItx } from "../../components/context-activity.tsx";
 
 export const Route = createFileRoute("/_auth/activity")({
+  // the view's every choice — mode, filter, the inspected event, the open sheet — is this URL
+  validateSearch: ContextViewState,
   staticData: { page: "Activity" },
   component: ActivityPage,
 });
 
 function ActivityPage() {
   const { api, info } = Route.useRouteContext();
+  const search = Route.useSearch();
+  const navigate = Route.useNavigate();
   const [user, setUser] = useState<ActivityItx>();
   useEffect(() => {
     let disposed = false;
@@ -36,6 +41,10 @@ function ActivityPage() {
         </p>
       </div>
       <ContextActivity
+        state={search}
+        onStateChange={(patch) =>
+          void navigate({ search: (previous) => ({ ...previous, ...patch }), replace: true })
+        }
         itx={user}
         title={<span className="font-mono text-xs">/users/{info.principal.actor}</span>}
         ensureProcessor="account"

@@ -888,8 +888,9 @@ expect((await itx.invoke(`itx.append({ type: 'hello' })`))[0].offset).toBe(6);
 
 THE CORE REDUCE is the stream's own state, reduced inside every commit. One reduce-only processor
 (`src/stream/core-processor.ts`, slug `core`, contract 13.0.0) folds the context's control events
-into `{ projectId, path, createdAt, incarnation, paused, itxExpressionRewriteRules, subscriptions,
-secrets }` — the rule table of chapter 3 is one slice, the subscription rows of chapter 5 another.
+into `{ projectId, path, createdAt, incarnation, paused, itxExpressionRewriteRules, subscriptions }`
+— the rule table of chapter 3 is one slice, the subscription rows of chapter 5 another (the secrets
+catalog is not a slice here: it is the `project` facet's, chapter 8).
 Runtime state IS reduced state, and its snapshot is a facet-shaped door:
 
 ```ts
@@ -1544,25 +1545,36 @@ context is what it adds. What it adds today is the secret substitution: a
 with a value the caller never sees, and `getSecret("/secrets/NAME", { field: "a.b" })` picks one
 field out of a JSON secret — apps/os's grammar for a URL or a header (the path and the query alike,
 `:` kept in a spliced value; NOT its `Basic base64(user:getSecret(…))` peeling nor its JSON-body
-template — the body is never scanned); `/secrets/NAME` is the name
-`itx.secrets.set(NAME, …)` stored. `itx.secrets` is the WRITE-ONLY surface for those values — `set`
-(material, a required pin of origins, an optional refresh strategy the secret's own Durable Object
-runs on a 401), `beginOAuth` (the provider's authorize URL; the platform's callback and the object
-obtain the first tokens), `delete`, and a `list` of names, pins and strategy kinds, never a value.
-Every change appends `events.iterate.com/secrets/changed` without the value:
+template — the body is never scanned). `/secrets/NAME` is not a name but a PATH: a secret is a
+domain object on the context at `/secrets/NAME` under the project's root (a user's own secret lives
+at `/users/<id>/secrets/NAME`; the placeholder still spells `/secrets/NAME`), hosted as the
+first-party facet `secret` (`src/secret/`: contract · processor · durable-object) the way a repo is
+(`itx.repos`, chapter 7), and the path is what `itx.secrets.set("/secrets/NAME", …)` stored.
+`itx.secrets` is the WRITE-ONLY surface for those values — `set(path, material, { urls, refresh? })`
+(a required pin of origins, an optional refresh strategy the facet runs on a 401), `beginOAuth(path,
+options)` (the provider's authorize URL; the platform's callback and the facet obtain the first
+tokens), `delete(path)`, and a `list()` of paths, pins, strategy kinds and `createdAt`, never a value.
+Every writing verb runs on the secret's own context, so the log's order is the value's: it appends
+the fact on that path — `events.iterate.com/secret/set { path, urls, refresh? }`, `secret/deleted
+{ path }` — attributed to the caller, cross-posts the same fact to the project's root, and puts the
+value in the facet; the value never enters a log:
 
 ```ts
 expect(await itx.secrets.list()).toEqual([]);
-await itx.secrets.set("api.key_v-2", "hunter2", { urls: ["https://api.example.com"] });
-await itx.secrets.set("stripe", "sk_live", { urls: ["https://api.stripe.com/v1/x"] });
+await itx.secrets.set("/secrets/api.key_v-2", "hunter2", { urls: ["https://api.example.com"] });
+await itx.secrets.set("/secrets/stripe", "sk_live", { urls: ["https://api.stripe.com/v1/x"] });
 expect(await itx.secrets.list()).toEqual([
-  { name: "api.key_v-2", urls: ["https://api.example.com"] },
-  { name: "stripe", urls: ["https://api.stripe.com"] }, // the ORIGIN of the URL given, path dropped
+  {
+    path: "/secrets/api.key_v-2",
+    urls: ["https://api.example.com"],
+    createdAt: expect.any(String),
+  },
+  { path: "/secrets/stripe", urls: ["https://api.stripe.com"], createdAt: expect.any(String) }, // the ORIGIN of the URL given, path dropped
 ]);
-const changes = (await readAll(itx))
-  .filter((e) => e.type === "events.iterate.com/secrets/changed")
+const facts = (await readAll(itx))
+  .filter((e) => e.type === "events.iterate.com/secret/set")
   .map((e) => e.payload);
-expect(JSON.stringify(changes)).not.toContain("hunter2");
+expect(JSON.stringify(facts)).not.toContain("hunter2");
 // e2e/secrets.e2e.test.ts
 ```
 
@@ -1571,7 +1583,7 @@ stored secret, or a secret pinned to other origins, is a 502 to the CALLER, befo
 naming the placeholder and where it sat, never the value:
 
 ```ts
-await itx.secrets.set("bound", "v", { urls: ["https://api.example.com"] });
+await itx.secrets.set("/secrets/bound", "v", { urls: ["https://api.example.com"] });
 const res = await itx.fetch(
   new Request("https://egress.invalid/", {
     headers: { authorization: 'getSecret("/secrets/bound")' },
@@ -1589,12 +1601,22 @@ expect(await missing.text()).toContain('header "x-hunt-auth"'); // WHERE it sat,
 // e2e/secrets.e2e.test.ts · e2e/fetch-door.e2e.test.ts
 ```
 
-The door (`src/iterate-context-durable-object.ts`) scans the URL first, then every header — the
-placeholder as written, or as the URL parser percent-encodes it in a path or a query — splices a URL
-value as ONE component so a secret can never add a query parameter, and preserves method, `Upgrade`
-and body, so a 101 flows through it. A `{ field }` placeholder whose value is not JSON, or has no
-string at that path, is the same 502. The catalog is the PROJECT's: a
-secret set from `/a` is listed from `/b` and the root, and the change events live in the root's log.
+The door (`src/iterate-context-durable-object.ts`, `#egress`) finds the one path a request names —
+in the URL first, then every header; the placeholder as written, or as the URL parser
+percent-encodes it in a path or a query — and forwards the request to the context at that path (a
+DO hop; one request, one secret), whose `secret` facet substitutes: a URL value spliced as ONE
+component so a secret can never add a query parameter, method, `Upgrade` and body preserved, so a
+101 flows through it (the facet dials the socket and hands it back; it holds none). A `{ field }`
+placeholder whose value is not JSON, or has no string at that path, is the same 502. The facet's
+own facts land on the secret's path: `secret/used { method, url, status }` per dispatch — the request
+as received, never a value — and `secret/refreshed { kind, ok, error? }` per refresh outcome. The
+catalog is the PROJECT's: the `project` facet on `/` folds the cross-posted `secret/set` and
+`secret/deleted` into its `secrets`, so a secret set from `/a` is listed from `/b` and the root; the
+secret's own state is `itx.cd("/secrets/NAME").facets.get("secret").snapshot()` →
+`{ material: { offset } | null, deletion: { offset } | null }`. `delete(path)` clears the facet, lands
+`secret/deleted` on both logs and drops the `secret` row (the facet's storage with it); a never-set
+secret has nothing to delete (refused), a deleted one answers at once, and a deleted secret can be
+set again.
 Deployed, the value arrives at the bound origin — proven by fetching one of the project's own apps
 on its real host.
 
@@ -2015,7 +2037,7 @@ expect(
 The stamp is `stampPrincipal` in `src/principal.ts`: drop whatever `source.principal` the client
 supplied, set the session's, and leave no empty `source` behind. A loaded worker's `env.ITX` carries
 NO principal: it speaks for the project, and the request's principal reaches an app as
-`x-itx-principal` for the app to attribute what it appends itself. A secret's change event is
+`x-itx-principal` for the app to attribute what it appends itself. A secret's `secret/set` is
 attributed the same way (`e2e/secrets.e2e.test.ts`).
 
 ### On a project host: the browser session and the bearer
@@ -2195,8 +2217,9 @@ The invariants a reader should now be able to state:
   implicit row and deletes elsewhere; a row carries a `description` a model reads.
 - **Everything else is an event.** The DO has `append` and no configuration verbs; every verb builds
   an event and appends it, session-scoped through its handle, durable as the raw event.
-- **Runtime state is reduced state.** Rules, subscription rows, the pause and the secrets catalog are
-  slices of the core reduce, reduced inside the commit; `itx.facets.get('core').snapshot()` shows it.
+- **Runtime state is reduced state.** Rules, subscription rows and the pause are slices of the core
+  reduce, reduced inside the commit; `itx.facets.get('core').snapshot()` shows it. The secrets catalog
+  is the `project` facet's, folded from certificates cross-posted to `/` like every other entity's.
 - **Delivery is decided by the value, not declared.** A facet or a lent stub owns its progress and is
   pushed; anything else gets a stream-kept cursor, at-least-once, one ladder, a halt fact, a resume.
 - **A processor is a subscription whose target is a facet's `processEventBatch`.** Two classes, one

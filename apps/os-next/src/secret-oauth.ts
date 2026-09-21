@@ -1,13 +1,13 @@
-// secret-oauth.ts — how a secret obtains its FIRST OAuth tokens, the pure half. `itx.secrets.beginOAuth(name,
+// secret-oauth.ts — how a secret obtains its FIRST OAuth tokens, the pure half. `itx.secrets.beginOAuth(path,
 // options)` sends a human through the provider's consent page; the provider redirects to the
 // platform's one callback (`SECRET_OAUTH_CALLBACK_PATH`, served by worker.ts) with a code; the
-// secret's Durable Object exchanges the code (PKCE, RFC 7636) and becomes an ordinary
-// `oauth-refresh-token` secret — everything in secrets.ts applies from then on, and no code but that
-// object ever holds a token.
+// secret's facet exchanges the code (PKCE, RFC 7636) and becomes an ordinary `oauth-refresh-token`
+// secret — everything in secrets.ts applies from then on, and no code but that facet ever holds a
+// token.
 //
 // Two pure functions of (options, fetch): `beginSecretOAuth` builds the pending attempt and the
 // authorize URL; `completeSecretOAuth` turns the pending attempt and a code into a `SecretRecord`.
-// The host (secret-durable-object.ts) signs the `state`, keeps the pending attempt and runs these.
+// The host (secret/durable-object.ts) signs the `state`, keeps the pending attempt and runs these.
 
 import * as oauth from "oauth4webapi";
 import {
@@ -20,7 +20,7 @@ import {
   type SecretRecord,
 } from "./secrets.ts";
 
-/** What `itx.secrets.beginOAuth(name, options)` takes: the provider's two endpoints, the project's
+/** What `itx.secrets.beginOAuth(path, options)` takes: the provider's two endpoints, the project's
  *  own OAuth client (bring-your-own-app), the scope, the pin, and any extra authorize parameters the
  *  provider needs (Google: `access_type=offline`, `prompt=consent` for a refresh token). */
 export type SecretOAuthOptions = {
@@ -50,7 +50,7 @@ export type NormalizedSecretOAuthOptions = {
   extra: Record<string, string>;
 };
 
-/** The pending attempt, kept by the secret's Durable Object between the redirect out and the code
+/** The pending attempt, kept by the secret's facet between the redirect out and the code
  *  back: everything the exchange needs and nothing a browser ever sees. */
 export type PendingSecretOAuth = {
   options: NormalizedSecretOAuthOptions;
@@ -63,15 +63,14 @@ export type PendingSecretOAuth = {
   until: number;
 };
 
-/** The claims the platform signs into the `state` parameter — how the callback finds the secret.
- *  `owner` is the RESOURCE OWNER's id (iterate-context.ts `resourceScope`): a project's id, or
- *  `global--users--<id>` / `global--organizations--<id>` for a user's or an organization's own
- *  secret — the callback admits the human by it. `kind` keeps these claims apart from every other
- *  claim set the same key signs. */
+/** The claims the platform signs into the `state` parameter — how the callback finds the secret:
+ *  `context` is the secret's context, its Durable Object name (`<projectId>.iterate/secrets/<name>`;
+ *  under `/users/<id>` or `/organizations/<id>` for a user's or an organization's own secret) — the
+ *  callback derives the RESOURCE OWNER from it (iterate-context.ts `resourceScope`) and admits the
+ *  human by that. `kind` keeps these claims apart from every other claim set the same key signs. */
 export type SecretOAuthState = {
   kind: "secret-oauth";
-  owner: string;
-  name: string;
+  context: string;
   nonce: string;
   exp: number;
 };
@@ -189,8 +188,7 @@ export function isSecretOAuthState(claims: unknown): claims is SecretOAuthState 
   return (
     isRecord(claims) &&
     claims.kind === "secret-oauth" &&
-    typeof claims.owner === "string" &&
-    typeof claims.name === "string" &&
+    typeof claims.context === "string" &&
     typeof claims.nonce === "string" &&
     typeof claims.exp === "number"
   );

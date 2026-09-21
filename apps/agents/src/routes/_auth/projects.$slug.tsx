@@ -3,12 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { CircleIcon } from "lucide-react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/next/app";
-import {
-  useContextLog,
-  useContextPresence,
-  useContextProcessors,
-  useLiveState,
-} from "iterate/next/react";
+import { useIterateContext, useLiveState } from "iterate/next/react";
 import {
   Conversation,
   ConversationContent,
@@ -28,10 +23,14 @@ import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { AgentUiLlmStep } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { ContextView } from "@iterate-com/ui/components/context-view/context-view";
+import {
+  ContextViewState,
+  RIGHT_EDGE_CLOSED,
+} from "@iterate-com/ui/components/context-view/context-view-search";
 import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
 import { InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
-import { FacetLiveState } from "../../components/facet-live-state.tsx";
-import { agentEventRenderers } from "../../lib/agent-event-renderers.tsx";
+import { LiveStateValue } from "../../components/live-state-value.tsx";
+import { agentEventInspectors, agentEventRenderers } from "../../lib/agent-event-renderers.tsx";
 import { AgentsNav } from "../../components/agents-nav.tsx";
 import { AgentComposer, type StreamInterrupt } from "../../components/composer.tsx";
 import { QueuedMessagesPanel } from "../../components/queued-messages.tsx";
@@ -61,12 +60,14 @@ const AgentList = z.array(z.object({ path: z.string(), createdAt: z.string() }))
 const FEED_SUBSCRIPTION = ["*", "events.iterate.com/agent/llm-response-chunks"];
 
 export const Route = createFileRoute("/_auth/projects/$slug")({
-  validateSearch: z.object({
-    agent: z.string().optional(),
-    view: z.enum(["chat", "events"]).optional(),
-    llmRequest: z.number().int().positive().optional(),
-    scriptExecution: z.string().optional(),
-    event: z.number().int().positive().optional(),
+  // THE PAGE IS A LINK: the agent, the tab, the two trace inspectors — and the context view's every
+  // choice (mode, filter, the inspected event, the open sheet) on the Events tab. A hand-edited value
+  // is an absent key, never an error page.
+  validateSearch: ContextViewState.extend({
+    agent: z.string().optional().catch(undefined),
+    view: z.enum(["chat", "events"]).optional().catch(undefined),
+    llmRequest: z.number().int().positive().optional().catch(undefined),
+    scriptExecution: z.string().optional().catch(undefined),
   }),
   loaderDeps: ({ search }) => ({ agent: search.agent }),
   loader: async ({ context, params, deps }) => {
@@ -188,24 +189,30 @@ function useAgentContext(
   return { context, error };
 }
 
-/** The agent's log, from the SDK's `useContextLog` over its context (subscribed for every committed
- *  event and the streamed chunk windows, caught up with `readEvents`), then — for the chat and its
- *  traces — as the shared reducer reads it: the wire envelope tagged with the path, the context's
- *  script runs in the reducer's vocabulary (agent-events.ts). The raw log itself feeds the Events
- *  view untouched. */
+/** The agent's log, from the SDK's ONE `useIterateContext` over its context (subscribed for every
+ *  committed event and the streamed chunk windows, caught up with `readEvents`; the processors
+ *  table, who is here, and the live state of `core` and every hosted facet ride the same
+ *  subscription), then — for the chat and its traces — as the shared reducer reads it: the wire
+ *  envelope tagged with the path, the context's script runs in the reducer's vocabulary
+ *  (agent-events.ts). The raw log itself feeds the Events view untouched. */
 function useAgentLog(context: Context | undefined, path: string) {
-  const log = useContextLog(context, { consumes: FEED_SUBSCRIPTION });
+  const iterateContext = useIterateContext(context, { consumes: FEED_SUBSCRIPTION });
   const events = useMemo(
     () =>
       adaptContextRuns(
-        log.events.flatMap((event) => {
+        iterateContext.events.flatMap((event) => {
           const tagged = toAgentEvent(event, path);
           return tagged ? [tagged] : [];
         }),
       ),
-    [log.events, path],
+    [iterateContext.events, path],
   );
-  return { log, events, caughtUp: log.caughtUp, error: log.error || null };
+  return {
+    iterateContext,
+    events,
+    caughtUp: iterateContext.caughtUp,
+    error: iterateContext.error || null,
+  };
 }
 
 /** apps/os's interrupt affordance for the running turn, shared by the composer and the queued
@@ -258,10 +265,8 @@ function AgentConversation({ project, path }: { project: string; path: string })
   const navigate = useNavigate();
   const { slug } = Route.useParams();
   const { context, error: connectError } = useAgentContext(api, project, path);
-  const { log, events, caughtUp, error: logError } = useAgentLog(context, path);
+  const { iterateContext, events, caughtUp, error: logError } = useAgentLog(context, path);
   const error = connectError || logError;
-  const processors = useContextProcessors(context, log.events);
-  const presence = useContextPresence(context, log.events);
   const live = useLiveState<unknown>(context, {
     key: "agent",
     door: async () =>
@@ -296,9 +301,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
     ? { kind: "llmRequest", llmRequestOffset: search.llmRequest }
     : search.scriptExecution
       ? { kind: "scriptExecution", executionId: search.scriptExecution }
-      : search.event
-        ? { kind: "event", offset: search.event }
-        : null;
+      : null;
   const onInspect = useCallback(
     (next: Inspected) =>
       void navigate({
@@ -306,9 +309,9 @@ function AgentConversation({ project, path }: { project: string; path: string })
         params: { slug },
         search: (prev) => ({
           ...prev,
+          ...RIGHT_EDGE_CLOSED, // one right edge: a trace closes the Events tab's inspector and sheet
           llmRequest: next?.kind === "llmRequest" ? next.llmRequestOffset : undefined,
           scriptExecution: next?.kind === "scriptExecution" ? next.executionId : undefined,
-          event: next?.kind === "event" ? next.offset : undefined,
         }),
         replace: true,
       }),
@@ -420,14 +423,32 @@ function AgentConversation({ project, path }: { project: string; path: string })
           <ContextView
             className="mx-auto w-full max-w-3xl px-4 py-2 md:px-6"
             title={<span className="font-mono text-xs">{path}</span>}
-            events={log.events}
+            events={iterateContext.events}
             caughtUp={caughtUp}
             error={error || undefined}
             renderers={agentEventRenderers}
-            processors={processors.rows}
-            presence={presence}
-            renderCoreState={() => <FacetLiveState itx={context} name="core" />}
-            renderLiveState={(name) => <FacetLiveState itx={context} name={name} />}
+            inspectors={agentEventInspectors}
+            processors={iterateContext.processors.rows}
+            presence={iterateContext.presence}
+            renderCoreState={() => <LiveStateValue state={iterateContext.liveState.core} />}
+            renderLiveState={(name) => <LiveStateValue state={iterateContext.liveState[name]} />}
+            state={search}
+            onStateChange={(patch) =>
+              void navigate({
+                to: "/projects/$slug",
+                params: { slug },
+                search: (previous) => ({
+                  ...previous,
+                  // one right edge: the view's inspector or sheet opening closes the page's traces
+                  ...((patch.event !== undefined || patch.processors) && {
+                    llmRequest: undefined,
+                    scriptExecution: undefined,
+                  }),
+                  ...patch,
+                }),
+                replace: true,
+              })
+            }
             emptyText="Nothing has happened on this agent yet."
           />
         </div>

@@ -3,7 +3,7 @@
 // menu in its footer, the rail) and the page beside it under a header row that carries the phone's
 // sidebar trigger. apps/os's frame on this package's shadcn Sidebar. Router-agnostic on purpose:
 // the app hands over hrefs and its current location, nothing from TanStack comes in here.
-import { useEffect, useRef, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useRef, useSyncExternalStore, type MouseEvent, type ReactNode } from "react";
 import { CheckIcon, ChevronsLeftIcon, ChevronsUpDownIcon, LogOutIcon } from "lucide-react";
 import { Avatar, AvatarFallback } from "./avatar.tsx";
 import {
@@ -35,8 +35,14 @@ import {
  *  by the id (two organizations may share a name), labelled by the name. */
 export type AppShellProject = { id: string; slug: string; org?: { id: string; name: string } };
 
-/** Frames a signed-in page. Client-only, like every page that frames itself in it: it reads the
- *  `sidebar_state` cookie shadcn's provider writes, so the sidebar reopens the way it was left. */
+/** Nothing to subscribe to: the cookie has no change event, and `SidebarProvider` reads
+ *  `defaultOpen` once, when it mounts. */
+const subscribeToNothing = () => () => {};
+
+/** Frames a signed-in page. It reads the `sidebar_state` cookie shadcn's provider writes, so the
+ *  sidebar reopens the way it was left — through `useSyncExternalStore`, which keeps the read out
+ *  of render: a server render (no page frames itself here under SSR today) gets shadcn's default,
+ *  open. */
 export function AppShell({
   app,
   projects,
@@ -77,7 +83,11 @@ export function AppShell({
   locationKey: string;
   children: ReactNode;
 }) {
-  const defaultOpen = !document.cookie.split("; ").includes("sidebar_state=false");
+  const defaultOpen = useSyncExternalStore(
+    subscribeToNothing,
+    () => !document.cookie.split("; ").includes("sidebar_state=false"),
+    () => true,
+  );
   return (
     <SidebarProvider defaultOpen={defaultOpen} className="h-svh">
       {/* outside <Sidebar>: on a phone its children live in a Sheet that remounts when opened */}

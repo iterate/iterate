@@ -39,13 +39,11 @@
     "bindings": [
       { "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" },
       { "name": "BROWSER_SESSION", "class_name": "BrowserSession" },
-      { "name": "SECRET", "class_name": "SecretDurableObject" },
     ],
   },
   "exports": {
     "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "BrowserSession": { "type": "durable-object", "storage": "sqlite" },
-    "SecretDurableObject": { "type": "durable-object", "storage": "sqlite" },
     // THE FIRST-PARTY FACETS: Durable Object classes hosted as facets of a context through
     // `ctx.exports` — declared like any DO class (the facet's own SQLite is where their state lives).
     "AccountDurableObject": { "type": "durable-object", "storage": "sqlite" },
@@ -53,6 +51,7 @@
     "OrganizationDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "ProjectDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "RepoDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    "SecretDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "WorkspaceDurableObject": { "type": "durable-object", "storage": "sqlite" },
   },
   // The control plane is in-process: a local (empty) D1 + OAuth KV so the worker loads; the e2e lane

@@ -70,7 +70,7 @@ async function main(): Promise<void> {
   const root = session().authenticate(adminCredentials()).projects.get(PROJECT);
   await root.invoke(["itx", ["whoami"]]);
   if (!PRESERVE_PROJECT) {
-    await root.secrets.set("openai", apiKey!, { urls: ["https://api.openai.com"] });
+    await root.secrets.set("/secrets/openai", apiKey!, { urls: ["https://api.openai.com"] });
   }
   await root.kv.put("voice-agent.js", voiceAgent);
   await root.kv.put("voice-delegate.js", voiceDelegate);

@@ -1,21 +1,21 @@
 // src/project/processor.ts — THE PROJECT PROCESSOR: the reduce of the project's own creation facts
 // and of the certificates cross-posted to `/` (the catalog: first certificate wins — a repo, a
-// workspace or an agent is born once, an MCP connection per grant — and a death certificate drops the
-// entry; the config repo's commits, whose latest is the tip the apex follows), and TWO EFFECTS, each
-// run from state at head. THE CREATION SAGA: the config repo (`itx.repos.create("/repos/config")`,
-// the same collection a caller uses), its seed committed when `main` is unborn (the homepage worker
-// and an AGENTS.md, below), the project's ingress pointed at that commit (`project/ingress-configured`,
-// the core's), then the certificate. THE APEX FOLLOWING THE CONFIG REPO: every `repo/commit-completed`
-// from `/repos/config` re-points the ingress at that commit — a commit to the config repo IS its
-// publication (apps/os's rule), what an agent used to be told to do by hand from `/` and cannot: its
-// scripts run in a sandbox that never reaches the root. Subscribed to `/` (the row
-// `session.projects.create` enables), it runs again after every eviction: an attempt lost with an
-// incarnation is simply run again by the next — the repo tolerates existing, the seed is skipped
-// once `main` has a tip, every ingress append is keyed by the commit it points at, the certificate is
-// keyed. The host's `withItx` is its one constructor argument; a unit test constructs it with `new`
-// and reduces rows (processor.test.ts, in node); the effects are proven on the worker
-// (e2e/session.e2e.test.ts: the catalog, the apex answering the seed; e2e/website-publication.e2e.test.ts:
-// a commit publishes).
+// workspace or an agent is born once, an MCP connection per grant; a secret's latest `set` is its
+// row — and a death certificate drops the entry; the config repo's commits, whose latest is the tip
+// the apex follows), and TWO EFFECTS, each run from state at head. THE CREATION SAGA: the config repo
+// (`itx.repos.create("/repos/config")`, the same collection a caller uses), its seed committed when
+// `main` is unborn (the homepage worker and an AGENTS.md, below), the project's ingress pointed at
+// that commit (`project/ingress-configured`, the core's), then the certificate. THE APEX FOLLOWING
+// THE CONFIG REPO: every `repo/commit-completed` from `/repos/config` re-points the ingress at that
+// commit — a commit to the config repo IS its publication (apps/os's rule), what an agent used to be
+// told to do by hand from `/` and cannot: its scripts run in a sandbox that never reaches the root.
+// Subscribed to `/` (the row `session.projects.create` enables), it runs again after every eviction:
+// an attempt lost with an incarnation is simply run again by the next — the repo tolerates existing,
+// the seed is skipped once `main` has a tip, every ingress append is keyed by the commit it points
+// at, the certificate is keyed. The host's `withItx` is its one constructor argument; a unit test
+// constructs it with `new` and reduces rows (processor.test.ts, in node); the effects are proven on
+// the worker (e2e/session.e2e.test.ts: the catalog, the apex answering the seed;
+// e2e/website-publication.e2e.test.ts: a commit publishes).
 import {
   type ConsumedEvent,
   type EmittedEventInput,
@@ -24,6 +24,7 @@ import {
   StreamProcessor,
 } from "iterate/next/stream/processor";
 import type { WithItx } from "iterate/next/sdk";
+import { jsonEqual } from "iterate/next/lib";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { ProjectContract, type ProjectState } from "./contract.ts";
 
@@ -100,6 +101,25 @@ export class ProjectProcessor extends StreamProcessor<
         if (!state.agents[event.payload.path]) return undefined;
         const { [event.payload.path]: _gone, ...agents } = state.agents;
         return { ...state, agents };
+      }
+      case "events.iterate.com/secret/set": {
+        // The latest write is the row (a rotation keeps the row, a new pin or strategy replaces
+        // it); the first set's time stays. The same pin and strategy again is a no-op.
+        const { path, urls, refresh } = event.payload;
+        const known = state.secrets[path];
+        if (known && known.refresh === refresh && jsonEqual(known.urls, urls)) return undefined;
+        return {
+          ...state,
+          secrets: {
+            ...state.secrets,
+            [path]: { urls, refresh, createdAt: known?.createdAt ?? event.createdAt },
+          },
+        };
+      }
+      case "events.iterate.com/secret/deleted": {
+        if (!state.secrets[event.payload.path]) return undefined;
+        const { [event.payload.path]: _gone, ...secrets } = state.secrets;
+        return { ...state, secrets };
       }
       case "events.iterate.com/repo/commit-completed":
         // Only the config repo moves the apex; another repo's commit is a fact for its own log.

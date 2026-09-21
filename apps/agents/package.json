@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "pnpm routes:check && tsc --noEmit",
     "test": "vitest run --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "deploy": "tsx scripts/app.ts deploy",
     "gen:wrangler": "tsx scripts/app.ts generate-wrangler-config",

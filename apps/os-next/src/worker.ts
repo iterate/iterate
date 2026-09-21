@@ -110,29 +110,23 @@ function projectHostRequestTo(
   return new Request(withoutBasePath(request, routing.basePath), { headers });
 }
 
-/** A secret's OWNER (iterate-context.ts `resourceScope`), read back from its id: a project's id,
- *  or `global--users--<id>` / `global--organizations--<id>`; `root` is the owner's root context —
- *  the catalog, where `itx.secrets` runs. */
-function secretOwnerOf(owner: string): {
+/** A secret's OWNER (iterate-context.ts `resourceScope`), read off the secret's context (its Durable
+ *  Object name, what the callback's claims carry): a project's id, or the user's / the
+ *  organization's id whose own secret it is — the callback admits the human by it. `path` is the
+ *  path the placeholder spells, `/secrets/<name>`, relative to the owner's root. */
+function secretOwnerOf(context: string): {
   kind: "project" | "users" | "organizations";
   id: string;
-  root: string;
+  path: string;
 } {
-  const [, kind, id] = /^global--(users|organizations)--(.+)$/.exec(owner) ?? [];
+  const { projectId, path } = DurableObjectNameCodec.parse(context);
+  const owner = resourceScope(projectId, path);
+  const secretPath = owner.rootPath === "/" ? path : path.slice(owner.rootPath.length);
+  if (projectId !== GLOBAL_PROJECT_ID) return { kind: "project", id: projectId, path: secretPath };
+  const [, kind, id] = /^global--(users|organizations)--(.+)$/.exec(owner.id) ?? [];
   if (kind !== "users" && kind !== "organizations")
-    return {
-      kind: "project",
-      id: owner,
-      root: DurableObjectNameCodec.stringify({ projectId: owner, path: "/" }),
-    };
-  return {
-    kind,
-    id: id || "",
-    root: DurableObjectNameCodec.stringify({
-      projectId: GLOBAL_PROJECT_ID,
-      path: `/${kind}/${id}`,
-    }),
-  };
+    throw new Error("the global root owns no secrets");
+  return { kind, id: id || "", path: secretPath };
 }
 
 /** WHO may complete a secret's OAuth: a session that reaches the secret's owner — for a project's
@@ -153,12 +147,12 @@ async function reachesSecretOwner(
 }
 
 /** A secret's OAuth callback: the provider redirected the human here with `code` and the
- *  platform-signed `state` (secret-oauth.ts) naming the secret's owner, its name and the nonce. WHO
+ *  platform-signed `state` (secret-oauth.ts) naming the secret's context and the nonce. WHO
  *  completes it is admitted the way a project host admits a visitor — the same platform session (a
  *  browser cookie, or a bearer) — and must reach the owner (`reachesSecretOwner`): a stranger who saw
  *  the authorize URL cannot plant their own provider account into someone else's secret. The
- *  secret's Durable Object then exchanges the code; a failure is a plain-text 4xx with the reason,
- *  never a credential. */
+ *  secret's facet then exchanges the code; a failure is a plain-text 4xx with the reason, never a
+ *  credential. */
 async function secretOAuthCallback(
   request: Request,
   env: WorkerEnv,
@@ -186,31 +180,36 @@ async function secretOAuthCallback(
       401,
       "Sign in to iterate in this browser first, then open this link again — the tokens go into a project you must be a member of.",
     );
-  const owner = secretOwnerOf(claims.owner);
+  let owner: ReturnType<typeof secretOwnerOf>;
+  try {
+    owner = secretOwnerOf(claims.context);
+  } catch (error) {
+    return answer(400, error instanceof Error ? error.message : String(error));
+  }
   if (!(await reachesSecretOwner(sessionInput.directory, authorization.reach, owner)))
-    return answer(403, `Your session cannot access the secrets of ${claims.owner}.`);
+    return answer(403, `Your session cannot access the secrets of ${owner.kind} ${owner.id}.`);
   const denied = url.searchParams.get("error");
   if (denied) return answer(400, `The provider declined: ${denied}`);
   const code = url.searchParams.get("code");
   if (!code) return answer(400, "The provider sent no authorization code.");
-  // Through the owner's root context — `itx.secrets.completeOAuth` (built-ins.ts) runs the exchange
-  // in the secret's object and appends the catalog fact, serialized with every other write to
-  // that name; the platform's own call, no principal.
+  // On the secret's own context — `itx.secrets.completeOAuth` (built-ins.ts) runs the exchange in
+  // the secret's facet and lands the facts, in the order every other write to that path takes; the
+  // platform's own call, no principal.
   try {
-    await env.ITERATE_CONTEXT.getByName(owner.root).invoke(
-      ["itx", "builtins", "secrets", ["completeOAuth", claims.name, { code, nonce: claims.nonce }]],
+    await env.ITERATE_CONTEXT.getByName(claims.context).invoke(
+      ["itx", "builtins", "secrets", ["completeOAuth", owner.path, { code, nonce: claims.nonce }]],
       [],
       { principal: null },
     );
   } catch (error) {
     return answer(
       400,
-      `Storing the tokens for ${claims.name} failed: ${error instanceof Error ? error.message : String(error)}`,
+      `Storing the tokens for ${owner.path} failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
   return answer(
     200,
-    `Done: the secret "${claims.name}" of ${claims.owner} holds the tokens. You can close this tab.`,
+    `Done: the secret ${owner.path} of ${owner.kind} ${owner.id} holds the tokens. You can close this tab.`,
   );
 }
 
@@ -231,7 +230,6 @@ registerPipelinedRpcBrand(CapnwebRpcStub as unknown as abstract new () => unknow
 
 export { IterateContextDurableObject };
 export { BrowserSession } from "iterate/next/app-session";
-export { SecretDurableObject } from "./secret-durable-object.ts";
 // THE FIRST-PARTY FACETS: exported Durable Object classes hosted as facets of a context through
 // `ctx.exports` (first-party-facets.ts FIRST_PARTY_FACET_CLASSES) — ordinary bundled
 // worker code with the worker's real env, never a loaded source.
@@ -240,6 +238,7 @@ export { AgentDurableObject } from "./agent/durable-object.ts";
 export { OrganizationDurableObject } from "./organization/durable-object.ts";
 export { ProjectDurableObject } from "./project/durable-object.ts";
 export { RepoDurableObject } from "./repo/durable-object.ts";
+export { SecretDurableObject } from "./secret/durable-object.ts";
 export { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 export { ItxEntrypoint } from "./iterate-context.ts";
 

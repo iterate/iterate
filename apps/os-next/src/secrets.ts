@@ -1,13 +1,13 @@
 // secrets.ts — a project secret, the pure half: what a secret IS (material + a URL pin + an optional
 // refresh strategy), the placeholder grammar egress substitutes, and the two refresh strategies,
 // each a plain function of (strategy, material, fetch). No Cloudflare import — the node unit tests
-// cover every row, and Node's type-stripping child in memory-budget.test.ts loads this module through
-// the core reduce, so only erasable TypeScript syntax is used here. The host that keeps a record and
-// runs these is secret-durable-object.ts.
+// cover every row — and only erasable TypeScript syntax, so a type-stripping loader can take it. The
+// host that keeps a record and runs these is the secret facet (secret/durable-object.ts); the verbs
+// that write one are `itx.secrets` (context/built-ins.ts).
 //
 // The invariant, apps/os's (apps/os/docs/adr/0005-the-secret-cell-invariant.md), carried over whole:
 // material goes in; nothing comes out except a request to a pinned host. Refresh runs INSIDE the
-// secret's own Durable Object — a named strategy in trusted code whose exchange endpoint must itself
+// secret's own facet — a named strategy in trusted code whose exchange endpoint must itself
 // be pinned — so a credential that expires (an OAuth access token, a Waitrose session) is one secret,
 // not a worker.
 
@@ -25,7 +25,7 @@ export type SecretMaterial = string | Record<string, unknown>;
  *  PKCE stands in for the secret). RFC 6749 §2.3.1 forbids sending two forms at once. */
 export type ClientAuth = "client_secret_basic" | "client_secret_post" | "none";
 
-/** How the secret's Durable Object re-mints an expired credential, in its own trusted code: the
+/** How the secret's facet re-mints an expired credential, in its own trusted code: the
  *  exchange reads this secret's own material, POSTs to an endpoint within the pin, and writes the
  *  answer back into the material — `accessToken` (and a rotated `refreshToken`). Triggered on a 401
  *  from the pinned host, and on first use when the placeholder's field is not there yet. */
@@ -42,7 +42,7 @@ export type SecretRefresh =
    *  earns the generalization, not before. */
   | { kind: "waitrose-session"; graphqlUrl: string };
 
-/** What the secret's Durable Object stores: the material, the ORIGINS it may be sent to (never
+/** What the secret's facet stores: the material, the ORIGINS it may be sent to (never
  *  empty — a secret is always pinned), and the refresh strategy or none. */
 export type SecretRecord = {
   material: SecretMaterial;
@@ -50,19 +50,27 @@ export type SecretRecord = {
   refresh: SecretRefresh | null;
 };
 
-/** A secret's catalog entry — `itx.secrets.list()` — the name, the pin and the strategy's KIND;
- *  never a value (what `events.iterate.com/secrets/changed` carries, reduced by the core). */
-export type SecretCatalogEntry = { name: string; urls?: string[]; refresh?: SecretRefresh["kind"] };
+/** A secret's catalog entry — `itx.secrets.list()` — its path, the pin, the strategy's KIND and when
+ *  it was first set; never a value (the owner root's fold of the `secret/set` certificates:
+ *  src/project/contract.ts and its account and organization twins). */
+export type SecretCatalogEntry = {
+  path: string;
+  urls: string[];
+  refresh?: SecretRefresh["kind"];
+  createdAt: string;
+};
 
-/** A name is what the placeholder can spell. */
-const SECRET_NAME = /^[a-zA-Z0-9._-]+$/;
+/** A secret IS its path, and the path is what the placeholder spells: `/secrets/<name>`, the name
+ *  `[a-zA-Z0-9._-]+` — under the resource owner's root (a user's own secret lives at
+ *  `/users/<id>/secrets/<name>`; the placeholder still spells `/secrets/<name>`). */
+const SECRET_PATH = /^\/secrets\/[a-zA-Z0-9._-]+$/;
 
-export function assertSecretName(name: string): string {
-  if (!SECRET_NAME.test(name))
+export function assertSecretPath(path: string): string {
+  if (!SECRET_PATH.test(path))
     throw new Error(
-      `secrets: a name is [a-zA-Z0-9._-]+ (what getSecret("/secrets/NAME") can spell), got ${JSON.stringify(name)}`,
+      `secrets: a secret's path is /secrets/<name>, the name [a-zA-Z0-9._-]+ (what getSecret("/secrets/<name>") can spell), got ${JSON.stringify(path)}`,
     );
-  return name;
+  return path;
 }
 
 /** A plain JSON object — not an array, which `typeof` also calls an object. */
@@ -74,7 +82,7 @@ const REFRESH_KINDS: readonly SecretRefresh["kind"][] = ["oauth-refresh-token", 
 const CLIENT_AUTHS: readonly ClientAuth[] = ["client_secret_basic", "client_secret_post", "none"];
 
 /** The strategy kinds implemented — the one place a kind is admitted from untyped input (a `set`
- *  option, a `secrets/changed` payload). */
+ *  option). */
 export function isRefreshKind(kind: unknown): kind is SecretRefresh["kind"] {
   return REFRESH_KINDS.some((known) => known === kind);
 }
@@ -96,7 +104,7 @@ export function originsOf(urls: unknown): string[] {
   return [...new Set(urls.map((url) => new URL(String(url)).origin))];
 }
 
-/** The record as `itx.secrets.set(name, material, { urls, refresh? })` spells it, validated and
+/** The record as `itx.secrets.set(path, material, { urls, refresh? })` spells it, validated and
  *  normalized: the pin is required and stored as origins, the strategy is one of the named kinds
  *  with an http(s) endpoint that falls within the pin. */
 export function normalizeSecretRecord(
@@ -140,7 +148,7 @@ export function normalizeSecretRecord(
 // ── the placeholder grammar ── apps/os's (apps/os/src/domains/secrets/utils.ts) for a URL or a header:
 // `getSecret("/secrets/NAME")` is the whole stored value; `getSecret("/secrets/NAME", { field: "a.b" })`
 // is one dotted field of a JSON-valued secret. Double quotes, whitespace free inside the
-// parentheses; `/secrets/NAME` is the name `itx.secrets.set(NAME, …)` stored. Matched as written in a
+// parentheses; `/secrets/NAME` is the PATH `itx.secrets.set("/secrets/NAME", …)` stored. Matched as written in a
 // header, and as the URL parser percent-encodes it in a URL (`"` → %22, a space → %20, `{` → %7B, `}`
 // → %7D) — the path and the query alike; the value is spliced back into the URL as ONE component,
 // `:` kept (Telegram's `bot123:abc` path). Where this DIVERGES from apps/os: no peeling of a `Basic
@@ -148,14 +156,14 @@ export function normalizeSecretRecord(
 const QUOTE = '(?:"|%22)';
 const SPACE = "(?:\\s|%20)*";
 const SECRET_PLACEHOLDER = new RegExp(
-  `getSecret\\(${SPACE}${QUOTE}/secrets/([a-zA-Z0-9._-]+)${QUOTE}${SPACE}` +
+  `getSecret\\(${SPACE}${QUOTE}(/secrets/[a-zA-Z0-9._-]+)${QUOTE}${SPACE}` +
     `(?:,${SPACE}(?:\\{|%7B)${SPACE}field${SPACE}:${SPACE}${QUOTE}([^"%\\s]+)${QUOTE}${SPACE}(?:\\}|%7D))?${SPACE}\\)`,
   "g",
 );
 
 /** The placeholder as a caller wrote it, for a refusal that names it. */
-const placeholderOf = (name: string, field: string | undefined): string =>
-  !field ? `getSecret("/secrets/${name}")` : `getSecret("/secrets/${name}", { field: "${field}" })`;
+const placeholderOf = (path: string, field: string | undefined): string =>
+  !field ? `getSecret("${path}")` : `getSecret("${path}", { field: "${field}" })`;
 
 /** A placeholder the secret cannot honour — no secret stored, a `field` the material has no string
  *  at, a secret pinned to other origins — answered with a 502 to the CALLER, never the destination.
@@ -163,8 +171,7 @@ const placeholderOf = (name: string, field: string | undefined): string =>
  *  yet): the mint-on-first-use. */
 export class ProjectSecretRefused extends Error {
   readonly mintable: boolean;
-  // A plain field, not a parameter property: this module is loaded by Node's type-stripping child in
-  // memory-budget.test.ts (through the core reduce's `isRefreshKind`), which only erases annotations.
+  // A plain field, not a parameter property: only erasable syntax in this module (the header).
   constructor(message: string, mintable = false) {
     super(message);
     this.mintable = mintable;
@@ -198,17 +205,17 @@ function secretFieldOf(
   return value;
 }
 
-/** The DISTINCT secret names a request's URL and headers reference — how egress knows which
- *  secret's Durable Object a request belongs to (one request, one secret). */
-export function secretNamesReferenced(request: Request): string[] {
-  const names = new Set<string>();
+/** The DISTINCT secret paths a request's URL and headers reference — how egress knows which
+ *  secret's context a request belongs to (one request, one secret). */
+export function secretPathsReferenced(request: Request): string[] {
+  const paths = new Set<string>();
   const scan = (value: string) => {
     if (!value.includes("getSecret(")) return;
-    for (const [, name = ""] of value.matchAll(SECRET_PLACEHOLDER)) names.add(name);
+    for (const [, path = ""] of value.matchAll(SECRET_PLACEHOLDER)) paths.add(path);
   };
   scan(request.url);
   for (const [, value] of request.headers) scan(value);
-  return [...names];
+  return [...paths];
 }
 
 /**
@@ -217,7 +224,7 @@ export function secretNamesReferenced(request: Request): string[] {
  * `?access_token=getSecret("/secrets/token")` would otherwise send the credential's NAME to the
  * destination and the value nowhere); a placeholder with NO stored secret throws
  * `ProjectSecretRefused` naming the placeholder and where it sat — to the caller, never the
- * destination. `resolve(name)` answers the stored material; a `{ field }` placeholder then picks one
+ * destination. `resolve(path)` answers the stored material; a `{ field }` placeholder then picks one
  * string out of it; an OBJECT material with no `field` is refused (a whole object is never a header).
  * In the URL the value is spliced as ONE component (`encodeURIComponent`, with `:` kept — a Telegram
  * bot token in the path), so a secret can never add a query parameter or a fragment. Returns a NEW
@@ -228,7 +235,7 @@ export function secretNamesReferenced(request: Request): string[] {
  */
 export async function substituteProjectSecrets(
   request: Request,
-  resolve: (name: string) => Promise<SecretMaterial | null> | SecretMaterial | null,
+  resolve: (path: string) => Promise<SecretMaterial | null> | SecretMaterial | null,
 ): Promise<Request> {
   // Substitute the placeholders in one string; null = none in it (leave as-is).
   const substitute = async (value: string, where: string, encode: boolean) => {
@@ -237,10 +244,10 @@ export async function substituteProjectSecrets(
     let last = 0;
     let any = false;
     for (const m of value.matchAll(SECRET_PLACEHOLDER)) {
-      // The two capture groups: the name (always present on a match), the optional field.
-      const [, name = "", field] = m;
-      const placeholder = placeholderOf(name, field);
-      const stored = await resolve(name);
+      // The two capture groups: the path (always present on a match), the optional field.
+      const [, path = "", field] = m;
+      const placeholder = placeholderOf(path, field);
+      const stored = await resolve(path);
       // oxlint-disable-next-line iterate/simple-truthiness-check -- null means no secret is stored; a stored empty-string value is a real secret and must be substituted, not refused
       if (stored == null)
         throw new ProjectSecretRefused(
@@ -287,14 +294,14 @@ export function originPinned(url: string, urls: string[]): boolean {
   return urls.includes(new URL(url).origin);
 }
 
-export function pinRefusal(name: string, url: string, urls: string[]): ProjectSecretRefused {
+export function pinRefusal(path: string, url: string, urls: string[]): ProjectSecretRefused {
   return new ProjectSecretRefused(
-    `itx.fetch: project secret ${name} is pinned to ${urls.join(", ")} — not sent to ${new URL(url).origin}`,
+    `itx.fetch: the secret ${path} is pinned to ${urls.join(", ")} — not sent to ${new URL(url).origin}`,
   );
 }
 
 // ── the refresh strategies ── each a pure function of (strategy, material, fetch): read the
-// material, POST within the pin, return the NEXT material. The host (secret-durable-object.ts) runs
+// material, POST within the pin, return the NEXT material. The host (secret/durable-object.ts) runs
 // ONE at a time per secret and stores the answer. A credential never appears in an error message.
 
 /** The material as a record — a JSON string parses, a plain string has no fields. */

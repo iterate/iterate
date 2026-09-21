@@ -32,6 +32,14 @@ const committed = (path: string, commitOid: string) => ({
   type: "events.iterate.com/repo/commit-completed",
   payload: { path, commitOid, message: "m", changedPaths: ["worker.ts"] },
 });
+const secretSet = (path: string, urls: string[], refresh?: string) => ({
+  type: "events.iterate.com/secret/set",
+  payload: { path, urls, refresh },
+});
+const secretDeleted = (path: string) => ({
+  type: "events.iterate.com/secret/deleted",
+  payload: { path },
+});
 
 /** The empty state; a row spreads it and names only what its events changed. */
 const empty: ProjectState = {
@@ -40,6 +48,7 @@ const empty: ProjectState = {
   workspaces: {},
   agents: {},
   mcpConnections: {},
+  secrets: {},
   configRepoTip: null,
 };
 
@@ -94,7 +103,37 @@ describe("ProjectProcessor — the reduce", () => {
         workspaces: { "/workspaces/notes": { createdAt: expect.any(String) } },
         agents: { "/agents/support": { createdAt: expect.any(String) } },
         mcpConnections: {},
+        secrets: {},
         configRepoTip: null,
+      },
+    },
+    {
+      name: "a secret's set is its row — the pin, the strategy kind, the first set's time; a re-set with a new pin replaces the row and keeps the time; the same pin again is a no-op; a deletion drops it; a set after the deletion is a new row",
+      events: [
+        secretSet("/secrets/shop", ["https://shop.example"]),
+        secretSet("/secrets/shop", ["https://shop.example"]),
+        secretSet(
+          "/secrets/shop",
+          ["https://shop.example", "https://api.shop.example"],
+          "oauth-refresh-token",
+        ),
+        secretSet("/secrets/gone", ["https://gone.example"]),
+        secretDeleted("/secrets/gone"),
+        secretDeleted("/secrets/gone"),
+        secretSet("/secrets/back", ["https://a.example"]),
+        secretDeleted("/secrets/back"),
+        secretSet("/secrets/back", ["https://b.example"]),
+      ],
+      state: {
+        ...empty,
+        secrets: {
+          "/secrets/shop": {
+            urls: ["https://shop.example", "https://api.shop.example"],
+            refresh: "oauth-refresh-token",
+            createdAt: expect.any(String),
+          },
+          "/secrets/back": { urls: ["https://b.example"], createdAt: expect.any(String) },
+        },
       },
     },
     {
