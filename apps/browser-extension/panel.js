@@ -116,8 +116,13 @@ async function store(issuer, clientId, tokens, previousRefreshToken) {
   return session;
 }
 
+/** The stored session — read fresh each time: a refresh rotates the token in storage. */
+const storedSession = async () => (await chrome.storage.local.get("session")).session;
+
 /** The access token, refreshed through the refresh token when it is about to expire. */
-async function freshAccessToken(session) {
+async function freshAccessToken() {
+  const session = await storedSession();
+  if (!session) throw new Error("Not signed in.");
   if (Date.now() < session.expiresAt - 30_000) return session.accessToken;
   if (!session.refreshToken)
     throw new Error("The access token expired and the grant cannot refresh. Sign in again.");
@@ -137,9 +142,19 @@ async function freshAccessToken(session) {
 // over raw CDP, commands only: the wire stays a wire, and the browser's FACTS — a tab attached,
 // navigated, detached — go to the root stream as ephemeral events.
 
-/** The tabs the project may drive — opened by it, or lent by the person — and whether the debugger
- *  is attached right now. */
+/** The tabs the project may drive — opened by it, or lent by the person — each with whether the
+ *  debugger is attached and, while it is being attached, that promise (so overlapping first calls
+ *  share one attach). */
 const tabs = new Map();
+const grant = (tabId) =>
+  tabs.get(tabId) ?? tabs.set(tabId, { attached: false, attaching: null }).get(tabId);
+
+/** Let every tab go: on sign-out, and when the panel moves to another project. */
+async function releaseTabs() {
+  for (const [tabId, known] of tabs)
+    if (known.attached) await chrome.debugger.detach({ tabId }).catch(console.error);
+  tabs.clear();
+}
 /** Where the browser's facts go: the connected root context's append, set by `connect`. */
 let report = () => {};
 const fact = (type, payload) =>
@@ -150,14 +165,19 @@ async function attach(tabId) {
   const known = tabs.get(tabId);
   if (!known) throw new Error(`Tab ${tabId} is not one this project opened or was lent.`);
   if (known.attached) return;
-  await chrome.debugger.attach({ tabId }, "1.3");
-  known.attached = true;
-  await chrome.debugger.sendCommand({ tabId }, "Page.enable"); // main-frame navigations, below
-  const { result } = await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", {
-    expression: "location.href",
-    returnByValue: true,
+  known.attaching ??= (async () => {
+    await chrome.debugger.attach({ tabId }, "1.3");
+    known.attached = true;
+    await chrome.debugger.sendCommand({ tabId }, "Page.enable"); // main-frame navigations, below
+    const { result } = await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", {
+      expression: "location.href",
+      returnByValue: true,
+    });
+    fact("attached", { tabId, url: result.value });
+  })().finally(() => {
+    known.attaching = null;
   });
-  fact("attached", { tabId, url: result.value });
+  await known.attaching;
 }
 
 chrome.debugger.onEvent.addListener(({ tabId }, method, params) => {
@@ -179,7 +199,7 @@ class ChromeBrowser extends RpcTarget {
     if (target.protocol !== "http:" && target.protocol !== "https:")
       throw new Error("openPage() only accepts http and https URLs.");
     const tab = await chrome.tabs.create({ active: true, url: target.href });
-    tabs.set(tab.id, { attached: false });
+    grant(tab.id);
     await new Promise((loaded) => {
       const onUpdated = (tabId, change) => {
         if (tabId !== tab.id || change.status !== "complete") return;
@@ -187,6 +207,8 @@ class ChromeBrowser extends RpcTarget {
         loaded();
       };
       chrome.tabs.onUpdated.addListener(onUpdated);
+      // Listener first, then the current status: a page that was already complete fires nothing.
+      void chrome.tabs.get(tab.id).then((current) => onUpdated(tab.id, { status: current.status }));
       setTimeout(() => onUpdated(tab.id, { status: "complete" }), 10_000);
     });
     return { tabId: tab.id, url: target.href };
@@ -281,9 +303,7 @@ async function signedIn(session) {
     } catch (error) {
       console.error(error);
     }
-    for (const [tabId, known] of tabs)
-      if (known.attached) await chrome.debugger.detach({ tabId }).catch(console.error);
-    tabs.clear();
+    await releaseTabs();
     await chrome.storage.local.remove("session");
     await signedOut(session.issuer);
   };
@@ -307,6 +327,8 @@ async function connect(session, project) {
   live?.[Symbol.dispose]();
   live = null;
   liveApi = null;
+  // Another project must not inherit this one's tabs (a reconnect to the same project keeps them).
+  if (project !== connectedProject) await releaseTabs();
   connectedProject = project;
   const view = element("connection", HTMLElement);
   view.innerHTML = project ? `<p class="muted">Connecting…</p>` : "";
@@ -316,7 +338,7 @@ async function connect(session, project) {
   const iterate = newWebSocketRpcSession(socket);
   live = iterate;
   try {
-    const token = await freshAccessToken(session);
+    const token = await freshAccessToken();
     // capnweb answers `authenticate` with a pipelined stub of the session: the calls below ride the
     // same round trip as the token.
     const api = iterate.authenticate({ type: "bearer", token });
@@ -371,7 +393,7 @@ async function connect(session, project) {
     element("lend", HTMLButtonElement).onclick = async () => {
       const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
       if (!tab?.id) return;
-      tabs.set(tab.id, { attached: false });
+      grant(tab.id);
       try {
         await attach(tab.id);
         result.textContent = `Tab ${tab.id} is lent: the project may drive it with cdp(${tab.id}, …).`;
