@@ -11,7 +11,8 @@
 //                                                  since the merge-base, all previews every one
 //   pnpm preview deploy  --pr <n>                  build, ensure the D1, upload secrets, `wrangler
 //                                                  preview`, then write the PR body's preview section
-//   pnpm preview e2e     --pr <n>                  the e2e suite (pnpm e2e) against the live preview
+//   pnpm preview e2e     --pr <n>                  the vitest e2e suite AND the Playwright specs
+//                                                  (pnpm e2e, pnpm spec) against the live preview
 //   pnpm preview reset   --pr <n>                  delete, then deploy from scratch — THE answer to
 //                                                  "something is wrong with my preview"
 //   pnpm preview delete  --pr <n>                  tear it down: the preview, then its D1
@@ -713,24 +714,35 @@ async function deleteAll(previewName: string): Promise<void> {
   }
 }
 
-/** `pnpm e2e` in deployed-target mode (e2e/support/global-setup.ts): the same suite prd's deploy
- *  runs after every merge, pointed at the preview. No project hosts on workers.dev, so the base is
- *  blank and the project-host rows skip. */
+/** THE PROOF: the vitest e2e suite and the Playwright specs, both in deployed-target mode against
+ *  the preview, side by side — the same two suites deploy-os-next.yml and `pnpm spec` know
+ *  (e2e/support/global-setup.ts, playwright.config.ts). No project hosts on workers.dev, so the base
+ *  is blank and the project-host rows skip. vitest streams; Playwright's report prints after it. */
 async function runE2e(previewName: string): Promise<void> {
   const url = previewUrl(previewName);
-  // The suite's files run in parallel: every project a test creates is its own (e2e/support/client.ts
-  // `freshCtx`); the few load-sensitive files are vitest's serial lane (vitest.config.ts).
-  await runOk("pnpm", ["e2e"], {
-    inherit: true,
-    cwd: ROOT,
-    env: {
-      ...process.env,
-      WORKER_BASE_URL: url,
-      ADMIN_API_SECRET: requireEnv("APP_CONFIG_ADMIN_API_SECRET"),
-      PROJECT_HOSTNAME_BASE: "",
-      MCP_BASE_URL: `${url}/mcp`,
-    },
-  });
+  const env = {
+    ...process.env,
+    WORKER_BASE_URL: url,
+    DEMO_BASE_URL: url,
+    ADMIN_API_SECRET: requireEnv("APP_CONFIG_ADMIN_API_SECRET"),
+    TEST_EMAIL_LOGIN: "true",
+    PROJECT_HOSTNAME_BASE: "",
+    MCP_BASE_URL: `${url}/mcp`,
+  };
+  const spec = (async () => {
+    if (process.env.CI) await runOk("pnpm", ["exec", "playwright", "install", "chromium"], { env });
+    return run("pnpm", ["spec"], { env });
+  })();
+  const e2e = run("pnpm", ["e2e"], { env, inherit: true });
+  const [specResult, e2eResult] = await Promise.all([spec, e2e]);
+  process.stdout.write(
+    `\n── playwright (pnpm spec) ──\n${specResult.stdout}${specResult.stderr}\n`,
+  );
+  const failed = [
+    e2eResult.status !== 0 && "pnpm e2e",
+    specResult.status !== 0 && "pnpm spec",
+  ].filter(Boolean);
+  if (failed.length > 0) throw new Error(`${failed.join(" and ")} failed against ${url}`);
 }
 
 // ── sweep (cloudflare-os: GitHub has no `environment.auto_stop_in`) ────────────────────────────
