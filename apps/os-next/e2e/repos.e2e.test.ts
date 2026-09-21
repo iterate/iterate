@@ -265,7 +265,9 @@ test("itx.repos.delete(path) lands the request and the death certificate on the 
   );
   expect(await itx.repos.create("/repos/gone")).toEqual({ path: "/repos/gone" });
   expect(await processorNames(itx.cd("/repos/gone"))).toEqual(["repo"]);
-  expect(await repo.tip()).toBeNull(); // alive: the verbs answer (an unborn main)
+  expect(await itx.cd("/repos/gone").facets.get("repo").snapshot()).toMatchObject({
+    state: { creation: { status: "created" }, deletion: null }, // alive (git is never spoken: the fake remote is local)
+  });
 
   expect(await itx.repos.delete("/repos/gone")).toEqual({ path: "/repos/gone" });
   expect(artifacts.deleted).toEqual(["/repos/gone"]); // the Artifacts repo went, by its path
