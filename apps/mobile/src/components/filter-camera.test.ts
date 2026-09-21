@@ -1,6 +1,49 @@
 import { expect, test } from "vitest";
 import FilterCamera from "./filter-camera.tsx";
 
+test("the recording clock waits for loaded images and the encoder's start event", async () => {
+  using camera = filterCamera({
+    source: `({label: "Image", emoji: "I", draw({helpers}) {
+      helpers.cachedImage("record-clock", "https://mobile.iterate.com/filter-assets/clock.png");
+    }})`,
+  });
+  camera.update({ facing: "back" });
+  camera.requests[0].resolve({ ...mediaStream(), getAudioTracks: () => [{ stop() {} }] });
+  await camera.settle();
+  camera.update({ command: { seq: 1, type: "start-recording" } });
+  await camera.settle();
+  expect(camera.recordingStarts).toEqual([]);
+  expect(camera.recorders).toHaveLength(0);
+  camera.images[0].naturalWidth = 100;
+  camera.images[0].complete = true;
+  camera.images[0].onload();
+  await camera.settle();
+  expect(camera.errors).toEqual([]);
+  expect(camera.recorders).toHaveLength(1);
+  expect(camera.recordingStarts).toEqual([]);
+  camera.recorders[0].onstart();
+  expect(camera.recordingStarts).toEqual(["started"]);
+});
+
+test("repeated Stop while the encoder finishes delivers one video without a capture error", async () => {
+  using camera = filterCamera({ source: '({label: "Video", emoji: "V", draw() {}})' });
+  camera.update({ facing: "back" });
+  camera.requests[0].resolve({ ...mediaStream(), getAudioTracks: () => [{ stop() {} }] });
+  await camera.settle();
+  camera.update({ command: { seq: 1, type: "start-recording" } });
+  await camera.settle();
+  camera.recorders[0].onstart();
+  camera.update({ command: { seq: 2, type: "stop-recording" } });
+  camera.update({ command: { seq: 3, type: "stop-recording" } });
+  await camera.settle();
+  expect(camera.errors).toEqual([]);
+  expect(camera.recorders[0].stops).toBe(1);
+  expect(camera.videos).toHaveLength(0);
+  camera.recorders[0].onstop();
+  await camera.settle();
+  expect(camera.videos).toMatchObject([{ base64: "AQID", mimeType: "video/mp4" }]);
+});
+
 test("capture waits for the active filter's image, then uses it without a second shutter press", async () => {
   using camera = filterCamera({
     source: `({label: "Image", emoji: "I", draw({ctx, helpers}) {
@@ -200,6 +243,9 @@ function filterCamera({ source }: { source: string }) {
   const errors: string[] = [];
   const images: any[] = [];
   const photos: any[] = [];
+  const videos: any[] = [];
+  const recordingStarts: string[] = [];
+  const recorders: any[] = [];
   const drawnImages: any[] = [];
   const ctx = {
     setTransform() {},
@@ -215,6 +261,28 @@ function filterCamera({ source }: { source: string }) {
   };
   let tick = () => {};
   const globals = {
+    MediaRecorder: class {
+      static isTypeSupported() {
+        return true;
+      }
+      state = "inactive";
+      onstart = () => {};
+      onstop = () => {};
+      stops = 0;
+      constructor() {
+        recorders.push(this);
+      }
+      start() {
+        this.state = "recording";
+      }
+      stop() {
+        if (this.state === "inactive")
+          throw new DOMException("Already stopped", "InvalidStateError");
+        this.state = "inactive";
+        this.stops++;
+        // Finalization is explicitly completed by the test, as on a slow encoder.
+      }
+    },
     Image: class {
       complete = false;
       naturalWidth = 0;
@@ -257,7 +325,12 @@ function filterCamera({ source }: { source: string }) {
     onPhoto: async (photo) => {
       photos.push(photo);
     },
-    onVideo: async () => {},
+    onVideo: async (video) => {
+      videos.push(video);
+    },
+    onRecordingStarted: async () => {
+      recordingStarts.push("started");
+    },
     onCaptureError: async (message: string) => {
       errors.push(message);
     },
@@ -271,6 +344,7 @@ function filterCamera({ source }: { source: string }) {
     height: 800,
     getContext: () => ctx,
     toBlob: (callback: any) => callback(new Blob([new Uint8Array([1, 2, 3])])),
+    captureStream: () => ({ addTrack() {} }),
   };
   const rendered: any = instance.render();
   rendered.props.children[1].props.ref(canvas);
@@ -281,6 +355,9 @@ function filterCamera({ source }: { source: string }) {
     errors,
     images,
     photos,
+    videos,
+    recordingStarts,
+    recorders,
     drawnImages,
     video,
     tick: () => tick(),

@@ -19,5 +19,6 @@ export type FilterCameraProps = {
   command: FilterCameraCommand | null;
   onPhoto: (photo: { base64: string; width: number; height: number }) => Promise<void>;
   onVideo: (video: FilterVideo) => Promise<void>;
+  onRecordingStarted: () => Promise<void>;
   onCaptureError: (message: string) => Promise<void>;
 };

@@ -65,6 +65,7 @@ type Props = {
   command: FilterCameraCommand | null;
   onPhoto: (photo: { base64: string; width: number; height: number }) => Promise<void>;
   onVideo: (video: { base64: string; mimeType: string; durationSeconds: number }) => Promise<void>;
+  onRecordingStarted: () => Promise<void>;
   onCaptureError: (message: string) => Promise<void>;
 };
 
@@ -230,7 +231,7 @@ export default class FilterCamera extends Component<Props, State> {
     this.#assetAbort.abort();
     cancelAnimationFrame(this.#raf);
     void this.#audioContext?.close();
-    this.#recorder?.stop();
+    if (this.#recorder && this.#recorder.state !== "inactive") this.#recorder.stop();
     this.#stream?.getTracks().forEach((track) => track.stop());
     this.#landmarker?.close();
   }
@@ -660,7 +661,8 @@ export default class FilterCamera extends Component<Props, State> {
         this.#startRecording();
         this.#preparingRecording = null;
       }
-      if (command.type === "stop-recording") this.#recorder?.stop();
+      if (command.type === "stop-recording" && this.#recorder?.state === "recording")
+        this.#recorder.stop();
     } catch (error) {
       if (command.type === "start-recording" && this.#preparingRecording !== command.seq) return;
       if (command.type === "start-recording") this.#preparingRecording = null;
@@ -739,6 +741,10 @@ export default class FilterCamera extends Component<Props, State> {
     this.#recordingStartedAt = Date.now();
     recorder.ondataavailable = (event) => {
       if (event.data.size > 0) this.#recorderChunks.push(event.data);
+    };
+    recorder.onstart = () => {
+      this.#recordingStartedAt = Date.now();
+      if (!this.#disposed) void this.props.onRecordingStarted();
     };
     recorder.onerror = (event) => {
       void this.props.onCaptureError(

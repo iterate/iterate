@@ -36,6 +36,7 @@ type Status = {
   ready: boolean;
   loading: boolean;
   error: string | null;
+  toneError: string | null;
   tracked: boolean;
   microphone: boolean;
   width: number;
@@ -134,6 +135,7 @@ class NativeFilterCamera extends Component<
       ready: false,
       loading: false,
       error: null,
+      toneError: null,
       tracked: false,
       microphone: true,
       width: 720,
@@ -273,9 +275,11 @@ class NativeFilterCamera extends Component<
           facing={this.props.facing}
           command={this.props.command}
           retryToken={this.state.retryToken}
-          onStatus={({ nativeEvent }) =>
-            this.setState({ status: { ...this.state.status, ...nativeEvent } })
-          }
+          onStatus={({ nativeEvent }) => {
+            if (nativeEvent.recording && !this.state.status.recording && !this.disposed)
+              void this.props.onRecordingStarted();
+            this.setState(({ status }) => ({ status: { ...status, ...nativeEvent } }));
+          }}
           onPhoto={({ nativeEvent }) => {
             void (async () => {
               try {
@@ -396,6 +400,7 @@ class NativeFilterCamera extends Component<
             </Pressable>
           </ScrollView>
         ) : null}
+        {status.toneError ? <Text style={styles.error}>{status.toneError}</Text> : null}
         {status.ready && !status.microphone ? (
           <Text style={styles.note}>
             Photos only — allow microphone access for video and singing.

@@ -14,9 +14,9 @@ pipeline. Photos and clips captured while a filter is active come back as
 normal composer attachments, filter baked in.
 
 High-level status: the user tried the native iPhone build and confirmed it works.
-The follow-up preloads three flashcards ahead and hides the filter picker after
-selection. Regression tests and native media proofs pass; the refreshed native
-build is signed and its install page, manifest and download are verified.
+Flashcard preloading and the picker fix are delivered. September 21 review fixes
+protect saving, correct the recording timer, and isolate sound failures; local
+checks pass. The updated Swift requires a refreshed native preview build.
 
 ## Why this shape (assumptions made while AFK)
 
@@ -497,3 +497,19 @@ on each new card, and the filter picker covered the per-filter controls.
 - [x] Hide the filter picker after selection. _The parent unmounts the camera on Close, so reopening starts at None with the picker visible again._
 - [x] Verify preload order and loading/error isolation. _The bundled native engine test follows three taps and a style change; browser-cache and native Apple proofs check that upcoming downloads do not block capture and errors surface on selection._
 - [x] Publish the refreshed native build. _EAS build `37ab5b53-bf4a-4d3e-b3cd-b1ebd8ca951c` finished at 11:55 UTC, source `c6977b21a`, runtime `907a5fc072db8e22b08c08c118e40fc61ec069db`; install page, manifest, IPA download and hosted art verified._
+
+## Implementation log — September 21 review follow-up
+
+- [x] Merge current main. _Merged `79411edce`; no history rewrite._
+- [x] Protect videos during saving. _The capture UI disables Stop/Close, native Stop ignores duplicates during finalization, and the browser checks MediaRecorder state._
+- [x] Start the timer when recording actually begins. _Both filter hosts notify the capture UI; loading shows Preparing instead of counting video time._
+- [x] Keep filter sounds optional. _Playback failures expose a nonfatal message; they cannot cancel the recorder._
+- [x] Fix cancellation during writer finalization. _The native regression reproduced a missing completion callback, not Bugbot's claimed API exception. Finish now completes before deleting a canceled clip, with a lock around the cancellation handoff; 50 runs pass._
+- [x] Remove the two flagged TypeScript assertions. _The camera-facing query needs an explicit literal-union return type: the suggested inferred version widens to string and fails typecheck._
+- [x] Verify locally. _279 mobile tests, mobile typecheck, focused lint/format, iOS export, and native MP4/audio decode proof pass. The native proof used identical repository artwork as data URLs because production does not yet serve this PR's route; it does not prove live hosting or iPhone capture._
+
+The session-queue review's claimed Apple prohibition is absent from the SDK contracts.
+Start/stop run on the capture serial queue, outside configuration, without synchronously
+waiting for the main queue. No speculative second queue was added. Device close/reopen
+remains part of native smoke testing. Main's mobile-website deploy uploads the assets
+and deploys their route automatically after merge.

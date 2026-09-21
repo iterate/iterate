@@ -10,6 +10,10 @@ final class FilterMovieWriter {
   private let audio: AVAssetWriterInput?
   private var startedAt: CMTime?
   private var ended = false
+  // finishWriting calls back on the encoder queue; cancel runs on the capture queue.
+  private let finishLock = NSLock()
+  private var finishing = false
+  private var cancelAfterFinish = false
   private(set) var writtenFrames = 0
   private(set) var droppedFrames = 0
 
@@ -99,19 +103,33 @@ final class FilterMovieWriter {
     ended = true
     video.markAsFinished()
     audio?.markAsFinished()
+    finishLock.withLock { finishing = true }
     writer.finishWriting { [self] in
-      if writer.status == .completed {
-        completion(.success(()))
-      } else {
-        completion(.failure(writer.error ?? FilterCameraError("Recording was canceled")))
+      let result: Result<Void, Error> = finishLock.withLock {
+        finishing = false
+        if cancelAfterFinish {
+          try? FileManager.default.removeItem(at: url)
+          return .failure(FilterCameraError("Recording was canceled"))
+        }
+        if writer.status == .completed { return .success(()) }
+        return .failure(writer.error ?? FilterCameraError("Recording could not finish"))
       }
+      completion(result)
     }
   }
 
   func cancel() {
     ended = true
-    if writer.status == .writing { writer.cancelWriting() }
-    try? FileManager.default.removeItem(at: url)
+    finishLock.withLock {
+      if finishing {
+        // Canceling AVAssetWriter here can suppress its completion callback.
+        // Let the encoder finish, then delete the canceled clip before delivery.
+        cancelAfterFinish = true
+        return
+      }
+      if writer.status == .writing { writer.cancelWriting() }
+      try? FileManager.default.removeItem(at: url)
+    }
   }
 }
 

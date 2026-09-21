@@ -146,6 +146,25 @@ import ImageIO
     let canceled = try FilterMovieWriter(url: canceledURL, width: 320, height: 480, hasAudio: false)
     canceled.cancel()
     precondition(!FileManager.default.fileExists(atPath: canceledURL.path))
+    // Exercise the real AVAssetWriter race: Close can cancel an asynchronous finish.
+    for index in 0..<50 {
+      let canceledURL = url.deletingLastPathComponent().appendingPathComponent(
+        "cancel-finish-\(index).mp4")
+      let writer = try FilterMovieWriter(url: canceledURL, width: 64, height: 64, hasAudio: false)
+      var buffer: CVPixelBuffer?
+      precondition(
+        CVPixelBufferCreate(nil, 64, 64, kCVPixelFormatType_32BGRA, nil, &buffer) == kCVReturnSuccess)
+      while !writer.isReadyForVideo { try await Task.sleep(nanoseconds: 1_000_000) }
+      try writer.appendVideo(buffer!, at: .zero)
+      let finished = DispatchSemaphore(value: 0)
+      writer.finish { _ in finished.signal() }
+      writer.cancel()
+      // A one-frame clip completes in milliseconds; a missing callback must fail fast.
+      precondition(
+        finished.wait(timeout: .now() + 2) == .success, "Cancel during finish lost its callback")
+      precondition(!FileManager.default.fileExists(atPath: canceledURL.path))
+    }
+    print("Native writer: 50 finish-then-cancel runs completed and removed their files")
     // Exercise the actual built-in drawers, including hosted images and
     // scratch-canvas cutouts, on the production JavaScriptCore renderer.
     let input = image

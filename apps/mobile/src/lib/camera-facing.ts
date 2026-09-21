@@ -12,10 +12,10 @@ export function useCameraFacing() {
   const queryClient = useQueryClient();
   const stored = useQuery({
     queryKey: ["camera-facing"],
-    queryFn: async () =>
-      ((await AsyncStorage.getItem(CAMERA_FACING_KEY)) === "front" ? "front" : "back") as
-        | "back"
-        | "front",
+    queryFn: async (): Promise<"front" | "back"> => {
+      const value = await AsyncStorage.getItem(CAMERA_FACING_KEY);
+      return value === "front" ? "front" : "back";
+    },
   });
   const facing = stored.data || "back";
   return {

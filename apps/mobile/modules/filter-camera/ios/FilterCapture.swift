@@ -439,6 +439,8 @@ final class FilterCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
   }
 
   private func stopRecording() {
+    // Repeated Stop while the encoder flushes must not reject the clip awaiting delivery.
+    guard finishing == nil else { return }
     guard let movie else {
       emit("error", ["message": "No recording is active"])
       return
@@ -522,9 +524,14 @@ final class FilterCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
       word(Int16(sin(2 * Double.pi * hz * Double(i) / Double(rate)) * envelope * 10000))
     }
     do {
-      tonePlayer = try AVAudioPlayer(data: bytes)
-      tonePlayer?.play()
-    } catch { fail("Could not play tone: \(error.localizedDescription)") }
+      let player = try AVAudioPlayer(data: bytes)
+      guard player.play() else { throw FilterCameraError("Audio playback is unavailable") }
+      tonePlayer = player
+      emit("status", ["toneError": NSNull()])
+    } catch {
+      // Filter sounds are optional feedback; their failure must never discard a recording.
+      emit("status", ["toneError": "Could not play filter sound: \(error.localizedDescription)"])
+    }
   }
 
 }

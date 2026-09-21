@@ -8,7 +8,15 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useGlobalSearchParams } from "expo-router";
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { CameraView } from "expo-camera";
@@ -73,7 +81,12 @@ export function CameraCaptureModal(props: {
       return found;
     },
   });
-  const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
+  const [recording, setRecording] = useState<{
+    startedAt: number | null;
+    stopping: boolean;
+  } | null>(null);
+  const recordingStartedAt = recording?.startedAt || null;
+  const saving = recording?.stopping || false;
   const [filterId, setFilterId] = useState<string | null>(null);
   const [filterCommand, setFilterCommand] = useState<FilterCameraCommand | null>(null);
   // Bridges between the imperative mutations below and the filter pipeline's
@@ -145,7 +158,7 @@ export function CameraCaptureModal(props: {
     mutationFn: async () => {
       const abort = new AbortController();
       captureAbort.current = abort;
-      setRecordingStartedAt(Date.now());
+      setRecording({ startedAt: filterId ? null : Date.now(), stopping: false });
       if (filterId !== null) {
         const video = await new Promise<FilterVideo>((resolve, reject) => {
           pendingFilterVideo.current = { resolve, reject };
@@ -181,10 +194,12 @@ export function CameraCaptureModal(props: {
       });
       props.onClose();
     },
-    onSettled: () => setRecordingStartedAt(null),
+    onSettled: () => setRecording(null),
   });
 
   const stopRecording = () => {
+    if (saving) return;
+    setRecording((current) => current && { ...current, stopping: true });
     if (filterId !== null) {
       sendFilterCommand("stop-recording");
     } else {
@@ -193,6 +208,8 @@ export function CameraCaptureModal(props: {
   };
 
   const close = () => {
+    // Stop commits to saving the clip; keep Close disabled until it is delivered.
+    if (saving) return;
     setFilterCommand(null);
     captureAbort.current?.abort();
     pendingFilterPhoto.current?.reject(new Error("Photo capture canceled"));
@@ -220,13 +237,13 @@ export function CameraCaptureModal(props: {
   const clock = useQuery({
     queryKey: ["camera-capture-clock"],
     queryFn: async () => Date.now(),
-    refetchInterval: recordingStartedAt === null ? false : 500,
-    enabled: recordingStartedAt !== null,
+    refetchInterval: recordingStartedAt === null || saving ? false : 500,
+    enabled: recordingStartedAt !== null && !saving,
   });
   const elapsedSeconds =
     recordingStartedAt === null
       ? 0
-      : ((clock.data || recordingStartedAt) - recordingStartedAt) / 1000;
+      : Math.max(0, ((clock.data || recordingStartedAt) - recordingStartedAt) / 1000);
 
   return (
     <Modal
@@ -245,6 +262,14 @@ export function CameraCaptureModal(props: {
               dynamicFilters={(dynamicFilters.data || []).map(({ id, source }) => ({ id, source }))}
               facing={facing}
               filterId={filterId}
+              onRecordingStarted={async () => {
+                if (!pendingFilterVideo.current) return;
+                setRecording((current) =>
+                  current && !current.stopping && current.startedAt === null
+                    ? { ...current, startedAt: Date.now() }
+                    : current,
+                );
+              }}
               onCaptureError={async (message) => {
                 setFilterCommand(null);
                 const error = new Error(message);
@@ -260,6 +285,7 @@ export function CameraCaptureModal(props: {
               }}
               onVideo={async (video) => {
                 setFilterCommand(null);
+                setRecording((current) => current && { ...current, stopping: true });
                 if (!pendingFilterVideo.current && "uri" in video) {
                   await FileSystem.deleteAsync(video.uri, { idempotent: true });
                 }
@@ -273,13 +299,19 @@ export function CameraCaptureModal(props: {
           <Pressable
             accessibilityLabel="Close camera"
             accessibilityRole="button"
+            disabled={saving}
             hitSlop={12}
             onPress={close}
             style={styles.roundControl}
           >
             <Ionicons name="close" size={22} color={colors.text} />
           </Pressable>
-          {recordingStartedAt !== null ? (
+          {record.isPending && (saving || recordingStartedAt === null) ? (
+            <View style={styles.recordingPill} accessibilityRole="progressbar">
+              <ActivityIndicator color={colors.text} />
+              <Text style={styles.timerText}>{saving ? "Saving…" : "Preparing…"}</Text>
+            </View>
+          ) : recordingStartedAt !== null ? (
             <View style={styles.recordingPill}>
               <View style={styles.redDot} />
               <Text style={styles.timerText}>{formatClipDuration(elapsedSeconds)}</Text>
@@ -287,9 +319,7 @@ export function CameraCaptureModal(props: {
           ) : null}
         </View>
         {snap.isError || record.isError ? (
-          <Text style={styles.error}>
-            {String(((snap.error || record.error) as Error).message)}
-          </Text>
+          <Text style={styles.error}>{snap.error?.message || record.error?.message}</Text>
         ) : null}
         {filterId ? null : (
           <ScrollView
@@ -340,9 +370,11 @@ export function CameraCaptureModal(props: {
             <View style={styles.shutterInner} />
           </Pressable>
           <Pressable
-            accessibilityLabel={record.isPending ? "Stop recording" : "Record video"}
+            accessibilityLabel={
+              saving ? "Saving video" : record.isPending ? "Stop recording" : "Record video"
+            }
             accessibilityRole="button"
-            disabled={snap.isPending}
+            disabled={snap.isPending || saving}
             onPress={() => {
               if (record.isPending) {
                 stopRecording();

@@ -10,7 +10,12 @@ to React Native; photos use the existing JPEG attachment contract.
 Capture, drawing, tracking, and writer state share one serial queue. The
 recorder writes incrementally. Encoder backpressure drops video frames and
 reports their count; audio write failure stops capture with a visible error.
-Closing the camera cancels its writer and deletes the unfinished file. New
+Closing the camera cancels its writer and deletes the unfinished file. Once
+Stop is pressed, the UI shows Saving and disables Stop/Close until delivery;
+duplicate native Stop commands are harmless. Teardown during finalization
+lets the encoder finish before deleting the canceled clip. A small lock
+coordinates that cleanup with the encoder callback. The timer starts on the
+encoder's start notification; optional filter-sound failures stay nonfatal. New
 commands wait for camera pixels and required images (30-second deadline).
 Images download to files, decode at up to 1024 pixels, and use a 32 MB cache.
 While an image changes during recording, the last complete frame remains
@@ -24,7 +29,7 @@ heat, interruptions, and bluetooth audio need device testing.
 
 From `apps/mobile`, run `pnpm test:native:macos` on a Mac with Command Line
 Tools. It exercises real Apple encoding/decoding, audio in short callbacks,
-retained image handles, path fill/stroke, all seven drawers, and live hosted
+retained image handles, 50 finish/cancel races, path fill/stroke, all seven drawers, and live hosted
 images. It prints the MP4/PNG locations. This is not an iPhone camera test.
 Use `pnpm test:native:macos --long` for a two-minute recording proof.
 The EAS preview workflow compiles and signs the actual iPhone application.
