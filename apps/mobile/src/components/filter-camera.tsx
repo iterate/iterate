@@ -323,6 +323,7 @@ export default class FilterCamera extends Component<Props, State> {
     this.forceUpdate();
     const urls: string[] = [];
     try {
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- a runtime capability probe: the global itself may not exist on an older iOS, so its type is the question
       if (typeof DecompressionStream === "undefined") {
         throw new Error("DecompressionStream unavailable (needs iOS 16.4+)");
       }
