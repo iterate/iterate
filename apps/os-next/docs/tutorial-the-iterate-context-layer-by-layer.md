@@ -1806,7 +1806,7 @@ function expression fails at load, in the loader's words, and does not poison th
 An agent's scripts run this way in `<agent>/sandbox`: the agent's creation saga (`src/agent/processor.ts`
 `#assertSandbox`) writes `itx.run ⇒ itx.builtins.cd('<agent>/sandbox').builtins.run` on the agent —
 the runner resolves `itx.run` through the table — and the sandbox's one row, the bare row targeting
-the agent, asserted again once per incarnation before the first model call. So a script sees the
+the agent, both before the certificate. So a script sees the
 agent's tree — sandbox, agent, creator, root, one hop per row — and appends to the sandbox's own
 log. An owner who replaces that row with `null` and appends grants beside it, in one batch, has a
 jail: the scripts reach the granted rows and nothing else. The agent's prompt is that child's

@@ -82,7 +82,7 @@ export const AgentContract = defineProcessorContract({
   slug: "agent",
   // 2: the script obligation moved to the context (core state `runs`); the state lost its slot.
   // 3: `path` became `creation` (the saga's offset); `agents/…` events became `agent/…`.
-  version: "4",
+  version: "5",
   description:
     "An agent: a conversation on its own context, driven by a model that acts by writing scripts against itx.",
   /** THE REDUCED STATE — what the reduce keeps between events: where creation stands (as the OFFSET
@@ -98,6 +98,8 @@ export const AgentContract = defineProcessorContract({
       .object({
         status: z.enum(["requested", "created", "failed"]),
         offset: z.number().int().positive(),
+        /** The context that asked (`create-requested.creator`): the saga writes the parent link to it. */
+        creator: z.string().optional(),
       })
       .nullable()
       .default(null),
@@ -183,8 +185,8 @@ export const AgentContract = defineProcessorContract({
   events: {
     "events.iterate.com/agent/create-requested": {
       description:
-        "Someone asked for this agent (`itx.agents.create(path)`). No payload: the context it lands on IS the agent. The processor lands created (with the default system prompt beside it) or create-failed; a request after a failure is a new attempt, one after the certificate a harmless fact.",
-      payloadSchema: z.object({}),
+        "Someone asked for this agent (`itx.agents.create(path)`). The context it lands on IS the agent; `creator` is the context that asked — the saga writes the child's parent link `itx ⇒ itx.builtins.cd(creator)` before the certificate, so the link is part of the birth and nothing re-points a born context. The processor lands created (with the default system prompt beside it) or create-failed; a request after a failure is a new attempt, one after the certificate a harmless fact.",
+      payloadSchema: z.object({ creator: z.string().optional() }),
     },
     "events.iterate.com/agent/created": {
       description:

@@ -504,6 +504,32 @@ export function admitLoadedCodeRow(event: { type: string; payload?: unknown }, b
   admitLoadedCodeExpression(expression, base);
 }
 
+/** A bare `itx` row whose target is `cd` of THIS context is a loop no depth budget can see — every
+ *  hop is a fresh resolve — so the append door refuses it where the path is known, whoever appends
+ *  (`provide`, a script's `itx.append`). Two contexts pointing at each other stays a trusted-client
+ *  misconfiguration. */
+export function refuseSelfLoopRow(
+  event: { type: string; payload?: unknown },
+  ownPath: string,
+): void {
+  if (event.type !== "events.iterate.com/itx/rewrite-rule-configured") return;
+  const { match, target } = (event.payload ?? {}) as { match?: unknown; target?: unknown };
+  if (!target) return;
+  let steps: ItxExpression;
+  try {
+    if (parseItxExpressionPrefix(match as ItxExpressionInput).length !== 1) return;
+    steps = normalizedItxExpression(target as ItxExpressionInput, { holes: true });
+  } catch {
+    return; // the door's own validation says what is wrong with it
+  }
+  const cdStep = steps[1] === "builtins" ? steps[2] : steps[1];
+  if (!Array.isArray(cdStep) || cdStep[0] !== "cd" || typeof cdStep[1] !== "string") return;
+  if (resolveContextPath(ownPath, cdStep[1]) === ownPath)
+    throw new Error(
+      `a bare itx row may not name its own context: "itx ⇒ ${print(steps, { holes: true })}" at ${JSON.stringify(ownPath)} would route every call back to itself`,
+    );
+}
+
 /** Every rpc-stub key some row (a rule, a subscription) currently names, resolved through the
  *  whole table — the census a `stream/resumed` commit compares against the registry's presence. */
 export function rpcStubKeysNamed(args: {

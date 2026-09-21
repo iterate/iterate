@@ -105,16 +105,13 @@ export function buildChatMessages(
 export function renderCapabilityTree(rows: RewriteRuleListEntry[]): string | null {
   const visible = rows.filter((row) => row.target && row.match !== "itx");
   if (visible.length === 0) return null;
-  const line = (row: RewriteRuleListEntry): string =>
-    `${row.match} — ${row.description || `⇒ ${row.target}`}`;
   const contexts = [...new Set(visible.map((row) => row.context))];
-  const body =
-    contexts.length === 1
-      ? visible.map(line)
-      : contexts.flatMap((context) => [
-          `from ${context}:`,
-          ...visible.filter((row) => row.context === context).map(line),
-        ]);
+  const body = contexts.flatMap((context) => [
+    `from ${context}:`,
+    ...visible
+      .filter((row) => row.context === context)
+      .map((row) => `${row.match} — ${row.description || `⇒ ${row.target}`}`),
+  ]);
   return [
     "`itx` IS THIS CONTEXT'S CAPABILITY TREE (`await itx.rewriteRules.list()`) — every name below is one you can spell inside a tag; nothing else resolves:",
     ...body,
@@ -338,10 +335,6 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   /** The same for this incarnation's death attempt; the durable ground is `state.deletion`. */
   #deleting = false;
 
-  /** Whether this incarnation has asserted the sandbox rows (below) — done at birth and once more
-   *  before the first model call, so an agent born before the sandbox existed has them. */
-  #sandboxAsserted = false;
-
   /** THE SANDBOX: this agent's scripts run on `<agent>/sandbox`, a child of their own — the row on
    *  THIS context redirects every requested run there (the context's runner honours it,
    *  iterate-context-durable-object.ts `#executeRun`), so the facet's own calls and the scripts'
@@ -367,10 +360,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         },
       }),
     );
-    await this.deps.withItx(async (itx) => {
-      const there = itx.cd(sandbox).builtins;
-      if (await there.rewriteRules.get("itx")) return;
-      await there.append({
+    await this.deps.withItx((itx) =>
+      itx.cd(sandbox).builtins.append({
         type: "events.iterate.com/itx/rewrite-rule-configured",
         idempotencyKey: `itx@${path}`,
         payload: {
@@ -378,8 +369,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           target: ["itx", "builtins", ["cd", path]],
           description: "everything this sandbox does not claim, the agent answers",
         },
-      });
-    });
+      }),
+    );
   }
 
   /** The requests THIS incarnation is running, so a later at-head pass over the same fold does
@@ -403,7 +394,14 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         // is a harmless fact there too (the collection refuses it before it lands).
         return state.creation?.status === "created"
           ? undefined
-          : { ...state, creation: { status: "requested", offset: event.offset } };
+          : {
+              ...state,
+              creation: {
+                status: "requested",
+                offset: event.offset,
+                creator: event.payload.creator,
+              },
+            };
       case "events.iterate.com/agent/created":
         return { ...state, creation: { status: "created", offset: event.offset } };
       case "events.iterate.com/agent/create-failed":
@@ -682,10 +680,24 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         try {
           const whoami = await this.deps.withItx((itx) => itx.whoami());
           const { path } = whoami;
+          // THE PARENT LINK, part of the birth: everything this context does not claim, its creator
+          // answers (itx-expression-rewriting.ts rule 3) — written before the certificate, so a born
+          // context is never re-pointed and an owner's later row (a jail) is the last word.
+          const creator = state.creation?.creator;
+          if (creator && creator !== path)
+            await this.deps.withItx((itx) =>
+              itx.builtins.append({
+                type: "events.iterate.com/itx/rewrite-rule-configured",
+                payload: {
+                  match: "itx",
+                  target: ["itx", "builtins", ["cd", creator]],
+                  description: "everything this context does not claim, its creator answers",
+                },
+                idempotencyKey: `itx@${creator}`,
+              }),
+            );
           // THE SANDBOX ROWS FIRST: `create()` answers when the certificate lands, and an owner's
-          // jail on the sandbox may follow at once — the link must already be there for the jail to
-          // replace, never land after it (the check-then-append in `#assertSandbox` reads "no row
-          // yet" only until the owner's null has landed; before the certificate, nothing races it).
+          // jail on the sandbox may follow at once — the link is already there for the jail to replace.
           await this.#assertSandbox(path);
           const certificate: AgentEmitted = {
             type: "events.iterate.com/agent/created",
@@ -850,12 +862,6 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     );
     try {
       const { path } = await this.#identity();
-      if (!this.#sandboxAsserted) {
-        // Once per incarnation, before the first model call: an agent born before the sandbox
-        // existed gets its rows here, so the tree below is the table its scripts will run against.
-        await this.#assertSandbox(path);
-        this.#sandboxAsserted = true;
-      }
       const tree = await this.deps.withItx((itx) =>
         itx.cd(`${path}/sandbox`).builtins.rewriteRules.list(),
       );

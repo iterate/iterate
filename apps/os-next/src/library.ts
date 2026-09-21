@@ -489,13 +489,11 @@ async function requestAndAwaitRun(itx: LibraryItx, script: string): Promise<unkn
  *  through its link, is the child's `./x`), else this one (`ownPath`). */
 const originOf = (caller: Caller, ownPath: string): string => caller.path || ownPath;
 
-/** THE CREATION, from the caller's context: the path resolved against it, THE PARENT LINK written on
- *  the new context first — the creator's act (itx-expression-rewriting.ts rule 3): everything the
- *  new context does not claim, its creator answers; absolute, so the row reads plainly; idempotent
- *  on the creator; none when a context creates on itself (a self-hop is a loop) — then the
- *  collection's saga on the `project` facet (`<entity>/create-requested` … `created`). A created
- *  entity answers at once there, so calling this again is how an entity born before the link
- *  existed gets one. */
+/** THE CREATION, from the caller's context: the path resolved against it, the CREATOR named on the
+ *  request — the collection's saga on the `project` facet (`<entity>/create-requested { creator }` …
+ *  `created`) writes the parent link `itx ⇒ itx.builtins.cd(creator)` on the new context before the
+ *  certificate (itx-expression-rewriting.ts rule 3: everything the new context does not claim, its
+ *  creator answers). A created entity answers at once, and nothing re-points it. */
 async function createEntity(
   itx: LibraryItx,
   path: string,
@@ -512,29 +510,10 @@ async function createEntity(
       "FORBIDDEN",
       `${collection}.create(${JSON.stringify(path)}) from ${JSON.stringify(creator)}: a context does not create its own ancestor`,
     );
-  if (creator !== absolute) {
-    // The link is the creator's DEFAULT, written only while the context has no bare `itx` row: a
-    // context already linked (or jailed) by whoever created it first is never re-pointed by a later
-    // `create(path)` from somewhere else — that would cut it off from the surface its owner gave it.
-    const context = await itx.builtins.cd(absolute);
-    const bare = await context.invoke(["builtins", "rewriteRules", ["get", "itx"]]);
-    if (!bare)
-      await context.invoke([
-        [
-          "append",
-          {
-            type: "events.iterate.com/itx/rewrite-rule-configured",
-            payload: {
-              match: "itx",
-              target: ["itx", "builtins", ["cd", creator]],
-              description: "everything this context does not claim, its creator answers",
-            },
-            idempotencyKey: `itx@${creator}`,
-          },
-        ],
-      ]);
-  }
-  return projectFacet(itx, [[collection], ["create", absolute]]) as Promise<{ path: string }>;
+  // The creator rides the request: the entity's saga writes the parent link before the certificate.
+  return projectFacet(itx, [[collection], ["create", absolute, { creator }]]) as Promise<{
+    path: string;
+  }>;
 }
 
 // THE LIBRARY'S HOPS ARE ADDRESSING, spelled at the fixed point (`itx.builtins.cd`): a physical grant

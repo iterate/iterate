@@ -48,7 +48,14 @@ export class WorkspaceProcessor extends StreamProcessor<
         // request is a harmless fact there too (the collection refuses it before it lands).
         return state.creation?.status === "created"
           ? undefined
-          : { ...state, creation: { status: "requested", offset: event.offset } };
+          : {
+              ...state,
+              creation: {
+                status: "requested",
+                offset: event.offset,
+                creator: event.payload.creator,
+              },
+            };
       case "events.iterate.com/workspace/created":
         return { ...state, creation: { status: "created", offset: event.offset } };
       case "events.iterate.com/workspace/create-failed":
@@ -90,6 +97,22 @@ export class WorkspaceProcessor extends StreamProcessor<
       runInBackground(async () => {
         try {
           const { path } = await this.withItx((itx) => itx.whoami());
+          // THE PARENT LINK, part of the birth: everything this context does not claim, its creator
+          // answers (itx-expression-rewriting.ts rule 3) — written before the certificate, so a born
+          // context is never re-pointed and an owner's later row (a jail) is the last word.
+          const creator = state.creation?.creator;
+          if (creator && creator !== path)
+            await this.withItx((itx) =>
+              itx.builtins.append({
+                type: "events.iterate.com/itx/rewrite-rule-configured",
+                payload: {
+                  match: "itx",
+                  target: ["itx", "builtins", ["cd", creator]],
+                  description: "everything this context does not claim, its creator answers",
+                },
+                idempotencyKey: `itx@${creator}`,
+              }),
+            );
           const certificate: EmittedEventInput<typeof WorkspaceContract> = {
             type: "events.iterate.com/workspace/created",
             payload: { path },
