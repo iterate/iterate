@@ -17,6 +17,6 @@ Status: observed and correlated, not fixed. A full real-CI control passed while 
 The stack is `#readFacetAlarmAtMs → #mergeFacetAlarmDesire → StreamDurableObject.alarm`. Durable Object ID: `dfe3a6a720e063a818c13df4229c70800cb3515791c1167ba2cc4eda30ce7c79`.
 
 [Cloudflare trace](https://dash.cloudflare.com/376ef7ed81b0573f93524de763666c15/observability/traces/4d0f711fc3ea8d682955ad5839fe06f9).
-Raw evidence stays ignored in `experiments/preview-lease-cycling/evidence.ignoreme/ci-sept18/`: `control-reset-query.json`, `control-plan.json`, `control-deployment-history.json`, and CI logs. This is an unexplained alarm incident, not an observed test failure and not evidence introduced by removing the gate.
+Raw evidence stays ignored in `experiments/preview-lease-cycling.ignoreme/evidence.ignoreme/ci-sept18/`: `control-reset-query.json`, `control-plan.json`, `control-deployment-history.json`, and CI logs. This is an unexplained alarm incident, not an observed test failure and not evidence introduced by removing the gate.
 
 Session: Codex 01a0b054-bdd8-7d52-9c01-30d9b92576c8.

@@ -15,11 +15,7 @@ test.each(["prepare", "apps", "playwright", "finish"])(
       readFileSync(resolve(import.meta.dirname, "../../.depot/workflows/preview-main.yml"), "utf8"),
     );
     expect(workflow).toMatchObject({
-      concurrency: {
-        group:
-          "${{ github.ref_name == 'codex/experiment-preview-lease-cycling' && 'preview-lease-cycling' || 'preview-main' }}",
-        "cancel-in-progress": false,
-      },
+      concurrency: { group: "preview-main", "cancel-in-progress": false },
       on: { push: { branches: ["main"] } },
     });
     expect(workflow.jobs.preview).toMatchObject({ uses: "./.depot/workflows/preview-run.yml" });
@@ -94,31 +90,6 @@ test("a validation dispatch from a branch cannot impersonate main", () => {
     environment: { ...repo.preview.environment, GITHUB_REF_NAME: "ci/test-main-workflow" },
   });
   expect(run).toMatchObject({ branch: "ci/test-main-workflow" });
-});
-
-test("lease-cycling dispatches cannot adopt main or another experiment run's slot", () => {
-  using repo = repository();
-  for (const id of ["control-run", "parked-run"]) {
-    expect(
-      createMainPreview({
-        ...repo.preview,
-        environment: {
-          ...repo.preview.environment,
-          GITHUB_REF_NAME: "codex/experiment-preview-lease-cycling",
-          GITHUB_RUN_ID: id,
-        },
-      }).run,
-    ).toMatchObject({ holder: `lease-cycling-${id}` });
-  }
-  expect(() =>
-    createMainPreview({
-      ...repo.preview,
-      environment: {
-        ...repo.preview.environment,
-        GITHUB_REF_NAME: "codex/experiment-preview-lease-cycling",
-      },
-    }),
-  ).toThrow();
 });
 
 test("local invocation cannot bypass main's workflow lock", () => {

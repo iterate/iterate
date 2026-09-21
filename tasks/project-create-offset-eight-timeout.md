@@ -27,10 +27,10 @@ Start at `apps/os/src/domains/projects/project-processor-implementation.ts`
 and its birth waits. The observed sandbox probe did not reach container startup,
 so this is not evidence of broken container recreation.
 
-Repro surface: `experiments/preview-lease-cycling/sandbox.ts` (first action is
+Repro surface: [the archived sandbox probe](https://github.com/iterate/iterate/blob/936bc9b37f949ec2f9b46292a6aeb3d091fce7ca/experiments/preview-lease-cycling/sandbox.ts) (first action is
 normal `root.projects.get(uniqueSlug).create({})`), or the ordinary agent-smoke
 script's identical project creation. Raw evidence is local-only under
-`experiments/preview-lease-cycling/evidence.ignoreme/sept18/`, notably
+`experiments/preview-lease-cycling.ignoreme/evidence.ignoreme/sept18/`, notably
 `correlation.json`, `trace-custom.json`, and the preview-15 smoke logs.
 
 Session: Codex `01a0b054-bdd8-7d52-9c01-30d9b92576c8`.

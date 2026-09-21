@@ -10,9 +10,6 @@ on:
       head-sha:
         type: string
         required: true
-      lease-cycling-receipt:
-        type: string
-        default: ""
       all-apps:
         type: boolean
         required: true
@@ -28,7 +25,6 @@ defaults:
   run:
     shell: bash
 env:
-  PREVIEW_LEASE_CYCLING_RECEIPT: ${{ inputs.lease-cycling-receipt }}
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
   BASH_ENV: ${{ github.workspace }}/scripts/ci/tracing/shell.sh
   CI_TRACE_ENABLED: "1"

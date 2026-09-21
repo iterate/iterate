@@ -98,11 +98,7 @@ export function createMainPreview(input: {
     workflowRunUrl: makeDefaultWorkflowRunUrl(input.environment) || null,
     headSha,
     branch,
-    // EXPERIMENT: each real CI comparison owns a separate slot, never main's.
-    holder:
-      branch === "codex/experiment-preview-lease-cycling"
-        ? `lease-cycling-${z.string().min(1).parse(input.environment.GITHUB_RUN_ID)}`
-        : "main-preview",
+    holder: "main-preview",
     pullRequestNumber: null,
   };
   const directory = join(input.repositoryRoot, "test-results");

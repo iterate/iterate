@@ -19,7 +19,6 @@ import {
   semaphoreEnvs,
   streamsExampleEnvs,
 } from "../../envs.ts";
-import { getWorkerDoNamespaces } from "../lib/do-reset.ts";
 import { createSemaphoreTokenProvider } from "../auth/semaphore-token.ts";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
@@ -42,7 +41,6 @@ import {
 } from "../../packages/shared/src/test-support/cloudflare-worker-version-overrides.ts";
 import { PREVIEW_APP_ROLLOUT_READY_AT_MS_ENV } from "../../packages/shared/src/test-support/preview-rollout-gate.ts";
 import { traceOperation } from "../ci/tracing/tracing.ts";
-import { claimRestedExperimentSlot, readLeaseCyclingReceipt } from "./lease-cycling-experiment.ts";
 import {
   parseWorkerSizeFromDeployOutput,
   parseWorkerSizeStatusDescription,
@@ -1102,46 +1100,8 @@ async function deployPreviewApps({
   let environmentConfigLease: EnvironmentConfigLease;
   try {
     const recordedSlug = current.environmentConfigLease?.slug ?? null;
-    environmentConfigLease = await traceOperation("Acquire and clean preview slot", async () => {
-      const receipt = readLeaseCyclingReceipt(runtime.commandEnvironment);
-      if (receipt) {
-        return toEnvironmentConfigLease(
-          await claimRestedExperimentSlot({
-            receipt,
-            holder,
-            leaseMs: defaultPreviewLeaseMs,
-            now: Date.now(),
-            semaphore,
-            verifyParked: async (slug) => {
-              const ctx = await resolveEnvContext({
-                envs,
-                dopplerProject: "os",
-                env: slug.replace("-", "_"),
-              });
-              const namespaces = await getWorkerDoNamespaces(ctx, ctx.env.osWorkerName);
-              if (
-                namespaces.length !== 6 ||
-                namespaces.some(
-                  (n) => !/^Sandbox(Basic|Lite|Standard[1-4])DurableObject$/.test(n.className),
-                )
-              ) {
-                throw new Error(
-                  "Prepared slot must retain exactly its six sandbox classes and no ordinary DOs",
-                );
-              }
-              const streams = await getWorkerDoNamespaces(ctx, `streams-example-app-${slug}`);
-              if (streams.length) throw new Error("Prepared streams app still has Durable Objects");
-              const health = await fetch(`${ctx.env.baseUrl}/api/health`, {
-                signal: AbortSignal.timeout(10_000),
-                cache: "no-store",
-              });
-              if (health.status !== 503)
-                throw new Error(`Prepared slot is not parked: HTTP ${health.status}`);
-            },
-          }),
-        );
-      }
-      return requestedEnvironment
+    environmentConfigLease = await traceOperation("Acquire and clean preview slot", async () =>
+      requestedEnvironment
         ? (
             await assignEnvironmentConfigLease({
               eraseSlotData: makePreviewSlotDataEraser(runtime, "reset"),
@@ -1169,8 +1129,8 @@ async function deployPreviewApps({
             recordedSlug,
             semaphore,
             waitTotalMs: resolveSlotWaitTotalMs(runtime.commandEnvironment),
-          });
-    });
+          }),
+    );
   } catch (error) {
     await report.update((state) => ({
       ...state,
@@ -1533,8 +1493,7 @@ function resolvePreviewRolloutReadyAtMs(input: {
     throw new Error(`Invalid preview deployment timestamp: ${input.deployedAt}`);
   }
 
-  // EXPERIMENT: prepare validates the receipt under ownership before publishing the CI plan.
-  return deployedAtMs + (readLeaseCyclingReceipt(process.env) ? 0 : previewMinimumDeploymentAgeMs);
+  return deployedAtMs + previewMinimumDeploymentAgeMs;
 }
 
 async function testPreviewApps({

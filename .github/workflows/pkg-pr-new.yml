@@ -30,8 +30,6 @@ on:
   push:
     branches:
       - main
-      # EXPERIMENT: publish the exact branch SHAs dispatched to real preview CI.
-      - codex/experiment-preview-lease-cycling
   pull_request:
 jobs:
   publish:
