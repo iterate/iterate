@@ -597,6 +597,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // WHO is asking, and from which context: a create path links a new context to its creator, and
     // a relative `./x` answered here through a hop is the caller's.
     caller: () => this.#callerStorage.getStore() ?? { principal: null },
+    path: this.#durableObjectAddress.path,
   });
 
   // ── the runner: `context/run-requested` → the script in a confined isolate → `run-settled` ──
@@ -817,7 +818,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         } catch {
           return null;
         }
-        return (await this.#rewriteRuleList()).find((row) => row.match === key) ?? null;
+        // THIS context's table — its own rows and the implicit rows here — never a hop: `get` asks
+        // what this context says about a name, `list()` what it can spell.
+        return (await this.#rewriteRuleList(0)).find((row) => row.match === key) ?? null;
       },
       // PURE: the chain of rewrites, printed — nothing dispatched, nothing noted as activity.
       resolve: (call) => this.#itxExpressionResolver.resolve(call).map((step) => print(step)),

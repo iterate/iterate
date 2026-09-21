@@ -75,7 +75,7 @@ import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
  *  more of itx — never by importing something else. */
 export type LibraryItx = Pick<
   BuiltInScope,
-  "append" | "waitForEvent" | "fetch" | "workers" | "cd" | "r2" | "whoami" | "builtins"
+  "append" | "waitForEvent" | "fetch" | "workers" | "cd" | "r2" | "builtins"
 >;
 
 /** The library's roots, exactly as the built-ins record spreads them in: each verb closed over ONE
@@ -232,6 +232,8 @@ export function buildLibrary(
      *  child, answered at the root through its link) means the caller's, and a creation's parent
      *  link names the caller's context. */
     caller: () => Caller;
+    /** This context's path — a relative path's base when the caller carries none. */
+    path: string;
   },
 ): {
   roots: LibraryRoots;
@@ -278,46 +280,59 @@ export function buildLibrary(
       // `create` answer exactly these shapes — ours, so the wire's copy is asserted, not re-validated.
       repos: {
         get: (path) =>
-          entityHandle(itx, path, "repo", RepoContract, deps.caller()) as InvokeHandle & RepoFacet,
+          entityHandle(itx, path, "repo", RepoContract, deps.caller(), deps.path) as InvokeHandle &
+            RepoFacet,
         list: () =>
           projectFacet(itx, [["repos"], ["list"]]) as Promise<
             { path: string; createdAt: string }[]
           >,
-        create: (path) => createEntity(itx, path, "repos", deps.caller()),
+        create: (path) => createEntity(itx, path, "repos", deps.caller(), deps.path),
         delete: async (path) =>
           projectFacet(itx, [
             ["repos"],
-            ["delete", resolveContextPath(await handleOrigin(itx, deps.caller()), path)],
+            ["delete", resolveContextPath(originOf(deps.caller(), deps.path), path)],
           ]) as Promise<{ path: string }>,
       },
       workspaces: {
         get: (path) =>
-          entityHandle(itx, path, "workspace", WorkspaceContract, deps.caller()) as InvokeHandle &
-            WorkspaceFacet,
+          entityHandle(
+            itx,
+            path,
+            "workspace",
+            WorkspaceContract,
+            deps.caller(),
+            deps.path,
+          ) as InvokeHandle & WorkspaceFacet,
         list: () =>
           projectFacet(itx, [["workspaces"], ["list"]]) as Promise<
             { path: string; createdAt: string }[]
           >,
-        create: (path) => createEntity(itx, path, "workspaces", deps.caller()),
+        create: (path) => createEntity(itx, path, "workspaces", deps.caller(), deps.path),
         delete: async (path) =>
           projectFacet(itx, [
             ["workspaces"],
-            ["delete", resolveContextPath(await handleOrigin(itx, deps.caller()), path)],
+            ["delete", resolveContextPath(originOf(deps.caller(), deps.path), path)],
           ]) as Promise<{ path: string }>,
       },
       agents: {
         get: (path) =>
-          entityHandle(itx, path, "agent", AgentContract, deps.caller()) as InvokeHandle &
-            AgentFacet,
+          entityHandle(
+            itx,
+            path,
+            "agent",
+            AgentContract,
+            deps.caller(),
+            deps.path,
+          ) as InvokeHandle & AgentFacet,
         list: () =>
           projectFacet(itx, [["agents"], ["list"]]) as Promise<
             { path: string; createdAt: string }[]
           >,
-        create: (path) => createEntity(itx, path, "agents", deps.caller()),
+        create: (path) => createEntity(itx, path, "agents", deps.caller(), deps.path),
         delete: async (path) =>
           projectFacet(itx, [
             ["agents"],
-            ["delete", resolveContextPath(await handleOrigin(itx, deps.caller()), path)],
+            ["delete", resolveContextPath(originOf(deps.caller(), deps.path), path)],
           ]) as Promise<{ path: string }>,
       },
       files: {
@@ -471,10 +486,8 @@ async function requestAndAwaitRun(itx: LibraryItx, script: string): Promise<unkn
 
 /** The context a handle's relative paths mean, and a creation's CREATOR: the caller's originating
  *  context (`Caller.path`, stamped by the first hop — `./x` from a child, answered at the root
- *  through its link, is the child's `./x`), else this one. */
-async function handleOrigin(itx: LibraryItx, caller: Caller): Promise<string> {
-  return caller.path || (await itx.whoami()).path;
-}
+ *  through its link, is the child's `./x`), else this one (`ownPath`). */
+const originOf = (caller: Caller, ownPath: string): string => caller.path || ownPath;
 
 /** THE CREATION, from the caller's context: the path resolved against it, THE PARENT LINK written on
  *  the new context first — the creator's act (itx-expression-rewriting.ts rule 3): everything the
@@ -488,8 +501,9 @@ async function createEntity(
   path: string,
   collection: "repos" | "workspaces" | "agents",
   caller: Caller,
+  ownPath: string,
 ): Promise<{ path: string }> {
-  const creator = await handleOrigin(itx, caller);
+  const creator = originOf(caller, ownPath);
   const absolute = resolveContextPath(creator, path);
   // A context never creates its own ancestor: the link it would write there points back down at
   // itself — a two-context cycle — and a child never holds more than its creator.
@@ -551,11 +565,12 @@ function entityHandle(
   name: string,
   contract: EntityContract,
   caller: Caller,
+  ownPath: string,
 ): InvokeHandle {
   return new InvokeHandle(async (itxExpressionSteps) => {
     // TWO dotted calls, never one chain (the `run` section says why): the sibling's handle first —
     // in-process a VALUE — then the chain relative to it. The path means the CALLER's `./x`.
-    const context = await itx.cd(resolveContextPath(await handleOrigin(itx, caller), path));
+    const context = await itx.cd(resolveContextPath(originOf(caller, ownPath), path));
     const [first, ...rest] = itxExpressionSteps;
     if (Array.isArray(first) && first[0] === "append" && rest.length === 0) {
       const [, ...events] = first;

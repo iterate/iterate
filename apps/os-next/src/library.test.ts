@@ -105,7 +105,7 @@ describe("the library", () => {
     for (const { verb, connect, handshake } of verbs)
       test(`${verb}: two connects with the same arguments are ONE connection — the same object back, one handshake`, async () => {
         const { itx, seen } = remotes();
-        const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }) });
+        const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" });
         const a = await connect(roots);
         const b = await connect(roots);
         expect(b).toBe(a);
@@ -274,7 +274,7 @@ describe("the library", () => {
           return new Response("down", { status: 503 });
         },
       } as unknown as LibraryItx;
-      const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }) });
+      const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" });
       await expect(roots.connectToMcp("https://mcp.example/")).rejects.toThrow(/503/);
       await expect(roots.connectToMcp("https://mcp.example/")).rejects.toThrow(/503/);
       expect(attempts).toBe(2);
@@ -282,7 +282,7 @@ describe("the library", () => {
 
     test("the memo is keyed by the options too, and two spellings of one options object are one key", async () => {
       const { itx, seen } = remotes();
-      const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }) });
+      const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" });
       const a = await roots.connectToMcp("https://mcp.example/", { headers: { a: "1", b: "2" } });
       const b = await roots.connectToMcp("https://mcp.example/", { headers: { b: "2", a: "1" } });
       const c = await roots.connectToMcp("https://mcp.example/", { headers: { a: "other" } });
@@ -392,7 +392,7 @@ describe("run", () => {
       settledAt(13, 10, { status: "succeeded", result: { n: 1 } }), // ours: the request landed at 10
     ]);
     await expect(
-      buildLibrary(itx, { caller: () => ({ principal: null }) }).roots.run(script),
+      buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" }).roots.run(script),
     ).resolves.toEqual({ n: 1 });
     expect(appended).toEqual([
       { type: "events.iterate.com/context/run-requested", payload: { code: script } },
@@ -411,7 +411,9 @@ describe("run", () => {
       settledAt(11, 10, { status: "failed", error: "boom", failureKind: "interrupted" }),
     ]);
     await expect(
-      buildLibrary(itx, { caller: () => ({ principal: null }) }).roots.run("async () => 1"),
+      buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" }).roots.run(
+        "async () => 1",
+      ),
     ).rejects.toMatchObject({
       message: "boom",
       failureKind: "interrupted",
