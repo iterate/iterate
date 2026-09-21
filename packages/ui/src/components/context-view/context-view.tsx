@@ -1,10 +1,11 @@
 // THE CONTEXT VIEW — one context's stream with its processors and its presence, the general-purpose
 // view every app reuses (the dash's activity pages, the agents feed's base): a strip (what this is,
-// how many events, who is here, the two buttons), a filter row (a text query, the types left
-// ticked), the rows (a renderer's rich body per type where the app plugged one in, else the default),
-// a Rendered / Raw switch for how the rows read, and two right-edge sheets — the inspector for one
-// event, the processors with their live state. The rows are single lines the view's width: nothing
-// here ever scrolls sideways; the inspector shows what a line cuts.
+// how many events, who is here, the mode, the two buttons), a filter row (a text query, the types
+// left ticked), the log folded for reading (folds.tsx) as rows one line wide on a desktop and two
+// on a phone, and two right-edge sheets — the inspector for one event, the processors with their
+// live state. apps/os's three modes: Pretty (sentences, housekeeping folded, repeats counted),
+// Pretty + raw (every event, sentence and raw line), Raw (the log as data). Nothing here ever
+// scrolls sideways; the inspector shows what a line cuts.
 // Pure: every datum arrives as a prop from the SDK's hooks (`iterate/next/react`).
 import { useMemo, useState, type ReactNode } from "react";
 import { FilterIcon, LayersIcon } from "lucide-react";
@@ -12,10 +13,13 @@ import { Button } from "../button.tsx";
 import { Input } from "../input.tsx";
 import { Spinner } from "../spinner.tsx";
 import { cn } from "../../lib/utils.ts";
-import { coreEventRenderers } from "./core-renderers.tsx";
+import { coreEventInspectors, coreEventRenderers } from "./core-renderers.tsx";
 import { EventInspector } from "./event-inspector.tsx";
 import { EventRow } from "./event-row.tsx";
+import { DaySeparator, HousekeepingRow, RepeatRow } from "./feed-rows.tsx";
+import { foldEvents, lastEventOf } from "./folds.tsx";
 import {
+  actorLabel,
   EMPTY_FILTER,
   filterEvents,
   shortEventType,
@@ -29,8 +33,15 @@ import type {
   ContextViewMode,
   ContextViewPresence,
   ContextViewProcessor,
+  EventInspectors,
   EventRenderers,
 } from "./types.tsx";
+
+const MODES: { id: ContextViewMode; label: string; short: string }[] = [
+  { id: "pretty", label: "Pretty", short: "Pretty" },
+  { id: "pretty-raw", label: "Pretty + raw", short: "+raw" },
+  { id: "raw", label: "Raw", short: "Raw" },
+];
 
 export function ContextView({
   title,
@@ -38,11 +49,12 @@ export function ContextView({
   caughtUp,
   error,
   renderers,
+  inspectors,
   processors = [],
   presence = { actors: [], rpcStubs: [] },
   renderCoreState,
   renderLiveState,
-  defaultMode = "rendered",
+  defaultMode = "pretty",
   emptyText = "Nothing has happened on this context yet.",
   className,
 }: {
@@ -52,6 +64,8 @@ export function ContextView({
   caughtUp: boolean;
   error?: string;
   renderers?: EventRenderers;
+  /** Rich inspector bodies by type — over the platform's own (a script's code, its result). */
+  inspectors?: EventInspectors;
   processors?: readonly ContextViewProcessor[];
   presence?: { actors: readonly ContextViewPresence[]; rpcStubs: readonly string[] };
   renderCoreState?: () => ReactNode;
@@ -66,9 +80,19 @@ export function ContextView({
   const [inspected, setInspected] = useState<number | undefined>();
   const [processorsOpen, setProcessorsOpen] = useState(false);
   const [mode, setMode] = useState<ContextViewMode>(defaultMode);
+  /** The folds opened in place, by item key. */
+  const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   // the platform's own events read as sentences everywhere; an app's renderers lie over them
   const allRenderers = useMemo(() => ({ ...coreEventRenderers, ...renderers }), [renderers]);
+  const allInspectors = useMemo(() => ({ ...coreEventInspectors, ...inspectors }), [inspectors]);
   const shown = useMemo(() => filterEvents(events, filter), [events, filter]);
+  const items = useMemo(() => foldEvents(shown, mode), [shown, mode]);
+  const toggleOpened = (key: string) =>
+    setOpened((held) => {
+      const next = new Set(held);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
   const types = useMemo(() => typeCounts(events), [events]);
   const filtered = Boolean(filter.query) || filter.types.size > 0 || Boolean(filter.actor);
   const toggleType = (type: string) =>
@@ -94,24 +118,25 @@ export function ContextView({
         />
         <div
           role="tablist"
-          aria-label="How the rows read"
+          aria-label="How the log reads"
           className="flex rounded-md border p-0.5 text-xs"
         >
-          {(["rendered", "raw"] as const).map((candidate) => (
+          {MODES.map((candidate) => (
             <button
-              key={candidate}
+              key={candidate.id}
               type="button"
               role="tab"
-              aria-selected={mode === candidate}
-              onClick={() => setMode(candidate)}
+              aria-selected={mode === candidate.id}
+              onClick={() => setMode(candidate.id)}
               className={cn(
-                "rounded px-2 py-0.5",
-                mode === candidate
+                "rounded px-2 py-0.5 whitespace-nowrap",
+                mode === candidate.id
                   ? "bg-muted text-foreground"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
-              {candidate === "rendered" ? "Rendered" : "Raw"}
+              <span className="sm:hidden">{candidate.short}</span>
+              <span className="hidden sm:inline">{candidate.label}</span>
             </button>
           ))}
         </div>
@@ -179,20 +204,57 @@ export function ContextView({
             <Spinner /> Loading the log…
           </div>
         ) : null}
-        {shown.map((event, index) => (
-          <EventRow
-            key={event.offset}
-            event={event}
-            previous={shown[index - 1]}
-            renderers={allRenderers}
-            mode={mode}
-            selected={inspected === event.offset}
-            onOpen={setInspected}
-          />
-        ))}
+        {items.map((item, index) => {
+          const previous = lastEventOf(items[index - 1]);
+          if (item.kind === "day") return <DaySeparator key={item.key} date={item.date} />;
+          const first = item.kind === "event" ? item.event : item.events[0]!;
+          // who acted is named when it changes hands — the row before was someone else's, or nobody's
+          const showWho = !previous || actorLabel(previous) !== actorLabel(first);
+          if (item.kind === "repeat")
+            return (
+              <RepeatRow
+                key={item.key}
+                events={item.events}
+                previous={previous}
+                renderers={allRenderers}
+                showWho={showWho}
+                open={opened.has(item.key)}
+                onToggle={() => toggleOpened(item.key)}
+                selected={inspected}
+                onOpen={setInspected}
+              />
+            );
+          if (item.kind === "housekeeping")
+            return (
+              <HousekeepingRow
+                key={item.key}
+                events={item.events}
+                previous={previous}
+                renderers={allRenderers}
+                open={opened.has(item.key)}
+                onToggle={() => toggleOpened(item.key)}
+                selected={inspected}
+                onOpen={setInspected}
+              />
+            );
+          return (
+            <EventRow
+              key={item.key}
+              event={item.event}
+              previous={previous}
+              renderers={allRenderers}
+              mode={mode}
+              showWho={showWho}
+              selected={inspected === item.event.offset}
+              onOpen={setInspected}
+            />
+          );
+        })}
       </div>
       <EventInspector
         event={inspected === undefined ? undefined : events.find((e) => e.offset === inspected)}
+        renderers={allRenderers}
+        inspectors={allInspectors}
         onClose={() => setInspected(undefined)}
       />
       <ProcessorsPanel
