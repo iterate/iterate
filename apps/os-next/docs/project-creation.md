@@ -8,7 +8,7 @@ once. The project processor (`src/project/processor.ts`) runs the saga from stat
 1. `itx.repos.create("/repos/config")` — the same collection a caller uses; a repo that exists answers at once;
 2. when `main` is unborn, ONE seed commit: `worker.ts` (the project's homepage, a plain-JavaScript
    `WorkerEntrypoint` answering `Homepage of project <slug>`) and `AGENTS.md` (what the repo is);
-3. `project/ingress-configured` on `/`, its target `itx.workers.get({ source: itx.repos.get('/repos/config').readFile('worker.ts', { commitOid }), cacheKey: commitOid })` — the apex answers that exact commit, keyed by it;
+3. `project/ingress-configured` on `/`, its target `itx.workers.get({ source: itx.repos.get('/repos/config').modules({ commitOid }), cacheKey: commitOid })` — the repo's whole tree at that exact commit as the worker's modules (`worker.ts` the main module, every `.js` file under its own path), keyed by the commit;
 4. `project/created` — or `project/create-failed { error }` on any throw; a later `projects.create`
    of the same slug is a new attempt.
 

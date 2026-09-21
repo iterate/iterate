@@ -194,6 +194,35 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     return out;
   }
 
+  /** THE REPO AS A WORKER'S MODULES: every `.js` file at the commit under its own path, and `main`
+   *  (default `worker.ts`) as `cap.js`, the loader's main module — so a config repo's relative imports
+   *  resolve exactly as they do in the tree, with no module map to keep. THE apex target's source
+   *  (project/processor.ts: the seed's and every commit's). The loader takes a module's TEXT only
+   *  under a name ending in `.js` (Cloudflare's rule: "Module name must end with '.js'"), so `.js` is
+   *  the one extension a sibling module may have; `worker.ts` is a name — the platform's seed — and
+   *  it rides as `cap.js`. A `.md`, a `.css`, a `.json` is not a module: a worker that serves one
+   *  exports its text from a `.js` file. A commit with no `main` is a refusal, never an empty worker. */
+  async modules(options?: { main?: string; commitOid?: string }): Promise<Record<string, string>> {
+    await this.#created();
+    const { main = "worker.ts", commitOid } =
+      z
+        .object({
+          main: z.string().min(1).optional(),
+          commitOid: z
+            .string()
+            .regex(/^[a-f0-9]{40}$/)
+            .optional(),
+        })
+        .optional()
+        .parse(options) ?? {};
+    const { files } = await this.#fresh(commitOid);
+    if (!Object.hasOwn(files, main))
+      throw new Error(`modules: no file at ${JSON.stringify(main)} to be the main module`);
+    const out: Record<string, string> = { "cap.js": files[main]! };
+    for (const [path, content] of Object.entries(files))
+      if (path.endsWith(".js")) out[path] = content;
+    return out;
+  }
   async listFiles(): Promise<{ commitOid: string | null; paths: string[] }> {
     await this.#created();
     const { tip, files } = await this.#fresh();

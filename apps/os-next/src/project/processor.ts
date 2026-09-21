@@ -161,8 +161,9 @@ export class ProjectProcessor extends StreamProcessor<
     // of `/repos/config` (its fact cross-posted here by the repo facet) is published by pointing the
     // ingress at it, keyed by the commit, so this and the seed's own append in the saga below land
     // ONE event, and an attempt lost with an incarnation is run again by the next for nothing. The
-    // target is the one the saga writes for the seed: the worker read from the repo at that exact
-    // commit, cached under it.
+    // target is the one the saga writes for the seed: the repo's whole tree at that exact commit as
+    // the worker's modules (`worker.ts` the main module, every `.js` file under its own path, so
+    // relative imports resolve as in the tree — the repo facet's `modules`), cached under the commit.
     if (state.configRepoTip) this.#newestTip = state.configRepoTip;
     if (this.#newestTip && this.#published !== this.#newestTip.offset && !this.#publishing) {
       this.#publishing = true;
@@ -188,7 +189,7 @@ export class ProjectProcessor extends StreamProcessor<
                         "itx",
                         "repos",
                         ["get", "/repos/config"],
-                        ["readFile", "worker.ts", { commitOid: tip.commitOid }],
+                        ["modules", { commitOid: tip.commitOid }],
                       ],
                       cacheKey: tip.commitOid,
                     },
@@ -252,8 +253,11 @@ export default class extends WorkerEntrypoint {
 This repository is the project's executable configuration. \`worker.ts\` is the project's homepage
 worker (its \`fetch\` answers the project's apex); the platform seeded both files when the project was
 created and never touches them again. A commit on \`main\` IS its publication: the platform points the
-apex at the new commit within a moment (the project processor follows this repo's commits). Keep
-\`worker.ts\` valid JavaScript — a broken commit takes the site down until the next one.
+apex at the new commit within a moment (the project processor follows this repo's commits). The whole
+tree rides along: \`worker.ts\` may import any \`.js\` file in the repo by its relative path, and each
+runs as a JavaScript module (\`.js\` is the one name the loader takes a module under; \`worker.ts\` is
+the seed's name and runs as the main module). Keep them valid JavaScript — a broken commit takes the
+site down until the next one.
 `,
                 },
               ],
@@ -273,12 +277,7 @@ apex at the new commit within a moment (the project processor follows this repo'
                 [
                   "get",
                   {
-                    source: [
-                      "itx",
-                      "repos",
-                      ["get", "/repos/config"],
-                      ["readFile", "worker.ts", { commitOid }],
-                    ],
+                    source: ["itx", "repos", ["get", "/repos/config"], ["modules", { commitOid }]],
                     cacheKey: commitOid,
                   },
                 ],

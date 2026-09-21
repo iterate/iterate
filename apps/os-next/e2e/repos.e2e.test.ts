@@ -176,6 +176,13 @@ localOnly(
     expect((await rejection(repo.readModules({ "x.js": "missing.ts" }))).message).toMatch(
       /no file at "missing.ts"/,
     );
+    // the whole tree as a worker's modules: `worker.ts` is the main module (`cap.js`); only `.js`
+    // files ride under their own paths (the loader's naming rule), so it is not there twice; a main
+    // that is not there is a refusal
+    expect(await repo.modules()).toEqual({ "cap.js": "export default 1;\n" });
+    expect((await rejection(repo.modules({ main: "missing.js" }))).message).toMatch(
+      /no file at "missing.js" to be the main module/,
+    );
     expect(artifacts.snapshots).toBe(1);
 
     // A push from OUTSIDE the facet moves the tip: the next read sees it, with ONE more fetch.
