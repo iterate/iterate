@@ -150,7 +150,7 @@ const acquireResourceProcedure = semaphore.resources.acquire
   .use(requireAuth)
   .use(mapResourceErrors)
   .handler(async ({ input }) => {
-    const { type, leaseMs, waitMs = 0, holder, allowedSlugs } = input;
+    const { type, leaseMs, waitMs = 0, holder, allowedSlugs, preferredTags } = input;
     const hasInventory = await hasInventoryForType(env.DB, type);
     if (!hasInventory) {
       throw new ORPCError("NOT_FOUND", {
@@ -164,6 +164,7 @@ const acquireResourceProcedure = semaphore.resources.acquire
       waitMs,
       holder,
       allowedSlugs,
+      preferredTags,
     });
     if (!lease) {
       throw new ORPCError("CONFLICT", {

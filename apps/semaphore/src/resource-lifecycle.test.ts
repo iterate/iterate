@@ -4,6 +4,52 @@ import { Miniflare } from "miniflare";
 import { expect, test } from "vitest";
 import { createSemaphoreClient } from "./contract.ts";
 
+test("acquisition prefers matching tags, oldest first, then falls back to other free slots", async () => {
+  await using app = await semaphoreFixture();
+  const { resources } = app.client;
+  for (const slug of ["untagged", "rested-first", "rested-second", "excluded"]) {
+    await resources.add({ type: "preview", slug, data: {} });
+    const lease = await resources.acquireSpecific({ type: "preview", slug, leaseMs: 60_000 });
+    await resources.release({
+      ...lease!,
+      tags: slug === "untagged" ? {} : { "preview-state": "rested" },
+    });
+  }
+  const input = {
+    type: "preview",
+    leaseMs: 60_000,
+    preferredTags: { "preview-state": "rested" },
+    allowedSlugs: ["untagged", "rested-first", "rested-second"],
+  };
+  expect(await resources.acquire(input)).toMatchObject({
+    slug: "rested-first",
+    tags: { "preview-state": "rested" },
+  });
+  expect(await resources.acquire(input)).toMatchObject({ slug: "rested-second" });
+  expect(await resources.acquire(input)).toMatchObject({ slug: "untagged", tags: {} });
+  // A preference must never widen the caller's allowed inventory.
+  await expect(resources.acquire(input)).rejects.toMatchObject({ code: "CONFLICT" });
+});
+
+test.each([undefined, {}])(
+  "without preferred tags (%j), acquisition keeps oldest-first ordering",
+  async (preferredTags) => {
+    await using app = await semaphoreFixture();
+    const { resources } = app.client;
+    await resources.add({ type: "preview", slug: "older", data: {} });
+    await resources.add({ type: "preview", slug: "tagged", data: {} });
+    const tagged = await resources.acquireSpecific({
+      type: "preview",
+      slug: "tagged",
+      leaseMs: 60_000,
+    });
+    await resources.release({ ...tagged!, tags: { "preview-state": "rested" } });
+    expect(
+      await resources.acquire({ type: "preview", leaseMs: 60_000, preferredTags }),
+    ).toMatchObject({ slug: "older", tags: {} });
+  },
+);
+
 test("released tags describe only the next acquisition, never intervening use", async () => {
   await using app = await semaphoreFixture();
   const { resources } = app.client;

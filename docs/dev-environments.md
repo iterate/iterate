@@ -507,15 +507,17 @@ Product-changing CI commits deploy into a different slot. An explicit
 the separate retirement job. The current PR URL stays
 published until the candidate passes shared readiness. Then the report switches
 to the new URL and `ci-retire` parks and erases the previous slot. It holds that
-lease for a further 150 seconds before releasing it with preparation tags.
+lease for a further 150 seconds before releasing it with `preview-state=rested`.
 Retirement runs in a separate job, alongside tests, and does not gate the test
 verdict. The lifecycle lock still covers all jobs, so consecutive commits cannot
 race retirement or restoration.
 
-Acquisition prefers the oldest prepared free slot. Semaphore returns its tags
-and consumes them atomically; a subsequent release without fresh preparation
-cannot preserve the old proof. Only `parked-v1` preparation with a completed
-150-second rest skips entry erase and the 90-second postdeploy age guard.
+Acquisition asks Semaphore for `preferredTags: { "preview-state": "rested" }`.
+It picks the oldest released free slot matching those tags, or the oldest free
+slot otherwise. Tags are consumed atomically on acquisition; a subsequent
+release without fresh preparation cannot preserve the old proof. Cleanup sets
+`preview-state=rested` only after its 150-second rest completes. That tag skips
+entry erase and the 90-second postdeploy age guard.
 Unknown slots, expired leases and interrupted cleanup retain erase plus the
 normal guard. Exact-version readiness and agent smoke still run in either case.
 
@@ -537,8 +539,10 @@ inspection; it consumes any preparation tags just like every other acquisition.
 Orphaned Artifacts repositories remain until full cleanup; new project IDs isolate
 subsequent tests and deployment-wide repo tests use unique paths.
 
-Semaphore must support release tags and atomic expected-holder acquisition before
-these preview commands are deployed. Older clients continue to work; acquiring a
+Semaphore must support release tags, `preferredTags` acquisition and atomic
+expected-holder acquisition before these preview commands are deployed. Existing
+policy/timestamp tags take the guarded path until cleanup replaces them with
+`preview-state=rested`. Older clients continue to work; acquiring a
 slot through them consumes its tags, so they cannot accidentally preserve readiness.
 
 ### Story 2: run what CI runs, locally

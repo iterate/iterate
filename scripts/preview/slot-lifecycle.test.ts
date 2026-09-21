@@ -1,26 +1,5 @@
 import { expect, test } from "vitest";
-import { preparedPreviewSlot, previewSlotRestMs } from "./slot-lifecycle.ts";
 import { previewInternals, type PreviewSemaphoreResourceClient } from "./preview.ts";
-
-test("only a completed rest under the current policy allows skipping the rollout wait", () => {
-  const parkedAt = 1_000_000;
-  const readyAt = parkedAt + previewSlotRestMs;
-  const tags = {
-    "preview-policy": "parked-v1",
-    "preview-parked-at": String(parkedAt),
-    "preview-ready-at": String(readyAt),
-  };
-  expect(preparedPreviewSlot(tags, readyAt)).toMatchObject({ "preview-ready-at": readyAt });
-  for (const invalid of [
-    undefined,
-    {},
-    { ...tags, "preview-policy": "old" },
-    { ...tags, "preview-ready-at": String(readyAt - 1) },
-  ]) {
-    expect(preparedPreviewSlot(invalid, readyAt)).toBeNull();
-  }
-  expect(preparedPreviewSlot(tags, readyAt - 1)).toBeNull();
-});
 
 test("retirement keeps both leases until the old slot has finished resting", async () => {
   const pool = new SlotPool();
@@ -42,69 +21,56 @@ test("retirement keeps both leases until the old slot has finished resting", asy
   ).toMatchObject({ retired: ["preview-1"] });
   expect(pool).toMatchObject({
     held: ["preview-2"],
-    released: [{ slug: "preview-1", tags: { "preview-policy": "parked-v1" } }],
+    released: [{ slug: "preview-1", tags: { "preview-state": "rested" } }],
   });
 });
 
-test("an interrupted rest releases no preparation and leaves the published preview alone", async () => {
-  const pool = new SlotPool();
-  await expect(
-    previewInternals.retirePreviewSlots({
-      semaphore: pool,
-      holder: "pr-123",
-      keepSlot: "preview-2",
-      eraseSlotData: async () => {},
-      rest: async () => {
-        throw new Error("cancelled");
-      },
-    }),
-  ).rejects.toThrow("cancelled");
-  expect(pool).toMatchObject({ held: ["preview-2"], released: [{ slug: "preview-1", tags: {} }] });
-});
+test.each(["erase", "rest"])(
+  "interrupted %s releases no preparation and leaves the published preview alone",
+  async (stage) => {
+    const pool = new SlotPool();
+    await expect(
+      previewInternals.retirePreviewSlots({
+        semaphore: pool,
+        holder: "pr-123",
+        keepSlot: "preview-2",
+        eraseSlotData: async () => {
+          if (stage === "erase") throw new Error("cancelled");
+        },
+        rest: async () => {
+          throw new Error("cancelled");
+        },
+      }),
+    ).rejects.toThrow("cancelled");
+    expect(pool).toMatchObject({
+      held: ["preview-2"],
+      released: [{ slug: "preview-1", tags: {} }],
+    });
+  },
+);
 
-test.each([true, false])(
-  "acquisition rechecks preparation returned by Semaphore (still prepared: %s)",
-  async (stillPrepared) => {
-    const tags = {
-      "preview-policy": "parked-v1",
-      "preview-parked-at": "1000000",
-      "preview-ready-at": "1150000",
-    };
+test.each(["rested", "parked", undefined])(
+  "acquisition skips erase only when the acquired lease is rested (state: %s)",
+  async (state) => {
     const events: string[] = [];
-    const lease = {
-      type: "environment-config-lease",
-      slug: "preview-3",
-      data: { dopplerConfig: "preview_3" },
-      leaseId: "next-token",
-      expiresAt: Date.now() + 60_000,
-      tags: stillPrepared ? tags : {},
-    };
     const semaphore: PreviewSemaphoreResourceClient = {
-      list: async () => [
-        {
-          ...lease,
-          tags: { ...tags, "preview-ready-at": "1250000" },
-          slug: "preview-4",
-          leaseState: "available",
-          leasedUntil: null,
-          lastAcquiredAt: null,
-          lastReleasedAt: null,
-        },
-        {
-          ...lease,
-          tags,
-          leaseState: "available",
-          leasedUntil: null,
-          lastAcquiredAt: null,
-          lastReleasedAt: null,
-        },
-      ],
-      acquireSpecific: async (input) => {
-        events.push(`acquire ${input.slug}`);
-        return lease;
+      list: async () => {
+        throw new Error("Semaphore chooses the preferred slot atomically");
       },
-      acquire: async () => {
-        throw new Error("Should prefer prepared slots");
+      acquireSpecific: async () => {
+        throw new Error("Use preference-based acquisition");
+      },
+      acquire: async (input) => {
+        expect(input).toMatchObject({ preferredTags: { "preview-state": "rested" } });
+        events.push("acquire preview-3");
+        return {
+          type: "environment-config-lease",
+          slug: "preview-3",
+          data: { dopplerConfig: "preview_3" },
+          leaseId: "next-token",
+          expiresAt: Date.now() + 60_000,
+          tags: state ? { "preview-state": state } : undefined,
+        };
       },
       release: async () => ({ released: true }),
     };
@@ -118,7 +84,7 @@ test.each([true, false])(
       },
     });
     expect(events).toEqual(
-      stillPrepared ? ["acquire preview-3"] : ["acquire preview-3", "erase preview-3"],
+      state === "rested" ? ["acquire preview-3"] : ["acquire preview-3", "erase preview-3"],
     );
   },
 );
@@ -130,11 +96,7 @@ test("an explicit erase invalidates preparation even when acquisition returned t
     slug: "preview-3",
     data: { dopplerConfig: "preview_3" },
     leaseId: "current-token",
-    tags: {
-      "preview-policy": "parked-v1",
-      "preview-parked-at": "1000000",
-      "preview-ready-at": "1150000",
-    },
+    tags: { "preview-state": "rested" },
   };
   expect(
     await previewInternals.eraseAcquiredSlotOrGiveItBack({
@@ -143,7 +105,7 @@ test("an explicit erase invalidates preparation even when acquisition returned t
       eraseSlotData: async () => {},
     }),
   ).toBe(true);
-  expect(preparedPreviewSlot(lease.tags, Date.now())).toBeNull();
+  expect(lease).not.toHaveProperty("tags");
 });
 
 /** Small controllable pool; Semaphore's HTTP integration tests cover the lease arbitration. */

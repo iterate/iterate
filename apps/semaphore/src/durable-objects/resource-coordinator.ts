@@ -23,6 +23,7 @@ type Waiter = {
   leaseMs: number;
   holder: string | null;
   allowedSlugs: string[] | undefined;
+  preferredTags: Record<string, string> | undefined;
   timeoutHandle: ReturnType<typeof setTimeout>;
   settled: boolean;
   resolve: (value: SemaphoreLeaseRecord | null) => void;
@@ -47,10 +48,24 @@ export class ResourceCoordinator extends DurableObject<Env> {
     waitMs?: number;
     holder?: string;
     allowedSlugs?: string[];
+    preferredTags?: Record<string, string>;
   }): Promise<SemaphoreLeaseRecord | null> {
-    const { type, leaseMs, waitMs = 0, holder, allowedSlugs } = AcquireResourceInput.parse(params);
+    const {
+      type,
+      leaseMs,
+      waitMs = 0,
+      holder,
+      allowedSlugs,
+      preferredTags,
+    } = AcquireResourceInput.parse(params);
     this.rememberCoordinatorType(type);
-    const immediate = await this.tryAcquire(type, leaseMs, holder ?? null, allowedSlugs);
+    const immediate = await this.tryAcquire(
+      type,
+      leaseMs,
+      holder || null,
+      allowedSlugs,
+      preferredTags,
+    );
     if (immediate) {
       return immediate;
     }
@@ -64,8 +79,9 @@ export class ResourceCoordinator extends DurableObject<Env> {
         id: waiterId,
         type,
         leaseMs,
-        holder: holder ?? null,
+        holder: holder || null,
         allowedSlugs,
+        preferredTags,
         timeoutHandle: setTimeout(() => {
           if (waiter.settled) {
             return;
@@ -188,13 +204,13 @@ export class ResourceCoordinator extends DurableObject<Env> {
     if (activeLease) {
       await this.releaseLease(parsed.type, parsed.slug, activeLease.lease_id, "evicted", {
         holder: activeLease.holder,
-        evictedBy: parsed.holder ?? null,
+        evictedBy: parsed.holder || null,
         releasedAt: Date.now(),
       });
     }
 
     const lease = candidate
-      ? await this.createLease(candidate, parsed.leaseMs, parsed.holder ?? null)
+      ? await this.createLease(candidate, parsed.leaseMs, parsed.holder || null)
       : null;
     if (activeLease && !lease) {
       // The eviction freed capacity but no new lease took it; wake waiters
@@ -388,6 +404,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
     leaseMs: number,
     holder: string | null,
     allowedSlugs: string[] | undefined,
+    preferredTags: Record<string, string> | undefined,
   ): Promise<SemaphoreLeaseRecord | null> {
     await this.reapExpiredLeases();
 
@@ -396,6 +413,19 @@ export class ResourceCoordinator extends DurableObject<Env> {
       return null;
     }
 
+    const tags = preferredTags ? await this.availableTags({ type }) : {};
+    const preferences = Object.entries(preferredTags || {});
+    const preferredSlugs = new Set(
+      Object.entries(tags)
+        .filter(
+          ([, resourceTags]) =>
+            preferences.length > 0 &&
+            preferences.every(
+              ([key, value]) => Object.hasOwn(resourceTags, key) && resourceTags[key] === value,
+            ),
+        )
+        .map(([slug]) => slug),
+    );
     const activeLeases = new Set(
       this.ctx.storage.sql
         .exec<{ slug: string }>("SELECT slug FROM leases")
@@ -403,10 +433,8 @@ export class ResourceCoordinator extends DurableObject<Env> {
         .map((row) => row.slug),
     );
 
-    // Hand out the least-recently-released slot (never-released first). A
-    // freed slot often still carries its previous holder's deployment; resting
-    // it as long as possible maximizes the chance that holder retakes its own
-    // slot before anyone else lands on it.
+    // Prefer matching free slots, with the oldest release first in each group.
+    // With no preference, retain ordinary oldest-first selection (never-released first).
     const allowedSlugSet = allowedSlugs ? new Set(allowedSlugs) : null;
     const candidates = inventory
       .filter(
@@ -414,7 +442,11 @@ export class ResourceCoordinator extends DurableObject<Env> {
           !activeLeases.has(resource.slug) &&
           (allowedSlugSet === null || allowedSlugSet.has(resource.slug)),
       )
-      .sort((left, right) => (left.lastReleasedAt ?? 0) - (right.lastReleasedAt ?? 0));
+      .sort(
+        (left, right) =>
+          Number(preferredSlugs.has(right.slug)) - Number(preferredSlugs.has(left.slug)) ||
+          (left.lastReleasedAt || 0) - (right.lastReleasedAt || 0),
+      );
     if (candidates.length === 0) {
       return null;
     }
@@ -472,6 +504,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
           waiter.leaseMs,
           waiter.holder,
           waiter.allowedSlugs,
+          waiter.preferredTags,
         );
         if (!lease) {
           if (!waiter.settled) {

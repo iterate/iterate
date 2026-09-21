@@ -186,17 +186,41 @@ describe.sequential("preview semaphore E2E", () => {
 
   test("release tags are consumed and adoption cannot take another holder's slot", async () => {
     const type = uniqueType();
+    // An older untagged slot must lose to the rested slot, but remain a valid fallback.
+    const untagged = { type, slug: "untagged", data: {} };
+    await semaphore.resources.add(untagged);
+    createdResources.push(untagged);
     const resource = { type, slug: "rested", data: {} };
     await semaphore.resources.add(resource);
     createdResources.push(resource);
-    let lease = await semaphore.resources.acquire({ type, leaseMs: 60_000, holder: "first" });
+    let lease = (await semaphore.resources.acquireSpecific({
+      ...resource,
+      leaseMs: 60_000,
+      holder: "first",
+    }))!;
     leasedResources.push(lease);
     expect(
-      await semaphore.resources.release({ ...lease, tags: { prepared: "yes" } }),
+      await semaphore.resources.release({ ...lease, tags: { "preview-state": "rested" } }),
     ).toMatchObject({ released: true });
-    lease = await semaphore.resources.acquire({ type, leaseMs: 60_000, holder: "next" });
+    lease = await semaphore.resources.acquire({
+      type,
+      leaseMs: 60_000,
+      holder: "next",
+      preferredTags: { "preview-state": "rested" },
+    });
     leasedResources.push(lease);
-    expect(lease).toMatchObject({ tags: { prepared: "yes" }, holder: "next" });
+    expect(lease).toMatchObject({
+      slug: "rested",
+      tags: { "preview-state": "rested" },
+      holder: "next",
+    });
+    const fallback = await semaphore.resources.acquire({
+      type,
+      leaseMs: 60_000,
+      preferredTags: { "preview-state": "rested" },
+    });
+    leasedResources.push(fallback);
+    expect(fallback).toMatchObject({ slug: "untagged", tags: {} });
     expect(
       await semaphore.resources.acquireSpecific({
         type,

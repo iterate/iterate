@@ -139,6 +139,8 @@ const AcquireResourceInputBase = z.object({
   waitMs: semaphoreWaitMsSchema.optional(),
   holder: semaphoreHolderSchema.optional(),
   allowedSlugs: allowedSlugsSchema.optional(),
+  /** Prefer free resources matching every tag, then fall back; oldest release wins in each group. */
+  preferredTags: z.record(z.string(), z.string()).optional(),
 });
 export const AcquireResourceInput = AcquireResourceInputBase.transform(
   applyLegacyPreviewAllowedSlugs,

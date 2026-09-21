@@ -41,7 +41,6 @@ import {
 } from "../../packages/shared/src/test-support/cloudflare-worker-version-overrides.ts";
 import { PREVIEW_APP_ROLLOUT_READY_AT_MS_ENV } from "../../packages/shared/src/test-support/preview-rollout-gate.ts";
 import { traceOperation } from "../ci/tracing/tracing.ts";
-import { preparedPreviewSlot, previewSlotRestMs } from "./slot-lifecycle.ts";
 import {
   parseWorkerSizeFromDeployOutput,
   parseWorkerSizeStatusDescription,
@@ -620,13 +619,8 @@ async function retirePreviewSlots(input: {
         slug: slot.slug,
         dopplerConfig: parseEnvironmentConfigLeaseData(lease.data).dopplerConfig,
       });
-      const parkedAt = Date.now();
       await input.rest();
-      tags = {
-        "preview-policy": "parked-v1",
-        "preview-parked-at": String(parkedAt),
-        "preview-ready-at": String(Date.now()),
-      };
+      tags = { "preview-state": "rested" };
     } catch (error) {
       errors.push(error);
     }
@@ -1413,7 +1407,7 @@ async function deployPreviewApps({
   const result = {
     ok,
     state: report.state,
-    preparedSlot: Boolean(preparedPreviewSlot(environmentConfigLease.tags, Date.now())),
+    preparedSlot: environmentConfigLease.tags?.["preview-state"] === "rested",
   };
 
   if (!result.ok) {
@@ -3720,6 +3714,7 @@ type PreviewSemaphoreLease = {
 export type PreviewSemaphoreResourceClient = {
   acquire: (input: {
     allowedSlugs: string[];
+    preferredTags?: Record<string, string>;
     holder?: string;
     leaseMs: number;
     type: string;
@@ -5053,14 +5048,9 @@ async function cleanupPreviewApps({
   // means the RELEASE itself failed — the lease truly leaked.
   let tags: Record<string, string> = {};
   if (ok) {
-    const parkedAt = Date.now();
     try {
       await sleep(previewSlotRestMs, runtime.signal);
-      tags = {
-        "preview-policy": "parked-v1",
-        "preview-parked-at": String(parkedAt),
-        "preview-ready-at": String(Date.now()),
-      };
+      tags = { "preview-state": "rested" };
     } catch (error) {
       logPreview(
         `Slot rest interrupted: ${formatPreviewErrorMessage(error)}; releasing without preparation.`,
@@ -5554,6 +5544,8 @@ function isNoSlotAvailableError(error: unknown) {
 const defaultSlotWaitTotalMs = 6 * 60 * 1000;
 // Semaphore caps a single acquire long-poll at 5 minutes; loop to go longer.
 const slotWaitPerAttemptMs = 5 * 60 * 1000;
+// Hold the lease while the parked Worker rollout settles before marking the slot rested.
+const previewSlotRestMs = 150_000;
 
 function resolveSlotWaitTotalMs(env: NodeJS.ProcessEnv) {
   const raw = env.PREVIEW_SLOT_WAIT_MS?.trim();
@@ -5941,40 +5933,16 @@ async function acquireAnyEnvironmentConfigLease(input: {
     // any long-poll; later attempts queue on the semaphore in 5-minute polls.
     const waitMs = attempt === 1 ? 0 : Math.max(0, Math.min(slotWaitPerAttemptMs, remainingMs));
     try {
-      // Prefer the oldest prepared free slot; acquisition consumes its tags atomically.
-      const prepared = (
-        await input.semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE })
-      )
-        .filter(
-          (resource) =>
-            allowedSlugs.includes(resource.slug) && preparedPreviewSlot(resource.tags, Date.now()),
-        )
-        .sort(
-          (left, right) =>
-            preparedPreviewSlot(left.tags, Date.now())!["preview-ready-at"] -
-            preparedPreviewSlot(right.tags, Date.now())!["preview-ready-at"],
-        );
-      let preferred: PreviewSemaphoreLease | null = null;
-      for (const resource of prepared) {
-        preferred = await input.semaphore.acquireSpecific({
-          allowedSlugs,
-          type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
-          slug: resource.slug,
-          leaseMs: input.leaseMs,
-          holder: input.holder,
-        });
-        if (preferred) break;
-      }
-      const acquired =
-        preferred ||
-        (await input.semaphore.acquire({
-          allowedSlugs,
-          type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
-          leaseMs: input.leaseMs,
-          waitMs,
-          holder: input.holder,
-        }));
-      if (preparedPreviewSlot(acquired.tags, Date.now())) {
+      // Semaphore chooses the oldest rested free slot, falling back to ordinary oldest-first.
+      const acquired = await input.semaphore.acquire({
+        allowedSlugs,
+        preferredTags: { "preview-state": "rested" },
+        type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+        leaseMs: input.leaseMs,
+        waitMs,
+        holder: input.holder,
+      });
+      if (acquired.tags?.["preview-state"] === "rested") {
         logPreview(
           `Acquired rested ${acquired.slug}: skipping entry erase and postdeploy age guard.`,
         );
