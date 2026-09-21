@@ -90,7 +90,7 @@ export function assembleTrace(
   const workflow = Workflow.parse(input);
   const finish = workflow.jobs.find((job) => job.jobKey.endsWith(":finish"));
   workflow.jobs = workflow.jobs.filter(
-    (job) => !job.jobKey.endsWith(":finish") && !job.jobKey.endsWith(":trace"),
+    (job) => ![":finish", ":trace", ":retire"].some((suffix) => job.jobKey.endsWith(suffix)),
   );
   if (
     workflow.jobs.some(

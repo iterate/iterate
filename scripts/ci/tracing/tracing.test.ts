@@ -268,6 +268,21 @@ test("inline collection refuses to label still-running preview jobs as finished"
   expect(() => assembleTrace(workflow, new Map())).toThrow("Preview jobs have not settled");
 });
 
+test.each(["queued", "running", "finished", "failed", "cancelled"])(
+  "old-slot retirement (%s) is outside the preparation and test verdict",
+  (status) => {
+    const workflow = previewWorkflow("running");
+    const expected = assembleTrace(workflow, new Map());
+    workflow.jobs.push({
+      jobId: "retire",
+      jobKey: "preview.yml:preview:retire",
+      status,
+      attempts: [],
+    });
+    expect(assembleTrace(workflow, new Map())).toEqual(expected);
+  },
+);
+
 test.each(["running", "finished", "failed", "cancelled"])(
   "cleanup status %s cannot change an observed green test result",
   (status) => {

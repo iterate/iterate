@@ -150,7 +150,13 @@ export default class CiStatus {
     const workflow = await this.workflow();
     if (workflow.jobs.find((job) => job.jobId === this.jobId)?.status !== "running")
       throw new Error("This Depot job is no longer running");
-    if (workflow.jobs.some((job) => job.jobId !== this.jobId && job.status !== "finished"))
+    // Old-slot retirement has its own check and must not delay the test verdict.
+    if (
+      workflow.jobs.some(
+        (job) =>
+          job.jobId !== this.jobId && !job.jobKey.endsWith(":retire") && job.status !== "finished",
+      )
+    )
       throw new Error("Cannot publish success before every preview producer has succeeded");
     const check = await this.ownCheck();
     if (check.status !== "in_progress") throw new Error("This GitHub check is no longer running");
@@ -191,7 +197,14 @@ export default class CiStatus {
     const self = workflow.jobs.find((job) => job.jobId === this.jobId);
     if (!self?.jobKey.endsWith(":finish") || self.status !== "running")
       throw new Error("Only the running preview finalizer can publish preview-settled");
-    if (workflow.jobs.some((job) => job !== self && !["finished", "failed"].includes(job.status)))
+    if (
+      workflow.jobs.some(
+        (job) =>
+          job !== self &&
+          !job.jobKey.endsWith(":retire") &&
+          !["finished", "failed"].includes(job.status),
+      )
+    )
       throw new Error("Cannot publish preview-settled with unfinished or cancelled jobs");
     const check = await this.ownCheck();
     await this.request(

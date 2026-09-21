@@ -4,7 +4,7 @@ import { assembleTrace, Workflow, renderTrace, stepCommands } from "./tracing.ts
 
 /** Completed-run CI traces. Invoke with `pnpm exec trpc-cli scripts/ci/tracing/cli.ts`. */
 export default class CiTrace {
-  /** Collect preparation and tests before cleanup, excluding the finish job. */
+  /** Collect preparation and tests, excluding finalization and old-slot retirement. */
   async current(directory: string) {
     const source = new URL(z.string().url().parse(process.env.DEPOT_JOB_URL));
     const workflowId = z
@@ -69,7 +69,7 @@ export default class CiTrace {
     if (!source.ok) throw new Error(`Could not read the source workflow: HTTP ${source.status}`);
     const commands = stepCommands(await source.text());
     const attempts = workflow.jobs
-      .filter((job) => !job.jobKey.endsWith(":trace"))
+      .filter((job) => !job.jobKey.endsWith(":trace") && !job.jobKey.endsWith(":retire"))
       .flatMap((job) => job.attempts)
       .filter((attempt) => attempt.startedAt);
     const entries = await Promise.all(
