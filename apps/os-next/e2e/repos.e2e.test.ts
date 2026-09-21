@@ -163,7 +163,6 @@ localOnly(
     expect((await readAll(itx)).filter((e) => e.type === COMMITTED).map((e) => e.payload)).toEqual([
       fact,
     ]);
-
     // The first read after a commit fetches the tip; reads at the same tip fetch nothing more (an
     // ls-refs each, which is not a fetch).
     expect(await repo.readFile("worker.ts")).toBe("export default 1;\n");
@@ -231,6 +230,48 @@ localOnly(
     expect(
       (await readAll(itx.cd("/repos/config"))).filter((e) => e.type === COMMITTED),
     ).toHaveLength(2);
+  },
+);
+
+// LOCAL ONLY: the fake remote listens on this machine's loopback (see localOnly).
+localOnly(
+  "a commit whose facts were lost heals on the retry: the push landed but the cross-post to / was refused (the root paused) and the commit threw; the same commit again finds nothing to commit and lands the facts for the tip those changes are — once, keyed by the commit — so the apex still follows",
+  async () => {
+    const itx = openItx(freshCtx("repo"));
+    const artifacts = await FakeArtifacts.start();
+    await itx.cd("/repos/config").provide("itx.cfArtifacts", artifacts);
+    await itx.repos.create("/repos/config");
+    const repo = itx.repos.get("/repos/config");
+    const first = await repo.writeFile("worker.ts", "export default 1;\n");
+    const facts = async (ctx: any) =>
+      (await readAll(ctx)).filter((e) => e.type === COMMITTED).map((e) => e.payload);
+    const fact = {
+      path: "/repos/config",
+      commitOid: first.commitOid,
+      message: "write worker.ts",
+      changedPaths: ["worker.ts"],
+    };
+    expect(await facts(itx)).toEqual([fact]);
+
+    await itx.append({ type: "events.iterate.com/stream/paused" });
+    await expect(repo.writeFile("worker.ts", "export default 2;\n")).rejects.toThrow();
+    expect(artifacts.remoteFiles("/repos/config")).toEqual({ "worker.ts": "export default 2;\n" }); // the push landed
+    expect(await facts(itx)).toEqual([fact]); // no fact for it anywhere yet
+    await itx.append({ type: "events.iterate.com/stream/resumed" });
+
+    const healed = await repo.writeFile("worker.ts", "export default 2;\n");
+    expect(healed).toEqual({ commitOid: artifacts.remoteTip("/repos/config"), changedPaths: [] });
+    const healedFact = {
+      path: "/repos/config",
+      commitOid: healed.commitOid,
+      message: "write worker.ts",
+      changedPaths: [],
+    };
+    expect(await facts(itx)).toEqual([fact, healedFact]);
+    expect(await facts(itx.cd("/repos/config"))).toEqual([fact, healedFact]);
+    // …and once only: the same retry again lands nothing (keyed by the commit).
+    await repo.writeFile("worker.ts", "export default 2;\n");
+    expect(await facts(itx)).toHaveLength(2);
   },
 );
 

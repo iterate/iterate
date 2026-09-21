@@ -244,7 +244,16 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
       if (!objects.has(oid)) toPush.push({ payload: blob, type: "blob" });
       changedPaths.push(file);
     }
-    if (changedPaths.length === 0) return { commitOid: tip, changedPaths };
+    if (changedPaths.length === 0) {
+      // Nothing to commit — but a RETRY of a commit whose facts were lost (the push landed, the
+      // append after it did not, the caller saw the throw and calls again with the same changes)
+      // lands them now, for the tip those changes ARE: keyed by the commit, so a tip whose fact
+      // stands lands nothing. The apex follows the fact (project/processor.ts), so a commit in git
+      // without its fact would sit unpublished until an unrelated later commit.
+      if (tip)
+        await this.#commitFact({ path, commitOid: tip, message: input.message, changedPaths });
+      return { commitOid: tip, changedPaths };
+    }
 
     const { rootOid, trees } = await treeObjectsOf(manifest);
     for (const tree of trees)
@@ -267,17 +276,27 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     // concurrent push) is a refusal like any other — the server's words, and the caller retries.
     // oxlint-disable-next-line iterate/simple-truthiness-check -- push() returns null only on success; an empty-string refusal reason (an `ng <ref>` line with no message) is still a refusal and must throw
     if (refused !== null) throw new Error(`repo ${path}: the commit was refused: ${refused}`);
-    // The fact: cross-posted to `/` FIRST — the project processor follows the config repo's commits
-    // with the apex (project/processor.ts), so a commit whose own-path fact lost its answer is
-    // published anyway — then on this path. Keyed by the commit on both.
+    await this.#commitFact({ path, commitOid, message: input.message, changedPaths });
+    return { commitOid, changedPaths };
+  }
+
+  /** THE COMMIT'S FACT: cross-posted to `/` FIRST — the project processor follows the config repo's
+   *  commits with the apex (project/processor.ts), so a commit whose own-path fact lost its answer is
+   *  published anyway — then on this path. Keyed by the commit on both, so landing it again (a
+   *  retried commit, above) lands nothing where it stands. */
+  async #commitFact(payload: {
+    path: string;
+    commitOid: string;
+    message: string;
+    changedPaths: string[];
+  }): Promise<void> {
     const committed: EventInput<typeof RepoContract> = {
       type: "events.iterate.com/repo/commit-completed",
-      payload: { path, commitOid, message: input.message, changedPaths },
-      idempotencyKey: `repo/commit-completed:${path}:${commitOid}`,
+      payload,
+      idempotencyKey: `repo/commit-completed:${payload.path}:${payload.commitOid}`,
     };
     await this.withItx((itx) => itx.cd("/").append(committed));
     await this.withItx((itx) => itx.append(committed));
-    return { commitOid, changedPaths };
   }
 
   writeFile(
