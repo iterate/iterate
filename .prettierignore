@@ -39,3 +39,6 @@ pnpm-workspace.yaml
 
 # Task specifications
 **/tasks/**
+
+# Vendored: capnweb's browser bundle, copied verbatim by `pnpm --dir apps/browser-extension vendor`
+apps/browser-extension/capnweb.js
