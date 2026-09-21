@@ -702,7 +702,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         ...(s.afterOffset !== undefined && { afterOffset: s.afterOffset }),
         // oxlint-disable-next-line iterate/simple-truthiness-check -- the `itx.subscriptions` wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
         ...(s.hostedFacet && {
-          hostedFacet: { ...s.hostedFacet, restarts: this.#facetRestarts(name) },
+          hostedFacet: { ...s.hostedFacet, restarts: this.#facetRestarts(s.hostedFacet.name) },
         }),
         ...(cursor && {
           cursor: {
@@ -1175,7 +1175,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  re-load into the same name is a clean rebuild, never a resume from orphaned state. */
   /** How many times this facet was restarted after a platform failure at its start (the predicate
    *  `isFacetStartPlatformFailure`), over the facet's whole life on this context. */
-  #facetRestarts(name: string): number {
+  #facetRestarts(name: string) {
+    // The row's value is the count this DO wrote in `#invokeFacet` (kv types it `unknown`); absent
+    // until the first restart.
     return (this.ctx.storage.kv.get(`facet:${name}:restarts`) as number | undefined) ?? 0;
   }
 
