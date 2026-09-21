@@ -282,9 +282,15 @@ export class AgentTurnLoop {
           return;
         }
         const messages = state.contextItems.flatMap((item) =>
-          item.kind === "message" &&
+          item.kind !== "request" &&
           item.offset > state.lastLlmRequestOffset &&
-          (item.payload.role === "user" || item.payload.actor?.type === "agent")
+          (item.payload.role === "user" ||
+            (item.payload.role === "developer" &&
+              item.payload.actor &&
+              item.payload.actor.type !== "script" &&
+              !item.payload.mentionResolution &&
+              (item.payload.llmRequestPolicy.behaviour !== "dont-trigger-request" ||
+                item.payload.mentions)))
             ? [{ role: item.payload.role, content: item.payload.content }]
             : [],
         );

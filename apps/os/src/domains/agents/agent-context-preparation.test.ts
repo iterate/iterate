@@ -162,6 +162,42 @@ test("eviction while selecting docs retries preparation before one answering req
   expect(h.events("events.iterate.com/agent/llm-request-requested")).toHaveLength(1);
 });
 
+test.each([
+  { type: "slack", userId: "U123" },
+  { type: "telegram", userId: "123" },
+  { type: "email", address: "sender@iterate.com" },
+  { type: "github", login: "sender" },
+  { type: "integration", name: "custom-inbox" },
+  { type: "agent", path: "/agents/sender" },
+])(
+  "incoming $type messages select docs even though their stored role is developer",
+  async (actor) => {
+    const inputs: any[] = [];
+    const calls: any[] = [];
+    const h = contextHarness(async (input) => {
+      inputs.push(input.messages);
+      return { content: "File storage documentation", metadata: {} };
+    }, calls);
+    await start(h, "Previous turn");
+    inputs.length = 0;
+    calls.length = 0;
+    await h.play([
+      "append",
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "developer",
+          actor: actor as any,
+          content: "How do I store an image?",
+        },
+      },
+    ]);
+    expect(inputs).toEqual([[{ role: "developer", content: "How do I store an image?" }]]);
+    expect(calls).toHaveLength(1);
+    expect(JSON.stringify(calls[0].messages)).toContain("File storage documentation");
+  },
+);
+
 function contextHarness(prepareContext: (input: any) => Promise<any>, calls: any[]) {
   return makeProcessorHarness<AgentProcessorContract>({
     path: "/agents/docs",
