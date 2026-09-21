@@ -34,7 +34,7 @@ export class WorkspaceCollectionRpcTarget extends RpcTarget {
    *  sought after the request that opened it, so a certificate landing between the read and the
    *  wait is seen, not missed. A deleted workspace is not re-creatable: thrown. Data back, never the
    *  handle: `itx.workspaces.get(path)` addresses it. */
-  create(path: string): Promise<{ path: string }> {
+  create(path: string, options: { creator?: string } = {}): Promise<{ path: string }> {
     return this.withItx(async (itx) => {
       const context = itx.cd(path);
       // The facet is the platform's own WorkspaceDurableObject and `snapshot()` the engine's
@@ -55,7 +55,7 @@ export class WorkspaceCollectionRpcTarget extends RpcTarget {
         // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
         const [requested] = (await context.append({
           type: "events.iterate.com/workspace/create-requested",
-          payload: {},
+          payload: { creator: options.creator },
         })) as unknown as StreamEvent[];
         requestedAtOffset = requested!.offset;
       }

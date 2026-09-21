@@ -15,7 +15,7 @@ import { defineProcessorContract, type ProcessorState } from "iterate/next/strea
 
 export const RepoContract = defineProcessorContract({
   slug: "repo",
-  version: "1",
+  version: "2",
   description: "A repo: its creation and deletion, and the commits that landed through it.",
   /** THE REDUCED STATE — what the reduce keeps between events: where creation stands, as the OFFSET
    *  of the event that says so (the request, the certificate, or the failure — read that event for
@@ -27,6 +27,8 @@ export const RepoContract = defineProcessorContract({
       .object({
         status: z.enum(["requested", "created", "failed"]),
         offset: z.number().int().positive(),
+        /** The context that asked (`create-requested.creator`): the saga writes the parent link to it. */
+        creator: z.string().optional(),
       })
       .nullable()
       .default(null),
@@ -42,8 +44,8 @@ export const RepoContract = defineProcessorContract({
   events: {
     "events.iterate.com/repo/create-requested": {
       description:
-        "Someone asked for this repo (`itx.repos.create(path)`). No payload: the context it lands on IS the repo. The processor provisions the Artifacts repo and lands created or create-failed; a request after a failure is a new attempt, one after the certificate a harmless fact.",
-      payloadSchema: z.object({}),
+        "Someone asked for this repo (`itx.repos.create(path)`). The context it lands on IS the repo; `creator` is the context that asked — the saga writes the child\'s parent link `itx ⇒ itx.builtins.cd(creator)` before the certificate, so the link is part of the birth and nothing re-points a born context. The processor provisions the Artifacts repo and lands created or create-failed; a request after a failure is a new attempt, one after the certificate a harmless fact.",
+      payloadSchema: z.object({ creator: z.string().optional() }),
     },
     "events.iterate.com/repo/created": {
       description:

@@ -15,7 +15,7 @@ import { defineProcessorContract, type ProcessorState } from "iterate/next/strea
 
 export const WorkspaceContract = defineProcessorContract({
   slug: "workspace",
-  version: "1",
+  version: "2",
   description: "A workspace: its creation and deletion.",
   /** THE REDUCED STATE — what the reduce keeps between events: where creation stands, as the OFFSET
    *  of the event that says so (the request, the certificate, or the failure — read that event for
@@ -29,6 +29,8 @@ export const WorkspaceContract = defineProcessorContract({
       .object({
         status: z.enum(["requested", "created", "failed"]),
         offset: z.number().int().positive(),
+        /** The context that asked (`create-requested.creator`): the saga writes the parent link to it. */
+        creator: z.string().optional(),
       })
       .nullable()
       .default(null),
@@ -44,8 +46,8 @@ export const WorkspaceContract = defineProcessorContract({
   events: {
     "events.iterate.com/workspace/create-requested": {
       description:
-        "Someone asked for this workspace (`itx.workspaces.create(path)`). No payload: the context it lands on IS the workspace. Nothing to provision — the processor lands created (or create-failed, should the cross-post fail); a request after a failure is a new attempt, one after the certificate a harmless fact.",
-      payloadSchema: z.object({}),
+        "Someone asked for this workspace (`itx.workspaces.create(path)`). The context it lands on IS the workspace; `creator` is the context that asked — the saga writes the child\'s parent link `itx ⇒ itx.builtins.cd(creator)` before the certificate, so the link is part of the birth and nothing re-points a born context. Nothing to provision — the processor lands created (or create-failed, should the cross-post fail); a request after a failure is a new attempt, one after the certificate a harmless fact.",
+      payloadSchema: z.object({ creator: z.string().optional() }),
     },
     "events.iterate.com/workspace/created": {
       description:

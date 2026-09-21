@@ -42,7 +42,7 @@ import {
 } from "../secrets.ts";
 import type { SecretState } from "../secret/contract.ts";
 import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.ts";
-import { admitLoadedCodeRow } from "./itx-expression-rewriting.ts";
+import { admitLoadedCodeRow, refuseSelfLoopRow } from "./itx-expression-rewriting.ts";
 import { GLOBAL_PROJECT_ID, resourceScope } from "./paths.ts";
 import {
   assertFacetSourceWithinCeiling,
@@ -449,7 +449,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     const caller = deps.caller();
     // LOADED CODE's rows are walled on their targets (itx-expression-rewriting.ts): the same wall its
     // calls meet, applied where the row is written.
-    if (caller.app) for (const event of events) admitLoadedCodeRow(event, path);
+    for (const event of events) {
+      refuseSelfLoopRow(event, path);
+      if (caller.app) admitLoadedCodeRow(event, path);
+    }
     return ownContext().append(...events.map((event) => stampCaller(event, caller)));
   };
   /** Secrets are the RESOURCE OWNER's, and a secret IS its path under the owner's root

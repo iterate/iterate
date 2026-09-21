@@ -30,7 +30,7 @@ export class RepoCollectionRpcTarget extends RpcTarget {
    *  sought after the request that opened it, so a certificate landing between the read and the
    *  wait is seen, not missed. A deleted repo is not re-creatable: thrown. Data back, never the
    *  handle: `itx.repos.get(path)` addresses it. */
-  create(path: string): Promise<{ path: string }> {
+  create(path: string, options: { creator?: string } = {}): Promise<{ path: string }> {
     return this.withItx(async (itx) => {
       const context = itx.cd(path);
       // The facet is the platform's own RepoDurableObject and `snapshot()` the engine's
@@ -51,7 +51,7 @@ export class RepoCollectionRpcTarget extends RpcTarget {
         // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
         const [requested] = (await context.append({
           type: "events.iterate.com/repo/create-requested",
-          payload: {},
+          payload: { creator: options.creator },
         })) as unknown as StreamEvent[];
         requestedAtOffset = requested!.offset;
       }

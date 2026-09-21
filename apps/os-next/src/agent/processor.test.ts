@@ -446,7 +446,7 @@ describe("the assistant's output, parsed (the codemode-tag grammar, codemode-for
 });
 
 describe("the capability tree the model reads", () => {
-  test("renderCapabilityTree: one line per row, masks and the sandbox's own link omitted, grouped by context only when there are two", () => {
+  test("renderCapabilityTree: one line per row, masks and the sandbox's own link omitted, grouped by the context each row came from", () => {
     expect(renderCapabilityTree([])).toBeNull();
     expect(
       renderCapabilityTree([
@@ -462,6 +462,7 @@ describe("the capability tree the model reads", () => {
     ).toBe(
       [
         "`itx` IS THIS CONTEXT'S CAPABILITY TREE (`await itx.rewriteRules.list()`) — every name below is one you can spell inside a tag; nothing else resolves:",
+        "from /agents/a/sandbox:",
         "itx.catalogue — search the catalogue: itx.catalogue({ q })",
       ].join("\n"),
     );

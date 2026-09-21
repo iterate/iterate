@@ -282,7 +282,6 @@ export class IterateContextRpcTarget extends RpcTarget {
         type: "events.iterate.com/itx/rewrite-rule-configured",
         payload: { match: matchString, target: expectedTarget, ...description },
       };
-      this.#refuseAnOverrideNamingItsOwnContext(matchString, expectedTarget);
       await this.#append(event);
       this.#sessionTeardown.dispose(sessionTeardownKey);
       return new RewriteRuleHandle(() => this.#removeRuleInBackground(matchString, expectedTarget));
@@ -433,21 +432,6 @@ export class IterateContextRpcTarget extends RpcTarget {
         payload: { name, target: null, ifConfiguredAtOffset: configuredAtOffset },
       }).catch(() => undefined),
     );
-  }
-
-  /** A whole-context override (a bare `itx` row) whose target is `cd` of THIS context is a loop no
-   *  depth budget can see — every hop is a fresh resolve — so it is refused here, where the path is
-   *  known. Two contexts overriding each other stays a trusted-client misconfiguration. */
-  #refuseAnOverrideNamingItsOwnContext(matchString: string, steps: ItxExpression | null): void {
-    if (matchString !== "itx") return;
-    if (!steps) return;
-    const cdStep = steps[1] === "builtins" ? steps[2] : steps[1];
-    if (!Array.isArray(cdStep) || cdStep[0] !== "cd" || typeof cdStep[1] !== "string") return;
-    const ownPath = this.#durableObjectAddress.path;
-    if (resolveContextPath(ownPath, cdStep[1]) === ownPath)
-      throw new Error(
-        `a whole-context override may not name its own context: "itx ⇒ ${print(steps, { holes: true })}" at ${JSON.stringify(ownPath)} would route every call back into itself`,
-      );
   }
 
   /** The SessionTeardown key for a lent stub. The teardown is SESSION-lived and shared by every
