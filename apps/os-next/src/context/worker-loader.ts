@@ -127,6 +127,12 @@ type PrepareConfinedWorkerOptions = {
    *  "unversioned" locally) — a facet built from an isolate a PRIOR deployment minted cannot be called
    *  by the new parent, so a redeploy must mint fresh isolates. */
   deployId: string;
+  /** The platform origin the `itxEntrypoint` stub was minted with (null until a self-host's first
+   *  stamped caller) — FOLDED INTO THE LOADER ID: a warm isolate keeps the `env.ITX` it captured, so
+   *  one minted before the origin was known must not be reused once it is (the next `LOADER.get`
+   *  under the new id mints a fresh isolate; the stale one idles out). One extra identity per
+   *  context at most, once. */
+  platformOrigin: string | null;
   /** The `ItxEntrypoint` stub a loaded worker gets as `env.ITX` and `globalOutbound` — the loopback
    *  minted for the owning context (iterate-context.ts `ItxEntrypoint`). */
   itxEntrypoint: Fetcher;
@@ -199,7 +205,13 @@ export async function prepareConfinedWorker(
   //    (owner, key) pairs name ONE isolate — the cross-context authority transfer `facetLoaderOwner`
   //    exists to prevent, reopened one field over. Changing the spelling restarts every facet once
   //    on its next wake (a new restart marker), storage surviving — the same as a deploy does.
-  const loaderIdBase = JSON.stringify([opts.kind, opts.deployId, opts.owner, sourceVersion]);
+  const loaderIdBase = JSON.stringify([
+    opts.kind,
+    opts.deployId,
+    opts.platformOrigin,
+    opts.owner,
+    sourceVersion,
+  ]);
   let { generation, dead } = loaderIdGenerations.get(loaderIdBase) ?? {
     generation: 0,
     dead: false,

@@ -119,7 +119,12 @@ test("Google proves issuer identity; upstream credentials never become app token
     bindings.BROWSER_SESSION,
     new Request(origin, { headers: { cookie: sessionCookie } }),
   )!;
-  const auth = await authorizationForToken(bindings, ctx, (await session.bearer())!);
+  const auth = await authorizationForToken(
+    bindings,
+    ctx,
+    (await session.bearer())!,
+    "https://control.test",
+  );
   await waitOnExecutionContext(ctx);
   expect(auth?.principal).toEqual({
     actor: "user_google_1234567890",

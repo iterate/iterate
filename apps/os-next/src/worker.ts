@@ -7,7 +7,7 @@ import { auth } from "iterate/next/sdk";
 import { verifyClaims } from "iterate/next/principal";
 import { registerPipelinedRpcBrand } from "iterate/next/expression";
 import { ITX_GRANT_HEADER, ITX_PRINCIPAL_HEADER, type Principal } from "iterate/next/principal";
-import { projectAddressOf } from "iterate/next/project-ingress";
+import { customProjectHostOf, projectAddressOf } from "iterate/next/project-ingress";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 // the one worker's env: the DO's bindings plus the in-process control plane's (control-plane.ts `Env`)
 import type { Env as WorkerEnv } from "./control-plane.ts";
@@ -16,18 +16,17 @@ import { isSecretOAuthState, SECRET_OAUTH_CALLBACK_PATH } from "./secret-oauth.t
 import type { Reach } from "./directory.ts";
 import { oauthResponse } from "./api.ts";
 import { issuerHandler, issuerPagePaths } from "./control-plane.ts";
-import { appConfigOf, sessionSigningSecretOf } from "./app-config.ts";
-import { customProjectHostOf } from "./hosts.ts";
-import {
-  ITX_PLATFORM_ORIGIN_HEADER,
-  platformOriginOf,
-  rememberPlatformOrigin,
-} from "./platform-origin.ts";
+import { appConfigOf, sessionSigningSecretOf, platformOriginOf } from "./app-config.ts";
 import { FILES_APP_LABEL, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
 import { directory, ensureDirectorySchema } from "./directory.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
-import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./iterate-context.ts";
+import {
+  DurableObjectNameCodec,
+  GLOBAL_PROJECT_ID,
+  resourceScope,
+  ITX_PLATFORM_ORIGIN_HEADER,
+} from "./iterate-context.ts";
 import type { SessionInput } from "./session.ts";
 import { authorizationForToken, recordGrantUse, cleanGrantActivity } from "./oauth.ts";
 
@@ -95,7 +94,7 @@ function projectHostRequestTo(
     identity: ProjectHostIdentity;
     /** paths ingress: the prefix stripped from the URL and said in `x-iterate-base-path` */
     basePath: string;
-    /** the platform origin this request reached the platform on (platform-origin.ts) */
+    /** the platform origin this request reached the platform on (app-config.ts `platformOriginOf`) */
     platformOrigin: string;
   },
 ): Request {
@@ -184,7 +183,7 @@ async function secretOAuthCallback(
     return answer(400, "This link is not one the platform issued, or it has expired.");
   const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
   const authorization = bearer
-    ? await authorizationForToken(env, ctx, bearer)
+    ? await authorizationForToken(env, ctx, bearer, sessionInput.platformOrigin)
     : await browserAuthorization(env, request, ctx);
   if (!authorization)
     return answer(
@@ -281,9 +280,9 @@ export default {
         return new Response("Not found", { status: 404 });
       return oauthResponse(request, env, ctx);
     }
-    // THE PLATFORM ORIGIN (platform-origin.ts): `urls.os`, else what this isolate remembered, else
-    // this request's own — a candidate until the request is known not to be a project's (below).
-    const platformOrigin = platformOriginOf(env, url.origin);
+    // THE PLATFORM ORIGIN (app-config.ts `platformOriginOf`): `urls.os`, else this request's own —
+    // stamped on every caller from here on.
+    const platformOrigin = platformOriginOf(appConfig, request);
     /** What every session and every lane's identity is built from — ONE object per request. */
     const sessionInput: SessionInput = {
       contextNamespace: env.ITERATE_CONTEXT,
@@ -336,7 +335,7 @@ export default {
       }
       const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
       const authorization = bearer
-        ? await authorizationForToken(env, ctx, bearer)
+        ? await authorizationForToken(env, ctx, bearer, platformOrigin)
         : await browserAuthorization(env, request, ctx);
       if (bearer && !authorization)
         return new Response("Invalid or revoked bearer", {
@@ -381,8 +380,8 @@ export default {
         { status: 421 },
       );
 
-    // A platform request, then: on a deployment that named no `urls.os`, this origin is it.
-    rememberPlatformOrigin(env, url.origin);
+    // A platform request, then — on the platform origin (a deployment with `urls.os` set answers there
+    // and on its project hosts, nowhere else).
     if (url.origin !== platformOrigin)
       return new Response("Unknown platform origin", { status: 421 });
 

@@ -7,6 +7,7 @@ import {
   projectUrlOf,
   type IngressRouting,
   type ProjectAddress,
+  customProjectHostOf,
 } from "./project-ingress.ts";
 
 const subdomains: IngressRouting = { type: "subdomains", hostname: "iterate2.app" };
@@ -241,5 +242,33 @@ describe("projectUrlOf", () => {
       const seen = new URL(url).pathname.slice(parsed!.basePath.length) + new URL(url).search;
       expect(seen, url).toBe(target.path || "/");
     }
+  });
+});
+
+describe("customProjectHostOf", () => {
+  const hostnames = { "iterate2.com": "iterate" };
+  test.each([
+    {
+      hostname: "iterate2.com",
+      becomes: { app: null, project: "iterate" },
+      why: "the apex, as named",
+    },
+    {
+      hostname: "Iterate2.COM.",
+      becomes: { app: null, project: "iterate" },
+      why: "case and a trailing dot forgiven",
+    },
+    {
+      hostname: "www.iterate2.com",
+      becomes: null,
+      why: "only the hostnames named — no wildcard under them",
+    },
+    {
+      hostname: "os.iterate2.com",
+      becomes: null,
+      why: "the platform's own origin is not a project",
+    },
+  ])("$hostname → $why", ({ hostname, becomes }) => {
+    expect(customProjectHostOf(hostname, hostnames)).toEqual(becomes);
   });
 });

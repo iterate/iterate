@@ -3,10 +3,9 @@ import { z } from "zod";
 import { errorCode, sameOriginPath } from "iterate/next/lib";
 import { cookieValueOf, signClaims, verifyClaims } from "iterate/next/principal";
 import type { Env } from "./control-plane.ts";
-import { appConfigOf, sessionSigningSecretOf } from "./app-config.ts";
+import { appConfigOf, platformOriginOf, sessionSigningSecretOf } from "./app-config.ts";
 import { startIssuerSession } from "./issuer-session.ts";
 import { directory } from "./directory.ts";
-import { oauthAddresses } from "./oauth.ts";
 
 const issuer = new URL("https://accounts.google.com");
 const cookie = "__Host-itx-identity-flow";
@@ -41,7 +40,7 @@ export async function identityDoor(request: Request, env: Env) {
     .discoveryRequest(issuer)
     .then((response) => oauth.processDiscoveryResponse(issuer, response));
   const client = { client_id: google.clientId };
-  const { issuer: platformOrigin } = oauthAddresses(env, request);
+  const platformOrigin = platformOriginOf(config, request);
   const redirectUri = `${platformOrigin}/.auth/identity/callback`;
   const signingSecret = await sessionSigningSecretOf(config);
   const headers = new Headers({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });

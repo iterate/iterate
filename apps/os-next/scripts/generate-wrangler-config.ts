@@ -30,6 +30,26 @@ function template() {
  *  scripts/dev.ts), one `env` block per deployment. */
 export function writeWranglerConfig() {
   const base = template();
+  // THE BINDINGS every env block repeats (wrangler does not inherit them): the base minus its
+  // inheritable keys and minus what an env block sets for itself (the resource ids, routes, vars).
+  const {
+    $schema: _schema,
+    name: _name,
+    main: _main,
+    compatibility_date: _compatibilityDate,
+    compatibility_flags: _compatibilityFlags,
+    account_id: _accountId,
+    observability: _observability,
+    workers_dev: _workersDev,
+    routes: _routes,
+    limits: _limits,
+    r2_buckets: _r2,
+    artifacts: _artifacts,
+    d1_databases: _d1,
+    kv_namespaces: _kv,
+    vars: _vars,
+    ...bindings
+  } = base;
   const config = {
     ...base,
     routes: [],
@@ -66,15 +86,7 @@ export function writeWranglerConfig() {
               zone_name: hostname.split(".").slice(-2).join("."),
             })),
           ].filter((route) => !route.pattern.includes(".workers.dev/")),
-          rules: base.rules,
-          assets: base.assets,
-          durable_objects: base.durable_objects,
-          exports: base.exports,
-          worker_loaders: base.worker_loaders,
-          ai: base.ai,
-          browser: base.browser,
-          send_email: base.send_email,
-          version_metadata: base.version_metadata,
+          ...bindings,
           artifacts: [{ binding: "ARTIFACTS", namespace: env.artifactsNamespace }],
           r2_buckets: [{ binding: "FILES", bucket_name: `${env.resourceNamePrefix}-files` }],
           d1_databases: [

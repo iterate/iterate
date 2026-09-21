@@ -11,8 +11,7 @@ import { OAuthScope, OAuthScopes } from "iterate/next/oauth-scopes";
 import { verifyAdminSecret, type Principal } from "iterate/next/principal";
 import type { Env, Handler } from "./control-plane.ts";
 import { type Reach } from "./directory.ts";
-import { appConfigOf } from "./app-config.ts";
-import { platformOriginOf } from "./platform-origin.ts";
+import { appConfigOf, platformOriginOf } from "./app-config.ts";
 
 /** Encrypted by the provider. Every grant is created through parseAuthorization,
  * so this version also proves the grant has a nonempty, allowed resource audience. */
@@ -52,12 +51,12 @@ export type Authorization = {
   grant: AccessGrant | null;
 };
 
-/** Canonical resource identifiers, including the MCP root's explicit slash. The issuer is the
- *  platform origin (platform-origin.ts): `urls.os`, else what the edge remembered, else — on a
- *  deployment that named no origin — the origin of `request`, a platform request in hand. */
-export function oauthAddresses(env: Env, request?: Request) {
+/** Canonical resource identifiers, including the MCP root's explicit slash, at `platformOrigin` —
+ *  the issuer (app-config.ts `platformOriginOf`: what the request in hand reached the platform on;
+ *  a session carries it as `SessionInput.platformOrigin`). */
+export function oauthAddresses(env: Env, platformOrigin: string) {
   const config = appConfigOf(env);
-  const issuer = platformOriginOf(env, request && new URL(request.url).origin);
+  const issuer = platformOrigin;
   return {
     issuer,
     api: `${issuer}/api`,
@@ -68,8 +67,9 @@ export function oauthAddresses(env: Env, request?: Request) {
 /** The provider validates clients, redirects and PKCE. We own the finite set of
  * resources this authorization server may grant; omission never creates an unbound token. */
 export async function parseAuthorization(env: Env, request: Request): Promise<AuthRequest> {
-  const auth = await oauthHelpers(env).parseAuthRequest(request);
-  const { api, mcp } = oauthAddresses(env);
+  const platformOrigin = platformOriginOf(appConfigOf(env), request);
+  const auth = await oauthHelpers(env, platformOrigin).parseAuthRequest(request);
+  const { api, mcp } = oauthAddresses(env, platformOrigin);
   const resources = [...new Set(auth.resource ? [auth.resource].flat() : [])];
   if (
     !resources.length ||
@@ -149,10 +149,11 @@ WHERE oauth_activity.last_used_at IS NULL OR oauth_activity.last_used_at < ?`)
  * parseAuthorization is the only public consent path and requires allowed resources. */
 export function providerOptions(
   env: Env,
+  platformOrigin: string,
   apiHandler: Handler = notFound,
   defaultHandler: Handler = notFound,
 ): OAuthProviderOptions<Env> {
-  const { issuer, api, mcp } = oauthAddresses(env);
+  const { issuer, api, mcp } = oauthAddresses(env, platformOrigin);
   return {
     apiHandlers: { [api]: apiHandler, [mcp]: apiHandler },
     defaultHandler,
@@ -210,13 +211,18 @@ export function providerOptions(
   };
 }
 
-export function oauthHelpers(env: Env) {
-  return getOAuthApi(providerOptions(env), env);
+export function oauthHelpers(env: Env, platformOrigin: string) {
+  return getOAuthApi(providerOptions(env, platformOrigin), env);
 }
 
 /** The browser adapter asks the same provider gate to admit its server-held token
  * at the API resource. No public validation endpoint or second token verifier. */
-export async function authorizationForToken(env: Env, ctx: ExecutionContext, token: string) {
+export async function authorizationForToken(
+  env: Env,
+  ctx: ExecutionContext,
+  token: string,
+  platformOrigin: string,
+) {
   let authorization: Authorization | null = null;
   const admission: Handler = {
     async fetch(_request, bindings, context) {
@@ -224,10 +230,10 @@ export async function authorizationForToken(env: Env, ctx: ExecutionContext, tok
       return new Response(null, { status: authorization ? 204 : 401 });
     },
   };
-  const apiRequest = new Request(oauthAddresses(env).api, {
+  const apiRequest = new Request(oauthAddresses(env, platformOrigin).api, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  const response = await new OAuthProvider(providerOptions(env, admission)).fetch(
+  const response = await new OAuthProvider(providerOptions(env, platformOrigin, admission)).fetch(
     apiRequest,
     env,
     ctx,
@@ -239,14 +245,18 @@ export async function authorizationForToken(env: Env, ctx: ExecutionContext, tok
 
 /** The caller must already own this grant: a checked provider inventory row or
  * the authenticated request's grant. The D1 marker precedes KV cleanup. */
-export async function revokeGrant(env: Env, grant: { userId: string; grantId: string }) {
+export async function revokeGrant(
+  env: Env,
+  platformOrigin: string,
+  grant: { userId: string; grantId: string },
+) {
   await env.DB.prepare(`INSERT INTO oauth_activity (user_id, grant_id, revoked_at, cleanup_pending)
 VALUES (?, ?, ?, 1) ON CONFLICT(user_id, grant_id) DO UPDATE
 SET revoked_at = COALESCE(oauth_activity.revoked_at, excluded.revoked_at), cleanup_pending = 1`)
     .bind(grant.userId, grant.grantId, Date.now())
     .run();
   try {
-    await oauthHelpers(env).revokeGrant(grant.grantId, grant.userId);
+    await oauthHelpers(env, platformOrigin).revokeGrant(grant.grantId, grant.userId);
   } catch (error) {
     console.error("oauth.revoke_cleanup_failed", {
       userId: grant.userId,
