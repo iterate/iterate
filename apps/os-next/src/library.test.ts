@@ -116,6 +116,7 @@ describe("the library", () => {
       const { itx, seen } = remotes();
       const { roots, releaseConnections } = buildLibrary(itx, {
         caller: () => ({ principal: null }),
+        path: "/",
       });
       const a = await roots.connectToMcp("https://mcp.example/");
       releaseConnections();
@@ -170,6 +171,7 @@ describe("the library", () => {
       } as unknown as LibraryItx;
       const { roots, releaseConnections } = buildLibrary(itx, {
         caller: () => ({ principal: null }),
+        path: "/",
       });
       const conn = await roots.connectToMcp("https://mcp.example/");
       releaseConnections();
@@ -217,6 +219,7 @@ describe("the library", () => {
       } as unknown as LibraryItx;
       const { roots, releaseConnections } = buildLibrary(itx, {
         caller: () => ({ principal: null }),
+        path: "/",
       });
       const conn = await roots.connectToMcp("https://mcp.example/"); // establishes s-1
       releaseConnections();
@@ -255,6 +258,7 @@ describe("the library", () => {
       const itx = { fetch: async () => ({ status: 101, webSocket }) } as unknown as LibraryItx;
       const { roots, releaseConnections } = buildLibrary(itx, {
         caller: () => ({ principal: null }),
+        path: "/",
       });
       await roots.connectToCapnweb("wss://ws.example/rpc");
       releaseConnections();
