@@ -148,12 +148,12 @@ export function traceOffsetByMessage(events: readonly Event[]): Map<string, numb
   for (const event of events) {
     const p = isRecord(event.payload) ? event.payload : {};
     if (
-      event.type === "events.iterate.com/agents/context-added" &&
+      event.type === "events.iterate.com/agent/context-added" &&
       p.role === "assistant" &&
       typeof p.llmRequestOffset === "number"
     )
       lastResponseOffset = p.llmRequestOffset;
-    if (event.type === "events.iterate.com/agents/web-message-sent") {
+    if (event.type === "events.iterate.com/agent/web-message-sent") {
       const offset =
         typeof p.llmRequestOffset === "number" ? p.llmRequestOffset : lastResponseOffset;
       if (offset !== undefined) map.set(`assistant-${String(event.offset)}`, offset);
@@ -193,7 +193,7 @@ export function llmTrace(events: readonly Event[], llmRequestOffset: number): Ll
   const payload = isRecord(requested.payload) ? requested.payload : {};
   const messages = events.flatMap((event) => {
     if (event.offset >= llmRequestOffset) return [];
-    if (event.type !== "events.iterate.com/agents/context-added") return [];
+    if (event.type !== "events.iterate.com/agent/context-added") return [];
     const p = isRecord(event.payload) ? event.payload : {};
     return typeof p.role === "string" && typeof p.content === "string"
       ? [{ offset: event.offset, role: p.role, content: p.content }]
@@ -219,12 +219,12 @@ export function llmTrace(events: readonly Event[], llmRequestOffset: number): Ll
             reason: typeof result.reason === "string" ? result.reason : undefined,
           };
   const assistant = events.find((event) => {
-    if (event.type !== "events.iterate.com/agents/context-added") return false;
+    if (event.type !== "events.iterate.com/agent/context-added") return false;
     const p = isRecord(event.payload) ? event.payload : {};
     return p.role === "assistant" && p.llmRequestOffset === llmRequestOffset;
   });
   const prose = events.find((event) => {
-    if (event.type !== "events.iterate.com/agents/web-message-sent") return false;
+    if (event.type !== "events.iterate.com/agent/web-message-sent") return false;
     const p = isRecord(event.payload) ? event.payload : {};
     return p.llmRequestOffset === llmRequestOffset;
   });
@@ -280,7 +280,7 @@ export function scriptTrace(events: readonly Event[], executionId: string): Scri
     return p.executionId === executionId;
   });
   const rendered = events.find((event) => {
-    if (event.type !== "events.iterate.com/agents/context-added") return false;
+    if (event.type !== "events.iterate.com/agent/context-added") return false;
     const p = isRecord(event.payload) ? event.payload : {};
     const actor = isRecord(p.actor) ? p.actor : {};
     return actor.type === "script" && actor.executionId === executionId;

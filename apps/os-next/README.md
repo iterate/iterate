@@ -14,7 +14,7 @@ the fetch door. Everything a client does is one dotted expression on `itx`.
 ```ts
 using api = newWebSocketRpcSession("wss://<worker>/api"); // the client's only dependency: capnweb
 const session = api.authenticate({ type: "from-server-cookie" }); // the issuer's login cookie rode the handshake
-const itx = await session.projects.create({ project: "my-project" }); // → the project's root context
+const itx = await session.projects.create({ project: "my-project" }); // → the project's root context, its creation saga on the log
 await itx.append({ type: "note", payload: { n: 1 } });
 ```
 

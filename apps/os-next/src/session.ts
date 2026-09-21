@@ -132,9 +132,12 @@ export class IterateRpcTarget extends RpcTarget {
    *  waitUntil), off the connection's hot path: it is "nice to see", not authoritative, so a lost one
    *  on eviction is fine. Only a human (a principal with an email) has an account context — the admin
    *  and project credentials name none. The fact rides `session.user`'s stream, where the
-   *  AccountProcessor folds it into the account view (src/account/contract.ts). NOTE: the boundary is
-   *  per-authenticate for now (a reconnect re-publishes); narrowing it to credential-establishment is
-   *  a later refinement. Attribution is the user's until the platform principal lands. */
+   *  AccountProcessor folds it into the account state (src/account/contract.ts) — so the `account`
+   *  processor row is enabled there first, idempotently (the door appends nothing for a row already
+   *  hosting it): the account processor is hosted from `ctx.exports` (first-party-facets.ts), and
+   *  this is the one place that enables it. NOTE: the boundary is per-authenticate for now (a
+   *  reconnect re-publishes); narrowing it to credential-establishment is a later refinement.
+   *  Attribution is the user's until the platform principal lands. */
   #publishAuthenticationFact(
     principal: SessionPrincipal,
     credential: "from-server-cookie" | "admin-secret",
@@ -150,15 +153,22 @@ export class IterateRpcTarget extends RpcTarget {
       payload: { credential, at: Date.now(), operationId } satisfies AuthenticationFact,
       idempotencyKey: `authenticated/${operationId}`,
     };
+    const account = this.#input.contextNamespace.getByName(name);
     this.#input.waitUntil(
+      // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the calls denote
+      // whatever expression is spelled, so `unknown` is the honest contract here.
       (
-        this.#input.contextNamespace
-          .getByName(name)
-          .invoke(["itx", ["append", fact]], [], { principal }) as Promise<unknown>
-      ).then(
-        () => undefined,
-        () => undefined,
-      ),
+        account.invoke(["itx", "processors", ["enable", "account"]], [], {
+          principal,
+        }) as Promise<unknown>
+      )
+        .then(
+          () => account.invoke(["itx", ["append", fact]], [], { principal }) as Promise<unknown>,
+        )
+        .then(
+          () => undefined,
+          () => undefined,
+        ),
     );
   }
 }
@@ -407,7 +417,14 @@ class ProjectCollection extends RpcTarget {
    *  by name when they have several, created on first use when they have none), or in the
    *  deployment's own org for the admin secret — and vend its root context. A grant narrowed to
    *  named projects creates none: FORBIDDEN. A slug ANY org already holds is refused, coded
-   *  (PROJECT_NAME_TAKEN); the same org's again is idempotent. */
+   *  (PROJECT_NAME_TAKEN); the same org's again is idempotent.
+   *
+   *  THE DIRECTORY ROW, THEN THE SAGA: the `project` processor row is enabled on `/` and
+   *  `project/create-requested` appended there — the row's facts, under this caller — and the
+   *  context is returned AT ONCE (apps/os's `waitUntilCreated: false`): the project processor
+   *  (src/project/processor.ts) lands `project/created` or `project/create-failed` from state at
+   *  head, and the dash watches the facet's live state. `enable` is idempotent at the door and the
+   *  request is keyed, so a repeated create of the same slug appends nothing new. */
   async create(input: { project: string; orgId?: string }): Promise<IterateContextRpcTarget> {
     const data = z.object({ project: z.string(), orgId: z.string().optional() }).parse(input);
     const project = await this.#input.directory.createProject(
@@ -415,7 +432,20 @@ class ProjectCollection extends RpcTarget {
       data.project,
       data.orgId,
     );
-    return this.#context(project.id);
+    const context = this.#context(project.id);
+    await context.invoke(["itx", "processors", ["enable", "project"]]);
+    await context.invoke([
+      "itx",
+      [
+        "append",
+        {
+          type: "events.iterate.com/project/create-requested",
+          payload: { slug: project.slug, orgId: project.orgId },
+          idempotencyKey: "project/create-requested",
+        },
+      ],
+    ]);
+    return context;
   }
 
   /** The project's root context ("/"), by its slug or its id. A project only — a context name

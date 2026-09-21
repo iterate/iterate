@@ -12,7 +12,7 @@
 
 import { stampCaller, type Caller } from "iterate/next/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
-import { codedError } from "iterate/next/lib";
+import { codedError, jsonEqual } from "iterate/next/lib";
 import {
   print,
   type ItxExpression,
@@ -709,6 +709,18 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             );
           assertFacetSourceWithinCeiling(loaded, `processors.enable("${name}")`);
         }
+        // IDEMPOTENT AT THE DOOR (the rule `provide` follows): a row already hosting this facet under
+        // the same spec appends nothing — every entity's `create()` enables its row on every call.
+        const existing = deps.subscriptions.get(name)?.hostedFacet;
+        if (
+          existing &&
+          existing.name === name &&
+          (firstPartyClassName
+            ? existing.className === firstPartyClassName
+            : existing.className === loaded!.className && existing.cacheKey === loaded!.cacheKey) &&
+          jsonEqual(deps.subscriptions.get(name)?.consumes ?? null, spec?.consumes ?? null)
+        )
+          return { name };
         await append({
           type: "events.iterate.com/stream/subscription-configured",
           payload: {

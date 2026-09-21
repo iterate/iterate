@@ -1,17 +1,16 @@
-// src/account/processor.ts — the account processor's PURE class (the triplet's middle: contract.ts is
-// the vocabulary, durable-object.ts is the loadable host). Folds account facts into the view; the
-// kernel's `ProcessorEngine` drives it and projects it to live state, exactly as a project
-// processor. Imports only the pure kernel, so the node lane constructs it with `new` (processor.test.ts).
+// src/account/processor.ts — THE ACCOUNT PROCESSOR: the pure reduce of the authentication facts into
+// the account's state; the kernel's `ProcessorEngine` drives it and projects it to live state, exactly
+// as a project processor. No effect lives here. Imports only the pure kernel, so a unit test constructs
+// it with `new` and reduces rows (processor.test.ts, in node).
 import {
   type ConsumedEvent,
-  type ProcessorState,
   type ReduceArgs,
   StreamProcessor,
 } from "iterate/next/stream/processor";
-import { AccountContract, type AccountView } from "./contract.ts";
+import { AccountContract, type AccountState } from "./contract.ts";
 
 export class AccountProcessor extends StreamProcessor<
-  ProcessorState<typeof AccountContract>,
+  AccountState,
   ConsumedEvent<typeof AccountContract>
 > {
   readonly contract = AccountContract;
@@ -19,7 +18,7 @@ export class AccountProcessor extends StreamProcessor<
   override reduce({
     event,
     state,
-  }: ReduceArgs<AccountView, ConsumedEvent<typeof AccountContract>>): AccountView | undefined {
+  }: ReduceArgs<AccountState, ConsumedEvent<typeof AccountContract>>): AccountState | undefined {
     if (event.type === "events.iterate.com/account/authenticated")
       return { ...state, authentications: [...state.authentications, event.payload] };
     return undefined;

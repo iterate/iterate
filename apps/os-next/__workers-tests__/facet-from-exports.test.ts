@@ -36,7 +36,13 @@ test("a facet from ctx.exports.<Class>({ props }) sees ctx.props and answers thr
   );
   expect(seen.entryKind).toBe("LoopbackDurableObjectNamespace");
   expect(seen.classKind).toBe("DurableObjectClass");
-  expect(seen.snapshot.state).toEqual({ repos: {}, workspaces: {}, agents: {}, mcpClients: {} });
+  expect(seen.snapshot.state).toEqual({
+    creation: null,
+    repos: {},
+    workspaces: {},
+    agents: {},
+    mcpClients: {},
+  });
 });
 
 test("a first-party facet name refuses a spec — no source ever names a class of this worker", async () => {

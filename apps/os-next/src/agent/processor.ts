@@ -1,8 +1,13 @@
-// src/agent/processor.ts — the agent processor (the triplet's middle): the pure reduce of the
-// conversation and the loop's two obligations, and the loop itself as effects over that fold — apps/os's
-// turn loop, LLM request and codemode parts folded into one class, lean. Imports only the pure kernel,
-// so a unit test constructs it with `new` (processor.test.ts, in node); the model and the script runner
-// come in as functions (`AgentDeps`) — the host (durable-object.ts) reaches both through `itx`.
+// src/agent/processor.ts — THE AGENT PROCESSOR: the pure reduce of the creation facts, the
+// conversation and the loop's obligations, and the effects over that fold — THE SAGA (the birth
+// `itx.agents.create(path)` opens: the certificate on `/` and here with the default prompt beside it)
+// and THE LOOP (apps/os's turn loop, LLM request and codemode parts folded into one class, lean). The
+// model call LIVES HERE (`#stream`): a `@cf/…` model through `itx.ai` (the Workers AI binding under
+// THIS context's rules, so a test lends a fake there), anything else through the account's AI
+// Gateway as a Workers AI partner model, streamed from the Responses API. The host
+// (durable-object.ts) is a shell: it hands in `withItx` and its env, nothing else, so a unit test
+// constructs the processor with `new` and reduces rows (processor.test.ts, in node); the saga and
+// the loop are proven on the worker (e2e/agents.e2e.test.ts, a fake `itx.ai` lent by rule).
 //
 // A request is DEBOUNCED as in apps/os (the at-head scheduling below): one window after its trigger,
 // the failure backoff folded in, the delayed append being the intent.
@@ -10,10 +15,11 @@
 // Two kinds of effect, chosen at the dispatch site (apps/os's rule): a PER-EVENT consequence — the
 // assistant's output parsed into a script request, a script's settlement rendered into the next
 // developer item — is BLOCKED (`blockProcessorWhile`): the event is delivered once, so losing the
-// append would lose the consequence. A STATE-DERIVED consequence — recording the next request, running
-// the open request or the open scripts, tripping a breaker — runs at head in the BACKGROUND: any later
+// append would lose the consequence. A STATE-DERIVED consequence — the birth, recording the next
+// request, running the open request, tripping a breaker — runs at head in the BACKGROUND: any later
 // delivery over the same fold re-derives it, so an attempt lost to an eviction costs nothing, and every
 // append is idempotency-keyed so a retry appends nothing twice.
+import { z } from "zod";
 import {
   type ConsumedEvent,
   type ProcessEventArgs,
@@ -21,40 +27,24 @@ import {
   type StreamEventInput,
   StreamProcessor,
 } from "iterate/next/stream/processor";
+import type { WithItx } from "iterate/next/sdk";
+import type { ItxEntrypointScope } from "../iterate-context.ts";
+import { type AppConfigEnv, appConfigOf } from "../app-config.ts";
 import type { RunSettlement } from "../stream/core-processor.ts";
 import {
   AgentContract,
-  type AgentView,
+  type AgentState,
   type ChatMessage,
   type FileAttachment,
   type LlmUsage,
 } from "./contract.ts";
 import { parseCodemodeResponse } from "./codemode-format.ts";
-
-/** What the host injects: the model and the files, both reached through `itx` there. A script is
- *  not run here — the loop appends the context's `run-requested` and reads its `run-settled`. */
-export type AgentDeps = {
-  /** One STREAMED model call over the conversation so far: every provider event the stream carries
-   *  reaches `onChunk` as it arrives, with the text it adds ("" for a reasoning or bookkeeping
-   *  event); the call answers the whole text once the stream ends, with the usage the provider
-   *  reported. Aborting `signal` stops the stream; the call then rejects. */
-  stream(input: {
-    model: string;
-    messages: ChatMessage[];
-    signal: AbortSignal;
-    onChunk(chunk: unknown, textDelta: string): void;
-  }): Promise<{ text: string; usage?: LlmUsage }>;
-  /** A stored file's bytes (`itx.files.get(path).bytes()`); throws when it is gone. */
-  readFile(path: string): Promise<Uint8Array>;
-  now(): number;
-  /** The debounce window's wait — injected so a test can make it instant. */
-  sleep(ms: number): Promise<void>;
-};
+import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./system-prompt.ts";
 
 /** apps/os's failure backoff, folded into the debounce window: doubling from the policy's base per
  *  consecutive failure, capped at its ceiling; nothing after a success. */
 export function retryBackoffMs(
-  state: Pick<AgentView, "consecutiveLlmFailures" | "config">,
+  state: Pick<AgentState, "consecutiveLlmFailures" | "config">,
 ): number {
   const { backoffBaseMs, backoffMaxMs } = state.config.llmRequestRetryPolicy;
   if (state.consecutiveLlmFailures <= 0) return 0;
@@ -66,7 +56,7 @@ export function retryBackoffMs(
  *  image whose bytes are gone, is a line naming it and how a script reads it (apps/os's hint line).
  *  The developer's notes read as system instructions. */
 export function buildChatMessages(
-  items: AgentView["contextItems"],
+  items: AgentState["contextItems"],
   images: Map<string, { contentType: string; base64: string }>,
 ): ChatMessage[] {
   return items.map((item) => {
@@ -141,8 +131,128 @@ function base64Of(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+// ── the model call's wire shapes (apps/os's, verbatim) ──
+
+/** What Workers AI answers when it does not stream: `{ response }`, or the chat-completions shape. */
+const ChatAnswer = z.union([
+  z.object({ response: z.string() }),
+  z.object({ choices: z.array(z.object({ message: z.object({ content: z.string() }) })).min(1) }),
+]);
+
+/** The usage a provider reports, both dialects (apps/os's `LlmUsage`): OpenAI Responses
+ *  (`input_tokens`/`output_tokens`) and chat completions (`prompt_tokens`/`completion_tokens`),
+ *  with the cached/reasoning breakdowns when present. Loose: vendors keep adding fields. */
+const ProviderUsage = z.looseObject({
+  prompt_tokens: z.number().int().nonnegative().optional(),
+  completion_tokens: z.number().int().nonnegative().optional(),
+  input_tokens: z.number().int().nonnegative().optional(),
+  output_tokens: z.number().int().nonnegative().optional(),
+  prompt_tokens_details: z
+    .looseObject({ cached_tokens: z.number().int().nonnegative().optional() })
+    .optional(),
+  completion_tokens_details: z
+    .looseObject({ reasoning_tokens: z.number().int().nonnegative().optional() })
+    .optional(),
+  input_tokens_details: z
+    .looseObject({ cached_tokens: z.number().int().nonnegative().optional() })
+    .optional(),
+  output_tokens_details: z
+    .looseObject({ reasoning_tokens: z.number().int().nonnegative().optional() })
+    .optional(),
+});
+
+function normalizeUsage(raw: unknown): LlmUsage | undefined {
+  const parsed = ProviderUsage.safeParse(raw);
+  if (!parsed.success) return undefined;
+  const inputTokens = parsed.data.prompt_tokens ?? parsed.data.input_tokens;
+  const outputTokens = parsed.data.completion_tokens ?? parsed.data.output_tokens;
+  if (inputTokens === undefined || outputTokens === undefined) return undefined;
+  const cachedInputTokens =
+    parsed.data.prompt_tokens_details?.cached_tokens ??
+    parsed.data.input_tokens_details?.cached_tokens;
+  const reasoningOutputTokens =
+    parsed.data.completion_tokens_details?.reasoning_tokens ??
+    parsed.data.output_tokens_details?.reasoning_tokens;
+  return { inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens };
+}
+
+/** One OpenAI Responses API stream event — the ones this loop reads; the rest pass through as
+ *  chunks a feed may ignore. */
+const ResponsesEvent = z.looseObject({ type: z.string() });
+
+/** Read an SSE body frame by frame, handing each `data:` JSON to `onEvent`; the reader is cancelled
+ *  when `signal` aborts, so nothing lands after the caller has settled. */
+async function drainSse(
+  body: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
+  onEvent: (event: unknown) => void,
+): Promise<void> {
+  const reader = body.getReader();
+  const cancel = () => void reader.cancel().catch(() => undefined);
+  if (signal.aborted) cancel();
+  signal.addEventListener("abort", cancel, { once: true });
+  const decoder = new TextDecoder();
+  let buffered = "";
+  const frame = (text: string) => {
+    const data = text
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice("data:".length).trim())
+      .join("\n");
+    if (data === "" || data === "[DONE]") return;
+    try {
+      onEvent(JSON.parse(data));
+    } catch {
+      onEvent(data);
+    }
+  };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+      const frames = buffered.split(/\r?\n\r?\n/);
+      buffered = frames.pop() || "";
+      frames.forEach(frame);
+    }
+    buffered += decoder.decode();
+    if (buffered.trim()) frame(buffered);
+  } finally {
+    signal.removeEventListener("abort", cancel);
+  }
+  if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
+}
+
+/** Race an un-abortable dial against the caller's signal (apps/os's `raceAbort`): the caller regains
+ *  control the moment it aborts — an interruption, the expiry, the idle watchdog — while the orphaned
+ *  dial finishes into the void; a stream already open is cancelled by `drainSse` itself. */
+function raceAbort<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason || new Error("aborted"));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason || new Error("aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
+/** The conversation as the Responses API takes it: `input` items with text and image parts. */
+function responsesInput(messages: ChatMessage[]) {
+  return messages.map((message) =>
+    typeof message.content === "string"
+      ? { role: message.role, content: message.content }
+      : {
+          role: message.role,
+          content: message.content.map((part) =>
+            part.type === "text"
+              ? { type: "input_text", text: part.text }
+              : { type: "input_image", image_url: part.image_url.url, detail: "auto" },
+          ),
+        },
+  );
+}
+
 type AgentEvent = ConsumedEvent<typeof AgentContract>;
-type AgentArgs = ProcessEventArgs<AgentView, AgentEvent>;
+type AgentArgs = ProcessEventArgs<AgentState, AgentEvent>;
 
 /** A settlement as the model reads it next — or null when the script returned nothing: the turn ends. */
 export function renderScriptSettlement(settlement: RunSettlement): string | null {
@@ -152,12 +262,34 @@ export function renderScriptSettlement(settlement: RunSettlement): string | null
   return `Your script returned:\n\`\`\`json\n${JSON.stringify(settlement.result, null, 2)}\n\`\`\``;
 }
 
-export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
+export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   readonly contract = AgentContract;
 
-  constructor(private readonly deps: AgentDeps) {
+  readonly #now: () => number;
+  /** The debounce window's wait — a test makes it instant. */
+  readonly #sleep: (ms: number) => Promise<void>;
+
+  constructor(
+    private readonly deps: {
+      /** The host's scope accessor: `itx.ai`, `itx.files`, `itx.whoami()` — the effects this loop
+       *  reaches through the context, under its rules (a test lends a fake `itx.ai` there). */
+      withItx: WithItx<ItxEntrypointScope>;
+      /** The host's bindings: `AI` for a partner model on Cloudflare's billing, and the app config
+       *  the gateway metadata is read from. */
+      env: { AI: Ai } & AppConfigEnv;
+      /** The clock and the wait, injected only so a unit test can make the debounce instant. */
+      now?: () => number;
+      sleep?: (ms: number) => Promise<void>;
+    },
+  ) {
     super();
+    this.#now = deps.now || (() => Date.now());
+    this.#sleep = deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
+
+  /** This incarnation's birth attempt, so one at-head pass does not start a second; the durable
+   *  ground is `state.creation`. */
+  #creating = false;
 
   /** The requests THIS incarnation is running, so a later at-head pass over the same fold does
    *  not start a second attempt; the durable ground is the fold (`openRequest`). */
@@ -166,10 +298,23 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
     { controller: AbortController; partialText: string }
   >();
 
-  reduce({ state, event }: ReduceArgs<AgentView, AgentEvent>): AgentView | undefined {
+  #identityRead?: { projectId: string; path: string };
+  /** Which context this is — its project and path — read once. */
+  async #identity(): Promise<{ projectId: string; path: string }> {
+    return (this.#identityRead ??= await this.deps.withItx((itx) => itx.whoami()));
+  }
+
+  reduce({ state, event }: ReduceArgs<AgentState, AgentEvent>): AgentState | undefined {
     switch (event.type) {
+      case "events.iterate.com/agent/create-requested":
+        // Born once: a request after the certificate is a harmless fact; after a failure, a new attempt.
+        return state.creation?.status === "created"
+          ? undefined
+          : { ...state, creation: { status: "requested", offset: event.offset } };
       case "events.iterate.com/agent/created":
-        return state.path ? undefined : { ...state, path: event.payload.path };
+        return { ...state, creation: { status: "created", offset: event.offset } };
+      case "events.iterate.com/agent/create-failed":
+        return { ...state, creation: { status: "failed", offset: event.offset } };
 
       case "events.iterate.com/agent/configured": {
         const patch = event.payload.config;
@@ -197,9 +342,9 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
         };
       }
 
-      case "events.iterate.com/agents/context-added": {
+      case "events.iterate.com/agent/context-added": {
         const { role, content, actor, llmRequestPolicy, llmRequestOffset } = event.payload;
-        const next: AgentView = {
+        const next: AgentState = {
           ...state,
           contextItems: [
             ...state.contextItems,
@@ -308,7 +453,7 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
     // request open for the next at-head pass to adopt. Their reduce already moved the trigger; the
     // settlement's own delivery re-runs the at-head pass, which then records the next request.
     if (
-      event?.type === "events.iterate.com/agents/context-added" &&
+      event?.type === "events.iterate.com/agent/context-added" &&
       event.payload.llmRequestPolicy?.behaviour === "interrupt-current-request" &&
       (event.payload.role === "user" || event.payload.role === "developer") &&
       state.openRequest
@@ -323,7 +468,7 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
           ...(partialText
             ? [
                 {
-                  type: "events.iterate.com/agents/context-added",
+                  type: "events.iterate.com/agent/context-added",
                   idempotencyKey: this.idempotencyKey(
                     `interrupted/${String(open.requestedAtOffset)}`,
                   ),
@@ -353,7 +498,7 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
     // The assistant's answer, interpreted (mmkal's order: the status precedes the script so the step
     // is born with its label, the script precedes the prose so a feed groups the turn as one).
     if (
-      event?.type === "events.iterate.com/agents/context-added" &&
+      event?.type === "events.iterate.com/agent/context-added" &&
       event.payload.role === "assistant" &&
       event.payload.llmRequestOffset !== undefined
     ) {
@@ -362,7 +507,7 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
       const consequences: StreamEventInput[] = [];
       if (outcome.kind === "malformed" || outcome.kind === "multiple")
         consequences.push({
-          type: "events.iterate.com/agents/context-added",
+          type: "events.iterate.com/agent/context-added",
           idempotencyKey: this.idempotencyKey("format-feedback", event),
           payload: { role: "developer", content: outcome.feedback, actor: { type: "agent" } },
         });
@@ -385,7 +530,7 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
       // is code, one turn is one activity, and where a reply GOES is per-agent (web, Slack, ...).
       if (outcome.kind === "script" && outcome.prose)
         consequences.push({
-          type: "events.iterate.com/agents/web-message-sent",
+          type: "events.iterate.com/agent/web-message-sent",
           idempotencyKey: this.idempotencyKey("codemode-prose", event),
           payload: { message: outcome.prose, llmRequestOffset },
         });
@@ -408,7 +553,7 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
       if (rendered)
         blockProcessorWhile(() =>
           append({
-            type: "events.iterate.com/agents/context-added",
+            type: "events.iterate.com/agent/context-added",
             idempotencyKey: this.idempotencyKey("script-result", event),
             payload: {
               role: "developer",
@@ -423,9 +568,49 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
   }
 
   // ── state-derived consequences, at head, in the background: re-derived by any later delivery ──
-  #atHead({ state, delivery, append, runInBackground }: AgentArgs): void {
-    if (!delivery.caughtUp || !state.path) return;
-    const now = this.deps.now();
+  #atHead({ state, delivery, append, appendTo, runInBackground }: AgentArgs): void {
+    if (!delivery.caughtUp) return;
+
+    // THE SAGA — the birth, from state at head, in the background: at most once per incarnation,
+    // and any later delivery over the same state runs it again, so an attempt lost to an eviction
+    // costs nothing. Nothing to provision: the certificate goes to `/` (the project catalog) first,
+    // then lands here in ONE append with the default system prompt beside it — both keyed, so a
+    // retry appends nothing twice. An operator's instructions are their own `context-added` after.
+    if (state.creation?.status === "requested") {
+      if (this.#creating) return;
+      this.#creating = true;
+      runInBackground(async () => {
+        try {
+          const whoami = await this.deps.withItx((itx) => itx.whoami());
+          const { path } = whoami;
+          const certificate = {
+            type: "events.iterate.com/agent/created",
+            payload: { path },
+            idempotencyKey: `agent/created:${path}`,
+          };
+          await appendTo("/", certificate); // the project catalog first
+          await append(certificate, {
+            // this path last: the certificate closes the obligation, the prompt rides with it
+            type: "events.iterate.com/agent/context-added",
+            idempotencyKey: `agent/system-prompt:${path}`,
+            payload: {
+              role: "system",
+              content: `${DEFAULT_AGENT_SYSTEM_PROMPT}\nCURRENT PROJECT: ${JSON.stringify(whoami)}`,
+            },
+          });
+        } catch (error) {
+          await append({
+            type: "events.iterate.com/agent/create-failed",
+            payload: { error: error instanceof Error ? error.message : String(error) },
+          });
+        } finally {
+          this.#creating = false;
+        }
+      });
+      return;
+    }
+    if (state.creation?.status !== "created") return;
+    const now = this.#now();
 
     // A person's words resume a paused loop; the loop's own never do (they are what paused it).
     const trigger = state.pendingLlmRequestTrigger;
@@ -481,7 +666,7 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
         },
       };
       runInBackground(async () => {
-        if (windowClosesInMs > 0) await this.deps.sleep(windowClosesInMs);
+        if (windowClosesInMs > 0) await this.#sleep(windowClosesInMs);
         await append(intent);
       });
       return;
@@ -517,12 +702,12 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
    *  between them is impossible. An interruption settles the request itself (processEvent) — an
    *  aborted stream ends here silently, and a success that raced it loses on the settle key. */
   async #runLlmRequest(
-    open: NonNullable<AgentView["openRequest"]>,
-    state: AgentView,
+    open: NonNullable<AgentState["openRequest"]>,
+    state: AgentState,
     append: AgentArgs["append"],
     inFlight: { controller: AbortController; partialText: string },
   ): Promise<void> {
-    const startedAt = this.deps.now();
+    const startedAt = this.#now();
     const { controller } = inFlight;
     // Two clocks fail a stalled stream, never wedge it: the request's own expiry, and apps/os's
     // idle budget since the last provider event.
@@ -545,7 +730,7 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
           try {
             images.set(file.path, {
               contentType: file.contentType,
-              base64: base64Of(await this.deps.readFile(file.path)),
+              base64: base64Of(await this.deps.withItx((itx) => itx.files.get(file.path).bytes())),
             });
           } catch {
             // named by its hint line instead
@@ -598,7 +783,7 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
             idempotencyKey: this.idempotencyKey(`settle/${String(llmRequestOffset)}`),
             payload: {
               requestOffset: llmRequestOffset,
-              durationMs: this.deps.now() - startedAt,
+              durationMs: this.#now() - startedAt,
               result,
             },
           },
@@ -607,7 +792,7 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
       };
       let answer: { text: string; usage?: LlmUsage };
       try {
-        answer = await this.deps.stream({
+        answer = await this.#stream({
           model: open.model,
           messages,
           signal: controller.signal,
@@ -626,7 +811,7 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
             if (windowChars >= CHUNK_WINDOW_MAX_CHARS) return closeWindow();
             if (windowOpen) return;
             windowOpen = true;
-            void this.deps.sleep(CHUNK_WINDOW_MS).then(closeWindow);
+            void this.#sleep(CHUNK_WINDOW_MS).then(closeWindow);
           },
         });
       } catch (error) {
@@ -645,7 +830,7 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
       await settle(
         { status: "succeeded", text, usage },
         {
-          type: "events.iterate.com/agents/context-added",
+          type: "events.iterate.com/agent/context-added",
           idempotencyKey: this.idempotencyKey(`assistant/${String(llmRequestOffset)}`),
           payload: { role: "assistant", content: text, llmRequestOffset },
         },
@@ -669,5 +854,141 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
       clearTimeout(idle);
       this.#llmRequestsInFlight.delete(open.requestedAtOffset);
     }
+  }
+
+  /** One STREAMED model call over the conversation so far: every provider event the stream carries
+   *  reaches `onChunk` as it arrives, with the text it adds ("" for a reasoning or bookkeeping
+   *  event); the call answers the whole text once the stream ends, with the usage the provider
+   *  reported. Aborting `signal` stops the stream; the call then rejects.
+   *
+   *  Two routes by the model's name. A `@cf/…` model is Workers AI through `itx.ai` (the binding
+   *  under THIS context's rules — a test lends a fake there), streamed when the binding streams.
+   *  Anything else is OpenAI's Responses API as a Workers AI partner model on Cloudflare's billing
+   *  — no key, ours or a project's — the FAST reading of a reasoning model: low effort, with its
+   *  summary streamed. */
+  async #stream({
+    model,
+    messages,
+    signal,
+    onChunk,
+  }: {
+    model: string;
+    messages: ChatMessage[];
+    signal: AbortSignal;
+    onChunk(chunk: unknown, textDelta: string): void;
+  }): Promise<{ text: string; usage?: LlmUsage }> {
+    if (model.startsWith("@cf/")) {
+      // workers-types keys `run`'s inputs and outputs by model-name literal; the model is
+      // configuration here (any name the account can reach), so the call is made through the
+      // binding's runtime shape and the answer is validated below rather than trusted from a type.
+      const raw: unknown = await raceAbort(
+        signal,
+        this.deps.withItx((itx) =>
+          (itx.ai as unknown as { run(model: string, inputs: unknown): Promise<unknown> }).run(
+            model,
+            { messages, stream: true },
+          ),
+        ),
+      );
+      if (raw instanceof ReadableStream) {
+        let text = "";
+        let usage: LlmUsage | undefined;
+        await drainSse(raw, signal, (event) => {
+          const chunk = z.looseObject({ response: z.string().optional() }).safeParse(event);
+          const delta = chunk.success ? chunk.data.response || "" : "";
+          text += delta;
+          onChunk(event, delta);
+          const reported = z.looseObject({ usage: z.unknown() }).safeParse(event);
+          if (reported.success && reported.data.usage !== undefined)
+            usage = normalizeUsage(reported.data.usage) ?? usage;
+        });
+        if (text.trim() === "") throw new Error("the model answered with no text");
+        return { text: text.trim(), usage };
+      }
+      // A binding (or a lent fake) that answered whole: the one chunk there is.
+      const answer = ChatAnswer.parse(raw);
+      const text = (
+        "response" in answer ? answer.response : answer.choices[0]!.message.content
+      ).trim();
+      if (text === "") throw new Error("the model answered with no text");
+      onChunk(raw, text);
+      return { text };
+    }
+    // No key of ours rides this request: an `openai/…` model is a Workers AI PARTNER model, billed
+    // by Cloudflare through the binding (apps/os's `unified` transport) — the Responses API shape,
+    // streamed, the raw Response asked for so the SSE body is ours to read. The gateway option
+    // routes it through the account's AI Gateway; its metadata is what the gateway's spend limits
+    // partition on (apps/os's: environment, project, stream), so a runaway agent hits ITS ceiling.
+    // Two casts, both because workers-types spells Workers AI's OWN catalog as literals: a partner
+    // model's name (`openai/…`) is not among them though the binding takes any model the account
+    // can reach, and a partner model takes the PROVIDER's request body (here the Responses API's),
+    // which no catalog input type names. Nothing is trusted from either: the answer is a Response
+    // checked for status and parsed event by event below.
+    const config = appConfigOf(this.deps.env);
+    const { projectId, path } = await this.#identity();
+    const raw: unknown = await raceAbort(
+      signal,
+      this.deps.env.AI.run(
+        `openai/${model}` as Parameters<Ai["run"]>[0],
+        {
+          input: responsesInput(messages),
+          stream: true,
+          store: false,
+          reasoning: { effort: "low", summary: "auto" },
+        } as never,
+        {
+          returnRawResponse: true,
+          gateway: {
+            id: config.aiGatewayId,
+            skipCache: true,
+            metadata: {
+              environment: config.environmentName,
+              projectId,
+              streamPath: path,
+              context: "agent-turn",
+            },
+          },
+        },
+      ),
+    );
+    if (!(raw instanceof Response))
+      throw new Error(`model ${model}: Workers AI did not answer with the raw response`);
+    const response = raw;
+    if (!response.ok || !response.body)
+      throw new Error(
+        `openai/${model} ${String(response.status)}: ${(await response.text()).slice(0, 400)}`,
+      );
+    let text = "";
+    let usage: LlmUsage | undefined;
+    await drainSse(response.body, signal, (raw) => {
+      const event = ResponsesEvent.safeParse(raw);
+      if (!event.success) return;
+      const { type } = event.data;
+      if (type === "response.output_text.delta") {
+        const delta = typeof event.data.delta === "string" ? event.data.delta : "";
+        text += delta;
+        onChunk(raw, delta);
+      } else if (type === "response.reasoning_summary_text.delta") onChunk(raw, "");
+      else if (type === "response.completed" || type === "response.incomplete") {
+        const done = z
+          .looseObject({ response: z.looseObject({ usage: z.unknown() }) })
+          .safeParse(raw);
+        if (done.success) usage = normalizeUsage(done.data.response.usage) ?? usage;
+      } else if (type === "response.failed" || type === "error") {
+        const failure = z
+          .looseObject({
+            error: z.looseObject({ message: z.string() }).optional(),
+            response: z
+              .looseObject({ error: z.looseObject({ message: z.string() }).optional() })
+              .optional(),
+          })
+          .safeParse(raw);
+        throw new Error(
+          `openai: ${failure.success ? failure.data.error?.message || failure.data.response?.error?.message || type : type}`,
+        );
+      }
+    });
+    if (text.trim() === "") throw new Error("the model answered with no text");
+    return { text: text.trim(), usage };
   }
 }

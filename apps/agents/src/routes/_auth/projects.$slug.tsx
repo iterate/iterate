@@ -92,7 +92,7 @@ function AgentsPage() {
             // an agent is its path; a new one is born at the moment's path, as in apps/os
             const path = newWebAgentPath(new Date());
             using itx = await api.projects.get(project);
-            await itx.invoke(["itx", "agents", ["get", path], ["create", {}]]);
+            await itx.invoke(["itx", "agents", ["create", path]]);
             await router.invalidate();
             await navigate({
               to: "/projects/$slug",
@@ -230,12 +230,13 @@ function useAgentInterrupt(args: {
   };
 }
 
-/** The agent facet's live state, the fields the header reads. */
+/** The agent facet's live state, the fields the header reads (src/agent/contract.ts `stateSchema`):
+ *  a pause, the one open request, the one pending trigger. A script the agent asked for is the
+ *  CONTEXT's obligation, not in this state — the feed's running code step says so. */
 const AgentLive = z.object({
   paused: z.object({ reason: z.string() }).nullable(),
   openRequest: z.object({ model: z.string() }).nullable(),
   pendingLlmRequestTrigger: z.object({}).nullable(),
-  activeScriptExecutions: z.record(z.string(), z.unknown()),
 });
 
 function AgentConversation({ project, path }: { project: string; path: string }) {
@@ -256,11 +257,13 @@ function AgentConversation({ project, path }: { project: string; path: string })
   // follow-up round). Without live state at all (the read failed), the log alone decides: the
   // reducer settles only once no step is running, and a follow-up round reopens an activity.
   const idle = facet.success
-    ? !facet.data.openRequest &&
-      !facet.data.pendingLlmRequestTrigger &&
-      Object.keys(facet.data.activeScriptExecutions).length === 0
+    ? !facet.data.openRequest && !facet.data.pendingLlmRequestTrigger
     : live.status === "error";
   const feed = useMemo(() => reduceAgentFeed(events, idle), [events, idle]);
+  // A script still running is the context's, read from the log: the feed's running code step.
+  const runningScript =
+    feed.state.live?.steps.some((step) => step.kind === "code" && step.status === "running") ??
+    false;
   const traceOffsets = useMemo(() => traceOffsetByMessage(events), [events]);
   const [toggled, setToggled] = useState<ReadonlySet<string>>(() => new Set());
   const onToggle = useCallback(
@@ -322,7 +325,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
     onInterrupt: context
       ? async () => {
           await context.append({
-            type: "events.iterate.com/agents/context-added",
+            type: "events.iterate.com/agent/context-added",
             payload: {
               role: "developer",
               content: "The user interrupted the in-progress response from the web chat.",
@@ -340,7 +343,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
       }
     : facet.data.paused
       ? { text: `Paused — ${facet.data.paused.reason}`, tone: "amber" as const }
-      : Object.keys(facet.data.activeScriptExecutions).length > 0
+      : runningScript
         ? {
             text: `Running a script${feed.state.summaryActivity ? ` · ${feed.state.summaryActivity}` : ""}`,
             tone: "live" as const,

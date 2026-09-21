@@ -47,6 +47,14 @@ This is why the API is `agents.get(path).create()`, rather than
 `agents.create(...)`: addressing and existence remain separate, and every
 subsequent operation uses the same path-bound handle.
 
+os-next (`apps/os-next`) keeps the address just as pure but puts the birth on the
+collection: `itx.repos.create(path)` — the `project` facet on `/`, where the
+catalog already lives — enables the processor row on the path, appends
+`repo/create-requested` and waits for the terminal fact, while `get(path)` stays
+an addressable handle that creates nothing (the facet's verbs plus a typed
+`append`). Addressing and existence stay separate; the collection is simply where
+a list and a birth meet. Everything else in this section holds there too.
+
 ## Creation is an explicit birth certificate
 
 Every hosted domain processor owns a distinct past-tense `*/created` event.

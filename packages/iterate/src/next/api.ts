@@ -28,8 +28,12 @@ export interface StreamPage {
   atHead: boolean;
 }
 
-/** `waitForEvent`'s filter: an event type, a floor, a timeout. */
-export type WaitForEventFilter = { type?: string; afterOffset?: number; timeoutMs?: number };
+/** `waitForEvent`'s filter: an event type (or one of a list), a floor, a timeout. */
+export type WaitForEventFilter = {
+  type?: string | string[];
+  afterOffset?: number;
+  timeoutMs?: number;
+};
 
 /** One row of `rewriteRules.list()`: a context row (`target` a string, or `null` for a mask) or a
  *  platform row. */
@@ -91,6 +95,9 @@ export interface IterateContextApi {
     /** A hosted processor's claim on this context's alarm: "revive me by `at`" (a facet with a
      *  `runInBackground` attempt in flight), or `null` to release it. */
     processors: { claim(name: string, at: number | null): Promise<void> };
+    /** Another context of the project, physically — its handle (`invoke` takes steps relative to
+     *  `itx`): where a processor's `appendTo` lands. */
+    cd(path: string): InvokeHandle;
   };
   whoami():
     | { projectId: string; path: string; projectSlug?: string; projectUrl?: string }
@@ -152,14 +159,24 @@ export interface IterateContextApi {
    *  `context/run-requested` under the caller, the context's runner, `run-settled` (JSON in, JSON
    *  out); resolves with the result or rejects with the settlement's error. Never re-run. */
   run(script: string): Promise<unknown>;
-  /** The project's repos and workspaces as domain objects: a facet on the context at `path`. */
+  /** The project's repos, workspaces and agents as domain objects — one shape each: `get(path)` is
+   *  the entity's facet on the context at `path` (its verbs, plus the typed `append` on that
+   *  context), `list()` the project catalog, `create(path)` the creation saga on that path
+   *  (the processor row, the request, the terminal fact — created, or create-failed thrown). */
   repos: {
     get(path: string): InvokeHandle;
     list(): Promise<{ path: string; createdAt: string }[]>;
+    create(path: string): Promise<{ path: string }>;
   };
   workspaces: {
     get(path: string): InvokeHandle;
     list(): Promise<{ path: string; createdAt: string }[]>;
+    create(path: string): Promise<{ path: string }>;
+  };
+  agents: {
+    get(path: string): InvokeHandle;
+    list(): Promise<{ path: string; createdAt: string }[]>;
+    create(path: string): Promise<{ path: string }>;
   };
 }
 

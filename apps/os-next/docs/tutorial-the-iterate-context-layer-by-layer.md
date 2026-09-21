@@ -1450,8 +1450,8 @@ repo's context whose `remote()` points at an in-memory git remote (`e2e/support/
 — the real wire codec runs in both lanes; only the binding is deployed-only.
 
 ```ts
-const repo = itx.repos.get("/repos/config");
-await repo.create(); // repos/create-requested, then repos/created on its path and on /
+await itx.repos.create("/repos/config"); // the repo processor's row, repo/create-requested, then repo/created on / and on its path
+const repo = itx.repos.get("/repos/config"); // the handle: the facet's verbs, plus the typed append
 expect(await repo.readFile("worker.ts")).toBeNull(); // an unborn repo reads as null
 const first = await repo.writeFile("worker.ts", source); // one commit on main
 expect(first.commitOid).toMatch(/^[0-9a-f]{40}$/);
