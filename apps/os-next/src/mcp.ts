@@ -5,6 +5,7 @@ import type { Env } from "./control-plane.ts";
 import { directory, type Directory, type Reach } from "./directory.ts";
 import { DurableObjectNameCodec } from "./iterate-context.ts";
 import type { Authorization } from "./oauth.ts";
+import { oauthAddresses } from "./oauth.ts";
 
 // MCP uses the same verified authorization as Cap’n Web. It exposes ONE tool, `run`: a script
 // evaluated under that principal in THE CONNECTION'S OWN CONTEXT of a project — `/mcp/inbound/<grantId>`,
@@ -78,13 +79,17 @@ const validator = new CfWorkerJsonSchemaValidator();
 /** A tool's input schema as `fromJsonSchema` takes it — the SDK's own JSON-Schema type. */
 type JsonSchema = Parameters<typeof fromJsonSchema>[0];
 
-async function buildServer(env: Env, authorization: Authorization): Promise<McpServer> {
+async function buildServer(
+  env: Env,
+  authorization: Authorization,
+  platformOrigin: string,
+): Promise<McpServer> {
   const d1Directory = directory(env.DB);
   const { reach, principal, grant } = authorization;
   // THE CONNECTION: the grant (a personal token, a Claude Code sign-in); the admin secret has none,
   // so every admin client shares one context per project.
   const connectionPath = `/mcp/inbound/${grant?.grantId ?? "admin"}`;
-  const caller = { principal, grant: grant?.grantId };
+  const caller = { principal, grant: grant?.grantId, platformOrigin };
   const mcpServer = new McpServer(
     { name: "control-plane", version: "0.1.0" },
     { instructions: await serverInstructions(d1Directory, reach) },
@@ -176,5 +181,7 @@ async function buildServer(env: Env, authorization: Authorization): Promise<McpS
 
 /** The shared bearer gate has established this principal and reach. */
 export function mcpResponse(request: Request, env: Env, authorization: Authorization) {
-  return createMcpHandler(() => buildServer(env, authorization)).fetch(request);
+  return createMcpHandler(() =>
+    buildServer(env, authorization, oauthAddresses(env, request).issuer),
+  ).fetch(request);
 }

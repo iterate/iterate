@@ -1,12 +1,14 @@
 // public/login.js — the sign-in page's script. /login.json (control-plane.ts) says who is signed in,
 // whether a code is on its way (and to whom), what went wrong with the last post, and which
 // sign-ins this deployment offers; this renders that. Signing in itself is plain form posts to
-// /login — the email, then the code — or the link to /.auth/identity (Google); no script in the loop.
+// /login — the email and the password; or the email, then the mailed code — or the link to
+// /.auth/identity (Google); no script in the loop.
 (async () => {
   const root = document.getElementById("login");
   const el = (tag, props, ...children) => {
     const node = document.createElement(tag);
     for (const [key, value] of Object.entries(props || {})) {
+      if (value === undefined) continue;
       if (key === "class") node.className = value;
       else if (key === "text") node.textContent = value;
       else node.setAttribute(key, value);
@@ -82,32 +84,62 @@
     return;
   }
   const options = [alert];
+  const emailField = () =>
+    el(
+      "label",
+      {},
+      "Email ",
+      el("input", {
+        type: "email",
+        name: "email",
+        value: state.email || "",
+        autocomplete: "email",
+        required: "",
+        autofocus: options.length === 1 ? "" : undefined,
+      }),
+    );
+  // the password: the email and the password in one form, signed in on submit
+  if (state.password)
+    options.push(
+      el(
+        "form",
+        { method: "post", action: "/login" },
+        next(),
+        emailField(),
+        el(
+          "label",
+          {},
+          "Password ",
+          el("input", {
+            type: "password",
+            name: "password",
+            autocomplete: "current-password",
+            required: "",
+          }),
+        ),
+        el("button", { class: "primary", type: "submit", text: "Sign in" }),
+      ),
+    );
+  // the mailed code: the email alone, a code on its way on submit
   if (state.emailSignIn)
     options.push(
       el(
         "form",
         { method: "post", action: "/login" },
         next(),
-        el(
-          "label",
-          {},
-          "Email ",
-          el("input", {
-            type: "email",
-            name: "email",
-            autocomplete: "email",
-            required: "",
-            autofocus: "",
-          }),
-        ),
-        el("button", { class: "primary", type: "submit", text: "Continue" }),
+        emailField(),
+        el("button", {
+          class: state.password ? "quiet" : "primary",
+          type: "submit",
+          text: state.password ? "Email me a code instead" : "Continue",
+        }),
       ),
     );
   if (state.google)
     options.push(
       el("p", {}, el("a", { class: "button", href: state.google, text: "Continue with Google" })),
     );
-  if (!state.emailSignIn && !state.google)
+  if (!state.password && !state.emailSignIn && !state.google)
     options.push(el("p", { text: "Sign-in is not configured for this deployment." }));
   show(...options);
 })();

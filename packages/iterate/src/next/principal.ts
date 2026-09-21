@@ -23,6 +23,10 @@ export type Caller = {
    *  `env.ITX`. Under it the resolver refuses the fixed point (`itx.builtins…`) and any `cd` above
    *  the caller's own context on the INPUT expression; rewrites the owner wrote are never subject. */
   app?: true;
+  /** THE PLATFORM ORIGIN the caller reached the platform on (os-next platform-origin.ts) — what a
+   *  public URL is composed from (`itx.url`, a signed file URL). Absent for a caller with none (a
+   *  loaded worker's `env.ITX`, the kernel); the context then uses the last one it was reached on. */
+  platformOrigin?: string | null;
 };
 /** The header the edge sets on a Request it forwards on a principal's behalf — the ingress after
  *  the cookie check, a session's terminal `fetch` — and strips from every inbound Request. */

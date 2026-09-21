@@ -17,7 +17,17 @@
 // the worker imports. Browser E2E is Playwright (playwright.config.ts + specs/**).
 
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
-import { defineConfig } from "vitest/config";
+import { defineConfig, type Plugin } from "vitest/config";
+
+// A `.sql` file imports as its text — what wrangler's `rules` (type `Text` for the .sql glob) do
+// for the worker's own bundle (src/worker.ts applies src/control-plane.sql at boot), done here for
+// the lanes Vite loads the module in (node, and workerd through the plugin's module runner).
+const sqlAsText: Plugin = {
+  name: "sql-as-text",
+  transform(code, id) {
+    if (id.endsWith(".sql")) return { code: `export default ${JSON.stringify(code)};`, map: null };
+  },
+};
 
 /** Teardown/async-transport noise only: disposing a capnweb session whose peer still delivers (a
  *  deliberate move in the reconnect/unsubscribe tests, and pager sockets still parked at teardown)
@@ -32,6 +42,7 @@ export default defineConfig({
     globalSetup: ["./vitest.global-setup.ts"],
     projects: [
       {
+        plugins: [sqlAsText],
         test: {
           name: "unit",
           include: ["src/**/*.test.ts", "examples/**/*.test.ts"],
@@ -42,6 +53,7 @@ export default defineConfig({
       },
       {
         plugins: [
+          sqlAsText,
           cloudflareTest({
             main: "./src/worker.ts",
             wrangler: { configPath: "./wrangler.test.jsonc" },

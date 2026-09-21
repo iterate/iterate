@@ -25,7 +25,7 @@ Every snippet assumes this preamble — exactly how the lane opens a session. Th
 ```ts
 import { newWebSocketRpcSession } from "capnweb";
 
-const wsApi = new URL("/internal/rpc", WORKER_BASE_URL); // the operator door of the one worker under test (a local boot, or the deployed one); the public door is /api, behind the OAuth gate
+const wsApi = new URL("/api", WORKER_BASE_URL); // the one door of the worker under test (a local boot, or the deployed one) — opened bare, the socket authenticates in-band
 wsApi.protocol = "ws:";
 
 /** A fresh session — an IterateRpcTarget stub. Hold it with `using`: a capnweb stub is
@@ -80,7 +80,7 @@ DO and reaches it only over Workers RPC. Everything you hold is minted at the ed
 
 ### A client is a capnweb peer, and the door is `authenticate(credentials)`
 
-`/api` — and the operator door `/internal/rpc`, the e2e lane's — serves an `IterateRpcTarget` whose
+`/api` serves an `IterateRpcTarget` whose
 only door is `authenticate(credentials)`. It answers a `SessionRpcTarget`: a catalog that vends
 contexts, never a context itself. `session.projects.get(project)` and
 `session.projects.create({ project })` vend a project's ROOT context — the `IterateContext` you
@@ -1839,7 +1839,7 @@ secret that proves it — and every door reads the same two kinds:
   Google, or an assumed email where `APP_CONFIG_TEST_EMAIL_LOGIN` is on). `projects.get` admits
   members of the owning org only.
 - `admin-secret`: the deployment's `APP_CONFIG_ADMIN_API_SECRET` (a wrangler secret), verified
-  in-band on the operator door `/internal/rpc` — `{ actor: "admin" }`, every project, `list()` is
+  in-band on a bare `/api` socket (or a bearer on the upgrade) — `{ actor: "admin" }`, every project, `list()` is
   the whole directory, `create()` lands in `org_admin`. With `as: { email }` it is that user's
   session without a login (the row upserted like `/login` does), which is how a confinement test
   signs in. The e2e lane runs on it. On `/api`, `/mcp` and a project host the same secret is a
@@ -1924,7 +1924,7 @@ const revoked = await fetch(workerUrl("/api"), {
   headers: { Authorization: `Bearer ${token}` },
 });
 expect(revoked.status).toBe(401);
-using operator = session(); // the operator door, /internal/rpc
+using operator = session(); // a bare /api socket; the admin secret authenticates it in-band
 const admin = operator.authenticate(adminCredentials()); // { type: "admin-secret", secret }
 expect(await admin.whoami()).toEqual({ actor: "admin" });
 const ada = operator.authenticate(adminCredentials({ email: "ada@example.com" }));

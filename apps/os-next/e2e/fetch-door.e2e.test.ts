@@ -32,7 +32,7 @@ import { adminCredentials, freshCtx, openItx, session, workerUrl } from "./suppo
 import {
   fetchProjectHost,
   freshDnsSafeProjectSlug,
-  projectHostnameBase,
+  ingressHostname,
   registerProject,
   wsRoundTripOnProjectHost,
 } from "./support/project-host.ts";
@@ -47,7 +47,7 @@ test("a project host serves a LOADED WORKER as an app: GET → 200 HTML, WebSock
   // an itx EXPRESSION (workers.get({ source })), same as every other rule.
   const itx = openItx(projectId);
   await itx.provide("itx.apps.site", ["itx", "workers", ["get", { source: SOURCES.site }]]);
-  const host = `site--${slug}.${projectHostnameBase()}`;
+  const host = `site--${slug}.${ingressHostname()}`;
 
   const page = await fetchProjectHost(host, "/");
   expect(page.status, page.text).toBe(200);
@@ -89,7 +89,7 @@ test("lent stub HTTP fetch: an eyeball POST on the project host reaches the Node
     .authenticate(adminCredentials())
     .projects.get(projectId)
     .provide("itx.apps.device", device);
-  const host = `device--${slug}.${projectHostnameBase()}`;
+  const host = `device--${slug}.${ingressHostname()}`;
 
   const res = await fetchProjectHost(host, "/hunt?probe=1", {}, { method: "POST", body: "ping" });
   expect(res.status, res.text).toBe(201);
@@ -120,7 +120,7 @@ test("lent stub WebSocket fetch: a plain eyeball WebSocket on the project host o
     .authenticate(adminCredentials())
     .projects.get(projectId)
     .provide("itx.apps.device", new WsDevice());
-  const host = `device--${slug}.${projectHostnameBase()}`;
+  const host = `device--${slug}.${ingressHostname()}`;
   // Sanity: the rule still answers plain HTTP (so the assertions below are about the UPGRADE).
   const plain = await fetchProjectHost(host, "/");
   expect(plain.text).toBe("http-fallback");
@@ -139,7 +139,7 @@ test("lent stub WebSocket fetch: a plain eyeball WebSocket on the project host o
 test("a hop count the platform never wrote (an app spelling `NaN` to defeat the budget) is over budget on arrival: 508, never a loop", async () => {
   // before admission — the count is read first, so the project need not exist
   const response = await fetchProjectHost(
-    `site--${freshDnsSafeProjectSlug("nan-hops")}.${projectHostnameBase()}`,
+    `site--${freshDnsSafeProjectSlug("nan-hops")}.${ingressHostname()}`,
     "/",
     { "x-itx-expression-hops": "NaN" },
   );

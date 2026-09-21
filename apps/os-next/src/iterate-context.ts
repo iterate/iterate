@@ -40,6 +40,7 @@ import {
   type Caller,
 } from "iterate/next/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
+import { ITX_PLATFORM_ORIGIN_HEADER } from "./platform-origin.ts";
 import type { IterateContextDurableObject, Env } from "./iterate-context-durable-object.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
@@ -102,9 +103,11 @@ export class IterateContextRpcTarget extends RpcTarget {
   readonly #durableObjectAddress: DurableObjectAddress;
   readonly #sessionTeardown: SessionTeardown;
   readonly #waitUntil: WaitUntil;
-  /** WHO holds this context: the session's verified principal and the grant it acts through
-   *  (session.ts), or nobody (the anonymous session, a loaded worker's `env.ITX`). Every dispatch
-   *  runs under it, so every event it appends carries `source.principal` and `source.grant`. */
+  /** WHO holds this context: the session's verified principal, the grant it acts through and the
+   *  platform origin it reached the platform on (session.ts) — or nobody (the anonymous session, a
+   *  loaded worker's `env.ITX`). Every dispatch runs under it, so every event it appends carries
+   *  `source.principal` and `source.grant`, and the DO can compose a public URL (`itx.url`, a signed
+   *  file URL) without knowing the deployment's origin itself. */
   readonly #caller: Caller;
 
   constructor(
@@ -189,11 +192,14 @@ export class IterateContextRpcTarget extends RpcTarget {
       headers.set(ITX_EXPRESSION_FETCH_HEADER, JSON.stringify(terminalFetch.steps)); // the lane parses a JSON ItxExpression
       headers.delete(ITX_PRINCIPAL_HEADER); // the stamp is this session's, never the Request's own
       headers.delete(ITX_GRANT_HEADER);
+      headers.delete(ITX_PLATFORM_ORIGIN_HEADER); // likewise the platform origin: this holder's, never the Request's
       if (this.#caller.principal)
         headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(this.#caller.principal));
       if (this.#caller.grant) headers.set(ITX_GRANT_HEADER, this.#caller.grant);
       headers.delete(ITX_APP_HEADER); // likewise this handle's, never the Request's own
       if (this.#caller.app) headers.set(ITX_APP_HEADER, "1");
+      if (this.#caller.platformOrigin)
+        headers.set(ITX_PLATFORM_ORIGIN_HEADER, this.#caller.platformOrigin);
       return this.#durableObject.fetch(new Request(terminalFetch.request, { headers }));
     }
     return this.#invokeOnDurableObject(itxExpression, args);
@@ -533,6 +539,7 @@ export class ItxEntrypoint extends WorkerEntrypoint<
     headers.delete(ITX_PRINCIPAL_HEADER);
     headers.delete(ITX_GRANT_HEADER);
     headers.delete(ITX_APP_HEADER);
+    headers.delete(ITX_PLATFORM_ORIGIN_HEADER);
     if (!this.ctx.props.platform) {
       // A raw `fetch(url)` from loaded code IS `itx.fetch(request)` at its context — through the
       // table (no `itx.fetch` row below the owner root, no egress); a self-addressed `env.ITX.fetch`

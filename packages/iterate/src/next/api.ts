@@ -9,6 +9,7 @@
 import type { FacetHandle, InvokeHandle, ItxExpressionInput } from "./expression.ts";
 import type { ConsentScope } from "./oauth-scopes.ts";
 import type { Principal } from "./principal.ts";
+import type { IngressRouting } from "./project-ingress.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
 
 /** What `authenticate` accepts: the browser (its login cookie rode the upgrade), a device or script
@@ -203,7 +204,8 @@ export type ConsentAnswer =
       /** the scopes the request asked for, each with the page's copy (oauth-scopes.ts) */
       scopes: ConsentScope[];
       denyLocation: string;
-      projectHostnameBase: string;
+      /** how projects are reached over HTTP (project-ingress.ts) — the page composes a project's URL */
+      ingressRouting: IngressRouting;
       /** the onboarding step's first draft of an organization name, from the person's name or email */
       suggestedOrganizationName: string;
     }
@@ -236,7 +238,8 @@ export interface IterateSessionApi {
     principal: Principal;
     scopes: string[];
     platformOrigin: string;
-    projectHostnameBase: string;
+    /** how projects are reached over HTTP (project-ingress.ts `projectUrlOf`); null ⇒ no ingress */
+    ingressRouting: IngressRouting;
     /** the MCP server's origin (the dash's connect page) — "" when this deployment serves none */
     mcpOrigin: string;
   };

@@ -18,7 +18,7 @@ direction. **All six increments landed as SHAPE** (typecheck + full workers lane
 1. **Context hierarchy** — `Session`→`SessionRpcTarget`, `IterateContext`→`IterateContextRpcTarget`;
    `GLOBAL_PROJECT_ID`; `session.user` vends a global context (same surface as a project's).
 2. **`IterateRpcTarget`** — the one `/api` root with `authenticate({ from-server-cookie | admin-secret })`,
-   served at `/api` and `/internal/rpc`; `UnauthenticatedSession` deleted.
+   served at `/api`; `UnauthenticatedSession` deleted.
 3. **Single `invoke(call, args, caller)` door** — `invoke`/`invokeAs` collapsed; the `Caller` is
    CARRIED through every dispatch and sibling hop, but NOT enforced (nothing reads it to refuse yet).
 4. **`session.organizations.get(id)`** — the org context catalog.
@@ -44,7 +44,6 @@ Deferred — the ENFORCEMENT and heavy plumbing (by direction; the expected-fail
   every global context sees alike; those are the next gap, not a path.
 - **Privileged `ctx.exports` account facet + D1/OAuth** — for the token-workflow effects (Phase 2);
   the foundation processor needs none.
-- **Full `/internal/rpc` deletion** — needs the OAuth-gate admission rework (admin via `/api`).
 
 ## Headline from the review
 
