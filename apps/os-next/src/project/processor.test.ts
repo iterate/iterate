@@ -7,6 +7,10 @@
 import { describe, expect, test } from "vitest";
 import { reduceProcessor } from "../stream/test-support.ts";
 import { ProjectProcessor } from "./processor.ts";
+
+/** The reduce never reaches the context; the saga is the e2e's. */
+const processor = () =>
+  new ProjectProcessor(() => Promise.reject(new Error("the reduce reaches no itx")));
 import type { ProjectState } from "./contract.ts";
 
 const requested = {
@@ -133,5 +137,5 @@ describe("ProjectProcessor — the reduce", () => {
     },
   ];
   for (const { name, events, state } of rows)
-    test(name, () => expect(reduceProcessor(new ProjectProcessor(), events)).toEqual(state));
+    test(name, () => expect(reduceProcessor(processor(), events)).toEqual(state));
 });

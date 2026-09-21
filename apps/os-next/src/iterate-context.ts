@@ -160,7 +160,14 @@ export class IterateContextRpcTarget extends RpcTarget {
     // it gets back accumulates onto one `invoke`, exactly as the built-in `cd` root answers.
     if (this.#caller.app)
       return new InvokeHandle((steps) =>
-        this.invoke(["itx", ["cd", path], ...steps]),
+        // The proxy hands relative steps; a caller's own `.invoke("itx.whoami()")` is a whole call.
+        this.invoke([
+          "itx",
+          ["cd", path],
+          ...(typeof steps === "string" || steps[0] === "itx"
+            ? normalizedItxExpression(steps as ItxExpressionInput).slice(1)
+            : steps),
+        ]),
       ) as unknown as IterateContextRpcTarget;
     const durableObjectAddress = DurableObjectNameCodec.address({
       projectId: this.#durableObjectAddress.projectId,
@@ -284,11 +291,14 @@ export class IterateContextRpcTarget extends RpcTarget {
         ...description,
       },
     };
+    // LOADED CODE's row goes through its own table FIRST (a jail's mask refuses it, and nothing is
+    // lent); the platform's rides the pager and the DO appends it as it accepts the pager.
+    if (this.#caller.app) await this.#append(ruleEvent);
     const pager = await lendRpcStubOverPager(
       () => this.#durableObject,
       target,
       matchString,
-      [ruleEvent],
+      this.#caller.app ? [] : [ruleEvent],
       this.#waitUntil,
     );
     // Registered with the session so a dying session recalls it even when the handle was never
@@ -352,11 +362,12 @@ export class IterateContextRpcTarget extends RpcTarget {
           ...consumes,
         },
       };
+      if (this.#caller.app) await this.#append(row); // loaded code's row: its table first, as in `provide`
       const pager = await lendRpcStubOverPager(
         () => this.#durableObject,
         input.target as ClientRpcStub,
         rpcStubKey,
-        [row],
+        this.#caller.app ? [] : [row],
         this.#waitUntil,
       );
       const lease = this.#sessionTeardown.add(sessionTeardownKey, pager);
@@ -380,11 +391,16 @@ export class IterateContextRpcTarget extends RpcTarget {
 
   // ── processors: durable configuration, two lines each over the subscription event ──
 
-  /** THE ONE WRITE: every verb above builds an event and appends it here, spelled `itx.builtins.append`
-   *  — the platform never spells a short name (context/itx-expression-rewriting.ts), so a context's own
-   *  rows redirect the user's calls, never this. */
+  /** THE ONE WRITE: every verb above builds an event and appends it here. The platform's is spelled
+   *  `itx.builtins.append`, so a context's own rows redirect the user's calls, never this. LOADED
+   *  CODE's goes through ITS table under the context root `append` — implicit everywhere, so a child
+   *  writes; a jail's bare null (or a mask at `itx.append`) refuses a live lend's row, a live
+   *  subscription's and an undo exactly as it refuses `itx.append` — and the door walls the row's
+   *  target (context/built-ins.ts `append`). */
   #append(event: StreamEventInput): Promise<unknown> {
-    return this.#invokeOnDurableObject(["itx", "builtins", ["append", event]]);
+    return this.#invokeOnDurableObject(
+      this.#caller.app ? ["itx", ["append", event]] : ["itx", "builtins", ["append", event]],
+    );
   }
 
   /** An undo's REMOVAL of a rule: un-set ONLY the row this handle wrote — `null` WITH the target it

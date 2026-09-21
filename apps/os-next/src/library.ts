@@ -25,7 +25,7 @@ import {
   walkStepsOnRpcStub,
   type ItxExpression,
 } from "iterate/next/expression";
-import { errorCode, resolveContextPath } from "iterate/next/lib";
+import { codedError, errorCode, resolveContextPath } from "iterate/next/lib";
 import type { Caller } from "iterate/next/principal";
 import type { EventInput, StreamEvent } from "iterate/next/stream/processor";
 import type { RunSettled } from "./stream/core-processor.ts";
@@ -49,8 +49,8 @@ import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 // from the stream, the DO or the context folder, except context/expression.ts — the codec and the
 // pipelinable handle).
 //
-// The verbs: `run` · `connectToMcp` · `connectToOpenApi` · `connectToCapnweb` · `repos.get`/`list`/`create` ·
-// `workspaces.get`/`list`/`create` · `agents.get`/`list`/`create` · `mcpConnections.list` · `files.get`/`list`. `run` is sugar over
+// The verbs: `run` · `connectToMcp` · `connectToOpenApi` · `connectToCapnweb` · `repos.get`/`list`/`create`/`delete` ·
+// `workspaces.get`/`list`/`create`/`delete` · `agents.get`/`list`/`create`/`delete` · `mcpConnections.list` · `files.get`/`list`. `run` is sugar over
 // `itx.workers.get` (the run section); an entity's `get(path)` is a handle over `itx.cd(path).facets.get`,
 // its `list()` and `create(path)` one dispatch on the collection the `project` facet on `/` carries
 // (the entities section). The three connectors each
@@ -119,6 +119,8 @@ export interface LibraryRoots {
     get(path: string): InvokeHandle & RepoFacet;
     list(): Promise<{ path: string; createdAt: string }[]>;
     create(path: string): Promise<{ path: string }>;
+    /** The entity's deletion saga on that path: the request, the death certificate (cross-posted to `/`, the catalog drops it), then the row disabled. */
+    delete(path: string): Promise<{ path: string }>;
   };
   /** THE WORKSPACES (src/workspace/): the workspace of ANY context, at most one per path — a
    *  workspace IS its path. `create(path)` is the collection's (src/workspace/collection.ts): the
@@ -133,6 +135,8 @@ export interface LibraryRoots {
     get(path: string): InvokeHandle & WorkspaceFacet;
     list(): Promise<{ path: string; createdAt: string }[]>;
     create(path: string): Promise<{ path: string }>;
+    /** The entity's deletion saga on that path: the request, the death certificate (cross-posted to `/`, the catalog drops it), then the row disabled. */
+    delete(path: string): Promise<{ path: string }>;
   };
   /** THE AGENTS (src/agent/): an agent as a DOMAIN OBJECT — a conversation on the context at ANY
    *  path (`/agents/<name>` by convention), driven by a model that acts by writing scripts against
@@ -150,6 +154,8 @@ export interface LibraryRoots {
     get(path: string): InvokeHandle & AgentFacet;
     list(): Promise<{ path: string; createdAt: string }[]>;
     create(path: string): Promise<{ path: string }>;
+    /** The entity's deletion saga on that path: the request, the death certificate (cross-posted to `/`, the catalog drops it), then the row disabled. */
+    delete(path: string): Promise<{ path: string }>;
   };
   /** THE MCP CONNECTIONS of the project: every grant whose connection context was born here (its
    *  first run over MCP) — the context's path (`/mcp/inbound/<grantId>`, its transcript) and when.
@@ -278,6 +284,11 @@ export function buildLibrary(
             { path: string; createdAt: string }[]
           >,
         create: (path) => createEntity(itx, path, "repos", deps.caller()),
+        delete: async (path) =>
+          projectFacet(itx, [
+            ["repos"],
+            ["delete", resolveContextPath(await handleOrigin(itx, deps.caller()), path)],
+          ]) as Promise<{ path: string }>,
       },
       workspaces: {
         get: (path) =>
@@ -288,6 +299,11 @@ export function buildLibrary(
             { path: string; createdAt: string }[]
           >,
         create: (path) => createEntity(itx, path, "workspaces", deps.caller()),
+        delete: async (path) =>
+          projectFacet(itx, [
+            ["workspaces"],
+            ["delete", resolveContextPath(await handleOrigin(itx, deps.caller()), path)],
+          ]) as Promise<{ path: string }>,
       },
       agents: {
         get: (path) =>
@@ -298,6 +314,11 @@ export function buildLibrary(
             { path: string; createdAt: string }[]
           >,
         create: (path) => createEntity(itx, path, "agents", deps.caller()),
+        delete: async (path) =>
+          projectFacet(itx, [
+            ["agents"],
+            ["delete", resolveContextPath(await handleOrigin(itx, deps.caller()), path)],
+          ]) as Promise<{ path: string }>,
       },
       files: {
         get: (path) => fileHandle(itx, path),
@@ -470,6 +491,13 @@ async function createEntity(
 ): Promise<{ path: string }> {
   const creator = await handleOrigin(itx, caller);
   const absolute = resolveContextPath(creator, path);
+  // A context never creates its own ancestor: the link it would write there points back down at
+  // itself — a two-context cycle — and a child never holds more than its creator.
+  if (creator !== absolute && creator.startsWith(absolute === "/" ? "/" : `${absolute}/`))
+    throw codedError(
+      "FORBIDDEN",
+      `${collection}.create(${JSON.stringify(path)}) from ${JSON.stringify(creator)}: a context does not create its own ancestor`,
+    );
   if (creator !== absolute)
     await (
       await itx.cd(absolute)

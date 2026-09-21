@@ -10,7 +10,15 @@
 // deployed lane runs ONE real turn through Workers AI.
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { collector, freshCtx, openItx, readAll, sleep, until } from "./support/client.ts";
+import {
+  collector,
+  freshCtx,
+  openItx,
+  processorNames,
+  readAll,
+  sleep,
+  until,
+} from "./support/client.ts";
 import { deployedOnly } from "./support/project-host.ts";
 
 /** A model that answers from a script of replies, in order, recording what it was asked. A reply
@@ -711,6 +719,8 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
     "const r = await fetch('https://example.com/'); return r.status",
     "await itx.append({ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match: 'itx', target: \"itx.builtins.cd('/')\" } }); return 'granted myself'",
     "await itx.schedules.set({ key: 'later', when: { afterMs: 10 }, events: [{ type: 't' }] }); return 'scheduled'",
+    "await itx.provide('itx.catalogue', () => 'mine now'); return 'lent over the grant'",
+    "await itx.subscribe({ target: () => {} }); return 'subscribed'",
     "return await itx.catalogue.search({ q: 'ship' })",
   ];
   const ai = new ScriptedAi([
@@ -763,6 +773,8 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
     "succeeded",
     "failed",
     "failed",
+    "failed",
+    "failed",
     "succeeded",
   ]);
   expect(settled[0]!.error).toMatch(/is masked/); // kv: the bare null
@@ -771,7 +783,9 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
   expect(settled[3]!.result).toBe(404); // raw fetch: the lane found no `itx.fetch` row
   expect(settled[4]!.error).toMatch(/is masked/); // the self-grant: append is masked
   expect(settled[5]!.error).toMatch(/is masked/); // schedules: masked
-  expect(settled[6]!.result).toEqual([{ name: "ship.com", price: 42 }]); // the one grant
+  expect(settled[6]!.error).toMatch(/is masked/); // a live lend over the grant: its row is an append, masked
+  expect(settled[7]!.error).toMatch(/is masked/); // a live subscription: its row likewise
+  expect(settled[8]!.result).toEqual([{ name: "ship.com", price: 42 }]); // the one grant, still the owner's
   // nothing moved: the root's table and the sandbox's are what the owner wrote
   expect(await itx.rewriteRules.list()).toEqual(rootRulesBefore);
   expect(await itx.cd(`${agentPath}/sandbox`).builtins.rewriteRules.list()).toEqual([
@@ -861,4 +875,67 @@ test("an agent born BEFORE the sandbox — a certificate and a prompt, no rows �
   await until("the model was asked again", () => (ai.calls.length >= 2 ? true : undefined));
   expect(treeOf(ai.calls[1]!)).toContain("from /:");
   expect(treeOf(ai.calls[1]!)).toContain("itx.kv — ");
+});
+
+test("itx.agents.delete(path) lands the request and the death certificate on the agent's path AND on /, drops the processor row; message() refuses and the loop runs no more turns; a second delete answers at once; never created, nothing to delete; deleted, not re-creatable", async () => {
+  const itx = openItx(freshCtx("agent-delete"));
+  const agent = itx.agents.get("/agents/gone");
+
+  await expect(itx.agents.delete("/agents/gone")).rejects.toThrow(
+    /agent \/agents\/gone: not created — nothing to delete/,
+  );
+  expect(await itx.agents.create("/agents/gone")).toEqual({ path: "/agents/gone" });
+  expect(await processorNames(itx.cd("/agents/gone"))).toEqual(["agent"]);
+
+  expect(await itx.agents.delete("/agents/gone")).toEqual({ path: "/agents/gone" });
+  const own = await readAll(itx.cd("/agents/gone"));
+  expect(short(own)).toEqual([
+    "agent/create-requested",
+    "agent/created",
+    "agent/context-added", // the default prompt, beside the birth certificate
+    "agent/delete-requested",
+    "agent/deleted",
+  ]);
+  expect(
+    own.filter((e) => e.type === "events.iterate.com/agent/deleted").map((e) => e.payload),
+  ).toEqual([{ path: "/agents/gone" }]);
+  expect(short(await readAll(itx))).toEqual(["agent/created", "agent/deleted"]); // both certificates cross to /
+  expect(await processorNames(itx.cd("/agents/gone"))).toEqual([]); // the row went
+
+  // A person's words refuse — nothing lands, nothing is triggered.
+  await expect(agent.message("anyone there?")).rejects.toThrow(/agent \/agents\/gone: deleted/);
+  expect(await readAll(itx.cd("/agents/gone"))).toHaveLength(own.length);
+  // Words appended PAST the verb (the handle's typed append lands under the caller's principal, no
+  // guard) reach the fold — a read hosts the facet anew and it folds the whole log, these words'
+  // trigger included — and still raise no turn: the loop is gated on the deletion, so no request is
+  // recorded long after the debounce window (250 ms) would have closed.
+  await agent.append({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "user", content: "anyone there?", actor: { type: "user" } },
+  });
+  expect(await itx.cd("/agents/gone").facets.get("agent").snapshot()).toMatchObject({
+    state: {
+      creation: { status: "created" },
+      deletion: {
+        status: "deleted",
+        offset: own.find((e) => e.type === "events.iterate.com/agent/deleted").offset,
+      },
+      pendingLlmRequestTrigger: { source: "external" },
+    },
+  });
+  await sleep(1_000);
+  expect(short(await readAll(itx.cd("/agents/gone")))).toEqual([
+    ...short(own),
+    "agent/context-added",
+  ]);
+
+  // Dies once: a second delete answers at once and appends nothing; not re-creatable.
+  expect(await itx.agents.delete("/agents/gone")).toEqual({ path: "/agents/gone" });
+  expect(short(await readAll(itx.cd("/agents/gone")))).toEqual([
+    ...short(own),
+    "agent/context-added",
+  ]);
+  await expect(itx.agents.create("/agents/gone")).rejects.toThrow(
+    /agent \/agents\/gone: deleted — not re-creatable/,
+  );
 });

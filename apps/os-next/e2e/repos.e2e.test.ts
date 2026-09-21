@@ -18,15 +18,17 @@
 // the real wire codec runs locally too. A row that reads or commits through git is `localOnly`: the
 // fake remote listens on THIS machine's loopback, which a deployed worker's egress cannot reach (403);
 // rows that only touch the proxy still run deployed (the fake proxy is called back over the
-// WebSocket), and the last test runs the story on real Artifacts, `deployedOnly`.
+// WebSocket), and the last test runs the story on real Artifacts — in every lane: the local worker
+// binds Artifacts too (wrangler's local runtime serves it).
 
 import { expect, test } from "vitest";
-import { freshCtx, openItx, readAll, rejection } from "./support/client.ts";
+import { freshCtx, openItx, processorNames, readAll, rejection } from "./support/client.ts";
 import { FakeArtifacts, type FakeCommit } from "./support/fake-artifacts.ts";
-import { deployedOnly, localOnly } from "./support/project-host.ts";
+import { localOnly } from "./support/project-host.ts";
 
 const CREATED = "events.iterate.com/repo/created";
 const FAILED = "events.iterate.com/repo/create-failed";
+const DELETED = "events.iterate.com/repo/deleted";
 const COMMITTED = "events.iterate.com/repo/commit-completed";
 /** A log as its repo facts' short type names, in order (the processor row, a `stream/…` fact, is
  *  not one). */
@@ -223,43 +225,96 @@ localOnly(
   },
 );
 
-deployedOnly(
-  "against real Artifacts: created, a nested commit, the memo, the catalog",
-  async () => {
-    const itx = openItx(freshCtx("realrepo"));
-    try {
-      expect(await itx.repos.create("/repos/config")).toEqual({ path: "/repos/config" });
-      const repo = itx.repos.get("/repos/config");
-      expect(types(await readAll(itx.cd("/repos/config")))).toEqual([
-        "repo/create-requested",
-        "repo/created",
-      ]);
-      expect((await itx.cfArtifacts.list()).repos).toEqual([{ path: "/repos/config" }]);
-      expect(await repo.tip()).toBeNull(); // unborn main
-      const first = await repo.commitFiles({
-        message: "first",
-        changes: [
-          { path: "worker.ts", content: "export default 1;\n" },
-          { path: "notes/log.md", content: "# log\n" },
-        ],
-      });
-      expect(first.changedPaths).toEqual(["worker.ts", "notes/log.md"]);
-      expect(await repo.tip()).toBe(first.commitOid);
-      expect(await repo.readFile("notes/log.md")).toBe("# log\n");
-      expect(await repo.listFiles()).toEqual({
-        commitOid: first.commitOid,
-        paths: ["notes/log.md", "worker.ts"],
-      });
-      expect(await repo.readFile("worker.ts")).toBe("export default 1;\n"); // the nested tree round-trips whole
-      expect((await repo.log()).map((c: FakeCommit) => [c.message, c.parents])).toEqual([
-        ["first", []],
-      ]);
-      expect(await itx.repos.list()).toEqual([
-        { path: "/repos/config", createdAt: expect.any(String) },
-      ]);
-    } finally {
-      await itx.cfArtifacts.delete("/repos/config");
-    }
-  },
-  120_000,
-);
+test("against real Artifacts: created, a nested commit, the memo, the catalog", async () => {
+  const itx = openItx(freshCtx("realrepo"));
+  try {
+    expect(await itx.repos.create("/repos/config")).toEqual({ path: "/repos/config" });
+    const repo = itx.repos.get("/repos/config");
+    expect(types(await readAll(itx.cd("/repos/config")))).toEqual([
+      "repo/create-requested",
+      "repo/created",
+    ]);
+    expect((await itx.cfArtifacts.list()).repos).toEqual([{ path: "/repos/config" }]);
+    expect(await repo.tip()).toBeNull(); // unborn main
+    const first = await repo.commitFiles({
+      message: "first",
+      changes: [
+        { path: "worker.ts", content: "export default 1;\n" },
+        { path: "notes/log.md", content: "# log\n" },
+      ],
+    });
+    expect(first.changedPaths).toEqual(["worker.ts", "notes/log.md"]);
+    expect(await repo.tip()).toBe(first.commitOid);
+    expect(await repo.readFile("notes/log.md")).toBe("# log\n");
+    expect(await repo.listFiles()).toEqual({
+      commitOid: first.commitOid,
+      paths: ["notes/log.md", "worker.ts"],
+    });
+    expect(await repo.readFile("worker.ts")).toBe("export default 1;\n"); // the nested tree round-trips whole
+    expect((await repo.log()).map((c: FakeCommit) => [c.message, c.parents])).toEqual([
+      ["first", []],
+    ]);
+    expect(await itx.repos.list()).toEqual([
+      { path: "/repos/config", createdAt: expect.any(String) },
+    ]);
+  } finally {
+    await itx.cfArtifacts.delete("/repos/config");
+  }
+}, 120_000);
+
+test("itx.repos.delete(path) lands the request and the death certificate on the repo's path AND on /, tears down the Artifacts repo by its path and drops the processor row; the verbs refuse; a second delete answers at once; never created, nothing to delete; deleted, not re-creatable", async () => {
+  const itx = openItx(freshCtx("repo"));
+  const artifacts = await FakeArtifacts.start();
+  await itx.cd("/repos/gone").provide("itx.cfArtifacts", artifacts);
+  const repo = itx.repos.get("/repos/gone");
+
+  expect((await rejection(itx.repos.delete("/repos/gone"))).message).toMatch(
+    /repo \/repos\/gone: not created — nothing to delete/,
+  );
+  expect(await itx.repos.create("/repos/gone")).toEqual({ path: "/repos/gone" });
+  expect(await processorNames(itx.cd("/repos/gone"))).toEqual(["repo"]);
+  expect(await repo.tip()).toBeNull(); // alive: the verbs answer (an unborn main)
+
+  expect(await itx.repos.delete("/repos/gone")).toEqual({ path: "/repos/gone" });
+  expect(artifacts.deleted).toEqual(["/repos/gone"]); // the Artifacts repo went, by its path
+  const own = await readAll(itx.cd("/repos/gone"));
+  expect(types(own)).toEqual([
+    "repo/create-requested",
+    "repo/created",
+    "repo/delete-requested",
+    "repo/deleted",
+  ]);
+  expect(own.filter((e) => e.type === DELETED).map((e) => e.payload)).toEqual([
+    { path: "/repos/gone" },
+  ]);
+  expect(types(await readAll(itx))).toEqual(["repo/created", "repo/deleted"]); // both certificates cross to /
+  // The row went with the deletion — `processors.disable`, one `{ target: null }` fact after the
+  // certificate — and the facet's storage with it.
+  expect(await processorNames(itx.cd("/repos/gone"))).toEqual([]);
+  expect(
+    own
+      .filter((e) => e.type === "events.iterate.com/stream/subscription-configured")
+      .map((e) => [e.payload?.name, e.payload?.target === null]),
+  ).toEqual([
+    ["repo", false],
+    ["repo", true],
+  ]);
+  // The verbs refuse: the facet a read hosts anew folds the log to a deleted repo.
+  expect((await rejection(repo.tip())).message).toMatch(/repo \/repos\/gone: deleted/);
+  expect((await rejection(repo.readFile("worker.ts"))).message).toMatch(/deleted/);
+  expect(await itx.cd("/repos/gone").facets.get("repo").snapshot()).toMatchObject({
+    state: {
+      creation: { status: "created" },
+      deletion: { status: "deleted", offset: own.find((e) => e.type === DELETED).offset },
+    },
+  });
+  // Dies once: a second delete answers at once, appends nothing and asks the proxy nothing; and a
+  // deleted repo is not re-creatable.
+  expect(await itx.repos.delete("/repos/gone")).toEqual({ path: "/repos/gone" });
+  expect(await readAll(itx.cd("/repos/gone"))).toHaveLength(own.length);
+  expect(artifacts.deleted).toEqual(["/repos/gone"]);
+  expect((await rejection(itx.repos.create("/repos/gone"))).message).toMatch(
+    /repo \/repos\/gone: deleted — not re-creatable/,
+  );
+  expect(await readAll(itx.cd("/repos/gone"))).toHaveLength(own.length);
+});

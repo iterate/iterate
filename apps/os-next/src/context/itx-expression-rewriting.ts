@@ -573,6 +573,53 @@ export function rowsNamingRpcStub(args: {
   };
 }
 
+/** THE APP WALL, as one check over an expression loaded code hands in (the resolver's INPUT, or the
+ *  TARGET of a row it appends): never the fixed point, never a `cd` above `base` (self and descendants
+ *  only, resolved step by step). Codec-style — nothing here is policy: the rows a call rewrites
+ *  through are the owner's and are never checked. */
+export function admitLoadedCodeExpression(expression: ItxExpression, base: string): void {
+  let at = base;
+  for (const step of expression) {
+    const name = typeof step === "string" ? step : step[0];
+    if (name === "builtins")
+      throw codedError(
+        "FORBIDDEN",
+        `"itx.builtins" is not a loaded worker's word — this context's rows say what its code may spell (${JSON.stringify(print(expression, { holes: true }))})`,
+      );
+    if (Array.isArray(step) && step[0] === "cd" && typeof step[1] === "string") {
+      const to = resolveContextPath(at, step[1]);
+      if (to !== at && !to.startsWith(at === "/" ? "/" : `${at}/`))
+        throw codedError(
+          "FORBIDDEN",
+          `cd goes down only for loaded code: ${JSON.stringify(step[1])} from ${JSON.stringify(at)} would leave it`,
+        );
+      at = to;
+    }
+  }
+}
+
+/** THE APP WALL ON A ROW: a rewrite rule or a subscription loaded code appends on its own context is
+ *  walled on its TARGET like a call is on its input — else `itx ⇒ itx.builtins.cd('/')` on its own log
+ *  would re-parent it past its creator's masks, and a subscription target runs as the kernel. The one
+ *  fixed-point target it may write is its OWN lend, `itx.builtins.rpcStubs.get(<key>)`: the registry is
+ *  this context's, so the row grants nothing the code does not already hold. A `null` (a mask, an
+ *  un-set) says nothing and passes. Any other event passes untouched. */
+export function admitLoadedCodeRow(event: { type: string; payload?: unknown }, base: string): void {
+  if (
+    event.type !== "events.iterate.com/itx/rewrite-rule-configured" &&
+    event.type !== "events.iterate.com/stream/subscription-configured"
+  )
+    return;
+  const target = (event.payload as { target?: unknown } | undefined)?.target;
+  if (target === null || target === undefined) return;
+  if (typeof target !== "string" && !Array.isArray(target)) return; // a live object: the lend's own business
+  const expression = normalizedItxExpression(target as ItxExpressionInput, { holes: true });
+  const [, root, registry, lend] = expression;
+  if (root === "builtins" && registry === "rpcStubs" && Array.isArray(lend) && lend[0] === "get")
+    return;
+  admitLoadedCodeExpression(expression, base);
+}
+
 /** Every rpc-stub key some row (a rule, a subscription) currently names, resolved through the
  *  whole table — the census a `stream/resumed` commit compares against the registry's presence. */
 export function rpcStubKeysNamed(args: {
@@ -640,25 +687,7 @@ export class ItxExpressionResolver {
    *  a parent link `itx ⇒ itx.builtins.cd('/agents/x')` carries a script up exactly as far as its
    *  owner said. Codec-style, kin to the reserved names `parse` refuses — nothing here is policy. */
   #admit(expression: ItxExpression): void {
-    if (!this.#caller().app) return;
-    let base = this.#path;
-    for (const step of expression) {
-      const name = typeof step === "string" ? step : step[0];
-      if (name === "builtins")
-        throw codedError(
-          "FORBIDDEN",
-          `"itx.builtins" is not a loaded worker's word — this context's rows say what its code may spell (${JSON.stringify(print(expression, { holes: true }))})`,
-        );
-      if (Array.isArray(step) && step[0] === "cd" && typeof step[1] === "string") {
-        const to = resolveContextPath(base, step[1]);
-        if (to !== base && !to.startsWith(base === "/" ? "/" : `${base}/`))
-          throw codedError(
-            "FORBIDDEN",
-            `cd goes down only for loaded code: ${JSON.stringify(step[1])} from ${JSON.stringify(base)} would leave it`,
-          );
-        base = to;
-      }
-    }
+    if (this.#caller().app) admitLoadedCodeExpression(expression, this.#path);
   }
 
   /** PURE: the chain of rewrites from `call` to the builtins-rooted call that would run (rules 3–5).

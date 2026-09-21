@@ -11,6 +11,7 @@
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
 import { codedError, jsonEqual, resolveContextPath } from "iterate/next/lib";
+import { admitLoadedCodeRow } from "./itx-expression-rewriting.ts";
 import { stampCaller, type Caller } from "iterate/next/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
 import {
@@ -451,8 +452,13 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const secretsCatalog = DurableObjectNameCodec.stringify({ projectId, path: owner.rootPath });
   /** THE append: every event appended through this scope carries WHO appended it — the DO's own
    *  stamp, never a client's (src/principal.ts): the session's verified principal, or none. */
-  const append = (...events: StreamEventInput[]) =>
-    ownContext().append(...events.map((event) => stampCaller(event, deps.caller())));
+  const append = (...events: StreamEventInput[]) => {
+    const caller = deps.caller();
+    // LOADED CODE's rows are walled on their targets (itx-expression-rewriting.ts): the same wall its
+    // calls meet, applied where the row is written.
+    if (caller.app) for (const event of events) admitLoadedCodeRow(event, path);
+    return ownContext().append(...events.map((event) => stampCaller(event, caller)));
+  };
   /** Secrets are the RESOURCE OWNER's: the value's key is owner-scoped, so the catalog lives in ONE
    *  log — the owner's root context (`owner.rootPath`: a project's `/`, a user's `/users/<id>`).
    *  Each `secrets` verb runs `here` on that root, and on a context below it runs as the same call

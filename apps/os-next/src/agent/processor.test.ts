@@ -27,6 +27,8 @@ const processor = () =>
 const requested = { type: "events.iterate.com/agent/create-requested", payload: {} };
 const created = { type: "events.iterate.com/agent/created", payload: { path: "/agents/support" } };
 const failed = { type: "events.iterate.com/agent/create-failed", payload: { error: "boom" } };
+const deleteRequested = { type: "events.iterate.com/agent/delete-requested", payload: {} };
+const deleted = { type: "events.iterate.com/agent/deleted", payload: { path: "/agents/support" } };
 /** Born: the request, then the certificate (offsets 1 and 2 of every row below). */
 const born = [requested, created];
 const system = {
@@ -64,7 +66,11 @@ describe("AgentProcessor — the reduce", () => {
     events: { type: string; payload?: unknown }[];
     state: Partial<AgentState>;
   }[] = [
-    { name: "the empty state", events: [], state: { creation: null, contextItems: [] } },
+    {
+      name: "the empty state",
+      events: [],
+      state: { creation: null, deletion: null, contextItems: [] },
+    },
     {
       name: "a request opens the creation, at its offset",
       events: [requested],
@@ -89,6 +95,30 @@ describe("AgentProcessor — the reduce", () => {
       name: "a failure after the certificate is a harmless fact too: the entity stays created",
       events: [requested, created, failed],
       state: { creation: { status: "created", offset: 2 } },
+    },
+    {
+      name: "a delete request opens the deletion at its offset; creation is untouched",
+      events: [...born, deleteRequested],
+      state: {
+        creation: { status: "created", offset: 2 },
+        deletion: { status: "requested", offset: 3 },
+      },
+    },
+    {
+      name: "the death certificate completes it, at its offset; creation is still untouched",
+      events: [...born, deleteRequested, deleted],
+      state: {
+        creation: { status: "created", offset: 2 },
+        deletion: { status: "deleted", offset: 4 },
+      },
+    },
+    {
+      name: "dies once, not re-creatable: a second delete request and a create request after the certificate are harmless facts",
+      events: [...born, deleteRequested, deleted, deleteRequested, requested],
+      state: {
+        creation: { status: "created", offset: 2 },
+        deletion: { status: "deleted", offset: 4 },
+      },
     },
     {
       name: "born with its prompt: the creation is complete, the system item is in the context, nothing is triggered",

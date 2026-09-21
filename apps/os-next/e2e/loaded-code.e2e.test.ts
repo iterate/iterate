@@ -21,6 +21,8 @@ export default class extends WorkerEntrypoint {
   async watch() { const itx = this.env.ITX.get(); try { return await outcome(() => itx.subscribe({ target: "itx.builtins.append" })); } finally { itx[Symbol.dispose]?.(); } }
   async fetchUrl(url) { const r = await fetch(url); return { status: r.status, text: (await r.text()).slice(0, 60) }; }
   async writeRow(match, target) { const itx = this.env.ITX.get(); try { return await outcome(() => itx.append({ type: "events.iterate.com/itx/rewrite-rule-configured", payload: { match, target } })); } finally { itx[Symbol.dispose]?.(); } }
+  async appendEvent(event) { const itx = this.env.ITX.get(); try { return await outcome(() => itx.append(event)); } finally { itx[Symbol.dispose]?.(); } }
+  async cdInvoke(path, call) { const itx = this.env.ITX.get(); try { return await outcome(() => itx.cd(path).invoke(call)); } finally { itx[Symbol.dispose]?.(); } }
 }`,
 };
 
@@ -57,6 +59,29 @@ test("loaded code may not spell itx.builtins, and its cd goes down only; the sam
   // …while a row is one append away, and it took effect
   expect(await worker().writeRow("itx.me", "itx.whoami")).toMatchObject({ ok: expect.anything() });
   expect(await worker().say("itx.me()")).toEqual({ ok: { projectId: ctx, path: "/x" } });
+  // A ROW'S TARGET meets the same wall as a call: no re-parenting past the creator, no project root
+  // granted to itself, no subscription that would run as the kernel above it; a mask passes.
+  expect(await worker().writeRow("itx", "itx.builtins.cd('/')")).toMatchObject({
+    error: expect.stringMatching(/not a loaded worker's word/),
+  });
+  expect(await worker().writeRow("itx.kv", "itx.builtins.kv")).toMatchObject({
+    error: expect.stringMatching(/not a loaded worker's word/),
+  });
+  expect(await worker().writeRow("itx.up", "itx.cd('/').whoami")).toMatchObject({
+    error: expect.stringMatching(/goes down only/),
+  });
+  expect(
+    await worker().appendEvent({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: { name: "leak", target: "itx.builtins.cd('/').append" },
+    }),
+  ).toMatchObject({ error: expect.stringMatching(/not a loaded worker's word/) });
+  expect(await worker().writeRow("itx.kv", null)).toMatchObject({ ok: expect.anything() });
+  expect(await x.builtins.rewriteRules.get("itx")).toBeNull(); // nothing of the refused landed
+  // the handle's own `invoke` takes a whole call, as the API declares
+  expect(await worker().cdInvoke("./y", "itx.whoami()")).toEqual({
+    ok: { projectId: ctx, path: "/x/y" },
+  });
 });
 
 test("a raw fetch() from loaded code is itx.fetch at its context, through the table: refused at a child with no row, egress at the root", async () => {

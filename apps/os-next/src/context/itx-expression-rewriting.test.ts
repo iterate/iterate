@@ -27,6 +27,7 @@ import {
   rowsNamingRpcStub,
   BUILT_IN_ROOTS,
   CONTEXT_ROOTS,
+  admitLoadedCodeRow,
 } from "./itx-expression-rewriting.ts";
 
 /** The roots implicit at the owner root (every built-in) and at a child (the context roots) —
@@ -1173,6 +1174,24 @@ describe("the app wall (`Caller.app`): on the INPUT expression only, `itx.builti
     for (const to of ["/", "..", "/agents/b", "../a2", "/agents/ab"])
       expect(() => resolver.resolve(`itx.cd('${to}').whoami()`)).toThrow(/goes down only/);
     expect(() => resolver.resolve("itx.cd('./b').cd('../..').whoami()")).toThrow(/goes down only/);
+  });
+  test("a ROW loaded code appends is walled on its target: the fixed point and a cd above are refused, its own lend (`itx.builtins.rpcStubs.get`) and a plain expression pass, a mask says nothing", () => {
+    const row = (type: string, target: unknown) => () =>
+      admitLoadedCodeRow({ type, payload: { match: "itx.x", target } }, "/agents/a");
+    const rule = "events.iterate.com/itx/rewrite-rule-configured";
+    const subscription = "events.iterate.com/stream/subscription-configured";
+    expect(row(rule, "itx.builtins.cd('/')")).toThrow(/not a loaded worker's word/);
+    expect(row(rule, "itx.builtins.kv")).toThrow(/not a loaded worker's word/);
+    expect(row(rule, "itx.cd('..').whoami")).toThrow(/goes down only/);
+    expect(row(subscription, "itx.builtins.cd('/').append")).toThrow(/not a loaded worker's word/);
+    expect(row(rule, "itx.builtins.rpcStubs.get('itx.x')")).not.toThrow();
+    expect(
+      row(subscription, ["itx", "builtins", "rpcStubs", ["get", "subscription:s"]]),
+    ).not.toThrow();
+    expect(row(rule, "itx.whoami")).not.toThrow();
+    expect(row(rule, "itx.cd('./b').whoami")).not.toThrow();
+    expect(row(rule, null)).not.toThrow();
+    expect(row("events.iterate.com/notes/added", "itx.builtins.cd('/')")).not.toThrow(); // not a row
   });
   test("a session (no app bit) says all of it", () => {
     const resolver = new ItxExpressionResolver({

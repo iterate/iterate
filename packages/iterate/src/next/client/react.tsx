@@ -207,10 +207,11 @@ export type ContextProcessorRow = {
   hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };
 };
 
-/** The slice of a context handle the processors and presence hooks read. */
+/** The slice of a context handle the processors and presence hooks read. `rpcStubs` is optional:
+ *  a handle typed without the census (a project context's client type) still gets the actors. */
 export type ContextTablesItx = {
   processors: { list(): Promise<ContextProcessorRow[]> | ContextProcessorRow[] };
-  rpcStubs: { list(): Promise<string[]> | string[] };
+  rpcStubs?: { list(): Promise<string[]> | string[] };
 };
 
 /** THE PROCESSORS TABLE, re-read whenever the log grows a row-changing event (a subscription
@@ -266,7 +267,7 @@ export function useContextPresence(
   const [census, setCensus] = useState<{ itx: ContextTablesItx; rpcStubs: string[] }>();
   const head = events.at(-1)?.offset ?? 0;
   useEffect(() => {
-    if (!itx) return;
+    if (!itx?.rpcStubs) return;
     let disposed = false;
     Promise.resolve(itx.rpcStubs.list()).then(
       (list) => !disposed && setCensus({ itx, rpcStubs: list }),
