@@ -188,13 +188,14 @@ test("the loop: a person's words → the model → a script run against itx → 
   expect(ai.calls).toHaveLength(2);
   expect(ai.calls[1]!.model).toBe(WORKERS_AI_MODEL);
   expect(ai.calls[1]!.messages.map((m) => m.role)).toEqual([
-    "system", // the journaled prompt
+    "system", // the journaled default prompt
+    "system", // the operator's
     "system", // the capability tree, rendered this turn
     "user",
     "assistant",
     "system",
   ]);
-  expect(ai.calls[1]!.messages[4]!.content).toContain('"stored": true');
+  expect(ai.calls[1]!.messages[5]!.content).toContain('"stored": true');
   // Idle: no obligation open, one autonomous turn counted, nothing paused.
   expect((await support.facets.get("agent").snapshot()).state).toMatchObject({
     openRequest: null,
@@ -233,7 +234,13 @@ test("debounced: two messages inside the window are answered by ONE request that
   expect(short(first).filter((t) => t === "agent/llm-request-settled")).toHaveLength(1);
   expect(ai.calls).toHaveLength(1);
   // The one call saw both messages — the prompt is built from the log at run time.
-  expect(ai.calls[0]!.messages.map((m) => m.role)).toEqual(["system", "system", "user", "user"]);
+  expect(ai.calls[0]!.messages.map((m) => m.role)).toEqual([
+    "system", // the default prompt
+    "system", // the operator's
+    "system", // the capability tree
+    "user",
+    "user",
+  ]);
   // The window, not a coincidence: the request landed at least the window after the FIRST words
   // (said[0] and said[1] are the two system prompts).
   const said = first.filter((e) => e.type === "events.iterate.com/agent/context-added");
@@ -422,8 +429,8 @@ test("an attached image is stored under the agent's path and SHOWN to the model 
   expect(assistantWords(log)).toEqual(["A red square and a note."]);
   // The model saw the pixels (a data: URL of the stored bytes) and was told about the note.
   const [call] = ai.calls;
-  // the default prompt, the capability tree, the operator's, then the person's words with their attachments
-  const message = call!.messages[2] as unknown as {
+  // the default prompt, the operator's, the capability tree, then the person's words with their attachments
+  const message = call!.messages[3] as unknown as {
     role: string;
     content: { type: string; text?: string; image_url?: { url: string } }[];
   };
