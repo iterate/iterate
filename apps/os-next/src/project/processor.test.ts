@@ -28,6 +28,10 @@ const agentBorn = (path: string) => ({
   type: "events.iterate.com/agent/created",
   payload: { path },
 });
+const committed = (path: string, commitOid: string) => ({
+  type: "events.iterate.com/repo/commit-completed",
+  payload: { path, commitOid, message: "m", changedPaths: ["worker.ts"] },
+});
 
 /** The empty state; a row spreads it and names only what its events changed. */
 const empty: ProjectState = {
@@ -36,6 +40,7 @@ const empty: ProjectState = {
   workspaces: {},
   agents: {},
   mcpConnections: {},
+  configRepoTip: null,
 };
 
 describe("ProjectProcessor — the reduce", () => {
@@ -66,6 +71,15 @@ describe("ProjectProcessor — the reduce", () => {
       state: { ...empty, creation: { status: "created", offset: 2 } },
     },
     {
+      name: "the config repo's commits move the tip the apex follows — the latest one, by its oid and the fact's offset; another repo's commit is ignored",
+      events: [
+        committed("/repos/config", "aaa"),
+        committed("/repos/other", "bbb"),
+        committed("/repos/config", "ccc"),
+      ],
+      state: { ...empty, configRepoTip: { commitOid: "ccc", offset: 3 } },
+    },
+    {
       name: "a repo's, a workspace's and an agent's certificates each add one entry, by path, stamped with the event's time — the project's own creation untouched",
       events: [
         requested,
@@ -80,6 +94,7 @@ describe("ProjectProcessor — the reduce", () => {
         workspaces: { "/workspaces/notes": { createdAt: expect.any(String) } },
         agents: { "/agents/support": { createdAt: expect.any(String) } },
         mcpConnections: {},
+        configRepoTip: null,
       },
     },
     {

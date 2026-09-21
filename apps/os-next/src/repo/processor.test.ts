@@ -20,7 +20,7 @@ const deleteRequested = { type: "events.iterate.com/repo/delete-requested", payl
 const deleted = { type: "events.iterate.com/repo/deleted", payload: { path: "/repos/config" } };
 const committed = {
   type: "events.iterate.com/repo/commit-completed",
-  payload: { commitOid: "a", message: "m", changedPaths: ["worker.ts"] },
+  payload: { path: "/repos/config", commitOid: "a", message: "m", changedPaths: ["worker.ts"] },
 };
 
 describe("RepoProcessor — the reduce", () => {

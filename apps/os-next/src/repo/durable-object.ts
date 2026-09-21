@@ -16,6 +16,7 @@ import { z } from "zod";
 // Hosted from `ctx.exports` (first-party-facets.ts): ordinary bundled worker code, git-wire.ts and pako
 // with it, reached as `itx.facets.get("repo")` (library.ts).
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
+import type { EventInput } from "iterate/next/stream/processor";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import {
   AUTHOR,
@@ -35,7 +36,7 @@ import {
   type RepoLogEntry,
   type RepoManifest,
 } from "./git-wire.ts";
-import type { RepoState } from "./contract.ts";
+import { RepoContract, type RepoState } from "./contract.ts";
 import { RepoProcessor } from "./processor.ts";
 
 /** How long a minted git credential lives — and how long this facet reuses one before minting again. */
@@ -266,13 +267,16 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     // concurrent push) is a refusal like any other — the server's words, and the caller retries.
     // oxlint-disable-next-line iterate/simple-truthiness-check -- push() returns null only on success; an empty-string refusal reason (an `ng <ref>` line with no message) is still a refusal and must throw
     if (refused !== null) throw new Error(`repo ${path}: the commit was refused: ${refused}`);
-    await this.withItx((itx) =>
-      itx.append({
-        type: "events.iterate.com/repo/commit-completed",
-        payload: { commitOid, message: input.message, changedPaths },
-        idempotencyKey: `repo/commit-completed:${commitOid}`,
-      }),
-    );
+    // The fact: cross-posted to `/` FIRST — the project processor follows the config repo's commits
+    // with the apex (project/processor.ts), so a commit whose own-path fact lost its answer is
+    // published anyway — then on this path. Keyed by the commit on both.
+    const committed: EventInput<typeof RepoContract> = {
+      type: "events.iterate.com/repo/commit-completed",
+      payload: { path, commitOid, message: input.message, changedPaths },
+      idempotencyKey: `repo/commit-completed:${path}:${commitOid}`,
+    };
+    await this.withItx((itx) => itx.cd("/").append(committed));
+    await this.withItx((itx) => itx.append(committed));
     return { commitOid, changedPaths };
   }
 

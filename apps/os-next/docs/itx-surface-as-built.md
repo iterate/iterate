@@ -121,7 +121,9 @@ The one codec every door speaks. String half ⇄ structured half.
   root; below it only the fourteen context roots are implicit — unless the context's own table says
   otherwise. A rule's match may not be rooted there; a target may (the owner's grant of the real
   thing); a call from loaded code may not (section 10). Apex ingress stores its complete worker expression
-  in a `project/ingress-configured` event. It adds no implicit rewrite row or subscription.
+  in a `project/ingress-configured` event. It adds no implicit rewrite row or subscription. The project
+  processor re-points it at every commit of `/repos/config` (the repo facet cross-posts
+  `repo/commit-completed` to `/`): a commit to the config repo IS its publication (2026-09-21).
 - The **anonymous call step** `""` calls the value itself: `itx.builtins.rpcStubs.get('cam')(1)` is
   `["itx","builtins","rpcStubs",["get","cam"],["",1]]`. It is what a rule spells when a lent stub
   is called with args.

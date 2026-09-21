@@ -9,7 +9,7 @@
 // certificate into the catalog `itx.repos.list()` reads — or `repo/create-failed` (the error the
 // Artifacts proxy threw), which `create` throws; a later `create` is a new attempt, and one on a
 // created repo answers at once, appending nothing. Every other method refuses until the certificate.
-// Every commit that lands through the facet is a `repo/commit-completed` fact on its path. The facet
+// Every commit that lands through the facet is a `repo/commit-completed` fact on its path, cross-posted to `/`. The facet
 // is the ONLY thing that speaks git (git protocol v2 over HTTP, src/repo/git-wire.ts): `itx.cfArtifacts`
 // — the binding proxy, by the same path — hands it a token and the remote URL; the tip's snapshot is
 // memoized under its oid — one `ls-refs` per read, the pack only when the tip moved. Locally the
@@ -150,9 +150,18 @@ localOnly(
     });
     expect(artifacts.remoteFiles("/repos/config")).toEqual({ "worker.ts": "export default 1;\n" }); // the remote agrees
     expect(artifacts.snapshots).toBe(0);
+    const fact = {
+      path: "/repos/config",
+      commitOid: first.commitOid,
+      message: "write worker.ts",
+      changedPaths: ["worker.ts"],
+    };
     const committed = (await readAll(itx.cd("/repos/config"))).filter((e) => e.type === COMMITTED);
-    expect(committed.map((e) => e.payload)).toEqual([
-      { commitOid: first.commitOid, message: "write worker.ts", changedPaths: ["worker.ts"] },
+    expect(committed.map((e) => e.payload)).toEqual([fact]);
+    // …and cross-posted to `/`, where the project processor follows the config repo's commits with
+    // the apex (website-publication.e2e.test.ts is that proof).
+    expect((await readAll(itx)).filter((e) => e.type === COMMITTED).map((e) => e.payload)).toEqual([
+      fact,
     ]);
 
     // The first read after a commit fetches the tip; reads at the same tip fetch nothing more (an
