@@ -33,7 +33,6 @@ import {
 } from "../stream/scheduled-appends.ts";
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
 import type { LibraryRoots } from "../library.ts";
-import { GLOBAL_PROJECT_ID, resourceScope } from "./paths.ts";
 import {
   assertSecretPath,
   normalizeSecretRecord,
