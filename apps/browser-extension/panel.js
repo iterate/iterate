@@ -1,8 +1,9 @@
 // panel.js — the whole extension, after apps/spa/public/{oauth,app}.js: the OAuth dance through
 // Chrome's identity window, then ONE WebSocket to the platform's /api opened bare, the credential
 // presented IN the `authenticate` call, and this Chrome lent to the project's root context as
-// `itx.chrome` — a live RpcTarget the project's agents and workers call back into while the panel
-// is open. capnweb.js is the package's own browser bundle, copied verbatim (README).
+// `itx.chrome` — a live RpcTarget (open a page, raw CDP on the tabs the project may drive) that the
+// project's agents and workers call back into while the panel is open. capnweb.js is the package's
+// own browser bundle, copied verbatim (README).
 import { newWebSocketRpcSession, RpcTarget } from "./capnweb.js";
 
 // The toolbar action opens the side panel from now on (persisted; the first time, open the panel
@@ -132,17 +133,75 @@ async function freshAccessToken(session) {
 }
 
 // ── What this Chrome lends: an RpcTarget (capnweb passes it by reference, so a call on the project's
-// root context runs HERE) with one method.
+// root context runs HERE). The project drives the tabs it opened and the tabs the person lent it,
+// over raw CDP, commands only: the wire stays a wire, and the browser's FACTS — a tab attached,
+// navigated, detached — go to the root stream as ephemeral events.
+
+/** The tabs the project may drive — opened by it, or lent by the person — and whether the debugger
+ *  is attached right now. */
+const tabs = new Map();
+/** Where the browser's facts go: the connected root context's append, set by `connect`. */
+let report = () => {};
+const fact = (type, payload) =>
+  report({ type: `events.iterate.com/chrome/${type}`, ephemeral: true, payload });
+
+/** Attach the debugger to a tab the project may drive (once; Chrome shows its bar on the tab). */
+async function attach(tabId) {
+  const known = tabs.get(tabId);
+  if (!known) throw new Error(`Tab ${tabId} is not one this project opened or was lent.`);
+  if (known.attached) return;
+  await chrome.debugger.attach({ tabId }, "1.3");
+  known.attached = true;
+  await chrome.debugger.sendCommand({ tabId }, "Page.enable"); // main-frame navigations, below
+  const { result } = await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", {
+    expression: "location.href",
+    returnByValue: true,
+  });
+  fact("attached", { tabId, url: result.value });
+}
+
+chrome.debugger.onEvent.addListener(({ tabId }, method, params) => {
+  if (method === "Page.frameNavigated" && !params.frame.parentId)
+    fact("navigated", { tabId, url: params.frame.url });
+});
+chrome.debugger.onDetach.addListener(({ tabId }, reason) => {
+  const known = tabs.get(tabId);
+  if (known) known.attached = false;
+  fact("detached", { tabId, reason });
+});
 
 class ChromeBrowser extends RpcTarget {
-  /** Open an http(s) page in a new active tab; answers the tab's id and the URL it opened. */
+  /** Open an http(s) page in a new active tab the project may drive; answers once the page has
+   *  loaded (or after ten seconds) with the tab's id and URL. */
   async openPage(input) {
     if (!input || typeof input.url !== "string") throw new Error("openPage() takes { url }.");
     const target = new URL(input.url);
     if (target.protocol !== "http:" && target.protocol !== "https:")
       throw new Error("openPage() only accepts http and https URLs.");
     const tab = await chrome.tabs.create({ active: true, url: target.href });
+    tabs.set(tab.id, { attached: false });
+    await new Promise((loaded) => {
+      const onUpdated = (tabId, change) => {
+        if (tabId !== tab.id || change.status !== "complete") return;
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        loaded();
+      };
+      chrome.tabs.onUpdated.addListener(onUpdated);
+      setTimeout(() => onUpdated(tab.id, { status: "complete" }), 10_000);
+    });
     return { tabId: tab.id, url: target.href };
+  }
+
+  /** One CDP command on a tab the project may drive (attached on first use): the command's result,
+   *  e.g. `cdp(tabId, "Runtime.evaluate", { expression: "document.title", returnByValue: true })`. */
+  async cdp(tabId, method, params) {
+    await attach(tabId);
+    return chrome.debugger.sendCommand({ tabId }, method, params);
+  }
+
+  /** Let go of a tab: the debugger bar goes; the tab stays open and stays drivable later. */
+  async detach(tabId) {
+    if (tabs.get(tabId)?.attached) await chrome.debugger.detach({ tabId });
   }
 }
 
@@ -222,6 +281,9 @@ async function signedIn(session) {
     } catch (error) {
       console.error(error);
     }
+    for (const [tabId, known] of tabs)
+      if (known.attached) await chrome.debugger.detach({ tabId }).catch(console.error);
+    tabs.clear();
     await chrome.storage.local.remove("session");
     await signedOut(session.issuer);
   };
@@ -268,25 +330,51 @@ async function connect(session, project) {
     ]);
     if (mine !== generation) return;
     liveApi = api;
+    report = (event) => itx.append(event).catch(console.error);
     const proofUrl = `https://example.com/?iterate-chrome-proof=${encodeURIComponent(whoami.projectId)}`;
     view.innerHTML = `
       <p>Connected as <strong>${escape(info.principal.email || info.principal.actor)}</strong>,
       project <code>${escape(whoami.projectId)}</code>.</p>
       <div class="capability">
         <div class="status"><span>Chrome capability</span><span>lent as <code>itx.chrome</code></span></div>
-        <p><button id="prove">Open a page through the project</button></p>
+        <p><button id="prove">Open a page through the project</button>
+          <button id="lend" class="secondary">Lend the current tab</button></p>
         <p id="proof-result" class="muted"></p>
         <p class="muted">Or post this to one of the project's agents:</p>
-        <p class="prompt">Call itx.cd('/').chrome.openPage({ url: "${escape(proofUrl)}" }) and report the tabId and url it returns.</p>
+        <p class="prompt">Call itx.cd('/').chrome.openPage({ url: "${escape(proofUrl)}" }), then
+          itx.cd('/').chrome.cdp(tabId, "Runtime.evaluate", { expression: "document.title", returnByValue: true })
+          on the tabId it returned, and report the title.</p>
       </div>`;
+    const result = element("proof-result", HTMLElement);
     element("prove", HTMLButtonElement).onclick = async () => {
-      const result = element("proof-result", HTMLElement);
       result.textContent = "Calling…";
       try {
-        // The round trip: this call leaves for the platform, whose rule resolves `itx.chrome` to the
-        // stub lent above and calls back into this very panel.
+        // The round trip: these calls leave for the platform, whose rule resolves `itx.chrome` to
+        // the stub lent above and calls back into this very panel.
         const opened = await itx.invoke(["itx", "chrome", ["openPage", { url: proofUrl }]]);
-        result.textContent = `The project answered ${JSON.stringify(opened)}`;
+        const evaluated = await itx.invoke([
+          "itx",
+          "chrome",
+          [
+            "cdp",
+            opened.tabId,
+            "Runtime.evaluate",
+            { expression: "document.title", returnByValue: true },
+          ],
+        ]);
+        result.textContent = `The project opened tab ${opened.tabId} and read its title: ${JSON.stringify(evaluated.result.value)}`;
+      } catch (error) {
+        result.textContent = "";
+        fail(result, error);
+      }
+    };
+    element("lend", HTMLButtonElement).onclick = async () => {
+      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      if (!tab?.id) return;
+      tabs.set(tab.id, { attached: false });
+      try {
+        await attach(tab.id);
+        result.textContent = `Tab ${tab.id} is lent: the project may drive it with cdp(${tab.id}, …).`;
       } catch (error) {
         result.textContent = "";
         fail(result, error);
