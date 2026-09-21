@@ -18,6 +18,9 @@ on:
       - scripts/lib/**
       - apps/os-next/**
       - packages/iterate/**
+      # the dash renders packages/ui (the context view, the app shell); a change there is a dash change
+      - packages/ui/**
+      - packages/shared/**
   workflow_dispatch:
     inputs:
       ref:
