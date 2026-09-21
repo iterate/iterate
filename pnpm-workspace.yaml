@@ -118,4 +118,8 @@ patchedDependencies:
   '@cloudflare/workers-types@4.20260621.1': patches/@cloudflare__workers-types@4.20260621.1.patch
   '@codemirror/merge@6.12.2': patches/@codemirror__merge@6.12.2.patch
   '@journeyapps/wa-sqlite@1.7.0': patches/@journeyapps__wa-sqlite@1.7.0.patch
+  # Metro cannot parse its non-literal dynamic import() (a module-loader
+  # fallback the mobile filter pipeline never hits — it loads wasm via blob
+  # URLs). The patch turns that fallback into a thrown error.
+  '@mediapipe/tasks-vision@0.10.35': patches/@mediapipe__tasks-vision@0.10.35.patch
   zod@4.5.4: patches/zod@4.5.4.patch

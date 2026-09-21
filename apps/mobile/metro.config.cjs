@@ -1,6 +1,12 @@
 const path = require("node:path");
 const { getDefaultConfig } = require("expo/metro-config");
 
+require("node:child_process").execFileSync(
+  process.execPath,
+  [path.join(__dirname, "scripts/build-native-filters.cjs")],
+  { stdio: "inherit" },
+);
+
 const projectRoot = __dirname;
 const config = getDefaultConfig(projectRoot);
 
