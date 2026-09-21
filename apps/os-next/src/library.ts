@@ -516,7 +516,7 @@ async function createEntity(
     // The link is the creator's DEFAULT, written only while the context has no bare `itx` row: a
     // context already linked (or jailed) by whoever created it first is never re-pointed by a later
     // `create(path)` from somewhere else — that would cut it off from the surface its owner gave it.
-    const context = await itx.cd(absolute);
+    const context = await itx.builtins.cd(absolute);
     const bare = await context.invoke(["builtins", "rewriteRules", ["get", "itx"]]);
     if (!bare)
       await context.invoke([
@@ -537,11 +537,17 @@ async function createEntity(
   return projectFacet(itx, [[collection], ["create", absolute]]) as Promise<{ path: string }>;
 }
 
+// THE LIBRARY'S HOPS ARE ADDRESSING, spelled at the fixed point (`itx.builtins.cd`): a physical grant
+// at a jailed context (`itx.repos ⇒ itx.builtins.repos` beside the bare `null`) runs these verbs
+// THERE, where `itx.cd` is masked — the verbs must still reach the entity's context and the catalog
+// at `/`. What a context may reach OF the library its table says; how the library gets there is not
+// the table's business (the same rule as the runner's own log traffic, below).
+
 /** ONE dispatch on the `project` facet at `/` — the catalog host, where the collections live. */
 async function projectFacet(itx: LibraryItx, steps: ItxExpression): Promise<unknown> {
   // TWO dotted calls, never one chain (the `run` section says why): the root's handle first —
   // in-process a VALUE — then the facet chain relative to it.
-  const context = await itx.cd("/");
+  const context = await itx.builtins.cd("/");
   return context.invoke(["facets", ["get", "project"], ...steps]);
 }
 
@@ -570,7 +576,7 @@ function entityHandle(
   return new InvokeHandle(async (itxExpressionSteps) => {
     // TWO dotted calls, never one chain (the `run` section says why): the sibling's handle first —
     // in-process a VALUE — then the chain relative to it. The path means the CALLER's `./x`.
-    const context = await itx.cd(resolveContextPath(originOf(caller, ownPath), path));
+    const context = await itx.builtins.cd(resolveContextPath(originOf(caller, ownPath), path));
     const [first, ...rest] = itxExpressionSteps;
     if (Array.isArray(first) && first[0] === "append" && rest.length === 0) {
       const [, ...events] = first;

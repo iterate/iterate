@@ -539,6 +539,7 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
     "await itx.provide('itx.catalogue', () => 'mine now'); return 'lent over the grant'",
     "await itx.subscribe({ target: () => {} }); return 'subscribed'",
     "return await itx.catalogue.search({ q: 'ship' })",
+    "return await itx.repos.list()",
   ];
   const ai = new ScriptedAi([
     ...scripts.map((code) => `<codemode status="probing">\n${code}\n</codemode>`),
@@ -568,6 +569,15 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
         description: "search the catalogue: itx.catalogue.search({ q })",
       },
     },
+    {
+      // a PHYSICAL grant to a library root: the verb runs HERE, its hops at the fixed point
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: {
+        match: "itx.repos",
+        target: "itx.builtins.repos",
+        description: "the project's repos: itx.repos.list()",
+      },
+    },
   );
   const rootRulesBefore = await itx.rewriteRules.list();
   await agent.message("Probe everything.");
@@ -593,6 +603,7 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
     "failed",
     "failed",
     "succeeded",
+    "succeeded",
   ]);
   expect(settled[0]!.error).toMatch(/is masked/); // kv: the bare null
   expect(settled[1]!.error).toMatch(/masked|goes down only/); // cd('/'): the wall, or the app rule
@@ -603,6 +614,7 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
   expect(settled[6]!.error).toMatch(/is masked/); // a live lend over the grant: its row is an append, masked
   expect(settled[7]!.error).toMatch(/is masked/); // a live subscription: its row likewise
   expect(settled[8]!.result).toEqual([{ name: "ship.com", price: 42 }]); // the one grant, still the owner's
+  expect(settled[9]!.result).toEqual([]); // the library root granted physically: its hops are the platform's
   // nothing moved: the root's table and the sandbox's are what the owner wrote
   expect(await itx.rewriteRules.list()).toEqual(rootRulesBefore);
   expect(await itx.cd(`${agentPath}/sandbox`).builtins.rewriteRules.list()).toEqual([
@@ -616,6 +628,12 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
       match: "itx.catalogue",
       target: "itx.builtins.cd('/').catalogue",
       description: "search the catalogue: itx.catalogue.search({ q })",
+      context: `${agentPath}/sandbox`,
+    },
+    {
+      match: "itx.repos",
+      target: "itx.builtins.repos",
+      description: "the project's repos: itx.repos.list()",
       context: `${agentPath}/sandbox`,
     },
   ]);
