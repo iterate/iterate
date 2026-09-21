@@ -148,7 +148,9 @@ export interface IterateContextApi {
     match: ItxExpressionInput,
     target: ItxExpressionInput | null,
   ): Promise<{ [Symbol.dispose](): void }>;
-  /** A script — the text of `async (itx) => { … }` — run once in a confined isolate. */
+  /** A script — the text of `async (itx) => { … }` — run once against this context, on its log:
+   *  `context/run-requested` under the caller, the context's runner, `run-settled` (JSON in, JSON
+   *  out); resolves with the result or rejects with the settlement's error. Never re-run. */
   run(script: string): Promise<unknown>;
   /** The project's repos and workspaces as domain objects: a facet on the context at `path`. */
   repos: {

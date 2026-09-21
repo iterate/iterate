@@ -10,6 +10,7 @@
 //   how calls rewrite         itx/rewrite-rule-configured { match, target|null, ifTarget? } → itxExpressionRewriteRules (every invoke)
 //   who is sent each commit   stream/subscription-configured { name, target|null, ifConfiguredAtOffset? }|
 //                             -delivery-halted|-delivery-resumed            → subscriptions (the delivery loop)
+//   which scripts are running context/run-requested { code } · run-settled { requestOffset, settlement } → scriptRuns, by the request's offset (the DO's runner; the wake record settles what a restart interrupted)
 //
 // ONE reduce, no effects, no verbs — a pure fold (`reduceCoreEvent`) with a batch door
 // (`reduceCoreEventBatch`), NOT a hosted `StreamProcessor`: owned by the Stream itself and reduced
@@ -33,6 +34,7 @@ import {
   print,
 } from "iterate/next/expression";
 import { jsonEqual } from "iterate/next/lib";
+import { z } from "zod";
 import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/next/stream/processor";
 import { normalizeIngressConfigured } from "../context/ingress.ts";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
@@ -280,11 +282,43 @@ export type CoreState = {
   /** Explicit fetch target for the project apex; null until configured. */
   ingressTarget: ItxExpression | null;
   schedules: Record<string, ScheduledAppend>;
+  /** THE OPEN SCRIPT RUNS, by the request's offset: a script requested (`context/run-requested`)
+   *  and not yet settled — what is running right now, or what a restart left open (never re-run:
+   *  the wake record settles it `interrupted`, stream.ts). The code stays on the request event. */
+  scriptRuns: Record<number, OpenScriptRun>;
   /** THE SECRETS CATALOG, by name — the origins a secret is pinned to and its refresh strategy's
    *  kind, never a value (the value is physical, in the secret's own Durable Object):
    *  `itx.secrets.list()` reads this, strongly consistent. */
   secrets: Record<string, Omit<SecretCatalogEntry, "name">>;
 };
+
+/** One open script run: when it was asked for (its identity is its key, the request's offset). */
+export type OpenScriptRun = { requestedAt: string };
+
+// ── the run events ── THE CONTEXT'S OWN VOCABULARY beyond its control events, owned by this
+// contract (`CoreContract.events`): the one place their schemas live. A processor that consumes
+// them names the contract in its `processorDeps` (the agent); the runner and `itx.run` read them here.
+
+/** `events.iterate.com/context/run-requested`: the whole script — the text of `async (itx) => …`.
+ *  The event's own OFFSET is the run's identity: the settlement names it back. */
+export const RunRequested = z.object({ code: z.string().min(1) });
+/** `events.iterate.com/context/run-settled`: `requestOffset` names the request; `settlement` is
+ *  what the script returned (JSON — a round trip drops what JSON cannot carry) or how it failed —
+ *  `runtime` (the script threw, or returned what the log refuses) or `interrupted` (the context
+ *  restarted before it finished; it is not run again). */
+export const RunSettled = z.object({
+  requestOffset: z.number().int().positive(),
+  settlement: z.discriminatedUnion("status", [
+    z.object({ status: z.literal("succeeded"), result: z.unknown().optional() }),
+    z.object({
+      status: z.literal("failed"),
+      error: z.string(),
+      failureKind: z.enum(["runtime", "interrupted"]),
+    }),
+  ]),
+});
+export type RunSettled = z.infer<typeof RunSettled>;
+export type RunSettlement = RunSettled["settlement"];
 
 /** A subscription name is ONE segment, [A-Za-z0-9_-] — and never a key of `Object.prototype`: the
  *  tables are plain records indexed by name, so such a name would read or write the prototype
@@ -304,13 +338,28 @@ function parseSubscriptionName(name: string): string {
  *  state. The reduce below is the one list of the types it consumes. */
 export const CoreContract = {
   slug: "core",
-  version: "11.0.0",
+  // 11: the ingress target; 12: the scriptRuns table (`context/run-requested` / `run-settled`).
+  version: "12.0.0",
+  /** THE EVENTS THIS CONTRACT OWNS beyond its control events (the run events section above). */
+  events: {
+    "events.iterate.com/context/run-requested": {
+      description:
+        "A script this context is asked to run once, against its own itx, by whoever appended it (source.principal); the event's offset is the run.",
+      payloadSchema: RunRequested,
+    },
+    "events.iterate.com/context/run-settled": {
+      description:
+        "What the requested script returned, or how it failed; a run the context's restart interrupted is settled here too, never re-run.",
+      payloadSchema: RunSettled,
+    },
+  },
   initialState: (): CoreState => ({
     paused: null,
     itxExpressionRewriteRules: {},
     subscriptions: {},
     ingressTarget: null,
     schedules: {},
+    scriptRuns: {},
     secrets: {},
   }),
 };
@@ -365,6 +414,20 @@ export function reduceCoreEvent(
     case "events.iterate.com/stream/append-schedule-failed": {
       const schedules = reduceScheduledAppends(state.schedules, event);
       return schedules === state.schedules ? undefined : { ...state, schedules };
+    }
+    case "events.iterate.com/context/run-requested": {
+      RunRequested.parse(payload); // the code is the event's to keep; the row is its offset's
+      if (state.scriptRuns[event.offset]) return undefined;
+      const scriptRuns = draftOf(state.scriptRuns, draftTables);
+      scriptRuns[event.offset] = { requestedAt: event.createdAt };
+      return { ...state, scriptRuns };
+    }
+    case "events.iterate.com/context/run-settled": {
+      const { requestOffset } = RunSettled.parse(payload);
+      if (!state.scriptRuns[requestOffset]) return undefined; // settled twice, or never requested
+      const scriptRuns = draftOf(state.scriptRuns, draftTables);
+      delete scriptRuns[requestOffset];
+      return { ...state, scriptRuns };
     }
     case "events.iterate.com/secrets/changed": {
       const name = payload.name as string;
@@ -581,6 +644,18 @@ export function normalizeControlEvent(event: StreamEventInput): StreamEventInput
     )
       return { ...event, payload: ScheduledAppendSettled.parse(event.payload) };
     throw new Error(`unknown scheduled append control event: ${event.type}`);
+  }
+  if (event.type === "events.iterate.com/context/run-requested") {
+    if (event.ephemeral)
+      throw new Error("a run's request is durable: the scriptRuns table is rebuilt from the log");
+    return { ...event, payload: RunRequested.parse(event.payload) };
+  }
+  if (event.type === "events.iterate.com/context/run-settled") {
+    if (event.ephemeral)
+      throw new Error(
+        "a run's settlement is durable: the scriptRuns table is rebuilt from the log",
+      );
+    return { ...event, payload: RunSettled.parse(event.payload) };
   }
   if (event.type === "events.iterate.com/stream/subscription-configured")
     return {

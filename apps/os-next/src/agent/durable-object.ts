@@ -3,8 +3,8 @@
 // the processor's (processor.ts); this host is what the processor cannot be: the two effects reached
 // through `itx` — the model (a `@cf/…` model through `itx.ai`, the Workers AI binding under THIS
 // context's rules, so a test lends a fake there; an OpenAI model through the account's AI Gateway
-// with the platform's key, streamed from the Responses API) and the script runner (`itx.run`, a
-// confined isolate over this context's itx) —
+// with the platform's key, streamed from the Responses API) and the files — a script the loop asks
+// for is the CONTEXT's to run (`context/run-requested`, iterate-context-durable-object.ts) —
 // plus the two doors a client calls: `create()`, which lands the birth (the certificate cross-posted to
 // `/` first, then on this path with the system prompt beside it), and `message(text)`, a person's words.
 // The library enables the processor row beside `create()`: subscribed, the loop runs on every commit
@@ -268,7 +268,6 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
       if (text.trim() === "") throw new Error("the model answered with no text");
       return { text: text.trim(), usage };
     },
-    runScript: (code) => this.withItx((itx) => itx.run(code)),
     readFile: (path) => this.withItx((itx) => itx.files.get(path).bytes()),
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),

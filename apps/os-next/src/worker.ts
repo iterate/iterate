@@ -12,7 +12,7 @@ import {
 import { auth } from "iterate/next/sdk";
 import { verifyClaims } from "iterate/next/principal";
 import { registerPipelinedRpcBrand } from "iterate/next/expression";
-import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/next/principal";
+import { ITX_GRANT_HEADER, ITX_PRINCIPAL_HEADER, type Principal } from "iterate/next/principal";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 // the one worker's env: the DO's bindings plus the in-process control plane's (control-plane.ts `Env`)
 import type { Env as WorkerEnv } from "./control-plane.ts";
@@ -39,9 +39,10 @@ const PROJECT_HOST_HOPS_HEADER = "x-itx-expression-hops";
 const PROJECT_HOST_MAX_HOPS = 4;
 
 /** WHO a project host's request is, as the lane into a context reads it: `principal` is the
- *  verified stamp the context runs the call under (null: nobody); `platformBearer` says the
- *  `Authorization: Bearer` was the platform's own credential, which an app never sees. */
-type ProjectHostIdentity = { principal: Principal | null; platformBearer: boolean };
+ *  verified stamp the context runs the call under (null: nobody) and `grant` the OAuth grant it
+ *  acts through (absent for the admin secret); `platformBearer` says the `Authorization: Bearer`
+ *  was the platform's own credential, which an app never sees. */
+type ProjectHostIdentity = { principal: Principal | null; grant?: string; platformBearer: boolean };
 
 /** The Request a project host hands the context DO — the same Request, its URL, method, body and a
  *  WebSocket upgrade intact, with the headers made the platform's: every inbound `x-itx-*` gone (a
@@ -71,6 +72,7 @@ function projectHostRequestTo(
   headers.set(PROJECT_HOST_HOPS_HEADER, String(routing.hops));
   if (routing.identity.principal)
     headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(routing.identity.principal));
+  if (routing.identity.grant) headers.set(ITX_GRANT_HEADER, routing.identity.grant);
   return new Request(request, { headers });
 }
 
@@ -296,6 +298,7 @@ export default {
           appCookies: appCookies(request.headers.get("cookie")) || null,
           identity: {
             principal: authorization?.principal ?? null,
+            grant: authorization?.grant?.grantId,
             platformBearer: Boolean(bearer && authorization),
           },
         }),
@@ -374,7 +377,9 @@ export default {
       const authorization = await browserAuthorization(env, request, ctx);
       const headers = new Headers(request.headers);
       headers.delete(ITX_PRINCIPAL_HEADER);
+      headers.delete(ITX_GRANT_HEADER);
       if (authorization) headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(authorization.principal));
+      if (authorization?.grant) headers.set(ITX_GRANT_HEADER, authorization.grant.grantId);
       const denied = auth.require(new Request(request, { headers }));
       if (denied) return denied;
     }

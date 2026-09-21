@@ -32,6 +32,7 @@ export async function rpcResponse(
   const teardown = new SessionTeardown();
   const authorityOf = (authorization: Authorization): SessionAuthority => ({
     principal: authorization.principal,
+    grant: authorization.grant?.grantId,
     reach: authorization.reach,
     grants: new Grants(env, ctx, authorization),
     scopes: authorization.grant?.scope,
