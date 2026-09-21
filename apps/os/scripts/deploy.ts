@@ -398,10 +398,8 @@ export default async function deploy(
       // ensure-resources run per environment.
       await ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-files`);
       // Sandbox container classes must exist container-enabled BEFORE the
-      // exports deploy — the exports reconciliation can't enable namespaces
-      // it creates (upstream gap; see ensureContainerClasses). Makes
-      // brand-new environments deployable from scratch; no-op everywhere
-      // else.
+      // real deploy: our pinned Wrangler does not expose exports.container.
+      // The bootstrap also repairs missing classes on existing exports Workers.
       const containerBootstrap = await ensureContainerClasses({
         ctx,
         workerName: ctx.env.osWorkerName,

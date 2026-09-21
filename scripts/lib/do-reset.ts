@@ -90,15 +90,20 @@ function runWranglerDeploy(input: {
 export async function getWorkerDoNamespaces(
   ctx: CfContext,
   workerName: string,
-): Promise<{ className: string; namespaceId: string }[]> {
-  const namespaces: { className: string; namespaceId: string }[] = [];
+): Promise<{ className: string; namespaceId: string; storage: "sqlite" | "legacy-kv" }[]> {
+  const namespaces: { className: string; namespaceId: string; storage: "sqlite" | "legacy-kv" }[] =
+    [];
   for (let page = 1; ; page++) {
-    const batch = await ctx.cf<{ id: string; script: string | null; class: string }[]>(
-      `/workers/durable_objects/namespaces?per_page=100&page=${page}`,
-    );
+    const batch = await ctx.cf<
+      { id: string; script: string | null; class: string; use_sqlite: boolean }[]
+    >(`/workers/durable_objects/namespaces?per_page=100&page=${page}`);
     for (const namespace of batch) {
       if (namespace.script === workerName) {
-        namespaces.push({ className: namespace.class, namespaceId: namespace.id });
+        namespaces.push({
+          className: namespace.class,
+          namespaceId: namespace.id,
+          storage: namespace.use_sqlite ? "sqlite" : "legacy-kv",
+        });
       }
     }
     if (batch.length < 100) break;
@@ -323,13 +328,10 @@ export async function resetWorkerDurableObjects(input: {
     return { action: "skipped", reason: "no Durable Object classes" };
   }
 
-  // CURRENT container-bearing classes are KEPT, not destroyed. Cloudflare's
-  // exports reconciliation cannot container-enable a namespace it creates (upstream
-  // gap, verified live 2026-07-08: recreating a container class under
-  // `exports` fails its container application with
-  // DURABLE_OBJECT_NOT_CONTAINER_ENABLED, and exports is one-way — error
-  // 100403 forbids ever going back to `migrations`), so a tombstoned
-  // container class could never come back. Kept instances become
+  // Keep current container classes and their applications across slot reuse.
+  // Recreating them with our pinned Wrangler loses container enablement;
+  // ensureContainerClasses can recover via the raw API, but ordinary cleanup
+  // should preserve them. Kept instances become
   // unreachable orphans like every pre-teardown DO did (D1/KV are wiped;
   // running containers are reaped by the sandbox destroy-on-idle sweeper),
   // and their container applications stay attached to the live namespaces.
@@ -378,17 +380,15 @@ export async function resetWorkerDurableObjects(input: {
       );
     }
   }
-  const containerNamespaceIds = new Set(
-    applications
-      .map((application) => application.durable_objects?.namespace_id)
-      .filter((id): id is string => Boolean(id)),
-  );
+  // Preserve declared container classes even when their application is missing.
+  // Otherwise an interrupted deploy or external deletion becomes a tombstoned
+  // namespace, making the next restore unable to attach its containers.
   const kept = namespaces
-    .filter((namespace) => containerNamespaceIds.has(namespace.namespaceId))
+    .filter((namespace) => currentContainerClasses.has(namespace.className))
     .map((namespace) => namespace.className)
     .sort();
   const deletedClasses = namespaces
-    .filter((namespace) => !containerNamespaceIds.has(namespace.namespaceId))
+    .filter((namespace) => !currentContainerClasses.has(namespace.className))
     .map((namespace) => namespace.className)
     .sort();
   if (deletedClasses.length === 0) {
@@ -643,29 +643,10 @@ export async function resetWorkerDurableObjectsOnVersionChange(
 }
 
 /**
- * Make sure a worker's container-bearing DO classes exist CONTAINER-ENABLED
- * before its first `exports` deploy — the workaround that keeps
- * new-environment creation possible.
- *
- * Why this exists (upstream Cloudflare gap, verified live 2026-07-08, not
- * fixed as of wrangler 4.108): the exports reconciliation creates classes
- * WITHOUT container-enablement and there is no API to enable an existing
- * namespace, so a container class created under `exports` fails its
- * container application with DURABLE_OBJECT_NOT_CONTAINER_ENABLED forever
- * (exports is one-way, API 100403 — no going back to migrations). The ONLY
- * thing that container-enables a namespace is a legacy-migrations script
- * upload whose metadata `containers` list names the class at creation time.
- * So: while the worker is fresh or still on migrations, upload the parked
- * module with a legacy migration creating exactly the missing container
- * classes, flagged as containers. The real deploy then declares them as
- * live `exports` entries and attaches the container applications — both
- * proven to work over migrations-created classes.
- *
- * No-op when every container class already exists. Throws with the repair
- * recipe when classes are missing on a worker that is already
- * exports-locked (only reachable by bypassing this bootstrap; the repair is
- * queue-consumer remove → `wrangler delete` → redeploy). Delete this whole
- * function when Cloudflare fixes exports reconciliation for containers.
+ * Bootstrap missing container classes before the real deploy attaches applications.
+ * Wrangler 4.107 does not expose exports.container, but the raw API supports it
+ * (verified on preview-2, 2026-09-21). Keep legacy bootstrap for fresh Workers;
+ * exports Workers can now recover missing classes without deleting the Worker.
  */
 export async function ensureContainerClasses(input: {
   ctx: CfContext;
@@ -683,40 +664,15 @@ export async function ensureContainerClasses(input: {
   const liveNames = new Set(live.map((namespace) => namespace.className));
   const missing = input.containerClassNames.filter((className) => !liveNames.has(className)).sort();
 
-  // A worker recreated after `wrangler delete` leaves container applications
-  // pinned to its DELETED namespaces (wrangler never deletes applications),
-  // and an application name collision with a dead namespace fails the
-  // containers phase of the coming deploy. Sweep dangling applications
-  // unconditionally: an application whose namespace no longer exists in the
-  // account is garbage by definition.
-  const allNamespaceIds = new Set<string>();
-  for (let page = 1; ; page++) {
-    const batch = await input.ctx.cf<{ id: string }[]>(
-      `/workers/durable_objects/namespaces?per_page=100&page=${page}`,
-    );
-    for (const namespace of batch) allNamespaceIds.add(namespace.id);
-    if (batch.length < 100) break;
-  }
-  const applications =
-    await input.ctx.cf<{ id: string; name: string; durable_objects?: { namespace_id?: string } }[]>(
-      `/containers/applications`,
-    );
-  for (const application of applications) {
-    const namespaceId = application.durable_objects?.namespace_id;
-    if (namespaceId && !allNamespaceIds.has(namespaceId)) {
-      await input.ctx.cf(`/containers/applications/${application.id}`, { method: "DELETE" });
-      console.log(
-        `container-class bootstrap: deleted dangling container application ${application.name} ` +
-          `(its namespace ${namespaceId} no longer exists)`,
-      );
-    }
-  }
-
+  // Do not sweep account-wide container applications here. A paginated
+  // namespace listing is not a snapshot: concurrent slot deployments can make
+  // live namespaces look absent. One preview deploy must never delete another
+  // preview's applications (observed across preview-5 and preview-2, 2026-09-21).
   if (missing.length === 0) return { action: "skipped", missing: [] };
 
   console.log(
     `container-class bootstrap: ${input.workerName} is missing ${missing.join(", ")} — ` +
-      `legacy-creating them container-enabled before the exports deploy`,
+      `creating them container-enabled before the real deploy`,
   );
   // The upload replaces the whole worker script, so it must keep exporting
   // every class existing Durable Objects depend on — the API rejects a
@@ -737,7 +693,10 @@ export async function ensureContainerClasses(input: {
       bindings: [],
       // The load-bearing line: naming the classes here at creation time is
       // what container-enables their namespaces.
-      containers: missing.map((className) => ({ class_name: className })),
+      containers: input.containerClassNames.map((className) => ({
+        name: className,
+        class_name: className,
+      })),
       migrations: {
         ...(script?.migration_tag && { old_tag: script.migration_tag }),
         new_tag: `container-bootstrap-${tagHash([script?.migration_tag ?? null, missing])}`,
@@ -755,16 +714,24 @@ export async function ensureContainerClasses(input: {
   try {
     await input.ctx.cf(`/workers/scripts/${input.workerName}`, { method: "PUT", body: form });
   } catch (error) {
-    if (String(error).includes("100403")) {
-      throw new Error(
-        `container-class bootstrap: ${input.workerName} is already on the exports flow but is ` +
-          `missing container classes (${missing.join(", ")}) — its namespaces can never be ` +
-          `container-enabled (upstream Cloudflare gap). Repair: remove the worker's queue ` +
-          `consumer, \`wrangler delete\` it, and redeploy — the bootstrap then recreates ` +
-          `everything enabled.`,
-      );
-    }
-    throw error;
+    if (!String(error).includes("100403")) throw error;
+    // exports.container must refer to a *named* containers entry. class_name
+    // alone does not wire it. Preserve every live class and its storage backend.
+    const metadata = JSON.parse(String(form.get("metadata")));
+    delete metadata.migrations;
+    metadata.exports = Object.fromEntries([
+      ...live.map(({ className, storage }) => [className, { type: "durable-object", storage }]),
+      ...input.containerClassNames.map((className) => [
+        className,
+        {
+          type: "durable-object",
+          storage: "sqlite",
+          container: className,
+        },
+      ]),
+    ]);
+    form.set("metadata", JSON.stringify(metadata));
+    await input.ctx.cf(`/workers/scripts/${input.workerName}`, { method: "PUT", body: form });
   }
   console.log(
     `container-class bootstrap: created ${missing.join(", ")} on ${input.workerName} (container-enabled)`,

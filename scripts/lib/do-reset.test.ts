@@ -1,10 +1,128 @@
 import { describe, expect, test, vi } from "vitest";
 import {
   detachExternalDurableObjectBindings,
+  ensureContainerClasses,
   resetWorkerDurableObjects,
   resetWorkerDurableObjectsOnVersionChange,
 } from "./do-reset.ts";
 import { CloudflareApiError } from "./env-context.ts";
+
+test("container bootstrap never deletes another slot's applications based on a namespace listing", async () => {
+  const applications = [
+    { id: "other-slot-app", durable_objects: { namespace_id: "temporarily-unlisted" } },
+  ];
+  const cf = async (path: string, init?: RequestInit): Promise<any> => {
+    if (path === "/workers/scripts") return [{ id: "os-preview-5" }];
+    if (path.startsWith("/workers/durable_objects/namespaces?")) {
+      return [{ id: "sandbox", script: "os-preview-5", class: "SandboxBasicDurableObject" }];
+    }
+    if (path === "/containers/applications") return structuredClone(applications);
+    if (path === "/containers/applications/other-slot-app" && init?.method === "DELETE") {
+      applications.splice(0);
+      return;
+    }
+    throw new Error(`unexpected Cloudflare request: ${path}`);
+  };
+
+  await ensureContainerClasses({
+    ctx: { cf },
+    workerName: "os-preview-5",
+    containerClassNames: ["SandboxBasicDurableObject"],
+    compatibilityDate: "2026-07-01",
+  });
+
+  expect(applications).toMatchObject([
+    { id: "other-slot-app", durable_objects: { namespace_id: "temporarily-unlisted" } },
+  ]);
+});
+
+test("erase preserves declared sandbox classes whose container applications are missing", async () => {
+  let parked: any;
+  const cf = async (path: string, init?: RequestInit): Promise<any> => {
+    if (path === "/workers/scripts") return [{ id: "os-preview-2" }];
+    if (path.startsWith("/workers/durable_objects/namespaces?")) {
+      return [
+        { id: "sandbox", script: "os-preview-2", class: "SandboxBasicDurableObject" },
+        { id: "project", script: "os-preview-2", class: "ProjectDurableObject" },
+      ];
+    }
+    if (path === "/containers/applications") return [];
+    if (path === "/workers/scripts/os-preview-2" && init?.method === "PUT") {
+      parked = JSON.parse((init.body as FormData).get("metadata") as string);
+      return;
+    }
+    throw new Error(`unexpected Cloudflare request: ${path}`);
+  };
+
+  const result = await resetWorkerDurableObjects({
+    ctx: { cf },
+    workerName: "os-preview-2",
+    cwd: "/tmp/os",
+    credentials: {},
+    compatibilityDate: "2026-07-01",
+    containerClassNames: ["SandboxBasicDurableObject"],
+  });
+
+  expect({ result, parked }).toMatchObject({
+    result: {
+      action: "reset",
+      deletedClasses: ["ProjectDurableObject"],
+      keptContainerClasses: ["SandboxBasicDurableObject"],
+    },
+    parked: {
+      containers: [{ class_name: "SandboxBasicDurableObject" }],
+      migrations: { steps: [{ deleted_classes: ["ProjectDurableObject"] }] },
+    },
+  });
+});
+
+test("bootstrap restores missing container classes on an exports Worker without deleting it", async () => {
+  let uploaded: any;
+  const cf = async (path: string, init?: RequestInit): Promise<any> => {
+    if (path === "/workers/scripts") return [{ id: "os-preview-2" }];
+    if (path.startsWith("/workers/durable_objects/namespaces?")) {
+      return [{ id: "basic", script: "os-preview-2", class: "SandboxBasicDurableObject" }];
+    }
+    if (path === "/workers/scripts/os-preview-2" && init?.method === "PUT") {
+      const metadata = JSON.parse((init.body as FormData).get("metadata") as string);
+      if (metadata.migrations) {
+        throw new CloudflareApiError("PUT", path, 400, [{ code: 100403 }]);
+      }
+      uploaded = metadata;
+      return;
+    }
+    throw new Error(`unexpected Cloudflare request: ${path}`);
+  };
+
+  const result = await ensureContainerClasses({
+    ctx: { cf },
+    workerName: "os-preview-2",
+    containerClassNames: ["SandboxBasicDurableObject", "SandboxLiteDurableObject"],
+    compatibilityDate: "2026-07-01",
+  });
+
+  expect({ result, uploaded }).toMatchObject({
+    result: { action: "bootstrapped", missing: ["SandboxLiteDurableObject"] },
+    uploaded: {
+      containers: [
+        { name: "SandboxBasicDurableObject", class_name: "SandboxBasicDurableObject" },
+        { name: "SandboxLiteDurableObject", class_name: "SandboxLiteDurableObject" },
+      ],
+      exports: {
+        SandboxBasicDurableObject: {
+          type: "durable-object",
+          storage: "sqlite",
+          container: "SandboxBasicDurableObject",
+        },
+        SandboxLiteDurableObject: {
+          type: "durable-object",
+          storage: "sqlite",
+          container: "SandboxLiteDurableObject",
+        },
+      },
+    },
+  });
+});
 
 type Settings = {
   annotations?: Record<string, unknown>;
