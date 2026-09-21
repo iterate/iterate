@@ -27,6 +27,29 @@ test("terminal colors in failure summaries cannot corrupt the published preview 
   });
 });
 
+test("a first manual deployment queues for a slot using its configured wait budget", async () => {
+  const acquire = vi
+    .fn()
+    .mockRejectedValueOnce(
+      Object.assign(new Error("No resource is currently available for this type."), {
+        code: "CONFLICT",
+      }),
+    )
+    .mockResolvedValueOnce(fakeLease());
+  const result = await previewInternals.assignEnvironmentConfigLease({
+    eraseSlotData: noopEraseSlotData,
+    holder: "pr-1600",
+    leaseMs: 1000,
+    recordedSlug: null,
+    semaphore: fakeSemaphore({ acquire }),
+    wantedSlug: null,
+    waitTotalMs: 60_000,
+  });
+  expect(result).toMatchObject({ outcome: "assigned", lease: { slug: "preview-2" } });
+  expect(acquire.mock.calls.map(([input]) => input.waitMs)).toEqual([0, expect.any(Number)]);
+  expect(acquire.mock.calls[1][0].waitMs).toBeGreaterThan(0);
+});
+
 const WorkflowConcurrency = z.object({
   group: z.string(),
   "cancel-in-progress": z.boolean(),
@@ -2777,6 +2800,7 @@ describe("assignEnvironmentConfigLease", () => {
     });
 
     const result = await assignEnvironmentConfigLease({
+      waitTotalMs: 0,
       eraseSlotData: noopEraseSlotData,
       holder: "pr-1600",
       leaseMs: 1000,
@@ -2798,6 +2822,7 @@ describe("assignEnvironmentConfigLease", () => {
     });
 
     const result = await assignEnvironmentConfigLease({
+      waitTotalMs: 0,
       eraseSlotData: noopEraseSlotData,
       holder: "pr-1600",
       leaseMs: 1000,
@@ -2823,6 +2848,7 @@ describe("assignEnvironmentConfigLease", () => {
     });
 
     const result = await assignEnvironmentConfigLease({
+      waitTotalMs: 0,
       eraseSlotData,
       holder: "pr-1600",
       leaseMs: 1000,
@@ -2858,6 +2884,7 @@ describe("assignEnvironmentConfigLease", () => {
     });
 
     const result = await assignEnvironmentConfigLease({
+      waitTotalMs: 0,
       eraseSlotData: noopEraseSlotData,
       holder: "pr-1600",
       leaseMs: 1000,
@@ -2905,6 +2932,7 @@ describe("assignEnvironmentConfigLease", () => {
     });
 
     const result = await assignEnvironmentConfigLease({
+      waitTotalMs: 0,
       eraseSlotData: noopEraseSlotData,
       holder: "pr-1600",
       leaseMs: 1000,
@@ -2943,6 +2971,7 @@ describe("assignEnvironmentConfigLease", () => {
     });
 
     const result = await assignEnvironmentConfigLease({
+      waitTotalMs: 0,
       eraseSlotData: noopEraseSlotData,
       force: true,
       holder: "pr-1600",
@@ -2964,6 +2993,7 @@ describe("assignEnvironmentConfigLease", () => {
 
     await expect(
       assignEnvironmentConfigLease({
+        waitTotalMs: 0,
         eraseSlotData: noopEraseSlotData,
         holder: "pr-1600",
         leaseMs: 1000,
@@ -2994,6 +3024,7 @@ describe("assignEnvironmentConfigLease", () => {
 
     await expect(
       assignEnvironmentConfigLease({
+        waitTotalMs: 0,
         eraseSlotData: noopEraseSlotData,
         holder: "pr-1600",
         leaseMs: 1000,
@@ -3029,6 +3060,7 @@ describe("assignEnvironmentConfigLease", () => {
 
     await expect(
       assignEnvironmentConfigLease({
+        waitTotalMs: 0,
         eraseSlotData: noopEraseSlotData,
         holder: "pr-1600",
         leaseMs: 1000,
@@ -3047,6 +3079,7 @@ describe("assignEnvironmentConfigLease", () => {
     const semaphore = fakeSemaphore({ acquireSpecific });
 
     const result = await assignEnvironmentConfigLease({
+      waitTotalMs: 0,
       eraseSlotData: noopEraseSlotData,
       force: true,
       holder: "pr-1600",
@@ -3069,6 +3102,7 @@ describe("assignEnvironmentConfigLease", () => {
     });
 
     const result = await assignEnvironmentConfigLease({
+      waitTotalMs: 0,
       eraseSlotData,
       force: true,
       holder: "pr-1600",
@@ -3099,6 +3133,7 @@ describe("assignEnvironmentConfigLease", () => {
 
     await expect(
       assignEnvironmentConfigLease({
+        waitTotalMs: 0,
         eraseSlotData,
         holder: "pr-1600",
         leaseMs: 1000,

@@ -1229,6 +1229,7 @@ async function deployPreviewApps({
               recordedSlug,
               semaphore,
               wantedSlug: requestedEnvironment,
+              waitTotalMs: resolveSlotWaitTotalMs(runtime.commandEnvironment),
             })
           ).lease
         : toEnvironmentConfigLease(
@@ -2180,6 +2181,7 @@ export async function assign(options: AssignOptions = {}) {
     recordedSlug: current.environmentConfigLease?.slug ?? null,
     semaphore,
     wantedSlug,
+    waitTotalMs: 0,
   });
 
   // Every outcome needs a redeploy now: taking a slot erases it, and that
@@ -6062,6 +6064,7 @@ async function assignEnvironmentConfigLease(input: {
   recordedSlug: string | null;
   semaphore: PreviewSemaphoreResourceClient;
   wantedSlug: string | null;
+  waitTotalMs: number;
 }): Promise<{
   lease: EnvironmentConfigLease;
   outcome: "kept" | "assigned" | "moved";
@@ -6188,15 +6191,14 @@ async function assignEnvironmentConfigLease(input: {
       throw error;
     }
   } else {
-    // A human is asking right now — fail fast with the holder table instead
-    // of queueing like CI does.
+    // Assignment fails fast; deploy/run preserve their configured queue budget.
     lease = toEnvironmentConfigLease(
       await acquireAnyEnvironmentConfigLease({
         semaphore: input.semaphore,
         eraseSlotData: input.eraseSlotData,
         holder: input.holder,
         leaseMs: input.leaseMs,
-        waitTotalMs: 0,
+        waitTotalMs: input.waitTotalMs,
       }),
     );
   }
