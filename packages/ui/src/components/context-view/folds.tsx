@@ -1,7 +1,9 @@
 // The log folded for reading, as a pure function: day separators wherever the date turns; in
 // Pretty, a run of the platform's housekeeping becomes one quiet row and a fact repeated
-// back-to-back (same type, same payload — four sign-ins in a row) becomes one row with its count.
-// Pretty + raw and Raw keep every event; only the days are marked.
+// back-to-back — the same SENTENCE, whatever the payload's timestamps and ids (four "Signed in with
+// a browser cookie" in a row) — becomes one row with its count. Pretty + raw and Raw keep every
+// event; only the days are marked.
+import { isValidElement, type ReactNode } from "react";
 import { isHousekeeping } from "./core-renderers.tsx";
 import type { ContextViewEvent, ContextViewMode } from "./types.tsx";
 
@@ -17,9 +19,28 @@ export type FeedItem =
  *  separator labels (feed-rows.tsx); grouping by the UTC date would open a second "Today" for an
  *  evening anywhere east or west of Greenwich. */
 const dayOf = (event: ContextViewEvent) => new Date(event.createdAt).toDateString();
-const factOf = (event: ContextViewEvent) => JSON.stringify([event.type, event.payload ?? null]);
 
-export function foldEvents(events: readonly ContextViewEvent[], mode: ContextViewMode): FeedItem[] {
+/** What makes two events "the same fact" for the repeat fold. The view keys by the type and the
+ *  rendered sentence's text (`sentenceText`); without renderers, by the type and the payload. */
+export type FactKey = (event: ContextViewEvent) => string;
+export const factByPayload: FactKey = (event) =>
+  JSON.stringify([event.type, event.payload ?? null]);
+
+/** The words of a rendered sentence — strings and numbers, elements' children walked — so two
+ *  renderings compare as text. Sentences are small trees of spans and strongs; nothing else is expected. */
+export function sentenceText(node: ReactNode): string {
+  if (node === null || node === undefined || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(sentenceText).join("");
+  if (isValidElement<{ children?: ReactNode }>(node)) return sentenceText(node.props.children);
+  return "";
+}
+
+export function foldEvents(
+  events: readonly ContextViewEvent[],
+  mode: ContextViewMode,
+  factOf: FactKey = factByPayload,
+): FeedItem[] {
   const items: FeedItem[] = [];
   let lastDay = "";
   let i = 0;

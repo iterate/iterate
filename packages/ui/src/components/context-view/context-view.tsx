@@ -10,7 +10,7 @@
 // in every app) and comes back as an `onStateChange` patch, so a view is a link: the mode, the
 // filter, the inspected event, the open sheet. Only the folds opened in place stay local — scroll-
 // position-grade ephemera. Pure otherwise: every datum arrives as a prop from the SDK's hooks.
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { FilterIcon, LayersIcon } from "lucide-react";
 import { Button } from "../button.tsx";
 import { Input } from "../input.tsx";
@@ -26,16 +26,17 @@ import { EventInspector } from "./event-inspector.tsx";
 import { EventRow } from "./event-row.tsx";
 import { DaySeparator, HousekeepingRow, RepeatRow } from "./feed-rows.tsx";
 import { actorLabel, filterEvents, shortEventType, typeCounts } from "./filters.tsx";
-import { foldEvents, lastEventOf } from "./folds.tsx";
+import { foldEvents, lastEventOf, sentenceText } from "./folds.tsx";
 import { PresenceStrip } from "./presence-strip.tsx";
 import { ProcessorsPanel } from "./processors-panel.tsx";
-import type {
-  ContextViewEvent,
-  ContextViewMode,
-  ContextViewPresence,
-  ContextViewProcessor,
-  EventInspectors,
-  EventRenderers,
+import {
+  type ContextViewEvent,
+  type ContextViewMode,
+  type ContextViewPresence,
+  type ContextViewProcessor,
+  type EventInspectors,
+  type EventRenderers,
+  rendererFor,
 } from "./types.tsx";
 
 const MODES: { id: ContextViewMode; label: string; short: string }[] = [
@@ -92,7 +93,16 @@ export function ContextView({
   const allRenderers = useMemo(() => ({ ...coreEventRenderers, ...renderers }), [renderers]);
   const allInspectors = useMemo(() => ({ ...coreEventInspectors, ...inspectors }), [inspectors]);
   const shown = useMemo(() => filterEvents(events, filter), [events, filter]);
-  const items = useMemo(() => foldEvents(shown, mode), [shown, mode]);
+  // the same fact = the same sentence: four sign-ins fold whatever their timestamps and ids say
+  const factOf = useCallback(
+    (event: ContextViewEvent) => {
+      const sentence = rendererFor(allRenderers, event.type)?.(event);
+      const text = sentence ? sentenceText(sentence) : "";
+      return `${event.type}\u0000${text || JSON.stringify(event.payload ?? null)}`;
+    },
+    [allRenderers],
+  );
+  const items = useMemo(() => foldEvents(shown, mode, factOf), [shown, mode, factOf]);
   const types = useMemo(() => typeCounts(events), [events]);
   const filtered = Boolean(filter.query) || filter.types.size > 0 || Boolean(filter.actor);
   const toggleType = (type: string) => {
