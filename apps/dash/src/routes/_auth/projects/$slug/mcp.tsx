@@ -1,6 +1,8 @@
 // /projects/<slug>/mcp — connect a coding agent to this project over MCP: the server, the one-line
 // installs for Claude Code and the Codex CLI, the sign-in that follows (the platform's OAuth, this
-// project ticked at consent), and how the `run` tool picks the project. Every command is copyable.
+// project ticked at consent), how the `run` tool picks the project — and the clients that have
+// connected, from the project's catalog (`mcpClients.list()`: one row per grant, with the context
+// its scripts run on). Every command is copyable.
 import { createFileRoute, getRouteApi } from "@tanstack/react-router";
 import {
   Card,
@@ -10,11 +12,28 @@ import {
   CardTitle,
 } from "@iterate-com/ui/components/card";
 import { Identifier } from "@iterate-com/ui/components/identifier";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@iterate-com/ui/components/table";
 
 const shell = getRouteApi("/_auth");
 const projectRoute = getRouteApi("/_auth/projects/$slug");
 
 export const Route = createFileRoute("/_auth/projects/$slug/mcp")({
+  // The project's connected clients, and — when the session may read the account — the person's
+  // own grants, so a client of theirs shows by its name and another member's by its grant id.
+  loader: async ({ context }) => {
+    const [clients, grants] = await Promise.all([
+      context.api.projects.get(context.project.id).mcpClients.list(),
+      context.info.scopes.includes("account") ? context.api.grants.list() : null,
+    ]);
+    return { clients, grants: grants?.items ?? [] };
+  },
   component: ProjectMcp,
 });
 
@@ -32,6 +51,7 @@ function Copyable({ value }: { value: string }) {
 function ProjectMcp() {
   const { project } = projectRoute.useRouteContext();
   const { info } = shell.useRouteContext();
+  const { clients, grants } = Route.useLoaderData();
   // the MCP server: its own origin when the deployment has one, else `/mcp` on the platform's
   const server = info.mcpOrigin ? `${info.mcpOrigin}/` : `${info.platformOrigin}/mcp`;
   return (
@@ -91,6 +111,47 @@ function ProjectMcp() {
         <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-2">
           <Identifier value={project.slug} />
           <Identifier value={project.id} />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Connected clients</CardTitle>
+          <CardDescription>
+            Every client that has run a script here, by its grant — your own by name, a teammate's
+            by grant id. Its scripts run on, and are logged at, the context shown.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {clients.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No client has connected yet.</p>
+          ) : (
+            <Table data-testid="mcp-clients">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Client</TableHead>
+                  <TableHead>Grant</TableHead>
+                  <TableHead>First connected</TableHead>
+                  <TableHead>Context</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {clients.map((client) => (
+                  <TableRow key={client.grantId}>
+                    <TableCell>
+                      {grants.find((grant) => grant.id === client.grantId)?.name ?? "—"}
+                    </TableCell>
+                    <TableCell>
+                      <Identifier value={client.grantId} />
+                    </TableCell>
+                    <TableCell>{new Date(client.createdAt).toISOString()}</TableCell>
+                    <TableCell>
+                      <Identifier value={client.path} />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
     </div>

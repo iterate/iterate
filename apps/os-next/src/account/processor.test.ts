@@ -16,11 +16,67 @@ const authenticated = (operationId: string, credential: "from-server-cookie" | "
 describe("AccountProcessor — the account view folded from facts", () => {
   const rows: { name: string; events: { type: string; payload?: unknown }[]; view: AccountView }[] =
     [
-      { name: "the empty view", events: [], view: { authentications: [] } },
+      {
+        name: "the empty view",
+        events: [],
+        view: { authentications: [], personalAccessTokens: {}, endedGrants: {}, consents: [] },
+      },
       {
         name: "an authentication fact appends to authentications (no credential material, only the fact)",
         events: [authenticated("op-1", "admin-secret")],
-        view: { authentications: [{ credential: "admin-secret", at: 1, operationId: "op-1" }] },
+        view: {
+          authentications: [{ credential: "admin-secret", at: 1, operationId: "op-1" }],
+          personalAccessTokens: {},
+          endedGrants: {},
+          consents: [],
+        },
+      },
+      {
+        name: "a token minted, a grant ended, a consent approved: each a fact where it happened — the token's row closes when its grant ends; a stranger's end is recorded too; a second mint or end is ignored",
+        events: [
+          {
+            type: "events.iterate.com/account/grant-minted",
+            payload: { grantId: "grant_a", name: "laptop", projects: ["prj_1"], expiresAt: 9 },
+          },
+          {
+            type: "events.iterate.com/account/grant-minted",
+            payload: { grantId: "grant_a", name: "again", projects: [], expiresAt: 1 },
+          },
+          { type: "events.iterate.com/account/grant-ended", payload: { grantId: "grant_b" } },
+          { type: "events.iterate.com/account/grant-ended", payload: { grantId: "grant_a" } },
+          { type: "events.iterate.com/account/grant-ended", payload: { grantId: "grant_a" } },
+          {
+            type: "events.iterate.com/account/consent-approved",
+            payload: {
+              clientId: "c1",
+              clientName: "Claude Code",
+              projects: null,
+              scopes: ["iterate"],
+            },
+          },
+        ],
+        view: {
+          authentications: [],
+          personalAccessTokens: {
+            grant_a: {
+              name: "laptop",
+              projects: ["prj_1"],
+              expiresAt: 9,
+              mintedAt: expect.any(String),
+              endedAt: expect.any(String),
+            },
+          },
+          endedGrants: { grant_b: { at: expect.any(String) }, grant_a: { at: expect.any(String) } },
+          consents: [
+            {
+              clientId: "c1",
+              clientName: "Claude Code",
+              projects: null,
+              scopes: ["iterate"],
+              at: expect.any(String),
+            },
+          ],
+        },
       },
       {
         name: "facts fold in order; an unrelated event leaves the view as it was",
@@ -34,6 +90,9 @@ describe("AccountProcessor — the account view folded from facts", () => {
             { credential: "from-server-cookie", at: 1, operationId: "op-1" },
             { credential: "admin-secret", at: 1, operationId: "op-2" },
           ],
+          personalAccessTokens: {},
+          endedGrants: {},
+          consents: [],
         },
       },
       {
@@ -47,6 +106,9 @@ describe("AccountProcessor — the account view folded from facts", () => {
         ],
         view: {
           authentications: [{ credential: "from-server-cookie", at: 1, operationId: "op-2" }],
+          personalAccessTokens: {},
+          endedGrants: {},
+          consents: [],
         },
       },
     ];

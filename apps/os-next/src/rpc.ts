@@ -37,7 +37,7 @@ export async function rpcResponse(
     grants: new Grants(env, ctx, authorization),
     scopes: authorization.grant?.scope,
     ...(authorization.grant?.kind === "issuer" && {
-      consent: new Consent(env, authorization.grant),
+      consent: new Consent(env, ctx, authorization.grant),
     }),
   });
   // THE GRANT THIS TRANSPORT CARRIES: the upgrade's (resolved by the gate before this call), or the
