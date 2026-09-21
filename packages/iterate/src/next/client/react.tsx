@@ -8,7 +8,7 @@
 // Adapted from apps/os's `useLiveState` (packages/iterate/src/sdk/capnweb/react.tsx), kept to the one
 // shape a UI/test needs — no reconnect/backoff/ping-watchdog (that policy belongs to whoever owns the
 // capnweb session; here the caller passes a ready `itx`).
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   connectLiveState,
   type LiveStateItx,
@@ -94,4 +94,182 @@ export function useLiveState<S>(
     () => undefined,
   );
   return { value, rev: store?.rev() ?? null, status, error };
+}
+
+// ── the context's log, processors and presence ── the data half of a general-purpose context view
+// (packages/ui `components/context-view`, the rendering half): every committed event of a context,
+// live; the rows of its processors table; who is here. Hooks here, pure components there, so the UI
+// kit stays free of the SDK and any app — the dash, the agents app — composes the two.
+
+/** One committed event as the log hooks hand it out: the itx envelope, structurally. */
+export type ContextLogEvent = {
+  offset: number;
+  type: string;
+  createdAt: string;
+  payload?: unknown;
+  metadata?: Record<string, unknown>;
+  idempotencyKey?: string;
+  source?: {
+    principal?: { actor: string; email?: string };
+    grant?: string;
+    processor?: { slug: string; version: string };
+  };
+};
+
+/** The slice of a context handle the log hook reads — a capnweb `IterateContextApi` stub satisfies it. */
+export type ContextLogItx = LiveStateItx & {
+  readEvents(
+    afterOffset?: number,
+    limit?: number,
+  ): Promise<{ events: unknown[]; atHead: boolean; scannedThroughOffset: number }>;
+};
+
+/** A wire event (a capnweb proxy value or a plain object) as a `ContextLogEvent`, or null when it is
+ *  not a committed row. Structural, not a schema: the transport validated it; this only refuses a
+ *  shape the view cannot place (no offset, type or time). */
+function toContextLogEvent(raw: unknown): ContextLogEvent | null {
+  const value = JSON.parse(JSON.stringify(raw)) as Record<string, unknown> | null;
+  if (
+    !value ||
+    typeof value.offset !== "number" ||
+    typeof value.type !== "string" ||
+    typeof value.createdAt !== "string"
+  )
+    return null;
+  return value as unknown as ContextLogEvent; // the three fields checked are all the hooks index by
+}
+
+/** THE LOG, live: subscribe to every committed event (or `consumes`) BEFORE the catch-up read, so
+ *  nothing lands between the two; pushes and pages both dedupe into one map by offset. `caughtUp`
+ *  once the read reached the head; `error` when the connect failed. Re-connects when `itx` changes;
+ *  unmount disposes the server-side subscription. The same shape the agents app grew for its feed,
+ *  generalized. */
+export function useContextLog(
+  itx: ContextLogItx | undefined,
+  opts: { consumes?: string[] } = {},
+): { events: ContextLogEvent[]; caughtUp: boolean; error?: string } {
+  const [events, setEvents] = useState<Map<number, ContextLogEvent>>(() => new Map());
+  const [caughtUp, setCaughtUp] = useState(false);
+  const [error, setError] = useState<string | undefined>();
+  const consumesKey = JSON.stringify(opts.consumes || ["*"]);
+  useEffect(() => {
+    setEvents(new Map());
+    setCaughtUp(false);
+    setError(undefined);
+    if (!itx) return;
+    let disposed = false;
+    const merge = (batch: unknown[]) =>
+      setEvents((held) => {
+        const next = new Map(held);
+        for (const raw of batch) {
+          const event = toContextLogEvent(raw);
+          if (event) next.set(event.offset, event);
+        }
+        return next;
+      });
+    let subscription: { [Symbol.dispose](): void } | undefined;
+    (async () => {
+      subscription = await itx.subscribe({
+        consumes: JSON.parse(consumesKey) as string[],
+        target: (batch) => !disposed && merge(batch),
+      });
+      if (disposed) return;
+      for (let after = 0; ; ) {
+        const page = await itx.readEvents(after, 500);
+        if (disposed) return;
+        merge(page.events);
+        if (page.atHead || page.scannedThroughOffset <= after) break;
+        after = page.scannedThroughOffset;
+      }
+      setCaughtUp(true);
+    })().catch((e: unknown) => !disposed && setError(e instanceof Error ? e.message : String(e)));
+    return () => {
+      disposed = true;
+      subscription?.[Symbol.dispose]();
+    };
+  }, [itx, consumesKey]);
+  const sorted = useMemo(() => [...events.values()].sort((a, b) => a.offset - b.offset), [events]);
+  return { events: sorted, caughtUp, error };
+}
+
+/** One row of a context's processors table (`itx.processors.list()`), structurally. */
+export type ContextProcessorRow = {
+  name: string;
+  target: string;
+  consumes?: string[];
+  configuredAtOffset: number;
+  hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };
+};
+
+/** The slice of a context handle the processors and presence hooks read. */
+export type ContextTablesItx = {
+  processors: { list(): Promise<ContextProcessorRow[]> | ContextProcessorRow[] };
+  rpcStubs: { list(): Promise<string[]> | string[] };
+};
+
+/** THE PROCESSORS TABLE, re-read whenever the log grows a row-changing event (a subscription
+ *  configured, halted or resumed) — the table is core state, one call away, no push of its own. */
+export function useContextProcessors(
+  itx: ContextTablesItx | undefined,
+  events: readonly ContextLogEvent[],
+): { rows: ContextProcessorRow[]; error?: string } {
+  const [rows, setRows] = useState<ContextProcessorRow[]>([]);
+  const [error, setError] = useState<string | undefined>();
+  const tableVersion = events.reduce(
+    (last, event) =>
+      event.type.startsWith("events.iterate.com/stream/subscription-") ? event.offset : last,
+    0,
+  );
+  useEffect(() => {
+    if (!itx) return;
+    let disposed = false;
+    Promise.resolve(itx.processors.list()).then(
+      (list) => !disposed && setRows(list),
+      (e: unknown) => !disposed && setError(e instanceof Error ? e.message : String(e)),
+    );
+    return () => {
+      disposed = true;
+    };
+  }, [itx, tableVersion]);
+  return { rows, error };
+}
+
+/** One presence: who acted on the context and when last, from the log's stamps. */
+export type ContextPresence = { actor: string; email?: string; grant?: string; lastSeenAt: string };
+
+/** WHO IS HERE: the rpc stubs lent right now (`itx.rpcStubs.list()` — physical, re-read on every
+ *  batch the log delivers, since presence changes are ephemeral facts) and, from the log, every
+ *  principal that acted, newest first. */
+export function useContextPresence(
+  itx: ContextTablesItx | undefined,
+  events: readonly ContextLogEvent[],
+): { rpcStubs: string[]; actors: ContextPresence[] } {
+  const [rpcStubs, setRpcStubs] = useState<string[]>([]);
+  const head = events.at(-1)?.offset ?? 0;
+  useEffect(() => {
+    if (!itx) return;
+    let disposed = false;
+    Promise.resolve(itx.rpcStubs.list()).then(
+      (list) => !disposed && setRpcStubs(list),
+      () => undefined, // presence is nice to have; a failed census shows nothing
+    );
+    return () => {
+      disposed = true;
+    };
+  }, [itx, head]);
+  const actors = useMemo(() => {
+    const byActor = new Map<string, ContextPresence>();
+    for (const event of events) {
+      const principal = event.source?.principal;
+      if (!principal) continue;
+      byActor.set(principal.actor, {
+        actor: principal.actor,
+        email: principal.email,
+        grant: event.source?.grant,
+        lastSeenAt: event.createdAt,
+      });
+    }
+    return [...byActor.values()].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
+  }, [events]);
+  return { rpcStubs, actors };
 }
