@@ -91,14 +91,16 @@ export const issuerPagePaths = [
 ];
 
 /** The tools people connect, whose marks we ship (public/brands/, from @lobehub/icons-static-svg,
- *  MIT): crisper than a favicon, and there for a client whose registration names no picture at all
- *  (Codex registers dynamically, with a name). Matched on the client's name, home and id. Our own
- *  apps get no mark here: the hero already shows the platform's, so the client tile shows their
- *  initials (or their favicon, once they have one). */
+ *  MIT; chrome.svg from simple-icons, CC0): crisper than a favicon, and there for a client whose
+ *  registration names no picture at all (Codex registers dynamically, with a name). Matched on the
+ *  client's name, home and id. Our own apps get no mark here: the hero already shows the platform's,
+ *  so the client tile shows their initials (or their favicon, once they have one) — except the
+ *  Chrome extension (apps/browser-extension), whose tile is the person's browser: iterate ⇄ Chrome. */
 const brandMarks: [RegExp, string][] = [
   [/claude|anthropic/i, "/brands/claude.svg"],
   [/codex|openai|chatgpt/i, "/brands/openai.svg"],
   [/cursor/i, "/brands/cursor.svg"],
+  [/chrome/i, "/brands/chrome.svg"],
 ];
 
 /** GET /client-icon?client_id=… — the client's picture for the consent page's hero: its `logo_uri`,

@@ -251,6 +251,14 @@ test("the consent page's client picture: a shipped mark for a client we know by 
   expect(mark.status).toBe(200);
   expect(mark.headers.get("content-type")).toContain("image/svg+xml");
   expect(await mark.text()).toContain("<title>Claude</title>");
+  // the Chrome extension (apps/browser-extension) registers as "Iterate Chrome extension" → Chrome's mark
+  const chrome = await helpers.createClient({
+    ...registration,
+    clientName: "Iterate Chrome extension",
+  });
+  const chromeMark = await SELF.fetch(`${origin}/client-icon?client_id=${chrome.clientId}`);
+  expect(chromeMark.status).toBe(200);
+  expect(await chromeMark.text()).toContain("<title>Chrome</title>");
   // a client's own logo_uri is fetched by the worker (fetch reaches SELF here) — and refused when
   // it is not a raster image: an SVG on the issuer's origin could carry script
   const svgLogo = await helpers.createClient({
