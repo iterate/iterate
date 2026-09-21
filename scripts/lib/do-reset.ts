@@ -90,20 +90,15 @@ function runWranglerDeploy(input: {
 export async function getWorkerDoNamespaces(
   ctx: CfContext,
   workerName: string,
-): Promise<{ className: string; namespaceId: string; storage: "sqlite" | "legacy-kv" }[]> {
-  const namespaces: { className: string; namespaceId: string; storage: "sqlite" | "legacy-kv" }[] =
-    [];
+): Promise<{ className: string; namespaceId: string }[]> {
+  const namespaces: { className: string; namespaceId: string }[] = [];
   for (let page = 1; ; page++) {
-    const batch = await ctx.cf<
-      { id: string; script: string | null; class: string; use_sqlite: boolean }[]
-    >(`/workers/durable_objects/namespaces?per_page=100&page=${page}`);
+    const batch = await ctx.cf<{ id: string; script: string | null; class: string }[]>(
+      `/workers/durable_objects/namespaces?per_page=100&page=${page}`,
+    );
     for (const namespace of batch) {
       if (namespace.script === workerName) {
-        namespaces.push({
-          className: namespace.class,
-          namespaceId: namespace.id,
-          storage: namespace.use_sqlite ? "sqlite" : "legacy-kv",
-        });
+        namespaces.push({ className: namespace.class, namespaceId: namespace.id });
       }
     }
     if (batch.length < 100) break;
@@ -667,29 +662,28 @@ export async function ensureContainerClasses(input: {
           {
             type: string;
             state?: string;
-            storage?: "sqlite" | "legacy-kv";
+            storage?: string;
           }
         >;
       }[]
     >(`/workers/scripts`);
   const script = scripts.find((candidate) => candidate.id === input.workerName);
   const namespaces = script ? await getWorkerDoNamespaces(input.ctx, input.workerName) : [];
-  // Script exports are a second source for classes omitted by the account-wide
-  // namespace listing. Keep their actual storage backend; do not guess from a
-  // 10064 error or accidentally resurrect a deleted export.
-  const liveClasses = new Map(namespaces.map(({ className, storage }) => [className, storage]));
+  // Script exports also retain classes omitted by the namespace listing.
+  // OS supports SQLite only; refuse unsupported storage before uploading.
+  const liveClasses = new Set(namespaces.map(({ className }) => className));
   for (const [className, entry] of Object.entries(script?.exports || {})) {
-    if (
-      entry.type === "durable-object" &&
-      entry.storage &&
-      (!entry.state || entry.state === "created")
-    ) {
-      liveClasses.set(className, entry.storage);
+    if (entry.type !== "durable-object" || (entry.state && entry.state !== "created")) continue;
+    if (entry.storage !== "sqlite") {
+      throw new Error(
+        `Container bootstrap requires SQLite Durable Objects: ${input.workerName}.${className} uses ${entry.storage}`,
+      );
     }
+    liveClasses.add(className);
   }
-  const live = [...liveClasses].map(([className, storage]) => ({ className, storage }));
-  const liveNames = new Set(live.map((namespace) => namespace.className));
-  const missing = input.containerClassNames.filter((className) => !liveNames.has(className)).sort();
+  const missing = input.containerClassNames
+    .filter((className) => !liveClasses.has(className))
+    .sort();
 
   // Do not sweep account-wide container applications here. A paginated
   // namespace listing is not a snapshot: concurrent slot deployments can make
@@ -707,7 +701,7 @@ export async function ensureContainerClasses(input: {
   // the missing ones (a live worker gaining new container classes is the
   // normal case, e.g. a preview slot first deploying a branch that adds
   // one); the next real deploy restores the real implementations.
-  const stubExports = [...missing, ...live.map((namespace) => namespace.className)]
+  const stubExports = [...missing, ...liveClasses]
     .sort()
     .map((className) => `export class ${className} { constructor() {} }`)
     .join("\n");
@@ -743,11 +737,14 @@ export async function ensureContainerClasses(input: {
   } catch (error) {
     if (!String(error).includes("100403")) throw error;
     // exports.container must refer to a *named* containers entry. class_name
-    // alone does not wire it. Preserve every live class and its storage backend.
+    // alone does not wire it. Preserve every live class as SQLite.
     const metadata = JSON.parse(String(form.get("metadata")));
     delete metadata.migrations;
     metadata.exports = Object.fromEntries([
-      ...live.map(({ className, storage }) => [className, { type: "durable-object", storage }]),
+      ...[...liveClasses].map((className) => [
+        className,
+        { type: "durable-object", storage: "sqlite" },
+      ]),
       ...input.containerClassNames.map((className) => [
         className,
         {

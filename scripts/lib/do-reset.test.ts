@@ -132,7 +132,7 @@ test("bootstrap keeps live Worker exports that the namespace listing omits", asy
         {
           id: "os-preview-2",
           exports: {
-            Project: { type: "durable-object", storage: "legacy-kv" },
+            Project: { type: "durable-object", storage: "sqlite" },
             Retired: { type: "durable-object", state: "deleted" },
           },
         },
@@ -171,7 +171,7 @@ test("bootstrap keeps live Worker exports that the namespace listing omits", asy
   expect(uploaded).toMatchObject({
     metadata: {
       exports: {
-        Project: { type: "durable-object", storage: "legacy-kv" },
+        Project: { type: "durable-object", storage: "sqlite" },
         SandboxBasicDurableObject: {
           type: "durable-object",
           storage: "sqlite",
@@ -181,6 +181,37 @@ test("bootstrap keeps live Worker exports that the namespace listing omits", asy
     },
   });
   expect(uploaded.code).not.toContain("export class Retired ");
+});
+
+test("bootstrap refuses unsupported storage instead of preserving legacy compatibility", async () => {
+  const uploads: string[] = [];
+  const cf = async (path: string, init?: RequestInit): Promise<any> => {
+    if (path === "/workers/scripts") {
+      return [
+        {
+          id: "os-preview-2",
+          exports: {
+            Project: { type: "durable-object", storage: "legacy-kv" },
+          },
+        },
+      ];
+    }
+    if (path.startsWith("/workers/durable_objects/namespaces?")) return [];
+    if (init?.method === "PUT") {
+      uploads.push(path);
+      return {};
+    }
+    throw new Error(`unexpected Cloudflare request: ${path}`);
+  };
+  await expect(
+    ensureContainerClasses({
+      ctx: { cf },
+      workerName: "os-preview-2",
+      containerClassNames: ["SandboxBasicDurableObject"],
+      compatibilityDate: "2026-07-01",
+    }),
+  ).rejects.toThrow("requires SQLite Durable Objects");
+  expect(uploads).toEqual([]);
 });
 
 type Settings = {
