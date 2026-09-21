@@ -86,7 +86,8 @@ test("first consent creates organization and project through the ordinary sessio
     kind: "consent",
     query: flow.url.search,
     email: user.email,
-    scopes: ["iterate"],
+    // each requested scope with the page's copy (oauth-scopes.ts); `iterate` cannot be unticked
+    scopes: [{ name: "iterate", required: true, note: "Required — what the app is for." }],
   });
   // the page lists a project by its slug; what a ticked box submits is its id
   if (view.kind !== "consent") throw new Error(`expected consent, got ${JSON.stringify(view)}`);
@@ -267,12 +268,15 @@ test("the consent page's client picture: a shipped mark for a client we know by 
 });
 
 test("a browser landing on the platform origin is told it is headless and where the dash is", async () => {
+  // rendered from the configuration (wrangler.test.jsonc), never a file's hostnames
   const page = await SELF.fetch(`${origin}/`);
   expect(page.status).toBe(200);
   expect(page.headers.get("content-type")).toContain("text/html");
+  expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
   const html = await page.text();
-  expect(html).toContain("deliberately headless");
-  expect(html).toContain("https://dash.iterate2.com/");
+  expect(html).toContain("<strong>control.test</strong> is deliberately headless");
+  expect(html).toContain('href="https://dash.test/"');
+  expect(html).toContain('href="/login"');
 });
 
 test("a client on a project's custom apex is bound to that project at consent, like one under the hostname base", async () => {
@@ -371,7 +375,8 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
   const view = await api.consent.describe(flow.url.search);
   expect(view.kind).toBe("consent");
   if (view.kind !== "consent") throw new Error("Expected consent");
-  expect(view.scopes).toEqual(["iterate"]);
+  expect(view.scopes.map((scope) => scope.name)).toEqual(["iterate"]);
+  expect(view.scopes[0]!.required).toBe(true);
   const cancel = new URL(view.denyLocation);
   expect(cancel.searchParams.get("error")).toBe("access_denied");
   expect(cancel.searchParams.get("state")).toBe(flow.state);
@@ -389,6 +394,17 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
   const page = await SELF.fetch(`${origin}/authorize`);
   expect(page.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
   expect(page.headers.get("X-Frame-Options")).toBe("DENY");
+  // The page is a capnweb client of /api: its bundle is a file beside it, open to anyone; there is
+  // no JSON sibling (an anonymous browser at a non-page path is sent to sign in) and nothing to
+  // post to /authorize.
+  expect((await SELF.fetch(`${origin}/capnweb.js`)).status).toBe(200);
+  const sibling = await SELF.fetch(`${origin}/authorize.json`, { redirect: "manual" });
+  expect(sibling.status).toBe(302);
+  expect(sibling.headers.get("location")).toMatch(/^\/\.auth\/login\?/);
+  expect(
+    (await SELF.fetch(`${origin}/authorize`, { method: "POST", headers: { Origin: origin } }))
+      .status,
+  ).toBe(404);
   // Force the client to refresh through the real public token endpoint.
   const session = appSession(bindings.BROWSER_SESSION, new Request(origin, { headers }))!;
   const before = await session.bearer();

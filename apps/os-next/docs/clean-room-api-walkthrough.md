@@ -1469,9 +1469,9 @@ origin — the provider wants its one resource as an absolute URL) owning `/oaut
 check on `/mcp` (its ONLY protected route, and its ONE resource: `<origin>/mcp`, this origin the
 authorization server — every token is bound to it, a foreign one refused); everything else falls
 through to THE ISSUER'S PAGES — `/login` and `/authorize`, files in public/ the assets binding serves;
-the consent page's script asks `/authorize.json` what to show and posts approve / create an
-organization / create a project to `/authorize`, answered by a session built the way `/api` builds one (`consentDoor`); the one
-machine endpoint beside them (`loginFormPost`) is the sign-in form's plain POST — `POST /login`,
+the consent page's script is a capnweb client of `/api` (`consent.describe`, `createOrg`,
+`projects.create`, `consent.approve` — the session cookie rides the handshake; the worker only gates
+the page); the one machine endpoint beside them (`loginFormPost`) is the sign-in form's plain POST — `POST /login`,
 `/logout` (the session is the signed `__Host-itx-control-plane-session` cookie, `signClaims` under
 `APP_CONFIG_SESSION_SECRET`), `POST /projects` (a program creates projects over `/api`,
 `projects.create`), `POST /authorize`. The `/authorize` consent is THE PROJECT SELECTION: the user's

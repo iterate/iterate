@@ -254,8 +254,9 @@ test("first Claude consent creates the organization and project on the consent p
       .waitFor();
     expect(new URL(page.url()).search).toBe(flow.url.search);
     expect(await accountAccess.isChecked()).toBe(false);
-    // The consent page opens no socket — it posts JSON, and its session is built in the worker.
-    expect(sockets.filter((url) => new URL(url).pathname === "/api")).toHaveLength(0);
+    // The consent page is a capnweb client of /api like any app: ONE socket for the whole flow,
+    // the session cookie riding its handshake — no JSON sibling, no form post.
+    expect(sockets.filter((url) => new URL(url).pathname === "/api")).toHaveLength(1);
     await page.screenshot({ path: test.info().outputPath("first-consent.png"), fullPage: true });
     await approve.click();
     await page

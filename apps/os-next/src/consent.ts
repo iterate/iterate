@@ -3,7 +3,12 @@ import { RpcTarget } from "capnweb";
 import { z } from "zod";
 import { suggestOrganizationName } from "@iterate-com/shared/name-suggestions";
 import { codedError } from "iterate/next/lib";
-import { OAuthScope, OAuthScopes } from "iterate/next/oauth-scopes";
+import {
+  OAuthScope,
+  OAuthScopeDescriptions,
+  OAuthScopes,
+  type ConsentScope,
+} from "iterate/next/oauth-scopes";
 import type { Env } from "./control-plane.ts";
 import { directory, type Org, type Project } from "./directory.ts";
 import { customProjectHostOf, projectHostOf } from "./hosts.ts";
@@ -30,7 +35,8 @@ export type ConsentView =
       projects: Project[];
       orgs: Org[];
       projectBound: boolean;
-      scopes: string[];
+      /** the scopes the request asked for, each with the page's copy (oauth-scopes.ts) */
+      scopes: ConsentScope[];
       denyLocation: string;
       /** where a project's own site lives — `<slug>.<base>` — for the New project form's hint;
        *  blank when the deployment serves no project hosts */
@@ -118,7 +124,11 @@ export class Consent extends RpcTarget {
         clientId: request.clientId,
         email: this.#grant.email,
         picture: this.#grant.picture,
-        scopes: request.scope,
+        // parseAuthorization admitted only known scopes
+        scopes: request.scope.map((scope) => {
+          const name = OAuthScope.parse(scope);
+          return { name, ...OAuthScopeDescriptions[name] };
+        }),
         orgs: await directory(env.DB).listOrgs(this.#grant.userId),
         projectHostnameBase: appConfigOf(env).projectHostnameBase,
         suggestedOrganizationName: suggestOrganizationName({
