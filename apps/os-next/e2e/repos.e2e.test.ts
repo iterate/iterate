@@ -235,7 +235,7 @@ localOnly(
 
 // LOCAL ONLY: the fake remote listens on this machine's loopback (see localOnly).
 localOnly(
-  "a commit whose facts were lost heals on the retry: the push landed but the cross-post to / was refused (the root paused) and the commit threw; the same commit again finds nothing to commit and lands the facts for the tip those changes are — once, keyed by the commit — so the apex still follows",
+  "a commit whose facts were lost heals on the retry: the push landed but the cross-post to / was refused (the root paused) and the commit threw; the same commit again finds nothing to commit and lands the fact the push owed, word for word — once, keyed by the commit — so the apex still follows",
   async () => {
     const itx = openItx(freshCtx("repo"));
     const artifacts = await FakeArtifacts.start();
@@ -265,7 +265,7 @@ localOnly(
       path: "/repos/config",
       commitOid: healed.commitOid,
       message: "write worker.ts",
-      changedPaths: [],
+      changedPaths: ["worker.ts"], // the fact the push owed, not the retry's empty diff
     };
     expect(await facts(itx)).toEqual([fact, healedFact]);
     expect(await facts(itx.cd("/repos/config"))).toEqual([fact, healedFact]);

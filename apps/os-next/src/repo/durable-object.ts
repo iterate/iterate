@@ -47,6 +47,8 @@ const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
 type Transport = ReturnType<typeof createGitWireTransport>;
+/** `repo/commit-completed`'s payload — what a push owes the logs (kept in storage until landed). */
+type CommitFact = { path: string; commitOid: string; message: string; changedPaths: string[] };
 type TipSnapshot = { manifest: RepoManifest; objects: Map<string, RawGitObject> };
 
 /** A repo-relative FILE path, `notes/log.md`: no leading slash, no empty, `.` or `..` segment. */
@@ -245,13 +247,17 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
       changedPaths.push(file);
     }
     if (changedPaths.length === 0) {
-      // Nothing to commit — but a RETRY of a commit whose facts were lost (the push landed, the
-      // append after it did not, the caller saw the throw and calls again with the same changes)
-      // lands them now, for the tip those changes ARE: keyed by the commit, so a tip whose fact
-      // stands lands nothing. The apex follows the fact (project/processor.ts), so a commit in git
-      // without its fact would sit unpublished until an unrelated later commit.
-      if (tip)
-        await this.#commitFact({ path, commitOid: tip, message: input.message, changedPaths });
+      // Nothing to commit — but a fact still OWED for the tip (a push that landed whose facts did
+      // not follow: the caller saw the throw and calls again with the same changes) is landed now,
+      // word for word (an idempotency key names ONE event). The apex follows the fact
+      // (project/processor.ts), so a commit in git without its fact would sit unpublished until an
+      // unrelated later commit. An owed fact for another commit than the tip is stale (main moved
+      // since) and is dropped.
+      const owed = await this.ctx.storage.get<CommitFact>("commit-fact");
+      if (owed) {
+        if (owed.commitOid === tip) await this.#commitFact(owed);
+        else await this.ctx.storage.delete("commit-fact");
+      }
       return { commitOid: tip, changedPaths };
     }
 
@@ -266,6 +272,10 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     });
     const commitOid = await hashObject("commit", commitBytes);
     toPush.push({ payload: commitBytes, type: "commit" });
+    // The fact this push will owe, kept in storage until it has landed on both logs — so a retry after
+    // a lost append lands the same event (above), never a different one under the same key.
+    const committed: CommitFact = { path, commitOid, message: input.message, changedPaths };
+    await this.ctx.storage.put("commit-fact", committed);
     const refused = await transport.push({
       newOid: commitOid,
       oldOid: tip || ZERO_OID,
@@ -275,21 +285,19 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     // The push is compare-and-swapped on the tip read above: `main` having moved in the meantime (a
     // concurrent push) is a refusal like any other — the server's words, and the caller retries.
     // oxlint-disable-next-line iterate/simple-truthiness-check -- push() returns null only on success; an empty-string refusal reason (an `ng <ref>` line with no message) is still a refusal and must throw
-    if (refused !== null) throw new Error(`repo ${path}: the commit was refused: ${refused}`);
-    await this.#commitFact({ path, commitOid, message: input.message, changedPaths });
+    if (refused !== null) {
+      await this.ctx.storage.delete("commit-fact"); // nothing landed, nothing owed
+      throw new Error(`repo ${path}: the commit was refused: ${refused}`);
+    }
+    await this.#commitFact(committed);
     return { commitOid, changedPaths };
   }
 
   /** THE COMMIT'S FACT: cross-posted to `/` FIRST — the project processor follows the config repo's
    *  commits with the apex (project/processor.ts), so a commit whose own-path fact lost its answer is
-   *  published anyway — then on this path. Keyed by the commit on both, so landing it again (a
-   *  retried commit, above) lands nothing where it stands. */
-  async #commitFact(payload: {
-    path: string;
-    commitOid: string;
-    message: string;
-    changedPaths: string[];
-  }): Promise<void> {
+   *  published anyway — then on this path. Keyed by the commit on both, so landing it again (an owed
+   *  fact on a retry, above) lands nothing where it stands. Owed no more once both have landed. */
+  async #commitFact(payload: CommitFact): Promise<void> {
     const committed: EventInput<typeof RepoContract> = {
       type: "events.iterate.com/repo/commit-completed",
       payload,
@@ -297,6 +305,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     };
     await this.withItx((itx) => itx.cd("/").append(committed));
     await this.withItx((itx) => itx.append(committed));
+    await this.ctx.storage.delete("commit-fact");
   }
 
   writeFile(
