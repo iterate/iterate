@@ -169,11 +169,17 @@ export function useContextLog(
       });
     let subscription: { [Symbol.dispose](): void } | undefined;
     (async () => {
-      subscription = await itx.subscribe({
+      const handle = await itx.subscribe({
         consumes: JSON.parse(consumesKey) as string[],
         target: (batch) => !disposed && merge(batch),
       });
-      if (disposed) return;
+      // An unmount while the subscribe was pending ran the cleanup before this handle existed:
+      // release it here, or the server keeps delivering to nobody.
+      if (disposed) {
+        handle[Symbol.dispose]();
+        return;
+      }
+      subscription = handle;
       for (let after = 0; ; ) {
         const page = await itx.readEvents(after, 500);
         if (disposed) return;
@@ -224,7 +230,11 @@ export function useContextProcessors(
     if (!itx) return;
     let disposed = false;
     Promise.resolve(itx.processors.list()).then(
-      (list) => !disposed && setRows(list),
+      (list) => {
+        if (disposed) return;
+        setRows(list);
+        setError(undefined); // a read that recovered clears the last failure
+      },
       (e: unknown) => !disposed && setError(e instanceof Error ? e.message : String(e)),
     );
     return () => {

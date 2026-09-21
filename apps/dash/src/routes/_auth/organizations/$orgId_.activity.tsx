@@ -1,11 +1,12 @@
 // /organizations/<organization>/activity — the organization's record: created, renamed, the
 // projects created in it — the context view over `session.organizations.get(orgId)`'s log, with
-// the organization fold enabled on first visit. Reached from the organization's page.
+// the organization fold enabled on first visit. Reached from the organization's page. A sibling
+// of the settings route, not its child (the `_` in the file name): the settings page renders no outlet.
 import { useEffect, useState } from "react";
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { ContextActivity, type ActivityItx } from "../../../components/context-activity.tsx";
 
-export const Route = createFileRoute("/_auth/organizations/$orgId/activity")({
+export const Route = createFileRoute("/_auth/organizations/$orgId_/activity")({
   beforeLoad: async ({ context, params }) => {
     const org = (await context.api.orgs()).find((candidate) => candidate.id === params.orgId);
     if (!org) throw notFound();
