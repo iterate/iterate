@@ -124,6 +124,65 @@ test("bootstrap restores missing container classes on an exports Worker without 
   });
 });
 
+test("bootstrap keeps live Worker exports that the namespace listing omits", async () => {
+  let uploaded: any;
+  const cf = async (path: string, init?: RequestInit): Promise<any> => {
+    if (path === "/workers/scripts") {
+      return [
+        {
+          id: "os-preview-2",
+          exports: {
+            Project: { type: "durable-object", storage: "legacy-kv" },
+            Retired: { type: "durable-object", state: "deleted" },
+          },
+        },
+      ];
+    }
+    if (path.startsWith("/workers/durable_objects/namespaces?")) return [];
+    if (path === "/workers/scripts/os-preview-2" && init?.method === "PUT") {
+      const form = init.body as FormData;
+      const metadata = JSON.parse(form.get("metadata") as string);
+      if (metadata.migrations) {
+        throw new CloudflareApiError("PUT", path, 400, [{ code: 100403 }]);
+      }
+      const code = await (form.get("bootstrap.mjs") as File).text();
+      if (!code.includes("export class Project ")) {
+        throw new CloudflareApiError("PUT", path, 400, [
+          {
+            code: 10064,
+            message:
+              "does not export class 'Project' which is depended on by existing Durable Objects",
+          },
+        ]);
+      }
+      uploaded = { metadata, code };
+      return;
+    }
+    throw new Error(`unexpected Cloudflare request: ${path}`);
+  };
+
+  await ensureContainerClasses({
+    ctx: { cf },
+    workerName: "os-preview-2",
+    containerClassNames: ["SandboxBasicDurableObject"],
+    compatibilityDate: "2026-07-01",
+  });
+
+  expect(uploaded).toMatchObject({
+    metadata: {
+      exports: {
+        Project: { type: "durable-object", storage: "legacy-kv" },
+        SandboxBasicDurableObject: {
+          type: "durable-object",
+          storage: "sqlite",
+          container: "SandboxBasicDurableObject",
+        },
+      },
+    },
+  });
+  expect(uploaded.code).not.toContain("export class Retired ");
+});
+
 type Settings = {
   annotations?: Record<string, unknown>;
   bindings: Record<string, unknown>[];

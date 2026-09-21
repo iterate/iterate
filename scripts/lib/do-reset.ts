@@ -658,9 +658,36 @@ export async function ensureContainerClasses(input: {
   if (input.containerClassNames.length === 0) return { action: "skipped", missing: [] };
 
   const scripts =
-    await input.ctx.cf<{ id: string; migration_tag?: string | null }[]>(`/workers/scripts`);
+    await input.ctx.cf<
+      {
+        id: string;
+        migration_tag?: string | null;
+        exports?: Record<
+          string,
+          {
+            type: string;
+            state?: string;
+            storage?: "sqlite" | "legacy-kv";
+          }
+        >;
+      }[]
+    >(`/workers/scripts`);
   const script = scripts.find((candidate) => candidate.id === input.workerName);
-  const live = script ? await getWorkerDoNamespaces(input.ctx, input.workerName) : [];
+  const namespaces = script ? await getWorkerDoNamespaces(input.ctx, input.workerName) : [];
+  // Script exports are a second source for classes omitted by the account-wide
+  // namespace listing. Keep their actual storage backend; do not guess from a
+  // 10064 error or accidentally resurrect a deleted export.
+  const liveClasses = new Map(namespaces.map(({ className, storage }) => [className, storage]));
+  for (const [className, entry] of Object.entries(script?.exports || {})) {
+    if (
+      entry.type === "durable-object" &&
+      entry.storage &&
+      (!entry.state || entry.state === "created")
+    ) {
+      liveClasses.set(className, entry.storage);
+    }
+  }
+  const live = [...liveClasses].map(([className, storage]) => ({ className, storage }));
   const liveNames = new Set(live.map((namespace) => namespace.className));
   const missing = input.containerClassNames.filter((className) => !liveNames.has(className)).sort();
 
