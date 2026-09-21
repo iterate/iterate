@@ -54,8 +54,15 @@ function CodeMirror({
   const latestSelectAllSignalRef = useRef(selectAllSignal);
   const valueRef = useRef(value);
   const syncingValueRef = useRef(false);
-  valueRef.current = value;
-  latestSelectAllSignalRef.current = selectAllSignal;
+
+  // The rebuild effect below reads the latest value and signal without depending on them (a
+  // keystroke must not rebuild the view). Assigned here, in an effect declared before it, so a
+  // rebuild in the same commit sees this commit's values — and a render React discards never
+  // reaches the refs.
+  useEffect(() => {
+    valueRef.current = value;
+    latestSelectAllSignalRef.current = selectAllSignal;
+  }, [value, selectAllSignal]);
 
   useEffect(() => {
     onChangeRef.current = onChange;
