@@ -729,7 +729,7 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
   ]);
 });
 
-test("an agent born BEFORE the sandbox — a certificate and a prompt, no rows — gets its sandbox rows on its first message of an incarnation (create() re-asserted) and its parent link on the next create(): the tree the model sees grows from its own roots to the root's", async () => {
+test("an agent born BEFORE the sandbox — a certificate and a prompt, no rows — gets its sandbox rows on its first message of an incarnation (create() re-asserted; a jail the owner wrote first STANDS) and its parent link on the next create(): the tree the model sees grows from its own roots to the root's", async () => {
   const itx = openItx(freshCtx("agent-old"));
   const path = "/agents/old";
   const old = itx.cd(path);
@@ -753,22 +753,40 @@ test("an agent born BEFORE the sandbox — a certificate and a prompt, no rows �
   expect(await old.builtins.rewriteRules.get("itx.run")).toMatchObject({
     target: "itx.builtins.run",
   }); // the implicit row: scripts would run here
-  // The first message of the incarnation confirms creation, which asserts the sandbox rows.
+  // The owner jails the sandbox BEFORE the agent's first message — a row the agent must not undo.
+  const sandbox = itx.cd(`${path}/sandbox`);
+  await sandbox.provide({
+    match: "itx",
+    target: null,
+    description: "jailed before birth caught up",
+  });
+  // The first message of the incarnation confirms creation, which asserts the sandbox rows: the
+  // redirect lands on the agent; the link does NOT overwrite the owner's null.
   await itx.agents.get(path).message("hello");
   await until("the model was asked", () => (ai.calls.length >= 1 ? true : undefined));
   expect(await old.builtins.rewriteRules.get("itx.run")).toMatchObject({
     target: "itx.builtins.cd('/agents/old/sandbox').builtins.run",
     context: path,
   });
-  expect(await itx.cd(`${path}/sandbox`).builtins.rewriteRules.get("itx")).toMatchObject({
+  expect(await sandbox.builtins.rewriteRules.list()).toEqual([
+    {
+      match: "itx",
+      target: null,
+      description: "jailed before birth caught up",
+      context: `${path}/sandbox`,
+    },
+  ]);
+  // The owner lifts the jail with the link the creator would have written; the rows are theirs.
+  await sandbox.provide("itx", `itx.builtins.cd('${path}')`);
+  expect(await sandbox.builtins.rewriteRules.get("itx")).toMatchObject({
     target: "itx.builtins.cd('/agents/old')",
   });
   const treeOf = (call: { messages: { role: string; content: string }[] }) =>
-    call.messages.find((m) => m.role === "system" && m.content.includes("CAPABILITY TREE"))!
-      .content;
-  // …but no parent link: the tree reaches the agent's own roots and stops (nothing from /)
-  expect(treeOf(ai.calls[0]!)).toContain(`from ${path}/sandbox:`);
+    call.messages.find((m) => m.role === "system" && m.content.includes("CAPABILITY TREE"))
+      ?.content ?? "";
+  // …and the model saw the jail: nothing to spell (no tree, or none of the root's rows)
   expect(treeOf(ai.calls[0]!)).not.toContain("from /:");
+  expect(treeOf(ai.calls[0]!)).not.toContain("itx.kv — ");
   await until("the first turn answered", async () =>
     assistantWords(await readAll(old)).length >= 1 ? true : undefined,
   );

@@ -319,8 +319,10 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
     // iterate-context-durable-object.ts `#executeRun`), so the facet's own calls and the scripts'
     // never share a table. The sandbox's one row: everything a script does not claim, this agent
     // answers (its own chain up to the root). A jail is the owner replacing THAT row with `null` —
-    // before or with the first message — and appending its grants beside it. Both rows are
-    // idempotent on their keys, so asserting them again writes nothing (a jail's replacement stands).
+    // before or with the first message — and appending its grants beside it. The redirect is
+    // idempotent on its key; the link is the DEFAULT the creator supplies where the owner has said
+    // nothing: written only while the sandbox has no bare `itx` row, so an owner's row — a jail's
+    // `null` written before this agent's first message included — is never overwritten.
     await this.withItx((itx) =>
       itx.builtins.append({
         type: "events.iterate.com/itx/rewrite-rule-configured",
@@ -334,8 +336,10 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
         },
       }),
     );
-    await this.withItx((itx) =>
-      itx.cd("./sandbox").builtins.append({
+    await this.withItx(async (itx) => {
+      const sandbox = itx.cd("./sandbox").builtins;
+      if (await sandbox.rewriteRules.get("itx")) return;
+      await sandbox.append({
         type: "events.iterate.com/itx/rewrite-rule-configured",
         idempotencyKey: `itx@${path}`,
         payload: {
@@ -343,8 +347,8 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
           target: ["itx", "builtins", ["cd", path]],
           description: "everything this sandbox does not claim, the agent answers",
         },
-      }),
-    );
+      });
+    });
     this.#confirmedCreated = true;
     return { path };
   }
