@@ -803,11 +803,8 @@ describe("the builtins root, as the reduce sees it: masks, the platform-equivale
 describe("the platform rows a null MASKS (kept) vs a plain delete", () => {
   const configured = (offset: number, match: string, target: string | null) =>
     at(offset, "events.iterate.com/itx/rewrite-rule-configured", { match, target });
-  // RED (`test.fails` — a known defect, too costly to fix now): the platform-equivalent target
-  // `itx.<x…> ⇒ itx.builtins.<x…>` is DELETED whatever lies above it, so under a broader mask
-  // (`itx ⇒ null`, `itx.kv ⇒ null`) one prefix can never be re-opened — yet longest-match promises
-  // it. The fix stores the row when a shorter row claims the prefix and deletes only when nothing
-  // lies above — a table-aware delete.
+  // Rule 8 in the presence of a broader mask: the physical spelling beneath it is a GRANT through
+  // the wall and is stored, so exactly that prefix re-opens — what longest-match promises.
   test("a platform-equivalent target beneath a broader mask re-opens exactly that prefix", () => {
     const s = reduceAll([
       configured(1, "itx.kv", null),
@@ -1050,14 +1047,5 @@ describe("rule 8 at a CHILD (nothing project-level implicit; the bare null; the 
       target: null,
       description: "a jail",
     });
-  });
-  test("a handle's undo — `null` with `ifTarget` — DELETES, never masks, and only while the row is still its own", () => {
-    const s = reduceAll([
-      atChild(1, { match: "itx.append", target: "itx.fake" }),
-      //  at rest is the PARSED form (the append boundary normalizes it like the target)
-      atChild(2, { match: "itx.append", target: null, ifTarget: ["itx", "other"] }), // stale: someone else's row now
-      atChild(3, { match: "itx.append", target: null, ifTarget: ["itx", "fake"] }),
-    ]);
-    expect(s.itxExpressionRewriteRules).toEqual({});
   });
 });

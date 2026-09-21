@@ -576,10 +576,9 @@ row `itx.<root> ⇒ itx.builtins.<root>` unless the context's own rows say other
 (rules FIRST, section 9.1), so a root can be shadowed or masked. Which roots are
 implicit depends on the context: at the owner root (`/`; `/users/<id>` or
 `/organizations/<id>` in the global namespace) every root below; everywhere else
-only the fourteen context roots — `whoami`, `url`, `append`, `readEvents`, `waitForEvent`,
-`cd`, `facets`, `subscriptions`, `processors`, `schedules`, `rewriteRules`,
-`rpcStubs`, `workers`, `run` — and a project-level name (`kv`, `secrets`, `ai`,
-`fetch`, `repos`, `agents`, …) is reached only through a row. `itx.builtins` is the
+only the fourteen context roots (`CONTEXT_ROOTS`, listed in itx-surface-as-built.md §5) — and a
+project-level name (`kv`, `secrets`, `ai`, `fetch`, `repos`, `agents`, …) is reached only through a
+row. `itx.builtins` is the
 kernel's word: a rule's target may name it (a grant of the real thing), the kernel's
 own appends spell it, and a call from loaded code may not (section 5).
 
