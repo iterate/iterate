@@ -107,19 +107,22 @@ test("an app is served at / on its project host — URL verbatim, relative asset
     expect(dotted.status, dotted.text).toBe(200);
     expect(dotted.text).toContain(`<p>site.${slug}.${base}/w</p>`);
   }
-  // the apex names no app: the config worker's fetch answers it — the bundled default is the
-  // project's bare homepage, a project's own routes it (here: to the site, through
-  // `itx.apps.site.fetch`), and the site then sees ITS label: the DO's fetch path derives
-  // `x-iterate-app` from the expression at every entry, never from what the config worker forwarded
-  // (the config worker itself sees none)
+  // An unconfigured apex returns 404. Publishing the router sends requests to
+  // `itx.apps.site.fetch`, which derives `x-iterate-app` from that expression.
+  // The wrapper's forwarded headers cannot override the resolved app label.
   const bare = await fetchProjectHost(`${slug}.${base}`, "/");
-  expect(bare.status, bare.text).toBe(200);
-  expect(bare.text).toContain(`Homepage of project ${projectId}`);
-  await itx.provide("itx.worker", [
-    "itx",
-    "workers",
-    ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:ingress" }],
-  ]);
+  expect(bare.status, bare.text).toBe(404);
+  expect(bare.text).toContain("not configured");
+  await itx.append({
+    type: "events.iterate.com/project/ingress-configured",
+    payload: {
+      target: [
+        "itx",
+        "workers",
+        ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:ingress" }],
+      ],
+    },
+  });
   const apex = await fetchProjectHost(`${slug}.${base}`, "/echo", {
     "x-iterate-app": "other",
   });
@@ -140,15 +143,20 @@ localOnly(
     const projectId = await registerProject("custom-apex-project"); // the slug worker-config.ts maps custom-apex.test to
     const itx = openItx(projectId);
     await itx.provide("itx.apps.site", siteRule());
-    // the bundled default config worker: the project's bare homepage — the request reached the project
+    // A custom hostname reaches its project, but needs an explicit ingress target.
     const bare = await fetchProjectHost("custom-apex.test", "/");
-    expect(bare.status, bare.text).toBe(200);
-    expect(bare.text).toContain(`Homepage of project ${projectId}`);
-    await itx.provide("itx.worker", [
-      "itx",
-      "workers",
-      ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:custom-apex" }],
-    ]);
+    expect(bare.status, bare.text).toBe(404);
+    expect(bare.text).toContain("not configured");
+    await itx.append({
+      type: "events.iterate.com/project/ingress-configured",
+      payload: {
+        target: [
+          "itx",
+          "workers",
+          ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:custom-apex" }],
+        ],
+      },
+    });
     const apex = await fetchProjectHost("custom-apex.test", "/echo");
     expect(apex.status, apex.text).toBe(200);
     expect((JSON.parse(apex.text) as { url: string }).url).toContain("//custom-apex.test/echo");

@@ -359,12 +359,15 @@ test("the Notes app works on its own origin and through a project config worker"
   // the `notes` app label at it — so notes--<project>.<base> reaches the config worker with the app
   // slug in x-iterate-app (the apps/os header), and it fetches through to the Notes worker.
   await Promise.all([
-    projectContext.provide("itx.worker", [
+    projectContext.append({
+      type: "events.iterate.com/project/ingress-configured",
+      payload: { target: ["itx", "workers", ["get", { source: { "cap.js": source } }]] },
+    }),
+    projectContext.provide("itx.apps.notes", [
       "itx",
       "workers",
       ["get", { source: { "cap.js": source } }],
     ]),
-    projectContext.provide("itx.apps.notes", ["itx", "worker"]),
   ]);
   await page.goto(notesOrigin);
   await page.getByRole("link", { name: "Log in with iterate", exact: true }).click();

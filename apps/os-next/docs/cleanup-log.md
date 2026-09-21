@@ -72,7 +72,7 @@ pins it + a note here; API/abstraction/concept questions → research + note her
 - **Account/organization handles are unrestricted global itx.** RESOLVED 2026-09-14, structurally:
   the global namespace is not navigable — a global handle's `cd` is refused (edge and, for a
   principal, DO), `session.organizations.get` checks membership, `global` is a reserved project name;
-  the kernel's config funnel is the one hop, under a null principal
+  no implicit config subscription requires a privileged path exception
   (docs/control-plane-context-resolved-design.md). What is still shared across global contexts is
   the project-scoped resources (`itx.kv`, `itx.secrets`, `itx.repos`), not a path. (codex #1)
 

@@ -88,7 +88,9 @@ export interface IterateContextApi {
      *  `runInBackground` attempt in flight), or `null` to release it. */
     processors: { claim(name: string, at: number | null): Promise<void> };
   };
-  whoami(): { projectId: string; path: string };
+  whoami():
+    | { projectId: string; path: string; projectSlug?: string; projectUrl?: string }
+    | Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   readEvents(
     afterOffset?: number,

@@ -346,8 +346,8 @@ test("subscribe → subscribe({ name, target: null }) recalls the lent stub AND 
   const observer = openItx(freshCtx("unsub-leak"));
   expect(await presence(observer)).toEqual([]); // baseline: nothing lent
   expect(await rpcStubRewriteRuleMatches(observer)).toEqual([]); // and no rpc-stub rules
-  // baseline: only the config-worker funnel row (auto-subscribed at birth) is ever in the table
-  expect((await subscriptions(observer)).map((r) => r.name)).toEqual(["config"]);
+  // No implicit subscriptions.
+  expect((await subscriptions(observer)).map((r) => r.name)).toEqual([]);
 
   const subscription = await observer.subscribe({ target: () => undefined });
   const subscriptionName: string = await subscription.name;
@@ -356,7 +356,7 @@ test("subscribe → subscribe({ name, target: null }) recalls the lent stub AND 
     (await presence(observer)).includes(rpcStubKey),
   );
   // the ROW landed (awaited configure); a subscription is NOT a rewrite rule (config-funnel row first)
-  expect((await subscriptions(observer)).map((r) => r.name)).toEqual(["config", subscriptionName]);
+  expect((await subscriptions(observer)).map((r) => r.name)).toEqual([subscriptionName]);
   expect(await rpcStubRewriteRuleMatches(observer)).toEqual([]);
 
   await observer.subscribe({ name: subscriptionName, target: null });
@@ -364,7 +364,7 @@ test("subscribe → subscribe({ name, target: null }) recalls the lent stub AND 
   // `target: null` = remove the row (awaited — the table is back to the config baseline on return)
   // + recall this session's stub under it (the relay's dispose closes the pager; the DO drops the
   // transport a beat later — poll presence). Two lifetimes, one explicit exit.
-  expect((await subscriptions(observer)).map((r) => r.name)).toEqual(["config"]);
+  expect((await subscriptions(observer)).map((r) => r.name)).toEqual([]);
   expect(await rpcStubRewriteRuleMatches(observer)).toEqual([]);
   await until(
     "the lent stub gone from presence",
@@ -388,9 +388,7 @@ test("disposing a SubscriptionHandle removes its row and recalls its stub — th
 
   subscription[Symbol.dispose](); // a wire release: the server disposes the handle → row removed, stub recalled
   // the scoped row gone = the table back to the config baseline (the config-funnel row is permanent)
-  await until("the scoped row gone", async () =>
-    (await subscriptions(observer)).every((r) => r.name === "config"),
-  );
+  await until("the scoped row gone", async () => (await subscriptions(observer)).length === 0);
   await until("the stub gone from presence", async () => (await presence(observer)).length === 0);
   await observer.append({ type: "mark" });
   await sleep(600);
@@ -404,10 +402,11 @@ test("disposing a SubscriptionHandle removes an EXPRESSION row in either codec h
   ] as const) {
     const itx = openItx(freshCtx(`subrow-${half}`));
     const handle = await itx.subscribe({ name: "viaExpression", target });
-    expect((await subscriptions(itx)).map((r) => r.name)).toEqual(["config", "viaExpression"]);
+    expect((await subscriptions(itx)).map((r) => r.name)).toEqual(["viaExpression"]);
     handle[Symbol.dispose]();
-    await until(`the ${half}-spelled row removed`, async () =>
-      (await subscriptions(itx)).every((r) => r.name === "config"),
+    await until(
+      `the ${half}-spelled row removed`,
+      async () => (await subscriptions(itx)).length === 0,
     );
     expect(await presence(itx)).toEqual([]); // nothing was ever lent under it
   }
@@ -450,7 +449,7 @@ test("storm of provide/dispose/subscribe/null-target/disconnect: presence AND th
     const err = await rejection(observer.invoke(`${match}.hello()`), `call on ${match}`);
     expect(codeOf(err)).toBe("NO_ITX_EXPRESSION_MATCH");
   }
-  expect((await subscriptions(observer)).map((r) => r.name)).toEqual(["config"]);
+  expect((await subscriptions(observer)).map((r) => r.name)).toEqual([]);
 });
 
 test("re-provide at one key replaces ONLY that key's transport and leaves a separate live stub (even mid-invoke) untouched", async () => {
@@ -525,7 +524,7 @@ test("churn 20×: no ghost deliveries; presence AND the tables return to baselin
   await itx.append({ type: "mark", payload: { n: 2 } });
   await sleep(800);
   expect(delivered).toBe(0);
-  expect((await subscriptions(observer)).map((r) => r.name)).toEqual(["config"]);
+  expect((await subscriptions(observer)).map((r) => r.name)).toEqual([]);
   // a subscription never touches the REWRITE-RULE table (two layers, two tables)
   expect((await rpcStubRewriteRuleMatches(observer)).length).toBe(baselineRules);
 
@@ -537,5 +536,5 @@ test("churn 20×: no ghost deliveries; presence AND the tables return to baselin
     async () => (await presence(observer)).length === baselinePresence,
   );
   expect((await rpcStubRewriteRuleMatches(observer)).length).toBe(baselineRules); // the dispose touched no rule
-  expect((await subscriptions(observer)).map((r) => r.name)).toEqual(["config"]);
+  expect((await subscriptions(observer)).map((r) => r.name)).toEqual([]);
 });

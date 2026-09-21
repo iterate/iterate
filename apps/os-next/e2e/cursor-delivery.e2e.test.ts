@@ -178,7 +178,6 @@ test("the digest worker is delivered from a stream-kept cursor; retryable:false 
   expect(row3.target).toBe("itx.digest.processEventBatch"); // stored as written — the loop classifies the target by what it EVALUATES to
   expect((await row(itx, "tab")).cursor).toBeUndefined(); // push target: the client owns its offset
   expect((await subscriptions(itx)).map((r: { name: string }) => r.name).sort()).toEqual([
-    "config", // the config-worker funnel's birth subscription is present on every context
     "digest",
     "tab",
   ]);
@@ -341,7 +340,7 @@ test("the view: a push target's row has NO cursor; a resumed fact for an unknown
   const c = collector();
   await itx.subscribe({ name: "conny", consumes: ["mark"], target: c.fn });
   const before = await subscriptions(itx);
-  expect(before).toHaveLength(2); // conny + the config-worker funnel's birth subscription
+  expect(before).toHaveLength(1); // conny only
   expect(before.find((r: { name: string }) => r.name === "conny").cursor).toBeUndefined(); // push target: no cursor
   const [fact] = await append(itx, { type: RESUMED, payload: { name: "never-was" } });
   expect(fact.offset).toBeGreaterThan(0); // not refused — a fact nobody reduces into a row
@@ -481,10 +480,8 @@ test("cursor subscriptions enable no processor and mint no facet; a row appears 
     ),
   );
   const listed = await subscriptions(itx);
-  // the config-worker funnel's birth subscription rides alongside the three under test
-  expect(listed.map((r) => r.name).sort()).toEqual(["auto-1", "auto-2", "auto-3", "config"]);
+  expect(listed.map((r) => r.name).sort()).toEqual(["auto-1", "auto-2", "auto-3"]);
   for (const r of listed) {
-    if (r.name === "config") continue; // config consumes '*' and delivers; the three under test consume "never"
     // Nothing consumed yet ⇒ nothing delivered: the cursor sits at rest (attempt 0) — a durable
     // commit a row does not consume (its own configure included) moves its cursor along without a
     // call, so the row is never behind the durable mark and never a claim on the alarm.
@@ -493,12 +490,7 @@ test("cursor subscriptions enable no processor and mint no facet; a row appears 
   }
   // and the core snapshot's subscription rows are the same truth, as reduced state
   const snap: any = await itx.invoke("itx.facets.get('core').snapshot()");
-  expect(Object.keys(snap.state.subscriptions).sort()).toEqual([
-    "auto-1",
-    "auto-2",
-    "auto-3",
-    "config",
-  ]);
+  expect(Object.keys(snap.state.subscriptions).sort()).toEqual(["auto-1", "auto-2", "auto-3"]);
 });
 
 test("subscribe resolves without probing the receiver; an unusable target fails at its FIRST delivery, never at configure", async () => {

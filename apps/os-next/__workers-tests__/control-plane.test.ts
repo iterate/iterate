@@ -41,14 +41,24 @@ test("the directory keeps creation, listing, membership and event attribution co
   using project = await ada.projects.create({ project: "adas-directory" });
   // the project's id is minted; its name is the slug — the list carries both
   const adasRoot = await project.whoami();
-  expect(adasRoot).toEqual({ projectId: expect.stringMatching(/^prj_[0-9a-f]{32}$/), path: "/" });
+  expect(adasRoot).toEqual({
+    projectId: expect.stringMatching(/^prj_[0-9a-f]{32}$/),
+    path: "/",
+    projectSlug: "adas-directory",
+    projectUrl: "https://adas-directory.projects.test",
+  });
   const adasProjectId = adasRoot.projectId;
   expect((await ada.projects.list()).map(({ id, slug }) => ({ id, slug }))).toEqual([
     { id: adasProjectId, slug: "adas-directory" },
   ]);
   // the slug names the project too (a URL's /projects/<slug>): the directory resolves it to the id
   using bySlug = await ada.projects.get("adas-directory");
-  expect(await bySlug.whoami()).toEqual({ projectId: adasProjectId, path: "/" });
+  expect(await bySlug.whoami()).toEqual({
+    projectId: adasProjectId,
+    path: "/",
+    projectSlug: "adas-directory",
+    projectUrl: "https://adas-directory.projects.test",
+  });
   const [event] = await project.append({
     type: "note",
     source: { principal: { actor: "forged" } },
@@ -74,7 +84,12 @@ test("the directory keeps creation, listing, membership and event attribution co
     ]),
   );
   using other = await admin.projects.get(adasProjectId);
-  expect(await other.whoami()).toEqual({ projectId: adasProjectId, path: "/" });
+  expect(await other.whoami()).toEqual({
+    projectId: adasProjectId,
+    path: "/",
+    projectSlug: "adas-directory",
+    projectUrl: "https://adas-directory.projects.test",
+  });
 });
 
 test("onboarding creates owned organizations atomically and checks the selected organization", async () => {
