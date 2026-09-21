@@ -45,7 +45,7 @@ import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 // pipelinable handle).
 //
 // The verbs: `run` · `connectToMcp` · `connectToOpenApi` · `connectToCapnweb` · `repos.get`/`list` ·
-// `workspaces.get`/`list` · `agents.get`/`list` · `files.get`/`list`. `run` is sugar over `itx.workers.get` (the run section); the entity handles
+// `workspaces.get`/`list` · `agents.get`/`list` · `mcpConnections.list` · `files.get`/`list`. `run` is sugar over `itx.workers.get` (the run section); the entity handles
 // over `itx.cd(path).facets.get` (the entities section). The three connectors each
 // return a connection RpcTarget a caller can hold across calls, and each does ALL its HTTP through
 // `itx.fetch` (egress: `getSecret("/secrets/NAME")` placeholders in headers substitute for free; a user
@@ -129,6 +129,13 @@ export interface LibraryRoots {
   agents: {
     get(path: string): InvokeHandle & AgentFacet;
     list(): Promise<{ path: string; createdAt: string }[]>;
+  };
+  /** THE MCP CONNECTIONS of the project: every grant whose connection context was born here (its
+   *  first run over MCP) — the context's path (`/mcp/inbound/<grantId>`, its transcript) and when.
+   *  The project catalog's `mcpConnections`, folded from `project/mcp-connection-created` (mcp.ts
+   *  cross-posts it to `/`). */
+  mcpConnections: {
+    list(): Promise<{ grantId: string; path: string; createdAt: string }[]>;
   };
   /** THE FILES (apps/os's `itx.files`, lean): project file storage as a PATH namespace over `itx.r2`
    *  — a file is its path (leading slash), its bytes and a content type; last write wins, no
@@ -265,6 +272,13 @@ export function buildLibrary(
           Object.entries((await projectCatalog(itx)).agents).map(([path, agent]) => ({
             path,
             ...agent,
+          })),
+      },
+      mcpConnections: {
+        list: async () =>
+          Object.entries((await projectCatalog(itx)).mcpConnections).map(([grantId, client]) => ({
+            grantId,
+            ...client,
           })),
       },
     },

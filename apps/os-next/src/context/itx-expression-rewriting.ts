@@ -132,6 +132,7 @@ export const BUILT_IN_ROOTS = [
   "repos",
   "workspaces",
   "agents",
+  "mcpConnections",
   "files",
 ] as const;
 

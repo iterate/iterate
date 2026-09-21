@@ -1,6 +1,6 @@
 // src/project/processor.ts — the project processor's PURE class (the triplet's middle): folds the
 // birth certificates cross-posted to `/` into the catalog. First certificate wins; a repo, a
-// workspace or an agent is born once, an MCP client connects once (per grant). Imports only the pure kernel, so a unit test constructs it with `new`
+// workspace, an agent or an MCP connection (per grant) is born once. Imports only the pure kernel, so a unit test constructs it with `new`
 // (processor.test.ts, in node); the host (durable-object.ts) reduces it on demand through `snapshot()`.
 import {
   type ConsumedEvent,
@@ -44,12 +44,15 @@ export class ProjectProcessor extends StreamProcessor<
       };
     }
 
-    if (event.type === "events.iterate.com/project/mcp-client-connected") {
+    if (event.type === "events.iterate.com/project/mcp-connection-created") {
       const { grantId, path } = event.payload;
-      if (state.mcpClients[grantId]) return undefined;
+      if (state.mcpConnections[grantId]) return undefined;
       return {
         ...state,
-        mcpClients: { ...state.mcpClients, [grantId]: { path, createdAt: event.createdAt } },
+        mcpConnections: {
+          ...state.mcpConnections,
+          [grantId]: { path, createdAt: event.createdAt },
+        },
       };
     }
     return undefined;

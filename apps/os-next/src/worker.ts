@@ -204,6 +204,7 @@ export { SecretDurableObject } from "./secret-durable-object.ts";
 // worker code with the worker's real env, never a loaded source.
 export { AccountDurableObject } from "./account/durable-object.ts";
 export { AgentDurableObject } from "./agent/durable-object.ts";
+export { OrganizationDurableObject } from "./organization/durable-object.ts";
 export { ProjectDurableObject } from "./project/durable-object.ts";
 export { RepoDurableObject } from "./repo/durable-object.ts";
 export { WorkspaceDurableObject } from "./workspace/durable-object.ts";

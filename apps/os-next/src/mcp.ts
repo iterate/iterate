@@ -13,8 +13,8 @@ import type { Authorization } from "./oauth.ts";
 // that context's log, `context/run-requested` + `run-settled` stamped with who and through which
 // grant (the audit lives where it happened); the project root is `itx.cd('/')`, and kv, files, repos,
 // secrets are the project's wherever the script runs. `run(script)` when the token reaches exactly
-// one project, `run(project, script)` otherwise. The project's catalog lists every client that
-// connected (src/project/: `project/mcp-client-connected`, appended to `/` on a grant's first use).
+// one project, `run(project, script)` otherwise. The project's catalog lists every connection born
+// under it (src/project/: `project/mcp-connection-created`, appended to `/` on a grant's first run).
 // Everything else a caller might read (who am I, which projects) is the server's own `instructions`
 // or a one-line script; project creation is the public Session's.
 
@@ -126,8 +126,8 @@ async function buildServer(env: Env, authorization: Authorization): Promise<McpS
           reach,
           toolArguments.project?.trim() ?? "",
         );
-        // THE CATALOG learns of this connection once: the project root's `mcp-client-connected`,
-        // idempotent on the grant (a dedupe hit writes nothing), before the first script runs.
+        // THE BIRTH CERTIFICATE of the connection's context, cross-posted to `/` for the catalog —
+        // idempotent on the grant (a dedupe hit writes nothing) — before its first script runs.
         await env.ITERATE_CONTEXT.getByName(
           DurableObjectNameCodec.stringify({ projectId, path: "/" }),
         ).invoke(
@@ -136,8 +136,8 @@ async function buildServer(env: Env, authorization: Authorization): Promise<McpS
             [
               "append",
               {
-                type: "events.iterate.com/project/mcp-client-connected",
-                idempotencyKey: `mcp-client-connected/${grant?.grantId ?? "admin"}`,
+                type: "events.iterate.com/project/mcp-connection-created",
+                idempotencyKey: `mcp-connection-created/${grant?.grantId ?? "admin"}`,
                 payload: { grantId: grant?.grantId ?? "admin", path: connectionPath },
               },
             ],
