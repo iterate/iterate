@@ -80,7 +80,7 @@ test("facet spine: cold catch-up + driven reduces + the subscriptions table list
   expect(await processorNames(itx)).toEqual(["tally"]);
   const row = (await subscriptions(itx)).find((r: { name: string }) => r.name === "tally");
   expect(row.target).toBe("itx.builtins.facets.get('tally').processEventBatch"); // the platform's spelling, minus the source
-  expect(row.hostedFacet).toEqual({ name: "tally", className: "TallyDurableObject" });
+  expect(row.hostedFacet).toEqual({ name: "tally", className: "TallyDurableObject", restarts: 0 });
   expect(row.cursor).toBeUndefined();
 });
 
