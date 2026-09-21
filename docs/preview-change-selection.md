@@ -244,3 +244,37 @@ its deploy. Ordinary full runs retain the existing three-app restoration.
 `preview-restoration.json` records tested and restored SHAs and Worker versions.
 `preview-settled` is published only after the restore succeeds. Main/manual runs
 continue to request full deployment and tests.
+
+## Lazy history acceptance
+
+[PR #2744](https://github.com/iterate/iterate/pull/2744) measured these two Plan
+jobs on the same baked CI image. These are individual observations, not an
+averaged benchmark; the baseline docs commit reached an untested product
+ancestor, while the implementation commit required deployment at head.
+
+| Measurement                           | Full-history checkout (`ba8ff38c5`) | Lazy metadata (`44107d152`)                              |
+| ------------------------------------- | ----------------------------------- | -------------------------------------------------------- |
+| Plan job                              | 55s                                 | 31s                                                      |
+| Checkout fetch phase                  | 27.185s                             | 0.432s                                                   |
+| Metadata fetches inside planning      | None                                | One `--deepen=3 --filter=blob:none` fetch; no main fetch |
+| Metadata fetch start through decision | Not separately measured             | 1.170s                                                   |
+
+The [baseline Plan](https://depot.dev/orgs/0p91s0lz49/workflows/x103v367zm?job=8lspj90c2k&attempt=115srn7fzs)
+and [lazy Plan](https://depot.dev/orgs/0p91s0lz49/workflows/tt77gkjqqt?job=4915hvtkq2&attempt=cxn3gs0zq8)
+logs identify both checkout fetch boundaries and the planning decision. The
+lazy job published `tests=true; deploy=true` for the exact implementation SHA.
+Its local regression test also verifies that the former product blob remains
+absent after the filtered fetch and that the checkout stays clean.
+
+Local validation passed all 31 focused planner/workflow tests, repository
+typecheck, lint, unused-code checks and formatting. The complete repository
+suite passed with `pnpm -r --workspace-concurrency=1 test`. Parallel local runs
+hit five-second timeouts: the new history fixture was shortened, and an
+unchanged telemetry subprocess test passed when workspaces ran serially. No
+timeouts were increased.
+
+The implementation run also passed deployment, app tests and all six browser
+shards, then restored the preview. Its [settlement](https://depot.dev/orgs/0p91s0lz49/workflows/tt77gkjqqt?job=fx5b2kkt74&attempt=rl1ltfjsrr)
+recorded `tests=success; deployment=restored; check=106277241289`. The following
+evidence-only commit tests docs inheritance; its result is recorded in the PR
+body so the acceptance record does not itself require another push.

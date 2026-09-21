@@ -1,11 +1,11 @@
 ---
-status: in-progress
+status: ready-for-review
 size: medium
 ---
 
 # Fetch preview planning history only when needed
 
-Status: implementation and focused shallow-repository tests pass. Normal checkout, filtered metadata fetching, early head decisions, and bounded merge-base discovery are in place. Broader checks, real CI evidence, and review remain.
+Status: implementation complete. Normal checkout, filtered metadata fetching, early head decisions, and bounded merge-base discovery pass local checks and a full settled preview run. The draft awaits review; PR monitoring is registered.
 
 The Plan job should use the ordinary actions/checkout defaults to get the checked-in scripts. Planning must fetch additional Git metadata only as needed, rather than making checkout fetch the entire repository history before any decision is possible.
 
@@ -17,8 +17,8 @@ The Plan job should use the ordinary actions/checkout defaults to get the checke
 - [x] Preserve docs inheritance (including failures), test-only deployment reuse, both paths of renames, first-parent merge semantics, and the merge-base stopping boundary. *Existing selection tests pass; shallow variants cover the two merge cases.*
 - [x] Bound metadata retrieval and report fetches and any conservative deployment decision. Authentication, transport, and unexpected Git failures must remain visible failures. *Six bounded ancestry expansions; 15-second fetch timeouts; budget exhaustion has an explicit deployment reason.*
 - [x] Add integration coverage with real shallow repositories and a controllable Git remote, including short-circuiting, history expansion, merges, roots, and fetch failures. *`change-plan.test.ts` uses local Git upload-pack with filtering enabled.*
-- [ ] Run required repository checks; exercise the real preview workflow and document planning/checkout evidence.
-- [ ] Address submitted review feedback, update the PR body, and move this task to complete.
+- [x] Run required repository checks; exercise the real preview workflow and document planning/checkout evidence. *Typecheck, lint, knip, format, 31 focused tests, and the full workspace-by-workspace suite passed. CI at `44107d152` passed every test, restored the preview, and published `preview-settled: tests=success`; measurements are in `docs/preview-change-selection.md`.*
+- [x] Address submitted review feedback, update the PR body, and move this task to complete. *No submitted reviews or unresolved threads as of this commit; the draft PR body includes behavior, risk, checks, and timings. The global monitor watches through 2026-09-22 09:03 UTC.*
 
 ## Decisions and assumptions
 
@@ -32,3 +32,6 @@ The Plan job should use the ordinary actions/checkout defaults to get the checke
 - 2026-09-21: Read the current planner, merge-boundary tests, CI workflow, repository rules, and PR workflow. Created this independent worktree from `origin/main` (`97ffd6fd65`).
 - First red/green case: a depth-one product checkout originally failed on missing `origin/main`; it now deploys using one filtered fetch, retaining a clean checkout and no main ref. The docs case originally failed at the same boundary; it now expands metadata until the merge-base is proven and inherits the failed base result.
 - Deliberate limit: older candidates require proving the merge boundary first. We do not inherit from a nearby ancestor before that proof, because another shallow path may conceal a newer or second merge-base. The dominant product-head path needs none of that work.
+
+- Live product acceptance: [workflow `tt77gkjqqt`](https://depot.dev/orgs/0p91s0lz49/workflows/tt77gkjqqt) passed deployment, app tests, all six browser shards and restoration. Settlement recorded `tests=success; deployment=restored; check=106277241289`. Plan took 31s versus 55s in the spec-only baseline; checkout fetch took 0.432s versus 27.185s.
+- This evidence-only commit also provides the docs inheritance acceptance push after settlement; its result is recorded in the PR body to avoid another validation-only commit.
