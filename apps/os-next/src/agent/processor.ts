@@ -694,6 +694,11 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         try {
           const whoami = await this.deps.withItx((itx) => itx.whoami());
           const { path } = whoami;
+          // THE SANDBOX ROWS FIRST: `create()` answers when the certificate lands, and an owner's
+          // jail on the sandbox may follow at once — the link must already be there for the jail to
+          // replace, never land after it (the check-then-append in `#assertSandbox` reads "no row
+          // yet" only until the owner's null has landed; before the certificate, nothing races it).
+          await this.#assertSandbox(path);
           const certificate: AgentEmitted = {
             type: "events.iterate.com/agent/created",
             payload: { path },
@@ -709,7 +714,6 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
               content: `${DEFAULT_AGENT_SYSTEM_PROMPT}\nCURRENT PROJECT: ${JSON.stringify(whoami)}`,
             },
           });
-          await this.#assertSandbox(path);
         } catch (error) {
           await append({
             type: "events.iterate.com/agent/create-failed",
