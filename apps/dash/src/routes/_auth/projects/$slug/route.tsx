@@ -12,6 +12,8 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
     if (!project) return context.signInFor(params.slug);
     return { project };
   },
-  head: ({ match }) => ({ meta: [{ title: `${match.context.project.slug} · Dash` }] }),
+  // the title from the URL's own segment: `head` runs before `beforeLoad` has put the project on the
+  // context, and a title that reads `match.context.project` throws and leaves the page blank (prd, #2783)
+  head: ({ params }) => ({ meta: [{ title: `${params.slug} · Dash` }] }),
   component: Outlet,
 });
