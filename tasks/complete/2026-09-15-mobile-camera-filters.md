@@ -502,6 +502,7 @@ on each new card, and the filter picker covered the per-filter controls.
 
 - [x] Merge current main. _Merged `79411edce`; no history rewrite._
 - [x] Protect videos during saving. _The capture UI disables Stop/Close, native Stop ignores duplicates during finalization, and the browser checks MediaRecorder state._
+- [x] Keep later preview/session errors from discarding a stopped clip. _The follow-up review found that `fail` still canceled `finishing`. It now stops preview processing and logs the failure while the writer completes; encoder errors still reject normally._
 - [x] Start the timer when recording actually begins. _Both filter hosts notify the capture UI; loading shows Preparing instead of counting video time._
 - [x] Keep filter sounds optional. _Playback failures expose a nonfatal message; they cannot cancel the recorder._
 - [x] Fix cancellation during writer finalization. _The native regression reproduced a missing completion callback, not Bugbot's claimed API exception. Finish now completes before deleting a canceled clip, with a lock around the cancellation handoff; 50 runs pass._

@@ -481,6 +481,14 @@ final class FilterCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
   }
 
   private func fail(_ message: String) {
+    failure = message
+    if finishing != nil {
+      // Stop already handed the clip to the encoder. A preview/session failure
+      // cannot invalidate those pixels or reject the promise awaiting the file.
+      // The writer's own completion still reports encoding failures normally.
+      NSLog("Filter preview failed while saving the completed capture: %@", message)
+      return
+    }
     generation += 1
     pending = nil
     pendingTimeout?.cancel()
@@ -488,7 +496,6 @@ final class FilterCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     movie = nil
     finishing?.cancel()
     finishing = nil
-    failure = message
     emit("error", ["message": message])
     emit("status", ["ready": false, "loading": false, "recording": false, "error": message])
   }
