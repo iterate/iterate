@@ -107,10 +107,9 @@ test("an app is served at / on its project host — URL verbatim, relative asset
     expect(dotted.status, dotted.text).toBe(200);
     expect(dotted.text).toContain(`<p>site.${slug}.${base}/w</p>`);
   }
-  // the apex names no app: the config worker's fetch answers it — the bundled default is 404, a
-  // project's own routes it (here: to the site, through `itx.apps.site.fetch`), and the site then
-  // sees ITS label: the DO's fetch lane derives `x-iterate-app` from the expression at every door,
-  // never from what the config worker forwarded (the config worker itself sees none — the workers lane)
+  // An unconfigured apex returns 404. Publishing the router sends requests to
+  // `itx.apps.site.fetch`, which derives `x-iterate-app` from that expression.
+  // The wrapper's forwarded headers cannot override the resolved app label.
   const bare = await fetchProjectHost(`${slug}.${base}`, "/");
   expect(bare.status, bare.text).toBe(404);
   expect(bare.text).toContain("not configured");
