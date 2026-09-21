@@ -485,9 +485,12 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
           "Cache-Control": "no-store",
         },
       });
+    // The fresh session goes where this browser was CONNECTED (an expired grant at a self-host
+    // signs in again at that self-host, not at the deployment's own issuer); a browser with no
+    // record signs in at the default.
     const { location, setCookie } = await startAppSession(
       sessions,
-      { origin: url.origin, issuer, resource, scopes },
+      { origin: url.origin, issuer: target.issuer, resource: target.resource, scopes },
       next,
     );
     return new Response(null, {
@@ -521,6 +524,10 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
     if (!isSameOriginBrowserRequest(request))
       return new Response("Cross-site request refused", { status: 403 });
+    // Where the ended session was bound: a sign-out from a CONNECTED issuer returns through the
+    // connect page for that issuer (one click, the host named), so "Sign in again" at a self-host
+    // stays at the self-host instead of silently binding the browser back to the default.
+    const ended = await held();
     try {
       await session?.end();
     } catch {
@@ -530,8 +537,12 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
         { status: 503 },
       );
     }
+    const next = nextPathOf(url.searchParams.get("next"), url.origin);
     const headers = new Headers({
-      Location: nextPathOf(url.searchParams.get("next"), url.origin),
+      Location:
+        ended && ended.issuer !== issuer && !config.loginPage
+          ? `/.auth/connect?${new URLSearchParams({ issuer: ended.issuer, next })}`
+          : next,
       "Set-Cookie": clearCookie,
       "Cache-Control": "no-store",
     });

@@ -99,6 +99,28 @@ localOnly(
 );
 
 localOnly(
+  "a stored file served under /projects/<project>/files/… is sandboxed too — a document on the platform's origin, whatever its type",
+  async () => {
+    const session = newWebSocketRpcSession(`ws://${new URL(origin).host}/api`) as any;
+    sessions.push(session);
+    const itx = session
+      .authenticate({ type: "admin-secret", secret: E2E_ADMIN_API_SECRET })
+      .projects.get(slug);
+    await itx.files.get("/page.html").put({
+      // `data` is base64 (or a data: URL): the bytes of a page that would call /api if it ran unsandboxed
+      data: Buffer.from("<script>fetch('/api')</script>").toString("base64"),
+      contentType: "text/html",
+    });
+    const signed = (await itx.files.get("/page.html").url()) as { url: string };
+    expect(signed.url).toContain(`/projects/${slug}/files/`);
+    const served = await fetch(signed.url);
+    expect(served.status, await served.clone().text()).toBe(200);
+    expect(served.headers.get("content-type")).toMatch(/text\/html/);
+    expect(served.headers.get("content-security-policy")).toMatch(/\bsandbox\b/);
+  },
+);
+
+localOnly(
   "the platform's own first segments are never a project: /api, /mcp, /version, /login answer as themselves",
   async () => {
     expect((await fetch(`${origin}/version`)).status).toBe(200);

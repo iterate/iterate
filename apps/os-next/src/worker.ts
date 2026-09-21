@@ -315,14 +315,18 @@ export default {
       const projectId = project.id;
       // THE FILES HOST (context/file-urls.ts): `files--<project>` serves a signed file URL straight
       // from the bucket, before any session or DO — the token in the URL is the authorization.
-      if (projectHost.app === FILES_APP_LABEL)
-        return serveProjectFileRequest({
+      if (projectHost.app === FILES_APP_LABEL) {
+        const file = await serveProjectFileRequest({
           bucket: env.FILES,
           secret: await sessionSigningSecretOf(appConfig),
           project: projectId,
           keyPrefix: `${resourceScope(projectId, "/").id}/`,
           request: withoutBasePath(request, projectHost.basePath),
         });
+        // Under paths a stored HTML or SVG file is a document on the platform's own origin: it runs
+        // sandboxed exactly as an app's answer does (an opaque origin, no cookie to spend).
+        return routing?.type === "paths" ? sandboxed(file) : file;
+      }
       // The browser adapter's doors (`/api`, `/.auth/*`) are an app's OWN under subdomains — its
       // origin. Under paths the app shares the platform's origin, whose `/api` and `/.auth/*` are
       // the issuer's: an app there has no cookie sign-in of its own (it authenticates in-band).
