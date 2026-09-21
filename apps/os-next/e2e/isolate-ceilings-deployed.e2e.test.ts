@@ -37,18 +37,23 @@
 
 import { beforeAll, expect, test } from "vitest";
 import { append, codeOf, freshCtx, openItx, rejection } from "./support/client.ts";
+import {
+  MiB,
+  OOMER_SOURCE,
+  blob,
+  isDurableObjectReset,
+  settle,
+} from "./support/isolate-ceilings.ts";
 import { deployedOnly, projectHostsAreLocal } from "./support/project-host.ts";
-
+import { enableFixtureProcessor } from "./support/sources.ts";
 /** The CRASH HUNT rows: they push the isolate to its 128 MiB ceiling (the GC's timing decides) and saturate the
  *  shared /api edge with 200+ MiB of concurrent payload — chronically red across deployed runs with a different
  *  symptom each time (7/8 committed, WebSocket refused, storage timeout). Opt in explicitly; a default deployed run of
  *  this file stays deterministic. Structural gate (`skipIf`), not a parked skip. */
 const crashHunt = test.skipIf(projectHostsAreLocal() || process.env.RUN_ISOLATE_CRASH_HUNT !== "1");
-import { enableFixtureProcessor } from "./support/sources.ts";
 
 // ── the shared 144 MiB seed ──
 
-const MiB = 1024 * 1024;
 const EVENT_COUNT = 24;
 const EVENT_CHARS = 6 * MiB;
 /** The seeded blob for event `n` — deterministic, so a read-back can be checked byte for byte. */
@@ -94,16 +99,9 @@ test(
 // ── the crash hunt's helpers and INLINE fixture sources ──
 
 /** A blob of `chars` code units — the payload that fills a body toward the 8 MiB append ceiling. */
-const blob = (chars: number): string => "q".repeat(chars);
-
 /** The stamped signal of an UNCONTROLLED reset (platform-facts.md §4): `.durableObjectReset` after the
  *  DO → edge → capnweb hops, or the raw message if a hop dropped the stamp. NOT a loaded-isolate OOM
  *  ("Worker exceeded memory limit.", `.overloaded` only) and NOT a facet wedge (SQLITE_TOOBIG). */
-const isDurableObjectReset = (e: any): boolean =>
-  e != null &&
-  (e.durableObjectReset === true ||
-    /isolate exceeded its memory limit and was reset/i.test(String(e.message ?? e)));
-
 /** Retry a call while the platform answers "Durable Object is overloaded. Requests queued for too
  *  long." — its backpressure after a burst (a queue draining), never a reset and never poisoning; any
  *  other failure propagates at once. Bounded: ~15 s. */
@@ -123,12 +121,6 @@ async function retryWhileOverloaded<T>(call: () => Promise<T>): Promise<T> {
 
 /** Settle a promise to a tagged outcome so a reset never escapes as an unhandled rejection (the e2e
  *  config only forgives WebSocket/RPC-session noise; a `durableObjectReset` message would be fatal). */
-const settle = <T>(p: Promise<T>): Promise<{ ok: true; v: T } | { ok: false; e: any }> =>
-  p.then(
-    (v) => ({ ok: true as const, v }),
-    (e) => ({ ok: false as const, e }),
-  );
-
 /** Read one context to its durable head, paging by the server's byte budget. */
 async function pageToHead(itx: any): Promise<number> {
   let after = 0;
@@ -145,7 +137,7 @@ async function pageToHead(itx: any): Promise<number> {
 
 /** A facet processor that COUNTS blob events — the fan-out target (its push is a loopback RPC copy). */
 const SINK_SOURCE = {
-  "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+  "cap.js": `import { StreamProcessor, StreamProcessorDurableObject } from "./processor.js";
 const contract = defineProcessorContract({ slug: "sink", version: "1.0.0", description: "counts blob events — a fan-out target", stateSchema: z.object({ n: z.number().default(0) }), events: {}, consumes: ["blob"], emits: [] });
 class SinkProcessor extends StreamProcessor { contract = contract; reduce({ state }) { return { n: state.n + 1 }; } }
 export class SinkDurableObject extends StreamProcessorDurableObject { processor = new SinkProcessor(); }`,
@@ -154,21 +146,13 @@ export class SinkDurableObject extends StreamProcessorDurableObject { processor 
 /** A facet processor whose reduce HOARDS every payload into its checkpoint state — it outgrows the
  *  ~2 MB SQLite checkpoint cell (SQLITE_TOOBIG) and wedges. The poison-facet case. */
 const HOARDER_SOURCE = {
-  "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+  "cap.js": `import { StreamProcessor, StreamProcessorDurableObject } from "./processor.js";
 const contract = defineProcessorContract({ slug: "hoarder", version: "1.0.0", description: "accumulates every payload — outgrows the checkpoint cell", stateSchema: z.object({ blobs: z.array(z.string()).default([]) }), events: {}, consumes: ["blob"], emits: [] });
 class HoarderProcessor extends StreamProcessor { contract = contract; reduce({ event, state }) { return { blobs: [...state.blobs, event.payload.blob] }; } }
 export class HoarderDurableObject extends StreamProcessorDurableObject { processor = new HoarderProcessor(); }`,
 };
 
 /** A stateless WorkerEntrypoint that allocates unboundedly — its OWN loaded isolate's memory limit. */
-const OOMER_SOURCE = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-export default class Oomer extends WorkerEntrypoint {
-  async ping() { return "pong"; }
-  async oom() { const a = []; for (;;) a.push(new Array(1e6).fill(1)); }
-}`,
-};
-
 // ─────────────────────────────── RED: the reproducible resets ───────────────────────────────
 
 // RED BY DESIGN — an ACCEPTED client-behaviour limit, deliberately NOT defended (2026-09-07). WHY
@@ -236,41 +220,6 @@ test(
     expect(error.message).toMatch(/32 ?MiB/); // the message says WHY: the platform's RPC ceiling
     const [next] = await append(itx, { type: "after" });
     expect(next.offset).toBe(marker.offset + 1); // the refused batch burned no offset, wrote nothing
-  },
-);
-
-// A stalled live subscriber (a callback that never returns) no longer resets the PRODUCER: past the
-// DO's in-flight budget (subscription-delivery.ts DELIVERY_IN_FLIGHT_BUDGET_CHARS) its pushes are
-// DROPPED with a warn (the client heals by read), so the producer floods on. BORN RED: each
-// fire-and-forget push stayed in flight, retaining its bytes on the DO until it reset at ~125 × 1 MiB
-// (flipped 2026-09-04, the per-context ledger).
-deployedOnly(
-  "SLOW LIVE CLIENT: a subscriber whose callback never resolves has its pushes dropped past the DO in-flight budget — the producer floods on, the DO never resets",
-  { timeout: 300_000 },
-  async () => {
-    const ctx = freshCtx("degrade-slow");
-    // A live callback lent to the DO; it never returns, so every delivered push is retained in flight.
-    await openItx(ctx).subscribe({
-      name: "stall",
-      consumes: ["chunk"],
-      target: () => new Promise(() => {}),
-    });
-    const producer = openItx(ctx);
-    let reset: any;
-    for (let i = 0; i < 300; i++) {
-      const r = await settle(
-        append(producer, { type: "chunk", ephemeral: true, payload: { i, blob: blob(1 * MiB) } }),
-      );
-      if (!r.ok) {
-        if (isDurableObjectReset(r.e)) reset = r.e;
-        break; // the DO is gone; stop flooding
-      }
-    }
-    // HEALTHY expectation: a stalled subscriber blocks nothing but itself, so the producer floods on.
-    expect(
-      reset,
-      `the producer DO reset under the stalled subscriber: ${String(reset?.message ?? "")}`,
-    ).toBeUndefined();
   },
 );
 
