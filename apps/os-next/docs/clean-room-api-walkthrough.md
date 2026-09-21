@@ -1257,7 +1257,7 @@ await itx.append({ type: "events.iterate.com/stream/resumed" });
 | `events.iterate.com/stream/woken`                                                             | `{ incarnation, reason }`                           | the first door of every incarnation (`Stream.appendWakeRecord`; the alarm handler says `"alarm"`)                                             |
 | `events.iterate.com/stream/paused` / `resumed`                                                | `{ reason }` / `{}`                                 | you, or a policy facet such as `BreakerProcessor`                                                                                             |
 | `events.iterate.com/stream/append-scheduled` · `append-schedule-{cancelled,completed,failed}` | docs/scheduled-appends.md                           | `itx.schedules` / the alarm pass                                                                                                              |
-| `events.iterate.com/stream/trace/alarm` (ephemeral)                                           | `AlarmTrace`                                        | the DO's alarm pass — `alarm-fired` / `quiesce` / `alarm-pass` / `alarm-abandoned`; never subscription input                                  |
+| `events.iterate.com/stream/trace/alarm` (ephemeral)                                           | `AlarmTrace`                                        | the DO's alarm pass — `alarm-fired` / `alarm-pass` / `alarm-abandoned`; never subscription input                                              |
 
 Refusals surface as coded errors (`src/lib.ts`): `STREAM_PAUSED`,
 `IDEMPOTENCY_CONFLICT`, `OFFSET_CONFLICT`, `NO_ITX_EXPRESSION_MATCH`, `NO_FACET`,
@@ -1284,7 +1284,7 @@ stream's post-commit hook. For every subscription it filters the batch by
   `(events, { after, through })`, serialized per subscription: fire-and-forget
   for a lent stub (a stalled tab never blocks the chain; `RPC_STUB_OFFLINE`
   is swallowed), awaited for a facet (its batches stay in order and the idle
-  quiesce never aborts it mid-reduce). No cursor row either way.
+  no release aborts it mid-reduce). No cursor row either way.
 - Anything else (a Worker-Loader entrypoint, a sibling context via `cd`, a
   rewrite rule whose target is one of those) cannot own progress, so **the stream keeps a cursor**:
   at-least-once, the awaited call is the ack, one bounded retry ladder

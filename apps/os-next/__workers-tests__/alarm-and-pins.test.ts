@@ -1,4 +1,4 @@
-// __workers-tests__/alarm-quiesce.test.ts — the context DO's alarm, inside workerd (the workers
+// __workers-tests__/alarm-and-pins.test.ts — the context DO's alarm, inside workerd (the workers
 // lane — the ONLY lane that can fire the DO's alarm (runDurableObjectAlarm) and force a graceful
 // teardown (evictDurableObject) deterministically).
 //
@@ -19,7 +19,7 @@
 // — memory releasing memory, no durable alarm. A facet is NOT a pin: on the edge it dies with the
 // actor. Here in workerd a materialized facet or a borrowed stub does keep the DO non-hibernatable
 // (workerd#6800 — evictDurableObject on such a DO times out after 30s, "still has active
-// references"), so a test must release BEFORE it can evict (support.ts's `quiesce` runs the release
+// references"), so a test must release BEFORE it can evict (support.ts's `releasePins` runs the release
 // directly, facets included).
 //
 // PROCESSORS here are what they are everywhere: userspace two-class sources — a pure
@@ -38,7 +38,7 @@ import type { ItxExpression } from "iterate/next/expression";
 import type { StreamEvent } from "iterate/next/stream/processor";
 import type { AlarmTrace } from "../src/iterate-context-durable-object.ts";
 import { STREAM_ALARM_TRACE_EVENT } from "../src/stream/stream.ts";
-import { adminCredentials, Echo, openSession, quiesce, stub, until } from "./support.ts";
+import { adminCredentials, Echo, openSession, releasePins, stub, until } from "./support.ts";
 
 /** A tiny userspace processor: counts every durable event. The tally fixture's shape
  *  (e2e/support/sources.ts), reduced to one number — the pure `CounterProcessor` plus its host
@@ -100,14 +100,14 @@ async function disableCounter(ctx: string, name = "counter"): Promise<void> {
   });
 }
 
-// The DO-only transport facts ({stubs, borrowed, rpcStubPagesInFlight, dormant}) — the quiesce probes are
+// The DO-only transport facts ({stubs, borrowed, rpcStubPagesInFlight, dormant}) — the release probes are
 // in-memory socket truths, so they speak rpcStubTransportState(), never the table.
 const stateOf = (ctx: string): Promise<Record<string, any>> =>
   runInDurableObject(stub(ctx), async (inst) =>
     (inst as unknown as { rpcStubTransportState(): Record<string, any> }).rpcStubTransportState(),
   );
 /** The DO's scheduled alarm instant, or null — only this lane can read it, and it is the ONE proof
- *  that a quiesce pin below is exercising the alarm instead of firing into an empty schedule. */
+ *  that a release pin below is exercising the alarm instead of firing into an empty schedule. */
 const alarmAt = (ctx: string): Promise<number | null> =>
   runInDurableObject(stub(ctx), (_inst, state) => state.storage.getAlarm());
 /** Poll the census until `stubs` reaches `n` (bounded). A transport leaves the census when its
@@ -130,7 +130,7 @@ test("QUIESCE PRESERVES CURSOR+STATE: abort an idle facet, re-materialize from t
   // A facet aborted by the release and re-materialized by the next call (`itx.facets.get(name)`
   // reads the `facet:<name>` startup memo — no configure(), no side channel; its identity is
   // ctx.props) keeps its durable checkpoint + reduced state. Were re-materialization broken, the
-  // post-quiesce snapshot would throw NO_FACET or reset to n=0.
+  // post-release snapshot would throw NO_FACET or reset to n=0.
   const ctx = "prj_q_cursor";
   const s = stub(ctx);
   await enableCounter(ctx);
@@ -139,8 +139,8 @@ test("QUIESCE PRESERVES CURSOR+STATE: abort an idle facet, re-materialize from t
   const before = await snapCounter(ctx);
   expect(before.state.n).toBe(await durableCount(ctx)); // every durable event counted, no double/no loss
 
-  // Idle 61s → the quiesce aborts the facet (its checkpoint is durable in its OWN storage).
-  await quiesce(ctx);
+  // Idle 61s → the release aborts the facet (its checkpoint is durable in its OWN storage).
+  await releasePins(ctx);
 
   // The next snapshot re-materializes the facet: it must resume from its own checkpoint.
   const after = await snapCounter(ctx);
@@ -155,7 +155,7 @@ test("QUIESCE PRESERVES CURSOR+STATE: abort an idle facet, re-materialize from t
 
 test("QUIESCE THEN EVICT THEN WAKE: the facet re-drives from its durable checkpoint exactly once (no double, no loss)", async () => {
   // True mid-drive eviction is UNFORCEABLE (a driving facet pins the DO; evict times out — see the
-  // header). The forceable, production-shaped path is quiesce (abort) → evict (fresh parent
+  // header). The forceable, production-shaped path is the release (abort) → evict (fresh parent
   // incarnation) → wake. PINS: on wake the facet gap-repairs from its own durable checkpoint — the
   // reduced count equals the number of durable events, never more (no double durable effect) and
   // never fewer (no lost catch-up).
@@ -163,15 +163,15 @@ test("QUIESCE THEN EVICT THEN WAKE: the facet re-drives from its durable checkpo
   const s = stub(ctx);
   await enableCounter(ctx);
   // Commit a run of durable events and let the facet drive them fully (so no drive is in flight —
-  // an in-flight drive keeps facetWorkInFlight > 0, the quiesce is skipped, the facet stays
+  // an in-flight drive keeps facetWorkInFlight > 0, the release is skipped, the facet stays
   // materialized, and evict then times out on the #6800 pin).
   await s.append({ type: "b/1" }, { type: "b/2" }, { type: "b/3" }, { type: "b/4" });
   await new Promise((r) => setTimeout(r, 300));
 
-  // Quiesce (aborts the idle facet → un-pins the DO), then a REAL graceful eviction: storage kept,
+  // The release (aborts the idle facet → un-pins the DO), then a REAL graceful eviction: storage kept,
   // in-memory torn down, a fresh parent incarnation on the next call (a genuine cold catch-up from
   // the log — the property under test).
-  await quiesce(ctx);
+  await releasePins(ctx);
   await evictDurableObject(s);
 
   const after = await snapCounter(ctx); // wakes a fresh incarnation → catch-up from the durable checkpoint
@@ -374,7 +374,7 @@ test(
     // A call after the release borrows again (the pager re-dials): a fresh quiet period.
     expect(await caller.invoke("itx.p0.echo('again')")).toBe("echo-0:again");
     expect((await stateOf(ctx)).borrowedRpcStubs).toBeGreaterThanOrEqual(1);
-    await quiesce(ctx);
+    await releasePins(ctx);
     expect((await stateOf(ctx)).borrowedRpcStubs).toBe(0);
     expect(await alarmAt(ctx)).toBeNull();
   },
@@ -394,7 +394,7 @@ test("A '*' FACET WAKE ARMS NOTHING: a facet-hosting context holds no alarm afte
   const before = (await wokens()).length;
   // A stale alarm fires into an evicted actor: the fresh incarnation's wake record materializes
   // the counter for the push, and the pass arms nothing for it.
-  await quiesce(ctx); // un-pin the facet so the eviction below can happen (workerd pins, the edge does not)
+  await releasePins(ctx); // un-pin the facet so the eviction below can happen (workerd pins, the edge does not)
   await runInDurableObject(s, (_inst, state) => state.storage.setAlarm(Date.now() + 300));
   await evictDurableObject(s);
   await new Promise((r) => setTimeout(r, 2_500));
@@ -474,7 +474,7 @@ test("A BORROW RACES THE RELEASE: a stub invoke fired concurrently with the pins
   const caller = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
   expect(await caller.invoke("itx.p0.echo('warm')")).toBe("echo-0:warm");
   expect((await stateOf(ctx)).borrowedRpcStubs).toBeGreaterThanOrEqual(1);
-  const [, raced] = await Promise.all([quiesce(ctx), caller.invoke("itx.p2.echo('race')")]);
+  const [, raced] = await Promise.all([releasePins(ctx), caller.invoke("itx.p2.echo('race')")]);
   expect(raced).toBe("echo-2:race");
 });
 test("SCALE DROP + QUIESCE + EVICT + WAKE: a DISPOSED live provide stays gone; the fan-out reaches EXACTLY the survivors", async () => {
@@ -502,9 +502,9 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a DISPOSED live provide stays gone; t
   // Warm one stub: that borrow is what the release then has to return — and it arms nothing.
   expect(await caller.invoke("itx.k0.echo('warm')")).toBe("echo-0:warm");
   expect(await alarmAt(ctx)).toBeNull();
-  await quiesce(ctx);
+  await releasePins(ctx);
   const q = await stateOf(ctx);
-  expect(q.borrowedRpcStubs).toBe(0); // the quiesce returned every borrowed stub (evict precondition)
+  expect(q.borrowedRpcStubs).toBe(0); // the release returned every borrowed stub (evict precondition)
   await evictDurableObject(stub(ctx));
   const evicted = await stateOf(ctx);
   expect(evicted.rpcStubPagers).toBe(K - 1); // survivors' hibernatable sockets rode the eviction; k3 stayed gone
@@ -605,7 +605,7 @@ test("ALARM PUMPS THE CURSOR LANE: a failed at-least-once delivery is retried fr
   expect(await s.invoke(["itx", "kv", ["get", "flaky-digested"]])).toBeNull();
 
   // Heal the target, then fire the alarm with Date faked PAST the retry instant (30s clears every
-  // early rung of the 1s·2ⁿ ladder; a rung the 30s quiesce is not part of).
+  // early rung of the 1s·2ⁿ ladder; a rung the 30 s release is not part of).
   await s.invoke(["itx", "kv", ["put", "flaky-mode", "ok"]]);
   vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
   try {

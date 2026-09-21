@@ -713,7 +713,7 @@ consumes + client key filter), `facet1`/`userfacet`/`facetaddr`/`load`/`dw2dw`/`
 `edge` (tally from a seeded source, bare facet names, `.fetch` dotted), every e2e via
 `support/client.ts` (`.projects.get(ctx)`, `subscriberMounts` → `itx.subscriptions.list()`). Unit:
 `processor.test.ts` onto the engine; `capability-table-processor.test.ts` loses lane/policy
-cases; `do-doors`/`alarm-quiesce` re-spelled (cursor pump in `alarm()`). `ephemeralflood` is
+cases; `do-doors`/`alarm-and-pins` re-spelled (cursor pump in `alarm()`). `ephemeralflood` is
 re-measured, not just re-spelled: the push path for tabs is unchanged, so its numbers should hold.
 
 ## 10. Open risks, ranked

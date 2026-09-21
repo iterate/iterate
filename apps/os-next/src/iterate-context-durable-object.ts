@@ -115,7 +115,7 @@ function parseIterateContextDurableObjectName(name: string | undefined) {
  *  before a timer returns the stubs and closes the sockets so the actor can hibernate. A pin lives
  *  and dies in memory, so its release needs no durable alarm: the timer dies with the actor, and so
  *  do the pins. */
-const IDLE_QUIESCE_AFTER_MS = 30_000;
+const PIN_RELEASE_AFTER_IDLE_MS = 30_000;
 /** WORKAROUND for a platform defect — https://github.com/iterate/alarm-loader-facet-repro (the
  *  reproduction, what was measured, what was ruled out). On prd (never in local workerd) a call into
  *  a LOADED facet started inside an alarm-woken incarnation can reject at facet start, in windows
@@ -131,7 +131,7 @@ const isFacetStartPlatformFailure = (error: unknown): error is Error =>
   (error.message.includes("Unable to deserialize cloned data") ||
     error.message.startsWith("internal error; reference = "));
 /** How long one facet call may take before the facet is aborted (a call that never answers would
- *  hold the quiesce, and with it this actor, forever). */
+ *  hold the pins' release, and with it this actor, forever). */
 const FACET_CALL_WATCHDOG_MS = 60_000;
 /** ONE ALARM PASS, as the DO saw it — the payload of the ephemeral `stream/trace/alarm` event,
  *  appended as the pass starts (`alarm-fired`, with what was armed and every deadline it found)
@@ -308,7 +308,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // delivered (workerd hides a firing alarm for the whole run), so the wake record is NOT written
     // here: the first door to open names the wake (`appendWakeRecord` — `alarm()` says "alarm").
     this.ctx.blockConcurrencyWhile(async () => {
-      this.#alarms.restore(await this.ctx.storage.getAlarm());
+      this.#alarmCoordinator.restore(await this.ctx.storage.getAlarm());
       // A claim row's value is the epoch-ms `at` this DO wrote in `#claimFacetAlarm` (kv types it
       // as unknown): read back as the number it was stored as.
       for (const [key, at] of this.ctx.storage.kv.list({ prefix: "facet-claim:" }))
@@ -352,7 +352,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset);
         this.#startRequestedRuns(events);
       });
-      this.#alarms.reconcile();
+      this.#alarmCoordinator.reconcile();
     },
   });
 
@@ -697,12 +697,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     stream: this.#stream,
     // The RESOLVER's door, not this class's `invoke`: the loop's evaluation is the kernel's own call.
     evaluateItxExpression: (itxExpression) => this.#itxExpressionResolver.invoke(itxExpression),
-    reconcileAlarm: () => this.#alarms.reconcile(),
+    reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
   });
 
   // ── THE ONE ALARM (alarm-coordinator.ts): derived from three deadline sources, traced ──
 
-  readonly #alarms = new AlarmCoordinator({
+  readonly #alarmCoordinator = new AlarmCoordinator({
     setAlarm: (at) => this.ctx.storage.setAlarm(at),
     deleteAlarm: () => this.ctx.storage.deleteAlarm(),
     deadlines: () => [
@@ -741,7 +741,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#facetClaims.set(name, at);
       this.ctx.storage.kv.put(`facet-claim:${name}`, at);
     }
-    this.#alarms.reconcile();
+    this.#alarmCoordinator.reconcile();
   }
 
   #traceAlarm(
@@ -754,7 +754,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       at: Date.now(),
       reason,
       ...extra,
-      alarm: { before, after: this.#alarms.snapshot().armedAt },
+      alarm: { before, after: this.#alarmCoordinator.snapshot().armedAt },
       deadlines: {
         schedule: this.#stream.nextScheduledAppendAt(),
         delivery: delivery.slice(0, 32),
@@ -808,7 +808,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     });
   }
 
-  // ── the #6800 quiesce: idle facets un-pinned so this actor can hibernate ──
+  // ── THE PINS' RELEASE: borrowed stubs returned and sockets closed by a timer, so this actor can hibernate (workerd#6800) ──
 
   /** THE PINS' TIMER: a pin's use — a borrowed stub called, the library's socket used (the two
    *  things that keep an actor resident on the edge, both measured) — starts the quiet period over
@@ -833,7 +833,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#pinReleaseTimer = setTimeout(() => {
       this.#pinReleaseTimer = undefined;
       this.#releasePins();
-    }, IDLE_QUIESCE_AFTER_MS);
+    }, PIN_RELEASE_AFTER_IDLE_MS);
   }
 
   /** EVERY facet materialized this incarnation — what a release aborts. In memory on purpose:
@@ -843,7 +843,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  hands the loader the SAME object, so its identity-keyed content hash (worker-loader.ts) runs once
    *  per source per incarnation, not once per push. */
   readonly #facetStartupMemoByName = new Map<string, FacetSpec>();
-  /** The in-flight count the quiesce respects: aborting a facet mid-REDUCE is exactly the stall a
+  /** The in-flight count the test-only `releasePins` respects: aborting a facet mid-REDUCE is exactly the stall a
    *  reduce would have to repair from the log — never cause it. */
   #facetWorkInFlight = 0;
 
@@ -853,9 +853,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  `revive()` — a facet still busy claims again from there). Then the next deadline is derived
    *  from what is left. */
   async alarm(): Promise<void> {
-    const { armedAt: fired } = this.#alarms.snapshot();
+    const { armedAt: fired } = this.#alarmCoordinator.snapshot();
     try {
-      await this.#alarms.pass(async () => {
+      await this.#alarmCoordinator.pass(async () => {
         // An incarnation the alarm woke records its wake HERE, inside the hold — the one door that
         // knows the reason. Its delivery (every "*" row's) runs and acks within this pass, so an
         // alarm wake that finds nothing else owed ends with no alarm and no alarm write at all.
@@ -974,7 +974,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** DO-only, for the tests that run inside workerd (`__workers-tests__`): the release, plus every
    *  live facet aborted — workerd's harness keeps a facet-pinned actor resident (workerd#6800), so
-   *  a test that must evict a facet-hosting context runs this first (`quiesce` in
+   *  a test that must evict a facet-hosting context runs this first (`releasePins` in
    *  __workers-tests__/support.ts). Never a facet mid-call (a
    *  reduce aborted midway is the stall its gap repair would have to heal). Aborted facets
    *  re-materialize from their startup memo on their next call. */
@@ -1082,7 +1082,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         });
         // A removal or a RECONFIGURE may have landed while that awaited: this name's memo is then gone
         // (#deleteFacet) or a newer object (#facetStartupMemoFor replaces a changed spec). Bail — a
-        // stale call must neither resurrect a deleted facet as an orphan this actor never quiesces, nor
+        // stale call must neither resurrect a deleted facet as an orphan this actor never releases, nor
         // abort the newer facet to install old code. The memo object's identity IS the check: the memo
         // is per incarnation, and so is this await.
         if (this.#facetStartupMemoByName.get(name) !== memo)
@@ -1177,7 +1177,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         throw error;
       }
       // A Workers-RPC RESULT object carries a disposer that references the FACET until disposed or
-      // GC'd — and GC is too late for the quiesce: an aborted facet stayed referenced through every
+      // GC'd — and GC is too late for the release: an aborted facet stayed referenced through every
       // `snapshot()` result left behind, and this actor could not be evicted (pinned, billed). So
       // copy the DATA out and release the result at once; an answer that cannot be cloned (a stub,
       // a stream, a Response) is handed through as is and is the caller's to dispose.
@@ -1250,7 +1250,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return facetStartupMemo;
   }
 
-  /** Abort a facet that is running; one that is not (already quiesced, never started) is nothing. */
+  /** Abort a facet that is running; one that is not (already released, never started) is nothing. */
   #abortFacetIfRunning(name: string, reason: string): void {
     try {
       this.ctx.facets.abort(name, reason);
@@ -1378,7 +1378,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#egress(request);
   }
 
-  /** IN-MEMORY TRANSPORT FACTS for the hibernation/quiesce probes — a DO-only Workers-RPC verb,
+  /** IN-MEMORY TRANSPORT FACTS for the hibernation/release probes — a DO-only Workers-RPC verb,
    *  deliberately OFF the itx surface: socket facts, not event-derivable state. */
   rpcStubTransportState(): ReturnType<RpcStubDirectory["rpcStubTransportState"]> {
     return this.#rpcStubs.rpcStubTransportState();
