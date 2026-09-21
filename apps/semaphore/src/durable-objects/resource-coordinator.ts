@@ -109,9 +109,10 @@ export class ResourceCoordinator extends DurableObject<Env> {
 
     // Both writes happen without yielding: a taker cannot see stale preparation.
     this.ctx.storage.sql.exec(
-      "INSERT OR REPLACE INTO available_tags (slug, tags) VALUES (?, ?)",
+      "INSERT OR REPLACE INTO available_tags (slug, tags, lease_id) VALUES (?, ?, ?)",
       slug,
       JSON.stringify(matchesLeaseId ? tags || {} : {}),
+      existing.lease_id,
     );
     this.ctx.storage.sql.exec("DELETE FROM leases WHERE slug = ?", slug);
     this.logEvent(matchesLeaseId ? "released" : "force-released", slug, {
@@ -285,7 +286,10 @@ export class ResourceCoordinator extends DurableObject<Env> {
     return Object.fromEntries(
       this.ctx.storage.sql
         .exec<{ slug: string; tags: string }>(
-          "SELECT slug, tags FROM available_tags WHERE slug NOT IN (SELECT slug FROM leases)",
+          `SELECT t.slug, t.tags FROM available_tags t
+           JOIN events e ON e.id = (SELECT MAX(id) FROM events WHERE slug = t.slug)
+           WHERE t.slug NOT IN (SELECT slug FROM leases)
+             AND e.event = 'released' AND json_extract(e.payload, '$.leaseId') = t.lease_id`,
         )
         .toArray()
         .map((row) => [row.slug, z.record(z.string(), z.string()).parse(JSON.parse(row.tags))]),
@@ -302,6 +306,13 @@ export class ResourceCoordinator extends DurableObject<Env> {
     this.ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS available_tags (slug TEXT PRIMARY KEY, tags TEXT NOT NULL)",
     );
+    const tagColumns = this.ctx.storage.sql
+      .exec<{ name: string }>("SELECT name FROM pragma_table_info('available_tags')")
+      .toArray();
+    if (!tagColumns.some((column) => column.name === "lease_id")) {
+      // Unbound records from before this migration cannot prove uninterrupted preparation.
+      this.ctx.storage.sql.exec("ALTER TABLE available_tags ADD COLUMN lease_id TEXT");
+    }
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS leases (
         slug TEXT PRIMARY KEY,
@@ -326,6 +337,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
         payload TEXT NOT NULL
       )
     `);
+    this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_events_slug_id ON events(slug, id)");
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS metadata (
         key TEXT PRIMARY KEY,
@@ -523,8 +535,16 @@ export class ResourceCoordinator extends DurableObject<Env> {
         .length
     )
       return null;
+    // Older service versions do not consume tags, but do record lease events.
+    // Bind preparation to its releasing lease so a rollback cannot resurrect it.
     const tagsRow = this.ctx.storage.sql
-      .exec<{ tags: string }>("SELECT tags FROM available_tags WHERE slug = ?", candidate.slug)
+      .exec<{ tags: string }>(
+        `SELECT t.tags FROM available_tags t
+         JOIN events e ON e.id = (SELECT MAX(id) FROM events WHERE slug = t.slug)
+         WHERE t.slug = ? AND e.event = 'released'
+           AND json_extract(e.payload, '$.leaseId') = t.lease_id`,
+        candidate.slug,
+      )
       .toArray()[0];
     const tags = tagsRow ? z.record(z.string(), z.string()).parse(JSON.parse(tagsRow.tags)) : {};
     this.ctx.storage.sql.exec("DELETE FROM available_tags WHERE slug = ?", candidate.slug);

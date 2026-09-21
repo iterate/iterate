@@ -142,7 +142,8 @@ const findResourceProcedure = semaphore.resources.find
       });
     }
 
-    return resource;
+    const tags = await getCoordinator(input.type).availableTags({ type: input.type });
+    return { ...resource, tags: tags[input.slug] || {} };
   });
 
 const acquireResourceProcedure = semaphore.resources.acquire

@@ -13,6 +13,9 @@ test("released tags describe only the next acquisition, never intervening use", 
   expect(await resources.list({ type: "preview" })).toMatchObject([
     { slug: "alpha", tags: { preparedAt: "1234" } },
   ]);
+  expect(await resources.find({ type: "preview", slug: "alpha" })).toMatchObject({
+    tags: { preparedAt: "1234" },
+  });
   const prepared = await resources.acquire({ type: "preview", leaseMs: 60_000 });
   expect(prepared).toMatchObject({ slug: "alpha", tags: { preparedAt: "1234" } });
   await resources.release(prepared);
