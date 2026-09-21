@@ -29,8 +29,9 @@ interface ArtifactCreateResult {
 /** The REAL repo handle `get()` yields (a live RPC stub), typed to what is read (`ArtifactsScope` says
  *  why `fork` is withheld). */
 export interface ArtifactRepoHandle {
-  /** the git-over-HTTPS remote of this repo — the binding's own word, account and namespace included */
-  remote: string;
+  /** the repo's metadata — its git-over-HTTPS `remote`, the binding's own word (account and namespace
+   *  included). A METHOD: the handle is a Workers-RPC stub, whose data fields do not cross the wire. */
+  info(): Promise<{ remote: string }>;
   createToken(scope: "read" | "write", ttlSeconds: number): Promise<ArtifactToken>;
   fork(name: string, options?: { setDefaultBranch?: string }): Promise<ArtifactCreateResult>;
 }
@@ -150,7 +151,7 @@ export function projectScopedArtifacts(input: {
     },
     get: async (path) => {
       const handle = await input.namespace.get(boundName(path));
-      return new ScopedArtifactRepo(handle, handle.remote);
+      return new ScopedArtifactRepo(handle, (await handle.info()).remote);
     },
     list: async (options) => {
       const page = await input.namespace.list(options);
