@@ -185,12 +185,12 @@ function useAgentContext(
 
 /** The agent's log, from the SDK's ONE `useIterateContext` over its context (subscribed for every
  *  committed event and the streamed chunk windows, caught up with `readEvents`; the processors
- *  table, who is here and the named facets' live state ride the same subscription), then — for the
- *  chat and its traces — as the shared reducer reads it: the wire envelope tagged with the path, the
- *  context's script runs in the reducer's vocabulary (agent-events.ts). The raw log itself feeds the
- *  Events view untouched. */
-function useAgentLog(context: Context | undefined, path: string, liveState: string[]) {
-  const iterateContext = useIterateContext(context, { consumes: FEED_SUBSCRIPTION, liveState });
+ *  table, who is here, and the live state of `core` and every hosted facet ride the same
+ *  subscription), then — for the chat and its traces — as the shared reducer reads it: the wire
+ *  envelope tagged with the path, the context's script runs in the reducer's vocabulary
+ *  (agent-events.ts). The raw log itself feeds the Events view untouched. */
+function useAgentLog(context: Context | undefined, path: string) {
+  const iterateContext = useIterateContext(context, { consumes: FEED_SUBSCRIPTION });
   const events = useMemo(
     () =>
       adaptContextRuns(
@@ -259,24 +259,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
   const navigate = useNavigate();
   const { slug } = Route.useParams();
   const { context, error: connectError } = useAgentContext(api, project, path);
-  // The Events view's panel shows the core reduce's live state and every hosted facet's. The facet
-  // names come from the processors table the same hook loads, so they feed back through state: the
-  // render after the table lands opens them (state-adjust-during-render per react.dev — no effect).
-  const [liveStateNames, setLiveStateNames] = useState(["core"]);
-  const {
-    iterateContext,
-    events,
-    caughtUp,
-    error: logError,
-  } = useAgentLog(context, path, liveStateNames);
-  const wantedLiveStateNames = [
-    "core",
-    ...iterateContext.processors.rows.flatMap((row) =>
-      row.hostedFacet ? [row.hostedFacet.name] : [],
-    ),
-  ];
-  if (JSON.stringify(wantedLiveStateNames) !== JSON.stringify(liveStateNames))
-    setLiveStateNames(wantedLiveStateNames);
+  const { iterateContext, events, caughtUp, error: logError } = useAgentLog(context, path);
   const error = connectError || logError;
   const live = useLiveState<unknown>(context, {
     key: "agent",

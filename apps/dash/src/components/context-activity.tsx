@@ -3,7 +3,7 @@
 // hosted processor's live state. `ensureProcessor` names the first-party fold to enable on first
 // visit (the account's, the organization's) when the context has none yet: the facts are on the
 // log either way; the fold is what the panel shows folded.
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { useIterateContext, type IterateContextHandle } from "iterate/next/react";
 import { ContextView } from "@iterate-com/ui/components/context-view/context-view";
 import { factRenderers } from "../lib/fact-renderers.tsx";
@@ -24,20 +24,9 @@ export function ContextActivity({
   title: ReactNode;
   ensureProcessor?: string;
 }) {
-  // The panel shows the core reduce's live state and every hosted facet's. The facet names come from
-  // the processors table the same hook loads, so they feed back through state: the render after the
-  // table lands opens them (state-adjust-during-render per react.dev — no effect, and no committed
-  // render without them).
-  const [liveStateNames, setLiveStateNames] = useState(["core"]);
-  const iterateContext = useIterateContext(itx, { liveState: liveStateNames });
-  const wantedLiveStateNames = [
-    "core",
-    ...iterateContext.processors.rows.flatMap((row) =>
-      row.hostedFacet ? [row.hostedFacet.name] : [],
-    ),
-  ];
-  if (JSON.stringify(wantedLiveStateNames) !== JSON.stringify(liveStateNames))
-    setLiveStateNames(wantedLiveStateNames);
+  // `liveState` omitted: the hook opens the core reduce's live state and every hosted facet's as the
+  // processors table it holds loads — exactly what the panel shows.
+  const iterateContext = useIterateContext(itx);
   // The first visit enables the context's own fold, once per context: the row is durable, so the
   // check is a read of the table, and only a table that has loaded and lacks the row asks for it.
   // A page that swaps contexts on one mount (one route, another organization) asks again for the

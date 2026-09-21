@@ -185,10 +185,12 @@ const LIVE_STATE_CONNECTING: LiveStateResult = {
  *  log grows a row-changing event (a subscription configured, halted or resumed — the table is core
  *  state, one call away, no push of its own), and WHO IS HERE: the rpc stubs lent right now
  *  (`itx.rpcStubs.list()` — physical, re-read at every new head, since presence changes are
- *  ephemeral facts) and, from the log, every principal that acted, newest first. And, per name in
- *  `liveState`, that facet's LIVE STATE, seeded through `itx.facets.get('<name>').liveSnapshot()`
- *  (the core reduce answers under the name `core`) — one entry per name, always. Re-connects when
- *  `itx` changes; unmount disposes every server-side subscription. */
+ *  ephemeral facts) and, from the log, every principal that acted, newest first. And named facets'
+ *  LIVE STATE, each seeded through `itx.facets.get('<name>').liveSnapshot()` — one entry per name,
+ *  always. `liveState` OMITTED opens `core` (the core reduce answers under that name) plus every
+ *  hosted facet in the processors table the hook holds, following the table as it loads and changes;
+ *  `liveState` GIVEN is exactly the names to open, no implicit `core`. Re-connects when `itx`
+ *  changes; unmount disposes every server-side subscription. */
 export function useIterateContext(
   itx: IterateContextHandle | undefined,
   opts: { consumes?: string[]; liveState?: string[] } = {},
@@ -314,11 +316,18 @@ export function useIterateContext(
 
   // ── named facets' live state ──
   // N subscriptions in ONE effect keyed by the name set — it changes at runtime as the processors
-  // table loads and the caller lists every hosted facet — since hooks cannot run in a loop:
-  // client/live-state.ts's store reduces each, and this mirrors every change into React state. The
-  // entries remember WHICH itx and name set they came from (as the table does), so a swapped context
-  // or a changed set shows fresh connecting entries, never the last one's values.
-  const liveStateKey = JSON.stringify(opts.liveState || []);
+  // table loads (the default set is `core` plus the table's hosted facets) — since hooks cannot run
+  // in a loop: client/live-state.ts's store reduces each, and this mirrors every change into React
+  // state. The entries remember WHICH itx and name set they came from (as the table does), so a
+  // swapped context or a changed set shows fresh connecting entries, never the last one's values.
+  const liveStateKey = JSON.stringify(
+    opts.liveState || [
+      "core",
+      ...(currentTable?.rows || []).flatMap((row) =>
+        row.hostedFacet ? [row.hostedFacet.name] : [],
+      ),
+    ],
+  );
   const [liveStates, setLiveStates] = useState<{
     itx: IterateContextHandle;
     key: string;
