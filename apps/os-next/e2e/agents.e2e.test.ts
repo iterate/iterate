@@ -32,7 +32,7 @@ class ScriptedAi extends RpcTarget {
 
 const short = (log: { type: string }[]) =>
   log
-    .filter((e) => /agent|context-added|script-run/.test(e.type) && !/subscription/.test(e.type))
+    .filter((e) => /agent|context-added|context\/run/.test(e.type) && !/subscription/.test(e.type))
     .map((e) => e.type.replace("events.iterate.com/", ""));
 /** The default model is OpenAI's astra; a local story pins Workers AI so the fake `itx.ai` answers. */
 const WORKERS_AI_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
@@ -100,15 +100,14 @@ test("the loop: a person's words → the model → a script run against itx → 
     offset: expect.any(Number),
   });
 
-  // Wait for the LAST derived fact: the plain-response handler's script-run-settled, appended a
+  // Wait for the LAST derived fact: the plain-response handler's run-settled, appended a
   // beat after the prose's web-message-sent it follows — reading at the prose raced it on the
   // deployed worker (17 of the 18 events, twice on main).
   const log = await until("the settle that ends the turn", async () => {
     const all = await readAll(support);
     const count = (type: string) =>
       all.filter((e) => e.type === `events.iterate.com/${type}`).length;
-    return count("agents/web-message-sent") === 2 &&
-      count("capability-host/script-run-settled") === 2
+    return count("agents/web-message-sent") === 2 && count("context/run-settled") === 2
       ? all
       : undefined;
   }).catch(async (error: unknown) => {
@@ -132,16 +131,16 @@ test("the loop: a person's words → the model → a script run against itx → 
     "agent/llm-request-settled",
     "agents/context-added", // the assistant's raw answer: prose + a tag
     "agent/summary-updated", // the tag's status
-    "capability-host/script-run-requested", // the tag's body
+    "context/run-requested", // the tag's body
     "agents/web-message-sent", // the prose outside the tag
-    "capability-host/script-run-settled",
+    "context/run-settled",
     "agents/context-added", // the developer: the script's result
     "agent/llm-request-requested",
     "agent/llm-request-settled",
     "agents/context-added", // the assistant: a bare reply (no tag)
-    "capability-host/script-run-requested", // the plain-response handler (itx.chat.sendMessage)
+    "context/run-requested", // the plain-response handler (itx.chat.sendMessage)
     "agents/web-message-sent", // its sendMessage
-    "capability-host/script-run-settled",
+    "context/run-settled",
   ]);
   const said = (type: string) => log.filter((e) => e.type === type).map((e) => e.payload);
   expect(said("events.iterate.com/agents/web-message-sent")).toEqual([
@@ -153,13 +152,11 @@ test("the loop: a person's words → the model → a script run against itx → 
   expect(said("events.iterate.com/agent/summary-updated")).toEqual([
     { activity: "Storing the answer" },
   ]);
-  expect(said("events.iterate.com/capability-host/script-run-requested")[0]).toMatchObject({
+  expect(said("events.iterate.com/context/run-requested")[0]).toMatchObject({
     code: 'async (itx) => {\nawait itx.kv.put("answer", "42")\nreturn { stored: true }\n}',
   });
   expect(await itx.kv.get("answer")).toBe("42"); // the script ran against the project's itx
-  const settledScript = log.find(
-    (e) => e.type === "events.iterate.com/capability-host/script-run-settled",
-  );
+  const settledScript = log.find((e) => e.type === "events.iterate.com/context/run-settled");
   expect(settledScript.payload.settlement).toEqual({
     status: "succeeded",
     result: { stored: true },
@@ -177,7 +174,6 @@ test("the loop: a person's words → the model → a script run against itx → 
   // Idle: no obligation open, one autonomous turn counted, nothing paused.
   expect((await support.facets.get("agent").snapshot()).state).toMatchObject({
     openRequest: null,
-    activeScriptExecutions: {},
     pendingLlmRequestTrigger: null,
     autonomousTurnCount: 1,
     paused: null,
@@ -240,7 +236,7 @@ test("a script that returns nothing ends the turn: no result item, no further re
   await agent.message("Write the note.");
   const settled = await until("the script's settlement", async () => {
     const all = await readAll(support);
-    return all.find((e) => e.type === "events.iterate.com/capability-host/script-run-settled");
+    return all.find((e) => e.type === "events.iterate.com/context/run-settled");
   });
   expect(settled.payload.settlement).toEqual({ status: "succeeded" }); // no result — undefined, not null
   expect(await itx.kv.get("note")).toBe("written");
@@ -256,7 +252,6 @@ test("a script that returns nothing ends the turn: no result item, no further re
   expect((await support.facets.get("agent").snapshot()).state).toMatchObject({
     pendingLlmRequestTrigger: null,
     openRequest: null,
-    activeScriptExecutions: {},
   });
 });
 
@@ -330,7 +325,6 @@ test("bounded: a model that never stops scripting trips the autonomous-turn brea
     consecutiveLlmFailures: 2,
     openRequest: null,
     pendingLlmRequestTrigger: null, // the pause dropped the retry that tripped it
-    activeScriptExecutions: {},
   });
   // A PAUSE MAKES NO LOOP: nothing the loop parked can resume it — the log stays as it is.
   const quietFrom = (await readAll(support)).length;

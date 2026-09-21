@@ -252,6 +252,28 @@ test("a personal access token — one OAuth grant the account mints — is the u
   expect(grant?.kind).toBe("Personal access token");
   // the provider keeps its deadline in seconds; the list shows that, the mint the millisecond one
   expect(Math.abs((grant?.expiresAt ?? 0) - expiresAt)).toBeLessThan(2000);
+  // THE CONNECTION'S LOG: the /mcp run landed in `/mcp/inbound/<grant>` of the project — a request
+  // and its settlement, stamped with the user AND the grant (a `grant_…` id, the connection); the
+  // project's catalog names the client once, at `/`
+  expect(grant!.id).toMatch(/^grant_/);
+  const connectionPath = `/mcp/inbound/${grant!.id}`;
+  const runPair = (await readAll(api.projects.get(projectId).cd(connectionPath))).filter((e) =>
+    e.type.startsWith("events.iterate.com/context/run-"),
+  );
+  expect(runPair.map((e) => e.type)).toEqual([
+    "events.iterate.com/context/run-requested",
+    "events.iterate.com/context/run-settled",
+  ]);
+  expect(runPair[0].source).toEqual({ principal, grant: grant!.id });
+  expect(runPair[1].payload).toEqual({
+    requestOffset: runPair[0].offset,
+    settlement: { status: "succeeded", result: { projectId, path: connectionPath } },
+  });
+  expect(
+    (await readAll(api.projects.get(projectId))).find(
+      (e) => e.type === "events.iterate.com/project/mcp-client-connected",
+    )?.payload,
+  ).toEqual({ grantId: grant!.id, path: connectionPath });
   // … and ends it: the same bearer is refused on /api, /mcp and the project host at once
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded revocation on the account session.
   using ender = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());

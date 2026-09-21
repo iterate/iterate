@@ -8,17 +8,19 @@
 // (`llm-request-requested`), runs the model, settles it (`llm-request-settled`) with the assistant's
 // words as the next `context-added`. The answer is markdown prose plus at most one `<codemode
 // status="…">` block (codemode-format.ts, mmkal's grammar): the prose is `web-message-sent` — what a
-// person is shown — the status `summary-updated`, the body a script: `script-run-requested`, run
-// through `itx.run`, `script-run-settled`, its result the next developer `context-added`, which
-// triggers the next turn; prose alone ends the turn. Bounded: an open request or
-// script expires, N consecutive model failures pause, N consecutive self-triggered turns pause, and
-// a person's next words resume. A request is DEBOUNCED as in apps/os: one window after the trigger
+// person is shown — the status `summary-updated`, the body a script: the CONTEXT's own
+// `context/run-requested` (the context runs it, iterate-context-durable-object.ts; a restart settles
+// it `interrupted`, never re-run), whose `run-settled` result is the next developer `context-added`,
+// which triggers the next turn; prose alone ends the turn. Bounded: an open request expires, N
+// consecutive model failures pause, N consecutive self-triggered turns pause, and a person's next
+// words resume. A request is DEBOUNCED as in apps/os: one window after the trigger
 // (more words inside it move the trigger; one request answers them all), a failure's backoff folded
 // into the same window. Dropped from apps/os on purpose: streaming chunks, interrupts, compaction,
 // token accounting, summaries, mentions, and the capability host with its typecheck and preambles —
 // the script runs against this context's `itx` as it is.
 import { z } from "zod";
 import { defineProcessorContract } from "iterate/next/stream/processor";
+import { CoreContract } from "../stream/core-processor.ts";
 
 /** The agent's identity — the certificate's payload: its context path. An agent IS its path. */
 const AgentIdentity = z.object({ path: z.string().min(1) });
@@ -28,7 +30,7 @@ const AgentIdentity = z.object({ path: z.string().min(1) });
  *  breaker counts them; a person's are external and reset it. */
 const Actor = z.discriminatedUnion("type", [
   z.object({ type: z.literal("user") }),
-  z.object({ type: z.literal("script"), executionId: z.string().min(1) }),
+  z.object({ type: z.literal("script"), requestOffset: z.number().int().positive() }),
   z.object({ type: z.literal("agent") }),
 ]);
 export type Actor = z.infer<typeof Actor>;
@@ -143,7 +145,7 @@ const AgentConfig = z.object({
     .prefault({}),
   /** Consecutive self-triggered turns (script results, corrections) before the loop pauses. */
   maxAutonomousTurns: z.number().int().positive().default(20),
-  /** How long a recorded request or script stays runnable; past it, settled as expired. */
+  /** How long a recorded request stays runnable; past it, settled as expired. */
   llmRequestExpiryMs: z
     .number()
     .int()
@@ -221,24 +223,15 @@ export const AgentView = z.object({
     .object({ reason: z.string(), atOffset: z.number().int().positive() })
     .nullable()
     .default(null),
-  /** Scripts requested and not yet settled, by executionId: the loop's other obligation. */
-  activeScriptExecutions: z
-    .record(
-      z.string(),
-      z.object({
-        code: z.string(),
-        requestedAtOffset: z.number().int().positive(),
-        expiresAt: z.number(),
-      }),
-    )
-    .default({}),
 });
-/** The agent's reduced state: the conversation and the loop's two obligations. */
+/** The agent's reduced state: the conversation and the loop's one obligation (a script it asked
+ *  for is the context's obligation — core state `runs`). */
 export type AgentView = z.infer<typeof AgentView>;
 
 export const AgentContract = defineProcessorContract({
   slug: "agent",
-  version: "1",
+  // 2: the script obligation moved to the context (core state `runs`); the view lost its slot.
+  version: "2",
   description:
     "An agent: a conversation on its own context, driven by a model that acts by writing scripts against itx.",
   stateSchema: AgentView,
@@ -371,31 +364,10 @@ export const AgentContract = defineProcessorContract({
       description: "Turns run again; the breakers' counts start over.",
       payloadSchema: z.object({ reason: z.string().optional() }),
     },
-    "events.iterate.com/capability-host/script-run-requested": {
-      description:
-        "The tag's body, to run against this context's itx (apps/os's capability-host vocabulary; here the agent runs it itself).",
-      payloadSchema: z.object({
-        code: z.string().min(1),
-        executionId: z.string().min(1),
-        expiresAt: z.number(),
-      }),
-    },
-    "events.iterate.com/capability-host/script-run-settled": {
-      description:
-        "What the script returned, or how it failed; its rendering is the next developer item.",
-      payloadSchema: z.object({
-        executionId: z.string().min(1),
-        settlement: z.discriminatedUnion("status", [
-          z.object({ status: z.literal("succeeded"), result: z.unknown().optional() }),
-          z.object({
-            status: z.literal("failed"),
-            error: z.string(),
-            failureKind: z.enum(["runtime", "expired"]),
-          }),
-        ]),
-      }),
-    },
   },
+  // The script events are the CONTEXT's (`context/run-requested` / `run-settled`): the agent asks,
+  // the context runs, the agent reads the settlement as the next developer item.
+  processorDeps: [CoreContract],
   consumes: [
     "events.iterate.com/agent/created",
     "events.iterate.com/agent/configured",
@@ -404,8 +376,7 @@ export const AgentContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-settled",
     "events.iterate.com/agent/paused",
     "events.iterate.com/agent/resumed",
-    "events.iterate.com/capability-host/script-run-requested",
-    "events.iterate.com/capability-host/script-run-settled",
+    "events.iterate.com/context/run-settled",
   ],
   emits: [
     "events.iterate.com/agents/context-added",
@@ -417,7 +388,6 @@ export const AgentContract = defineProcessorContract({
     "events.iterate.com/agent/token-usage-reported",
     "events.iterate.com/agent/paused",
     "events.iterate.com/agent/resumed",
-    "events.iterate.com/capability-host/script-run-requested",
-    "events.iterate.com/capability-host/script-run-settled",
+    "events.iterate.com/context/run-requested",
   ],
 });

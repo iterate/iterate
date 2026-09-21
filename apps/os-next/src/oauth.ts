@@ -31,7 +31,10 @@ export const GrantProps = z.object({
 export type GrantProps = z.infer<typeof GrantProps>;
 
 const AccessGrant = GrantProps.extend({
-  grantId: z.string().min(1),
+  /** The provider mints it `grant_<16 url-safe chars>` (patches/@cloudflare__workers-oauth-provider): a
+   *  qualified id, and a legal context-path segment — `/mcp/inbound/<grantId>` (mcp.ts). A grant
+   *  from before the prefix fails here: its token is refused and the client signs in again. */
+  grantId: z.string().startsWith("grant_"),
   scope: z.array(z.string()),
   expiresAt: z.number().int().positive(),
 });

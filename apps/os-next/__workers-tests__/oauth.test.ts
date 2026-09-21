@@ -218,7 +218,7 @@ test("the configured header bearer is the same administrator at both protocols",
         })
       ).body.result.content[0].text,
     ),
-  ).toEqual({ projectId: "admin-probe", path: "/" });
+  ).toEqual({ projectId: "admin-probe", path: "/mcp/inbound/admin" }); // the admin secret's shared connection context (mcp.ts)
   expect((await call("/api", { headers: { Authorization: "Bearer wrong" } })).status).toBe(401);
   expect((await tool("wrong", "run", { project: "x", script: "async () => 1" })).status).toBe(401);
 });
@@ -517,7 +517,7 @@ test("console and project browsers use the same CIMD flow and independent grants
         (await tool(personal.token, "run", { script: "async (itx) => itx.whoami()" })).body.result
           .content[0].text,
       ),
-    ).toEqual({ projectId: browserA.id, path: "/" });
+    ).toEqual({ projectId: browserA.id, path: expect.stringMatching(/^\/mcp\/inbound\/grant_/) }); // the token's own connection context, named by its grant (mcp.ts)
     const { root: personalApi } = await rpc(personal.token);
     expect((await personalApi.projects.list()).map((p: { id: string }) => p.id)).toEqual([
       browserA.id,

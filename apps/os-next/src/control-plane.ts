@@ -238,6 +238,7 @@ async function browserSession(
     teardown,
     {
       principal: authorization.principal,
+      grant: authorization.grant?.grantId,
       reach: authorization.reach,
       grants: new Grants(env, ctx, authorization),
       scopes: authorization.grant?.scope,
