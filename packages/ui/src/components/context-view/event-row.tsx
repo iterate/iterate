@@ -1,9 +1,16 @@
-// One row of the stream: the gutter every event shares — offset, who, when, how long after the one
-// before — and the body: a renderer's rich rendering when the app plugged one in for the type, else
-// the type and a one-line glance at the payload. Click opens the inspector.
+// One row of the stream, ONE line that never runs past the view: the gutter every event shares —
+// offset, when, how long after the one before — then the body, then who. The body in `rendered`
+// mode is a renderer's sentence for the type (the platform's own events come with theirs), else the
+// type and a glance at the payload's fields; in `raw` mode the type and the payload's JSON. Anything
+// longer than the line is cut with an ellipsis — the inspector (click) shows the whole event.
 import { cn } from "../../lib/utils.ts";
-import { actorLabel, payloadPreview, shortEventType } from "./filters.tsx";
-import { type ContextViewEvent, type EventRenderers, rendererFor } from "./types.tsx";
+import { actorLabel, payloadPreview, payloadSummary, shortEventType } from "./filters.tsx";
+import {
+  type ContextViewEvent,
+  type ContextViewMode,
+  type EventRenderers,
+  rendererFor,
+} from "./types.tsx";
 
 function formatClockTime(ms: number): string {
   return new Date(ms).toLocaleTimeString(undefined, {
@@ -24,18 +31,19 @@ export function EventRow({
   event,
   previous,
   renderers,
+  mode,
   selected,
   onOpen,
 }: {
   event: ContextViewEvent;
   previous?: ContextViewEvent;
   renderers?: EventRenderers;
+  mode: ContextViewMode;
   selected?: boolean;
   onOpen: (offset: number) => void;
 }) {
   const at = Date.parse(event.createdAt);
-  const delta = previous ? at - Date.parse(previous.createdAt) : 0;
-  const rich = rendererFor(renderers, event.type)?.(event) ?? null;
+  const rich = mode === "rendered" ? (rendererFor(renderers, event.type)?.(event) ?? null) : null;
   const who = actorLabel(event);
   return (
     <button
@@ -43,30 +51,40 @@ export function EventRow({
       onClick={() => onOpen(event.offset)}
       data-offset={event.offset}
       className={cn(
-        "flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-muted/60 sm:flex-row sm:items-baseline sm:gap-3",
+        "flex w-full min-w-0 items-baseline gap-3 overflow-hidden rounded-md px-2 py-1 text-left hover:bg-muted/60",
         selected && "bg-muted",
       )}
     >
-      <span className="flex shrink-0 items-baseline gap-3 font-mono text-xs text-muted-foreground/70 sm:w-40">
+      <span className="flex shrink-0 items-baseline gap-2 font-mono text-[11px] text-muted-foreground/70 tabular-nums">
         <span className="w-10">#{event.offset}</span>
-        <span className="tabular-nums">{formatClockTime(at)}</span>
-        <span className="tabular-nums">{previous ? formatDelta(delta) : ""}</span>
+        <span className="hidden w-16 sm:inline">{formatClockTime(at)}</span>
+        <span className="hidden w-14 md:inline">
+          {previous ? formatDelta(at - Date.parse(previous.createdAt)) : ""}
+        </span>
       </span>
-      <span className="min-w-0 flex-1 text-sm">
-        {rich ?? (
-          <>
-            <span className="font-mono text-xs">{shortEventType(event.type)}</span>
-            {event.payload === undefined ? null : (
-              <span className="ml-2 truncate font-mono text-xs text-muted-foreground">
-                {payloadPreview(event.payload)}
-              </span>
-            )}
-          </>
-        )}
+      {/* every child inline, so the line truncates as one — a renderer's <strong> and <span> too */}
+      <span className="min-w-0 flex-1 truncate text-sm whitespace-nowrap [&_*]:inline">
+        {rich ?? <DefaultBody event={event} mode={mode} />}
       </span>
       {who ? (
-        <span className="shrink-0 truncate text-xs text-muted-foreground sm:max-w-48">{who}</span>
+        <span className="hidden max-w-40 shrink-0 truncate text-xs text-muted-foreground lg:inline">
+          {who}
+        </span>
       ) : null}
     </button>
+  );
+}
+
+function DefaultBody({ event, mode }: { event: ContextViewEvent; mode: ContextViewMode }) {
+  const glance = mode === "raw" ? payloadPreview(event.payload) : payloadSummary(event.payload);
+  return (
+    <>
+      <span className="font-mono text-xs text-foreground/80">{shortEventType(event.type)}</span>
+      {glance ? (
+        <span className={cn("ml-2 text-xs text-muted-foreground", mode === "raw" && "font-mono")}>
+          {glance}
+        </span>
+      ) : null}
+    </>
   );
 }

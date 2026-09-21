@@ -18,6 +18,11 @@ export type ContextViewEvent = {
   };
 };
 
+/** How the rows read: `rendered` — a renderer's sentence per type (the platform's own events come
+ *  with theirs; an app adds its vocabulary), else the type with a glance at the payload's fields;
+ *  `raw` — the type and the payload's JSON, one line, for reading the log as data. */
+export type ContextViewMode = "rendered" | "raw";
+
 /** A rich rendering of one event's body — what the row shows instead of the type and the payload
  *  preview. Return null to fall back to the default row. */
 export type EventRenderer = (event: ContextViewEvent) => ReactNode | null;

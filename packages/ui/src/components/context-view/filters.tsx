@@ -47,6 +47,42 @@ export function payloadPreview(payload: unknown, max = 140): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+/** The payload's top-level fields as one human line — `key value · key value` — for a type no
+ *  renderer names: strings to their first line, arrays to their length, objects to their keys. */
+export function payloadSummary(payload: unknown, max = 120): string {
+  if (payload === undefined) return "";
+  if (Array.isArray(payload))
+    return `${String(payload.length)} item${payload.length === 1 ? "" : "s"}`;
+  if (!isPlainObject(payload)) return valueGlance(payload);
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(payload)) {
+    if (parts.length === 5) {
+      parts.push("…");
+      break;
+    }
+    parts.push(`${key} ${valueGlance(value)}`);
+  }
+  const text = parts.join(" · ");
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  Object.prototype.toString.call(value) === "[object Object]";
+
+/** One value inside the line: a string's first line, an array's length, an object's keys, else JSON. */
+function valueGlance(value: unknown): string {
+  if (typeof value === "string") {
+    const line = value.split("\n")[0] || "";
+    return line.length > 48 ? `${line.slice(0, 47)}…` : line;
+  }
+  if (Array.isArray(value)) return `[${String(value.length)}]`;
+  if (isPlainObject(value)) {
+    const keys = Object.keys(value);
+    return `{${keys.slice(0, 3).join(", ")}${keys.length > 3 ? ", …" : ""}}`;
+  }
+  return String(JSON.stringify(value)); // numbers, booleans, null — and "undefined" for a hole
+}
+
 /** Who appended: the email when the stamp has one, else the actor id; "" for the platform's own. */
 export const actorLabel = (event: ContextViewEvent): string =>
   event.source?.principal?.email ?? event.source?.principal?.actor ?? "";
