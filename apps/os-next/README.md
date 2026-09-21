@@ -93,6 +93,9 @@ can rotate with `previousKey` beside it. A self-host sets the object and the key
 
 The platform serves two pages and nothing else a person looks at: sign-in, because the session
 cookie is the issuer origin's, and consent, because the authorization server is the one that asks.
+(Beside them, two files for machines and their operators: `/` says the origin is headless and where the
+dash is, and `/setup-prompt.md` is the prompt an agent follows to deploy a platform of its own —
+`SELF-HOSTING.md`'s recipe.)
 Both are files in `public/` (`login.html`, `authorize.html`, `issuer.css`, a script each, `_headers`
 for their CSP), served by the assets binding. The sign-in page's script asks `/login.json`
 (`control-plane.ts`) what to show and signs in with plain form posts to `/login`. The consent page is

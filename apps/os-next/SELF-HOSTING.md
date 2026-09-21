@@ -25,6 +25,13 @@ The first deploy creates the D1 database, the two KV namespaces and the R2 bucke
 account and prints the Worker's URL, `https://iterate.<your-subdomain>.workers.dev`. Everything
 below is on that origin.
 
+## With an agent
+
+Your platform serves the recipe above as a prompt an agent follows: point Claude, Codex or Cursor at
+`https://iterate.<your-subdomain>.workers.dev/setup-prompt.md` (the repository's copy is
+`apps/os-next/public/setup-prompt.md`) and it deploys, asks you for the password, connects over MCP
+and hands you the dash.
+
 ## Using it
 
 - **Sign in:** open the URL. Enter any email and the password you chose. Anyone who knows the

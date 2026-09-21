@@ -253,6 +253,18 @@ test("a browser landing on the platform origin is told it is headless and where 
   expect(html).toContain('href="/login"');
 });
 
+test("the setup prompt an agent follows is served beside the pages, and the landing page points at it", async () => {
+  const prompt = await SELF.fetch(`${origin}/setup-prompt.md`);
+  expect(prompt.status).toBe(200);
+  expect(prompt.headers.get("content-type")).toMatch(/^text\/(markdown|plain)/);
+  const text = await prompt.text();
+  expect(text).toContain("wrangler deploy --config apps/os-next/wrangler.self-host.jsonc");
+  expect(text).toContain("/mcp");
+  expect(text).toContain("dash.iterate2.com/.auth/connect?issuer=");
+  const page = await (await SELF.fetch(`${origin}/`)).text();
+  expect(page).toContain('href="/setup-prompt.md"');
+});
+
 test("a client on a project's custom apex is bound to that project at consent, like one under the hostname base", async () => {
   const user = await directory(bindings.DB).upsertUser("custom-apex@example.com");
   const apexProject = await directory(bindings.DB).createProject(

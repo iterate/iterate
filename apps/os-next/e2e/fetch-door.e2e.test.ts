@@ -30,11 +30,12 @@ import { RpcTarget, upgradeWebSocketResponse, WebSocketPair } from "capnweb";
 import { expect, test } from "vitest";
 import { adminCredentials, freshCtx, openItx, session, workerUrl } from "./support/client.ts";
 import {
-  fetchProjectHost,
+  appSeesUrl,
+  fetchProjectUrl,
   freshDnsSafeProjectSlug,
-  ingressHostname,
+  projectUrl,
   registerProject,
-  wsRoundTripOnProjectHost,
+  wsRoundTripOnProjectUrl,
 } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
 
@@ -47,13 +48,13 @@ test("a project host serves a LOADED WORKER as an app: GET → 200 HTML, WebSock
   // an itx EXPRESSION (workers.get({ source })), same as every other rule.
   const itx = openItx(projectId);
   await itx.provide("itx.apps.site", ["itx", "workers", ["get", { source: SOURCES.site }]]);
-  const host = `site--${slug}.${ingressHostname()}`;
+  const site = projectUrl({ project: slug, app: "site", path: "/" });
 
-  const page = await fetchProjectHost(host, "/");
+  const page = await fetchProjectUrl(site);
   expect(page.status, page.text).toBe(200);
   expect(page.text).toContain("dynamic web capability");
 
-  const ws = await wsRoundTripOnProjectHost(host, "/", "hello-from-eyeball", 15_000);
+  const ws = await wsRoundTripOnProjectUrl(site, "hello-from-eyeball", 15_000);
   expect(ws.error).toBeUndefined();
   expect(ws.opened).toBe(true);
   expect(ws.echo).toBe("site-echo:hello-from-eyeball");
@@ -89,13 +90,15 @@ test("lent stub HTTP fetch: an eyeball POST on the project host reaches the Node
     .authenticate(adminCredentials())
     .projects.get(projectId)
     .provide("itx.apps.device", device);
-  const host = `device--${slug}.${ingressHostname()}`;
+  const target = { project: slug, app: "device", path: "/hunt?probe=1" };
 
-  const res = await fetchProjectHost(host, "/hunt?probe=1", {}, { method: "POST", body: "ping" });
+  const res = await fetchProjectUrl(projectUrl(target), {}, { method: "POST", body: "ping" });
   expect(res.status, res.text).toBe(201);
   expect(res.text).toBe("pong-from-node-provider");
   expect(res.headers["x-device"]).toBe("node-live-cap");
-  expect(device.saw).toEqual([`POST ${host}/hunt?probe=1 body=ping`]); // the URL as the eyeball spelled it
+  // the URL as the eyeball spelled it (under paths: with the project prefix stripped, as the app sees it)
+  const seen = appSeesUrl(target);
+  expect(device.saw).toEqual([`POST ${seen.host}${seen.pathname}${seen.search} body=ping`]);
 });
 
 /** The device: a fetch-shaped live rpc stub that upgrades WebSockets — the workerd fetch-handler
@@ -120,12 +123,12 @@ test("lent stub WebSocket fetch: a plain eyeball WebSocket on the project host o
     .authenticate(adminCredentials())
     .projects.get(projectId)
     .provide("itx.apps.device", new WsDevice());
-  const host = `device--${slug}.${ingressHostname()}`;
+  const device = projectUrl({ project: slug, app: "device", path: "/" });
   // Sanity: the rule still answers plain HTTP (so the assertions below are about the UPGRADE).
-  const plain = await fetchProjectHost(host, "/");
+  const plain = await fetchProjectUrl(device);
   expect(plain.text).toBe("http-fallback");
 
-  const ws = await wsRoundTripOnProjectHost(host, "/", "hello-device");
+  const ws = await wsRoundTripOnProjectUrl(device, "hello-device");
   expect(ws.error).toBeUndefined();
   expect(ws.opened).toBe(true);
   expect(ws.echo).toBe("device-echo:hello-device");
@@ -138,9 +141,8 @@ test("lent stub WebSocket fetch: a plain eyeball WebSocket on the project host o
 
 test("a hop count the platform never wrote (an app spelling `NaN` to defeat the budget) is over budget on arrival: 508, never a loop", async () => {
   // before admission — the count is read first, so the project need not exist
-  const response = await fetchProjectHost(
-    `site--${freshDnsSafeProjectSlug("nan-hops")}.${ingressHostname()}`,
-    "/",
+  const response = await fetchProjectUrl(
+    projectUrl({ project: freshDnsSafeProjectSlug("nan-hops"), app: "site", path: "/" }),
     { "x-itx-expression-hops": "NaN" },
   );
   expect(response.status).toBe(508);

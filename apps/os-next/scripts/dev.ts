@@ -34,7 +34,9 @@ const dev = spawn(
     `APP_CONFIG_URLS__INGRESS_ROUTING:${JSON.stringify({ type: "subdomains", hostname: "localhost" })}`,
     "--var",
     `APP_CONFIG:${JSON.stringify({
-      login: { password: "dev" },
+      // the password `dev`, and the mailed code too (wrangler dev simulates the EMAIL binding: the
+      // message lands in a local file), so the sign-in page renders both mechanisms as prd does
+      login: { password: "dev", emailCode: { from: "iterate <login@localhost>" } },
       secrets: { adminBearer: "dev-admin-api-secret" },
     })}`,
     "--var",

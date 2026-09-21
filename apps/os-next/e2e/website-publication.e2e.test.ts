@@ -1,26 +1,21 @@
 import { expect } from "vitest";
 import { adminCredentials, readAll, session, until } from "./support/client.ts";
-import { localOnly, fetchProjectHost, ingressHostname } from "./support/project-host.ts";
+import { fetchProjectUrl, localOnly, projectUrl } from "./support/project-host.ts";
 
 localOnly("website identity, pinned revisions, and explicit publication agree", async () => {
   const slug = `website-${Date.now()}`;
   const root = session().authenticate(adminCredentials()).projects.create({ project: slug });
   const identity = await root.cd("/agents/website-test").whoami();
   expect(identity.projectSlug).toBe(slug);
-  // the project's URL under the platform's own protocol and port (http and a port on the local
-  // harness), an href
-  const platform = new URL(process.env.WORKER_BASE_URL!);
-  expect(identity.projectUrl).toBe(
-    `${platform.protocol}//${slug}.${ingressHostname()}${platform.port ? `:${platform.port}` : ""}/`,
-  );
+  // the project's URL as the platform composes it — the apex under the worker's routing
+  const apex = projectUrl({ project: slug, path: "/" });
+  expect(identity.projectUrl).toBe(apex.href);
   // The project's own saga seeded `/repos/config` (the homepage worker) and published its commit;
   // this story's commits land on top of it (the local worker binds Artifacts for real).
   await until("the project's certificate", async () =>
     (await readAll(root)).find((e) => e.type === "events.iterate.com/project/created"),
   );
-  expect((await fetchProjectHost(`${slug}.${ingressHostname()}`, "/")).text.trim()).toBe(
-    `Homepage of project ${slug}`,
-  );
+  expect((await fetchProjectUrl(apex)).text.trim()).toBe(`Homepage of project ${slug}`);
   {
     const repo = root.repos.get("/repos/config");
     const source = (joke: string) =>
@@ -54,11 +49,9 @@ localOnly("website identity, pinned revisions, and explicit publication agree", 
         },
       });
     await publish(first.commitOid);
-    expect((await fetchProjectHost(`${slug}.${ingressHostname()}`, "/")).text).toBe(
-      "Elephants fear the mouse.",
-    );
+    expect((await fetchProjectUrl(apex)).text).toBe("Elephants fear the mouse.");
     await publish(second.commitOid);
-    const live = await fetchProjectHost(`${slug}.${ingressHostname()}`, "/");
+    const live = await fetchProjectUrl(apex);
     expect(live.status).toBe(200);
     expect(live.text).toBe("Elephants pack their trunks.");
     expect(
