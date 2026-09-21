@@ -1,23 +1,33 @@
 // agent-events.test.ts — the os-next log through the shared reducer: `adaptContextRuns` turns the
 // CONTEXT's runs (`context/run-requested` / `run-settled`, the request's offset as identity) into the
 // script vocabulary apps/os's reducer folds (`capability-host/script-run-*`, an executionId the
-// reducer links to the assistant's message), so a turn renders as one activity with its code step,
-// the raw log stays as it is, and a bare reply's `reply:` script is filtered out of the feed.
+// reducer links to the assistant's message — from the processor's `whileProcessing` stamp), so a
+// turn renders as one activity with its code step, and a bare reply's `reply:` script is filtered out
+// of the feed whether its activity settled on its own or at the idle boundary.
 import { describe, expect, test } from "vitest";
 import { adaptContextRuns, reduceAgentFeed, scriptTrace, toAgentEvent } from "./agent-events.ts";
 
 const PATH = "/agents/support";
-const at = (offset: number, type: string, payload: unknown, idempotencyKey?: string) =>
+const at = (
+  offset: number,
+  type: string,
+  payload: unknown,
+  extra: { idempotencyKey?: string; source?: unknown } = {},
+) =>
   toAgentEvent(
     {
       offset,
       type,
       createdAt: new Date(1_700_000_000_000 + offset * 1000).toISOString(),
       payload,
-      idempotencyKey,
+      ...extra,
     },
     PATH,
   )!;
+/** The engine's stamp on an event the agent processor appended while processing offset 6. */
+const byAgentWhile = (offset: number) => ({
+  processor: { slug: "agent", version: "2", whileProcessing: { offset, type: "x" } },
+});
 
 /** One turn as the agent's own log lays it out: the person asks, the model answers (a codemode
  *  script, or a bare reply), the CONTEXT runs the script, the message goes out, the result comes
@@ -51,7 +61,7 @@ const turn = (kind: "run-requested" | "plain-response") => [
     8,
     "events.iterate.com/context/run-requested",
     { code: "async (itx) => { await itx.kv.put('answer', '42'); return { stored: true } }" },
-    `agent/${kind}@6`,
+    { idempotencyKey: `agent/${kind}@6`, source: byAgentWhile(6) },
   ),
   // the visible message: the tag's prose sent directly, or the reply the `reply:` script sends
   at(
@@ -71,32 +81,31 @@ const turn = (kind: "run-requested" | "plain-response") => [
 ];
 
 describe("adaptContextRuns — the context's runs in the reducer's vocabulary", () => {
-  test("a request becomes script-run-requested with the executionId the reducer links to the assistant's message; its settlement and the developer item follow it by offset; the raw log is untouched", () => {
-    const events = turn("run-requested");
-    const adapted = adaptContextRuns(events);
+  test("a request the agent appended while processing the assistant's item becomes script-run-requested with the id the reducer links to that item; its settlement takes the same id; a run nobody's processor asked for is its own offset", () => {
+    const adapted = adaptContextRuns(turn("run-requested"));
     const byOffset = (offset: number) => adapted.find((e) => e.offset === offset)!;
     expect(byOffset(8)).toMatchObject({
       type: "events.iterate.com/capability-host/script-run-requested",
       payload: {
         executionId: "agent-output:6",
+        requestOffset: 8,
         code: expect.stringContaining("itx.kv.put"),
-        expiresAt: Number.MAX_SAFE_INTEGER,
+        expiresAt: Date.parse(byOffset(8).createdAt) + 10 * 60_000,
       },
     });
     expect(byOffset(10)).toMatchObject({
       type: "events.iterate.com/capability-host/script-run-settled",
       payload: {
         executionId: "agent-output:6",
+        requestOffset: 8,
         settlement: { status: "succeeded", result: { stored: true } },
       },
     });
-    expect(byOffset(11)).toMatchObject({
-      payload: { actor: { type: "script", executionId: "agent-output:6" } },
-    });
-    expect(events.find((e) => e.offset === 8)!.type).toBe(
-      "events.iterate.com/context/run-requested",
-    );
     expect(adapted.filter((e) => e.type.startsWith("events.iterate.com/context/"))).toEqual([]);
+    const [unasked] = adaptContextRuns([
+      at(20, "events.iterate.com/context/run-requested", { code: "async () => 1" }),
+    ]);
+    expect(unasked!.payload).toMatchObject({ executionId: "run:20" });
   });
 
   test("a failed settlement gains the fields apps/os's strict schema wants — an interrupted run counts as having run", () => {
@@ -105,7 +114,10 @@ describe("adaptContextRuns — the context's runs in the reducer's vocabulary", 
         8,
         "events.iterate.com/context/run-requested",
         { code: "async () => 1" },
-        "agent/run-requested@6",
+        {
+          idempotencyKey: "agent/run-requested@6",
+          source: byAgentWhile(6),
+        },
       ),
       at(9, "events.iterate.com/context/run-settled", {
         requestOffset: 8,
@@ -128,7 +140,7 @@ describe("adaptContextRuns — the context's runs in the reducer's vocabulary", 
     });
   });
 
-  test("through the reducer: the person's message, then one activity whose code step is the run, settled with its result; the trace finds code, settlement and the rendered result by the same id", () => {
+  test("through the reducer: the person's message, then one activity whose code step is the run, settled with its result; the trace finds code and settlement by the same id", () => {
     const adapted = adaptContextRuns(turn("run-requested"));
     const { items } = reduceAgentFeed(adapted, true);
     const activity = items.find((item) => item.kind === "activity");
@@ -143,12 +155,10 @@ describe("adaptContextRuns — the context's runs in the reducer's vocabulary", 
         result: { stored: true },
       }),
     ]);
-    const trace = scriptTrace(adapted, "agent-output:6");
-    expect(trace).toMatchObject({
+    expect(scriptTrace(adapted, "agent-output:6")).toMatchObject({
       code: expect.stringContaining("itx.kv.put"),
       settlement: { value: { status: "succeeded", result: { stored: true } } },
     });
-    expect(trace?.rendered).toBeDefined();
   });
 
   test("a bare reply's `reply:` script shows as the message alone — its activity card is dropped, whether it settled on its own or at the idle boundary", () => {

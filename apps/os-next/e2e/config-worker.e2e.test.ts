@@ -1,5 +1,7 @@
 // Config workers are explicit workers.get targets. Neither loading one nor creating a context
-// subscribes it, configures ingress, or follows repository commits implicitly.
+// subscribes it, configures ingress, or follows repository commits implicitly. The repo a worker's
+// source is read from is born through the collection (`itx.repos.create(path)`) and addressed as
+// `itx.repos.get(path)`.
 import { expect, test } from "vitest";
 import { append, freshCtx, openItx, readAll, until } from "./support/client.ts";
 import { FakeArtifacts } from "./support/fake-artifacts.ts";
@@ -54,8 +56,8 @@ localOnly(
     const artifacts = await FakeArtifacts.start();
     try {
       await root.cd("/repos/config").provide("itx.cfArtifacts", artifacts);
+      await root.repos.create("/repos/config");
       const repo = root.repos.get("/repos/config");
-      await repo.create();
       const first = await repo.writeFile("worker.ts", source("v1"));
       const spec = {
         source: "itx.repos.get('/repos/config').readFile('worker.ts')",
@@ -119,8 +121,8 @@ deployedOnly(
   "a real Artifacts repository supplies an explicit worker source expression",
   async () => {
     const root = openItx(freshCtx("config-artifacts"));
+    await root.repos.create("/repos/config");
     const repo = root.repos.get("/repos/config");
-    await repo.create();
     const { commitOid } = await repo.writeFile("worker.ts", source("artifacts"));
     await root.subscribe({
       name: "config",

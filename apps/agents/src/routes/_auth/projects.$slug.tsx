@@ -97,7 +97,7 @@ function AgentsPage() {
             // an agent is its path; a new one is born at the moment's path, as in apps/os
             const path = newWebAgentPath(new Date());
             using itx = await api.projects.get(project);
-            await itx.invoke(["itx", "agents", ["get", path], ["create", {}]]);
+            await itx.invoke(["itx", "agents", ["create", path]]);
             await router.invalidate();
             await navigate({
               to: "/projects/$slug",
@@ -196,7 +196,11 @@ function useAgentLog(api: AuthenticatedApp["api"], project: string, path: string
       release();
     };
   }, [api, project, path]);
-  const sorted = useMemo(() => [...events.values()].sort((a, b) => a.offset - b.offset), [events]);
+  // In offset order, the context's script runs in the reducer's vocabulary (agent-events.ts).
+  const sorted = useMemo(
+    () => adaptContextRuns([...events.values()].sort((a, b) => a.offset - b.offset)),
+    [events],
+  );
   return { context, events: sorted, caughtUp, error };
 }
 
@@ -235,15 +239,14 @@ function useAgentInterrupt(args: {
   };
 }
 
-/** The agent facet's live state, the fields the header reads. */
+/** The agent facet's live state, the fields the header reads (src/agent/contract.ts `stateSchema`):
+ *  a pause, the one open request, the one pending trigger. A script the agent asked for is the
+ *  CONTEXT's obligation, not in this state — the feed's running code step says so. */
 const AgentLive = z.object({
   paused: z.object({ reason: z.string() }).nullable(),
   openRequest: z.object({ model: z.string() }).nullable(),
   pendingLlmRequestTrigger: z.object({}).nullable(),
 });
-/** The context's own live state (the core reduce), the one field the header reads: the scripts
- *  running right now — the context's obligation since the runs moved out of the agent. */
-const CoreLive = z.object({ scriptRuns: z.record(z.string(), z.unknown()) });
 
 function AgentConversation({ project, path }: { project: string; path: string }) {
   const { api } = Route.useRouteContext();
@@ -258,29 +261,19 @@ function AgentConversation({ project, path }: { project: string; path: string })
         .object({ rev: z.number(), state: z.unknown() })
         .parse(await context!.invoke("itx.facets.get('agent').liveSnapshot()")),
   });
-  const core = useLiveState<unknown>(context, {
-    key: "core",
-    door: async () =>
-      z
-        .object({ rev: z.number(), state: z.unknown() })
-        .parse(await context!.invoke("itx.facets.get('core').liveSnapshot()")),
-  });
   const facet = AgentLive.safeParse(live.value);
-  const runs = CoreLive.safeParse(core.value);
-  // The turn is over when neither the facet nor the context holds an obligation — a pause included
-  // (a paused loop owes no follow-up round). Without live state at all (the reads failed), the log
-  // alone decides: the reducer settles only once no step is running, and a follow-up round reopens
-  // an activity.
-  const idle =
-    facet.success && runs.success
-      ? !facet.data.openRequest &&
-        !facet.data.pendingLlmRequestTrigger &&
-        Object.keys(runs.data.scriptRuns).length === 0
-      : live.status === "error" || core.status === "error";
-  // The context's runs in the reducer's vocabulary (agent-events.ts); the raw Events view keeps the log as it is.
-  const adapted = useMemo(() => adaptContextRuns(events), [events]);
-  const feed = useMemo(() => reduceAgentFeed(adapted, idle), [adapted, idle]);
-  const traceOffsets = useMemo(() => traceOffsetByMessage(adapted), [adapted]);
+  // The turn is over when the facet holds no obligation — a pause included (a paused loop owes no
+  // follow-up round). Without live state at all (the read failed), the log alone decides: the
+  // reducer settles only once no step is running, and a follow-up round reopens an activity.
+  const idle = facet.success
+    ? !facet.data.openRequest && !facet.data.pendingLlmRequestTrigger
+    : live.status === "error";
+  const feed = useMemo(() => reduceAgentFeed(events, idle), [events, idle]);
+  // A script still running is the context's, read from the log: the feed's running code step.
+  const runningScript =
+    feed.state.live?.steps.some((step) => step.kind === "code" && step.status === "running") ??
+    false;
+  const traceOffsets = useMemo(() => traceOffsetByMessage(events), [events]);
   const [toggled, setToggled] = useState<ReadonlySet<string>>(() => new Set());
   const onToggle = useCallback(
     (id: string) =>
@@ -341,7 +334,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
     onInterrupt: context
       ? async () => {
           await context.append({
-            type: "events.iterate.com/agents/context-added",
+            type: "events.iterate.com/agent/context-added",
             payload: {
               role: "developer",
               content: "The user interrupted the in-progress response from the web chat.",
@@ -359,7 +352,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
       }
     : facet.data.paused
       ? { text: `Paused — ${facet.data.paused.reason}`, tone: "amber" as const }
-      : runs.success && Object.keys(runs.data.scriptRuns).length > 0
+      : runningScript
         ? {
             text: `Running a script${feed.state.summaryActivity ? ` · ${feed.state.summaryActivity}` : ""}`,
             tone: "live" as const,
@@ -490,7 +483,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
         </>
       )}
       <InspectorSheet
-        events={adapted}
+        events={events}
         live={feed.state.live}
         inspected={inspected}
         onInspect={onInspect}

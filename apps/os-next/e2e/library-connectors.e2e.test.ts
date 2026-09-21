@@ -29,7 +29,7 @@ import { adminCredentials, freshCtx, openItx, workerUrl } from "./support/client
 import {
   deployedOnly,
   freshDnsSafeProjectSlug,
-  ingressHostname,
+  projectUrl,
   registerProject,
 } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
@@ -46,7 +46,7 @@ deployedOnly(
     ]);
     // the context dials its own project's host from inside — no credential: the app is public
     const connection = await itx.connectToCapnweb(
-      `https://rpc--${slug}.${ingressHostname()}/rpc/v1`,
+      projectUrl({ project: slug, app: "rpc", path: "/rpc/v1" }).href,
       { transport: "batch" },
     );
     expect(await connection.hello("host")).toBe("hello host");

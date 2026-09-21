@@ -1,23 +1,27 @@
-// src/workspace/durable-object.ts — THE WORKSPACE: the facet any context hosts under the name
-// `workspace` (`itx.workspaces.get(path)`, library.ts — at most one per path, nothing appended to
-// get it). ONE private overlay over the MOUNT TABLE — every repo in the project catalog at its own
+// src/workspace/durable-object.ts — THE WORKSPACE: the facet a context at ANY path hosts under the
+// name `workspace` (`itx.workspaces.get(path)`, library.ts; `/workspaces/<name>` is the convention,
+// not a rule). ONE private overlay over the MOUNT TABLE — every repo in the project catalog at its own
 // path (`itx.repos.list()`: the workspace is a view of the project's one path namespace): a read
 // tries the overlay, then falls through to the mounted repo's `main` at its tip (the repo facet); a
 // write shadows the repo's file until `gitCommit` lands ONE mount's changes as one commit on that
 // repo's `main` and clears them; a delete of a repo file is a WHITEOUT until then. A path under no
-// mount is scratch (`/workspace/…` by convention): writable, never committed. `create()` lands the
-// creation facts, the certificate cross-posted to `/` for the catalog `itx.workspaces.list()` reads.
+// mount is scratch (`/workspace/…` by convention): writable, never committed. It is also what makes a
+// workspace a DOMAIN OBJECT: it hosts the workspace processor (processor.ts) — the creation saga
+// `itx.workspaces.create(path)` opens, whose certificate is cross-posted to `/` for the catalog
+// `itx.workspaces.list()` reads — and every method refuses until the certificate has landed
+// (`state.creation`).
+//
 // Storage is this facet's own SQLite: one `files` table, a row per touched path — its content, or the
-// `deleted` flag that makes it a whiteout. Text only,
-// ONE writer, no policies. The repo facets speak git themselves (src/repo/git-wire.ts) and reach the
-// Artifacts binding — their token and remote — as `itx.cfArtifacts` through THEIR context's rules, so
-// a test lends a fake proxy there (`provide("itx.cfArtifacts", …)`, e2e/support/fake-artifacts.ts).
-// Hosted from `ctx.exports` (first-party-facets.ts): ordinary bundled worker code, reached as
-// `itx.facets.get("workspace")` (library.ts).
+// `deleted` flag that makes it a whiteout. Text only, ONE writer, no policies. The repo facets speak
+// git themselves (src/repo/git-wire.ts) and reach the Artifacts binding — their token and remote — as
+// `itx.cfArtifacts` through THEIR context's rules, so a test lends a fake proxy there
+// (`provide("itx.cfArtifacts", …)`, e2e/support/fake-artifacts.ts). Hosted from `ctx.exports`
+// (first-party-facets.ts): ordinary bundled worker code, reached as `itx.facets.get("workspace")`
+// (library.ts).
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { RepoFileChange, RepoLogEntry } from "../repo/git-wire.ts";
-import type { WorkspaceView } from "./contract.ts";
+import type { WorkspaceState } from "./contract.ts";
 import { WorkspaceProcessor } from "./processor.ts";
 
 /** One mount: the PATH of the project repo whose `main` shows through at the mount path (its own). */
@@ -57,11 +61,11 @@ export function routeMount(
 }
 
 export class WorkspaceDurableObject extends StreamProcessorDurableObject<
-  WorkspaceView,
+  WorkspaceState,
   { ITX?: ItxEntrypointService },
   ItxEntrypointScope
 > {
-  processor = new WorkspaceProcessor();
+  processor = new WorkspaceProcessor((call) => this.withItx(call));
 
   #pathRead?: string;
   async #path(): Promise<string> {
@@ -97,35 +101,18 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
       .toArray();
   }
 
-  // ── creation ──
+  // ── the created guard ──
 
-  /** Bring the workspace into being: `workspace/create-requested` on this path, then the
-   *  certificate on `/` (the catalog) and on this path — nothing to provision, so nothing fails.
-   *  Idempotent: a created workspace answers at once. Every other method refuses until this has run. */
-  async create(): Promise<{ path: string }> {
-    const path = await this.#path();
-    if ((await this.snapshot()).state.creation === "created") return { path };
-    await this.withItx((itx) =>
-      itx.append({ type: "events.iterate.com/workspace/create-requested", payload: { path } }),
-    );
-    const certificate = {
-      type: "events.iterate.com/workspace/created",
-      payload: { path },
-      idempotencyKey: `workspace/created:${path}`,
-    };
-    await this.withItx((itx) => itx.cd("/").append(certificate));
-    await this.withItx((itx) => itx.append(certificate));
-    this.#confirmedCreated = true;
-    return { path };
-  }
-
-  /** Every method past `create()` starts here: a workspace not yet created refuses. Creation is
+  /** Every verb starts here: a workspace whose certificate has not landed refuses. Creation is
    *  terminal, so one confirming read per incarnation. */
   #confirmedCreated = false;
   async #created(): Promise<void> {
     if (this.#confirmedCreated) return;
-    if ((await this.snapshot()).state.creation !== "created")
-      throw new Error(`workspace ${await this.#path()}: not created — call create() first`);
+    const path = await this.#path();
+    if ((await this.snapshot()).state.creation?.status !== "created")
+      throw new Error(
+        `workspace ${path}: not created — itx.workspaces.create(${JSON.stringify(path)}) first`,
+      );
     this.#confirmedCreated = true;
   }
 

@@ -1,29 +1,28 @@
-// src/account/contract.ts — the account context's vocabulary and pure reducer.
-//
-// A user's account context (global, /users/<id>) records authentication FACTS; the AccountProcessor
-// folds them into the account VIEW a client reads through live state — the SAME StreamProcessor
-// kernel every project processor uses, no new framework. The contract's `events` map is the
-// vocabulary: each type string with its zod payload schema, visible right here. The reduce's event
-// union is DERIVED from the contract (`ConsumedEvent`), so there is no hand-kept discriminated union.
-// The copy that runs in a facet is NOT hand-kept either — the facet is this worker's own class, the
-// `AccountProcessor` (via ./durable-object.ts) into the loaded `cap.js`, one source. No D1: the
-// processor only reduces its own stream. Credentials are NOT here: a personal access token is an
-// OAuth grant (grants.ts), listed and ended through `session.grants`, never an account event.
+// src/account/contract.ts — THE ACCOUNT: a person's context, `/users/<id>` in the deployment-global
+// namespace, where the control-plane FACTS about them land — an authentication (session.ts), a
+// personal access token minted or a grant ended (grants.ts), a consent approved (consent.ts) — each
+// appended by the verb that did it, stamped with the caller. This file is the only place those events
+// and their payloads are spelled; processor.ts folds them into the state a client reads through live
+// state, durable-object.ts hosts it as the first-party facet `account` (first-party-facets.ts), the
+// row enabled where the first fact is published (session.ts `publishGlobalFact`). No D1: the
+// processor only reduces its own stream. Credentials are NOT here: a token is an OAuth grant
+// (grants.ts), listed and ended through `session.grants`. Every type is derived:
+//   AccountState = ProcessorState<typeof AccountContract>   the reduced state below
+//   ConsumedEvent<typeof AccountContract>                    what the reduce sees
 import { z } from "zod";
-import { defineProcessorContract } from "iterate/next/stream/processor";
+import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
 
-// ── event payloads (facts the platform publishes) ──
+// Each fact's payload is spelled once and used twice — by its event and by the state that keeps it.
 
-/** `events.iterate.com/account/authenticated` payload (platform FACT, idempotency key
- *  `authenticated/<operationId>`). NO credential material — only which KIND, when, and a stable op id
- *  (dedup on retry). Once the append type-gate is enforced a client cannot forge this type. */
+/** `events.iterate.com/account/authenticated` (idempotency key `authenticated/<operationId>`): NO
+ *  credential material — only which KIND, when, and a stable op id (dedup on retry). Once the append
+ *  type-gate is enforced a client cannot forge this type. */
 const AuthenticationFact = z.object({
   credential: z.enum(["from-server-cookie", "admin-secret"]),
   at: z.number(),
   operationId: z.string(),
 });
 export type AuthenticationFact = z.infer<typeof AuthenticationFact>;
-
 /** `events.iterate.com/account/grant-minted`: a personal access token minted through
  *  `session.grants.mint` (grants.ts) — the grant's id, the name given, the projects it reaches. */
 export const GrantMinted = z.object({
@@ -49,42 +48,34 @@ export const ConsentApproved = z.object({
 });
 export type ConsentApproved = z.infer<typeof ConsentApproved>;
 
-// ── the view ──
-
-export const AccountView = z.object({
-  // The list IS the event it is folded from — no re-spelling of the payload shape.
-  authentications: z.array(AuthenticationFact).default([]),
-  /** Personal access tokens minted, by grant id — and when each was ended. */
-  personalAccessTokens: z
-    .record(
-      z.string(),
-      z.object({
-        name: z.string(),
-        projects: z.array(z.string()),
-        expiresAt: z.number(),
-        mintedAt: z.string(),
-        endedAt: z.string().nullable(),
-      }),
-    )
-    .default({}),
-  /** Every grant ended — a session logged out, a token revoked — by grant id: when. */
-  endedGrants: z.record(z.string(), z.object({ at: z.string() })).default({}),
-  /** Every consent approved, in order: the client and what it was given. */
-  consents: z.array(ConsentApproved.extend({ at: z.string() })).default([]),
-});
-/** The account view a client reads (through live state): the user's authentications, tokens,
- *  ended grants and consents. */
-export type AccountView = z.infer<typeof AccountView>;
-
-// ── the contract + reducer ──
-
 export const AccountContract = defineProcessorContract({
   slug: "account",
-  // 2: the view grew tokens, ended grants and consents (the control-plane facts).
+  // 2: the state grew tokens, ended grants and consents (the control-plane facts).
   version: "2",
   description:
-    "The user's account view: authentications, personal access tokens, ended grants, consents.",
-  stateSchema: AccountView,
+    "The user's account: authentications, personal access tokens, ended grants, consents.",
+  /** THE REDUCED STATE — the record of the account, folded from the facts above: what a client
+   *  reads through live state. The lists ARE the events they are folded from — no re-spelling. */
+  stateSchema: z.object({
+    authentications: z.array(AuthenticationFact).default([]),
+    /** Personal access tokens minted, by grant id — and when each was ended. */
+    personalAccessTokens: z
+      .record(
+        z.string(),
+        z.object({
+          name: z.string(),
+          projects: z.array(z.string()),
+          expiresAt: z.number(),
+          mintedAt: z.string(),
+          endedAt: z.string().nullable(),
+        }),
+      )
+      .default({}),
+    /** Every grant ended — a session logged out, a token revoked — by grant id: when. */
+    endedGrants: z.record(z.string(), z.object({ at: z.string() })).default({}),
+    /** Every consent approved, in order: the client and what it was given. */
+    consents: z.array(ConsentApproved.extend({ at: z.string() })).default([]),
+  }),
   events: {
     "events.iterate.com/account/authenticated": {
       description: "A successful authentication on the user's account (platform fact).",
@@ -112,3 +103,6 @@ export const AccountContract = defineProcessorContract({
   ],
   emits: [],
 });
+
+/** The account's reduced state: its record (the contract's `stateSchema`). */
+export type AccountState = ProcessorState<typeof AccountContract>;

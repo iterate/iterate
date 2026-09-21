@@ -26,6 +26,7 @@ export {
   type ConsumedEvent,
   type EventCatalog,
   type EventDefinition,
+  type EventInput,
   type ProcessorContract,
   type ProcessorState,
   type ProcessorStream,
@@ -91,8 +92,17 @@ export type ProcessorScope = {
     readEvents(afterOffset?: number, limit?: number): Promise<unknown>;
     /** The engine's claim on the context's alarm (processor.ts rule 3): "come back by `at`", or null. */
     processors: { claim(name: string, at: number | null): Promise<unknown> };
+    /** Another context of the project — where `appendTo` lands: its handle, whose `invoke` takes the
+     *  steps relative to `itx` (an InvokeHandle on the platform's stub; the declared API elsewhere). */
+    cd(path: string): { invoke(call: unknown): unknown };
   };
 };
+
+/** THE SCOPE ACCESSOR a host hands its processor: one pipelined round trip on the context's itx,
+ *  released after (`StreamProcessorDurableObject.withItx`). A processor that needs an effect —
+ *  `itx.cfArtifacts.create(path)`, `itx.ai.run(…)` — takes this and nothing else, so a unit test
+ *  hands it a fake and the e2e lends one by rule on the context. */
+export type WithItx<Scope = ItxScope> = <T>(call: (itx: Scope) => T) => Promise<Awaited<T>>;
 
 export abstract class StreamProcessorDurableObject<
   State = unknown,
@@ -167,6 +177,10 @@ export abstract class StreamProcessorDurableObject<
         // engine awaits them): the engine's own types, asserted.
         append: (...events) =>
           this.withItx((itx) => itx.builtins.append(...events)) as Promise<StreamEvent[]>,
+        appendTo: (path, ...events) =>
+          this.withItx((itx) => itx.builtins.cd(path).invoke([["append", ...events]])) as Promise<
+            StreamEvent[]
+          >,
         read: (after, limit) =>
           this.withItx((itx) => itx.builtins.readEvents(after, limit)) as Promise<StreamPage>,
         claim: (at) =>
