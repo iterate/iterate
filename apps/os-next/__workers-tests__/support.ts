@@ -104,7 +104,7 @@ afterAll(async () => {
  *  30 s timer releases them, and a facet is released by nothing but the actor's own end (on the
  *  edge it does not keep the actor resident); a test that wants the alarm PASS itself fakes Date
  *  and calls `runDurableObjectAlarm`. */
-export async function quiesce(ctx: string): Promise<void> {
+export async function releasePins(ctx: string): Promise<void> {
   await runInDurableObject(stub(ctx), (instance) => {
     (instance as IterateContextDurableObject).releasePins();
   });

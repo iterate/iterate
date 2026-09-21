@@ -23,18 +23,18 @@
 //       workerd's idle eviction. MEASURED CAVEAT: on a WARM DO (borrowed stubs still held) it
 //       times out after 30s with "Timed out waiting to evict Durable Object:
 //       it still has active references" — which is FAITHFUL to production: a DO holding live RPC
-//       stubs is pinned non-hibernatable (workerd#6800, the reason the quiesce alarm exists). So
-//       each eviction here reproduces the production sequence first: quiesce (return the stubs) →
-//       evict — see quiesceLikeProduction().
+//       stubs is pinned non-hibernatable (workerd#6800, the reason the pins' release exists). So
+//       each eviction here reproduces the production sequence first: the release (return the stubs) →
+//       evict — see releasePinsLikeProduction().
 //   (c) waiting for the pins' release — NOT VIABLE as the eviction ITSELF: the release is a timer
-//       IDLE_QUIESCE_AFTER_MS (30 s) after the pins' last use (`#pinCallEnded`), and it only returns the
+//       PIN_RELEASE_AFTER_IDLE_MS (30 s) after the pins' last use (`#pinCallEnded`), and it only returns the
 //       borrowed stubs and closes library connections — the weaker assertion, subsumed by (b).
-//       support.ts's `quiesce` runs that release directly, which is how (b)'s precondition is met
+//       support.ts's `releasePins` runs that release directly, which is how (b)'s precondition is met
 //       above — no waiting needed.
 
 import { evictDurableObject } from "cloudflare:test";
 import { beforeAll, expect, test } from "vitest";
-import { adminCredentials, Echo, openSession, quiesce, stub } from "./support.ts";
+import { adminCredentials, Echo, openSession, releasePins, stub } from "./support.ts";
 
 const CTX = "prj_hibscale";
 const CLIENTS = 200;
@@ -64,14 +64,14 @@ async function incarnationNow(): Promise<number> {
 
 let callerItx: any; // a SEPARATE caller session (it lends nothing of its own)
 
-/** The production pins' release on demand (support.ts's `quiesce`), then the two facts this
+/** The production pins' release on demand (support.ts's `releasePins`), then the two facts this
  *  file leans on: every borrowed stub returned, the DO dormant — evictDurableObject's de-facto
  *  precondition (see mechanism note (b) in the header: evicting a warm DO times out on "active
  *  references", exactly the production #6800 pin). */
-async function quiesceLikeProduction(): Promise<void> {
-  await quiesce(CTX);
+async function releasePinsLikeProduction(): Promise<void> {
+  await releasePins(CTX);
   const s = await state();
-  expect(s.borrowedRpcStubs).toBe(0); // the quiesce returned every borrowed stub
+  expect(s.borrowedRpcStubs).toBe(0); // the release returned every borrowed stub
   expect(s.dormant).toBe(true);
 }
 
@@ -118,10 +118,10 @@ test("EVICT THEN WAKE: eviction drops every in-memory stub; a call pages the rel
   const beforeIncarnation = await incarnationNow();
   expect(before.borrowedRpcStubs).toBeGreaterThanOrEqual(5); // warm from the previous test
 
-  // The production sequence: quiesce (return the borrowed stubs — without this the eviction
+  // The production sequence: the release (return the borrowed stubs — without this the eviction
   // times out on "active references", the #6800 pin), THEN evict: instance torn down, storage
   // kept, hibernatable sockets hibernated.
-  await quiesceLikeProduction();
+  await releasePinsLikeProduction();
   await evictDurableObject(stub(CTX));
 
   const evicted = await state(); // read-only probe — wakes a FRESH instance
@@ -148,7 +148,7 @@ test("EVICT THEN WAKE: eviction drops every in-memory stub; a call pages the rel
 });
 
 test("SCALE WAKE: after another eviction, a fan-out reaches ALL 200 clients", async () => {
-  await quiesceLikeProduction(); // the previous test left 3+ stubs borrowed — same #6800 dance
+  await releasePinsLikeProduction(); // the previous test left 3+ stubs borrowed — same #6800 dance
   await evictDurableObject(stub(CTX));
   const evicted = await state();
   expect(evicted.borrowedRpcStubs).toBe(0);

@@ -1747,7 +1747,7 @@ side by side, and nothing in the spelling says which is which. The alternative i
 The trade: one root is one spelling and no level to learn; two make the litmus test visible in the
 name, and let the library move to userspace without a rename. Not decided.
 
-### Memoized per context, released at the quiesce
+### Memoized per context, released by the pins' timer
 
 A connector reached THROUGH a rule is a connect per call as an expression — a fresh MCP session, an
 open WebSocket that no intermediate holder disposes. So the library keeps every connection it opened,
@@ -2027,8 +2027,8 @@ durable obligations:
 ```ts
 // iterate-context-durable-object.ts — alarm(), abridged: one pass under the coordinator's hold
 async alarm(): Promise<void> {
-  const { armedAt: fired } = this.#alarms.snapshot();
-  await this.#alarms.pass(async () => {
+  const { armedAt: fired } = this.#alarmCoordinator.snapshot();
+  await this.#alarmCoordinator.pass(async () => {
     this.#stream.appendWakeRecord("alarm"); // 0. an alarm-woken incarnation names its wake here
     /* 1. the due schedules: up to 32, each appended with its append-schedule-completed in ONE commit */
     await this.#subscriptionDelivery.deliverEveryCursorSubscription(); // 2. every cursor row's owed delivery — AWAITED
@@ -2047,7 +2047,7 @@ A facet is never released at all: on the edge it is not a pin and dies with the 
 may be mid-attempt (an LLM call in its background). A facet the watchdog or a source change aborted
 re-materializes from its durable startup memo on the next call, its storage having
 survived. A facet's answer arrives as a Workers-RPC result carrying a disposer that holds a reference
-on the facet until disposed or GC'd — GC is too late for the quiesce — so the DO copies the data out
+on the facet until disposed or GC'd — GC is too late for the release — so the DO copies the data out
 and disposes the result at once; the SDK host releases its `env.ITX.get()` capability after every
 append and read for the same reason.
 
@@ -2068,9 +2068,9 @@ makes no loop because delivering it creates no reason to wake again.
 
 ### The watchdog on facet calls
 
-A facet call that never answers would hold the in-flight count, and with it the quiesce, and with
+A facet call that never answers would hold the in-flight count, and with it the pins' release, and with
 that the actor, forever. So `#invokeFacet` counts the call in (`#facetWorkInFlight++`, so a
-concurrent alarm's quiesce never aborts a facet mid-call), loads the class from the facet's startup
+release never aborts a facet mid-call), loads the class from the facet's startup
 memo (aborting a running facet whose loaded identity changed, so a new source restarts it in place
 with its storage surviving), runs the call under `withTimeout(call, FACET_CALL_WATCHDOG_MS = 60_000,
 …)`, and on `TIMEOUT` aborts the facet — the pending call rejects, the counter drains, the next call
@@ -2094,7 +2094,7 @@ has the model.
 The hibernation property at scale — hundreds of clients providing into one context, the DO evicted,
 every value still callable on wake — is deterministic inside workerd
 (`__workers-tests__/hibernation-at-scale.test.ts`); the alarm pass — the wake record, the cursor pump,
-the quiesce, and that a wake makes no loop — is `__workers-tests__/alarm-quiesce.test.ts`, its
+the pins' release, and that a wake makes no loop — is `__workers-tests__/alarm-and-pins.test.ts`, its
 schedules half `__workers-tests__/scheduled-appends.test.ts`. Both use `cloudflare:test`'s eviction,
 which times out on a warm DO exactly as production refuses to evict a pinned one. Isolate limits are
 measured deployed only, in `e2e/isolate-ceilings-deployed.e2e.test.ts`.
@@ -2118,7 +2118,7 @@ measured deployed only, in `e2e/isolate-ceilings-deployed.e2e.test.ts`.
 | 8       | fetch in the context of this project (secrets), project hosts, the upgrade leg | `src/iterate-context-durable-object.ts`, `src/context/rpc-stubs.ts`, `src/worker.ts`                                               |
 | 9       | the library                                                                    | `src/library.ts`                                                                                                                   |
 | 10      | identity, OAuth grants, personal access tokens, the control plane              | `src/principal.ts`, `src/session.ts`, `src/oauth.ts`, `src/grants.ts`, `src/control-plane.ts`                                      |
-| 11      | pagers, the quiesce, the one alarm, the watchdog                               | `src/iterate-context-durable-object.ts`, `src/alarm-coordinator.ts`, `src/stream/subscription-delivery.ts`, `src/stream/stream.ts` |
+| 11      | pagers, the pins' release, the one alarm, the watchdog                         | `src/iterate-context-durable-object.ts`, `src/alarm-coordinator.ts`, `src/stream/subscription-delivery.ts`, `src/stream/stream.ts` |
 
 The invariants a reader should now be able to state:
 
@@ -2145,7 +2145,7 @@ The invariants a reader should now be able to state:
   host, answered by the config worker's `fetch`.
 - **Identity is attribution.** The DO stamps `source.principal`; the session's reach is its grant's;
   membership is the directory's; loaded code speaks for the project.
-- **The DO holds nothing across idle.** Pagers, the quiesce, an alarm only while something is owed
+- **The DO holds nothing across idle.** Pagers, the pins' release, an alarm only while something is owed
   (derived, never requested), a watchdog on every facet call.
 
 ---
@@ -2169,7 +2169,7 @@ Every client snippet above is lifted from, or composed of calls made by, these f
 | 8        | `e2e/secrets.e2e.test.ts`, `e2e/fetch-door.e2e.test.ts`, `e2e/session.e2e.test.ts`, `e2e/ingress-project-host.e2e.test.ts`                                                                                                                                     |
 | 9        | `e2e/library-connectors.e2e.test.ts` (against the deployed pet shop; the WebSocket transports deployed only)                                                                                                                                                   |
 | 10       | `e2e/session.e2e.test.ts`, `e2e/support/principal.ts` (the OAuth login fixture), `e2e/secrets.e2e.test.ts`, `e2e/ingress-project-host.e2e.test.ts`, `__workers-tests__/control-plane.test.ts` (the `/mcp` rows)                                                |
-| 11       | `e2e/stream.e2e.test.ts` (opt-in, deployed only), `__workers-tests__/hibernation-at-scale.test.ts`, `__workers-tests__/alarm-quiesce.test.ts`                                                                                                                  |
+| 11       | `e2e/stream.e2e.test.ts` (opt-in, deployed only), `__workers-tests__/hibernation-at-scale.test.ts`, `__workers-tests__/alarm-and-pins.test.ts`                                                                                                                 |
 
 The server snippets are abridged from the files named in each code block's first comment. The rule
 table of chapter 3 was checked by running `src/context/itx-expression-rewriting.test.ts` and

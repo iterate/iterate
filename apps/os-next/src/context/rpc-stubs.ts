@@ -189,7 +189,7 @@ export class RpcStubDirectory {
     return this.#borrowedRpcStubs.size > 0;
   }
 
-  /** THE IDLE RETURN (call from the DO's quiesce alarm): give every borrowed stub back so the DO
+  /** THE IDLE RETURN (the DO's pins' release, on its timer): give every borrowed stub back so the DO
    *  can hibernate. Losing them costs exactly one page on the next call — that is the deal. */
   returnBorrowedRpcStubs(): void {
     for (const [rpcStubKey, borrowed] of this.#borrowedRpcStubs) {
