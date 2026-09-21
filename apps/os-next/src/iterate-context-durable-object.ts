@@ -555,14 +555,20 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       })) as RewriteRuleListEntry[]; // `invoke` is untyped over Workers RPC; the sibling is this same class answering this same method, so its rows are this method's return shape
       // A local row shadows every inherited row it is a PREFIX of, as the resolver's longest-prefix
       // match does (a mask at `itx.ai` refuses `itx.ai.run('gpt-5')`): the list must not show a name
-      // the table would refuse. A prefix ends at a step boundary — `.` or a pinned call's `(`.
-      const shadows = (local: string, match: string) =>
-        match === local || match.startsWith(`${local}.`) || match.startsWith(`${local}(`);
-      const locals = rows.map((row) => row.match).filter((match) => match !== "itx"); // the link itself shadows nothing
+      // the table would refuse. A prefix ends at a step boundary — `.` or a pinned call's `(`. The
+      // bare `itx` link itself shadows nothing.
+      const locals = rows.map((row) => row.match).filter((match) => match !== "itx");
       return [
         ...rows,
         ...inherited.filter(
-          (row) => row.match !== "itx" && !locals.some((local) => shadows(local, row.match)),
+          (row) =>
+            row.match !== "itx" &&
+            !locals.some(
+              (local) =>
+                row.match === local ||
+                row.match.startsWith(`${local}.`) ||
+                row.match.startsWith(`${local}(`),
+            ),
         ),
       ];
     }
