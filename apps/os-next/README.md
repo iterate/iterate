@@ -6,7 +6,7 @@ project-host ingress — `<app>--<project>.<base>`, `<app>.<project>.<base>`, th
 the control plane in-process as its catch-all (`src/control-plane.ts`: OAuth AS + a D1 directory +
 `/mcp`, the ONE MCP server for every project + the issuer's server half) and THE ISSUER'S TWO PAGES —
 `/login` and the `/authorize` consent, files in `public/` the assets binding serves (no framework, no
-build), each asking its JSON sibling what to show — the consent's session built the way `/api` builds one;
+build): sign-in asks `/login.json` what to show and posts plain forms; consent is a capnweb client of `/api`;
 `src/iterate-context-durable-object.ts` is THE CONTEXT — one Durable Object per `{ projectId, path }`
 holding the event log, the core reduce, subscription delivery, the facets, the rpc-stub pagers and
 the fetch door. Everything a client does is one dotted expression on `itx`.
