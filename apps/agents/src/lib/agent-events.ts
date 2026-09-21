@@ -120,16 +120,6 @@ export function reduceAgentFeed(
     state = reduced.endState;
     items.push(...reduced.items);
   }
-  // A bare reply runs as a `reply:` script (the plain-response handler); its message shows as a
-  // normal bubble, so the redundant activity card is dropped (click the bubble for its trace).
-  const shown = items.filter(
-    (item) =>
-      item.kind !== "activity" ||
-      !item.steps.some((step) => step.kind === "code") ||
-      item.steps.some((step) => step.kind === "code" && !step.executionId.startsWith("reply:")),
-  );
-  items.length = 0;
-  items.push(...shown);
   const last = events.at(-1);
   if (idle && last && state.live && !state.live.steps.some((step) => step.status === "running")) {
     const reduced = reduceAgentUiRuntime(state, {
@@ -140,6 +130,17 @@ export function reduceAgentFeed(
     state = reduced.endState;
     items.push(...reduced.items);
   }
+  // A bare reply runs as a `reply:` script (the plain-response handler); its message shows as a
+  // normal bubble, so the redundant activity card is dropped (click the bubble for its trace) —
+  // whether the activity settled on its own or at the turn boundary above.
+  const shown = items.filter(
+    (item) =>
+      item.kind !== "activity" ||
+      !item.steps.some((step) => step.kind === "code") ||
+      item.steps.some((step) => step.kind === "code" && !step.executionId.startsWith("reply:")),
+  );
+  items.length = 0;
+  items.push(...shown);
   return { state, items };
 }
 
