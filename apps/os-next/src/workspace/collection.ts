@@ -90,25 +90,32 @@ export class WorkspaceCollectionRpcTarget extends RpcTarget {
         ["get", "workspace"],
         ["snapshot"],
       ])) as { state: WorkspaceState };
-      if (state.deletion?.status === "deleted") return { path };
-      if (state.creation?.status !== "created")
-        throw new Error(`workspace ${path}: not created — nothing to delete`);
-      let requestedAtOffset: number;
-      if (state.deletion?.status === "requested") requestedAtOffset = state.deletion.offset;
-      else {
-        // Over the loopback stub an append's answer types as an RPC result, not the array the context
-        // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
-        const [requested] = (await context.append({
-          type: "events.iterate.com/workspace/delete-requested",
-          payload: {},
-        })) as unknown as StreamEvent[];
-        requestedAtOffset = requested!.offset;
+      if (state.deletion?.status !== "deleted") {
+        if (state.creation?.status !== "created")
+          throw new Error(`workspace ${path}: not created — nothing to delete`);
+        let requestedAtOffset: number;
+        if (state.deletion?.status === "requested") requestedAtOffset = state.deletion.offset;
+        else {
+          // Over the loopback stub an append's answer types as an RPC result, not the array the context
+          // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
+          const [requested] = (await context.append({
+            type: "events.iterate.com/workspace/delete-requested",
+            payload: {},
+          })) as unknown as StreamEvent[];
+          requestedAtOffset = requested!.offset;
+        }
+        await context.waitForEvent({
+          type: "events.iterate.com/workspace/deleted",
+          afterOffset: requestedAtOffset,
+        });
       }
-      await context.waitForEvent({
-        type: "events.iterate.com/workspace/deleted",
-        afterOffset: requestedAtOffset,
-      });
-      await context.processors.disable("workspace"); // the row, and the overlay with the facet, go
+      // The row goes LAST — and again on a retry: a call that lost its answer between the certificate
+      // and the disable would otherwise leave the row and the facet's storage behind (a workspace's
+      // overlay readable, a repo's checkpoint kept), so the certificate alone never answers a delete.
+      // `processors.list` is the read; `disable` appends, so it runs only while the row is there.
+      const rows = (await context.processors.list()) as unknown as { name: string }[];
+      if (rows.some((row) => row.name === "workspace"))
+        await context.processors.disable("workspace");
       return { path };
     });
   }
