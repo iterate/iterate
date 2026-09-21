@@ -168,6 +168,8 @@ async function loginState(request: Request, env: Env, ctx: ExecutionContext): Pr
       error: url.searchParams.get("error"),
       emailSignIn: emailSignInOffered(env),
       google: google ? `/.auth/identity?next=${encodeURIComponent(next)}` : null,
+      // where a signed-in person with nowhere else to go is sent (the landing page's pointer)
+      dash: config.dashOrigin || null,
     },
     { headers: { "cache-control": "no-store" } },
   );
