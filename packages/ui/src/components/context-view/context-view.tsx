@@ -26,7 +26,7 @@ import { EventInspector } from "./event-inspector.tsx";
 import { EventRow } from "./event-row.tsx";
 import { DaySeparator, HousekeepingRow, RepeatRow } from "./feed-rows.tsx";
 import { actorLabel, filterEvents, shortEventType, typeCounts } from "./filters.tsx";
-import { foldEvents, lastEventOf, sentenceText } from "./folds.tsx";
+import { foldEvents, lastEventOf, sentenceText, whoBefore } from "./folds.tsx";
 import { PresenceStrip } from "./presence-strip.tsx";
 import { ProcessorsPanel } from "./processors-panel.tsx";
 import {
@@ -103,16 +103,7 @@ export function ContextView({
     [allRenderers],
   );
   const items = useMemo(() => foldEvents(shown, mode, factOf), [shown, mode, factOf]);
-  /** Per item, who acted on the last row before it that anyone acted on ("" at the top). */
-  const whoBefore = useMemo(() => {
-    let last = "";
-    return items.map((item) => {
-      const before = last;
-      const event = lastEventOf(item);
-      if (event && actorLabel(event)) last = actorLabel(event);
-      return before;
-    });
-  }, [items]);
+  const namedBefore = useMemo(() => whoBefore(items, actorLabel), [items]);
   const types = useMemo(() => typeCounts(events), [events]);
   const filtered = Boolean(filter.query) || filter.types.size > 0 || Boolean(filter.actor);
   const toggleType = (type: string) => {
@@ -237,9 +228,9 @@ export function ContextView({
           const previous = lastEventOf(items[index - 1]);
           if (item.kind === "day") return <DaySeparator key={item.key} date={item.date} />;
           const first = item.kind === "event" ? item.event : item.events[0]!;
-          // who acted is named when it changes hands: the last row that WAS someone's (the platform's
-          // own housekeeping between two of a person's rows names nobody) was someone else's
-          const showWho = actorLabel(first) !== whoBefore[index];
+          // who acted is named when it changes hands: against the last row that WAS someone's (the
+          // platform's housekeeping between two of a person's rows names nobody), afresh each day
+          const showWho = actorLabel(first) !== namedBefore[index];
           if (item.kind === "repeat")
             return (
               <RepeatRow

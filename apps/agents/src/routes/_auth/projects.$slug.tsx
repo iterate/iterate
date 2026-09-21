@@ -23,7 +23,10 @@ import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { AgentUiLlmStep } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { ContextView } from "@iterate-com/ui/components/context-view/context-view";
-import { ContextViewState } from "@iterate-com/ui/components/context-view/context-view-search";
+import {
+  ContextViewState,
+  RIGHT_EDGE_CLOSED,
+} from "@iterate-com/ui/components/context-view/context-view-search";
 import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
 import { InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
 import { LiveStateValue } from "../../components/live-state-value.tsx";
@@ -306,6 +309,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
         params: { slug },
         search: (prev) => ({
           ...prev,
+          ...RIGHT_EDGE_CLOSED, // one right edge: a trace closes the Events tab's inspector and sheet
           llmRequest: next?.kind === "llmRequest" ? next.llmRequestOffset : undefined,
           scriptExecution: next?.kind === "scriptExecution" ? next.executionId : undefined,
         }),
@@ -433,7 +437,15 @@ function AgentConversation({ project, path }: { project: string; path: string })
               void navigate({
                 to: "/projects/$slug",
                 params: { slug },
-                search: (previous) => ({ ...previous, ...patch }),
+                search: (previous) => ({
+                  ...previous,
+                  // one right edge: the view's inspector or sheet opening closes the page's traces
+                  ...((patch.event !== undefined || patch.processors) && {
+                    llmRequest: undefined,
+                    scriptExecution: undefined,
+                  }),
+                  ...patch,
+                }),
                 replace: true,
               })
             }

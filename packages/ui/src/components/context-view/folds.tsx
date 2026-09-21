@@ -89,6 +89,26 @@ export function foldEvents(
   return items;
 }
 
+/** Per item, who acted on the last row before it that anyone acted on — "" at the top and after
+ *  a day mark (a new day names its first actor again, since yesterday may have scrolled off).
+ *  The rows name who acted only when it changes against this. */
+export function whoBefore(
+  items: readonly FeedItem[],
+  actorOf: (event: ContextViewEvent) => string,
+): string[] {
+  let last = "";
+  return items.map((item) => {
+    if (item.kind === "day") {
+      last = "";
+      return "";
+    }
+    const before = last;
+    const event = lastEventOf(item);
+    if (event && actorOf(event)) last = actorOf(event);
+    return before;
+  });
+}
+
 /** The last event an item covers — the anchor for the next row's gap. */
 export function lastEventOf(item: FeedItem | undefined): ContextViewEvent | undefined {
   if (!item || item.kind === "day") return undefined;

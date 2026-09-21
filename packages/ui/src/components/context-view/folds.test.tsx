@@ -1,7 +1,7 @@
 // Folding the log for reading: days, housekeeping runs, repeated facts — and that the raw modes fold nothing.
 // The fixture's two days sit 48 h apart at noon UTC, so they are two local days in every timezone.
 import { describe, expect, test } from "vitest";
-import { foldEvents, lastEventOf, sentenceText } from "./folds.tsx";
+import { foldEvents, lastEventOf, sentenceText, whoBefore } from "./folds.tsx";
 import { housekeepingSummary } from "./core-renderers.tsx";
 import type { ContextViewEvent } from "./types.tsx";
 
@@ -102,4 +102,40 @@ describe("the same fact is the same sentence", () => {
       ),
     ).toBe("Approved Claude Code for 1 project(s)");
   });
+});
+
+test("whoBefore: carries the last named actor over housekeeping, starts afresh at a day mark", () => {
+  const named = (offset: number, actor: string, iso?: string): ContextViewEvent => ({
+    ...at(offset, "account/grant-minted", { grantId: `g${String(offset)}` }, iso),
+    source: { principal: { actor } },
+  });
+  const items = foldEvents(
+    [
+      named(1, "user_a"),
+      at(2, "stream/woken", { incarnation: 2 }),
+      named(3, "user_a"),
+      named(4, "user_b"),
+      named(5, "user_b", "2026-09-23T12:00:00.000Z"),
+    ],
+    "pretty",
+  );
+  expect(items.map((item) => item.kind)).toEqual([
+    "day",
+    "event",
+    "event",
+    "event",
+    "event",
+    "day",
+    "event",
+  ]);
+  expect(whoBefore(items, (e) => e.source?.principal?.actor || "")).toEqual([
+    "",
+    "",
+    "user_a",
+    "user_a",
+    "user_a",
+    "",
+    "",
+  ]);
+  // so: #1 named (first), woke unnamed, #3 not named again (still user_a), #4 named (changed), #5 named (new day)
 });
