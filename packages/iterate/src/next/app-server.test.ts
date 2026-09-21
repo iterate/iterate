@@ -126,16 +126,33 @@ describe("a browser CONNECTED to another issuer stays there", () => {
     expect(calls).toEqual(["discard", `begin ${CONNECTED}`]);
   });
 
-  test("a sign-out from a connected issuer returns through that issuer's connect page", async () => {
-    const { response, calls } = connected("/.auth/logout?next=%2Fprojects%2Facme", {
+  test("a sign-out from a connected issuer returns through that issuer's connect page, the scopes the login asked for kept", async () => {
+    // the Sign-in-again form's `next` is the login URL that showed it, scopes and all
+    const loginUrl =
+      "/.auth/login?next=%2Fprojects%2Facme&scope=iterate+account+organizations%3Awrite";
+    const { response, calls } = connected(`/.auth/logout?next=${encodeURIComponent(loginUrl)}`, {
       method: "POST",
       headers: { origin: "https://notes.example" },
     });
     const answer = await response;
     expect(answer?.status).toBe(303);
     expect(answer?.headers.get("location")).toBe(
-      `/.auth/connect?${new URLSearchParams({ issuer: CONNECTED, next: "/projects/acme" })}`,
+      `/.auth/connect?${new URLSearchParams({
+        issuer: CONNECTED,
+        next: loginUrl,
+        scope: "iterate account organizations:write",
+      })}`,
     );
     expect(calls).toEqual(["end"]);
+  });
+
+  test("a sign-out from a connected issuer bound for an ordinary page carries no scope", async () => {
+    const { response } = connected("/.auth/logout?next=%2Fprojects%2Facme", {
+      method: "POST",
+      headers: { origin: "https://notes.example" },
+    });
+    expect((await response)?.headers.get("location")).toBe(
+      `/.auth/connect?${new URLSearchParams({ issuer: CONNECTED, next: "/projects/acme", scope: "" })}`,
+    );
   });
 });

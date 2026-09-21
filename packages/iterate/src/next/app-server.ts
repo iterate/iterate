@@ -538,10 +538,17 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
       );
     }
     const next = nextPathOf(url.searchParams.get("next"), url.origin);
+    // The scopes the next sign-in must hold ride along: the Sign-in-again form's `next` IS the login
+    // URL that asked for them (`/.auth/login?…&scope=…`), and the connect page starts the grant from
+    // its own `scope` — without this the reconnected grant would hold `iterate` alone and the login
+    // would send the person straight back to Sign in again.
+    const nextUrl = new URL(next, url.origin);
+    const scope =
+      nextUrl.pathname === "/.auth/login" ? nextUrl.searchParams.get("scope") || "" : "";
     const headers = new Headers({
       Location:
         ended && ended.issuer !== issuer && !config.loginPage
-          ? `/.auth/connect?${new URLSearchParams({ issuer: ended.issuer, next })}`
+          ? `/.auth/connect?${new URLSearchParams({ issuer: ended.issuer, next, scope })}`
           : next,
       "Set-Cookie": clearCookie,
       "Cache-Control": "no-store",
