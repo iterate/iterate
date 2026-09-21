@@ -34,9 +34,12 @@ test("a no-build mini-app served by a project persists a note through its own ca
   // dashboard: creating a project is the OS app's or a script's — here the fixture's).
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
   using owner = newHttpBatchRpcSession<IterateRpcTarget>(`${origin}/internal/rpc`);
-  using _created = await owner
+  // one pipelined round trip (an HTTP batch session ends with its first): create the project and
+  // read its minted id — the project is addressed by it; `project` is its slug, its hosts' label
+  const { projectId } = await owner
     .authenticate({ type: "admin-secret", secret: adminSecret, as: { email } })
-    .projects.create({ project });
+    .projects.create({ project })
+    .whoami();
   // The project's host: `<project>.<base>` — `localhost` under the local worker (scripts/dev.ts), the
   // deployment's base otherwise (PROJECT_HOSTNAME_BASE, as the e2e suite spells it).
   const base =
@@ -55,7 +58,7 @@ test("a no-build mini-app served by a project persists a note through its own ca
   using operator = newHttpBatchRpcSession<IterateRpcTarget>(`${origin}/internal/rpc`);
   await operator
     .authenticate({ type: "admin-secret", secret: adminSecret })
-    .projects.get(project)
+    .projects.get(projectId)
     .provide("itx.apps.notes", ["itx", "workers", ["get", { source: { "cap.js": source } }]]);
 
   // Open the app on notes--<project>.<base> and prove a note round-trips through /rpc.

@@ -1,7 +1,8 @@
 import { env, SELF } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
-import { signIn, type Env } from "../src/control-plane.ts";
+import type { Env } from "../src/control-plane.ts";
+import { startLoginCode } from "../src/login-code.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { directory } from "../src/directory.ts";
 import { applyDirectorySchema, SRC_ECHO_APP } from "./support.ts";
@@ -38,15 +39,23 @@ test("the directory keeps creation, listing, membership and event attribution co
     actor: expect.stringMatching(/^user_/),
   });
   using project = await ada.projects.create({ project: "adas-directory" });
-  expect(await project.whoami()).toEqual({ projectId: "adas-directory", path: "/" });
-  expect((await ada.projects.list()).map((project) => project.id)).toEqual(["adas-directory"]);
+  // the project's id is minted; its name is the slug — the list carries both
+  const adasRoot = await project.whoami();
+  expect(adasRoot).toEqual({ projectId: expect.stringMatching(/^prj_[0-9a-f]{32}$/), path: "/" });
+  const adasProjectId = adasRoot.projectId;
+  expect((await ada.projects.list()).map(({ id, slug }) => ({ id, slug }))).toEqual([
+    { id: adasProjectId, slug: "adas-directory" },
+  ]);
+  // the slug names the project too (a URL's /projects/<slug>): the directory resolves it to the id
+  using bySlug = await ada.projects.get("adas-directory");
+  expect(await bySlug.whoami()).toEqual({ projectId: adasProjectId, path: "/" });
   const [event] = await project.append({
     type: "note",
     source: { principal: { actor: "forged" } },
   });
   expect(event.source?.principal).toEqual(principal);
   const bob = await operator("bob@directory.test");
-  await expect(bob.projects.get("adas-directory")).rejects.toThrow(/outside/);
+  await expect(bob.projects.get(adasProjectId)).rejects.toThrow(/outside/);
   await expect(bob.projects.create({ project: "adas-directory" })).rejects.toThrow(
     /taken|another/i,
   );
@@ -56,12 +65,16 @@ test("the directory keeps creation, listing, membership and event attribution co
   using _own = await admin.projects.create({ project: "admin-directory" });
   expect(await admin.projects.list()).toEqual(
     expect.arrayContaining([
-      { id: "admin-directory", orgId: "org_admin" },
-      expect.objectContaining({ id: "adas-directory" }),
+      {
+        id: expect.stringMatching(/^prj_[0-9a-f]{32}$/),
+        slug: "admin-directory",
+        orgId: "org_admin",
+      },
+      expect.objectContaining({ id: adasProjectId, slug: "adas-directory" }),
     ]),
   );
-  using other = await admin.projects.get("adas-directory");
-  expect(await other.whoami()).toEqual({ projectId: "adas-directory", path: "/" });
+  using other = await admin.projects.get(adasProjectId);
+  expect(await other.whoami()).toEqual({ projectId: adasProjectId, path: "/" });
 });
 
 test("onboarding creates owned organizations atomically and checks the selected organization", async () => {
@@ -71,21 +84,23 @@ test("onboarding creates owned organizations atomically and checks the selected 
   const reach = { userId: user.id };
   const first = await catalog.createOrg(user.id, "A first organization");
   const chosen = await catalog.createOrg(user.id, "Z selected organization");
-  expect(await catalog.createProject(reach, "selected-org-project", chosen.id)).toEqual({
-    id: "selected-org-project",
+  const selected = await catalog.createProject(reach, "selected-org-project", chosen.id);
+  expect(selected).toEqual({
+    id: expect.stringMatching(/^prj_[0-9a-f]{32}$/),
+    slug: "selected-org-project",
     orgId: chosen.id,
   });
+  // the same name in its own organization is the same project; the id reads it, so does the slug
+  expect(await catalog.createProject(reach, "selected-org-project", chosen.id)).toEqual(selected);
+  expect(await catalog.getProject(selected.id)).toEqual(selected);
+  expect(await catalog.getProject("selected-org-project")).toEqual(selected);
   expect((await catalog.listOrgs(user.id)).map((org) => org.id)).toEqual([first.id, chosen.id]);
   const other = await catalog.upsertUser("other-onboarding@directory.test");
   await expect(
     catalog.createProject({ userId: other.id }, "foreign-org-project", chosen.id),
   ).rejects.toThrow(/cannot create/);
   await expect(
-    catalog.createProject(
-      { ...reach, projectIds: ["selected-org-project"] },
-      "bound-new-project",
-      chosen.id,
-    ),
+    catalog.createProject({ ...reach, projectIds: [selected.id] }, "bound-new-project", chosen.id),
   ).rejects.toThrow(/creating a project needs/);
   expect(await catalog.getProject("foreign-org-project")).toBeNull();
   expect(await catalog.getProject("bound-new-project")).toBeNull();
@@ -93,6 +108,20 @@ test("onboarding creates owned organizations atomically and checks the selected 
   expect(
     await db.prepare("SELECT id FROM orgs WHERE name = ?").bind("No orphan organization").first(),
   ).toBeNull();
+  // rename and delete are the owner's: a member who owns nothing is refused, and an organization
+  // that still holds a project stays
+  expect(await catalog.renameOrg(user.id, first.id, "  A renamed organization ")).toEqual({
+    ...first,
+    name: "A renamed organization",
+  });
+  expect((await catalog.listOrgs(user.id)).map((org) => org.name)).toEqual([
+    "A renamed organization",
+    "Z selected organization",
+  ]);
+  await expect(catalog.renameOrg(other.id, first.id, "Not mine")).rejects.toThrow(/owner/);
+  await expect(catalog.deleteOrg(user.id, chosen.id)).rejects.toThrow(/still holds 1 project/);
+  await catalog.deleteOrg(user.id, first.id);
+  expect((await catalog.listOrgs(user.id)).map((org) => org.id)).toEqual([chosen.id]);
 });
 
 test("operator RPC accepts only its administrator credential; issuer login uses the public API", async () => {
@@ -150,22 +179,51 @@ test("operator RPC accepts only its administrator credential; issuer login uses 
   ).toBe(403);
 });
 
-test("unverified email login requires test mode and creates an ordinary user session", async () => {
+test("email sign-in: the email, then the code (this config's test code), then an ordinary user session; without a mailbox or test mode there is no email sign-in", async () => {
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
     SELF.fetch(new Request(input, init)),
   );
   const bindings = env as unknown as Env;
-  const request = new Request(`${origin}/login`, { method: "POST" });
-  const input = { email: "Test-Login@directory.test", next: "/sessions" };
-  await expect(signIn(bindings, request, input)).rejects.toThrow(/Sign in with Google/);
-  const login = await signIn({ ...bindings, APP_CONFIG_TEST_EMAIL_LOGIN: "true" }, request, input);
-  expect(login.location).toBe("/sessions");
+  // no mailbox binding and no test flag: the deployment offers no email sign-in at all
+  await expect(
+    startLoginCode(
+      { ...bindings, EMAIL: undefined, APP_CONFIG_TEST_EMAIL_LOGIN: "false" },
+      "someone@directory.test",
+    ),
+  ).rejects.toThrow(/Sign in with Google/);
+  const post = (form: Record<string, string>, cookie?: string) =>
+    SELF.fetch(`${origin}/login`, {
+      method: "POST",
+      redirect: "manual",
+      headers: cookie ? { Origin: origin, cookie } : { Origin: origin },
+      body: new URLSearchParams(form),
+    });
+  const started = await post({ email: "Test-Login@directory.test", next: "/sessions" });
+  expect(started.status).toBe(303);
+  expect(started.headers.get("location")).toBe("/login?next=%2Fsessions");
+  const loginCookie = started.headers.get("set-cookie")!.split(";")[0]!;
+  expect(loginCookie).toMatch(/^__Host-itx-login=/);
+  // the page learns whom the code went to
+  const state = await (
+    await SELF.fetch(`${origin}/login.json?next=/sessions`, { headers: { cookie: loginCookie } })
+  ).json<{ codeSentTo: string | null; emailSignIn: boolean }>();
+  expect(state).toMatchObject({ codeSentTo: "test-login@directory.test", emailSignIn: true });
+  // a wrong code goes back to the code step with the reason, and makes no session
+  const wrong = await post({ code: "000000", next: "/sessions" }, loginCookie);
+  expect(wrong.status).toBe(303);
+  expect(new URL(wrong.headers.get("location")!, origin).searchParams.get("error")).toBe(
+    "That code is not right. Try again.",
+  );
+  expect(wrong.headers.get("set-cookie")).toBeNull();
+  // the right one (the test code, here) is the session; the login cookie ends with it
+  const login = await post({ code: "424242", next: "/sessions" }, loginCookie);
+  expect(login.status).toBe(302);
+  expect(login.headers.get("location")).toBe("/sessions");
+  const cookies = login.headers.getSetCookie();
+  expect(cookies.some((cookie) => cookie.startsWith("__Host-itx-login=;"))).toBe(true);
+  const session = cookies.find((cookie) => cookie.startsWith("__Host-itx-session="))!;
   const response = await SELF.fetch(`${origin}/api`, {
-    headers: {
-      Upgrade: "websocket",
-      Origin: origin,
-      Cookie: login.setCookie.split(";")[0]!,
-    },
+    headers: { Upgrade: "websocket", Origin: origin, Cookie: session.split(";")[0]! },
   });
   expect(response.status).toBe(101);
   response.webSocket!.accept();

@@ -621,8 +621,13 @@ export interface OsNextEnv {
    *  pinned apart from `workerName` because the worker was renamed after they existed; `ensure-resources` and
    *  the wrangler generator derive names from this, never from the worker name. */
   resourceNamePrefix: string;
-  /** Unverified email sign-in for this isolated test deployment. Never enable for real user data. */
+  /** The test code 424242 signs anyone in beside the mailed one — the specs' way in on a deployment
+   *  they may drive. Never enable for real user data. */
   testEmailLogin?: boolean;
+  /** The address the sign-in code is mailed from, on a domain onboarded for Email Sending in the
+   *  deployment's account (iterate2.com is, on prd: `cf-bounce.iterate2.com` MX/SPF, DKIM, DMARC).
+   *  Unset ⇒ no email sign-in (beyond the test code). */
+  loginEmailFrom?: string;
   /** Hostnames of this deployment's own that ARE a project's apex — `{ "iterate2.com": "iterate" }`:
    *  a request there lands on that project's config worker `fetch`, exactly as `<project>.<base>`
    *  does (apps/os-next/src/hosts.ts `customProjectHostOf`). The wrangler generator adds the zone
@@ -662,6 +667,7 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
     artifactsNamespace: "project-worker-prd-repos",
     resourceNamePrefix: "project-worker-prd",
     testEmailLogin: true,
+    loginEmailFrom: "iterate <login@iterate2.com>",
     resources: {
       directoryDbId: "be6a3789-726a-4786-8b50-ef150c583b4e",
       oauthKvId: "a1a12d1cf1c342f8a389e5bf9dc5b760",

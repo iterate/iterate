@@ -32,6 +32,9 @@
   // (e2e/ai-root-shadow-and-fable.e2e.test.ts, e2e/browser-root.e2e.test.ts). `env.AI` and
   // `env.BROWSER` are undefined in this lane.
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
+  // Email Sending, simulated: the sign-in code's mail goes nowhere (the tests hand the code
+  // sign-in a fake mailbox when they need to read the code, and the test code otherwise).
+  "send_email": [{ "name": "EMAIL" }],
   "durable_objects": {
     "bindings": [
       { "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" },
@@ -75,5 +78,9 @@
     "APP_CONFIG_SESSION_SECRET": "test-session-secret",
     "APP_CONFIG_SECRETS_KEY": "test-secrets-key",
     "APP_CONFIG_ADMIN_API_SECRET": "test-admin-api-secret",
+    // the test code (424242) signs in through the page's real posts; the mailed code is tested with
+    // a fake mailbox handed to login-code.ts directly
+    "APP_CONFIG_TEST_EMAIL_LOGIN": "true",
+    "APP_CONFIG_LOGIN_EMAIL_FROM": "iterate <login@control.test>",
   },
 }

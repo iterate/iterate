@@ -148,7 +148,7 @@ async function secretOAuthCallback(
   if (!authorization)
     return answer(
       401,
-      "Sign in to Iterate in this browser first, then open this link again — the tokens go into a project you must be a member of.",
+      "Sign in to iterate in this browser first, then open this link again — the tokens go into a project you must be a member of.",
     );
   const owner = secretOwnerOf(claims.owner);
   if (!(await reachesSecretOwner(sessionInput.directory, authorization.reach, owner)))
@@ -250,8 +250,8 @@ export default {
       // ADMISSION, before any Durable Object is dialled: a context is created on first touch, so a
       // hostname whose project the in-process directory does not know must never reach one — else
       // any label under the wildcard would mint durable storage from the public internet. One
-      // directory read — the row resolves the host's label (an id or a slug) to the project's id;
-      // an unknown project is 421.
+      // directory read — the row resolves the host's label (a slug, an id would do too) to the
+      // project's id; an unknown label is 421.
       const project = await sessionInput.directory.getProject(projectHost.project);
       if (!project)
         return new Response(

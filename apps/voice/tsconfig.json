@@ -10,7 +10,12 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
     "esModuleInterop": true,
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    "paths": {
+      "@iterate-com/ui/*": ["../../packages/ui/src/*"],
+      "@iterate-com/shared/*": ["../../packages/shared/src/*"]
+    },
+    "baseUrl": "."
   },
   "include": ["src"]
 }

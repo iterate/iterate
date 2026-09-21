@@ -16,6 +16,13 @@ import {
 import { verifyAdminSecret } from "iterate/next/principal";
 import type { BrowserSession } from "iterate/next/app-session";
 import { startIssuerSession } from "./issuer-session.ts";
+import {
+  clearLoginCookie,
+  emailSignInOffered,
+  finishLoginCode,
+  loginCodePending,
+  startLoginCode,
+} from "./login-code.ts";
 import { directory } from "./directory.ts";
 import { appConfigOf } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
@@ -37,6 +44,9 @@ export interface Env extends DurableObjectEnv {
   /** The issuer's pages and their files — public/ (wrangler.jsonc `assets`, `run_worker_first`: this
    *  worker sees every request first and asks the binding only for `issuerPagePaths`). */
   ASSETS: Fetcher;
+  /** Email Sending (wrangler `send_email`) — how the sign-in code reaches the person (login-code.ts).
+   *  Simulated by wrangler dev and the test configs; absent where a deployment has no mailbox. */
+  EMAIL?: SendEmail;
 }
 
 /** A worker handler with a REQUIRED fetch — what OAuthProvider expects for defaultHandler/apiHandler. */
@@ -44,8 +54,8 @@ export interface Handler {
   fetch(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response>;
 }
 
-/** Email-only sign-in for explicitly enabled test deployments and localhost,
- * or the administrator fixture. Other deployments require verified Google identity. */
+/** The administrator's identity fixture: with the admin bearer, any email is signed in at once —
+ *  the deployed specs' way in. A person signs in with a code (login-code.ts) or with Google. */
 export async function signIn(
   env: Env,
   request: Request,
@@ -53,10 +63,7 @@ export async function signIn(
 ): Promise<{ setCookie: string; location: string }> {
   const config = appConfigOf(env);
   const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
-  if (
-    !config.testEmailLogin &&
-    !(bearer && (await verifyAdminSecret(bearer, config.adminApiSecret.exposeSecret())))
-  )
+  if (!(bearer && (await verifyAdminSecret(bearer, config.adminApiSecret.exposeSecret()))))
     throw codedError("UNAUTHENTICATED", "Sign in with Google.");
   const email = input.email.trim();
   if (!email) throw codedError("INVALID_INPUT", "Enter an email.");
@@ -85,12 +92,13 @@ export const issuerPagePaths = [
 
 /** The tools people connect, whose marks we ship (public/brands/, from @lobehub/icons-static-svg,
  *  MIT): crisper than a favicon, and there for a client whose registration names no picture at all
- *  (Codex registers dynamically, with a name). Matched on the client's name, home and id. */
+ *  (Codex registers dynamically, with a name). Matched on the client's name, home and id. Our own
+ *  apps get no mark here: the hero already shows the platform's, so the client tile shows their
+ *  initials (or their favicon, once they have one). */
 const brandMarks: [RegExp, string][] = [
   [/claude|anthropic/i, "/brands/claude.svg"],
   [/codex|openai|chatgpt/i, "/brands/openai.svg"],
   [/cursor/i, "/brands/cursor.svg"],
-  [/iterate/i, "/iterate-logo.svg"],
 ];
 
 /** GET /client-icon?client_id=… — the client's picture for the consent page's hero: its `logo_uri`,
@@ -143,43 +151,69 @@ const json = (body: unknown, status = 200) =>
   Response.json(body, { status, headers: { "cache-control": "no-store" } });
 
 /** /login.json — what the sign-in page (public/login.js) shows: who is signed in (continue, or switch
- *  account), or the sign-ins this deployment offers — the email form for test deployments, Google —
- *  and where to continue to. Signing in is the form's POST to `loginFormPost` or the Google link
- *  (identity.ts); "switch account" ends the browser's session and returns here. Without a `next`
- *  the page is its own destination (the issuer has no home page): signed in, it says so. */
+ *  account); or that a code is on its way and to whom (the code step); or the sign-ins this
+ *  deployment offers — email (a code), Google — and where to continue to; and what went wrong with
+ *  the last post (`?error=`, the message `loginFormPost` bounced back with). Signing in is the
+ *  form's POSTs to `loginFormPost` or the Google link (identity.ts); "switch account" ends the
+ *  browser's session and returns here. Without a `next` the page is its own destination (the
+ *  issuer has no home page): signed in, it says so. */
 async function loginState(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const config = appConfigOf(env);
-  const next = sameOriginPath(
-    new URL(request.url).searchParams.get("next") || "/login",
-    config.platformOrigin,
-  );
+  const url = new URL(request.url);
+  const next = sameOriginPath(url.searchParams.get("next") || "/login", config.platformOrigin);
   const session = await browserAuthorization(env, request, ctx);
   const google = Boolean(config.googleClientId && config.googleClientSecret.exposeSecret());
   return json({
     next,
     signedInAs: session ? session.principal.email || session.principal.actor : null,
     switchAccount: `/.auth/logout?next=${encodeURIComponent(`/login?next=${encodeURIComponent(next)}`)}`,
-    emailSignIn: config.testEmailLogin,
+    codeSentTo: session ? null : await loginCodePending(env, request),
+    error: url.searchParams.get("error"),
+    emailSignIn: emailSignInOffered(env),
     google: google ? `/.auth/identity?next=${encodeURIComponent(next)}` : null,
   });
 }
 
-/** The sign-in form's POST — a plain form, no script needed to sign in. */
+/** The sign-in page's POSTs — plain forms, no script in the loop. An `email` starts the code
+ *  sign-in (or, with the administrator bearer, signs the fixture straight in); a `code` finishes
+ *  it; `restart` drops a pending code for another email. What goes wrong comes back to the page as
+ *  `?error=` (303), so the person reads it where they typed. */
 async function loginFormPost(request: Request, env: Env): Promise<Response | null> {
   if (request.method !== "POST" || new URL(request.url).pathname !== "/login") return null;
   const form = await request.formData();
+  const next = String(form.get("next") || "/login");
+  const back = (error?: string, ...cookies: string[]) => {
+    const query = new URLSearchParams({ next });
+    if (error) query.set("error", error);
+    const headers = new Headers({ location: `/login?${query}` });
+    for (const cookie of cookies) headers.append("set-cookie", cookie);
+    return new Response(null, { status: 303, headers });
+  };
   try {
-    const { setCookie, location } = await signIn(env, request, {
-      email: String(form.get("email") ?? ""),
-      next: String(form.get("next") || "/login"),
-    });
-    return new Response(null, { status: 302, headers: { location, "set-cookie": setCookie } });
+    if (form.has("restart")) return back(undefined, clearLoginCookie);
+    if (form.has("code")) {
+      const finished = await finishLoginCode(env, request, String(form.get("code") ?? ""));
+      if ("error" in finished)
+        return finished.restart ? back(finished.error, clearLoginCookie) : back(finished.error);
+      const { setCookie, location } = await startIssuerSession(env, finished.user, next);
+      const headers = new Headers({ location });
+      headers.append("set-cookie", setCookie);
+      headers.append("set-cookie", clearLoginCookie);
+      return new Response(null, { status: 302, headers });
+    }
+    const email = String(form.get("email") ?? "");
+    if (request.headers.has("authorization")) {
+      const { setCookie, location } = await signIn(env, request, { email, next });
+      return new Response(null, { status: 302, headers: { location, "set-cookie": setCookie } });
+    }
+    const started = await startLoginCode(env, email, request.headers.get("cf-connecting-ip"));
+    return back(undefined, started.setCookie);
   } catch (error) {
     const code = errorCode(error);
-    if (!["UNAUTHENTICATED", "INVALID_INPUT"].includes(code || "")) throw error;
-    return new Response(error instanceof Error ? error.message : String(error), {
-      status: code === "UNAUTHENTICATED" ? 401 : 400,
-    });
+    if (code === "INVALID_INPUT")
+      return back(error instanceof Error ? error.message : "Try again.");
+    if (code !== "UNAUTHENTICATED") throw error;
+    return new Response(error instanceof Error ? error.message : String(error), { status: 401 });
   }
 }
 
@@ -278,11 +312,26 @@ async function authorizeHandler(
       }
       // an empty project name is refused before a new organization is made for it
       if (!action.project.trim()) return json({ error: "Enter a project name." }, 400);
-      orgId = action.org || (await session.createOrg(action.newOrg || "")).id;
+      // The page sends `newOrg` — typed or still empty — only with "New organization…" chosen, so
+      // an empty one is refused rather than becoming the person's first organization; with neither
+      // named, the project goes to their first (made from their email when they have none).
+      orgId =
+        action.org ||
+        ("newOrg" in action ? (await session.createOrg(action.newOrg || "")).id : undefined);
       // the new project's context is the session's to hold; the teardown below lets it go
       await session.projects.create({ project: action.project, orgId });
     } catch (error) {
-      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+      // A refusal after a new organization was made (the slug taken, say) answers with the fresh
+      // view and that organization's id: the page offers it next, rather than minting another
+      // on the retry.
+      return json(
+        {
+          error: error instanceof Error ? error.message : String(error),
+          orgId,
+          view: await session.consent.describe(query),
+        },
+        400,
+      );
     }
     return json({ view: await session.consent.describe(query), orgId });
   } finally {

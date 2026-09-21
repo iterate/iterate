@@ -1447,7 +1447,8 @@ describe("rule 3 — the claim: work in flight ⇒ the context owes this process
     attempts.endings[0]!(); // settles: a release is sent…
     await settle(1);
     mem.stream.append({ type: "e" }); // …and a new attempt claims right behind it
-    await settle(60);
+    // three landings, however long the loaded runner takes; the assertion is their ORDER
+    await vi.waitFor(() => expect(landed).toHaveLength(3), { timeout: 5_000 });
     expect(landed.map((at) => (at === null ? "release" : "claim"))).toEqual([
       "claim",
       "release",

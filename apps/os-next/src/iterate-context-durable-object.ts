@@ -90,6 +90,7 @@ import {
   BUILT_IN_ROOTS,
 } from "./context/itx-expression-rewriting.ts";
 import { signedFileUrl } from "./context/file-urls.ts";
+import { directory } from "./directory.ts";
 import {
   buildBuiltIns,
   type RewriteRuleListEntry,
@@ -174,6 +175,8 @@ export interface Env extends AppConfigEnv {
   BROWSER: BrowserRun;
   /** The one R2 bucket — the built-in root `itx.r2`, every owner under its own prefix (context/built-ins.ts). */
   FILES: R2Bucket;
+  /** The directory (directory.ts) — read for a project's slug, the host a signed file URL hangs under. */
+  DB: D1Database;
   /** Cloudflare Artifacts (beta) — the ONE bound namespace behind `itx.cfArtifacts`, project-scoped. */
   ARTIFACTS: ArtifactsNamespace;
   /** THE SECRETS (secret-durable-object.ts): one Durable Object per secret, `<owner>:<name>` —
@@ -493,13 +496,20 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     deployId: this.#appConfig.deployId,
     artifactsAccountId: this.#appConfig.artifactsAccountId,
     artifactsNamespace: this.#appConfig.artifactsNamespace,
-    signFileUrl: (input) =>
-      signedFileUrl({
+    signFileUrl: async (input) => {
+      // the URL's host carries the project's slug (the edge admits a project host by it); the
+      // claim carries the id — a global context (a user's, an organization's) has no host
+      const project = await directory(this.env.DB).getProject(input.project);
+      if (!project)
+        throw new Error("files: only a project's context can sign a file URL — it has the host");
+      return signedFileUrl({
         ...input,
+        host: project.slug,
         secret: this.#appConfig.sessionSecret.exposeSecret(),
         platformOrigin: this.#appConfig.platformOrigin,
         projectHostnameBase: this.#appConfig.projectHostnameBase,
-      }),
+      });
+    },
     secrets: () =>
       Object.entries(this.#stream.coreReducedState.secrets).map(([name, secret]) => ({
         name,

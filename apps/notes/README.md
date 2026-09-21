@@ -7,9 +7,11 @@ is a FILE in the project's config repo — `/repos/config/notes/log.md` — edit
 through the workspace `/workspaces/notes`: the page brings the repo and the
 workspace into being (`itx.repos.get("/repos/config").create()`,
 `itx.workspaces.get("/workspaces/notes").create()`, both idempotent), reads the
-file through the workspace, and "Save and commit" writes the workspace's overlay
-and lands ONE commit on the repo's `main` (`gitCommit({ scope: "/repos/config" })`).
-The app holds no OAuth credentials and no state of its own.
+file through the workspace, and "Save" writes the workspace's overlay and lands
+ONE commit on the repo's `main` (`gitCommit({ scope: "/repos/config" })`). The
+app holds no OAuth credentials and no state of its own. It frames itself in
+packages/ui's `AppShell` — the sidebar, the project switcher and the account menu
+every os-next app shares — with the note as its one page.
 
 Install [config-worker.ts](config-worker.ts) as the project's `itx.worker` to
 serve it on `<project>.iterate2.app`. It can also be installed as `itx.apps.notes`

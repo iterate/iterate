@@ -18,7 +18,7 @@ import { petshopBaseUrl } from "./support/petshop.ts";
 import { oauthSession } from "./support/principal.ts";
 import {
   deployedOnly,
-  freshDnsSafeProjectId,
+  freshDnsSafeProjectSlug,
   projectHostnameBase,
   registerProject,
 } from "./support/project-host.ts";
@@ -60,10 +60,10 @@ test("set / list / delete: names, pins and strategy kinds are listed, values nev
 });
 
 test("an authenticated session's set is attributed — the change carries the principal, never the value", async () => {
-  const projectId = freshDnsSafeProjectId("secrets-who");
-  const email = `${projectId}@example.com`;
+  const slug = freshDnsSafeProjectSlug("secrets-who");
+  const email = `${slug}@example.com`;
   const ada = { email };
-  await registerProject(projectId, ada);
+  const projectId = await registerProject(slug, ada);
   const { api, principal } = await oauthSession(projectId, ada);
   const itx = api.projects.get(projectId);
   await itx.secrets.set("token", "t0p", { urls: ["https://api.example.com"] });
@@ -143,10 +143,9 @@ test("`{ field }` in the egress placeholder: a field the JSON value has no strin
 deployedOnly(
   "DEPLOYED: the value arrives at a pinned origin — an egress to one of this project's own apps, on its real host",
   async () => {
-    const projectId = freshDnsSafeProjectId("secrets-arrive");
-    await registerProject(projectId);
-    const itx = openItx(projectId);
-    // an app that echoes two headers back, served at `echo--<projectId>.<base>`
+    const slug = freshDnsSafeProjectSlug("secrets-arrive");
+    const itx = openItx(await registerProject(slug));
+    // an app that echoes two headers back, served at `echo--<slug>.<base>`
     await itx.provide("itx.apps.echo", [
       "itx",
       "workers",
@@ -162,7 +161,7 @@ export default class Echo extends WorkerEntrypoint {
         },
       ],
     ]);
-    const origin = `https://echo--${projectId}.${projectHostnameBase()}`;
+    const origin = `https://echo--${slug}.${projectHostnameBase()}`;
     await itx.secrets.set("arrives", "the-value", { urls: [origin] });
     await itx.secrets.set("arrives-json", { a: { b: "the-field" } }, { urls: [origin] });
     // one request, one secret — the whole-string form, then the `{ field }` form of an object material

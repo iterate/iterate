@@ -22,8 +22,10 @@ const GoogleIdentity = z.object({
   sub: z.string().regex(/^\d+$/),
   email: z.email(),
   email_verified: z.literal(true),
-  /** the account's picture (the `profile` scope), for the consent page's "signed in as" */
+  /** the account's picture and display name (the `profile` scope): the consent page's "signed in
+   *  as", and the onboarding step's suggested organization name */
   picture: z.url().optional(),
+  name: z.string().optional(),
 });
 
 /** Google proves identity to our issuer; its credentials never authorize our API. */
@@ -97,7 +99,10 @@ export async function identityDoor(request: Request, env: Env) {
       });
     // Google's stable subject owns the account; an email change cannot change its actor.
     const user = await directory(env.DB).upsertGoogleUser(identity.data.sub, identity.data.email);
-    const session = await startIssuerSession(env, user, flow.data.next, identity.data.picture);
+    const session = await startIssuerSession(env, user, flow.data.next, {
+      picture: identity.data.picture,
+      name: identity.data.name,
+    });
     headers.append("Set-Cookie", session.setCookie);
     headers.set("Location", session.location);
     return new Response(null, { status: 303, headers });

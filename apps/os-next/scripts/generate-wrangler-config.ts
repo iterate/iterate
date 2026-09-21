@@ -47,6 +47,7 @@ export function writeWranglerConfig() {
           worker_loaders: template.worker_loaders,
           ai: template.ai,
           browser: template.browser,
+          send_email: template.send_email,
           version_metadata: template.version_metadata,
           artifacts: [{ binding: "ARTIFACTS", namespace: env.artifactsNamespace }],
           r2_buckets: [{ binding: "FILES", bucket_name: `${env.resourceNamePrefix}-files` }],
@@ -65,6 +66,7 @@ export function writeWranglerConfig() {
             APP_CONFIG_ENVIRONMENT_NAME: name,
             APP_CONFIG_PLATFORM_ORIGIN: env.baseUrl,
             APP_CONFIG_TEST_EMAIL_LOGIN: String(env.testEmailLogin ?? false),
+            APP_CONFIG_LOGIN_EMAIL_FROM: env.loginEmailFrom || "",
             APP_CONFIG_MCP_ORIGIN:
               new URL(env.mcpBaseUrl).origin === new URL(env.baseUrl).origin ? "" : env.mcpBaseUrl,
             APP_CONFIG_PROJECT_HOSTNAME_BASE: env.projectHostnameBase,
