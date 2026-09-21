@@ -1149,3 +1149,40 @@ describe("targets round-trip the codec: rewrite → print → reduce → parse",
     expect(await invoke("itx.chat")).toBe("chat:undefined");
   });
 });
+
+describe("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` is refused and `cd` goes down only — from the root too", () => {
+  const appResolverAt = (path: string, implicitRoots: ReadonlySet<string>) =>
+    new ItxExpressionResolver({
+      builtIns: fakeBuiltIns(),
+      rewriteRules: () => [],
+      implicitRoots,
+      path,
+      caller: () => ({ principal: null, app: true }),
+    });
+  test("at the root, every project path is a descendant: `cd('/x')` and `cd('./x')` pass, `cd('.')` is self; `itx.builtins` is refused", () => {
+    const resolver = appResolverAt("/", ROOT);
+    expect(() => resolver.resolve("itx.cd('/x').whoami()")).not.toThrow();
+    expect(() => resolver.resolve("itx.cd('./x').cd('y').whoami()")).not.toThrow();
+    expect(() => resolver.resolve("itx.cd('.').whoami()")).not.toThrow();
+    expect(() => resolver.resolve("itx.builtins.whoami()")).toThrow(/not a loaded worker's word/);
+  });
+  test("at a child, `cd` may not leave it: `/`, `..`, a sibling — refused; its own descendants pass; a `cd` that steps down then up past the base is refused", () => {
+    const resolver = appResolverAt("/agents/a", CHILD);
+    expect(() => resolver.resolve("itx.cd('./b').whoami()")).not.toThrow();
+    expect(() => resolver.resolve("itx.cd('/agents/a/b/c').whoami()")).not.toThrow();
+    for (const to of ["/", "..", "/agents/b", "../a2", "/agents/ab"])
+      expect(() => resolver.resolve(`itx.cd('${to}').whoami()`)).toThrow(/goes down only/);
+    expect(() => resolver.resolve("itx.cd('./b').cd('../..').whoami()")).toThrow(/goes down only/);
+  });
+  test("a session (no app bit) says all of it", () => {
+    const resolver = new ItxExpressionResolver({
+      builtIns: fakeBuiltIns(),
+      rewriteRules: () => [],
+      implicitRoots: CHILD,
+      path: "/agents/a",
+      caller: () => ({ principal: null }),
+    });
+    expect(() => resolver.resolve("itx.cd('/').whoami()")).not.toThrow();
+    expect(() => resolver.resolve("itx.builtins.whoami()")).not.toThrow();
+  });
+});

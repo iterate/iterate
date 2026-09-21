@@ -304,8 +304,8 @@ export function isLocalOrigin(origin: string) {
   );
 }
 
-/** Resolve a `cd` target against a context's own path — the one resolver every `cd` door
- *  (the edge method, the built-in root, the library's relative handles) shares. Absolute ("/agents/x") stands alone; relative
+/** Resolve a `cd` target against a context's own path — the one resolver every `cd` (the edge
+ *  method, the built-in root, the library's relative handles) shares. Absolute ("/agents/x") stands alone; relative
  *  ("agents/x", "../inbox", ".") joins onto `base`. `.` and `..` resolve; the root cannot be
  *  escaped ("/.." is "/"). The result is canonical: leading slash, no trailing slash but for "/". */
 export function resolveContextPath(basePath: string, contextPath: string): string {

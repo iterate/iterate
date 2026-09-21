@@ -416,7 +416,7 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
       }
       // The prose — beside a tag or on its own — is the message, appended directly on this context.
       // Where a reply GOES from here is a subscriber's business (events are the interface), never a
-      // script the model's sandbox would have to be granted a door for.
+      // script the model's sandbox would need a row for.
       if ((outcome.kind === "script" || outcome.kind === "none") && outcome.prose)
         consequences.push({
           type: "events.iterate.com/agents/web-message-sent",

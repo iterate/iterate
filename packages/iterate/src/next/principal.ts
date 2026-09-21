@@ -30,8 +30,8 @@ export const ITX_PRINCIPAL_HEADER = "x-itx-principal";
 /** The grant's header beside it (the caller's `grant`), set and stripped exactly where the
  *  principal's is. */
 export const ITX_GRANT_HEADER = "x-itx-grant";
-/** The header a loaded worker's `env.ITX.fetch` sets on the Request it forwards, so the fetch lane
- *  runs the call as app code; stripped from every Request that arrives from outside. */
+/** The header a loaded worker's `env.ITX.fetch` sets on the Request it forwards, so the context's
+ *  fetch runs the call as app code; stripped from every Request that arrives from outside. */
 export const ITX_APP_HEADER = "x-itx-app";
 
 /** The event as the log stores it: `source.principal` and `source.grant` are the platform's — set

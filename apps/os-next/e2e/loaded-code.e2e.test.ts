@@ -65,7 +65,7 @@ test("a raw fetch() from loaded code is itx.fetch at its context, through the ta
   const target = workerUrl("/version");
   expect(await root.cd("/x").workers.get({ source: PROBE }).fetchUrl(target)).toMatchObject({
     status: 404,
-    text: expect.stringMatching(/fetch lane/),
+    text: expect.stringMatching(/no rewrite rule matches/), // the child has no `itx.fetch` row
   });
   const atRoot = await root.workers.get({ source: PROBE }).fetchUrl(target);
   expect(atRoot.status).toBeLessThan(500); // the root's implicit `itx.fetch`: egress answered

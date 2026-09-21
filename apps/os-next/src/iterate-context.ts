@@ -537,8 +537,8 @@ export class ItxEntrypoint extends WorkerEntrypoint<
     headers.delete(ITX_APP_HEADER);
     if (!this.ctx.props.platform) {
       // A raw `fetch(url)` from loaded code IS `itx.fetch(request)` at its context — through the
-      // table (no `itx.fetch` row below the owner root, no egress); a self-addressed lane call keeps
-      // its expression and runs as app code like any other.
+      // table (no `itx.fetch` row below the owner root, no egress); a self-addressed `env.ITX.fetch`
+      // keeps its expression and runs as app code like any other.
       headers.set(ITX_APP_HEADER, "1");
       if (!headers.has(ITX_EXPRESSION_FETCH_HEADER))
         headers.set(ITX_EXPRESSION_FETCH_HEADER, "itx.fetch");

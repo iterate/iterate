@@ -476,7 +476,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       (rule): RewriteRuleListEntry => ({
         match: print(rule.match),
         target: rule.target && print(rule.target, { holes: true }),
-        description: rule.description,
+        ...(rule.description && { description: rule.description }),
         context: ownPath,
       }),
     );
@@ -1397,8 +1397,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // a loaded worker's own `env.ITX.fetch` — resolved as a terminal-fetch call with the live Request
     // as its one runtime arg; the routing header is stripped so it never reaches the capability or
     // egress); everything else is EGRESS.
-    // LOADED CODE's fetch (`ItxEntrypoint.fetch` set the header): never the pager door nor the
-    // upgrade leg — both append rows past every table — and the lane runs as app code.
+    // LOADED CODE's fetch (`ItxEntrypoint.fetch` set the header): neither the rpc-stub pager
+    // WebSocket nor the rpc-stub fetch upgrade — both append rows past every table — and the
+    // expression runs as app code.
     const app = request.headers.get(ITX_APP_HEADER) !== null;
     if (!app) {
       const pager = this.#rpcStubs.acceptRpcStubPagerWebSocket(request);
@@ -1471,7 +1472,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     }
     // Bare egress is the PLATFORM's (a first-party facet's raw `fetch(url)`); loaded code's fetch
     // always names an expression (`ItxEntrypoint.fetch`), so an app Request without one is refused.
-    if (app) return new Response("fetch lane: no expression\n", { status: 404 });
+    if (app) return new Response("loaded code's fetch names no expression\n", { status: 404 });
     return this.#egress(request);
   }
 

@@ -148,7 +148,8 @@ export function isBuiltInRoot(root: unknown): root is BuiltInRoot {
 /** THE CONTEXT ROOTS: the built-ins that are a context's OWN — its log, its tables, its facets, the
  *  hosts whose loaded code speaks for it. Implicit in every context (rule 3): nothing else could
  *  `append` mean at `/agents/x`, and a hop for it would land in another log. Everything else in
- *  `BUILT_IN_ROOTS` is a PROJECT resource or a door to the world, implicit at the owner root only. */
+ *  `BUILT_IN_ROOTS` is a PROJECT resource or an external capability (`fetch`, `ai`, `browser`),
+ *  implicit at the owner root only. */
 export const CONTEXT_ROOTS = [
   "whoami",
   "append",
@@ -211,8 +212,8 @@ export const BUILT_IN_ROOT_DESCRIPTIONS: Record<BuiltInRoot, string> = {
     'names only, never values: `secrets.list()`; a `getSecret("/secrets/x")` placeholder in an outbound request is substituted at egress',
   ai: "Workers AI, verbatim: `ai.run(model, inputs)`",
   browser: 'browser rendering: `browser.quickAction("markdown", { url })`',
-  r2: "the object store, verbatim (`files` is the friendlier door)",
-  cfArtifacts: "the Artifacts binding, project-scoped (`repos` is the friendlier door)",
+  r2: "the object store, verbatim (`files` is the friendlier surface)",
+  cfArtifacts: "the Artifacts binding, project-scoped (`repos` is the friendlier surface)",
   append: "write events to this log: `itx.append({ type, payload })`",
   schedules:
     "durable future appends: `schedules.set({ key, when, events })` · `schedules.cancel(key)`",
@@ -453,7 +454,7 @@ export function normalizeRewriteRuleConfigured(
 } {
   const matchPrefix = parseItxExpressionPrefix(payload.match);
   const d = payload.description;
-  // oxlint-disable-next-line iterate/simple-truthiness-check -- wire-fed: a present non-string (a number, an object) must be refused at the door, not coerced
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- wire-fed: a present non-string (a number, an object) must be refused where the event is normalized, not coerced
   if (d && (typeof d !== "string" || d.length > 500))
     throw new Error("a rewrite rule's description is one line: a string of at most 500 chars");
   const description = payload.description ? { description: payload.description } : {};
@@ -643,7 +644,7 @@ export class ItxExpressionResolver {
         );
       if (Array.isArray(step) && step[0] === "cd" && typeof step[1] === "string") {
         const to = resolveContextPath(base, step[1]);
-        if (to !== base && !to.startsWith(`${base}/`))
+        if (to !== base && !to.startsWith(base === "/" ? "/" : `${base}/`))
           throw codedError(
             "FORBIDDEN",
             `cd goes down only for loaded code: ${JSON.stringify(step[1])} from ${JSON.stringify(base)} would leave it`,
