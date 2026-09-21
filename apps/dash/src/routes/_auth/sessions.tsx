@@ -31,7 +31,7 @@ import {
 } from "@iterate-com/ui/components/table";
 
 export const Route = createFileRoute("/_auth/sessions")({
-  validateSearch: z.object({ cursor: z.string().optional() }),
+  validateSearch: z.object({ cursor: z.string().optional().catch(undefined) }),
   loaderDeps: ({ search }) => ({ cursor: search.cursor }),
   staticData: { page: "Sessions" },
   // `account` is optional at consent: without it there is no list to load — the page offers the
