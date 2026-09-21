@@ -514,7 +514,10 @@ export const DurableObjectNameCodec = {
  *  pipelined. The platform's own facets extend the SDK's host with THIS scope, so they spell every
  *  root; an app's facet has the declared `IterateContextApi` (iterate/next/api). */
 export type ItxEntrypointScope = ReturnType<Service<ItxEntrypoint>["get"]>;
-export class ItxEntrypoint extends WorkerEntrypoint<Env, { iterateContextName: string }> {
+export class ItxEntrypoint extends WorkerEntrypoint<
+  Env,
+  { iterateContextName: string; platformOrigin: string | null }
+> {
   /** THE handoff: the genuine itx scope — the SAME `IterateContextRpcTarget` RpcTarget a capnweb client gets
    *  from `projects.get(id)` (capnweb's RpcTarget IS the native `cloudflare:workers` RpcTarget on
    *  workerd), so loaded code writes plain dotted access and mid-chain handles pipeline natively. A
@@ -522,11 +525,15 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, { iterateContextName: s
    *  ride as Workers-RPC stubs through the call args, never the pager). Re-resolved per call — never
    *  a stub held across calls (the back-channel rule). */
   get(): IterateContextRpcTarget {
+    // Loaded code speaks for the project (no principal) at the origin the context was minted with
+    // (platform-origin persisted on the DO): every hop from here — this context, a `cd` to a
+    // sibling — carries it, so a sibling never reached from the edge still composes URLs.
     return new IterateContextRpcTarget(
       this.env.ITERATE_CONTEXT,
       DurableObjectNameCodec.parse(this.ctx.props.iterateContextName),
       new SessionTeardown(),
       (p) => this.ctx.waitUntil(p),
+      { principal: null, platformOrigin: this.ctx.props.platformOrigin },
     );
   }
 
@@ -551,11 +558,19 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, { iterateContextName: s
 /** Mint the loopback stub for one context — `ctx.exports.ItxEntrypoint({ props })` on the DO's own
  *  state (workers-types puts the worker's export table on it). `Cloudflare.Exports` is `{}` without a
  *  generated `GlobalProps`, hence the cast. */
-export function itxEntrypointFor(ctx: DurableObjectState, iterateContextName: string): Fetcher {
+export function itxEntrypointFor(
+  ctx: DurableObjectState,
+  iterateContextName: string,
+  platformOrigin: string | null,
+): Fetcher {
   const { exports } = ctx as unknown as {
-    exports: { ItxEntrypoint(opts: { props: { iterateContextName: string } }): Fetcher };
+    exports: {
+      ItxEntrypoint(opts: {
+        props: { iterateContextName: string; platformOrigin: string | null };
+      }): Fetcher;
+    };
   };
-  return exports.ItxEntrypoint({ props: { iterateContextName } });
+  return exports.ItxEntrypoint({ props: { iterateContextName, platformOrigin } });
 }
 
 // THE PUBLISHED API IS DECLARED, NOT GENERATED (iterate/next/api): a context satisfies it, checked here.

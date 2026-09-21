@@ -76,9 +76,12 @@ function ownZones(): string[] {
   for (const envs of [dashEnvs, agentsEnvs, notesEnvs, voiceEnvs])
     for (const env of Object.values(envs) as { baseUrl: string }[])
       zones.add(registrableDomainOf(env.baseUrl));
-  // apps/os's project hosts (`<app>.<project>.iterate.app`, the preview zones) are userspace too
-  for (const env of Object.values(osEnvs))
+  // apps/os's project hosts (`<app>.<project>.iterate.app`, the preview zones) and its projects'
+  // custom apexes (`*.iterate.com` custom hostnames) are userspace too
+  for (const env of Object.values(osEnvs)) {
     for (const base of env.projectHostnameBases) zones.add(base);
+    for (const apex of env.ownedProjectCustomApexes) zones.add(apex);
+  }
   return [...zones].sort();
 }
 

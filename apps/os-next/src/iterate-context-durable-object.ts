@@ -217,7 +217,23 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #durableObjectAddress = parseIterateContextDurableObjectName(this.ctx.id.name);
   /** The `env.ITX` / `globalOutbound` stub every worker this context loads receives (iterate-context.ts `ItxEntrypoint`).
    *  Minted once: it names the context, not an incarnation, and a warm loader never re-reads it. */
-  readonly #itxEntrypoint = itxEntrypointFor(this.ctx, this.#durableObjectAddress.name);
+  /** THE PLATFORM ORIGIN this context is reached on — what the edge stamped on its callers
+   *  (`Caller.platformOrigin`), PERSISTED here (`ctx.storage.kv`) the moment a caller says it, so a
+   *  call that carries none (a loaded worker's `env.ITX`, an alarm, a commit's fan-out) composes URLs
+   *  at the same origin the people do — across evictions. Null until the first stamped call. */
+  #platformOrigin: string | null = null;
+  /** The `env.ITX` / `globalOutbound` stub every worker this context loads receives, minted with the
+   *  origin this context is reached on (so loaded code's hops carry it) — re-minted when that origin
+   *  is first learned or changes; a stub minted for the current origin is reused. */
+  #itxEntrypointStub: { origin: string | null; stub: Fetcher } | null = null;
+  get #itxEntrypoint(): Fetcher {
+    if (!this.#itxEntrypointStub || this.#itxEntrypointStub.origin !== this.#platformOrigin)
+      this.#itxEntrypointStub = {
+        origin: this.#platformOrigin,
+        stub: itxEntrypointFor(this.ctx, this.#durableObjectAddress.name, this.#platformOrigin),
+      };
+    return this.#itxEntrypointStub.stub;
+  }
   /** This deployment's configuration (worker.ts `appConfigOf`) — a malformed var throws here, naming it. */
   readonly #appConfig = appConfigOf(this.env);
   /** context/rpc-stubs.ts — wired to the fetch door and the two WebSocket handlers below. */
@@ -360,7 +376,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // An alarm trace answers waitForEvent, never a subscription (AlarmTrace says why).
       const events = freshEvents.filter((event) => event.type !== STREAM_ALARM_TRACE_EVENT);
       if (events.length === 0) return;
-      this.#callerStorage.run({ principal: null }, () => {
+      this.#callerStorage.run(this.#withPlatformOrigin({ principal: null }), () => {
         this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset);
         this.#startRequestedRuns(events);
       });
@@ -587,7 +603,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     append: async (...events) => this.#appendAndRunCommittedEffects(events),
     read: async (afterOffset, limit, options) => this.#stream.read(afterOffset, limit, options),
     invoke: (call, args = [], caller = this.#callerStorage.getStore() ?? { principal: null }) =>
-      this.#callerStorage.run(caller, () => this.#itxExpressionResolver.invoke(call, ...args)),
+      this.#callerStorage.run(this.#withPlatformOrigin(caller), () =>
+        this.#itxExpressionResolver.invoke(call, ...args),
+      ),
   };
 
   /** `itx.builtins` — the physical scope this context resolves against (context/built-ins.ts). */
@@ -654,7 +672,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             }),
           ),
     egress: (request) => this.#egress(request),
-    caller: () => this.#callerStorage.getStore() ?? { principal: null },
+    // The caller a hop hands a sibling (`cd`, a fan-out): the store's, or nobody — either way with
+    // this context's origin filled in, so the sibling composes URLs at the origin the people use even
+    // when the store did not survive to the step (a pipelined chain resolved outside the run scope).
+    caller: () => this.#withPlatformOrigin(this.#callerStorage.getStore() ?? { principal: null }),
     // `get(key)` is a GENUINE RpcTarget so `itx.rpcStubs.get('k').hello()` pipelines the mid-chain
     // `.hello()` on every lane (workerd's classifier rejects a Proxy, #6873), branded RpcStubHandle
     // for the delivery loop.
@@ -704,7 +725,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       resolve: (call) => this.#itxExpressionResolver.resolve(call).map((step) => print(step)),
     },
     waitForEvent: (filter) => this.#stream.waitForEvent(filter),
-    itxEntrypoint: this.#itxEntrypoint,
+    itxEntrypoint: () => this.#itxEntrypoint,
     library: this.#library.roots,
   });
 
@@ -1325,22 +1346,26 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     caller: Caller = { principal: null },
   ): Promise<unknown> {
     this.#stream.appendWakeRecord("request");
-    this.#recordPlatformOrigin(caller);
-    return this.#callerStorage.run(caller, () => this.#itxExpressionResolver.invoke(call, ...args));
+    return this.#callerStorage.run(this.#withPlatformOrigin(caller), () =>
+      this.#itxExpressionResolver.invoke(call, ...args),
+    );
   }
   readonly #callerStorage = new AsyncLocalStorage<Caller>();
-  /** THE PLATFORM ORIGIN this context is reached on — what the edge stamped on its callers
-   *  (`Caller.platformOrigin`), PERSISTED here (`ctx.storage.kv`) the moment a caller says it, so a
-   *  call that carries none (a loaded worker's `env.ITX`, an alarm, a commit's fan-out) composes URLs
-   *  at the same origin the people do — across evictions. Null until the first stamped call. */
-  #platformOrigin: string | null = null;
-  /** A caller from outside arrived: keep what it says about the origin. */
-  #recordPlatformOrigin(caller: Caller): void {
-    if (!caller.platformOrigin || caller.platformOrigin === this.#platformOrigin) return;
-    this.#platformOrigin = caller.platformOrigin;
-    this.ctx.storage.kv.put("platform-origin", caller.platformOrigin);
+  /** THE CALLER THIS CALL RUNS UNDER: what arrived, its origin kept when it names one, else the
+   *  persisted origin filled in — so the caller in ALS ALWAYS carries the effective origin and a hop to
+   *  a sibling context (`deps.caller()`, a `cd`, a fan-out) hands it on; a sibling never reached from
+   *  the edge still composes URLs at the origin the people use. */
+  #withPlatformOrigin(caller: Caller): Caller {
+    if (caller.platformOrigin) {
+      if (caller.platformOrigin !== this.#platformOrigin) {
+        this.#platformOrigin = caller.platformOrigin;
+        this.ctx.storage.kv.put("platform-origin", caller.platformOrigin);
+      }
+      return caller;
+    }
+    return this.#platformOrigin ? { ...caller, platformOrigin: this.#platformOrigin } : caller;
   }
-  /** The origin for THIS call: the caller's own, else the persisted one. */
+  /** The origin for THIS call: the caller's (the persisted one filled in above), else nothing yet. */
   #platformOriginNow(): string | null {
     return this.#callerStorage.getStore()?.platformOrigin || this.#platformOrigin;
   }
@@ -1404,8 +1429,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         const platformOrigin = headers.get(ITX_PLATFORM_ORIGIN_HEADER);
         headers.delete(ITX_PLATFORM_ORIGIN_HEADER);
         const forwarded = new Request(request, { headers });
-        const caller: Caller = { principal, grant, platformOrigin };
-        this.#recordPlatformOrigin(caller);
+        const caller = this.#withPlatformOrigin({ principal, grant, platformOrigin });
         const result = await this.#callerStorage.run(caller, () =>
           this.#itxExpressionResolver.invoke(itxExpressionEndingInFetch(itxExpression), forwarded),
         );

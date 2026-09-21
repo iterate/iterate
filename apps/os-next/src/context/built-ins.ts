@@ -434,9 +434,9 @@ interface BuildBuiltInsDeps {
   /** The DO's claim table for hosted processors (`processors.claim`). */
   claimFacetAlarm: (name: string, at: number | null) => void;
   /** The `ItxEntrypoint` stub a loaded worker gets as `env.ITX` and `globalOutbound` — the loopback
-   *  minted once for this context (the DO's `#itxEntrypoint`; iterate-context.ts's `ItxEntrypoint` for why it is never a
+   *  minted for this context at its current origin (the DO's `#itxEntrypoint`; iterate-context.ts's `ItxEntrypoint` for why it is never a
    *  raw getByName stub). */
-  itxEntrypoint: Fetcher;
+  itxEntrypoint: () => Fetcher;
   /** THE LIBRARY's roots (library.ts `buildLibrary(itx).roots`), built by the DO over its own
    *  `itx` handle so a library call's `itx.fetch(...)` resolves through THIS context's rules. */
   library: LibraryRoots;
@@ -810,7 +810,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           const { load } = await prepareConfinedWorker({
             env,
             deployId: deps.deployId,
-            itxEntrypoint: deps.itxEntrypoint,
+            itxEntrypoint: deps.itxEntrypoint(),
             kind: "worker",
             owner: iterateContextName,
             source: spec.source,
