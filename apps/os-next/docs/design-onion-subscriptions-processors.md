@@ -277,7 +277,7 @@ COMMAND that builds the first event (`subscriptionConfiguredEvent({ name, target
 // reduced state
 subscriptions: Record<string, {
   target: ItxExpression; consumes?: string[]; configuredAtOffset: number; afterOffset?: number;
-  hostedFacet?: { name: string; className: string; cacheKey?: string };  // the row HOSTS a facet (the source stays in the log + the facet's kv memo)
+  hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };  // the row HOSTS a facet (the source stays in the log + the facet's kv memo); `restarts` counts the platform-failure restarts
   halted?: { afterOffset: number; attempts: number; error?: string };
   resumed?: { afterOffset?: number; atOffset: number };            // level-triggered onto the cursor row
 }>;
@@ -294,7 +294,7 @@ type SubscriptionListEntry = {
   name: string; target: string; consumes?: string[]; configuredAtOffset: number;
   /** Where the cursor lane started (0 = the whole log); absent = at the configure. */
   afterOffset?: number;
-  hostedFacet?: { name: string; className: string; cacheKey?: string };
+  hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };
   /** Present only when the STREAM keeps the cursor (a target that cannot own its progress). */
   cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
   halted?: { afterOffset: number; attempts: number; error?: string };
