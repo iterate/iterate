@@ -5,7 +5,8 @@ import { RpcTarget } from "capnweb";
 import { codedError, isLocalOrigin } from "iterate/next/lib";
 import { authorizationCodeRequest } from "iterate/next/oauth";
 import { type GrantEnded, type GrantMinted } from "./account/contract.ts";
-import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./iterate-context.ts";
+import { DurableObjectNameCodec } from "./iterate-context.ts";
+import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import type { Env } from "./control-plane.ts";
 import { directory } from "./directory.ts";
 import {

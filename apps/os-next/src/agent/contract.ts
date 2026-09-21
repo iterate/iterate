@@ -82,7 +82,7 @@ export const AgentContract = defineProcessorContract({
   slug: "agent",
   // 2: the script obligation moved to the context (core state `runs`); the state lost its slot.
   // 3: `path` became `creation` (the saga's offset); `agents/…` events became `agent/…`.
-  version: "3",
+  version: "4",
   description:
     "An agent: a conversation on its own context, driven by a model that acts by writing scripts against itx.",
   /** THE REDUCED STATE — what the reduce keeps between events: where creation stands (as the OFFSET
@@ -133,7 +133,6 @@ export const AgentContract = defineProcessorContract({
          *  code, and a bare-prose reply is sugar for `<codemode>await <this>(<the prose>)</codemode>`.
          *  The default sends the text to web chat; a Slack-connected agent points it at its Slack
          *  reply instead. Blank drops a bare reply (an agent that only acts). */
-        plainResponse: z.string().default("itx.chat.sendMessage"),
         /** Consecutive model failures before the loop pauses; between attempts, apps/os's backoff —
          *  `backoffBaseMs · 2^(failures−1)`, capped at `backoffMaxMs` — folded into the debounce window. */
         llmRequestRetryPolicy: z
@@ -213,7 +212,6 @@ export const AgentContract = defineProcessorContract({
         config: z.object({
           llm: z.object({ model: z.string().min(1).optional() }).optional(),
           maxAutonomousTurns: z.number().int().positive().optional(),
-          plainResponse: z.string().optional(),
           llmRequestExpiryMs: z.number().int().positive().optional(),
           llmRequestDebounceMs: z.number().int().nonnegative().optional(),
           llmRequestRetryPolicy: z

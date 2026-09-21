@@ -32,9 +32,9 @@ const reduceAll = (events: StreamEvent[], initial = CoreContract.initialState())
   events.reduce((s, e) => reduceCoreEvent({ event: e, state: s }) ?? s, initial);
 
 describe("the contract", () => {
-  test("slug `core` v12.0.0; the every-field-defaulted initial state", () => {
+  test("slug `core` v13.0.0; the every-field-defaulted initial state", () => {
     expect(CoreContract.slug).toBe("core");
-    expect(CoreContract.version).toBe("12.0.0");
+    expect(CoreContract.version).toBe("13.0.0");
     expect(CoreContract.initialState()).toEqual({
       paused: null,
       itxExpressionRewriteRules: {},
@@ -671,7 +671,8 @@ describe("the builtins root, as the reduce sees it: masks, the platform-equivale
         state: s,
       }),
     ).toBeUndefined();
-    // a pinned match's equivalent carries the pin
+    // a PINNED match's physical target is NOT the implicit row it sits under (`itx.ai`): it is a
+    // grant of exactly that call and is STORED (rule 8) — what re-opens a prefix beneath a mask
     const pinned = reduceAll([
       at(1, "events.iterate.com/itx/rewrite-rule-configured", {
         match: "itx.ai.run('gpt-5')",
@@ -682,7 +683,7 @@ describe("the builtins root, as the reduce sees it: masks, the platform-equivale
         target: "itx.builtins.ai.run('gpt-5')",
       }),
     ]);
-    expect(pinned.itxExpressionRewriteRules).toEqual({});
+    expect(Object.keys(pinned.itxExpressionRewriteRules)).toEqual(["itx.ai.run('gpt-5')"]);
   });
 
   test("HOSTING is decided on the RESOLVED target: the platform's spelling, a user's short spelling and a user's own rule naming the door all host; the source is elided from the ORIGINAL spelling", () => {
@@ -881,7 +882,7 @@ describe("the platform rows a null MASKS (kept) vs a plain delete", () => {
   // (`itx ⇒ null`, `itx.kv ⇒ null`) one prefix can never be re-opened — yet longest-match promises
   // it. The fix stores the row when a shorter row claims the prefix and deletes only when nothing
   // lies above — a table-aware delete.
-  test.fails("a platform-equivalent target beneath a broader mask re-opens exactly that prefix", () => {
+  test("a platform-equivalent target beneath a broader mask re-opens exactly that prefix", () => {
     const s = reduceAll([
       configured(1, "itx.kv", null),
       configured(2, "itx.kv.get", "itx.builtins.kv.get"),
@@ -1064,5 +1065,73 @@ describe("configure — ONE event: set, replace, or remove", () => {
       expect((event.payload as { target: unknown }).target).toEqual(target);
       expect(rows()[`odd${i}`].target).toEqual(target);
     }
+  });
+});
+
+describe("rule 8 at a CHILD (nothing project-level implicit; the bare null; the grant through the wall)", () => {
+  const child = "/agents/a";
+  const atChild = (offset: number, payload: Record<string, unknown>) =>
+    ({
+      ...at(offset, "events.iterate.com/itx/rewrite-rule-configured", payload),
+      path: child,
+    }) as StreamEvent;
+  test("a project root's physical target at a child is a GRANT and is stored; a context root's is the default and deletes", () => {
+    const s = reduceAll([
+      atChild(1, { match: "itx.kv", target: "itx.builtins.kv" }),
+      atChild(2, { match: "itx.append", target: "itx.builtins.append" }),
+    ]);
+    expect(Object.keys(s.itxExpressionRewriteRules)).toEqual(["itx.kv"]);
+  });
+  test("`null` at a project root's name at a child deletes (nothing implicit beneath); at a context root's it masks; the bare null is kept", () => {
+    const s = reduceAll([
+      atChild(1, { match: "itx.kv", target: null }),
+      atChild(2, { match: "itx.append", target: null }),
+      atChild(3, { match: "itx", target: null }),
+    ]);
+    expect(Object.keys(s.itxExpressionRewriteRules).sort()).toEqual(["itx", "itx.append"]);
+  });
+  test("`null` at a name a stored SHORTER row with a target would answer — the parent link, a granted root — is KEPT as a mask (the chain is cut there); without that row it deletes", () => {
+    const linked = reduceAll([
+      atChild(1, { match: "itx", target: "itx.builtins.cd('/')" }),
+      atChild(2, { match: "itx.tool", target: null }),
+      atChild(3, { match: "itx.repos", target: "itx.builtins.cd('/').repos" }),
+      atChild(4, { match: "itx.repos.get('secret')", target: null }),
+    ]);
+    expect(Object.keys(linked.itxExpressionRewriteRules).sort()).toEqual([
+      "itx",
+      "itx.repos",
+      "itx.repos.get('secret')",
+      "itx.tool",
+    ]);
+    expect(linked.itxExpressionRewriteRules["itx.tool"]).toMatchObject({ target: null });
+    const unlinked = reduceAll([atChild(1, { match: "itx.tool", target: null })]);
+    expect(unlinked.itxExpressionRewriteRules).toEqual({});
+  });
+  test("behind a bare null the physical spelling of a context root is the grant through the wall and is STORED; a description rides the row", () => {
+    const s = reduceAll([
+      atChild(1, { match: "itx", target: null, description: "a jail" }),
+      atChild(2, {
+        match: "itx.readEvents",
+        target: "itx.builtins.readEvents",
+        description: "your history",
+      }),
+    ]);
+    expect(s.itxExpressionRewriteRules["itx.readEvents"]).toMatchObject({
+      target: ["itx", "builtins", "readEvents"],
+      description: "your history",
+    });
+    expect(s.itxExpressionRewriteRules["itx"]).toMatchObject({
+      target: null,
+      description: "a jail",
+    });
+  });
+  test("a handle's undo — `null` with `ifTarget` — DELETES, never masks, and only while the row is still its own", () => {
+    const s = reduceAll([
+      atChild(1, { match: "itx.append", target: "itx.fake" }),
+      //  at rest is the PARSED form (the append boundary normalizes it like the target)
+      atChild(2, { match: "itx.append", target: null, ifTarget: ["itx", "other"] }), // stale: someone else's row now
+      atChild(3, { match: "itx.append", target: null, ifTarget: ["itx", "fake"] }),
+    ]);
+    expect(s.itxExpressionRewriteRules).toEqual({});
   });
 });

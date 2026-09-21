@@ -10,9 +10,9 @@ import { verifyAdminSecret, type Caller, type Principal } from "iterate/next/pri
 import type { StreamEventInput } from "iterate/next/stream/processor";
 import type { Consent } from "./consent.ts";
 import type { Grants } from "./grants.ts";
+import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import {
   DurableObjectNameCodec,
-  GLOBAL_PROJECT_ID,
   IterateContextRpcTarget,
   type IterateContextNamespace,
   type WaitUntil,
