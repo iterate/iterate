@@ -498,23 +498,28 @@ async function createEntity(
       "FORBIDDEN",
       `${collection}.create(${JSON.stringify(path)}) from ${JSON.stringify(creator)}: a context does not create its own ancestor`,
     );
-  if (creator !== absolute)
-    await (
-      await itx.cd(absolute)
-    ).invoke([
-      [
-        "append",
-        {
-          type: "events.iterate.com/itx/rewrite-rule-configured",
-          payload: {
-            match: "itx",
-            target: ["itx", "builtins", ["cd", creator]],
-            description: "everything this context does not claim, its creator answers",
+  if (creator !== absolute) {
+    // The link is the creator's DEFAULT, written only while the context has no bare `itx` row: a
+    // context already linked (or jailed) by whoever created it first is never re-pointed by a later
+    // `create(path)` from somewhere else — that would cut it off from the surface its owner gave it.
+    const context = await itx.cd(absolute);
+    const bare = await context.invoke(["builtins", "rewriteRules", ["get", "itx"]]);
+    if (!bare)
+      await context.invoke([
+        [
+          "append",
+          {
+            type: "events.iterate.com/itx/rewrite-rule-configured",
+            payload: {
+              match: "itx",
+              target: ["itx", "builtins", ["cd", creator]],
+              description: "everything this context does not claim, its creator answers",
+            },
+            idempotencyKey: `itx@${creator}`,
           },
-          idempotencyKey: `itx@${creator}`,
-        },
-      ],
-    ]);
+        ],
+      ]);
+  }
   return projectFacet(itx, [[collection], ["create", absolute]]) as Promise<{ path: string }>;
 }
 

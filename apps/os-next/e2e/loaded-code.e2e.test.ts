@@ -7,7 +7,7 @@
 // `itx.fetch(request)` at the worker's context, through the table — no row below the owner root, no
 // egress. The chain a child inherits: own rows → the parent link → … → the root's rows → the built-ins.
 import { expect, test } from "vitest";
-import { freshCtx, openItx, rejection, workerUrl } from "./support/client.ts";
+import { freshCtx, openItx, rejection } from "./support/client.ts";
 
 /** A loaded worker that hands its `env.ITX` whatever the test asks it to say, and reports the refusal. */
 const PROBE = {
@@ -87,7 +87,7 @@ test("loaded code may not spell itx.builtins, and its cd goes down only; the sam
 test("a raw fetch() from loaded code is itx.fetch at its context, through the table: refused at a child with no row, egress at the root", async () => {
   const ctx = freshCtx("app-fetch");
   const root = openItx(ctx);
-  const target = workerUrl("/version");
+  const target = "https://example.com/"; // egress proper — never this worker's own origin, which a Worker may not fetch on Cloudflare
   expect(await root.cd("/x").workers.get({ source: PROBE }).fetchUrl(target)).toMatchObject({
     status: 404,
     text: expect.stringMatching(/no rewrite rule matches/), // the child has no `itx.fetch` row
@@ -137,8 +137,19 @@ test("THE CHAIN: a subagent two levels down resolves a capability provided at th
   });
   expect(rows.find((row) => row.match === "itx.kv")).toMatchObject({ context: "/" });
   expect(rows.find((row) => row.match === "itx.append")).toMatchObject({ context: sub });
-  // nothing project-level is implicit below the root: a mask at /agents/a stops the chain there
+  // nothing project-level is implicit below the root: a mask at /agents/a stops the chain there —
+  // and the list agrees: the mask is inherited as a mask, and no spellable row is left beneath it
+  // (the root's `itx.tool` and its longer `itx.tool.deep` alike)
+  await root.provide("itx.tool.deep", () => "deeper");
   await root.cd("/agents/a").provide("itx.tool", null);
+  const afterMask = (await root.cd(sub).rewriteRules.list()) as {
+    match: string;
+    target: string | null;
+    context: string;
+  }[];
+  expect(afterMask.filter((row) => row.match.startsWith("itx.tool"))).toEqual([
+    { match: "itx.tool", target: null, context: "/agents/a" },
+  ]);
   // (a run's failure crosses the log as the settlement's TEXT, never a code)
   expect((await rejection(root.cd(sub).run("async (itx) => itx.tool()"))).message).toMatch(
     /is masked/,

@@ -612,7 +612,7 @@ export function admitLoadedCodeRow(event: { type: string; payload?: unknown }, b
   )
     return;
   const target = (event.payload as { target?: unknown } | undefined)?.target;
-  if (target === null || target === undefined) return;
+  if (!target) return; // a mask, an un-set (an empty string is the reduce's refusal, not this wall's)
   if (typeof target !== "string" && !Array.isArray(target)) return; // a live object: the lend's own business
   const expression = normalizedItxExpression(target as ItxExpressionInput, { holes: true });
   const [, root, registry, lend] = expression;

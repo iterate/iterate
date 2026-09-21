@@ -11,7 +11,6 @@
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
 import { codedError, jsonEqual, resolveContextPath } from "iterate/next/lib";
-import { admitLoadedCodeRow } from "./itx-expression-rewriting.ts";
 import { stampCaller, type Caller } from "iterate/next/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
 import {
@@ -44,6 +43,7 @@ import {
 } from "../secrets.ts";
 import type { SecretDurableObject } from "../secret-durable-object.ts";
 import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.ts";
+import { admitLoadedCodeRow } from "./itx-expression-rewriting.ts";
 import { GLOBAL_PROJECT_ID, resourceScope } from "./paths.ts";
 import {
   assertFacetSourceWithinCeiling,
