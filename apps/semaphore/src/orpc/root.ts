@@ -97,6 +97,7 @@ const addResourceProcedure = semaphore.resources.add
       });
     }
 
+    await coordinator.forgetTags({ type, slug });
     const created = await insertResource(env.DB, { type, slug, data });
     await coordinator.inventoryChanged({ type });
     return created;
@@ -107,6 +108,7 @@ const deleteResourceProcedure = semaphore.resources.delete
   .use(mapResourceErrors)
   .handler(async ({ input }) => {
     const { type, slug } = input;
+    await getCoordinator(type).forgetTags({ type, slug });
     const deleted = await deleteResourceFromDb(env.DB, { type, slug });
     return { deleted };
   });
@@ -114,7 +116,20 @@ const deleteResourceProcedure = semaphore.resources.delete
 const listResourcesProcedure = semaphore.resources.list
   .use(requireAuth)
   .use(mapResourceErrors)
-  .handler(async ({ input }) => listResourcesFromDb(env.DB, { type: input.type }));
+  .handler(async ({ input }) => {
+    const resources = await listResourcesFromDb(env.DB, { type: input.type });
+    const tagsByType = new Map(
+      await Promise.all(
+        [...new Set(resources.map((resource) => resource.type))].map(
+          async (type) => [type, await getCoordinator(type).availableTags({ type })] as const,
+        ),
+      ),
+    );
+    return resources.map((resource) => ({
+      ...resource,
+      tags: tagsByType.get(resource.type)?.[resource.slug] || {},
+    }));
+  });
 
 const findResourceProcedure = semaphore.resources.find
   .use(requireAuth)
@@ -165,7 +180,7 @@ const acquireSpecificResourceProcedure = semaphore.resources.acquireSpecific
   .use(requireAuth)
   .use(mapResourceErrors)
   .handler(async ({ input }) => {
-    const { type, slug, leaseMs, holder, force, allowedSlugs } = input;
+    const { type, slug, leaseMs, holder, force, expectedHolder, allowedSlugs } = input;
     const hasInventory = await hasInventoryForType(env.DB, type);
     if (!hasInventory) {
       throw new ORPCError("NOT_FOUND", {
@@ -179,6 +194,7 @@ const acquireSpecificResourceProcedure = semaphore.resources.acquireSpecific
       leaseMs,
       holder,
       force,
+      expectedHolder,
       allowedSlugs,
     });
   });
@@ -195,8 +211,7 @@ const releaseResourceProcedure = semaphore.resources.release
   .use(requireAuth)
   .use(mapResourceErrors)
   .handler(async ({ input }) => {
-    const { type, slug, leaseId, force } = input;
-    const released = await getCoordinator(type).release({ type, slug, leaseId, force });
+    const released = await getCoordinator(input.type).release(input);
     return { released };
   });
 

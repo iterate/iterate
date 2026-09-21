@@ -83,6 +83,8 @@ export const SemaphoreResourceRecord = z.object({
   type: semaphoreKeySchema,
   slug: semaphoreKeySchema,
   data: semaphoreDataSchema,
+  /** Metadata from the last release; consumed by the next acquisition. */
+  tags: z.record(z.string(), z.string()).optional(),
   leaseState: z.enum(["available", "leased"]),
   leasedUntil: z.number().int().positive().nullable(),
   holder: z.string().nullable().default(null),
@@ -96,6 +98,7 @@ export const SemaphoreLeaseRecord = z.object({
   type: semaphoreKeySchema,
   slug: semaphoreKeySchema,
   data: semaphoreDataSchema,
+  tags: z.record(z.string(), z.string()).optional(),
   leaseId: z.uuid(),
   expiresAt: z.number().int().positive(),
   holder: z.string().nullable().default(null),
@@ -154,7 +157,13 @@ export const AcquireSpecificResourceInput = z
      * explicit human `--force`; automation must never steal a held resource.
      */
     force: z.boolean().optional(),
+    /** Renew an existing hold only if its owner still matches, without stealing it. */
+    expectedHolder: semaphoreHolderSchema.optional(),
   })
+  .refine(
+    (value) => !(value.force && value.expectedHolder),
+    "force and expectedHolder are mutually exclusive",
+  )
   .transform(applyLegacyPreviewAllowedSlugs);
 
 export const RenewResourceLeaseInput = z.object({
@@ -169,6 +178,7 @@ export const ReleaseResourceInput = z
     type: semaphoreKeySchema,
     slug: semaphoreKeySchema,
     leaseId: z.uuid().optional(),
+    tags: z.record(z.string(), z.string()).optional(),
     /**
      * Release whatever lease is on the slug, even without its leaseId. The
      * forced release is recorded (event `force-released`, with the evicted

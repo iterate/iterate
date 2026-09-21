@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { DurableObject } from "cloudflare:workers";
 import {
   AcquireResourceInput,
@@ -87,8 +88,9 @@ export class ResourceCoordinator extends DurableObject<Env> {
     slug: string;
     leaseId?: string;
     force?: boolean;
+    tags?: Record<string, string>;
   }): Promise<boolean> {
-    const { type, slug, leaseId, force } = ReleaseResourceInput.parse(params);
+    const { type, slug, leaseId, force, tags } = ReleaseResourceInput.parse(params);
     this.rememberCoordinatorType(type);
     const existing = this.ctx.storage.sql
       .exec<{
@@ -105,6 +107,12 @@ export class ResourceCoordinator extends DurableObject<Env> {
       return false;
     }
 
+    // Both writes happen without yielding: a taker cannot see stale preparation.
+    this.ctx.storage.sql.exec(
+      "INSERT OR REPLACE INTO available_tags (slug, tags) VALUES (?, ?)",
+      slug,
+      JSON.stringify(matchesLeaseId ? tags || {} : {}),
+    );
     this.ctx.storage.sql.exec("DELETE FROM leases WHERE slug = ?", slug);
     this.logEvent(matchesLeaseId ? "released" : "force-released", slug, {
       leaseId: existing.lease_id,
@@ -148,6 +156,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
     leaseMs: number;
     holder?: string;
     force?: boolean;
+    expectedHolder?: string;
     allowedSlugs?: string[];
   }) {
     const parsed = AcquireSpecificResourceInput.parse(params);
@@ -157,12 +166,21 @@ export class ResourceCoordinator extends DurableObject<Env> {
       return null;
     }
     await this.reapExpiredLeases(parsed.type);
+    const inventory = await selectInventoryByType(this.env.DB, parsed.type);
+    const candidate = inventory.find((resource) => resource.slug === parsed.slug);
+    if (!candidate) return null;
     const activeLease = this.ctx.storage.sql
       .exec<{ lease_id: string; holder: string | null }>(
         "SELECT lease_id, holder FROM leases WHERE slug = ?",
         parsed.slug,
       )
       .toArray()[0];
+    if (parsed.expectedHolder) {
+      if (activeLease?.holder !== parsed.expectedHolder) return null;
+      // Replace our own token atomically. Available tags never survive intervening use.
+      this.ctx.storage.sql.exec("DELETE FROM leases WHERE slug = ?", parsed.slug);
+      return this.createLease(candidate, parsed.leaseMs, parsed.holder || parsed.expectedHolder);
+    }
     if (activeLease && !parsed.force) {
       return null;
     }
@@ -174,8 +192,6 @@ export class ResourceCoordinator extends DurableObject<Env> {
       });
     }
 
-    const inventory = await selectInventoryByType(this.env.DB, parsed.type);
-    const candidate = inventory.find((resource) => resource.slug === parsed.slug);
     const lease = candidate
       ? await this.createLease(candidate, parsed.leaseMs, parsed.holder ?? null)
       : null;
@@ -263,7 +279,29 @@ export class ResourceCoordinator extends DurableObject<Env> {
     await this.dispatchWaiters();
   }
 
+  /** Available-only metadata, kept next to the authoritative leases. */
+  async availableTags(params: { type: string }): Promise<Record<string, Record<string, string>>> {
+    this.rememberCoordinatorType(params.type);
+    return Object.fromEntries(
+      this.ctx.storage.sql
+        .exec<{ slug: string; tags: string }>(
+          "SELECT slug, tags FROM available_tags WHERE slug NOT IN (SELECT slug FROM leases)",
+        )
+        .toArray()
+        .map((row) => [row.slug, z.record(z.string(), z.string()).parse(JSON.parse(row.tags))]),
+    );
+  }
+
+  /** Deleted inventory must not carry preparation into a later resource with the same name. */
+  async forgetTags(params: { type: string; slug: string }) {
+    this.rememberCoordinatorType(params.type);
+    this.ctx.storage.sql.exec("DELETE FROM available_tags WHERE slug = ?", params.slug);
+  }
+
   private initializeSql() {
+    this.ctx.storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS available_tags (slug TEXT PRIMARY KEY, tags TEXT NOT NULL)",
+    );
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS leases (
         slug TEXT PRIMARY KEY,
@@ -479,6 +517,17 @@ export class ResourceCoordinator extends DurableObject<Env> {
     leaseMs: number,
     holder: string | null,
   ) {
+    // Inventory reads can yield to another acquisition. Claim only if still free.
+    if (
+      this.ctx.storage.sql.exec("SELECT slug FROM leases WHERE slug = ?", candidate.slug).toArray()
+        .length
+    )
+      return null;
+    const tagsRow = this.ctx.storage.sql
+      .exec<{ tags: string }>("SELECT tags FROM available_tags WHERE slug = ?", candidate.slug)
+      .toArray()[0];
+    const tags = tagsRow ? z.record(z.string(), z.string()).parse(JSON.parse(tagsRow.tags)) : {};
+    this.ctx.storage.sql.exec("DELETE FROM available_tags WHERE slug = ?", candidate.slug);
     const now = Date.now();
     const expiresAt = now + leaseMs;
     const leaseId = crypto.randomUUID();
@@ -521,6 +570,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
       leaseId,
       expiresAt,
       holder,
+      tags,
     } satisfies SemaphoreLeaseRecord;
   }
 
