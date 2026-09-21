@@ -61,3 +61,17 @@ final health showed an idle call, ready transport, XMOS 1.0.3 and an unmuted mic
 - The September 21 failed update had written a repo and ingress event while production still used the old router. Its source also contained a TypeScript annotation unsupported by the JavaScript worker loader. Both were corrected.
 - Voice prompts require probing worker code and fetching the public page before claiming success. Firmware and USB devices were not changed for this backend repair.
 - Physical HAVPE call at 11:16:28 UTC successfully requested the chicken-joke update. The final deployed backend independently repeated publication and live HTTP verification, and returned the exact hostname on a fresh follow-up. The website was left showing the user's chicken joke.
+
+## Satellite1 OTA proof — 2026-09-21
+
+`itx.clients.satellite1.system.update({url, sha256})` successfully installed the
+1,283,664-byte Satellite1 app over Wi-Fi (SHA-256
+`ff3a2fb771880a95808079b5805a296d237cf8c63e5d5788719ca792d78b92a5`).
+The download was staged through `itx.files` with a one-hour signed URL and
+independently hash-checked before calling the updater. Acceptance returned
+`true`; the device disappeared briefly, then reconnected within 20 seconds
+with lower uptime and `restartNote: "system-update"`. A subsequent health
+check confirmed increasing uptime/capture counts, ready transport, a 20 V PD
+contract, and zero protocol, codec, amplifier or PD failures. No USB was used.
+The temporary remote file was removed. Evidence is retained locally under
+`.build/satellite-ota-2026-09-21/`; no post-update voice conversation was tested.
