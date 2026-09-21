@@ -19,15 +19,20 @@
 // workspaces`).
 
 import { expect, test } from "vitest";
-import { freshCtx, openItx, readAll, rejection } from "./support/client.ts";
+import { freshCtx, openItx, processorNames, readAll, rejection } from "./support/client.ts";
 import { FakeArtifacts, type FakeCommit } from "./support/fake-artifacts.ts";
-import { deployedOnly, localOnly } from "./support/project-host.ts";
+import { localOnly } from "./support/project-host.ts";
 
 /** A log as its repo facts' short type names, in order (the processor row, a `stream/…` fact, is
  *  not one). */
 const types = (log: { type: string }[]) =>
   log
     .filter((e) => e.type.startsWith("events.iterate.com/repo"))
+    .map((e) => e.type.replace("events.iterate.com/", ""));
+/** The same for the workspace's own facts. */
+const workspaceTypes = (log: { type: string }[]) =>
+  log
+    .filter((e) => e.type.startsWith("events.iterate.com/workspace"))
     .map((e) => e.type.replace("events.iterate.com/", ""));
 
 const SEED = { "/repos/config": { "worker.ts": "export default 1;\n", "notes/log.md": "# log\n" } };
@@ -309,53 +314,96 @@ localOnly(
   },
 );
 
-deployedOnly(
-  "against real Artifacts: nested paths through the workspace — a repo file read at the tip, a nested write committed as one commit, a delete committed, the repo's log",
-  async () => {
-    const itx = openItx(freshCtx("wsrepo"));
-    try {
-      await itx.repos.create("/repos/config");
-      const repo = itx.repos.get("/repos/config");
-      await repo.writeFile("worker.ts", "export default 1;\n");
-      await itx.workspaces.create("/workspaces/deployed");
-      const workspace = itx.workspaces.get("/workspaces/deployed");
-      expect(await workspace.readFile("/repos/config/worker.ts")).toBe("export default 1;\n");
-      await workspace.writeFile("/repos/config/notes/log.md", "# log\n");
-      await workspace.writeFile("/repos/config/worker.ts", "export default 2;\n");
-      const commit = await workspace.gitCommit({ message: "notes" });
-      expect(commit.changedPaths).toEqual([
-        "/repos/config/notes/log.md",
-        "/repos/config/worker.ts",
-      ]);
-      expect(await repo.readFile("notes/log.md")).toBe("# log\n");
-      expect(await repo.readFile("worker.ts")).toBe("export default 2;\n"); // the repo, at the new tip, agrees
-      expect(await repo.listFiles()).toEqual({
-        commitOid: commit.commitOid,
-        paths: ["notes/log.md", "worker.ts"],
-      });
-      expect(await workspace.listAllFiles()).toEqual([
-        "/repos/config/notes/log.md",
-        "/repos/config/worker.ts",
-      ]);
-      expect(await workspace.gitStatus()).toEqual({
-        mounts: [{ path: "/repos/config", repo: "/repos/config", changes: [] }],
-        unmounted: [],
-      });
-      await workspace.deleteFile("/repos/config/worker.ts");
-      await workspace.gitCommit({ message: "drop the worker" });
-      expect(await repo.listFiles()).toMatchObject({ paths: ["notes/log.md"] });
-      expect(
-        (await workspace.gitLog({ scope: "/repos/config" })).map((c: FakeCommit) => c.message),
-      ).toEqual(["drop the worker", "notes", "write worker.ts"]);
-      expect((await itx.repos.list()).map((r: { path: string }) => r.path)).toEqual([
-        "/repos/config",
-      ]);
-      expect((await itx.workspaces.list()).map((w: { path: string }) => w.path)).toEqual([
-        "/workspaces/deployed",
-      ]);
-    } finally {
-      await itx.cfArtifacts.delete("/repos/config"); // teardown — the repo, by its path
-    }
-  },
-  120_000,
-);
+test("against real Artifacts: nested paths through the workspace — a repo file read at the tip, a nested write committed as one commit, a delete committed, the repo's log", async () => {
+  const itx = openItx(freshCtx("wsrepo"));
+  try {
+    await itx.repos.create("/repos/config");
+    const repo = itx.repos.get("/repos/config");
+    await repo.writeFile("worker.ts", "export default 1;\n");
+    await itx.workspaces.create("/workspaces/deployed");
+    const workspace = itx.workspaces.get("/workspaces/deployed");
+    expect(await workspace.readFile("/repos/config/worker.ts")).toBe("export default 1;\n");
+    await workspace.writeFile("/repos/config/notes/log.md", "# log\n");
+    await workspace.writeFile("/repos/config/worker.ts", "export default 2;\n");
+    const commit = await workspace.gitCommit({ message: "notes" });
+    expect(commit.changedPaths).toEqual(["/repos/config/notes/log.md", "/repos/config/worker.ts"]);
+    expect(await repo.readFile("notes/log.md")).toBe("# log\n");
+    expect(await repo.readFile("worker.ts")).toBe("export default 2;\n"); // the repo, at the new tip, agrees
+    expect(await repo.listFiles()).toEqual({
+      commitOid: commit.commitOid,
+      paths: ["notes/log.md", "worker.ts"],
+    });
+    expect(await workspace.listAllFiles()).toEqual([
+      "/repos/config/notes/log.md",
+      "/repos/config/worker.ts",
+    ]);
+    expect(await workspace.gitStatus()).toEqual({
+      mounts: [{ path: "/repos/config", repo: "/repos/config", changes: [] }],
+      unmounted: [],
+    });
+    await workspace.deleteFile("/repos/config/worker.ts");
+    await workspace.gitCommit({ message: "drop the worker" });
+    expect(await repo.listFiles()).toMatchObject({ paths: ["notes/log.md"] });
+    expect(
+      (await workspace.gitLog({ scope: "/repos/config" })).map((c: FakeCommit) => c.message),
+    ).toEqual(["drop the worker", "notes", "write worker.ts"]);
+    expect((await itx.repos.list()).map((r: { path: string }) => r.path)).toEqual([
+      "/repos/config",
+    ]);
+    expect((await itx.workspaces.list()).map((w: { path: string }) => w.path)).toEqual([
+      "/workspaces/deployed",
+    ]);
+  } finally {
+    await itx.cfArtifacts.delete("/repos/config"); // teardown — the repo, by its path
+  }
+}, 120_000);
+
+test("itx.workspaces.delete(path) lands the request and the death certificate on the workspace's path AND on /, drops the processor row and the overlay with it; the verbs refuse; a second delete answers at once; never created, nothing to delete; deleted, not re-creatable", async () => {
+  const itx = openItx(freshCtx("ws"));
+  const workspace = itx.workspaces.get("/workspaces/gone");
+
+  expect((await rejection(itx.workspaces.delete("/workspaces/gone"))).message).toMatch(
+    /workspace \/workspaces\/gone: not created — nothing to delete/,
+  );
+  expect(await itx.workspaces.create("/workspaces/gone")).toEqual({ path: "/workspaces/gone" });
+  expect(await processorNames(itx.cd("/workspaces/gone"))).toEqual(["workspace"]);
+  await workspace.writeFile("/workspace/scratch.md", "mine"); // the overlay holds a row
+  expect(await workspace.readFile("/workspace/scratch.md")).toBe("mine");
+
+  expect(await itx.workspaces.delete("/workspaces/gone")).toEqual({ path: "/workspaces/gone" });
+  const own = await readAll(itx.cd("/workspaces/gone"));
+  expect(workspaceTypes(own)).toEqual([
+    "workspace/create-requested",
+    "workspace/created",
+    "workspace/delete-requested",
+    "workspace/deleted",
+  ]);
+  expect(
+    own.filter((e) => e.type === "events.iterate.com/workspace/deleted").map((e) => e.payload),
+  ).toEqual([{ path: "/workspaces/gone" }]);
+  expect(workspaceTypes(await readAll(itx))).toEqual(["workspace/created", "workspace/deleted"]); // both certificates cross to /
+  expect(await processorNames(itx.cd("/workspaces/gone"))).toEqual([]); // the row went
+  // The verbs refuse — and the overlay went with the facet: a read tries the overlay BEFORE the
+  // guard, so "mine" would have answered had the row survived; it refuses as deleted instead.
+  expect((await rejection(workspace.mounts())).message).toMatch(
+    /workspace \/workspaces\/gone: deleted/,
+  );
+  expect((await rejection(workspace.readFile("/workspace/scratch.md"))).message).toMatch(/deleted/);
+  expect((await rejection(workspace.writeFile("/workspace/x.md", "x"))).message).toMatch(/deleted/);
+  expect(await itx.cd("/workspaces/gone").facets.get("workspace").snapshot()).toMatchObject({
+    state: {
+      creation: { status: "created" },
+      deletion: {
+        status: "deleted",
+        offset: own.find((e) => e.type === "events.iterate.com/workspace/deleted").offset,
+      },
+    },
+  });
+  // Dies once: a second delete answers at once and appends nothing; not re-creatable.
+  expect(await itx.workspaces.delete("/workspaces/gone")).toEqual({ path: "/workspaces/gone" });
+  expect(await readAll(itx.cd("/workspaces/gone"))).toHaveLength(own.length);
+  expect((await rejection(itx.workspaces.create("/workspaces/gone"))).message).toMatch(
+    /workspace \/workspaces\/gone: deleted — not re-creatable/,
+  );
+  expect(await readAll(itx.cd("/workspaces/gone"))).toHaveLength(own.length);
+});

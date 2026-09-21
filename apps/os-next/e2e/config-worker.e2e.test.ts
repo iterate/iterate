@@ -5,7 +5,7 @@
 import { expect, test } from "vitest";
 import { append, freshCtx, openItx, readAll, until } from "./support/client.ts";
 import { FakeArtifacts } from "./support/fake-artifacts.ts";
-import { deployedOnly, localOnly } from "./support/project-host.ts";
+import { localOnly } from "./support/project-host.ts";
 
 const PING = "events.iterate.com/config-ping";
 const PONG = "events.iterate.com/config-pong";
@@ -117,31 +117,28 @@ localOnly(
   },
 );
 
-deployedOnly(
-  "a real Artifacts repository supplies an explicit worker source expression",
-  async () => {
-    const root = openItx(freshCtx("config-artifacts"));
-    await root.repos.create("/repos/config");
-    const repo = root.repos.get("/repos/config");
-    const { commitOid } = await repo.writeFile("worker.ts", source("artifacts"));
-    await root.subscribe({
-      name: "config",
-      target: [
-        "itx",
-        "workers",
-        [
-          "get",
-          { source: "itx.repos.get('/repos/config').readFile('worker.ts')", cacheKey: commitOid },
-        ],
-        "processEventBatch",
+test("a real Artifacts repository supplies an explicit worker source expression", async () => {
+  const root = openItx(freshCtx("config-artifacts"));
+  await root.repos.create("/repos/config");
+  const repo = root.repos.get("/repos/config");
+  const { commitOid } = await repo.writeFile("worker.ts", source("artifacts"));
+  await root.subscribe({
+    name: "config",
+    target: [
+      "itx",
+      "workers",
+      [
+        "get",
+        { source: "itx.repos.get('/repos/config').readFile('worker.ts')", cacheKey: commitOid },
       ],
-      consumes: [PING],
-    });
-    const [ping] = await append(root, { type: PING });
-    await until("the repo-sourced worker answered", async () =>
-      (await readAll(root)).find(
-        (event) => event.type === PONG && event.payload?.pinged === ping.offset,
-      ),
-    );
-  },
-);
+      "processEventBatch",
+    ],
+    consumes: [PING],
+  });
+  const [ping] = await append(root, { type: PING });
+  await until("the repo-sourced worker answered", async () =>
+    (await readAll(root)).find(
+      (event) => event.type === PONG && event.payload?.pinged === ping.offset,
+    ),
+  );
+});

@@ -91,15 +91,24 @@ export type ScannedRange = { after: number; through: number };
 
 export type ReduceArgs<State, Event = StreamEvent> = { event: Event; state: State };
 
-export type ProcessEventArgs<State, Event = StreamEvent> = {
+export type ProcessEventArgs<
+  State,
+  Event = StreamEvent,
+  /** What `append`/`appendTo` take: `EmittedEventInput<typeof Contract>` for a processor that
+   *  declares one — each type the contract `emits`, its payload as the catalog spells it. */
+  Emitted extends StreamEventInput = StreamEventInput,
+> = {
   /** The consumed event — or `null` for the eventless at-head pass. */
   event: Event | null;
   state: State;
   previousState: State;
-  /** Emit (validated against `emits`, provenance-stamped) onto this processor's own stream. */
-  append: (...events: StreamEventInput[]) => Promise<StreamEvent[]>;
+  /** Emit (validated against `emits`, provenance-stamped) onto this processor's own stream. Declared
+   *  as METHODS (not arrow-typed properties) on purpose: a subclass that narrows `Emitted` must stay
+   *  assignable to `StreamProcessor<State>` (the host's field), and only method parameters are
+   *  compared bivariantly. */
+  append(...events: Emitted[]): Promise<StreamEvent[]>;
   /** The same, onto the context at `path` (apps/os's `appendTo`): a certificate cross-posted to `/`. */
-  appendTo: (path: string, ...events: StreamEventInput[]) => Promise<StreamEvent[]>;
+  appendTo(path: string, ...events: Emitted[]): Promise<StreamEvent[]>;
   /** Hold the cursor until `work` settles; FIFO with other blockers of the SAME event. */
   blockProcessorWhile: (work: () => Promise<unknown>) => void;
   /** Fire-and-forget attempt; may overtake later events; outcome must be state-recoverable. */
@@ -141,8 +150,13 @@ export abstract class StreamProcessor<State, Event extends StreamEvent = StreamE
     return undefined;
   }
 
-  /** Side-effect hook. Synchronous by design: register async work via the two helpers on args. */
-  processEvent(_args: ProcessEventArgs<State, Event>): undefined {}
+  /** Side-effect hook. Synchronous by design: register async work via the two helpers on args.
+   *  `append`/`appendTo` take what THIS class's `contract` emits (`EmittedEventInput<this["contract"]>`:
+   *  a subclass whose `contract` is a defined one gets each emitted type's payload as its catalog
+   *  spells it; the base, and a hand-built contract, take any input). */
+  processEvent(
+    _args: ProcessEventArgs<State, Event, EmittedEventInput<this["contract"]>>,
+  ): undefined {}
 
   /** The live-state PROJECTION — the shape clients see and the diffs are computed over. DEFAULT: the
    *  reduced state verbatim, so every processor is live out of the box; that is deliberate — the
@@ -1041,6 +1055,45 @@ export type ConsumedEvent<Contract> = Contract extends {
   ? EventForTypes<Events, DepsOf<Contract>, Consumes>
   : never;
 
+/** The input for ONE event type as a catalog spells it (`EventInput`'s row) — or, for a type no
+ *  catalog defines (a core control event a processor emits, `project/ingress-configured`), the plain
+ *  input: it widens the whole union, so a contract that emits one undefined type appends untyped
+ *  until that type is in a catalog it depends on. */
+type EventInputForType<
+  Events extends EventCatalog,
+  Deps extends readonly unknown[],
+  Type extends string,
+> = Type extends unknown
+  ? [DefinitionForType<Events, Deps, Type>] extends [never]
+    ? StreamEventInput
+    : DefinitionForType<Events, Deps, Type> extends {
+          payloadSchema: infer Schema extends z.ZodType;
+        }
+      ? {
+          type: Type;
+          payload: z.input<Schema>;
+          idempotencyKey?: string;
+          metadata?: Record<string, unknown>;
+        } & (DefinitionForType<Events, Deps, Type> extends { ephemeral: true }
+          ? { ephemeral: true }
+          : { ephemeral?: never })
+      : never
+  : never;
+
+/** What a processor's `append`/`appendTo` take: one input per type the contract `emits` — its own
+ *  events and its deps' as their catalogs spell them (`z.input`), a type no catalog defines as the
+ *  plain input under that name. A contract whose `emits` is not a literal tuple gets every input. */
+export type EmittedEventInput<Contract> = Contract extends {
+  events: infer Events extends EventCatalog;
+  emits: infer Emits extends readonly string[];
+}
+  ? string[] extends Emits
+    ? StreamEventInput
+    : Emits extends readonly []
+      ? StreamEventInput // emits nothing: no call to type, and `never` would break the host's variance
+      : EventInputForType<Events, DepsOf<Contract>, Emits[number]>
+  : StreamEventInput;
+
 /** What a caller APPENDS for one of a contract's OWNED events — the typed write on an entity
  *  (`itx.agents.get(path).append(…)`, library.ts): the type string, the payload as its schema takes
  *  it (`z.input`), a key and metadata; `ephemeral` only where the definition says so. Derived from
@@ -1065,12 +1118,15 @@ export type DefinedProcessorContract<
   Events extends EventCatalog,
   Consumes extends readonly string[],
   Deps extends readonly unknown[],
+  Emits extends readonly string[] = readonly string[],
 > = ProcessorContract<z.output<StateSchema>> & {
   stateSchema: StateSchema;
   events: Events;
-  // The literal consumes tuple is preserved (not widened to string[]) so `ConsumedEvent` can map each
-  // consumed type to its event; the base ProcessorContract only needs `readonly string[]`.
+  // The literal consumes and emits tuples are preserved (not widened to string[]) so `ConsumedEvent`
+  // and `EmittedEventInput` can map each type to its event; the base ProcessorContract only needs
+  // `readonly string[]`.
   consumes: Consumes;
+  emits: Emits;
   processorDeps: Deps;
 };
 
@@ -1079,6 +1135,7 @@ export function defineProcessorContract<
   const Events extends EventCatalog = Record<string, never>,
   const Consumes extends readonly string[] = readonly string[],
   const Deps extends readonly { events: EventCatalog }[] = readonly [],
+  const Emits extends readonly string[] = readonly string[],
 >(contract: {
   slug: string;
   version: string;
@@ -1091,8 +1148,8 @@ export function defineProcessorContract<
   /** Other processors' contracts whose events this one may `consumes`/`emits` without owning. */
   processorDeps?: Deps;
   consumes: Consumes;
-  emits: readonly string[];
-}): DefinedProcessorContract<StateSchema, Events, Consumes, Deps> {
+  emits: Emits;
+}): DefinedProcessorContract<StateSchema, Events, Consumes, Deps, Emits> {
   if (!contract.stateSchema.safeParse({}).success)
     throw new Error(`contract "${contract.slug}": stateSchema must parse {} (default every field)`);
   const events = (contract.events ?? {}) as Events;

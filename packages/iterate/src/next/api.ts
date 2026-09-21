@@ -163,21 +163,25 @@ export interface IterateContextApi {
   /** The project's repos, workspaces and agents as domain objects — one shape each: `get(path)` is
    *  the entity's facet on the context at `path` (its verbs, plus the typed `append` on that
    *  context), `list()` the project catalog, `create(path)` the creation saga on that path
-   *  (the processor row, the request, the terminal fact — created, or create-failed thrown). */
+   *  (the processor row, the request, the terminal fact — created, or create-failed thrown),
+   *  `delete(path)` the deletion saga (the request, `deleted` cross-posted to `/`, the row disabled). */
   repos: {
     get(path: string): InvokeHandle;
     list(): Promise<{ path: string; createdAt: string }[]>;
     create(path: string): Promise<{ path: string }>;
+    delete(path: string): Promise<{ path: string }>;
   };
   workspaces: {
     get(path: string): InvokeHandle;
     list(): Promise<{ path: string; createdAt: string }[]>;
     create(path: string): Promise<{ path: string }>;
+    delete(path: string): Promise<{ path: string }>;
   };
   agents: {
     get(path: string): InvokeHandle;
     list(): Promise<{ path: string; createdAt: string }[]>;
     create(path: string): Promise<{ path: string }>;
+    delete(path: string): Promise<{ path: string }>;
   };
   /** The MCP connections born under the project, by grant: each connection's context path
    *  (`/mcp/inbound/<grantId>`, its transcript) and when it was born (the grant's first run). */
