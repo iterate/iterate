@@ -365,7 +365,7 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
     const { ctx, width, height, face } = args;
     const deck = flashcardDeck;
     if (deck.seed === null) deck.seed = Date.now() % 1000;
-    if (deck.order === null) deck.order = seededOrder(FLASHCARDS.length, deck.seed);
+    if (!deck.order) deck.order = seededOrder(FLASHCARDS.length, deck.seed);
 
     // Settings-row actions: ↺ replays the same seed from card one; 🎲 rolls
     // a new seed. Taps on the scene just advance the card (backgroundIndex).
@@ -387,12 +387,11 @@ export const FILTER_DRAWERS: Record<string, (args: FilterFrameArgs) => void> = {
     const style = FLASHCARD_STYLES[args.modeIndex % FLASHCARD_STYLES.length];
     const backgroundOption = FLASHCARD_BACKGROUNDS[args.modeIndex2 % FLASHCARD_BACKGROUNDS.length];
 
-    ctx.fillStyle =
-      backgroundOption.color === null
-        ? card.background
-        : backgroundOption.color === "rainbow"
-          ? `hsl(${(cardStep * 47 + 200) % 360} 65% 45%)`
-          : backgroundOption.color;
+    ctx.fillStyle = !backgroundOption.color
+      ? card.background
+      : backgroundOption.color === "rainbow"
+        ? `hsl(${(cardStep * 47 + 200) % 360} 65% 45%)`
+        : backgroundOption.color;
     ctx.fillRect(0, 0, width, height);
     const chromeColor = backgroundOption.darkChrome
       ? "rgba(20,20,25,0.75)"
@@ -1422,7 +1421,7 @@ function drawFeatureCutout(
   sctx.restore();
 
   const { featureScale, faceScale } = args.adjust;
-  if (dest === null) {
+  if (!dest) {
     if (featureScale === 1 && faceScale === 1) {
       ctx.drawImage(scratch, 0, 0, sw, sh, sx, sy, sw, sh);
       args.featureHits.push({

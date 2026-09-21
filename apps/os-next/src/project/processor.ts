@@ -1,16 +1,21 @@
 // src/project/processor.ts — THE PROJECT PROCESSOR: the reduce of the project's own creation facts
 // and of the certificates cross-posted to `/` (the catalog: first certificate wins — a repo, a
 // workspace or an agent is born once, an MCP connection per grant; a secret's latest `set` is its
-// row — and a death certificate drops the entry), and THE SAGA — the project's
-// creation, run from state at head: the config repo (`itx.repos.create("/repos/config")`, the same
-// collection a caller uses), its seed committed when `main` is unborn (the homepage worker and an
-// AGENTS.md, below), the project's ingress pointed at that commit (`project/ingress-configured`, the
-// core's), then the certificate. Subscribed to `/` (the row `session.projects.create` enables), it
-// runs again after every eviction: an attempt lost with an incarnation is simply run again by the
-// next — the repo tolerates existing, the seed is skipped once `main` has a tip, the ingress append
-// is keyed by the commit, the certificate is keyed. The host's `withItx` is its one constructor
-// argument; a unit test constructs it with `new` and reduces rows (processor.test.ts, in node); the
-// saga is proven on the worker (e2e/session.e2e.test.ts: the catalog, the apex answering the seed).
+// row — and a death certificate drops the entry; the config repo's commits, whose latest is the tip
+// the apex follows), and TWO EFFECTS, each run from state at head. THE CREATION SAGA: the config repo
+// (`itx.repos.create("/repos/config")`, the same collection a caller uses), its seed committed when
+// `main` is unborn (the homepage worker and an AGENTS.md, below), the project's ingress pointed at
+// that commit (`project/ingress-configured`, the core's), then the certificate. THE APEX FOLLOWING
+// THE CONFIG REPO: every `repo/commit-completed` from `/repos/config` re-points the ingress at that
+// commit — a commit to the config repo IS its publication (apps/os's rule), what an agent used to be
+// told to do by hand from `/` and cannot: its scripts run in a sandbox that never reaches the root.
+// Subscribed to `/` (the row `session.projects.create` enables), it runs again after every eviction:
+// an attempt lost with an incarnation is simply run again by the next — the repo tolerates existing,
+// the seed is skipped once `main` has a tip, every ingress append is keyed by the commit it points
+// at, the certificate is keyed. The host's `withItx` is its one constructor argument; a unit test
+// constructs it with `new` and reduces rows (processor.test.ts, in node); the effects are proven on
+// the worker (e2e/session.e2e.test.ts: the catalog, the apex answering the seed;
+// e2e/website-publication.e2e.test.ts: a commit publishes).
 import {
   type ConsumedEvent,
   type EmittedEventInput,
@@ -36,6 +41,15 @@ export class ProjectProcessor extends StreamProcessor<
   /** This incarnation's creation attempt, so one at-head pass does not start a second; the durable
    *  ground is `state.creation`. */
   #creating = false;
+  /** The apex following the config repo: the newest tip any delivery has shown this incarnation,
+   *  and the offset it has published — the durable ground is the keyed ingress event itself, so a
+   *  fresh incarnation appending again for the same commit lands nothing. One attempt runs at a
+   *  time and DRAINS: a tip that arrives while an append is in flight is published by the same
+   *  attempt once that append settles, without waiting for another delivery (an idempotent hit
+   *  lands no fresh event to be delivered). */
+  #newestTip: { commitOid: string; offset: number } | null = null;
+  #published: number | null = null;
+  #publishing = false;
 
   override reduce({
     event,
@@ -107,6 +121,13 @@ export class ProjectProcessor extends StreamProcessor<
         const { [event.payload.path]: _gone, ...secrets } = state.secrets;
         return { ...state, secrets };
       }
+      case "events.iterate.com/repo/commit-completed":
+        // Only the config repo moves the apex; another repo's commit is a fact for its own log.
+        if (event.payload.path !== "/repos/config") return undefined;
+        return {
+          ...state,
+          configRepoTip: { commitOid: event.payload.commitOid, offset: event.offset },
+        };
       case "events.iterate.com/project/mcp-connection-created": {
         const { grantId, path } = event.payload;
         const known = state.mcpConnections[grantId];
@@ -135,13 +156,60 @@ export class ProjectProcessor extends StreamProcessor<
     ConsumedEvent<typeof ProjectContract>,
     EmittedEventInput<typeof ProjectContract>
   >): undefined {
+    if (!delivery.caughtUp) return;
+    // THE APEX FOLLOWS THE CONFIG REPO — state-derived, at head, in the background: the latest commit
+    // of `/repos/config` (its fact cross-posted here by the repo facet) is published by pointing the
+    // ingress at it, keyed by the commit, so this and the seed's own append in the saga below land
+    // ONE event, and an attempt lost with an incarnation is run again by the next for nothing. The
+    // target is the one the saga writes for the seed: the worker read from the repo at that exact
+    // commit, cached under it.
+    if (state.configRepoTip) this.#newestTip = state.configRepoTip;
+    if (this.#newestTip && this.#published !== this.#newestTip.offset && !this.#publishing) {
+      this.#publishing = true;
+      runInBackground(async () => {
+        try {
+          // Drain: the newest tip as of each pass — one that landed during the append is next.
+          for (
+            let tip = this.#newestTip;
+            tip && this.#published !== tip.offset;
+            tip = this.#newestTip
+          ) {
+            await append({
+              type: "events.iterate.com/project/ingress-configured",
+              idempotencyKey: `project/ingress-configured:${tip.commitOid}`,
+              payload: {
+                target: [
+                  "itx",
+                  "workers",
+                  [
+                    "get",
+                    {
+                      source: [
+                        "itx",
+                        "repos",
+                        ["get", "/repos/config"],
+                        ["readFile", "worker.ts", { commitOid: tip.commitOid }],
+                      ],
+                      cacheKey: tip.commitOid,
+                    },
+                  ],
+                ],
+              },
+            });
+            this.#published = tip.offset;
+          }
+        } finally {
+          this.#publishing = false;
+        }
+      });
+    }
     // THE SAGA — state-derived, at head, in the background: at most once per incarnation, and any
     // later delivery over the same state runs it again, so an attempt lost to an eviction costs
     // nothing (the engine revives the host while an attempt is in flight). Every step is idempotent
     // on its own: the config repo's create answers at once for a created repo, the seed is committed
     // only onto an unborn `main`, the ingress append is keyed by the commit it points at, the
     // certificate is keyed.
-    if (!delivery.caughtUp || state.creation?.status !== "requested" || this.#creating) return;
+    if (state.creation?.status !== "requested" || this.#creating) return;
     this.#creating = true;
     runInBackground(async () => {
       try {
@@ -158,15 +226,15 @@ export class ProjectProcessor extends StreamProcessor<
               // THE SEED: `worker.ts`, the project's homepage — plain JavaScript (the loader executes
               // what it reads; `.ts` is a name) a project edits in place — and an AGENTS.md saying what
               // the repo is. Committed once, onto an unborn `main`; the ingress is pointed at this
-              // commit below, so a later commit is published by appending
-              // `project/ingress-configured` for its oid (the website-publication e2e is the recipe).
+              // commit below, and at every later commit by the follower above (the
+              // website-publication e2e is the proof).
               changes: [
                 {
                   path: "worker.ts",
                   content: `import { WorkerEntrypoint } from "cloudflare:workers";
 
-// The project's homepage: what its apex answers. Edit and commit; then publish the commit by
-// appending events.iterate.com/project/ingress-configured on / with the new commitOid.
+// The project's homepage: what its apex answers. Edit and commit — a commit on this repo's main IS
+// its publication: the platform points the apex at the new commit within a moment.
 export default class extends WorkerEntrypoint {
   async fetch(request) {
     const { projectSlug } = await this.env.ITX.get().whoami();
@@ -183,8 +251,9 @@ export default class extends WorkerEntrypoint {
 
 This repository is the project's executable configuration. \`worker.ts\` is the project's homepage
 worker (its \`fetch\` answers the project's apex); the platform seeded both files when the project was
-created and never touches them again. Commit changes, then publish the commit by appending
-\`events.iterate.com/project/ingress-configured\` on the project's root context with the commit's oid.
+created and never touches them again. A commit on \`main\` IS its publication: the platform points the
+apex at the new commit within a moment (the project processor follows this repo's commits). Keep
+\`worker.ts\` valid JavaScript — a broken commit takes the site down until the next one.
 `,
                 },
               ],

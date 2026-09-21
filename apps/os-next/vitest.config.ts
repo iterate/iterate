@@ -8,10 +8,10 @@
 //   • e2e     — ONE real worker booted once by e2e/support/global-setup.ts (local workerd by default;
 //               the DEPLOYED worker with `WORKER_BASE_URL=https://os.iterate2.com`,
 //               the proof that counts), every file a capnweb client at /api exactly like a production
-//               client, ALL files in parallel AND all tests within a file concurrent — every test mints
-//               its own project, and what a test measures it measures on its own contexts; the run's
-//               floor is its slowest TEST. A file whose rows genuinely need an order says so itself
-//               (`describe.sequential`)
+//               client, ALL files in parallel AND all tests within a file concurrent (`--sequence.concurrent`
+//               on the `e2e` script: a ROOT-ONLY option, see below) — every test mints its own project,
+//               and what a test measures it measures on its own contexts; the run's floor is its slowest
+//               TEST. A file whose rows genuinely need an order says so itself (`describe.sequential`)
 //   • bench   — vitest's benchmark runner (tinybench) over the same client + worker (`pnpm bench`),
 //               files one at a time so scenarios never share the wire; `BENCH_OUT=<file.json>` writes
 //               the raw samples
@@ -46,20 +46,16 @@ const onUnhandledError = (error: unknown): boolean | void => {
 };
 
 /** THE LONG POLES FIRST. vitest orders files by their cached durations, and CI has no cache — so the
- *  80 s row that waits a real deadline started after ninety seconds of short files and the run ended
- *  at 170 s instead of its 90 s floor (measured 2026-09-21). These files start in slot one, longest
- *  first; everything else follows vitest's own order. A file that stops being long drops off this list. */
+ *  row that waits a real deadline started after ninety seconds of short files and the run ended at
+ *  170 s instead of its floor (measured 2026-09-21). These files start in slot one, longest first;
+ *  everything else follows vitest's own order. With rows concurrent the poles are (deployed, 2026-09-21):
+ *  the dormant deadline 44 s, session's 30 s grant re-check 34 s, the slow client's upload 31 s, then
+ *  nothing above 12 s. A file that stops being long drops off this list. */
 const LONG_POLES = [
-  "e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts",
-  "e2e/isolate-ceilings-slow-client.e2e.test.ts",
   "e2e/scheduled-appends-dormant.e2e.test.ts",
-  "e2e/isolate-ceilings-deployed.e2e.test.ts",
-  "e2e/agents-streamed.e2e.test.ts",
-  "e2e/stream.e2e.test.ts",
-  "e2e/scheduled-appends.e2e.test.ts",
-  "e2e/agents.e2e.test.ts",
-  "e2e/agents-deployed.e2e.test.ts",
   "e2e/session.e2e.test.ts",
+  "e2e/isolate-ceilings-slow-client.e2e.test.ts",
+  "e2e/isolate-ceilings-deployed.e2e.test.ts",
 ];
 class LongPolesFirst extends BaseSequencer {
   override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
@@ -124,14 +120,20 @@ export default defineConfig({
           // FILES IN PARALLEL: every test mints its own project (client.ts `freshCtx` carries the run's
           // id and the worker process's slot), so nothing two files touch is shared but the worker
           // itself — which is the thing under test. The cap is an I/O one: these are round trips to a
-          // remote worker, not CPU, so the runner's cpus-1 default is the wrong shape on a CI box.
-          maxWorkers: process.env.CI ? 8 : undefined,
+          // remote worker, not CPU (the 4-vCPU CI box idles at 1–8 % during the run), and 8 workers
+          // packed 33 files into a 100 s critical path above the longest pole; 16 reaches the pole
+          // (measured 2026-09-21: 8 → 114–120 s, 16 → the pole + a few seconds).
+          maxWorkers: process.env.CI ? 16 : undefined,
           fileParallelism: true,
           // TESTS IN ONE FILE CONCURRENT TOO: each one opens its own sessions (support/client.ts keeps
           // them per test, support/setup.ts disposes that test's alone) against its own project, so the
           // only thing two rows share is the worker under test. A file that reads worker-global state —
           // its own worker's logs, one seeded context it also resets — marks itself `describe.sequential`.
-          sequence: { concurrent: true },
+          // `sequence.concurrent` is ROOT-ONLY (vitest copies the root value into every project and
+          // ignores the project's — a project-level `sequence: { concurrent: true }` here did nothing,
+          // 2026-09-21), so the `e2e` script passes `--sequence.concurrent`. `maxConcurrency` IS per
+          // project: the default 5 would run a 21-row file in five waves.
+          maxConcurrency: 32,
           onUnhandledError,
         },
       },

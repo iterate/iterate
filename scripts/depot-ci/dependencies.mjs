@@ -54,13 +54,62 @@ for (const file of [...files].filter(
     );
   }
 }
+// A manifest's install inputs: what pnpm resolves, links or runs. Its other fields — `scripts` beyond
+// the lifecycle hooks, `exports`, `main`, `types`, `files`, `description` — change node_modules not at
+// all, and hashing them made every edit to a package's `test` script a 60 s reinstall in CI
+// (2026-09-21: two PRs' preview jobs missed the baked dependencies over an added `e2e:soak` script).
+const MANIFEST_INSTALL_FIELDS = [
+  "name",
+  "version",
+  "private",
+  "packageManager",
+  "bin",
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies",
+  "peerDependenciesMeta",
+  "dependenciesMeta",
+  "bundledDependencies",
+  "bundleDependencies",
+  "overrides",
+  "resolutions",
+  "pnpm",
+  "engines",
+  "os",
+  "cpu",
+  "workspaces",
+];
+const LIFECYCLE_HOOKS = [
+  "pnpm:devPreinstall",
+  "preinstall",
+  "install",
+  "postinstall",
+  "preprepare",
+  "prepare",
+  "postprepare",
+];
+function manifestInstallInputs(file) {
+  const manifest = JSON.parse(readFileSync(file, "utf8"));
+  const inputs = {};
+  for (const field of MANIFEST_INSTALL_FIELDS)
+    if (field in manifest) inputs[field] = manifest[field];
+  const scripts = manifest.scripts ?? {};
+  for (const hook of LIFECYCLE_HOOKS)
+    if (hook in scripts) inputs[`scripts.${hook}`] = scripts[hook];
+  return JSON.stringify(inputs);
+}
+
 const hash = createHash("sha256");
 // Include this implementation, including the validity policy, even outside this repo (tests).
 hash.update(readFileSync(new URL(import.meta.url)));
 for (const file of [...new Set(files)].sort()) {
-  hash.update(
-    JSON.stringify([file, existsSync(file) ? readFileSync(file).toString("base64") : null]),
-  );
+  const contents = !existsSync(file)
+    ? null
+    : /(^|\/)package\.json$/.test(file)
+      ? manifestInstallInputs(file)
+      : readFileSync(file).toString("base64");
+  hash.update(JSON.stringify([file, contents]));
 }
 for (const file of [
   join(homedir(), ".npmrc"),
@@ -95,15 +144,7 @@ const safeLifecycle =
     .filter((file) => /(^|\/)package\.json$/.test(file) && existsSync(file))
     .every((file) => {
       const { scripts = {} } = JSON.parse(readFileSync(file, "utf8"));
-      return [
-        "pnpm:devPreinstall",
-        "preinstall",
-        "install",
-        "postinstall",
-        "preprepare",
-        "prepare",
-        "postprepare",
-      ].every(
+      return LIFECYCLE_HOOKS.every(
         (hook) =>
           !scripts[hook] ||
           (file === "package.json" && hook === "prepare" && scripts[hook] === "is-ci || husky"),
