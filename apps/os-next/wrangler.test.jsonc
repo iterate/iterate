@@ -50,6 +50,7 @@
     // `ctx.exports` — declared like any DO class (the facet's own SQLite is where their state lives).
     "AccountDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "AgentDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    "OrganizationDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "ProjectDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "RepoDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "WorkspaceDurableObject": { "type": "durable-object", "storage": "sqlite" },
@@ -63,26 +64,26 @@
     { "binding": "ITX_KV", "id": "08df862920b04446b3503c22f9888b04" },
     { "binding": "OAUTH_KV", "id": "oauth-test" },
   ],
-  // Configuration (src/worker.ts `parseAppConfig`): the workers lane is its own deployment name; its
-  // project hosts hang under `projects.test` (SELF.fetch takes any hostname — no DNS); the two
-  // required secrets are test values (control-plane.test.ts and session-doors.test.ts sign in and
-  // authenticate with them).
+  // The directory schema (src/control-plane.sql) is a text module the worker applies at boot.
+  "rules": [{ "type": "Text", "globs": ["**/*.sql"], "fallthrough": true }],
+  // Configuration (src/app-config.ts): the `APP_CONFIG_<PATH>__<KEY>` spellings of the one object —
+  // this lane's issuer is `control.test`, its project hosts hang under `projects.test` (SELF.fetch
+  // takes any hostname — no DNS), and its secrets are test values (control-plane.test.ts and
+  // session-doors.test.ts sign in with the password and authenticate with the admin bearer).
   "vars": {
-    "APP_CONFIG_ENVIRONMENT_NAME": "test",
-    "APP_CONFIG_PLATFORM_ORIGIN": "https://control.test",
+    "APP_CONFIG_URLS__OS": "https://control.test",
     // the landing page's pointer (control-plane.test.ts)
-    "APP_CONFIG_DASH_ORIGIN": "https://dash.test",
-    "APP_CONFIG_GOOGLE_CLIENT_ID": "google-test-client",
-    "APP_CONFIG_GOOGLE_CLIENT_SECRET": "google-test-secret",
-    "APP_CONFIG_PROJECT_HOSTNAME_BASE": "projects.test",
+    "APP_CONFIG_URLS__DASH": "https://dash.test",
+    "APP_CONFIG_URLS__INGRESS_ROUTING": "{\"type\":\"subdomains\",\"hostname\":\"projects.test\"}",
     // one custom apex, for the consent test that binds a client on it to its project
-    "APP_CONFIG_PROJECT_CUSTOM_HOSTNAMES": "custom-apex.test=custom-apex-project",
-    "APP_CONFIG_SESSION_SECRET": "test-session-secret",
-    "APP_CONFIG_SECRETS_KEY": "test-secrets-key",
-    "APP_CONFIG_ADMIN_API_SECRET": "test-admin-api-secret",
-    // the test code (424242) signs in through the page's real posts; the mailed code is tested with
-    // a fake mailbox handed to login-code.ts directly
-    "APP_CONFIG_TEST_EMAIL_LOGIN": "true",
-    "APP_CONFIG_LOGIN_EMAIL_FROM": "iterate <login@control.test>",
+    "APP_CONFIG_URLS__TEMPORARY_CUSTOM_HOSTNAMES": "{\"custom-apex.test\":\"custom-apex-project\"}",
+    // the password signs in through the page's real posts; the mailed code is tested with a fake
+    // mailbox handed to login-code.ts directly
+    "APP_CONFIG_LOGIN__PASSWORD": "test-password",
+    "APP_CONFIG_LOGIN__EMAIL_CODE__FROM": "iterate <login@control.test>",
+    "APP_CONFIG_LOGIN__GOOGLE__CLIENT_ID": "google-test-client",
+    "APP_CONFIG_LOGIN__GOOGLE__CLIENT_SECRET": "google-test-secret",
+    "APP_CONFIG_SECRETS__KEY": "test-secrets-key",
+    "APP_CONFIG_SECRETS__ADMIN_BEARER": "test-admin-api-secret",
   },
 }

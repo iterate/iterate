@@ -9,6 +9,7 @@
 // that bytes flow through the worker, bounded by the request-body limit.
 import { z } from "zod";
 import { signClaims, verifyClaims } from "iterate/next/principal";
+import { projectUrlOf, type IngressRouting } from "iterate/next/project-ingress";
 
 /** What a signed file URL carries: the project it belongs to, the object key (owner prefix NOT
  *  included — ingress applies it), the one method it permits, and when it stops working. */
@@ -25,21 +26,27 @@ export const DEFAULT_FILE_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
 export const FILES_APP_LABEL = "files";
 
 /** Mint a signed URL for `key` in `project`'s slice of the bucket: the claim names the project by
- *  id, the URL hangs under `files--<host>.<base>` — `host` the project's slug, the label the edge
- *  admits a project host by. Refused without a project-host base (a deployment with no project
- *  ingress cannot serve one). */
+ *  id, the URL is the `files` app's in the project (project-ingress.ts `projectUrlOf` — `host` the
+ *  project's slug, the label the edge admits a project by). Refused on a deployment with no project
+ *  ingress (nothing could serve it). */
 export async function signedFileUrl(input: {
   secret: string;
+  routing: IngressRouting;
   platformOrigin: string;
-  projectHostnameBase: string;
   project: string;
   host: string;
   key: string;
   method: "GET" | "PUT";
   expiresInSeconds?: number;
 }): Promise<{ url: string; expiresAt: string }> {
-  if (!input.projectHostnameBase)
-    throw new Error("files: this deployment has no project-host ingress to serve a signed URL on");
+  const path = `/${input.key.split("/").map(encodeURIComponent).join("/")}`;
+  const url = projectUrlOf(input.routing, input.platformOrigin, {
+    project: input.host,
+    app: FILES_APP_LABEL,
+    path,
+  });
+  if (!url)
+    throw new Error("files: this deployment has no project ingress to serve a signed URL on");
   // The whole sum floored: the claim's `exp` is an integer, whatever TTL a caller spelled.
   const exp = Math.floor(
     Date.now() / 1000 + (input.expiresInSeconds ?? DEFAULT_FILE_URL_TTL_SECONDS),
@@ -48,12 +55,8 @@ export async function signedFileUrl(input: {
     { kind: "file-url", project: input.project, key: input.key, method: input.method, exp },
     input.secret,
   );
-  const { protocol } = new URL(input.platformOrigin);
-  const path = input.key.split("/").map(encodeURIComponent).join("/");
-  return {
-    url: `${protocol}//${FILES_APP_LABEL}--${input.host}.${input.projectHostnameBase}/${path}?token=${token}`,
-    expiresAt: new Date(exp * 1000).toISOString(),
-  };
+  url.searchParams.set("token", token);
+  return { url: url.href, expiresAt: new Date(exp * 1000).toISOString() };
 }
 
 /** Serve one request on the files host: the token names the key, the method and the deadline; the

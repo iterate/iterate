@@ -25,7 +25,7 @@ describe("ProjectProcessor — the catalog folded from cross-posted birth certif
       {
         name: "the empty catalog",
         events: [],
-        view: { repos: {}, workspaces: {}, agents: {}, mcpClients: {} },
+        view: { repos: {}, workspaces: {}, agents: {}, mcpConnections: {} },
       },
       {
         name: "a repo's, a workspace's and an agent's certificates each add one entry, by path, stamped with the event's time",
@@ -38,7 +38,7 @@ describe("ProjectProcessor — the catalog folded from cross-posted birth certif
           repos: { "/repos/config": { createdAt: expect.any(String) } },
           workspaces: { "/workspaces/notes": { createdAt: expect.any(String) } },
           agents: { "/agents/support": { createdAt: expect.any(String) } },
-          mcpClients: {},
+          mcpConnections: {},
         },
       },
       {
@@ -58,22 +58,22 @@ describe("ProjectProcessor — the catalog folded from cross-posted birth certif
           },
           workspaces: {},
           agents: { "/agents/support": { createdAt: expect.any(String) } },
-          mcpClients: {},
+          mcpConnections: {},
         },
       },
       {
-        name: "an MCP client connects once per grant — the connection's path and first time; a second connect is ignored",
+        name: "an MCP connection is born once per grant — its context path and birth time; a second certificate is ignored",
         events: [
           {
-            type: "events.iterate.com/project/mcp-client-connected",
+            type: "events.iterate.com/project/mcp-connection-created",
             payload: { grantId: "grant_a", path: "/mcp/inbound/grant_a" },
           },
           {
-            type: "events.iterate.com/project/mcp-client-connected",
+            type: "events.iterate.com/project/mcp-connection-created",
             payload: { grantId: "grant_a", path: "/mcp/inbound/grant_a" },
           },
           {
-            type: "events.iterate.com/project/mcp-client-connected",
+            type: "events.iterate.com/project/mcp-connection-created",
             payload: { grantId: "admin", path: "/mcp/inbound/admin" },
           },
         ],
@@ -81,7 +81,7 @@ describe("ProjectProcessor — the catalog folded from cross-posted birth certif
           repos: {},
           workspaces: {},
           agents: {},
-          mcpClients: {
+          mcpConnections: {
             grant_a: { path: "/mcp/inbound/grant_a", createdAt: expect.any(String) },
             admin: { path: "/mcp/inbound/admin", createdAt: expect.any(String) },
           },
@@ -98,7 +98,7 @@ describe("ProjectProcessor — the catalog folded from cross-posted birth certif
           repos: {},
           workspaces: { "/w": { createdAt: expect.any(String) } },
           agents: {},
-          mcpClients: {},
+          mcpConnections: {},
         },
       },
     ];

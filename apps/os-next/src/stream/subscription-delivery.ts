@@ -533,8 +533,8 @@ export class SubscriptionDelivery {
           .finally(() => this.#deliveryCharsInFlight.release(chars));
         return;
       }
-      // A FACET owns its checkpoint: push, AWAITED, so this facet's batches stay in order and the
-      // quiesce never aborts it mid-reduce. The DO's facet watchdog (#invokeFacet, 60 s) bounds a
+      // A FACET owns its checkpoint: push, AWAITED, so this facet's batches stay in order and no
+      // release aborts it mid-reduce (`releasePins` waits for the in-flight count). The DO's facet watchdog (#invokeFacet, 60 s) bounds a
       // hung facet; its own gap repair covers a dropped push.
       try {
         const chars = serializedChars(events);
@@ -740,11 +740,16 @@ export class SubscriptionDelivery {
           };
           this.#adoptCursor(name, cursor, true);
         }
-        // The batch: the pushed one when contiguous (ephemerals ride it); else a page of the log, read
-        // only UP TO the pushed batch's start, so that once the durables before it are delivered the
-        // cursor IS contiguous with it and takes it. A pushed batch the cursor has already passed is
-        // stale and forgotten. Cursor-read room (CURSOR_READ_BUDGET_CHARS) is held from BEFORE the
-        // read — the READ is what allocates — THROUGH the awaited call, released once in the finally.
+        // The batch: the pushed one when contiguous (ephemerals ride it) — or whenever the cursor
+        // stands AT the durable mark, whatever the pushed batch's start: the log holds nothing past
+        // the mark, so the span between them was ephemeral and is gone. (An ephemeral push that FAILED
+        // leaves the cursor where it was while the row's watermark moves on; taken by contiguity
+        // alone, the row would be deaf to every ephemeral until a durable landed.) Else a page of the
+        // log, read only UP TO the pushed batch's start, so that once the durables before it are
+        // delivered the cursor IS contiguous with it and takes it. A pushed batch the cursor has
+        // already passed is stale and forgotten. Cursor-read room (CURSOR_READ_BUDGET_CHARS) is held
+        // from BEFORE the read — the READ is what allocates — THROUGH the awaited call, released once
+        // in the finally.
         let inFlightRoomHeld = 0;
         try {
           const record = this.#deliveryRecordFor(name); // the cursor above put it there
@@ -754,7 +759,11 @@ export class SubscriptionDelivery {
             pushedEventBatch = undefined;
           }
           let eventBatch: { events: StreamEvent[]; through: number };
-          if (pushedEventBatch && pushedEventBatch.after === cursor.confirmedOffset) {
+          if (
+            pushedEventBatch &&
+            (pushedEventBatch.after === cursor.confirmedOffset ||
+              cursor.confirmedOffset >= this.#stream.highestDurableOffset())
+          ) {
             record.pushedEventBatch = undefined;
             eventBatch = { events: pushedEventBatch.events, through: pushedEventBatch.through };
           } else {

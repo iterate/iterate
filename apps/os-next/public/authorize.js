@@ -173,8 +173,15 @@ function projectFields(view, { follow }) {
   const host = el("span", { class: "muted consent-host" });
   const showSlug = () => {
     slug.value = draft.slug;
-    host.hidden = !view.projectHostnameBase;
-    host.textContent = `Your project will be hosted at ${draft.slug || "my-project"}.${view.projectHostnameBase}`;
+    // the project's address under this deployment's ingress routing (project-ingress.ts): a
+    // subdomain of the wildcard, or a path on this very origin; none ⇒ the line stays hidden
+    const routing = view.ingressRouting;
+    host.hidden = !routing;
+    host.textContent = !routing
+      ? ""
+      : routing.type === "subdomains"
+        ? `Your project will be hosted at ${draft.slug || "my-project"}.${routing.hostname}`
+        : `Your project will be hosted at ${location.origin}/projects/${draft.slug || "my-project"}/`;
   };
   slug.addEventListener("input", () => {
     draft.slug = slugOf(slug.value);
@@ -478,7 +485,7 @@ function render() {
     ].filter(Boolean),
   );
 
-  // The hero (iterate ⇄ the client: its picture — /client-icon — or its initials) and who is
+  // The hero (iterate ⇄ the client, by its initials) and who is
   // signed in are built once; every later render swaps the form alone, so the entrance in
   // issuer.css plays once and the pictures stay put.
   const shown = card.querySelector("#consent-form");
@@ -493,13 +500,10 @@ function render() {
         { class: "consent-hero", "aria-hidden": "true" },
         el("span", { class: "consent-tile" }, el("img", { src: "/iterate-logo.svg", alt: "" })),
         el("span", { class: "consent-arrow", text: "⇄" }),
-        pictured(
-          el(
-            "span",
-            { class: "consent-tile" },
-            el("span", { text: clientName.slice(0, 2).toUpperCase() }),
-          ),
-          `/client-icon?client_id=${encodeURIComponent(view.clientId)}`,
+        el(
+          "span",
+          { class: "consent-tile" },
+          el("span", { text: clientName.slice(0, 2).toUpperCase() }),
         ),
       ),
       el("h1", { text: `Authorize ${clientName}` }),

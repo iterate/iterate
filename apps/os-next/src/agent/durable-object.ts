@@ -14,7 +14,12 @@ import { z } from "zod";
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
 import type { StreamEvent } from "iterate/next/stream/processor";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
-import { type AppConfigEnv, appConfigOf } from "../app-config.ts";
+import type { AppConfigEnv } from "../app-config.ts";
+
+/** THE AI GATEWAY the agent's model calls go through — `default`, the gateway Cloudflare creates on
+ *  an account's first authenticated request; unified billing pays the provider, no key anywhere. A
+ *  property of the code, not of a deployment. */
+const AI_GATEWAY_ID = "default";
 import {
   type AgentView,
   type ChatMessage,
@@ -201,7 +206,6 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
       // can reach, and a partner model takes the PROVIDER's request body (here the Responses API's),
       // which no catalog input type names. Nothing is trusted from either: the answer is a Response
       // checked for status and parsed event by event below.
-      const config = appConfigOf(this.env);
       const { projectId, path } = await this.#identity();
       const raw: unknown = await raceAbort(
         signal,
@@ -216,10 +220,9 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
           {
             returnRawResponse: true,
             gateway: {
-              id: config.aiGatewayId,
+              id: AI_GATEWAY_ID,
               skipCache: true,
               metadata: {
-                environment: config.environmentName,
                 projectId,
                 streamPath: path,
                 context: "agent-turn",

@@ -169,7 +169,7 @@ schedules leave the projection; history remains in the log.
 - `__workers-tests__/scheduled-appends.test.ts`: eviction, duplicate alarms, paused recovery,
   atomic refusal, bounded batches, coalesced intervals, parked interval failures, post-commit effect
   failures (the abandoned pass leaves its alarm stored), and preservation of existing physical
-  alarms during cold startup. `__workers-tests__/alarm-quiesce.test.ts`: a bare probe leaves no
+  alarms during cold startup. `__workers-tests__/alarm-and-pins.test.ts`: a bare probe leaves no
   alarm; an observed pass yields one ephemeral trace and a ring holding the whole pass.
 - `src/stream/scheduled-appends.test.ts`: replay, deadline reconstruction, the pass holding its
   alarm, relative timestamp anchoring, interval replacement, recurrence identity, validation and

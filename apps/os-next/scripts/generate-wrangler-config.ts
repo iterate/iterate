@@ -1,25 +1,44 @@
 import { readFileSync } from "node:fs";
 import JSON5 from "json5";
-import { osNextEnvs } from "../../../envs.ts";
+import { osNextEnvs, type OsNextEnv } from "../../../envs.ts";
 import {
   OBSERVABILITY,
   writeGeneratedWranglerConfig,
 } from "../../../scripts/lib/wrangler-config.ts";
 
-/** Runtime bindings stay with the app; deployed names and IDs come from envs.ts. */
+/** The `urls` half of `APP_CONFIG` (src/app-config.ts) a deployment gets from envs.ts, as the
+ *  override vars the parser merges on top of the Doppler blob: `APP_CONFIG_URLS__<KEY>`. An object
+ *  travels as a JSON STRING — the parser reads string vars only. A blank var is unset. */
+function urlVars(env: OsNextEnv): Record<string, string> {
+  const vars: Record<string, string> = { APP_CONFIG_URLS__OS: env.baseUrl };
+  if (new URL(env.mcpBaseUrl).origin !== new URL(env.baseUrl).origin)
+    vars.APP_CONFIG_URLS__MCP = new URL(env.mcpBaseUrl).origin;
+  if (env.dashBaseUrl) vars.APP_CONFIG_URLS__DASH = env.dashBaseUrl;
+  if (env.ingressRouting)
+    vars.APP_CONFIG_URLS__INGRESS_ROUTING = JSON.stringify(env.ingressRouting);
+  if (env.temporaryCustomHostnames)
+    vars.APP_CONFIG_URLS__TEMPORARY_CUSTOM_HOSTNAMES = JSON.stringify(env.temporaryCustomHostnames);
+  return vars;
+}
+
+function template() {
+  return JSON5.parse(readFileSync(new URL("../wrangler.base.jsonc", import.meta.url), "utf8"));
+}
+
+/** Runtime bindings stay with the app; deployed names and IDs come from envs.ts. The top-level
+ *  block is local dev (projects under `<project>.localhost`, the secrets as plain dev vars —
+ *  scripts/dev.ts), one `env` block per deployment. */
 export function writeWranglerConfig() {
-  const template = JSON5.parse(
-    readFileSync(new URL("../wrangler.base.jsonc", import.meta.url), "utf8"),
-  );
+  const base = template();
   const config = {
-    ...template,
+    ...base,
     routes: [],
     vars: {
-      ...template.vars,
-      APP_CONFIG_PLATFORM_ORIGIN: "http://localhost:8788",
-      APP_CONFIG_MCP_ORIGIN: "",
-      APP_CONFIG_DASH_ORIGIN: "",
-      APP_CONFIG_PROJECT_HOSTNAME_BASE: "localhost",
+      APP_CONFIG_URLS__OS: "http://localhost:8788",
+      APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify({
+        type: "subdomains",
+        hostname: "localhost",
+      }),
     },
     env: Object.fromEntries(
       Object.entries(osNextEnvs).map(([name, env]) => [
@@ -33,23 +52,29 @@ export function writeWranglerConfig() {
           routes: [
             { pattern: `${new URL(env.baseUrl).hostname}/*`, zone_name: "iterate2.com" },
             { pattern: `${new URL(env.mcpBaseUrl).hostname}/*`, zone_name: "iterate2.com" },
-            ...(env.projectHostnameBase
-              ? [{ pattern: `*.${env.projectHostnameBase}/*`, zone_name: env.projectHostnameBase }]
+            ...(env.ingressRouting?.type === "subdomains"
+              ? [
+                  {
+                    pattern: `*.${env.ingressRouting.hostname}/*`,
+                    zone_name: env.ingressRouting.hostname,
+                  },
+                ]
               : []),
             // A custom hostname is a project's apex: its zone is the hostname's registrable domain.
-            ...Object.keys(env.projectCustomHostnames || {}).map((hostname) => ({
+            ...Object.keys(env.temporaryCustomHostnames || {}).map((hostname) => ({
               pattern: `${hostname}/*`,
               zone_name: hostname.split(".").slice(-2).join("."),
             })),
           ].filter((route) => !route.pattern.includes(".workers.dev/")),
-          assets: template.assets,
-          durable_objects: template.durable_objects,
-          exports: template.exports,
-          worker_loaders: template.worker_loaders,
-          ai: template.ai,
-          browser: template.browser,
-          send_email: template.send_email,
-          version_metadata: template.version_metadata,
+          rules: base.rules,
+          assets: base.assets,
+          durable_objects: base.durable_objects,
+          exports: base.exports,
+          worker_loaders: base.worker_loaders,
+          ai: base.ai,
+          browser: base.browser,
+          send_email: base.send_email,
+          version_metadata: base.version_metadata,
           artifacts: [{ binding: "ARTIFACTS", namespace: env.artifactsNamespace }],
           r2_buckets: [{ binding: "FILES", bucket_name: `${env.resourceNamePrefix}-files` }],
           d1_databases: [
@@ -63,21 +88,7 @@ export function writeWranglerConfig() {
             { binding: "OAUTH_KV", id: env.resources.oauthKvId },
             { binding: "ITX_KV", id: env.resources.itxKvId },
           ],
-          vars: {
-            APP_CONFIG_ENVIRONMENT_NAME: name,
-            APP_CONFIG_PLATFORM_ORIGIN: env.baseUrl,
-            APP_CONFIG_TEST_EMAIL_LOGIN: String(env.testEmailLogin ?? false),
-            APP_CONFIG_LOGIN_EMAIL_FROM: env.loginEmailFrom || "",
-            APP_CONFIG_MCP_ORIGIN:
-              new URL(env.mcpBaseUrl).origin === new URL(env.baseUrl).origin ? "" : env.mcpBaseUrl,
-            APP_CONFIG_DASH_ORIGIN: env.dashBaseUrl || "",
-            APP_CONFIG_PROJECT_HOSTNAME_BASE: env.projectHostnameBase,
-            APP_CONFIG_PROJECT_CUSTOM_HOSTNAMES: Object.entries(env.projectCustomHostnames || {})
-              .map(([hostname, project]) => `${hostname}=${project}`)
-              .join(","),
-            APP_CONFIG_ARTIFACTS_ACCOUNT_ID: env.cloudflareAccountId,
-            APP_CONFIG_ARTIFACTS_NAMESPACE: env.artifactsNamespace,
-          },
+          vars: urlVars(env),
         },
       ]),
     ),
@@ -88,6 +99,49 @@ export function writeWranglerConfig() {
     config,
   });
 }
+
+/** THE SELF-HOST CONFIG (SELF-HOSTING.md): the same worker, the same bindings, for a deployment into
+ *  an account that is not ours — no account id, no routes, no resource ids (wrangler provisions the
+ *  D1, KV and R2 by name on the first deploy), projects as paths on the one workers.dev origin, the
+ *  dash ours. `urls.os` stays unset: the worker takes each request's own origin. Every secret is in
+ *  the `APP_CONFIG` blob (login.password) and `APP_CONFIG_SECRETS__KEY`, put at deploy time. */
+export function writeSelfHostWranglerConfig() {
+  const base = template();
+  const {
+    account_id: _accountId,
+    routes: _routes,
+    d1_databases,
+    kv_namespaces,
+    r2_buckets,
+    ...rest
+  } = base;
+  const config = {
+    ...rest,
+    name: "iterate",
+    workers_dev: true,
+    artifacts: [{ binding: "ARTIFACTS", namespace: "iterate-repos" }],
+    r2_buckets: r2_buckets.map(({ binding }: { binding: string }) => ({
+      binding,
+      bucket_name: "iterate-files",
+    })),
+    d1_databases: d1_databases.map(({ binding }: { binding: string }) => ({
+      binding,
+      database_name: "iterate-directory",
+    })),
+    kv_namespaces: kv_namespaces.map(({ binding }: { binding: string }) => ({ binding })),
+    vars: {
+      APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify({ type: "paths" }),
+      APP_CONFIG_URLS__DASH: "https://dash.iterate2.com",
+    },
+  };
+  return writeGeneratedWranglerConfig({
+    configUrl: new URL("../wrangler.self-host.jsonc", import.meta.url),
+    appLabel: "apps/os-next (self-host)",
+    extraDocs: "apps/os-next/SELF-HOSTING.md",
+    config,
+  });
+}
+
 /** The gitignored config `wrangler preview` reads (scripts/preview.ts). */
 export const PREVIEW_CONFIG_NAME = "wrangler.preview.jsonc";
 
@@ -123,54 +177,51 @@ const bindingOnly = (resources: { binding: string }[] | undefined) =>
  *  assets) and declares the Durable Object classes as a legacy `migrations` entry: the pkg.pr.new
  *  wrangler build that provisions per-preview KV and R2 predates `exports`, and a preview
  *  deployment provisions its own namespaces from that entry. The `previews` block is the ONE
- *  preview's bindings — a preview inherits nothing from the top level, so every binding and var the
- *  worker reads is here: KV and R2 binding-only (auto-provisioned), the D1 scripts/preview.ts
- *  created, the Artifacts namespace by name, and vars: the two the parser requires (src/app-config.ts),
- *  the test sign-in code, and the Artifacts remote; everything else defaults blank — no MCP origin,
- *  no project hosts, no email. */
+ *  preview's bindings — a preview inherits nothing from the top level, so every binding the worker
+ *  reads is here: KV and R2 binding-only (auto-provisioned), the D1 scripts/preview.ts created, the
+ *  Artifacts namespace by name. Its `urls` are two vars: the preview's own origin and projects as
+ *  paths on it; the secrets (`APP_CONFIG`, `APP_CONFIG_SECRETS__KEY`) are the parent's Previews
+ *  settings, inherited. */
 export function previewWranglerConfig(input: {
   template: Record<string, any>;
   previewName: string;
   d1DatabaseId: string;
 }) {
-  const { template, previewName } = input;
-  const artifactsNamespace = previewResourceName(previewName, "repos");
+  const { template: base, previewName } = input;
   return {
     name: PREVIEW_PARENT.workerName,
     account_id: PREVIEW_PARENT.cloudflareAccountId,
-    main: template.main,
-    compatibility_date: template.compatibility_date,
-    compatibility_flags: template.compatibility_flags,
+    main: base.main,
+    compatibility_date: base.compatibility_date,
+    compatibility_flags: base.compatibility_flags,
     workers_dev: true,
     preview_urls: true,
-    assets: template.assets,
-    migrations: [{ tag: "v1", new_sqlite_classes: Object.keys(template.exports) }],
+    rules: base.rules,
+    assets: base.assets,
+    migrations: [{ tag: "v1", new_sqlite_classes: Object.keys(base.exports) }],
     previews: {
       observability: OBSERVABILITY,
-      limits: template.limits,
-      durable_objects: template.durable_objects,
-      worker_loaders: template.worker_loaders,
-      ai: template.ai,
-      browser: template.browser,
-      send_email: template.send_email,
-      version_metadata: template.version_metadata,
-      kv_namespaces: bindingOnly(template.kv_namespaces),
-      r2_buckets: bindingOnly(template.r2_buckets),
-      d1_databases: template.d1_databases.map(({ binding }: { binding: string }) => ({
+      limits: base.limits,
+      durable_objects: base.durable_objects,
+      worker_loaders: base.worker_loaders,
+      ai: base.ai,
+      browser: base.browser,
+      send_email: base.send_email,
+      version_metadata: base.version_metadata,
+      kv_namespaces: bindingOnly(base.kv_namespaces),
+      r2_buckets: bindingOnly(base.r2_buckets),
+      d1_databases: base.d1_databases.map(({ binding }: { binding: string }) => ({
         binding,
         database_name: previewResourceName(previewName, "db"),
         database_id: input.d1DatabaseId,
       })),
-      artifacts: template.artifacts.map(({ binding }: { binding: string }) => ({
+      artifacts: base.artifacts.map(({ binding }: { binding: string }) => ({
         binding,
-        namespace: artifactsNamespace,
+        namespace: previewResourceName(previewName, "repos"),
       })),
       vars: {
-        APP_CONFIG_ENVIRONMENT_NAME: previewName,
-        APP_CONFIG_PLATFORM_ORIGIN: previewUrl(previewName),
-        APP_CONFIG_TEST_EMAIL_LOGIN: "true",
-        APP_CONFIG_ARTIFACTS_ACCOUNT_ID: PREVIEW_PARENT.cloudflareAccountId,
-        APP_CONFIG_ARTIFACTS_NAMESPACE: artifactsNamespace,
+        APP_CONFIG_URLS__OS: previewUrl(previewName),
+        APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify(PREVIEW_PARENT.ingressRouting),
       },
     },
   };
@@ -178,14 +229,14 @@ export function previewWranglerConfig(input: {
 
 /** Write wrangler.preview.jsonc for one preview and return its path. */
 export function writePreviewWranglerConfig(input: { previewName: string; d1DatabaseId: string }) {
-  const template = JSON5.parse(
-    readFileSync(new URL("../wrangler.base.jsonc", import.meta.url), "utf8"),
-  );
   return writeGeneratedWranglerConfig({
     configUrl: new URL(`../${PREVIEW_CONFIG_NAME}`, import.meta.url),
     appLabel: "apps/os-next (one per-PR Worker Preview; scripts/preview.ts)",
-    config: previewWranglerConfig({ template, ...input }),
+    config: previewWranglerConfig({ template: template(), ...input }),
   });
 }
 
-if (process.argv[1]?.endsWith("generate-wrangler-config.ts")) console.log(writeWranglerConfig());
+if (process.argv[1]?.endsWith("generate-wrangler-config.ts")) {
+  console.log(writeWranglerConfig());
+  console.log(writeSelfHostWranglerConfig());
+}

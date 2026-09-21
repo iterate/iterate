@@ -167,7 +167,7 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
     () => {}, // waitUntil
   );
 
-  // A long-lived, active device: five page/quiesce cycles, each lending a fresh stub.
+  // A long-lived, active device: five page/release cycles, each lending a fresh stub.
   const PAGES = 5;
   for (let i = 0; i < PAGES; i++) pager.page();
 
@@ -334,7 +334,9 @@ test("a DO fetch that REJECTS releases the session's dup before the error propag
   const provider = { dup: () => lent };
   const context = {
     fetch: async () => {
-      throw new Error("APP_CONFIG_ENVIRONMENT_NAME: required, got nothing");
+      throw new Error(
+        "APP_CONFIG secrets.key (APP_CONFIG_SECRETS__KEY): required, but unset or blank",
+      );
     },
   };
   await expect(
@@ -345,6 +347,6 @@ test("a DO fetch that REJECTS releases the session's dup before the error propag
       [],
       () => {},
     ),
-  ).rejects.toThrow(/APP_CONFIG_ENVIRONMENT_NAME/);
+  ).rejects.toThrow(/APP_CONFIG_SECRETS__KEY/);
   expect(disposed).toBe(1);
 });

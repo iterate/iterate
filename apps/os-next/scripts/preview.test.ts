@@ -1,9 +1,5 @@
 import { describe, expect, test } from "vitest";
-import {
-  previewResourceName,
-  previewUrl,
-  previewWranglerConfig,
-} from "./generate-wrangler-config.ts";
+import { previewResourceName, previewWranglerConfig } from "./generate-wrangler-config.ts";
 import {
   APPS,
   changedApps,
@@ -129,7 +125,7 @@ describe("the preview's wrangler config (a pure transform of wrangler.base.jsonc
       { binding: "ITX_KV", id: "1" },
       { binding: "OAUTH_KV", id: "2" },
     ],
-    vars: { APP_CONFIG_ENVIRONMENT_NAME: "poc", APP_CONFIG_PLATFORM_ORIGIN: "https://os.example" },
+    rules: [{ type: "ESModule", globs: ["**/*.js"] }],
   };
   const config = previewWranglerConfig({
     template,
@@ -144,6 +140,7 @@ describe("the preview's wrangler config (a pure transform of wrangler.base.jsonc
     ]);
     expect(config).not.toHaveProperty("exports");
     expect(config).not.toHaveProperty("vars");
+    expect(config.rules).toEqual([{ type: "ESModule", globs: ["**/*.js"] }]);
     expect(config).not.toHaveProperty("kv_namespaces");
   });
 
@@ -162,18 +159,12 @@ describe("the preview's wrangler config (a pure transform of wrangler.base.jsonc
     ]);
   });
 
-  test("vars are the five the preview needs, and the origin is the preview's own URL", () => {
-    expect(Object.keys(config.previews.vars).sort()).toEqual([
-      "APP_CONFIG_ARTIFACTS_ACCOUNT_ID",
-      "APP_CONFIG_ARTIFACTS_NAMESPACE",
-      "APP_CONFIG_ENVIRONMENT_NAME",
-      "APP_CONFIG_PLATFORM_ORIGIN",
-      "APP_CONFIG_TEST_EMAIL_LOGIN",
-    ]);
-    expect(config.previews.vars.APP_CONFIG_PLATFORM_ORIGIN).toBe(previewUrl("pr123-feature-foo"));
-    expect(previewUrl("pr123-feature-foo")).toBe(
-      "https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev",
-    );
+  test("vars are the preview's own origin and projects as paths; the secrets are the parent's Previews settings", () => {
+    expect(config.previews.vars).toEqual({
+      APP_CONFIG_URLS__OS:
+        "https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev",
+      APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify({ type: "paths" }),
+    });
     expect(previewResourceName("pr123-feature-foo", "db")).toBe(
       "os-next-preview-pr123-feature-foo-db",
     );

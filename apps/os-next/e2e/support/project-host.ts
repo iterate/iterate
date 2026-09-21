@@ -6,6 +6,7 @@
 // wildcard DNS is real and the default dispatcher does. One test runs both ways.
 import { Agent, buildConnector, fetch as undiciFetch, WebSocket as UndiciWebSocket } from "undici";
 import { test } from "vitest";
+import type { IngressRouting } from "../../src/app-config.ts";
 import { adminCredentials, runId, session, workerSlot, workerUrl } from "./client.ts";
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);
@@ -23,33 +24,45 @@ export const deployedOnly = test.skipIf(projectHostsAreLocal());
  *  the fake proxy is called back over the WebSocket — and the real binding's rows run `deployedOnly`. */
 export const localOnly = test.skipIf(!projectHostsAreLocal());
 
-/** Does the worker under test HAVE project-host ingress at all? The local worker always does (its
- *  hosts hang under `localhost`); a deployed one only where `APP_CONFIG_PROJECT_HOSTNAME_BASE` names
- *  a base. A `*.workers.dev` preview deploy leaves it blank — workers.dev has no wildcard
- *  subdomains, and the `previews` config block has no routes — so `<app>--<project>.<base>` exists
- *  nowhere to dial there, by design. */
-export const projectHostsAvailable = (): boolean =>
-  projectHostsAreLocal() || Boolean(process.env.PROJECT_HOSTNAME_BASE);
+/** Does the worker under test route projects by SUBDOMAIN — the one shape every row below spells a
+ *  host in? The local worker does (`localhost`); a deployed one only where its `ingressRouting` says
+ *  so. A per-PR preview routes by paths on its workers.dev origin (no wildcard subdomains there), so
+ *  a row that dials `<app>--<project>.<hostname>` has nowhere to dial: it skips. */
+export const subdomainRoutingAvailable = (): boolean =>
+  projectHostsAreLocal() || ingressRouting()?.type === "subdomains";
 
-/** `test`, for a row that DIALS a project host: it runs against the local worker and against a
- *  deployment that has the ingress, and skips against one that does not (the helper's NAME is the
- *  reason). Every row reaching `projectHostnameBase()` goes through this or `deployedOnProjectHost`;
- *  `projectHostnameBase()` still throws for a caller that reached it through neither. */
-export const onProjectHost = test.skipIf(!projectHostsAvailable());
+/** `test`, for a row that DIALS a project host: runs where the worker routes by subdomain, skips
+ *  elsewhere (the helper's NAME is the reason). Every row reaching `ingressHostname()` goes through
+ *  this or `deployedOnProjectHost`; `ingressHostname()` still throws for one that reached it through
+ *  neither. */
+export const onProjectHost = test.skipIf(!subdomainRoutingAvailable());
 
-/** `deployedOnly` AND `onProjectHost`: a row only a real deployment can prove, on a host only a
- *  deployment that has the ingress owns. */
+/** `deployedOnly` AND `onProjectHost`. */
 export const deployedOnProjectHost = test.skipIf(
-  projectHostsAreLocal() || !projectHostsAvailable(),
+  projectHostsAreLocal() || !subdomainRoutingAvailable(),
 );
 
-/** The base project hosts hang under: `localhost` for the local worker (worker-config.ts), the
- *  deployed worker's `APP_CONFIG_PROJECT_HOSTNAME_BASE` (wrangler.jsonc) otherwise. */
-export function projectHostnameBase(): string {
-  if (projectHostsAreLocal()) return "localhost";
-  const base = process.env.PROJECT_HOSTNAME_BASE;
-  if (!base) throw new Error("PROJECT_HOSTNAME_BASE is required for deployed ingress tests");
-  return base;
+/** How the worker under test reaches projects (src/app-config.ts `urls.ingressRouting`): subdomains
+ *  under `localhost` for the local worker (worker-config.ts), the deployed worker's routing
+ *  (global-setup: envs.ts, or PROJECT_INGRESS_ROUTING) otherwise. */
+export function ingressRouting(): IngressRouting {
+  const routing = process.env.PROJECT_INGRESS_ROUTING;
+  if (!routing)
+    throw new Error("PROJECT_INGRESS_ROUTING unset — the e2e globalSetup/setup did not run");
+  return JSON.parse(routing) as IngressRouting;
+}
+
+/** The hostname project hosts hang under — `<app>--<project>.<hostname>`, the apex
+ *  `<project>.<hostname>` — where the worker under test routes projects by subdomain (every row
+ *  below spells a host with it). A worker routing by paths, or with no ingress, has none: such a
+ *  row cannot run there. */
+export function ingressHostname(): string {
+  const routing = ingressRouting();
+  if (routing?.type !== "subdomains")
+    throw new Error(
+      `the worker under test routes projects ${routing ? "by paths" : "not at all"} — this row needs subdomain routing`,
+    );
+  return routing.hostname;
 }
 
 /** The Agent every project-host request goes through against the local worker: its connector dials
@@ -85,13 +98,13 @@ export async function registerProject(slug: string, as?: { email: string }): Pro
 }
 
 /** A fresh project slug — a DNS label, the one the project's hosts carry (`freshCtx` names carry
- *  `_`, which no hostname may). `registerProject(slug)` turns it into a project and hands back the id.
- *  Same shape as `freshCtx`: the run's id and this worker process's slot, then a per-process counter
- *  — unique across runs and across the processes running files in parallel. */
+ *  `_`, which no hostname may). `registerProject(slug)` turns it into a project and hands back the id. */
 let counter = 0;
+/** `prj-<prefix>-<run>-<worker>-<n>`: the run's id and the worker process's slot (client.ts) keep two
+ *  processes' restarted counters, and two runs, apart — a DNS label, lowercase, at most 63 chars. */
 export const freshDnsSafeProjectSlug = (prefix: string): string => {
   const slug = `prj-${prefix}-${runId()}-${workerSlot()}-${counter++}`.toLowerCase();
-  if (slug.length > 63) throw new Error(`project slug "${slug}" is longer than a DNS label allows`);
+  if (slug.length > 63) throw new Error(`project slug ${slug} exceeds a DNS label (63)`);
   return slug;
 };
 

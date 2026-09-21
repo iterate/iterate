@@ -1,8 +1,11 @@
 import { z } from "zod";
 import { OAuthProvider, type GrantSummary } from "@cloudflare/workers-oauth-provider";
+import type { StreamEventInput } from "iterate/next/stream/processor";
 import { RpcTarget } from "capnweb";
 import { codedError, isLocalOrigin } from "iterate/next/lib";
 import { authorizationCodeRequest } from "iterate/next/oauth";
+import { type GrantEnded, type GrantMinted } from "./account/contract.ts";
+import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./iterate-context.ts";
 import type { Env } from "./control-plane.ts";
 import { directory } from "./directory.ts";
 import {
@@ -54,11 +57,41 @@ export class Grants extends RpcTarget {
       );
     return { sub: grant.userId, email: grant.email, reach: this.#auth.reach, grant };
   }
+  /** An ACCOUNT FACT on `/users/<userId>` — a token minted, a grant ended — stamped with this
+   *  caller; best-effort and async, as session.ts `publishGlobalFact` says: the provider is the
+   *  truth for the grant, this is the person's record of it. */
+  #publishAccountFact(userId: string, fact: StreamEventInput): void {
+    const name = DurableObjectNameCodec.stringify({
+      projectId: GLOBAL_PROJECT_ID,
+      path: `/users/${userId}`,
+    });
+    const caller = { principal: this.#auth.principal, grant: this.#auth.grant?.grantId };
+    this.#ctx.waitUntil(
+      // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the append's
+      // answer is not read.
+      (
+        this.#env.ITERATE_CONTEXT.getByName(name).invoke(
+          ["itx", ["append", fact]],
+          [],
+          caller,
+        ) as Promise<unknown>
+      ).then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+  }
   /** Any client can end its own grant. It cannot address another user's session. */
   async endCurrent() {
     const grant = this.#auth.grant;
     if (!grant) throw codedError("FORBIDDEN", "The administrator credential has no user session.");
-    return revokeGrant(this.#env, grant);
+    const ended = await revokeGrant(this.#env, grant);
+    this.#publishAccountFact(grant.userId, {
+      type: "events.iterate.com/account/grant-ended",
+      idempotencyKey: `account/grant-ended/${grant.grantId}`,
+      payload: { grantId: grant.grantId } satisfies GrantEnded,
+    });
+    return ended;
   }
 
   /** Provider pagination is the inventory; D1 adds use and revocation state only. */
@@ -145,7 +178,13 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
       } while (!owned && cursor);
       if (!owned) throw codedError("GRANT_NOT_FOUND", "Session not found");
     }
-    return revokeGrant(env, { userId: session.sub, grantId });
+    const ended = await revokeGrant(env, { userId: session.sub, grantId });
+    this.#publishAccountFact(session.sub, {
+      type: "events.iterate.com/account/grant-ended",
+      idempotencyKey: `account/grant-ended/${grantId}`,
+      payload: { grantId } satisfies GrantEnded,
+    });
+    return ended;
   }
 
   /** The console's own OAuth client the personal-token exchange runs through: the client id
@@ -251,6 +290,14 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
         refresh_token: z.string(),
       })
       .parse(await response.json());
+    // The provider's access token is `<userId>:<grantId>:<secret>` (oauth-provider.ts): the grant's
+    // id is its middle — the only place the mint learns it. The fact of the mint, on the account.
+    const [, grantId = ""] = tokens.access_token.split(":");
+    this.#publishAccountFact(session.sub, {
+      type: "events.iterate.com/account/grant-minted",
+      idempotencyKey: `account/grant-minted/${grantId}`,
+      payload: { grantId, name: data.name, projects, expiresAt } satisfies GrantMinted,
+    });
     return { token: tokens.access_token, expiresAt };
   }
 }

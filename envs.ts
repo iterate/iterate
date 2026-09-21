@@ -618,24 +618,22 @@ export interface OsNextEnv {
   /** The dash's origin for this deployment (apps/dash) — where the platform's landing page `/` sends
    *  a person, the platform being headless. Unset ⇒ the page names no dash (a preview has none). */
   dashBaseUrl?: string;
-  projectHostnameBase: string;
+  /** How projects are reached over HTTP (`APP_CONFIG urls.ingressRouting`): `subdomains` hangs
+   *  `<app>--<project>.<hostname>` and the apex `<project>.<hostname>` under a wildcard route the
+   *  generator adds on `hostname`'s zone (ensure-resources creates the wildcard DNS record); `paths`
+   *  serves `<baseUrl>/<project>/<app>/…` from the one origin. Unset ⇒ no ingress. */
+  ingressRouting?: { type: "subdomains"; hostname: string } | { type: "paths" };
   artifactsNamespace: string;
   /** The name the Cloudflare resources were CREATED under (D1 `<prefix>-directory`, KV `<prefix>-oauth|-itx`) —
    *  pinned apart from `workerName` because the worker was renamed after they existed; `ensure-resources` and
    *  the wrangler generator derive names from this, never from the worker name. */
   resourceNamePrefix: string;
-  /** The test code 424242 signs anyone in beside the mailed one — the specs' way in on a deployment
-   *  they may drive. Never enable for real user data. */
-  testEmailLogin?: boolean;
-  /** The address the sign-in code is mailed from, on a domain onboarded for Email Sending in the
-   *  deployment's account (iterate2.com is, on prd: `cf-bounce.iterate2.com` MX/SPF, DKIM, DMARC).
-   *  Unset ⇒ no email sign-in (beyond the test code). */
-  loginEmailFrom?: string;
-  /** Hostnames of this deployment's own that ARE a project's apex — `{ "iterate2.com": "iterate" }`:
-   *  a request there lands on that project's config worker `fetch`, exactly as `<project>.<base>`
-   *  does (apps/os-next/src/hosts.ts `customProjectHostOf`). The wrangler generator adds the zone
-   *  route, ensure-resources the DNS record. */
-  projectCustomHostnames?: Record<string, string>;
+  /** TEMPORARY (`APP_CONFIG urls.temporaryCustomHostnames`) — hostnames of this deployment's own that
+   *  ARE a project's apex: `{ "iterate2.com": "iterate" }` lands a request on that project's config
+   *  worker `fetch`, exactly as `<project>.<hostname>` does. The generator adds one zone route per
+   *  hostname (its registrable domain's zone must exist in the account), ensure-resources the proxied
+   *  DNS record. Belongs in the project's own runtime config, not here. */
+  temporaryCustomHostnames?: Record<string, string>;
   resources: { directoryDbId: string; oauthKvId: string; itxKvId: string };
 }
 export const osNextEnvs: Record<string, OsNextEnv> = {
@@ -649,7 +647,9 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
     workerName: "os-next-preview",
     baseUrl: "https://os-next-preview.iterate-dev-preview.workers.dev",
     mcpBaseUrl: "https://os-next-preview.iterate-dev-preview.workers.dev/mcp",
-    projectHostnameBase: "",
+    // Projects as paths on the one origin (`/projects/<slug>/<app>/…`): workers.dev has no wildcard
+    // subdomains, and every preview inherits this.
+    ingressRouting: { type: "paths" },
     artifactsNamespace: "os-next-preview-repos",
     resourceNamePrefix: "os-next-preview",
     resources: {
@@ -668,13 +668,17 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
     baseUrl: "https://os.iterate2.com",
     mcpBaseUrl: "https://mcp.iterate2.com",
     dashBaseUrl: "https://dash.iterate2.com",
-    projectHostnameBase: "iterate2.app",
-    // The apex is the `iterate` project's: its config worker's `fetch` serves iterate2.com.
-    projectCustomHostnames: { "iterate2.com": "iterate" },
+    ingressRouting: { type: "subdomains", hostname: "iterate2.app" },
+    // Each apex is its project's: the config worker's `fetch` serves it. Every zone must exist in
+    // the prd account for the route to deploy; the DNS record appears on `ensure-resources --env prd`.
+    temporaryCustomHostnames: {
+      "iterate2.com": "iterate",
+      "garple.com": "garple",
+      "lispwoso.com": "lispwoso",
+      "templestein.com": "templestein",
+    },
     artifactsNamespace: "project-worker-prd-repos",
     resourceNamePrefix: "project-worker-prd",
-    testEmailLogin: true,
-    loginEmailFrom: "iterate <login@iterate2.com>",
     resources: {
       directoryDbId: "be6a3789-726a-4786-8b50-ef150c583b4e",
       oauthKvId: "a1a12d1cf1c342f8a389e5bf9dc5b760",
@@ -734,7 +738,7 @@ export const notesEnvs = {
     dopplerConfig: "prd",
     workerName: "notes",
     // Its own workers.dev subdomain — NOT a custom domain (iterate2.com is the iterate project's
-    // apex, osNextEnvs.prd.projectCustomHostnames). A workers.dev baseUrl adds no custom route (below).
+    // apex, osNextEnvs.prd.temporaryCustomHostnames). A workers.dev baseUrl adds no custom route (below).
     baseUrl: "https://notes.iterate.workers.dev",
   },
 };
@@ -753,7 +757,7 @@ export const voiceEnvs = {
     dopplerConfig: "prd",
     workerName: "voice",
     // Its own workers.dev subdomain — NOT a custom domain (iterate2.com is the iterate project's
-    // apex, osNextEnvs.prd.projectCustomHostnames). A workers.dev baseUrl adds no custom route (below).
+    // apex, osNextEnvs.prd.temporaryCustomHostnames). A workers.dev baseUrl adds no custom route (below).
     baseUrl: "https://voice.iterate.workers.dev",
   },
 };

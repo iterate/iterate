@@ -91,6 +91,7 @@ import {
 
 export const BUILT_IN_ROOTS = [
   "whoami",
+  "url",
   "kv",
   "secrets",
   "ai",
@@ -118,6 +119,7 @@ export const BUILT_IN_ROOTS = [
   "repos",
   "workspaces",
   "agents",
+  "mcpConnections",
   "files",
 ] as const;
 

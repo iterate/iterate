@@ -32,10 +32,10 @@ import { adminCredentials, freshCtx, openItx, session, workerUrl } from "./suppo
 import {
   fetchProjectHost,
   freshDnsSafeProjectSlug,
-  onProjectHost,
-  projectHostnameBase,
+  ingressHostname,
   registerProject,
   wsRoundTripOnProjectHost,
+  onProjectHost,
 } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
 
@@ -50,7 +50,7 @@ onProjectHost(
     // an itx EXPRESSION (workers.get({ source })), same as every other rule.
     const itx = openItx(projectId);
     await itx.provide("itx.apps.site", ["itx", "workers", ["get", { source: SOURCES.site }]]);
-    const host = `site--${slug}.${projectHostnameBase()}`;
+    const host = `site--${slug}.${ingressHostname()}`;
 
     const page = await fetchProjectHost(host, "/");
     expect(page.status, page.text).toBe(200);
@@ -95,7 +95,7 @@ onProjectHost(
       .authenticate(adminCredentials())
       .projects.get(projectId)
       .provide("itx.apps.device", device);
-    const host = `device--${slug}.${projectHostnameBase()}`;
+    const host = `device--${slug}.${ingressHostname()}`;
 
     const res = await fetchProjectHost(host, "/hunt?probe=1", {}, { method: "POST", body: "ping" });
     expect(res.status, res.text).toBe(201);
@@ -129,7 +129,7 @@ onProjectHost(
       .authenticate(adminCredentials())
       .projects.get(projectId)
       .provide("itx.apps.device", new WsDevice());
-    const host = `device--${slug}.${projectHostnameBase()}`;
+    const host = `device--${slug}.${ingressHostname()}`;
     // Sanity: the rule still answers plain HTTP (so the assertions below are about the UPGRADE).
     const plain = await fetchProjectHost(host, "/");
     expect(plain.text).toBe("http-fallback");
@@ -151,7 +151,7 @@ onProjectHost(
   async () => {
     // before admission — the count is read first, so the project need not exist
     const response = await fetchProjectHost(
-      `site--${freshDnsSafeProjectSlug("nan-hops")}.${projectHostnameBase()}`,
+      `site--${freshDnsSafeProjectSlug("nan-hops")}.${ingressHostname()}`,
       "/",
       { "x-itx-expression-hops": "NaN" },
     );

@@ -14,16 +14,16 @@ import {
   rejection,
   session,
   sleep,
+  until,
   workerUrl,
 } from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
 import {
   fetchProjectHost,
   freshDnsSafeProjectSlug,
-  onProjectHost,
-  projectHostnameBase,
-  projectHostsAreLocal,
+  ingressHostname,
   registerProject,
+  onProjectHost,
 } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
 
@@ -231,6 +231,8 @@ test("a personal access token — one OAuth grant the account mints — is the u
   expect(ran.status, ranBody).toBe(200);
   expect(ranBody).toContain(projectId); // itx.whoami() names the project the token reaches
 
+  const bearer = { Authorization: `Bearer ${token}` };
+
   // the account lists it as what it is …
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory read on the account session.
   using lister = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
@@ -261,22 +263,52 @@ test("a personal access token — one OAuth grant the account mints — is the u
   });
   expect(
     (await readAll(api.projects.get(projectId))).find(
-      (e) => e.type === "events.iterate.com/project/mcp-client-connected",
+      (e) => e.type === "events.iterate.com/project/mcp-connection-created",
     )?.payload,
   ).toEqual({ grantId: grant!.id, path: connectionPath });
+  expect(await api.projects.get(projectId).mcpConnections.list()).toEqual([
+    { grantId: grant!.id, path: connectionPath, createdAt: expect.any(String) },
+  ]);
+  // THE ACCOUNT'S RECORD: the mint is a fact on the person's own context, stamped with them and
+  // the issuer session it was minted through (best-effort and async: wait for it)
+  const accountEvents = async () => {
+    // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded read of the account context per attempt.
+    using reader = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
+    return (await reader.authenticate({ type: "from-server-cookie" }).user.readEvents(0, 500))
+      .events as { type: string; payload: Record<string, unknown>; source?: unknown }[];
+  };
+  const minted = await until("the mint is on the account context", async () =>
+    (await accountEvents()).find(
+      (e) =>
+        e.type === "events.iterate.com/account/grant-minted" && e.payload.grantId === grant!.id,
+    ),
+  );
+  expect(minted.payload).toEqual({
+    grantId: grant!.id,
+    name: "E2E personal access token",
+    projects: [projectId],
+    expiresAt,
+  });
+  expect(minted.source).toEqual({ principal, grant: expect.stringMatching(/^grant_/) });
   // … and ends it: the same bearer is refused on /api and /mcp at once
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded revocation on the account session.
   using ender = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
   expect(await ender.authenticate({ type: "from-server-cookie" }).grants.end(grant!.id)).toEqual({
     cleanupPending: false,
   });
-  const bearer = { Authorization: `Bearer ${token}` };
   const endedApi = await fetch(workerUrl("/api"), { method: "POST", headers: bearer });
   expect(endedApi.status).toBe(401);
   await endedApi.body?.cancel();
   const endedMcp = await fetch(mcp, { method: "POST", headers: mcpHeaders, body: "{}" });
   expect(endedMcp.status).toBe(401);
   await endedMcp.body?.cancel();
+  // … and the end is the account's fact too
+  const ended = await until("the end is on the account context", async () =>
+    (await accountEvents()).find(
+      (e) => e.type === "events.iterate.com/account/grant-ended" && e.payload.grantId === grant!.id,
+    ),
+  );
+  expect(ended.source).toEqual({ principal, grant: expect.stringMatching(/^grant_/) });
 });
 
 onProjectHost(
@@ -300,7 +332,7 @@ onProjectHost(
       .authenticate({ type: "from-server-cookie" })
       .grants.mint({ name: "E2E personal access token (host)", projects: [projectId] });
 
-    const base = projectHostnameBase();
+    const base = ingressHostname();
     const bearer = { Authorization: `Bearer ${token}` };
     const covered = await fetchProjectHost(`echo--${slug}.${base}`, "/", bearer);
     expect(covered.status, covered.text).toBe(200);
@@ -368,17 +400,17 @@ export default class Mine extends WorkerEntrypoint {
   expect(html).toContain("dynamic web capability");
 });
 
-test("/version answers `<deployId> <environmentName>` — the deploy stamp a smoke waits for", async () => {
+test("/version answers `<deployId> <platformOrigin>` — the deploy stamp a smoke waits for", async () => {
   // The deploy id is Cloudflare's version id of the deploy (what `wrangler deploy` prints) — local
-  // workerd mints one too — or "unversioned" where the binding is absent; then the configuration
-  // (src/worker.ts `parseAppConfig`): the e2e lane names itself "e2e", a deployed worker names its environment.
+  // workerd mints one too — or "unversioned" where the binding is absent; then the platform origin:
+  // the issuer (src/app-config.ts `urls.os`, or the request's own origin where a deployment leaves
+  // it blank) — the one thing that names a deployment, local or deployed.
   const versionRes = await fetch(workerUrl("/version"));
   expect(versionRes.status).toBe(200);
-  const [deployId, environmentName, ...rest] = (await versionRes.text()).trim().split(" ");
+  const [deployId, platformOrigin, ...rest] = (await versionRes.text()).trim().split(" ");
   expect(rest).toEqual([]);
   expect(deployId).toMatch(/^(?:[0-9a-f-]{36}|unversioned)$/);
-  if (projectHostsAreLocal()) expect(environmentName).toBe("e2e");
-  else expect(environmentName).toMatch(/^[a-z][a-z0-9_-]*$/);
+  expect(platformOrigin).toBe(new URL(workerUrl("/")).origin);
 });
 
 // ── THE CROSS-CONTEXT LEND PIN — the reviewer's exact probe: root provides a live fn under `itx.clash`,

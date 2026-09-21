@@ -109,7 +109,7 @@ const untilIssue = (failureSite: string, pattern: RegExp, timeoutMs = 10_000): P
 
 /** What `itx.enableProcessorByEvent(name, { source, className })` appends, spelled RAW on the DO's `append`:
  *  ONE subscription-configured row whose target hosts the class as the facet `name`
- *  (alarm-quiesce.test.ts spells it the same way). */
+ *  (alarm-and-pins.test.ts spells it the same way). */
 const hostingTarget = (name: string, source: string, className: string): ItxExpression => [
   "itx",
   "facets",
@@ -585,7 +585,7 @@ async function uncallableCursorRow(ctx: string): Promise<SubscriptionRow> {
   });
 }
 /** Fire the DO's alarm up to `fires` times with Date faked 40 minutes further each time (past the
- *  ladder's 30-minute ceiling plus its 20% jitter; sockets and real timers stay real — support.ts's quiesce shape), and
+ *  ladder's 30-minute ceiling plus its 20% jitter; sockets and real timers stay real — support.ts's releasePins shape), and
  *  return how many alarms actually ran and the row after the last. Stops early when `halted`. */
 async function walkLadder(
   ctx: string,

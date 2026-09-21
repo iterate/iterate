@@ -28,12 +28,12 @@
 // parent under the same name, its one var the issuer, this PR's os-next preview (README, "Previews").
 //
 // Environment: Doppler project-worker/preview (CLOUDFLARE_API_TOKEN + ACCOUNT_ID for the parent's
-// account; the three APP_CONFIG secrets every preview inherits), PREVIEW_NAME + PREVIEW_PR_NUMBER
+// account; APP_CONFIG + APP_CONFIG_SECRETS__KEY, the two secrets every preview inherits), PREVIEW_NAME + PREVIEW_PR_NUMBER
 // (the branch and the PR; flags override), GITHUB_TOKEN + GITHUB_REPOSITORY (the PR body and the
 // sweep's PR lookups), PREVIEW_WRANGLER (a wrangler binary instead of the pinned one).
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -187,7 +187,7 @@ export function renderPullRequestSection(input: {
     `| Deploy | \`${local("deploy")}\` |`,
     `| Delete | \`${local("delete")}\` |`,
     "",
-    "The suite runs with `PROJECT_HOSTNAME_BASE` blank: previews live on workers.dev and have no project hosts, so the project-host rows skip.",
+    "Previews route projects by paths on their workers.dev origin (`/projects/<slug>/<app>/…`), so the e2e rows that dial a subdomain skip.",
     "",
     "</details>",
   ].join("\n");
@@ -384,20 +384,14 @@ async function findDatabase(name: string): Promise<D1Row | undefined> {
   return (await listDatabases()).find((row) => row.name === name);
 }
 
-/** Create if missing, then apply src/control-plane.sql — the same idempotent DDL every deploy of
- *  every environment runs (scripts/deploy.ts). A schema change that DDL cannot express on a
- *  populated database is what `preview reset` is for. */
+/** Create the preview's D1 if missing. The directory schema is the worker's own business — applied
+ *  at boot, idempotent (src/control-plane.sql) — so a schema change is proven by the next request. */
 async function ensureDatabase(name: string): Promise<string> {
   const existing = await findDatabase(name);
   const row =
     existing ||
     (await cf<D1Row>(`/accounts/${account()}/d1/database`, { method: "POST", body: { name } }));
   console.log(`${existing ? "found" : "created"} D1 ${name} (${row.uuid})`);
-  const sql = readFileSync(path.join(ROOT, "src/control-plane.sql"), "utf8");
-  await cf(`/accounts/${account()}/d1/database/${row.uuid}/query`, {
-    method: "POST",
-    body: { sql },
-  });
   return row.uuid;
 }
 
@@ -537,31 +531,18 @@ async function deleteAppPreview(
 // ── the preview itself ─────────────────────────────────────────────────────────────────────────
 
 /** `preview secret bulk` writes the WORKER's Previews settings, which every preview of it inherits:
- *  one upload covers every preview, and each run refreshes them. The values go through a 0700 tmp
- *  file, never argv (visible in `ps`) and never the config (wrangler prints config values). */
+ *  one upload covers every preview, and each run refreshes them. The two secrets are the deployment's
+ *  (src/app-config.ts): the one `APP_CONFIG` object — `login.password`, `secrets.adminBearer` — and
+ *  `APP_CONFIG_SECRETS__KEY` beside it. Values go through a 0600 tmp file, never argv or the config. */
 async function uploadPreviewSecrets(wrangler: string): Promise<void> {
   const secrets = Object.fromEntries(
-    ["APP_CONFIG_SESSION_SECRET", "APP_CONFIG_ADMIN_API_SECRET", "APP_CONFIG_SECRETS_KEY"].map(
-      (name) => [name, requireEnv(name)],
-    ),
+    ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"].map((name) => [name, requireEnv(name)]),
   );
   const dir = mkdtempSync(path.join(tmpdir(), "os-next-preview-secrets-"));
   const file = path.join(dir, "secrets.json");
   try {
     writeFileSync(file, JSON.stringify(secrets), { mode: 0o600 });
-    const result = await run(wrangler, [
-      "preview",
-      "secret",
-      "bulk",
-      file,
-      "-c",
-      PREVIEW_CONFIG_NAME,
-    ]);
-    if (result.status !== 0) {
-      throw new Error(
-        `wrangler preview secret bulk failed with exit code ${result.status}\n${result.stderr}`,
-      );
-    }
+    await runOk(wrangler, ["preview", "secret", "bulk", file, "-c", PREVIEW_CONFIG_NAME]);
     console.log(
       `uploaded ${Object.keys(secrets).length} secrets to the Previews settings of ${PREVIEW_PARENT.workerName}`,
     );
@@ -704,17 +685,24 @@ async function deleteAll(previewName: string): Promise<void> {
 
 /** THE PROOF: the vitest e2e suite and the Playwright specs, both in deployed-target mode against
  *  the preview, side by side — the same two suites deploy-os-next.yml and `pnpm spec` know
- *  (e2e/support/global-setup.ts, playwright.config.ts). No project hosts on workers.dev, so the base
- *  is blank and the project-host rows skip. vitest streams; Playwright's report prints after it. */
+ *  (e2e/support/global-setup.ts, playwright.config.ts). The admin bearer and the sign-in password
+ *  are read out of the deployment's `APP_CONFIG` (secrets.adminBearer, login.password); the preview
+ *  routes projects by paths, so the rows that dial a subdomain skip. vitest streams; Playwright's
+ *  report prints after it. */
 async function runE2e(previewName: string): Promise<void> {
   const url = previewUrl(previewName);
+  // The deployment's own object (src/app-config.ts), as Doppler holds it.
+  const appConfig = JSON.parse(requireEnv("APP_CONFIG")) as {
+    login: { password: string };
+    secrets: { adminBearer: string };
+  };
   const env = {
     ...process.env,
     WORKER_BASE_URL: url,
     DEMO_BASE_URL: url,
-    ADMIN_API_SECRET: requireEnv("APP_CONFIG_ADMIN_API_SECRET"),
-    TEST_EMAIL_LOGIN: "true",
-    PROJECT_HOSTNAME_BASE: "",
+    ADMIN_API_SECRET: appConfig.secrets.adminBearer,
+    LOGIN_PASSWORD: appConfig.login.password,
+    PROJECT_INGRESS_ROUTING: JSON.stringify(PREVIEW_PARENT.ingressRouting),
     MCP_BASE_URL: `${url}/mcp`,
   };
   const spec = (async () => {

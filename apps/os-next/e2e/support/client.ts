@@ -14,11 +14,19 @@ const baseUrl = (): string => {
   return u;
 };
 
-/** The worker's admin secret (global-setup: the local worker's, or a deployed run's ADMIN_API_SECRET). */
+/** The worker's admin bearer (global-setup: the local worker's, or a deployed run's ADMIN_API_SECRET). */
 const adminApiSecret = (): string => {
   const secret = process.env.ADMIN_API_SECRET;
   if (!secret) throw new Error("ADMIN_API_SECRET unset — the e2e globalSetup/setup did not run");
   return secret;
+};
+
+/** The worker's sign-in password (global-setup: the local worker's, or a deployed run's
+ *  LOGIN_PASSWORD) — `POST /login` with an email and this mints a browser session (support/principal.ts). */
+export const loginPassword = (): string => {
+  const password = process.env.LOGIN_PASSWORD;
+  if (!password) throw new Error("LOGIN_PASSWORD unset — the e2e globalSetup/setup did not run");
+  return password;
 };
 
 /** THE lane's credentials (src/session.ts `SessionCredentials`): the admin secret — every project,
@@ -56,8 +64,10 @@ let counter = 0;
 export const freshCtx = (prefix: string): string =>
   `prj_${prefix}_${runId()}_${workerSlot()}_${counter++}`;
 
+/** `/api` opened BARE (no credential on the upgrade): the socket authenticates in-band with the
+ *  admin secret (src/api.ts, src/session.ts). */
 const wsApi = (): string => {
-  const u = new URL("/internal/rpc", baseUrl());
+  const u = new URL("/api", baseUrl());
   u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
   return u.toString();
 };
