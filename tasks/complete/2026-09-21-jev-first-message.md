@@ -18,9 +18,9 @@ No core changes; the earlier experiment remains untouched.
 - Best effort: the first answering request can proceed without docs after one
   second. Include delivery/search/fetch overhead in that deadline where possible.
 - Record selection status, sources and timing in project-owned stream events.
-- Keep the earlier branch intact. Commit/push this worktree, no PR. Each commit
-  carries the proposed review body. Deploy and prove the new implementation on a
-  leased preview; do not rely on the earlier branch's core hook being present.
+- Keep the earlier branch intact. Commit/push this worktree. Originally no PR;
+  the user subsequently requested a draft PR on 21 September. Deploy and prove
+  this implementation on a leased preview without the earlier core hook.
 
 ## Checklist
 
@@ -29,7 +29,7 @@ No core changes; the earlier experiment remains untouched.
 - [x] Implement first-message-only selection entirely in userland. *`configs/jev-docs/worker.ts` uses existing config/context events and durable project-owned markers; core files and contracts are unchanged.*
 - [x] Prove timely context, timeout/error fallback, late-result discard and 250ms later turns. *Nine focused tests also cover malformed output, no matches, replay and existing-agent exclusion.*
 - [x] Run typechecks/lint and live e2e on a preview without core changes. *OS/templates typecheck, scoped lint and live e2e pass; preview-6 runs main plus the generated template catalog.*
-- [x] Record evidence, complete task, commit and push; return compare and demo links. *Final evidence and links below; no PR.*
+- [x] Record evidence, complete task, commit and push; return compare and demo links. *Final evidence and links below; draft PR subsequently requested.*
 
 ## References
 
@@ -122,3 +122,21 @@ Preview-6 lease `47aac5a8-60eb-4006-a824-de9d2a404d26` expires
 ```sh
 doppler run --project _shared --config prd -- pnpm preview release --slot 6 --lease-id 47aac5a8-60eb-4006-a824-de9d2a404d26
 ```
+
+2026-09-21: User requested a draft PR with the preview sign-in/demo links and
+instructions for triggering selection in a new agent. Full repository checks
+are being run for opening; ongoing review/CI follow-up uses the global PR monitor.
+
+Latency interpretation: TypeSafe documents parallel question evaluation. The
+25-to-12 change reduced input size; these runs do not isolate question count as
+the cause of the improvement. Recorded Jev timing includes the `itx.ai.run`
+round trip, not just model inference.
+
+PR-opening checks: repository-wide install, typecheck, lint, knip and format
+passed. Full OS tests passed (3189 pass, 20 existing expected failures, 1
+existing skip). The full recursive test command exited on one unhandled
+`EnvironmentTeardownError: Closing rpc while "resolve" was pending` in the
+unchanged os-next WebSocket test. That file passed all four tests in isolation;
+OS was rerun separately to completion. This is disclosed in the draft body; no
+test was skipped or timeout increased. Logs: `/tmp/jev-pr-test.log`,
+`/tmp/jev-pr-os-test.log`, `/tmp/jev-pr-websocket-recheck.log`.
