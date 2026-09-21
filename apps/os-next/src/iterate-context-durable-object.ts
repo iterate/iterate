@@ -336,8 +336,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // here: the first door to open names the wake (`appendWakeRecord` — `alarm()` says "alarm").
     this.ctx.blockConcurrencyWhile(async () => {
       this.#alarmCoordinator.restore(await this.ctx.storage.getAlarm());
+      // A deployment that names its origin (`urls.os`: prd, the previews — anything with more than one
+      // hostname) knows it outright; one that does not (a self-host on workers.dev) learns it from the
+      // first stamped caller and keeps it here across evictions.
       this.#platformOrigin =
-        (this.ctx.storage.kv.get("platform-origin") as string | undefined) ?? null;
+        this.#appConfig.urls.os ||
+        ((this.ctx.storage.kv.get("platform-origin") as string | undefined) ?? null);
       // A claim row's value is the epoch-ms `at` this DO wrote in `#claimFacetAlarm` (kv types it
       // as unknown): read back as the number it was stored as.
       for (const [key, at] of this.ctx.storage.kv.list({ prefix: "facet-claim:" }))
@@ -1118,6 +1122,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         const { loaderId, load, retire } = await prepareConfinedWorker({
           env: this.env,
           deployId: this.#appConfig.deployId,
+          platformOrigin: this.#platformOrigin,
           itxEntrypoint: this.#itxEntrypoint,
           kind: "facet",
           owner: facetLoaderOwner(this.#durableObjectAddress.name, memo.className),

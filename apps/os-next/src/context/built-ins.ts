@@ -810,6 +810,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           const { load } = await prepareConfinedWorker({
             env,
             deployId: deps.deployId,
+            platformOrigin: deps.platformOrigin(),
             itxEntrypoint: deps.itxEntrypoint(),
             kind: "worker",
             owner: iterateContextName,
