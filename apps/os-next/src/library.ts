@@ -412,7 +412,7 @@ async function requestAndAwaitRun(itx: LibraryItx, script: string): Promise<unkn
  *  child, answered at the root through its link) resolves against the caller's originating context,
  *  else this one. */
 async function handleOrigin(itx: LibraryItx, caller: Caller): Promise<string> {
-  return caller.path || ((await itx.whoami()) as { path: string }).path;
+  return caller.path || (await itx.whoami()).path;
 }
 
 function facetHandle(itx: LibraryItx, path: string, name: string, caller: Caller): InvokeHandle {
@@ -460,6 +460,9 @@ function workspaceHandle(
   path: string,
   caller: Caller,
 ): InvokeHandle & WorkspaceFacet {
+  // An InvokeHandle's dotted proxy answers ANY name at runtime (the facet does the answering); the
+  // intersection is how TypeScript learns the facet's methods for the dotted spelling — nothing here
+  // can check it, so an assertion is the only way to say it.
   return facetHandle(itx, path, "workspace", caller) as InvokeHandle & WorkspaceFacet;
 }
 
@@ -579,6 +582,7 @@ function agentHandle(itx: LibraryItx, path: string, caller: Caller): InvokeHandl
 /** The `repo` facet on the context at `path` — any path; the facet derives the Artifacts name from
  *  it and refuses one it cannot back. */
 function repoHandle(itx: LibraryItx, path: string, caller: Caller): InvokeHandle & RepoFacet {
+  // The same proxy-typed-for-its-facet assertion as `workspaceHandle`.
   return facetHandle(itx, path, "repo", caller) as InvokeHandle & RepoFacet;
 }
 

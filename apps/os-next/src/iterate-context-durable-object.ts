@@ -481,6 +481,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       }),
     );
     const claimed = new Set(own.map((row) => row.match));
+    // `roots` is `#implicitRoots` (`implicitRootsAt`: a subset of `BUILT_IN_ROOTS`) or the target of a
+    // bare `itx ⇒ itx.builtins` (every root), so each one indexes the description map; the sets are
+    // typed `string` because the resolver compares them against parsed step names, hence the assertion.
     const implicit = (roots: Iterable<string>): RewriteRuleListEntry[] =>
       [...roots]
         .filter((root) => !claimed.has(`itx.${root}`))
@@ -518,7 +521,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         }),
       ).invoke(["itx", "builtins", "rewriteRules", ["list", depth - 1]], [], {
         principal: null,
-      })) as RewriteRuleListEntry[];
+      })) as RewriteRuleListEntry[]; // `invoke` is untyped over Workers RPC; the sibling is this same class answering this same method, so its rows are this method's return shape
       const shadowed = new Set(rows.map((row) => row.match));
       return [
         ...rows,

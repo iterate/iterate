@@ -222,22 +222,20 @@ export class IterateContextRpcTarget extends RpcTarget {
     target: ClientRpcStub | ItxExpressionInput | null,
   ): Promise<RewriteRuleHandle>;
   async provide(
-    matchOrInput: ItxExpressionInput | RewriteRuleConfigured,
+    matchOrInput:
+      | ItxExpressionInput
+      | (Omit<RewriteRuleConfigured, "target"> & {
+          target: ClientRpcStub | ItxExpressionInput | null;
+        }),
     maybeTarget?: ClientRpcStub | ItxExpressionInput | null,
   ): Promise<RewriteRuleHandle> {
-    // The object form IS the event's payload (`RewriteRuleConfigured`); `(match, target)` is its shorthand.
-    const input: {
-      match: ItxExpressionInput;
-      target: ClientRpcStub | ItxExpressionInput | null;
-      description?: string;
-    } =
+    // The object form IS the event's payload (`RewriteRuleConfigured`, its target widened to a live
+    // stub); `(match, target)` is its shorthand. An expression is a string or an array, so the check
+    // narrows to the object form.
+    const input =
       typeof matchOrInput === "string" || Array.isArray(matchOrInput)
         ? { match: matchOrInput, target: maybeTarget || null }
-        : (matchOrInput as {
-            match: ItxExpressionInput;
-            target: ClientRpcStub | ItxExpressionInput | null;
-            description?: string;
-          });
+        : matchOrInput;
     const { match, target } = input;
     // LOADED CODE may lend its OWN object (a live stub answers with the code's own authority and
     // dies with its invocation); a pure rewrite or a deny is a ROW, and a row from loaded code is

@@ -691,6 +691,9 @@ export function normalizeControlEvent(event: StreamEventInput): StreamEventInput
       ),
     };
   if (event.type === "events.iterate.com/itx/rewrite-rule-configured") {
+    // A literal event's payload is wire-fed JSON (`unknown`); `normalizeRewriteRuleConfigured` parses
+    // `match`, `target` and `ifTarget` and shape-checks `description`, throwing on anything else — the
+    // assertion only names the shape it is about to check.
     const payload = event.payload as RewriteRuleConfigured & {
       ifTarget?: ItxExpressionInput | null;
     };
