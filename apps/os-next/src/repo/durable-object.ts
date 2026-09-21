@@ -217,6 +217,18 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     this.#snapshotMemo = null; // whatever the outcome, the next read re-fetches
     const transport = await this.#transport("write");
     const tip = (await transport.tipOf(REF)) || null;
+    // A fact still OWED from a push that landed without its facts (below: the caller saw the throw)
+    // is settled FIRST, word for word (an idempotency key names ONE event) — before this commit can
+    // overwrite the debt or land on top of an unpublished tip. The apex follows the fact
+    // (project/processor.ts), so a commit in git without it would sit unpublished; a root still
+    // refusing the fact refuses this commit too, loud. An owed fact for another commit than the tip
+    // never landed (a debt written before a push that was refused or died) or is stale (main moved
+    // since): dropped.
+    const owed = await this.ctx.storage.get<CommitFact>("commit-fact");
+    if (owed) {
+      if (owed.commitOid === tip) await this.#commitFact(owed);
+      else await this.ctx.storage.delete("commit-fact");
+    }
     // The tip's snapshot, or an unborn repo's empty one. (A tip whose commit or tree the pack omits
     // THROWS in #tipSnapshot — never a fresh root commit that would repoint `main` at an orphan.)
     const { manifest, objects }: TipSnapshot = tip
@@ -246,20 +258,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
       if (!objects.has(oid)) toPush.push({ payload: blob, type: "blob" });
       changedPaths.push(file);
     }
-    if (changedPaths.length === 0) {
-      // Nothing to commit — but a fact still OWED for the tip (a push that landed whose facts did
-      // not follow: the caller saw the throw and calls again with the same changes) is landed now,
-      // word for word (an idempotency key names ONE event). The apex follows the fact
-      // (project/processor.ts), so a commit in git without its fact would sit unpublished until an
-      // unrelated later commit. An owed fact for another commit than the tip is stale (main moved
-      // since) and is dropped.
-      const owed = await this.ctx.storage.get<CommitFact>("commit-fact");
-      if (owed) {
-        if (owed.commitOid === tip) await this.#commitFact(owed);
-        else await this.ctx.storage.delete("commit-fact");
-      }
-      return { commitOid: tip, changedPaths };
-    }
+    if (changedPaths.length === 0) return { commitOid: tip, changedPaths };
 
     const { rootOid, trees } = await treeObjectsOf(manifest);
     for (const tree of trees)

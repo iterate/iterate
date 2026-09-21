@@ -235,7 +235,7 @@ localOnly(
 
 // LOCAL ONLY: the fake remote listens on this machine's loopback (see localOnly).
 localOnly(
-  "a commit whose facts were lost heals on the retry: the push landed but the cross-post to / was refused (the root paused) and the commit threw; the same commit again finds nothing to commit and lands the fact the push owed, word for word — once, keyed by the commit — so the apex still follows",
+  "a commit whose facts were lost heals on the next commit: the push landed but the cross-post to / was refused (the root paused) and the commit threw; the next commit — the same one again, or a different one — settles the owed fact first, word for word, once, keyed by the commit, so the apex still follows",
   async () => {
     const itx = openItx(freshCtx("repo"));
     const artifacts = await FakeArtifacts.start();
@@ -272,6 +272,27 @@ localOnly(
     // …and once only: the same retry again lands nothing (keyed by the commit).
     await repo.writeFile("worker.ts", "export default 2;\n");
     expect(await facts(itx)).toHaveLength(2);
+
+    // A DIFFERENT commit after a lost fact settles the debt first, then lands its own: both facts,
+    // in order — the debt is never overwritten by the commit that follows it.
+    await itx.append({ type: "events.iterate.com/stream/paused" });
+    await expect(repo.writeFile("worker.ts", "export default 3;\n")).rejects.toThrow();
+    const lost = artifacts.remoteTip("/repos/config");
+    await itx.append({ type: "events.iterate.com/stream/resumed" });
+    const fourth = await repo.writeFile("worker.ts", "export default 4;\n");
+    expect(fourth.changedPaths).toEqual(["worker.ts"]);
+    expect((await facts(itx)).map((f) => f.commitOid)).toEqual([
+      first.commitOid,
+      healed.commitOid,
+      lost,
+      fourth.commitOid,
+    ]);
+    expect((await facts(itx.cd("/repos/config"))).map((f) => f.commitOid)).toEqual([
+      first.commitOid,
+      healed.commitOid,
+      lost,
+      fourth.commitOid,
+    ]);
   },
 );
 
