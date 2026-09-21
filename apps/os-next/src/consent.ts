@@ -9,12 +9,14 @@ import {
   OAuthScopes,
   type ConsentScope,
 } from "iterate/next/oauth-scopes";
+import { projectAddressOf, type IngressRouting } from "iterate/next/project-ingress";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./iterate-context.ts";
 import { type ConsentApproved } from "./account/contract.ts";
 import type { Env } from "./control-plane.ts";
 import { directory, type Org, type Project } from "./directory.ts";
-import { customProjectHostOf, projectHostOf } from "./hosts.ts";
+import { customProjectHostOf } from "./hosts.ts";
 import { appConfigOf } from "./app-config.ts";
+import { platformOriginOf } from "./platform-origin.ts";
 import {
   authorizationOf,
   oauthAddresses,
@@ -40,9 +42,10 @@ export type ConsentView =
       /** the scopes the request asked for, each with the page's copy (oauth-scopes.ts) */
       scopes: ConsentScope[];
       denyLocation: string;
-      /** where a project's own site lives — `<slug>.<base>` — for the New project form's hint;
-       *  blank when the deployment serves no project hosts */
-      projectHostnameBase: string;
+      /** how projects are reached over HTTP (project-ingress.ts) — the New project form's hint
+       *  composes `<slug>.<hostname>` or `<origin>/<slug>/` from it; null when this deployment
+       *  serves no project ingress */
+      ingressRouting: IngressRouting;
       /** the onboarding step's first draft of an organization name (apps/auth's heuristic): from
        *  the person's display name, else their email's company domain or local part */
       suggestedOrganizationName: string;
@@ -59,8 +62,8 @@ async function projectsForClient(env: Env, clientId: string, userId: string) {
   const config = appConfigOf(env);
   const host =
     url?.pathname === "/.auth/client.json"
-      ? (projectHostOf(url.hostname, config.projectHostnameBase) ??
-        customProjectHostOf(url.hostname, config.projectCustomHostnames))
+      ? (projectAddressOf(config.urls.ingressRouting, url, platformOriginOf(env)) ??
+        customProjectHostOf(url.hostname, config.urls.temporaryCustomHostnames))
       : null;
   if (!host) return { projects, projectBound: false };
   const project = await directory(env.DB).getProject(host.project);
@@ -134,7 +137,7 @@ export class Consent extends RpcTarget {
           return { name, ...OAuthScopeDescriptions[name] };
         }),
         orgs: await directory(env.DB).listOrgs(this.#grant.userId),
-        projectHostnameBase: appConfigOf(env).projectHostnameBase,
+        ingressRouting: appConfigOf(env).urls.ingressRouting,
         suggestedOrganizationName: suggestOrganizationName({
           name: this.#grant.name,
           email: this.#grant.email,

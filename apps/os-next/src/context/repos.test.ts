@@ -58,6 +58,8 @@ function recordingNamespace(existing: string[] = []) {
       // A real-shaped handle that ALSO carries the UNSAFE `fork(dest)` — `get` must re-expose
       // `createToken` but NEVER this method.
       return {
+        // the binding names the remote itself (account and namespace baked in)
+        remote: `https://acct.artifacts.cloudflare.net/git/ns/${name}.git`,
         createToken: async (scope: "read" | "write", ttlSeconds: number) => ({
           plaintext: `${scope}-${name}-${ttlSeconds}`,
         }),
@@ -80,7 +82,7 @@ function recordingNamespace(existing: string[] = []) {
 }
 
 const scoped = (namespace: ArtifactsNamespace, projectId: string) =>
-  projectScopedArtifacts({ namespace, projectId, accountId: "acct", namespaceName: "ns" });
+  projectScopedArtifacts({ namespace, projectId });
 
 test("cfArtifacts speaks paths, prefixes the derived name with a '.' delimiter, and re-exposes the handle WITH remote() and WITHOUT fork", async () => {
   const { namespace, calls, forkCalled } = recordingNamespace();

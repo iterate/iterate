@@ -1,6 +1,7 @@
 // repos.ts — `itx.cfArtifacts`: Cloudflare Artifacts, project-scoped, addressed BY THE REPO'S PATH — a
 // PROXY to the binding and nothing more: `create` / `get` / `list` / `delete` a repo, and the two facts
-// git-over-HTTPS needs from it, a token (`get(path).createToken`) and the remote URL (`get(path).remote()`).
+// git-over-HTTPS needs from it, a token (`get(path).createToken`) and the remote URL (`get(path).remote()`,
+// the binding's own — it knows the account and namespace; nothing here spells them).
 // GIT ITSELF — files, commits, the wire — lives in the repo facet (src/repo/durable-object.ts over
 // src/repo/git-wire.ts), the domain object `itx.repos.get(path)`: THAT is how a project interacts with
 // its repos, and the only thing that speaks git. This root is what the facet calls for its credential
@@ -28,6 +29,8 @@ interface ArtifactCreateResult {
 /** The REAL repo handle `get()` yields (a live RPC stub), typed to what is read (`ArtifactsScope` says
  *  why `fork` is withheld). */
 export interface ArtifactRepoHandle {
+  /** the git-over-HTTPS remote of this repo — the binding's own word, account and namespace included */
+  remote: string;
   createToken(scope: "read" | "write", ttlSeconds: number): Promise<ArtifactToken>;
   fork(name: string, options?: { setDefaultBranch?: string }): Promise<ArtifactCreateResult>;
 }
@@ -58,8 +61,9 @@ export class ScopedArtifactRepo extends RpcTarget {
   createToken(scope: "read" | "write", ttlSeconds: number): Promise<ArtifactToken> {
     return this.#handle.createToken(scope, ttlSeconds);
   }
-  /** `https://<account>.artifacts.cloudflare.net/git/<namespace>/<project>.<name>.git` — what a git
-   *  client POSTs `git-upload-pack` / `git-receive-pack` under, the token as the basic-auth password. */
+  /** `https://<account>.artifacts.cloudflare.net/git/<namespace>/<project>.<name>.git` (the binding's
+   *  own word) — what a git client POSTs `git-upload-pack` / `git-receive-pack` under, the token as
+   *  the basic-auth password. */
   remote(): string {
     return this.#remote;
   }
@@ -127,8 +131,6 @@ export interface ArtifactsScope {
 export function projectScopedArtifacts(input: {
   namespace: ArtifactsNamespace;
   projectId: string;
-  accountId: string;
-  namespaceName: string;
 }): ArtifactsScope {
   const prefix = `${input.projectId}.`;
   const boundName = (path: string): string => prefix + repoArtifactName(path);
@@ -147,11 +149,8 @@ export function projectScopedArtifacts(input: {
       return { created: true };
     },
     get: async (path) => {
-      const name = boundName(path);
-      return new ScopedArtifactRepo(
-        await input.namespace.get(name),
-        `https://${input.accountId}.artifacts.cloudflare.net/git/${input.namespaceName}/${name}.git`,
-      );
+      const handle = await input.namespace.get(boundName(path));
+      return new ScopedArtifactRepo(handle, handle.remote);
     },
     list: async (options) => {
       const page = await input.namespace.list(options);

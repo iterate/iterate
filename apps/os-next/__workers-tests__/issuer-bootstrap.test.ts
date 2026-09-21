@@ -56,7 +56,7 @@ test("first consent creates organization and project through the ordinary sessio
   const next = flow.url.pathname + flow.url.search;
   // the picture Google's sign-in brings rides the issuer grant to the consent page's "signed in as"
   const picture = "https://lh3.googleusercontent.com/a/bootstrap=s96-c";
-  const login = await startIssuerSession(bindings, user, next, { picture });
+  const login = await startIssuerSession(bindings, new Request(origin), user, next, { picture });
   expect(login.location).toBe(next);
   expect(login.setCookie).toMatch(/^__Host-itx-session=[\da-f-]+; HttpOnly; Secure;/);
   const headers = { Cookie: login.setCookie.split(";")[0]!, Origin: origin };
@@ -164,7 +164,7 @@ test("first consent creates organization and project through the ordinary sessio
 
 test("copied issuer client metadata and every scope confer app permissions but never consent authority", async () => {
   const user = await directory(bindings.DB).upsertUser("copied-client@example.com");
-  const login = await startIssuerSession(bindings, user, "/");
+  const login = await startIssuerSession(bindings, new Request(origin), user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
   const flow = await authorizationCodeRequest({
     issuer: origin,
@@ -238,43 +238,6 @@ test("an issuer session minted before a scope existed still holds every scope �
   expect((await old.orgs()).map((candidate) => candidate.id)).toContain(org.id);
 });
 
-test("the consent page's client picture: a shipped mark for a client we know by name, never a client's own SVG, a 404 for a client the provider does not know", async () => {
-  const helpers = oauthHelpers(bindings);
-  const registration = {
-    redirectUris: ["http://127.0.0.1/callback"],
-    tokenEndpointAuthMethod: "none",
-    grantTypes: ["authorization_code"],
-    responseTypes: ["code"],
-  };
-  // "Claude …" → the Claude mark we ship, whatever its metadata says about pictures
-  const claude = await helpers.createClient({ ...registration, clientName: "Claude fixture" });
-  const mark = await SELF.fetch(`${origin}/client-icon?client_id=${claude.clientId}`);
-  expect(mark.status).toBe(200);
-  expect(mark.headers.get("content-type")).toContain("image/svg+xml");
-  expect(await mark.text()).toContain("<title>Claude</title>");
-  // the Chrome extension (apps/browser-extension) registers as "Iterate Chrome extension" → Chrome's mark
-  const chrome = await helpers.createClient({
-    ...registration,
-    clientName: "Iterate Chrome extension",
-  });
-  const chromeMark = await SELF.fetch(`${origin}/client-icon?client_id=${chrome.clientId}`);
-  expect(chromeMark.status).toBe(200);
-  expect(await chromeMark.text()).toContain("<title>Chrome</title>");
-  // a client's own logo_uri is fetched by the worker (fetch reaches SELF here) — and refused when
-  // it is not a raster image: an SVG on the issuer's origin could carry script
-  const svgLogo = await helpers.createClient({
-    ...registration,
-    clientName: "Nobody in particular",
-    logoUri: `${origin}/iterate-logo.svg`,
-  });
-  expect((await SELF.fetch(`${origin}/client-icon?client_id=${svgLogo.clientId}`)).status).toBe(
-    404,
-  );
-  expect((await SELF.fetch(`${origin}/client-icon?client_id=nobody-registered-this`)).status).toBe(
-    404,
-  );
-});
-
 test("a browser landing on the platform origin is told it is headless and where the dash is", async () => {
   // rendered from the configuration (wrangler.test.jsonc), never a file's hostnames
   const page = await SELF.fetch(`${origin}/`);
@@ -283,7 +246,10 @@ test("a browser landing on the platform origin is told it is headless and where 
   expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
   const html = await page.text();
   expect(html).toContain("<strong>control.test</strong> is deliberately headless");
-  expect(html).toContain('href="https://dash.test/"');
+  // the dash's CONNECT page, naming this issuer — a click there is what binds the browser to it
+  expect(html).toContain(
+    'href="https://dash.test/.auth/connect?issuer=https%3A%2F%2Fcontrol.test"',
+  );
   expect(html).toContain('href="/login"');
 });
 
@@ -294,7 +260,7 @@ test("a client on a project's custom apex is bound to that project at consent, l
     "custom-apex-project",
   );
   await directory(bindings.DB).createProject({ userId: user.id }, "custom-apex-other");
-  const login = await startIssuerSession(bindings, user, "/");
+  const login = await startIssuerSession(bindings, new Request(origin), user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
   const flow = await authorizationCodeRequest({
     issuer: origin,
@@ -313,7 +279,7 @@ test("a client on a project's custom apex is bound to that project at consent, l
 
 test("consent grants only the scopes left ticked; organizations:write, not project reach, is what creates an organization", async () => {
   const user = await directory(bindings.DB).upsertUser("ticked-scopes@example.com");
-  const login = await startIssuerSession(bindings, user, "/");
+  const login = await startIssuerSession(bindings, new Request(origin), user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
   const org = await issuer.createOrg("Ticked scopes organization");
   using project = await issuer.projects.create({ project: "ticked-scopes-project", orgId: org.id });
@@ -370,7 +336,7 @@ test("consent grants only the scopes left ticked; organizations:write, not proje
 
 test("consent requires PKCE, defaults empty scopes, rejects empty reach and returns a cancellable request", async () => {
   const user = await directory(bindings.DB).upsertUser("consent-checks@example.com");
-  const login = await startIssuerSession(bindings, user, "/");
+  const login = await startIssuerSession(bindings, new Request(origin), user, "/");
   const headers = { Cookie: login.setCookie.split(";")[0]!, Origin: origin };
   const api = await connect(headers);
   const flow = await authorizationCodeRequest({

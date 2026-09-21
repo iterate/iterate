@@ -34,6 +34,7 @@ import type { IterateContextApi } from "iterate/next/api";
 import { ITX_GRANT_HEADER, ITX_PRINCIPAL_HEADER, type Caller } from "iterate/next/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
 import { codedError } from "iterate/next/lib";
+import { ITX_PLATFORM_ORIGIN_HEADER } from "./platform-origin.ts";
 import type { IterateContextDurableObject, Env } from "./iterate-context-durable-object.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
@@ -98,9 +99,11 @@ export class IterateContextRpcTarget extends RpcTarget {
   readonly #durableObjectAddress: DurableObjectAddress;
   readonly #sessionTeardown: SessionTeardown;
   readonly #waitUntil: WaitUntil;
-  /** WHO holds this context: the session's verified principal and the grant it acts through
-   *  (session.ts), or nobody (the anonymous session, a loaded worker's `env.ITX`). Every dispatch
-   *  runs under it, so every event it appends carries `source.principal` and `source.grant`. */
+  /** WHO holds this context: the session's verified principal, the grant it acts through and the
+   *  platform origin it reached the platform on (session.ts) — or nobody (the anonymous session, a
+   *  loaded worker's `env.ITX`). Every dispatch runs under it, so every event it appends carries
+   *  `source.principal` and `source.grant`, and the DO can compose a public URL (`itx.url`, a signed
+   *  file URL) without knowing the deployment's origin itself. */
   readonly #caller: Caller;
 
   constructor(
@@ -178,9 +181,12 @@ export class IterateContextRpcTarget extends RpcTarget {
       headers.set(ITX_EXPRESSION_FETCH_HEADER, JSON.stringify(terminalFetch.steps)); // the lane parses a JSON ItxExpression
       headers.delete(ITX_PRINCIPAL_HEADER); // the stamp is this session's, never the Request's own
       headers.delete(ITX_GRANT_HEADER);
+      headers.delete(ITX_PLATFORM_ORIGIN_HEADER); // likewise the platform origin: this holder's, never the Request's
       if (this.#caller.principal)
         headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(this.#caller.principal));
       if (this.#caller.grant) headers.set(ITX_GRANT_HEADER, this.#caller.grant);
+      if (this.#caller.platformOrigin)
+        headers.set(ITX_PLATFORM_ORIGIN_HEADER, this.#caller.platformOrigin);
       return this.#durableObject.fetch(new Request(terminalFetch.request, { headers }));
     }
     return this.#invokeOnDurableObject(itxExpression, args);
@@ -529,6 +535,7 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, { iterateContextName: s
     const headers = new Headers(request.headers);
     headers.delete(ITX_PRINCIPAL_HEADER);
     headers.delete(ITX_GRANT_HEADER);
+    headers.delete(ITX_PLATFORM_ORIGIN_HEADER);
     return this.env.ITERATE_CONTEXT.getByName(this.ctx.props.iterateContextName).fetch(
       new Request(request, { headers }),
     );

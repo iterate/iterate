@@ -17,15 +17,14 @@ const withCookie = (setCookie: string) =>
 /** What login-code.ts hands the mailbox: the builder shape of `SendEmail.send`. */
 type Mail = { to: string; from: string; subject: string; text: string; html: string };
 
-test("the mailed code signs in; the test code does not without test mode; five wrong tries end the challenge; three codes per address per window; a reserved test domain gets no mail", async () => {
+test("the mailed code signs in; a wrong code costs a try; five wrong tries end the challenge; three codes per address per window; a reserved test domain gets no mail", async () => {
   const send = vi.fn<(mail: Mail) => Promise<{ messageId: string }>>(async () => ({
     messageId: "message-1",
   }));
   const mailbox = {
     ...(env as unknown as Env),
     EMAIL: { send } as unknown as Env["EMAIL"],
-    APP_CONFIG_TEST_EMAIL_LOGIN: "false",
-    APP_CONFIG_LOGIN_EMAIL_FROM: "iterate <login@control.test>",
+    APP_CONFIG_LOGIN__EMAIL_CODE__FROM: "iterate <login@control.test>",
   } as Env;
   const started = await startLoginCode(mailbox, "Person@Real-Mailbox.dev");
   expect(send).toHaveBeenCalledTimes(1);
@@ -34,7 +33,7 @@ test("the mailed code signs in; the test code does not without test mode; five w
   expect(message.from).toBe("iterate <login@control.test>");
   const code = /^(\d{6}) is your iterate sign-in code$/.exec(message.subject)![1]!;
   expect(message.text).toContain(code);
-  // no test mode here: 424242 is just a wrong code, and costs a try
+  // a wrong code (there is no test code any more: the password is a sign-in of its own) costs a try
   expect(await finishLoginCode(mailbox, withCookie(started.setCookie), "424242")).toMatchObject({
     error: expect.stringMatching(/not right/),
   });
@@ -61,12 +60,13 @@ test("the mailed code signs in; the test code does not without test mode; five w
     restart: true,
   });
   // three codes to one address in the window, then the address rests; a reserved test domain is
-  // never mailed and never counts — its challenge still exists, for the test code
+  // never mailed — no mailbox exists there (mail there bounces, and a bounce costs the sender's
+  // reputation) — so no code is even started: the person is told to enter a real address
   await startLoginCode(mailbox, "person@real-mailbox.dev");
   expect(send).toHaveBeenCalledTimes(3);
   await expect(startLoginCode(mailbox, "Person@Real-Mailbox.dev")).rejects.toThrow(/Too many/);
   send.mockClear();
-  for (let round = 0; round < 4; round++) await startLoginCode(mailbox, "nobody@example.com");
+  await expect(startLoginCode(mailbox, "nobody@example.com")).rejects.toThrow(/receive mail/);
   expect(send).not.toHaveBeenCalled();
   // no cookie at all: nothing to finish
   expect(

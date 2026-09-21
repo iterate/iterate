@@ -14,7 +14,11 @@ const ISSUER = "https://os.example";
  *  port so it fails at once and the page degrades. */
 function login(path: string, scopes: string[]) {
   const sessions = {
-    getByName: () => ({ bearer: async () => "token", scopes: async () => scopes }),
+    getByName: () => ({
+      bearer: async () => "token",
+      scopes: async () => scopes,
+      host: async () => ({ issuer: ISSUER, resource: "http://127.0.0.1:1/api" }),
+    }),
   } as unknown as DurableObjectNamespace<never>;
   return appAuth(
     new Request(`https://notes.example${path}`, {

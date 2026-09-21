@@ -19,7 +19,7 @@ import { oauthSession } from "./support/principal.ts";
 import {
   deployedOnly,
   freshDnsSafeProjectSlug,
-  projectHostnameBase,
+  ingressHostname,
   registerProject,
 } from "./support/project-host.ts";
 
@@ -161,7 +161,7 @@ export default class Echo extends WorkerEntrypoint {
         },
       ],
     ]);
-    const origin = `https://echo--${slug}.${projectHostnameBase()}`;
+    const origin = `https://echo--${slug}.${ingressHostname()}`;
     await itx.secrets.set("arrives", "the-value", { urls: [origin] });
     await itx.secrets.set("arrives-json", { a: { b: "the-field" } }, { urls: [origin] });
     // one request, one secret — the whole-string form, then the `{ field }` form of an object material

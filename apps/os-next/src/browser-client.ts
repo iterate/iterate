@@ -23,7 +23,7 @@ export async function browserAuthorization(env: Env, request: Request, ctx: Exec
 }
 
 export function browserClient(request: Request, env: Env, ctx: ExecutionContext) {
-  const { issuer, api } = oauthAddresses(env);
+  const { issuer, api } = oauthAddresses(env, request);
   return appAuth(request, {
     sessions: env.BROWSER_SESSION,
     issuer,
