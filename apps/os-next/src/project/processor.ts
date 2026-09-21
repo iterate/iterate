@@ -40,9 +40,13 @@ export class ProjectProcessor extends StreamProcessor<
   /** This incarnation's creation attempt, so one at-head pass does not start a second; the durable
    *  ground is `state.creation`. */
   #creating = false;
-  /** The apex following the config repo: the tip offset this incarnation has published (or is
-   *  publishing) — the durable ground is the keyed ingress event itself, so a fresh incarnation
-   *  appending again for the same commit lands nothing. */
+  /** The apex following the config repo: the newest tip any delivery has shown this incarnation,
+   *  and the offset it has published — the durable ground is the keyed ingress event itself, so a
+   *  fresh incarnation appending again for the same commit lands nothing. One attempt runs at a
+   *  time and DRAINS: a tip that arrives while an append is in flight is published by the same
+   *  attempt once that append settles, without waiting for another delivery (an idempotent hit
+   *  lands no fresh event to be delivered). */
+  #newestTip: { commitOid: string; offset: number } | null = null;
   #published: number | null = null;
   #publishing = false;
 
@@ -139,34 +143,41 @@ export class ProjectProcessor extends StreamProcessor<
     // ONE event, and an attempt lost with an incarnation is run again by the next for nothing. The
     // target is the one the saga writes for the seed: the worker read from the repo at that exact
     // commit, cached under it.
-    const tip = state.configRepoTip;
-    if (tip && this.#published !== tip.offset && !this.#publishing) {
+    if (state.configRepoTip) this.#newestTip = state.configRepoTip;
+    if (this.#newestTip && this.#published !== this.#newestTip.offset && !this.#publishing) {
       this.#publishing = true;
       runInBackground(async () => {
         try {
-          await append({
-            type: "events.iterate.com/project/ingress-configured",
-            idempotencyKey: `project/ingress-configured:${tip.commitOid}`,
-            payload: {
-              target: [
-                "itx",
-                "workers",
-                [
-                  "get",
-                  {
-                    source: [
-                      "itx",
-                      "repos",
-                      ["get", "/repos/config"],
-                      ["readFile", "worker.ts", { commitOid: tip.commitOid }],
-                    ],
-                    cacheKey: tip.commitOid,
-                  },
+          // Drain: the newest tip as of each pass — one that landed during the append is next.
+          for (
+            let tip = this.#newestTip;
+            tip && this.#published !== tip.offset;
+            tip = this.#newestTip
+          ) {
+            await append({
+              type: "events.iterate.com/project/ingress-configured",
+              idempotencyKey: `project/ingress-configured:${tip.commitOid}`,
+              payload: {
+                target: [
+                  "itx",
+                  "workers",
+                  [
+                    "get",
+                    {
+                      source: [
+                        "itx",
+                        "repos",
+                        ["get", "/repos/config"],
+                        ["readFile", "worker.ts", { commitOid: tip.commitOid }],
+                      ],
+                      cacheKey: tip.commitOid,
+                    },
+                  ],
                 ],
-              ],
-            },
-          });
-          this.#published = tip.offset;
+              },
+            });
+            this.#published = tip.offset;
+          }
         } finally {
           this.#publishing = false;
         }
