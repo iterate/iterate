@@ -51,6 +51,11 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     note: "env-gated: same OTP gate as signup.spec.ts",
   },
   {
+    file: "apps/os-next/specs/issuer-pages.spec.ts",
+    match: "the code step needs a deployment that accepts the test code",
+    note: "env-gated: the sign-in page's code step runs where the deployment accepts the test code (local, or testEmailLogin); the other two tests in the file run everywhere",
+  },
+  {
     file: "specs/seeded-apps.spec.ts",
     match: "Email OTP sign-in is disabled for this deployment",
     note: "env-gated: the authenticated seeded app proof requires a real signup",

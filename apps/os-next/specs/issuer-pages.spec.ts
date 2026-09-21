@@ -125,7 +125,15 @@ test("a consent page whose session ends underneath it returns to sign-in", async
   const other = await context.newPage();
   await other.goto(`${origin}/login`);
   await other.getByRole("button", { name: "Switch account", exact: true }).click();
-  await other.getByRole("textbox", { name: "Email", exact: true }).waitFor();
+  // signed out, whatever sign-ins the deployment offers next: /login.json names nobody
+  await expect
+    .poll(async () => {
+      const state = (await (await other.request.get(`${origin}/login.json`)).json()) as {
+        signedInAs: string | null;
+      };
+      return state.signedInAs;
+    })
+    .toBeNull();
   await other.close();
   // the page acts on its open socket; the platform refuses; the page leaves for sign-in, bound
   // for this very request
