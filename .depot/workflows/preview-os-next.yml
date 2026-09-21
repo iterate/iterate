@@ -85,7 +85,7 @@ jobs:
     runs-on:
       size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Checkout the PR head
         uses: actions/checkout@v4
@@ -110,18 +110,25 @@ jobs:
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
           PREVIEW_APPS: ${{ inputs.apps || 'auto' }}
         run: doppler run -- pnpm preview "$ACTION"
+      # THE PROOF THAT COUNTS (docs/testing.md): the same e2e suite deploy-os-next.yml runs against
+      # prd after every merge, against this PR's preview — in this job, on this checkout, so the
+      # suite starts the second the preview answers.
+      - name: Run the e2e suite against the preview
+        working-directory: apps/os-next
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PREVIEW_NAME: ${{ github.head_ref }}
+          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
+          E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: doppler run -- pnpm preview e2e
 
-  # THE PROOF THAT COUNTS (docs/testing.md): the same e2e suite deploy-os-next.yml runs against prd
-  # after every merge, against this PR's preview. Also runnable alone: dispatch with action=e2e.
+  # The suite alone, against the live preview: dispatch with action=e2e.
   e2e:
     name: Preview OS-Next / e2e
-    needs:
-      - deploy
     if: >-
-      always() && (
-        needs.deploy.result == 'success' ||
-        (github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '' && inputs.action == 'e2e')
-      )
+      github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '' && inputs.action == 'e2e'
     runs-on:
       size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
@@ -146,6 +153,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           PREVIEW_NAME: ${{ github.head_ref }}
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
+          E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: doppler run -- pnpm preview e2e
 
   cleanup:

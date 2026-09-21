@@ -216,38 +216,41 @@ function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function runAsync(
+/** Run a command. `inherit`: the child's output streams through (builds, installs); otherwise it is
+ *  captured and returned — wrangler's `--json` payload, its prose for a not-found check. */
+function run(
   command: string,
   args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
-): Promise<void> {
-  console.log(`running: ${command} ${args.join(" ")}`);
-  return new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, { env: process.env, stdio: "inherit", ...options });
-    child.once("error", reject);
-    child.once("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`${command} ${args.join(" ")} failed with exit code ${code}`));
-    });
-  });
-}
-
-function capture(command: string, args: string[], cwd = ROOT): Promise<CommandResult> {
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; inherit?: boolean } = {},
+): Promise<CommandResult> {
+  console.log(
+    `running${options.cwd ? ` in ${path.relative(ROOT, options.cwd) || "."}` : ""}: ${command} ${args.join(" ")}`,
+  );
   return new Promise<CommandResult>((resolve, reject) => {
     const child = spawn(command, args, {
-      cwd,
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
+      cwd: options.cwd || ROOT,
+      env: options.env || process.env,
+      stdio: options.inherit ? "inherit" : ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (data: string) => (stdout += data));
-    child.stderr.on("data", (data: string) => (stderr += data));
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (data: string) => (stdout += data));
+    child.stderr?.on("data", (data: string) => (stderr += data));
     child.once("error", (error) => reject(new Error(`failed to run ${command}: ${error.message}`)));
     child.once("close", (status) => resolve({ status, stdout, stderr }));
   });
+}
+
+/** `run`, failing loudly on a non-zero exit. */
+async function runOk(command: string, args: string[], options?: Parameters<typeof run>[2]) {
+  const result = await run(command, args, options);
+  if (result.status !== 0)
+    throw new Error(
+      `${command} ${args.join(" ")} failed with exit code ${result.status}\n${result.stderr}`,
+    );
+  return result;
 }
 
 /** The wrangler a run uses: PREVIEW_WRANGLER, or the pinned draft build installed into a tmpdir the
@@ -266,7 +269,9 @@ function preparePreviewWrangler(): { command: string; ready: Promise<void>; clea
   );
   return {
     command: path.join(installDir, "node_modules", ".bin", "wrangler"),
-    ready: runAsync("pnpm", ["--config.blockExoticSubdeps=false", "--dir", installDir, "install"]),
+    ready: runOk("pnpm", ["--config.blockExoticSubdeps=false", "--dir", installDir, "install"], {
+      inherit: true,
+    }).then(() => {}),
     cleanup: () => rmSync(installDir, { recursive: true, force: true }),
   };
 }
@@ -302,6 +307,9 @@ async function cf<T = unknown>(
     },
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
+  // Cloudflare's v4 envelope: `{ success, errors, result }` on every route; a non-JSON body (a 5xx
+  // page) becomes `{}` and fails the `success` check below. `result` is whatever the caller declared
+  // for its route — the routes here are read-mostly and their shapes are pinned by use.
   const payload = (await response.json().catch(() => ({}))) as {
     success?: boolean;
     errors?: unknown;
@@ -312,7 +320,7 @@ async function cf<T = unknown>(
       `Cloudflare ${init.method || "GET"} ${route} failed with ${response.status}: ${JSON.stringify(payload.errors ?? payload)}`,
     );
   }
-  return payload.result as T;
+  return payload.result as T; // the caller's declared route shape (see above)
 }
 
 const account = () => {
@@ -339,6 +347,7 @@ async function github<T = unknown>(route: string, init: { method?: string; body?
   if (!response.ok) {
     throw new Error(`GitHub ${init.method || "GET"} ${route} failed with ${response.status}`);
   }
+  // GitHub's REST shapes are stable and documented; each caller declares the two or three fields it reads.
   return (await response.json()) as T;
 }
 
@@ -371,9 +380,19 @@ async function writePullRequestSection(prNumber: string, section: string): Promi
 
 type D1Row = { uuid: string; name: string };
 
+/** Every D1 on the account (the list API's `name` filter matches by prefix — measured — so the exact
+ *  match is made here, and the sweep filters by prefix here too). */
+async function listDatabases(): Promise<D1Row[]> {
+  const rows: D1Row[] = [];
+  for (let page = 1; ; page++) {
+    const batch = await cf<D1Row[]>(`/accounts/${account()}/d1/database?per_page=100&page=${page}`);
+    rows.push(...batch);
+    if (batch.length < 100) return rows;
+  }
+}
+
 async function findDatabase(name: string): Promise<D1Row | undefined> {
-  const rows = await cf<D1Row[]>(`/accounts/${account()}/d1/database?per_page=100&name=${name}`);
-  return rows.find((row) => row.name === name);
+  return (await listDatabases()).find((row) => row.name === name);
 }
 
 /** Create if missing, then apply src/control-plane.sql — the same idempotent DDL every deploy of
@@ -409,12 +428,11 @@ const isMissingWorkerError = (output: string) =>
 const appPreviewUrl = (app: StartApp, previewName: string) =>
   `https://${previewName}-${new URL(app.envs.preview!.baseUrl).hostname}`;
 
-/** A config that names an app's parent worker and nothing else: enough for `wrangler preview
- *  delete` and the sweep on a checkout that never built the app. */
-function writeAppParentConfig(app: StartApp): string {
-  const dir = mkdtempSync(path.join(tmpdir(), `os-next-preview-${app.name}-`));
+/** A config that names a parent worker and nothing else: enough for `wrangler preview delete`
+ *  and the sweep, on a checkout that never built anything. */
+function writeParentConfig(parent: { workerName: string; cloudflareAccountId: string }): string {
+  const dir = mkdtempSync(path.join(tmpdir(), "os-next-preview-parent-"));
   const file = path.join(dir, "wrangler.json");
-  const parent = app.envs.preview!;
   writeFileSync(
     file,
     JSON.stringify({ name: parent.workerName, account_id: parent.cloudflareAccountId }),
@@ -435,13 +453,13 @@ async function deployAppPreview(
   const config = writeStartAppPreviewConfig(app, { issuer });
   const previewArgs = ["preview", "--name", previewName, "-c", config, "--json"];
   console.log(`running in apps/${app.name}: wrangler ${previewArgs.join(" ")}`);
-  let result = await capture(wrangler, previewArgs, root);
+  let result = await run(wrangler, previewArgs, { cwd: root });
   if (result.status !== 0 && isMissingWorkerError(`${result.stdout}\n${result.stderr}`)) {
     console.log(`apps/${app.name}: parent worker missing; running: wrangler deploy -c ${config}`);
-    const deployed = await capture(wrangler, ["deploy", "-c", config], root);
+    const deployed = await run(wrangler, ["deploy", "-c", config], { cwd: root });
     if (deployed.status !== 0)
       throw new Error(`apps/${app.name}: wrangler deploy of the parent failed\n${deployed.stderr}`);
-    result = await capture(wrangler, previewArgs, root);
+    result = await run(wrangler, previewArgs, { cwd: root });
   }
   if (result.stderr) process.stderr.write(result.stderr);
   if (result.status !== 0)
@@ -451,42 +469,51 @@ async function deployAppPreview(
     throw new Error(
       `apps/${app.name}: expected ${appPreviewUrl(app, previewName)}, wrangler returned ${url}`,
     );
-  for (let attempt = 1; ; attempt++) {
-    const status = await fetch(`${url}/healthz`)
-      .then((r) => r.status)
-      .catch(() => 0);
-    if (status === 200) break;
-    if (attempt === 18) throw new Error(`${url}/healthz never answered 200 (last: ${status})`);
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-  }
-  console.log(`apps/${app.name}: ${url}`);
+  await waitFor(`${url}/healthz`, (status) => status === 200);
   return { name: app.name, url };
 }
 
-/** The apps this run previews: --apps all, none, or (auto) the ones whose paths changed since the
- *  merge-base with main. No merge-base — a shallow or detached checkout — previews every app: the
- *  safe side of "only when changed". */
-function appsToPreview(mode: "all" | "auto" | "none"): StartApp[] {
+/** The apps this run previews: --apps all, none, or (auto) the ones whose paths this PR changes. */
+async function appsToPreview(
+  mode: "all" | "auto" | "none",
+  prNumber: string | undefined,
+): Promise<StartApp[]> {
   if (mode === "all") return APPS;
   if (mode === "none") return [];
-  const git = (...args: string[]) => {
-    const result = spawnSync("git", args, { cwd: ROOT, encoding: "utf8" });
-    if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr.trim()}`);
-    return result.stdout.trim();
-  };
   try {
-    git("fetch", "--quiet", "origin", "main");
-    const base = git("merge-base", "origin/main", "HEAD");
-    const changed = git("diff", "--name-only", base, "HEAD").split("\n").filter(Boolean);
-    const apps = changedApps(changed);
-    console.log(
-      `apps on top changed since ${base.slice(0, 8)}: ${apps.map((app) => app.name).join(", ") || "none"}`,
-    );
+    const apps = changedApps(await changedPaths(prNumber));
+    console.log(`apps on top changed: ${apps.map((app) => app.name).join(", ") || "none"}`);
     return apps;
   } catch (error) {
     console.warn(`${describe(error)}; previewing every app on top.`);
     return APPS;
   }
+}
+
+/** The paths this pull request changes. From GitHub when there is a PR — the same cumulative diff
+ *  the PR page shows, and independent of how deep CI's checkout is (a depth-1 checkout has no
+ *  merge-base); from git against origin/main on a laptop. */
+async function changedPaths(prNumber: string | undefined): Promise<string[]> {
+  if (prNumber && process.env.GITHUB_TOKEN) {
+    const paths: string[] = [];
+    for (let page = 1; ; page++) {
+      // GET /pulls/{n}/files: one `filename` per changed file, 100 per page.
+      const files = await github<{ filename: string }[]>(
+        `/repos/${repository()}/pulls/${prNumber}/files?per_page=100&page=${page}`,
+      );
+      paths.push(...files.map((file) => file.filename));
+      if (files.length < 100) return paths;
+    }
+  }
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", args, { cwd: ROOT, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr.trim()}`);
+    return result.stdout.trim();
+  };
+  git("fetch", "--quiet", "origin", "main");
+  return git("diff", "--name-only", git("merge-base", "origin/main", "HEAD"), "HEAD")
+    .split("\n")
+    .filter(Boolean);
 }
 
 /** Delete an app's preview; a preview (or parent) that never existed is the expected case. */
@@ -495,9 +522,9 @@ async function deleteAppPreview(
   previewName: string,
   wrangler: string,
 ): Promise<void> {
-  const config = writeAppParentConfig(app);
+  const config = writeParentConfig(app.envs.preview!);
   try {
-    const result = await capture(wrangler, [
+    const result = await run(wrangler, [
       "preview",
       "delete",
       "--name",
@@ -533,7 +560,7 @@ async function uploadPreviewSecrets(wrangler: string): Promise<void> {
   const file = path.join(dir, "secrets.json");
   try {
     writeFileSync(file, JSON.stringify(secrets), { mode: 0o600 });
-    const result = await capture(wrangler, [
+    const result = await run(wrangler, [
       "preview",
       "secret",
       "bulk",
@@ -554,17 +581,18 @@ async function uploadPreviewSecrets(wrangler: string): Promise<void> {
   }
 }
 
-/** The deploy stamp a smoke waits for (src/worker.ts `/version`): the new deployment's id, on the
- *  preview's URL. Propagation was observed at a few seconds; 90 s is the budget deploy-helpers uses. */
-async function waitForDeployment(url: string, deploymentId: string): Promise<void> {
+/** Wait for a URL to answer as expected — propagation was observed at a few seconds; 90 s is the
+ *  budget deploy-helpers uses. os-next's smoke is `/version` naming the new deployment (src/worker.ts);
+ *  an app's is `/healthz`. */
+async function waitFor(url: string, ok: (status: number, text: string) => boolean): Promise<void> {
   for (let attempt = 1; attempt <= 18; attempt++) {
-    const text = await fetch(`${url}/version`)
-      .then((r) => (r.ok ? r.text() : ""))
-      .catch(() => "");
-    if (text.startsWith(deploymentId)) return console.log(`${url}/version answers ${text.trim()}`);
+    const response = await fetch(url).catch(() => null);
+    const text = (await response?.text().catch(() => "")) || "";
+    if (response && ok(response.status, text))
+      return console.log(`${url} answers ${text.trim() || response.status}`);
     await new Promise((resolve) => setTimeout(resolve, 5000));
   }
-  throw new Error(`${url}/version never answered deployment ${deploymentId}`);
+  throw new Error(`${url} never answered as expected`);
 }
 
 async function deployPreview(
@@ -583,7 +611,7 @@ async function deployPreview(
     await wrangler.ready;
     await uploadPreviewSecrets(wrangler.command);
     console.log(`running: wrangler preview --name ${previewName} -c ${PREVIEW_CONFIG_NAME} --json`);
-    const result = await capture(wrangler.command, [
+    const result = await run(wrangler.command, [
       "preview",
       "--name",
       previewName,
@@ -608,7 +636,10 @@ async function deployPreview(
         `expected preview URL ${previewUrl(previewName)}, but wrangler returned ${url}`,
       );
     }
-    await waitForDeployment(url, deploymentId);
+    await waitFor(
+      `${url}/version`,
+      (status, text) => status === 200 && text.startsWith(deploymentId),
+    );
     await appBuilds;
     const appPreviews = await Promise.all(
       apps.map((app) => deployAppPreview(app, previewName, url, wrangler.command)),
@@ -639,39 +670,33 @@ async function deployPreview(
 /** Deleting a preview that was never created — a PR closed before its first deploy, a re-run of
  *  the cleanup job, the sweep racing the close job — is the expected case, not a failure. */
 async function deletePreview(previewName: string, wranglerCommand?: string): Promise<void> {
-  writePreviewWranglerConfig({ previewName, d1DatabaseId: "00000000-0000-0000-0000-000000000000" });
+  const config = writeParentConfig(PREVIEW_PARENT);
   const wrangler = wranglerCommand
     ? { command: wranglerCommand, ready: Promise.resolve(), cleanup: () => {} }
     : preparePreviewWrangler();
   try {
     await wrangler.ready;
-    console.log(
-      `running: wrangler preview delete --name ${previewName} -c ${PREVIEW_CONFIG_NAME} -y`,
-    );
-    const result = await capture(wrangler.command, [
+    const result = await run(wrangler.command, [
       "preview",
       "delete",
       "--name",
       previewName,
       "-c",
-      PREVIEW_CONFIG_NAME,
+      config,
       "-y",
     ]);
-    if (result.status !== 0) {
-      if (
-        /not found|does not exist|10007|10025|10222/i.test(`${result.stdout}\n${result.stderr}`)
-      ) {
-        console.warn(`preview ${previewName} did not exist; continuing.`);
-      } else {
-        throw new Error(
-          `wrangler preview delete failed with exit code ${result.status}\n${result.stderr}`,
-        );
-      }
-    } else {
-      console.log(`deleted preview ${previewName}`);
-    }
+    if (result.status === 0) console.log(`deleted preview ${previewName}`);
+    else if (
+      /not found|does not exist|10007|10025|10222/i.test(`${result.stdout}\n${result.stderr}`)
+    )
+      console.warn(`preview ${previewName} did not exist; continuing.`);
+    else
+      throw new Error(
+        `wrangler preview delete failed with exit code ${result.status}\n${result.stderr}`,
+      );
   } finally {
     wrangler.cleanup();
+    rmSync(path.dirname(config), { recursive: true, force: true });
   }
   await deleteDatabase(previewResourceName(previewName, "db"));
 }
@@ -693,7 +718,10 @@ async function deleteAll(previewName: string): Promise<void> {
  *  blank and the project-host rows skip. */
 async function runE2e(previewName: string): Promise<void> {
   const url = previewUrl(previewName);
-  await runAsync("pnpm", ["e2e", "--no-file-parallelism"], {
+  // The suite's files run in parallel: every project a test creates is its own (e2e/support/client.ts
+  // `freshCtx`); the few load-sensitive files are vitest's serial lane (vitest.config.ts).
+  await runOk("pnpm", ["e2e"], {
+    inherit: true,
     cwd: ROOT,
     env: {
       ...process.env,
@@ -723,6 +751,7 @@ async function pullRequestState(number: number): Promise<PullRequestState> {
     });
     if (response.status === 404) return "missing";
     if (!response.ok) throw new Error(`GitHub GET pulls/${number} failed with ${response.status}`);
+    // GET /pulls/{n}: `state` is "open" | "closed" per the docs; anything else is refused below.
     const { state } = (await response.json()) as { state: string };
     if (state === "open" || state === "closed") return state;
     throw new Error(`GitHub reported the state ${JSON.stringify(state)}`);
@@ -747,7 +776,7 @@ async function sweep(dryRun: boolean): Promise<void> {
       `/accounts/${account()}/workers/workers/${parent}/previews`,
     ).catch((error) => {
       if (!isMissingWorkerError(describe(error))) throw error;
-      return [] as ListedPreview[];
+      return [] as ListedPreview[]; // a parent never deployed holds no previews
     });
     for (const preview of listed) appPreviews.push({ app, name: preview.name });
   }
@@ -769,11 +798,7 @@ async function sweep(dryRun: boolean): Promise<void> {
   }
   // A D1 whose preview is gone (a cleanup that failed after `preview delete`, a hand-deleted preview).
   const live = new Set(previews.map((preview) => previewResourceName(preview.name, "db")));
-  const orphanDatabases = (
-    await cf<D1Row[]>(
-      `/accounts/${account()}/d1/database?per_page=100&name=${PREVIEW_PARENT.workerName}-pr`,
-    )
-  ).filter(
+  const orphanDatabases = (await listDatabases()).filter(
     (row) =>
       /-db$/.test(row.name) &&
       row.name.startsWith(`${PREVIEW_PARENT.workerName}-pr`) &&
@@ -821,7 +846,7 @@ async function sweep(dryRun: boolean): Promise<void> {
 // ── main ───────────────────────────────────────────────────────────────────────────────────────
 
 function parseArgs(argv: string[]) {
-  const command = argv[0] as Command;
+  const command = argv[0] as Command; // validated on the next line: anything not in COMMANDS is refused
   if (!COMMANDS.includes(command)) throw new Error(USAGE);
   let pr: string | undefined;
   let name: string | undefined;
@@ -871,12 +896,13 @@ async function main(argv: string[]): Promise<void> {
     );
     return;
   }
-  if (command === "deploy") return deployPreview(previewName, pr, branch, appsToPreview(appsMode));
+  if (command === "deploy")
+    return deployPreview(previewName, pr, branch, await appsToPreview(appsMode, pr));
   if (command === "e2e") return runE2e(previewName);
   if (command === "delete") return deleteAll(previewName);
   if (command === "reset") {
     await deleteAll(previewName);
-    return deployPreview(previewName, pr, branch, appsToPreview(appsMode));
+    return deployPreview(previewName, pr, branch, await appsToPreview(appsMode, pr));
   }
 }
 
