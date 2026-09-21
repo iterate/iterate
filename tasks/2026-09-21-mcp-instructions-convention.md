@@ -13,7 +13,7 @@ Jonas, 2026-09-21: the convention is not thought through yet — record the idea
 
 `apps/os-next/src/mcp.ts` `serverInstructions` tells a connecting client three things at
 `initialize`: that there is one tool, `run`, and where its scripts execute
-(`/mcp/inbound/<grant>`, the project root being `itx.cd('/')`); that every run is on that
+(`/mcp/inbound/grants/<grant>`, the project root being `itx.cd('/')`); that every run is on that
 context's log; and which projects the token reaches (so `project` is spelled right the first
 time). Nothing tells the client how THIS project wants to be used.
 
