@@ -110,8 +110,8 @@ export interface LibraryRoots {
    *  on the `project` facet at `/`): the `repo` processor row on the path, `repo/create-requested`,
    *  then the terminal fact — `repo/created`, cross-posted to `/` by the repo processor, or
    *  `repo/create-failed`, thrown. `get(path)` is the handle — pure addressing, hosted on its first
-   *  call: the facet's verbs (`RepoDurableObject`'s `tip` `readFile` `listFiles` `commitFiles`
-   *  `writeFile` `log`, each one dotted expression on the facet, refused until the certificate has
+   *  call: the facet's verbs (`RepoDurableObject`'s `tip` `readFile` `readModules` `modules` `listFiles`
+   *  `commitFiles` `writeFile` `log`, each one dotted expression on the facet, refused until the certificate has
    *  landed) plus the typed `append(...events)` — the repo's own events, validated against its
    *  contract, appended on that context under the caller. `list()` is the project catalog: the
    *  certificates cross-posted to `/`, folded by the project processor (src/project/). */
@@ -198,7 +198,7 @@ export type FileHandle = {
  *  of the repo's events on that context (`entityHandle`). */
 export type RepoFacet = Pick<
   RepoDurableObject,
-  "tip" | "readFile" | "readModules" | "listFiles" | "commitFiles" | "writeFile" | "log"
+  "tip" | "readFile" | "readModules" | "modules" | "listFiles" | "commitFiles" | "writeFile" | "log"
 > & { append(...events: EventInput<typeof RepoContract>[]): Promise<StreamEvent[]> };
 /** What an agent handle's dotted members reach: the agent facet's own methods, and the typed
  *  `append` of the agent's events on that context. */

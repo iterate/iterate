@@ -33,7 +33,31 @@ localOnly(
       await until("the second commit published", async () =>
         (await fetchProjectUrl(apex)).text === "Elephants pack their trunks." ? true : undefined,
       );
-      // The processor's ingress facts are keyed by the commit: exactly one per commit on `/`.
+      // THE WHOLE TREE IS THE WORKER: a commit whose `worker.ts` imports a sibling by its relative
+      // path publishes too — the platform's target is the repo's modules at the commit, not one file
+      // (a `.md` beside them is not a module and changes nothing).
+      const third = await repo.commitFiles({
+        message: "a site in two modules",
+        changes: [
+          {
+            path: "lib/joke.js",
+            content: 'export const joke = "Elephants never forget a module.";\n',
+          },
+          { path: "NOTES.md", content: "# not a module\n" },
+          {
+            path: "worker.ts",
+            content:
+              "import { WorkerEntrypoint } from 'cloudflare:workers'; import { joke } from './lib/joke.js'; export default class extends WorkerEntrypoint { fetch() { return new Response(joke); } }",
+          },
+        ],
+      });
+      await until("the two-module commit published", async () =>
+        (await fetchProjectUrl(apex)).text === "Elephants never forget a module."
+          ? true
+          : undefined,
+      );
+      // The processor's ingress facts are keyed by the commit: exactly one per commit on `/`, each
+      // loading the repo's modules at that commit.
       const published = (await readAll(root)).filter(
         (e) => e.type === "events.iterate.com/project/ingress-configured",
       );
@@ -41,6 +65,13 @@ localOnly(
         expect.any(String), // the seed's
         first.commitOid,
         second.commitOid,
+        third.commitOid,
+      ]);
+      expect(published.at(-1)!.payload.target[2][1].source).toEqual([
+        "itx",
+        "repos",
+        ["get", "/repos/config"],
+        ["modules", { commitOid: third.commitOid }],
       ]);
       // First cold load happens AFTER main advanced: the cache key still loads its exact commit.
       expect(await repo.readFile("worker.ts", { commitOid: first.commitOid })).toBe(
