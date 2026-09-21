@@ -142,7 +142,8 @@ async function buildServer(
               "append",
               {
                 type: "events.iterate.com/project/mcp-connection-created",
-                idempotencyKey: `mcp-connection-created/${grant?.grantId ?? "admin"}`,
+                // one row per connection AND path: a connection whose context moved is born again there
+                idempotencyKey: `mcp-connection-created${connectionPath}`,
                 payload: { grantId: grant?.grantId ?? "admin", path: connectionPath },
               },
             ],
