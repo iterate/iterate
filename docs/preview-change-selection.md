@@ -268,7 +268,7 @@ lazy job published `tests=true; deploy=true` for the exact implementation SHA.
 Its local regression test also verifies that the former product blob remains
 absent after the filtered fetch and that the checkout stays clean.
 
-Local validation passed all 31 focused planner/workflow tests, repository
+Local validation passed all 52 focused planner/evidence/workflow tests, repository
 typecheck, lint, unused-code checks and formatting. The complete repository
 suite passed with `pnpm -r --workspace-concurrency=1 test`. Parallel local runs
 hit five-second timeouts: the new history fixture was shortened, and an
@@ -278,8 +278,7 @@ timeouts were increased.
 The implementation run also passed deployment, app tests and all six browser
 shards, then restored the preview. Its [settlement](https://depot.dev/orgs/0p91s0lz49/workflows/tt77gkjqqt?job=fx5b2kkt74&attempt=rl1ltfjsrr)
 recorded `tests=success; deployment=restored; check=106277241289`. The following
-evidence-only commit tests docs inheritance; its result is recorded in the PR
-body so the acceptance record does not itself require another push.
+docs-only push tested inheritance and exposed the mismatch described below.
 
 The first docs-only push exposed an existing evidence-reader mismatch: Depot
 reported `Preview / Preview / deploy + e2e / App tests`, while the reader
@@ -287,3 +286,13 @@ removed only one prefix and rejected the settled run. A regression now covers
 those actual nested names, and the reader matches the leaf job name while
 retaining every provenance and completeness check. Replaying the real
 `44107d152` checks/statuses then recognized its settled success.
+
+Final code at `e36843a25` passed unit/lint CI and a [full preview run](https://depot.dev/orgs/0p91s0lz49/workflows/th655r5qwt):
+readiness, app tests, all six browser shards and restoration, followed by
+`tests=success; deployment=restored; check=106287271519`. An earlier attempt
+failed readiness when npm returned 404 for the newly published
+`@tanstack/query-core@5.103.2` tarball; after cleanup and registry recovery, the
+fresh run passed without dependency or timeout changes. Subsequent product
+checkout fetches took 0.394s and 0.416s; total job times still vary with runner
+queueing. The docs-only acceptance push follows this settlement; its outcome is
+recorded in the PR body to avoid another evidence-only commit.
