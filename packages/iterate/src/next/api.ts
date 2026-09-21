@@ -29,8 +29,12 @@ export interface StreamPage {
   atHead: boolean;
 }
 
-/** `waitForEvent`'s filter: an event type, a floor, a timeout. */
-export type WaitForEventFilter = { type?: string; afterOffset?: number; timeoutMs?: number };
+/** `waitForEvent`'s filter: an event type (or one of a list), a floor, a timeout. */
+export type WaitForEventFilter = {
+  type?: string | string[];
+  afterOffset?: number;
+  timeoutMs?: number;
+};
 
 /** The `rewrite-rule-configured` event's payload — what `provide` takes, what `itx.append` writes
  *  durably: make `match` mean `target` (an expression, or `null` to deny). `description` is the one
@@ -161,14 +165,25 @@ export interface IterateContextApi {
    *  `context/run-requested` under the caller, the context's runner, `run-settled` (JSON in, JSON
    *  out); resolves with the result or rejects with the settlement's error. Never re-run. */
   run(script: string): Promise<unknown>;
-  /** The project's repos and workspaces as domain objects: a facet on the context at `path`. */
+  /** The project's repos, workspaces and agents as domain objects — one shape each: `get(path)` is
+   *  the entity's facet on the context at `path` (its verbs, plus the typed `append` on that
+   *  context), `list()` the project catalog, `create(path)` the creation saga on that path (the
+   *  parent link the caller's context writes first, then the processor row, the request, the
+   *  terminal fact — created, or create-failed thrown). A relative `path` means the caller's. */
   repos: {
     get(path: string): InvokeHandle;
     list(): Promise<{ path: string; createdAt: string }[]>;
+    create(path: string): Promise<{ path: string }>;
   };
   workspaces: {
     get(path: string): InvokeHandle;
     list(): Promise<{ path: string; createdAt: string }[]>;
+    create(path: string): Promise<{ path: string }>;
+  };
+  agents: {
+    get(path: string): InvokeHandle;
+    list(): Promise<{ path: string; createdAt: string }[]>;
+    create(path: string): Promise<{ path: string }>;
   };
   /** The MCP connections born under the project, by grant: each connection's context path
    *  (`/mcp/inbound/<grantId>`, its transcript) and when it was born (the grant's first run). */

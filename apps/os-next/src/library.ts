@@ -5,9 +5,9 @@
 //   capnweb     — `itx.connectToCapnweb(url)`: a remote capnweb API as a pipelinable handle
 //   mcp         — `itx.connectToMcp(url)`: an MCP client over Streamable HTTP
 //   openapi     — `itx.connectToOpenApi(spec)`: an OpenAPI 3 service as an RpcTarget of operationIds
-//   repos       — `itx.repos.get(path)` / `.list()`: a repo as a stream on any path — its `repo` facet
-//   workspaces  — `itx.workspaces.get(path)` / `.list()`: the workspace of any context — its `workspace` facet
-//   agents      — `itx.agents.get(path)` / `.list()`: an agent on any path — its `agent` facet, the loop that acts by scripts
+//   repos       — `itx.repos.get(path)` / `.list()` / `.create(path)`: a repo as a stream on any path — its `repo` facet
+//   workspaces  — `itx.workspaces.get(path)` / `.list()` / `.create(path)`: the workspace of any context — its `workspace` facet
+//   agents      — `itx.agents.get(path)` / `.list()` / `.create(path)`: an agent on any path — its `agent` facet, the loop that acts by scripts
 //   files       — `itx.files.get(path)` / `.list()`: project file storage — a path, its bytes and content type, over `itx.r2`
 
 import {
@@ -23,14 +23,19 @@ import {
   InvokeHandle,
   print,
   walkStepsOnRpcStub,
+  type ItxExpression,
 } from "iterate/next/expression";
 import { errorCode, resolveContextPath } from "iterate/next/lib";
 import type { Caller } from "iterate/next/principal";
+import type { EventInput, StreamEvent } from "iterate/next/stream/processor";
 import type { RunSettled } from "./stream/core-processor.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
+import { AgentContract } from "./agent/contract.ts";
 import type { AgentDurableObject } from "./agent/durable-object.ts";
-import type { ProjectView } from "./project/contract.ts";
+import { RepoContract } from "./repo/contract.ts";
+import type { ProjectState } from "./project/contract.ts";
 import type { RepoDurableObject } from "./repo/durable-object.ts";
+import { WorkspaceContract } from "./workspace/contract.ts";
 import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 
 // ── the library ── THE LIBRARY: the built-ins that could be userspace. context/built-ins.ts has TWO
@@ -44,9 +49,11 @@ import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 // from the stream, the DO or the context folder, except context/expression.ts — the codec and the
 // pipelinable handle).
 //
-// The verbs: `run` · `connectToMcp` · `connectToOpenApi` · `connectToCapnweb` · `repos.get`/`list` ·
-// `workspaces.get`/`list` · `agents.get`/`list` · `mcpConnections.list` · `files.get`/`list`. `run` is sugar over `itx.workers.get` (the run section); the entity handles
-// over `itx.cd(path).facets.get` (the entities section). The three connectors each
+// The verbs: `run` · `connectToMcp` · `connectToOpenApi` · `connectToCapnweb` · `repos.get`/`list`/`create` ·
+// `workspaces.get`/`list`/`create` · `agents.get`/`list`/`create` · `mcpConnections.list` · `files.get`/`list`. `run` is sugar over
+// `itx.workers.get` (the run section); an entity's `get(path)` is a handle over `itx.cd(path).facets.get`,
+// its `list()` and `create(path)` one dispatch on the collection the `project` facet on `/` carries
+// (the entities section). The three connectors each
 // return a connection RpcTarget a caller can hold across calls, and each does ALL its HTTP through
 // `itx.fetch` (egress: `getSecret("/secrets/NAME")` placeholders in headers substitute for free; a user
 // rule shadowing `itx.fetch` redirects the library too, which is how a test fakes a remote). The
@@ -97,38 +104,52 @@ export interface LibraryRoots {
    *  trip per step. */
   connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
   /** THE REPOS (src/repo/): a repo as a DOMAIN OBJECT — a stream on ANY path (`/repos/<name>` by
-   *  convention) whose `repo` facet lands the creation facts and the commit facts and memoizes the
-   *  tip — git spoken from inside the facet, its token and remote from `itx.cfArtifacts` (which derives the Artifacts repo's name from the path). `get(path)` is that
-   *  facet, hosted on its first call and addressed after; `create()` births it, and every other
-   *  method refuses until it has. Every call on the handle is one dotted expression on the facet
-   *  (`RepoDurableObject`'s methods: `create` `tip` `readFile` `readModules` `listFiles` `commitFiles` `writeFile`
-   *  `log`). `list()` is the project catalog: the birth certificates cross-posted to `/`, folded by
-   *  the project processor (src/project/). */
+   *  convention) whose `repo` facet lands the commit facts and memoizes the tip — git spoken from
+   *  inside the facet, its token and remote from `itx.cfArtifacts` (which derives the Artifacts
+   *  repo's name from the path). `create(path)` is THE CREATION, the collection's (src/repo/collection.ts,
+   *  on the `project` facet at `/`): the `repo` processor row on the path, `repo/create-requested`,
+   *  then the terminal fact — `repo/created`, cross-posted to `/` by the repo processor, or
+   *  `repo/create-failed`, thrown. `get(path)` is the handle — pure addressing, hosted on its first
+   *  call: the facet's verbs (`RepoDurableObject`'s `tip` `readFile` `listFiles` `commitFiles`
+   *  `writeFile` `log`, each one dotted expression on the facet, refused until the certificate has
+   *  landed) plus the typed `append(...events)` — the repo's own events, validated against its
+   *  contract, appended on that context under the caller. `list()` is the project catalog: the
+   *  certificates cross-posted to `/`, folded by the project processor (src/project/). */
   repos: {
     get(path: string): InvokeHandle & RepoFacet;
     list(): Promise<{ path: string; createdAt: string }[]>;
+    create(path: string): Promise<{ path: string }>;
   };
-  /** THE WORKSPACES (src/workspace/): the workspace of ANY context, at most one per path —
+  /** THE WORKSPACES (src/workspace/): the workspace of ANY context, at most one per path — a
+   *  workspace IS its path. `create(path)` is the collection's (src/workspace/collection.ts): the
+   *  `workspace` processor row on the path, `workspace/create-requested`, then `workspace/created`
+   *  (cross-posted to `/` by the workspace processor) or `workspace/create-failed`, thrown.
    *  `get(path)` is the `workspace` facet on `itx.cd(path)`, hosted on its first call and addressed
-   *  after — a workspace IS its path; `create()` births it, and every other method refuses until
-   *  it has. Every call on the handle is one dotted expression on that facet
-   *  (`WorkspaceDurableObject`'s methods: `readFile` `readBase` `writeFile` `deleteFile` `revert`
-   *  `listAllFiles` `mounts` `gitStatus` `gitCommit` `gitLog`). `list()` is the project catalog (as for repos). */
+   *  after — its methods (`WorkspaceDurableObject`'s `readFile` `readBase` `writeFile` `deleteFile`
+   *  `revert` `listAllFiles` `mounts` `gitStatus` `gitCommit` `gitLog`, each one dotted expression
+   *  on that facet, refused until the certificate has landed) plus the typed `append`. `list()` is
+   *  the project catalog (as for repos). */
   workspaces: {
     get(path: string): InvokeHandle & WorkspaceFacet;
     list(): Promise<{ path: string; createdAt: string }[]>;
+    create(path: string): Promise<{ path: string }>;
   };
   /** THE AGENTS (src/agent/): an agent as a DOMAIN OBJECT — a conversation on the context at ANY
    *  path (`/agents/<name>` by convention), driven by a model that acts by writing scripts against
-   *  that context's `itx`; apps/os's agent, lean. `get(path)` is the `agent` facet there, hosted on
-   *  its first call and addressed after; `create({ systemPrompt? })` births it — the processor row
-   *  (the loop runs on every commit) and the certificate, cross-posted to `/` — and `message(text)`
-   *  is a person's words, the trigger of a turn; everything the loop does is an event on the path.
-   *  `list()` is the project catalog: every `agent/created` cross-posted to `/`, folded by the
-   *  project processor (src/project/) — a userspace agent that announces itself lists the same. */
+   *  that context's `itx`; apps/os's agent, lean. `create(path)` is the collection's
+   *  (src/agent/collection.ts): the `agent` processor row on the path (the loop runs on every
+   *  commit), `agent/create-requested`, then `agent/created` (cross-posted to `/` by the agent
+   *  processor) or `agent/create-failed`, thrown; an operator prompt is a keyed
+   *  `agent/context-added` through the handle's `append`. `get(path)` is the `agent` facet there,
+   *  hosted on its first call and addressed after: `message(text)` is a person's words, the trigger
+   *  of a turn, and `append(...events)` the typed write of the agent's own events; everything the
+   *  loop does is an event on the path. `list()` is the project catalog: every `agent/created`
+   *  cross-posted to `/`, folded by the project processor (src/project/) — a userspace agent that
+   *  announces itself lists the same. */
   agents: {
     get(path: string): InvokeHandle & AgentFacet;
     list(): Promise<{ path: string; createdAt: string }[]>;
+    create(path: string): Promise<{ path: string }>;
   };
   /** THE MCP CONNECTIONS of the project: every grant whose connection context was born here (its
    *  first run over MCP) — the context's path (`/mcp/inbound/<grantId>`, its transcript) and when.
@@ -167,14 +188,19 @@ export type FileHandle = {
   }): Promise<{ url: string; expiresAt: string }>;
 };
 
-/** What a repo handle's dotted members reach: the repo facet's own methods. */
+/** What a repo handle's dotted members reach: the repo facet's own methods, and the typed `append`
+ *  of the repo's events on that context (`entityHandle`). */
 export type RepoFacet = Pick<
   RepoDurableObject,
-  "create" | "tip" | "readFile" | "readModules" | "listFiles" | "commitFiles" | "writeFile" | "log"
->;
-/** What an agent handle's dotted members reach: the agent facet's own doors. */
-export type AgentFacet = Pick<AgentDurableObject, "create" | "message">;
-/** What a workspace handle's dotted members reach: the workspace facet's own methods. */
+  "tip" | "readFile" | "readModules" | "listFiles" | "commitFiles" | "writeFile" | "log"
+> & { append(...events: EventInput<typeof RepoContract>[]): Promise<StreamEvent[]> };
+/** What an agent handle's dotted members reach: the agent facet's own methods, and the typed
+ *  `append` of the agent's events on that context. */
+export type AgentFacet = Pick<AgentDurableObject, "message"> & {
+  append(...events: EventInput<typeof AgentContract>[]): Promise<StreamEvent[]>;
+};
+/** What a workspace handle's dotted members reach: the workspace facet's own methods, and the typed
+ *  `append` of the workspace's events on that context. */
 export type WorkspaceFacet = Pick<
   WorkspaceDurableObject,
   | "mounts"
@@ -187,7 +213,7 @@ export type WorkspaceFacet = Pick<
   | "gitStatus"
   | "gitCommit"
   | "gitLog"
->;
+> & { append(...events: EventInput<typeof WorkspaceContract>[]): Promise<StreamEvent[]> };
 
 /** The library, built once per context: the verbs closed over one `itx`, memoizing the live
  *  connections the connectors open, and the one release door. Nothing is constructed here: a wake
@@ -195,8 +221,10 @@ export type WorkspaceFacet = Pick<
 export function buildLibrary(
   itx: LibraryItx,
   deps: {
-    /** WHO is calling — the DO's ambient caller: its originating `path` names the CREATOR a create
-     *  path links a new context to. The one thing the library reads beside `itx`. */
+    /** WHO is calling right now — read when a handle is MADE (a handle is a value that outlives the
+     *  call; its later dispatches arrive with no ambient caller), so a relative path (`./x` from a
+     *  child, answered at the root through its link) means the caller's, and a creation's parent
+     *  link names the caller's context. */
     caller: () => Caller;
   },
 ): {
@@ -237,21 +265,39 @@ export function buildLibrary(
         memoized(["capnweb", url, options], options?.transport !== "batch", () =>
           connectToCapnweb(itx, url, options),
         ),
+      // An entity root is ONE shape: `get(path)` the handle (`entityHandle`, typed as the facet it
+      // dispatches to — the entities section says why the assertion is safe), `list()` and
+      // `create(path)` one dispatch each on the collection the `project` facet carries
+      // (`projectFacet`): the platform's own `<Entity>CollectionRpcTarget`, whose `list` and
+      // `create` answer exactly these shapes — ours, so the wire's copy is asserted, not re-validated.
       repos: {
-        get: (path) => repoHandle(itx, path, deps.caller()),
-        list: async () =>
-          Object.entries((await projectCatalog(itx)).repos).map(([path, repo]) => ({
-            path,
-            ...repo,
-          })),
+        get: (path) =>
+          entityHandle(itx, path, "repo", RepoContract, deps.caller()) as InvokeHandle & RepoFacet,
+        list: () =>
+          projectFacet(itx, [["repos"], ["list"]]) as Promise<
+            { path: string; createdAt: string }[]
+          >,
+        create: (path) => createEntity(itx, path, "repos", deps.caller()),
       },
       workspaces: {
-        get: (path) => workspaceHandle(itx, path, deps.caller()),
-        list: async () =>
-          Object.entries((await projectCatalog(itx)).workspaces).map(([path, workspace]) => ({
-            path,
-            ...workspace,
-          })),
+        get: (path) =>
+          entityHandle(itx, path, "workspace", WorkspaceContract, deps.caller()) as InvokeHandle &
+            WorkspaceFacet,
+        list: () =>
+          projectFacet(itx, [["workspaces"], ["list"]]) as Promise<
+            { path: string; createdAt: string }[]
+          >,
+        create: (path) => createEntity(itx, path, "workspaces", deps.caller()),
+      },
+      agents: {
+        get: (path) =>
+          entityHandle(itx, path, "agent", AgentContract, deps.caller()) as InvokeHandle &
+            AgentFacet,
+        list: () =>
+          projectFacet(itx, [["agents"], ["list"]]) as Promise<
+            { path: string; createdAt: string }[]
+          >,
+        create: (path) => createEntity(itx, path, "agents", deps.caller()),
       },
       files: {
         get: (path) => fileHandle(itx, path),
@@ -266,20 +312,15 @@ export function buildLibrary(
           }
         },
       },
-      agents: {
-        get: (path) => agentHandle(itx, path, deps.caller()),
-        list: async () =>
-          Object.entries((await projectCatalog(itx)).agents).map(([path, agent]) => ({
-            path,
-            ...agent,
-          })),
-      },
+      // The MCP connections born under the project — a catalog entry with no `create`: mcp.ts births
+      // the connection's context and appends its certificate to `/` itself. Read off the `project`
+      // facet's state, the same catalog the collections list from (the shape is ours, asserted).
       mcpConnections: {
         list: async () =>
-          Object.entries((await projectCatalog(itx)).mcpConnections).map(([grantId, client]) => ({
-            grantId,
-            ...client,
-          })),
+          Object.entries(
+            ((await projectFacet(itx, [["snapshot"]])) as { state: ProjectState }).state
+              .mcpConnections,
+          ).map(([grantId, connection]) => ({ grantId, ...connection })),
       },
     },
     holdsOpenSocket: () => [...liveConnections.values()].some((c) => c.holdsSocket),
@@ -341,8 +382,6 @@ export async function executeScript(itx: LibraryItx, code: string): Promise<unkn
   // TWO dotted calls, never one chain: the handle's dotted surface dispatches at the first call, and
   // in-process the record hands the worker's handle back as a VALUE (a genuine RpcTarget), so `run`
   // is its own dispatch on that value — exactly what a remote holder of the same handle would do.
-  // Minted at the FIXED POINT — the loader is the kernel's act; the ROWS govern the script's world
-  // (its `env.ITX` is this context's app handle, and the table decides what it may say).
   const worker = (await itx.builtins.workers.get({ source: runScriptModule(code) })) as unknown as {
     run(): Promise<unknown>;
   };
@@ -359,9 +398,9 @@ export function runScript(itx: LibraryItx, script: unknown): Promise<unknown> {
 }
 
 async function requestAndAwaitRun(itx: LibraryItx, script: string): Promise<unknown> {
-  // The request and the wait are the KERNEL's own log traffic, spelled at the fixed point: a
-  // context's rows say what its code may spell (the script's `env.ITX`), never whether the runner
-  // may write its request — a jail's bare null must not wall the platform's own plumbing.
+  // The request and the wait are the KERNEL's own log traffic, spelled at the fixed point: a context's
+  // rows say what its code may spell, never whether the runner may write its request (a jail's bare
+  // null must not wall the platform's own plumbing).
   const [requested] = await itx.builtins.append({
     type: "events.iterate.com/context/run-requested",
     payload: { code: script },
@@ -394,76 +433,122 @@ async function requestAndAwaitRun(itx: LibraryItx, script: string): Promise<unkn
   }
 }
 
-// ── the entities ── `itx.repos.get(path)`, `itx.workspaces.get(path)`: a repo (src/repo/) and a
-// workspace (src/workspace/) are each a FACET hosted on their own context — a facet named with a
-// spec is hosted on its first call and addressed after (the DO's startup memo; an unchanged spec never
-// restarts it), so nothing is appended to get one; `create()` appends the birth certificate (on its
-// path, cross-posted to `/`). Every call on the handle is one dotted expression
-// on that facet, run in the sibling under ITS rules (a test lends a fake `itx.cfArtifacts` on a repo's
-// context). A first-party facet is this worker's own class (first-party-facets.ts); a userspace one
-// could carry just the same. `list()` for both — and `agents.list()`, the agents having no
-// first-party facet to `get` — reads THE CATALOG: the `project` facet on `/` (src/project/), which
-// folds the cross-posted certificates; hosted the same way, on first read.
+// ── the entities ── `itx.repos`, `itx.workspaces`, `itx.agents`: a repo (src/repo/), a workspace
+// (src/workspace/) and an agent (src/agent/) are each a FACET hosted on their own context, and ONE
+// SHAPE here. `get(path)` is the HANDLE — pure addressing: a first-party facet is hosted on its first
+// call and addressed after (the DO's startup memo), so nothing is appended to get one; every call on
+// the handle is one dotted expression on that facet, run in the sibling under ITS rules (a test lends
+// a fake `itx.cfArtifacts` on a repo's context) — EXCEPT `append(...events)`, THE TYPED WRITE: the
+// entity's own events, each validated against its contract and appended on the context at `path`
+// under the CALLER's principal, never through the facet (a facet's appends are the processor's,
+// stamped as its). `list()` and `create(path)` are THE COLLECTION's, which lives where the catalog
+// does: the `project` facet on `/` (src/project/durable-object.ts carries one
+// `<Entity>CollectionRpcTarget` per entity) — `list()` reads the catalog the project processor folds
+// from the cross-posted certificates; `create(path)` is the creation saga on the path: the
+// processor row, `<entity>/create-requested`, then `<entity>/created` (cross-posted to `/` by the
+// entity's processor, which provisions at head from state) or `<entity>/create-failed`, thrown.
 
-/** A facet on the context at `path`: the call's steps, relative to the facet, as one dispatch there. */
-/** The caller a handle was MADE for, and the context its relative paths mean. A handle is a VALUE
- *  that outlives the call that made it — its later calls arrive in a fresh RPC continuation with no
- *  ambient caller — so the caller is captured here, once, and every relative path (`./x` from a
- *  child, answered at the root through its link) resolves against the caller's originating context,
- *  else this one. */
+/** The context a handle's relative paths mean, and a creation's CREATOR: the caller's originating
+ *  context (`Caller.path`, stamped by the first hop — `./x` from a child, answered at the root
+ *  through its link, is the child's `./x`), else this one. */
 async function handleOrigin(itx: LibraryItx, caller: Caller): Promise<string> {
   return caller.path || (await itx.whoami()).path;
 }
 
-function facetHandle(itx: LibraryItx, path: string, name: string, caller: Caller): InvokeHandle {
+/** THE CREATION, from the caller's context: the path resolved against it, THE PARENT LINK written on
+ *  the new context first — the creator's act (itx-expression-rewriting.ts rule 3): everything the
+ *  new context does not claim, its creator answers; absolute, so the row reads plainly; idempotent
+ *  on the creator; none when a context creates on itself (a self-hop is a loop) — then the
+ *  collection's saga on the `project` facet (`<entity>/create-requested` … `created`). A created
+ *  entity answers at once there, so calling this again is how an entity born before the link
+ *  existed gets one. */
+async function createEntity(
+  itx: LibraryItx,
+  path: string,
+  collection: "repos" | "workspaces" | "agents",
+  caller: Caller,
+): Promise<{ path: string }> {
+  const creator = await handleOrigin(itx, caller);
+  const absolute = resolveContextPath(creator, path);
+  if (creator !== absolute)
+    await (
+      await itx.cd(absolute)
+    ).invoke([
+      [
+        "append",
+        {
+          type: "events.iterate.com/itx/rewrite-rule-configured",
+          payload: {
+            match: "itx",
+            target: ["itx", "builtins", ["cd", creator]],
+            description: "everything this context does not claim, its creator answers",
+          },
+          idempotencyKey: `itx@${creator}`,
+        },
+      ],
+    ]);
+  return projectFacet(itx, [[collection], ["create", absolute]]) as Promise<{ path: string }>;
+}
+
+/** ONE dispatch on the `project` facet at `/` — the catalog host, where the collections live. */
+async function projectFacet(itx: LibraryItx, steps: ItxExpression): Promise<unknown> {
+  // TWO dotted calls, never one chain (the `run` section says why): the root's handle first —
+  // in-process a VALUE — then the facet chain relative to it.
+  const context = await itx.cd("/");
+  return context.invoke(["facets", ["get", "project"], ...steps]);
+}
+
+/** What `entityHandle` reads off a contract: the payload schema of an event type it owns, or none. */
+type EntityContract = { payloadSchemaFor?: (type: string) => z.ZodType | undefined };
+
+// An InvokeHandle's dotted members are DYNAMIC (expression.ts: every unknown member reduces to one
+// dispatch), so a handle types as the facet it dispatches to — the first-party class the name hosts
+// — by assertion at the root (`InvokeHandle & RepoFacet` says what `handle.readFile(…)` lands on),
+// which the runtime guarantees (first-party-facets.ts: the name IS that class) and the type system
+// cannot see.
+
+/** The `name` facet on the context at `path`, and the typed write of `contract`'s events there: a
+ *  first step `["append", ...events]` with nothing after it validates each event's payload against
+ *  the contract (a type the contract does not own is refused, naming both) and appends the parsed
+ *  events on the context — the caller's principal on every one; any other chain is one dispatch on
+ *  the facet. */
+function entityHandle(
+  itx: LibraryItx,
+  path: string,
+  name: string,
+  contract: EntityContract,
+  caller: Caller,
+): InvokeHandle {
   return new InvokeHandle(async (itxExpressionSteps) => {
-    const origin = await handleOrigin(itx, caller);
-    const absolute = resolveContextPath(origin, path);
     // TWO dotted calls, never one chain (the `run` section says why): the sibling's handle first —
-    // in-process a VALUE — then the facet chain relative to it.
-    const context = await itx.cd(absolute);
-    const [first] = itxExpressionSteps;
-    if (Array.isArray(first) && first[0] === "create") {
-      // THE PARENT LINK, the creator's act (itx-expression-rewriting.ts rule 3): everything the new
-      // context does not claim, its creator answers — the caller's originating context. Absolute,
-      // so the row reads plainly; a context creating on itself writes none (a self-hop is a loop).
-      // Idempotent on the creator.
-      const creator = origin;
-      if (creator !== absolute)
-        await context.invoke([
-          [
-            "append",
-            {
-              type: "events.iterate.com/itx/rewrite-rule-configured",
-              payload: {
-                match: "itx",
-                target: ["itx", "builtins", ["cd", creator]],
-                description: "everything this context does not claim, its creator answers",
-              },
-              idempotencyKey: `itx@${creator}`,
-            },
-          ],
-        ]);
+    // in-process a VALUE — then the chain relative to it. The path means the CALLER's `./x`.
+    const context = await itx.cd(resolveContextPath(await handleOrigin(itx, caller), path));
+    const [first, ...rest] = itxExpressionSteps;
+    if (Array.isArray(first) && first[0] === "append" && rest.length === 0) {
+      const [, ...events] = first;
+      const parsed = events.map((event) => {
+        // Wire-fed (a handle's steps carry no validation): the shape is checked here, then the
+        // payload by the contract's own schema — the runtime check IS the contract.
+        const input = z
+          .object({
+            type: z.string(),
+            payload: z.unknown(),
+            idempotencyKey: z.string().optional(),
+            metadata: z.record(z.string(), z.unknown()).optional(),
+            ephemeral: z.literal(true).optional(),
+          })
+          .parse(event);
+        const schema = contract.payloadSchemaFor?.(input.type);
+        if (!schema)
+          throw new Error(
+            `${name}.append: ${JSON.stringify(input.type)} is not an event the ${name} contract owns`,
+          );
+        return { ...input, payload: schema.parse(input.payload ?? {}) };
+      });
+      return context.invoke([["append", ...parsed]]);
     }
     return context.invoke(["facets", ["get", name], ...itxExpressionSteps]);
   });
-}
-
-// An InvokeHandle's dotted members are DYNAMIC (expression.ts: every unknown member reduces to one
-// dispatch), so a handle types as the facet it dispatches to — the class the spec names — by
-// assertion: `InvokeHandle & RepoFacet` says what `handle.readFile(…)` lands on, which the runtime
-// guarantees (the spec's `className` IS that class) and the type system cannot see.
-
-/** The `workspace` facet on the context at `path`. */
-function workspaceHandle(
-  itx: LibraryItx,
-  path: string,
-  caller: Caller,
-): InvokeHandle & WorkspaceFacet {
-  // An InvokeHandle's dotted proxy answers ANY name at runtime (the facet does the answering); the
-  // intersection is how TypeScript learns the facet's methods for the dotted spelling — nothing here
-  // can check it, so an assertion is the only way to say it.
-  return facetHandle(itx, path, "workspace", caller) as InvokeHandle & WorkspaceFacet;
 }
 
 // ── the files ── `itx.files.get(path)`: the path's object in `itx.r2` (already the owner's slice),
@@ -536,65 +621,6 @@ function fileHandle(itx: LibraryItx, path: string): InvokeHandle & FileHandle {
     // reads what it needs and the runtime checks in fileBytes are the contract.
     return (verbs[verb] as (...verbArgs: unknown[]) => unknown)(...args);
   }) as InvokeHandle & FileHandle;
-}
-
-/** The `agent` facet's spec — ONE object for the library's hosting and the processor row it enables,
- *  so the facet's startup memo never changes between the two. */
-
-/** The `agent` facet on the context at `path`. A `create` is TWO appends there: the processor row —
- *  `itx.processors.enable`, spelled HERE because the library is what knows the facet's spec; DURABLE,
- *  so the loop runs on every commit and outlives this session; enabled ONCE, a row already there is
- *  left alone — and then the facet's own birth, idempotent on its side. */
-function agentHandle(itx: LibraryItx, path: string, caller: Caller): InvokeHandle & AgentFacet {
-  return new InvokeHandle(async (itxExpressionSteps) => {
-    const origin = await handleOrigin(itx, caller);
-    const absolute = resolveContextPath(origin, path);
-    const context = await itx.cd(absolute);
-    const [first] = itxExpressionSteps;
-    if (Array.isArray(first) && first[0] === "create") {
-      // THE PARENT LINK first (spelled as in facetHandle — the creator's act, rule 3), then the
-      // processor row, then the facet's own birth: the agent's `itx.ai`, `itx.files` and its
-      // sandbox's every unclaimed name resolve through this row from the first turn.
-      const creator = origin;
-      if (creator !== absolute)
-        await context.invoke([
-          [
-            "append",
-            {
-              type: "events.iterate.com/itx/rewrite-rule-configured",
-              payload: {
-                match: "itx",
-                target: ["itx", "builtins", ["cd", creator]],
-                description: "everything this context does not claim, its creator answers",
-              },
-              idempotencyKey: `itx@${creator}`,
-            },
-          ],
-        ]);
-      const rows = (await context.invoke(["processors", ["list"]])) as { name: string }[];
-      if (!rows.some((row) => row.name === "agent"))
-        await context.invoke(["processors", ["enable", "agent"]]);
-    }
-    return context.invoke(["facets", ["get", "agent"], ...itxExpressionSteps]);
-  }) as InvokeHandle & AgentFacet;
-}
-
-/** The `repo` facet on the context at `path` — any path; the facet derives the Artifacts name from
- *  it and refuses one it cannot back. */
-function repoHandle(itx: LibraryItx, path: string, caller: Caller): InvokeHandle & RepoFacet {
-  // The same proxy-typed-for-its-facet assertion as `workspaceHandle`.
-  return facetHandle(itx, path, "repo", caller) as InvokeHandle & RepoFacet;
-}
-
-/** THE CATALOG: the `project` facet's view on `/` — what `repos.list()`, `workspaces.list()` and
- *  `agents.list()` read. */
-async function projectCatalog(itx: LibraryItx): Promise<ProjectView> {
-  const context = await itx.cd("/");
-  const snapshot = await context.invoke(["facets", ["get", "project"], ["snapshot"]]);
-  // The facet is the platform's own ProjectDurableObject and `snapshot()` is the engine's
-  // `{ offset, state }`, its state the contract's parsed view — the shape is ours, so the read is
-  // asserted, not re-validated.
-  return (snapshot as { state: ProjectView }).state;
 }
 
 // ── what the three connectors share ──

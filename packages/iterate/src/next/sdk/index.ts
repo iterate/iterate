@@ -26,6 +26,7 @@ export {
   type ConsumedEvent,
   type EventCatalog,
   type EventDefinition,
+  type EventInput,
   type ProcessorContract,
   type ProcessorState,
   type ProcessorStream,
@@ -90,7 +91,18 @@ export type ProcessorScope = {
   readEvents(afterOffset?: number, limit?: number): Promise<unknown>;
   /** The engine's claim on the context's alarm (processor.ts rule 3): "come back by `at`", or null. */
   processors: { claim(name: string, at: number | null): Promise<unknown> };
+  /** Another context of the project — where `appendTo` lands — by its dotted surface (`.append`),
+   *  which the platform's handle and a loaded worker's alike answer. Through the table like every
+   *  other word here: a loaded processor's `cd` goes down only (the app wall), the platform's own
+   *  go anywhere. */
+  cd(path: string): { append(...events: StreamEventInput[]): Promise<unknown> };
 };
+
+/** THE SCOPE ACCESSOR a host hands its processor: one pipelined round trip on the context's itx,
+ *  released after (`StreamProcessorDurableObject.withItx`). A processor that needs an effect —
+ *  `itx.cfArtifacts.create(path)`, `itx.ai.run(…)` — takes this and nothing else, so a unit test
+ *  hands it a fake and the e2e lends one by rule on the context. */
+export type WithItx<Scope = ItxScope> = <T>(call: (itx: Scope) => T) => Promise<Awaited<T>>;
 
 export abstract class StreamProcessorDurableObject<
   State = unknown,
@@ -164,12 +176,15 @@ export abstract class StreamProcessorDurableObject<
       // `processors.claim` — implicit in every context (itx-expression-rewriting.ts rule 3), so they
       // resolve to this log with no row and no hop; a row at `itx.append` is the OWNER's deliberate
       // wall (a jailed processor halts visibly), never a loaded worker's — the fixed point is not a
-      // loaded worker's word.
+      // loaded worker's word. `appendTo` is `cd` through the same table: a first-party saga (the
+      // platform's mint) reaches `/`; a loaded processor's `cd` goes down only.
       stream: {
         // A stub scope's answers are pipelined shapes by type and plain data on the wire (the
         // engine awaits them): the engine's own types, asserted.
         append: (...events) =>
           this.withItx((itx) => itx.append(...events)) as Promise<StreamEvent[]>,
+        appendTo: (path, ...events) =>
+          this.withItx((itx) => itx.cd(path).append(...events)) as Promise<StreamEvent[]>,
         read: (after, limit) =>
           this.withItx((itx) => itx.readEvents(after, limit)) as Promise<StreamPage>,
         claim: (at) => this.withItx((itx) => itx.processors.claim(this.ctx.props.name, at)),

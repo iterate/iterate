@@ -359,7 +359,7 @@ expect(await b.invoke("itx.clash(1)")).toBe(101);
 
 A child is born with its own log and nothing else. Whoever creates it writes one bare row — `itx`,
 the shortest legal match — whose target is the creator's own context; the library's
-`agents.get(path).create()`, `repos.get(path).create()` and `workspaces.get(path).create()` do
+`agents.create(path)`, `repos.create(path)` and `workspaces.create(path)` do
 (`src/library.ts`), and nothing writes it for a context you merely `cd` into. That row claims only
 what no implicit row claims (chapter 3): the child's `append`, `whoami`, `cd`, its rules and its
 facets stay the child's, and every other name walks one hop up to the creator's Durable Object and
@@ -1497,8 +1497,8 @@ repo's context whose `remote()` points at an in-memory git remote (`e2e/support/
 — the real wire codec runs in both lanes; only the binding is deployed-only.
 
 ```ts
-const repo = itx.repos.get("/repos/config");
-await repo.create(); // repos/create-requested, then repos/created on its path and on /
+await itx.repos.create("/repos/config"); // the repo processor's row, repo/create-requested, then repo/created on / and on its path
+const repo = itx.repos.get("/repos/config"); // the handle: the facet's verbs, plus the typed append
 expect(await repo.readFile("worker.ts")).toBeNull(); // an unborn repo reads as null
 const first = await repo.writeFile("worker.ts", source); // one commit on main
 expect(first.commitOid).toMatch(/^[0-9a-f]{40}$/);

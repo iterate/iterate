@@ -1165,6 +1165,12 @@ const ALLOWED_RUNTIME_IMPORTS = new Set([
   "zod", // an npm package a userspace worker could bundle too — used to PARSE untrusted MCP responses
   "iterate/next/expression", // the codec — the package's, as a userspace worker would import it
   "iterate/next/lib", // the package's pure helpers (error codes, resolveContextPath) — in the SDK bundle every userspace worker gets
+  // The entities' CONTRACTS — pure zod over `defineProcessorContract` (the SDK's), no stream, DO or
+  // context runtime: the vocabulary a handle's typed `append` validates against, which a userspace
+  // worker would import from the SDK just the same.
+  "./agent/contract.ts",
+  "./repo/contract.ts",
+  "./workspace/contract.ts",
 ]);
 
 describe("the library boundary", () => {

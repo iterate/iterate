@@ -19,7 +19,7 @@ import { oauthSession } from "./support/principal.ts";
 import {
   deployedOnly,
   freshDnsSafeProjectSlug,
-  ingressHostname,
+  projectUrl,
   registerProject,
 } from "./support/project-host.ts";
 
@@ -161,17 +161,19 @@ export default class Echo extends WorkerEntrypoint {
         },
       ],
     ]);
-    const origin = `https://echo--${slug}.${ingressHostname()}`;
-    await itx.secrets.set("arrives", "the-value", { urls: [origin] });
-    await itx.secrets.set("arrives-json", { a: { b: "the-field" } }, { urls: [origin] });
+    // the app's address; a secret is pinned to its ORIGIN (secrets.ts `originsOf`) — under paths that
+    // is the platform's own origin, every project's apps included
+    const app = projectUrl({ project: slug, app: "echo", path: "/" }).href;
+    await itx.secrets.set("arrives", "the-value", { urls: [app] });
+    await itx.secrets.set("arrives-json", { a: { b: "the-field" } }, { urls: [app] });
     // one request, one secret — the whole-string form, then the `{ field }` form of an object material
     const plain = await itx.fetch(
-      new Request(`${origin}/`, { headers: { "x-secret": 'getSecret("/secrets/arrives")' } }),
+      new Request(app, { headers: { "x-secret": 'getSecret("/secrets/arrives")' } }),
     );
     expect(plain.status).toBe(200);
     expect(await plain.text()).toBe("the-value (none)");
     const field = await itx.fetch(
-      new Request(`${origin}/`, {
+      new Request(app, {
         headers: { "x-field": 'getSecret("/secrets/arrives-json", { field: "a.b" })' },
       }),
     );
@@ -181,8 +183,8 @@ export default class Echo extends WorkerEntrypoint {
     // (the placeholder, never the value) and the upstream's status
     const used = await usedFacts(itx, 2);
     expect(used).toEqual([
-      { name: "arrives", method: "GET", url: `${origin}/`, status: 200 },
-      { name: "arrives-json", method: "GET", url: `${origin}/`, status: 200 },
+      { name: "arrives", method: "GET", url: app, status: 200 },
+      { name: "arrives-json", method: "GET", url: app, status: 200 },
     ]);
     expect(JSON.stringify(used)).not.toContain("the-value");
     expect(JSON.stringify(used)).not.toContain("the-field");

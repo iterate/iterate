@@ -397,7 +397,13 @@ export default {
       return secretOAuthCallback(request, env, ctx, sessionInput);
     const identityResponse = await identityDoor(request, env);
     if (identityResponse) return identityResponse;
-    if (!appConfig.urls.mcp && url.pathname === "/mcp") return oauthResponse(request, env, ctx);
+    if (url.pathname === "/mcp") {
+      // With its own origin configured, MCP lives THERE: a client (or a person) pointed at the
+      // platform's /mcp is sent to it, method and body kept (308), instead of falling through to the
+      // issuer's pages and a bare "Sign in first".
+      if (appConfig.urls.mcp) return Response.redirect(`${appConfig.urls.mcp}/`, 308);
+      return oauthResponse(request, env, ctx);
+    }
     const browserResponse = await browserClient(request, env, ctx);
     if (browserResponse) return browserResponse;
     if (url.pathname.startsWith("/api")) return new Response("Not found", { status: 404 });

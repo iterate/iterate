@@ -10,8 +10,8 @@
 // Dynamic code has two doors, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
+import { codedError, jsonEqual, resolveContextPath } from "iterate/next/lib";
 import { stampCaller, type Caller } from "iterate/next/principal";
-import { codedError, resolveContextPath } from "iterate/next/lib";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
 import {
   print,
@@ -750,6 +750,18 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             );
           assertFacetSourceWithinCeiling(loaded, `processors.enable("${name}")`);
         }
+        // IDEMPOTENT AT THE DOOR (the rule `provide` follows): a row already hosting this facet under
+        // the same spec appends nothing — every entity's `create()` enables its row on every call.
+        const existing = deps.subscriptions.get(name)?.hostedFacet;
+        if (
+          existing &&
+          existing.name === name &&
+          (firstPartyClassName
+            ? existing.className === firstPartyClassName
+            : existing.className === loaded!.className && existing.cacheKey === loaded!.cacheKey) &&
+          jsonEqual(deps.subscriptions.get(name)?.consumes ?? null, spec?.consumes ?? null)
+        )
+          return { name };
         await append({
           type: "events.iterate.com/stream/subscription-configured",
           payload: {

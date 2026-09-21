@@ -20,6 +20,7 @@ import {
 import { describeReach, type Directory, type Project, type Reach } from "./directory.ts";
 import type { AppConfig } from "./app-config.ts";
 import type { AuthenticationFact } from "./account/contract.ts";
+import type { ProjectState } from "./project/contract.ts";
 
 /** A project as a caller names it: its minted id (`prj_<hex>`) or its slug (a URL's
  *  `/projects/<slug>`, a hostname's label) — the directory resolves either (`projectIdOf`), and the
@@ -151,6 +152,7 @@ export class IterateRpcTarget extends RpcTarget {
     publishGlobalFact(
       this.#input,
       `/users/${principal.actor}`,
+      "account",
       {
         type: "events.iterate.com/account/authenticated",
         payload: { credential, at: Date.now(), operationId } satisfies AuthenticationFact,
@@ -171,21 +173,23 @@ export class IterateRpcTarget extends RpcTarget {
 function publishGlobalFact(
   input: SessionInput,
   path: string,
+  /** The first-party processor that folds the fact (first-party-facets.ts): its row on the context
+   *  is enabled first — idempotent at the door, so every fact re-asks and only the first appends. */
+  processor: "account" | "organization",
   fact: StreamEventInput,
   caller: Caller,
 ): void {
   const name = DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path });
+  const context = input.contextNamespace.getByName(name);
   input.waitUntil(
-    // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the append's answer
-    // is not read, so `unknown` is all the promise needs to be.
-    (
-      input.contextNamespace
-        .getByName(name)
-        .invoke(["itx", ["append", fact]], [], caller) as Promise<unknown>
-    ).then(
-      () => undefined,
-      () => undefined,
-    ),
+    // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; neither answer is
+    // read, so `unknown` is all the promises need to be.
+    (context.invoke(["itx", "processors", ["enable", processor]], [], caller) as Promise<unknown>)
+      .then(() => context.invoke(["itx", ["append", fact]], [], caller) as Promise<unknown>)
+      .then(
+        () => undefined,
+        () => undefined,
+      ),
   );
 }
 
@@ -304,6 +308,7 @@ export class SessionRpcTarget extends RpcTarget {
     publishGlobalFact(
       this.#input,
       `/organizations/${org.id}`,
+      "organization",
       {
         type: "events.iterate.com/organization/created",
         idempotencyKey: "organization/created",
@@ -326,6 +331,7 @@ export class SessionRpcTarget extends RpcTarget {
     publishGlobalFact(
       this.#input,
       `/organizations/${org.id}`,
+      "organization",
       { type: "events.iterate.com/organization/renamed", payload: { name: org.name } },
       this.#caller,
     );
@@ -341,6 +347,7 @@ export class SessionRpcTarget extends RpcTarget {
     publishGlobalFact(
       this.#input,
       `/organizations/${id}`,
+      "organization",
       {
         type: "events.iterate.com/organization/deleted",
         idempotencyKey: "organization/deleted",
@@ -494,6 +501,7 @@ class ProjectCollection extends RpcTarget {
     publishGlobalFact(
       this.#input,
       `/organizations/${project.orgId}`,
+      "organization",
       {
         type: "events.iterate.com/organization/project-created",
         idempotencyKey: `organization/project-created/${project.id}`,
@@ -501,7 +509,36 @@ class ProjectCollection extends RpcTarget {
       },
       this.#caller,
     );
-    return this.#context(project.id);
+    // THE SAGA — the rule every entity collection follows: the `project` facet's state is read first;
+    // a project already created, or one whose creation is open, gets its context back and nothing
+    // appended; otherwise (never requested, or the last attempt failed) the `project` processor row
+    // is enabled on `/` and a NEW `project/create-requested` appended there — the row's facts, under
+    // this caller. The context is returned AT ONCE (apps/os's `waitUntilCreated: false`): the
+    // project processor (src/project/processor.ts) lands `project/created` or `project/create-failed`
+    // from state at head, and the dash watches the facet's live state.
+    const context = this.#context(project.id);
+    // The facet is the platform's own ProjectDurableObject and `snapshot()` the engine's
+    // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.
+    const { state } = (await context.invoke([
+      "itx",
+      "facets",
+      ["get", "project"],
+      ["snapshot"],
+    ])) as { state: ProjectState };
+    if (state.creation?.status === "created" || state.creation?.status === "requested")
+      return context;
+    await context.invoke(["itx", "processors", ["enable", "project"]]);
+    await context.invoke([
+      "itx",
+      [
+        "append",
+        {
+          type: "events.iterate.com/project/create-requested",
+          payload: { slug: project.slug, orgId: project.orgId },
+        },
+      ],
+    ]);
+    return context;
   }
 
   /** The project's root context ("/"), by its slug or its id. A project only — a context name

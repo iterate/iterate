@@ -1680,9 +1680,9 @@ sees the skipped span in its next range.
 A child is born with its own log and nothing else — its thirteen implicit
 roots, default-deny for every other name. Whoever creates it writes the bare
 row, targeting the creator's OWN context (not the lexical parent: a child can
-never hold more than its creator): the library's `agents.get(path).create()`,
-`repos.get(path).create()` and `workspaces.get(path).create()` append it on the
-child in the same act as the birth (`src/library.ts`), keyed `itx@<creator>`; a
+never hold more than its creator): the library's `agents.create(path)`,
+`repos.create(path)` and `workspaces.create(path)` append it on the child before
+requesting the birth (`src/library.ts` `createEntity`), keyed `itx@<creator>`; a
 context merely touched by `cd` gets none.
 
 ```ts

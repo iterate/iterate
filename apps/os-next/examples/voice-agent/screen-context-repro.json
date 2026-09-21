@@ -3,7 +3,7 @@
     "device": "zectrix_note4",
     "events": [
       {
-        "type": "events.iterate.com/agents/context-added",
+        "type": "events.iterate.com/agent/context-added",
         "idempotencyKey": "voice-agent/screen-context:933f620d27e4ebbd6a4fa7f44b395bbd",
         "payload": {
           "role": "developer",
@@ -59,7 +59,7 @@
     "device": "waveshare_rlcd_4_2",
     "events": [
       {
-        "type": "events.iterate.com/agents/context-added",
+        "type": "events.iterate.com/agent/context-added",
         "idempotencyKey": "voice-agent/screen-context:9b916aef9bf0f5764b8805b210a085e8",
         "payload": {
           "role": "developer",

@@ -13,9 +13,10 @@
 //   • the raw event-sourced door agrees with the verb, both ways: a hand-appended
 //     subscription-configured IS the enablement; `{ target: null }` deletes the hosted facet, storage
 //     included, and a re-enable rebuilds from the log
-//   • a two-session enable race yields ONE lineage with exact counts; re-enable while WARM appends ONE
-//     more configured event (same name REPLACES the row, no dedupe) and never corrupts the reduce;
-//     double-enable then ONE disable disables (no enablement stack)
+//   • a two-session enable race yields ONE lineage with exact counts; re-enable while WARM with the
+//     SAME spec appends NOTHING (idempotent at the door — every entity's `create()` enables its row on
+//     every call) and never corrupts the reduce; double-enable then ONE disable disables (no
+//     enablement stack)
 //   • `waitUntilProcessed(future offset)` times out with its documented error and leaks no waiter
 //   • POLICY IS A FACET PROCESSOR: the token-bucket breaker (`SOURCES.breaker` — a pure reduce spending
 //     one token per durable non-control event, refilled from the EVENT's createdAt, replayable) trips
@@ -248,14 +249,15 @@ test("processors.enable('tally') from two sessions concurrently: one effective l
   const itxB = openItx(ctx);
   await Promise.all([enableFixtureProcessor(itxA, "tally"), enableFixtureProcessor(itxB, "tally")]);
 
-  // same name REPLACES (no stack, no dedupe): the racing enables landed TWO configured events, and
-  // the table holds ONE row named tally
+  // same name REPLACES (no stack): the racing enables landed one or two configured events — the
+  // door appends nothing for a row already in the table, and a race may or may not see it — and the
+  // table holds ONE row named tally
   expect((await processorNames(itxA)).filter((s) => s === "tally")).toHaveLength(1);
 
   for (let i = 0; i < 3; i++) await append(itxA, { type: "seen", payload: { i } });
   const head = await readHead(itxA);
   const expected = durableCountsByType(await readAll(itxA));
-  expect(expected["events.iterate.com/stream/subscription-configured"]).toBe(2); // one per enable
+  expect([1, 2]).toContain(expected["events.iterate.com/stream/subscription-configured"]);
   const snap = await until("tally reduced the whole log exactly once", async () => {
     const s: any = await tallySnapshot(itxA);
     return s.offset >= head && s;
@@ -266,7 +268,7 @@ test("processors.enable('tally') from two sessions concurrently: one effective l
   expect(snap.state.counts.seen).toBe(3);
 });
 
-test("re-enable while WARM appends ONE more configured event (same name REPLACES the row) and never corrupts the reduce (no reset, no double-count)", async () => {
+test("re-enable while WARM with the same spec appends NOTHING (idempotent at the door) and never corrupts the reduce (no reset, no double-count)", async () => {
   const itx = openItx(freshCtx("reenable"));
   await enableFixtureProcessor(itx, "tally");
   await append(itx, { type: "mark" });
@@ -283,8 +285,8 @@ test("re-enable while WARM appends ONE more configured event (same name REPLACES
       (e) => e.type === "events.iterate.com/stream/subscription-configured",
     ).length;
   const configuredBefore = await configuredEvents();
-  await enableFixtureProcessor(itx, "tally"); // the same row again ⇒ ONE more configured event (no dedupe); the map entry is replaced
-  expect(await configuredEvents()).toBe(configuredBefore + 1);
+  await enableFixtureProcessor(itx, "tally"); // the same row again ⇒ nothing appended: the door answers from the table
+  expect(await configuredEvents()).toBe(configuredBefore);
   expect((await processorNames(itx)).filter((s) => s === "tally")).toHaveLength(1);
   await append(itx, { type: "mark" });
   const head2 = await readHead(itx);

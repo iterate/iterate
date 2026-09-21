@@ -1,11 +1,11 @@
 // src/organization/processor.test.ts — the OrganizationProcessor's executable spec: declarative
-// `{ events → view }` rows on the shared processor harness (stream/test-support.ts
+// `{ events → state }` rows on the shared processor harness (stream/test-support.ts
 // `reduceProcessor`): the pure reduce, with the engine's contract validation (a malformed KNOWN
 // payload is skipped).
 import { describe, expect, test } from "vitest";
 import { reduceProcessor } from "../stream/test-support.ts";
 import { OrganizationProcessor } from "./processor.ts";
-import { type OrganizationView } from "./contract.ts";
+import { type OrganizationState } from "./contract.ts";
 
 const created = (name: string) => ({
   type: "events.iterate.com/organization/created",
@@ -20,9 +20,9 @@ describe("OrganizationProcessor — the organization's record folded from facts"
   const rows: {
     name: string;
     events: { type: string; payload?: unknown }[];
-    view: OrganizationView;
+    state: OrganizationState;
   }[] = [
-    { name: "the empty record", events: [], view: { name: null, deletedAt: null, projects: {} } },
+    { name: "the empty record", events: [], state: { name: null, deletedAt: null, projects: {} } },
     {
       name: "created sets the name, renamed replaces it; a project created in it is a row by id, stamped with the event's time; the same project again is ignored",
       events: [
@@ -32,7 +32,7 @@ describe("OrganizationProcessor — the organization's record folded from facts"
         projectCreated("prj_1", "monkey"),
         projectCreated("prj_2", "voice"),
       ],
-      view: {
+      state: {
         name: "Booper Inc",
         deletedAt: null,
         projects: {
@@ -42,14 +42,14 @@ describe("OrganizationProcessor — the organization's record folded from facts"
       },
     },
     {
-      name: "deleted stamps the record once and keeps it; an unrelated event leaves the view as it was",
+      name: "deleted stamps the record once and keeps it; an unrelated event leaves the state as it was",
       events: [
         created("Booper"),
         { type: "note", payload: { n: 1 } },
         { type: "events.iterate.com/organization/deleted", payload: {} },
         { type: "events.iterate.com/organization/deleted", payload: {} },
       ],
-      view: { name: "Booper", deletedAt: expect.any(String), projects: {} },
+      state: { name: "Booper", deletedAt: expect.any(String), projects: {} },
     },
     {
       name: "a malformed payload for a KNOWN type is skipped by the contract, never reduced",
@@ -58,9 +58,9 @@ describe("OrganizationProcessor — the organization's record folded from facts"
         { type: "events.iterate.com/organization/project-created", payload: { projectId: "x" } },
         created("Booper"),
       ],
-      view: { name: "Booper", deletedAt: null, projects: {} },
+      state: { name: "Booper", deletedAt: null, projects: {} },
     },
   ];
-  for (const { name, events, view } of rows)
-    test(name, () => expect(reduceProcessor(new OrganizationProcessor(), events)).toEqual(view));
+  for (const { name, events, state } of rows)
+    test(name, () => expect(reduceProcessor(new OrganizationProcessor(), events)).toEqual(state));
 });

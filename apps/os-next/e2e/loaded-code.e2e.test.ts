@@ -84,7 +84,7 @@ test("THE CHAIN: a subagent two levels down resolves a capability provided at th
     target: () => "hello-from-root",
     description: "says hello",
   });
-  await root.agents.get("/agents/a").create();
+  await root.agents.create("/agents/a");
   // /agents/a was linked to its creator (the root). An agent's scripts run in ITS SANDBOX
   // (`/agents/a/sandbox`, linked to the agent), so a script there that creates `./b` births
   // `/agents/a/sandbox/b`, linked to the sandbox — a child never holds more than its creator.
@@ -93,7 +93,7 @@ test("THE CHAIN: a subagent two levels down resolves a capability provided at th
     await root
       .cd("/agents/a")
       .run(
-        "async (itx) => { await itx.agents.get('./b').create(); return (await itx.cd('./b').rewriteRules.list()).filter((r) => r.match === 'itx').map((r) => r.target); }",
+        "async (itx) => { await itx.agents.create('./b'); return (await itx.cd('./b').rewriteRules.list()).filter((r) => r.match === 'itx').map((r) => r.target); }",
       ),
   ).toEqual(["itx.builtins.cd('/agents/a/sandbox')"]); // the child's own link, pointing at its creator
   expect(await root.cd(sub).builtins.rewriteRules.get("itx")).toMatchObject({

@@ -539,18 +539,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** THE LIBRARY's itx (library.ts): a genuine InvokeHandle over `invoke`, so a library call's
    *  `itx.fetch(...)` resolves through THIS context's rules (a test may shadow `itx.fetch`) with
-   *  zero hops. The CALLER crosses with it: a library verb runs inside the caller's own dispatch,
-   *  so an event it appends — `itx.run`'s request, `chat.sendMessage` — is attributed to whoever
-   *  called (the ambient store; the kernel's null outside any call). */
+   *  zero hops. The CALLER crosses with it — its principal, its grant, its originating path — so an
+   *  event a library verb appends (`itx.run`'s request, a creation) is attributed to whoever called,
+   *  and a relative path means the caller's; NOT its `app` bit: the library's own hops (`cd('/')` for
+   *  the catalog, the fixed point for a mint) are the platform's act, and what a context may reach OF
+   *  the library its table already says (a naked child has no `itx.repos` row to get here through). */
   readonly #libraryItx = new InvokeHandle((steps) => {
     // Every call the library makes (a connection opening, a call through it) is a use of the
     // library's pin: the quiet period runs from the call's end.
     this.#pinCallStarted();
-    return this.invoke(
-      ["itx", ...steps],
-      [],
-      this.#callerStorage.getStore() ?? { principal: null },
-    ).finally(() => this.#pinCallEnded());
+    const { app: _loadedCode, ...caller } = this.#callerStorage.getStore() ?? { principal: null };
+    return this.invoke(["itx", ...steps], [], caller).finally(() => this.#pinCallEnded());
     // The handle's dotted surface IS the library's itx: `itx.append(...)`, `itx.workers.get(...)`
     // reduce into steps (the prototype fallback, iterate-context.ts) and land in the callback above.
   }) as unknown as LibraryItx;
@@ -1449,7 +1448,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // The JSON form is an edge-set (worker.ts) or self-addressed (env.ITX.fetch) expression; the
         // resolver below canonicalizes it and rejects a malformed shape, so this parse trusts the JSON.
         if (itxExpressionHeader === "" && !this.#stream.coreReducedState.ingressTarget)
-          return new Response("Project ingress is not configured\n", { status: 404 });
+          return new Response(
+            "This project has no site yet: its config worker's fetch serves this page once the project defines one\n",
+            { status: 404 },
+          );
         const itxExpression =
           itxExpressionHeader === ""
             ? this.#stream.coreReducedState.ingressTarget!
