@@ -152,12 +152,13 @@ export function isBuiltInRoot(root: unknown): root is BuiltInRoot {
 }
 
 /** THE CONTEXT ROOTS: the built-ins that are a context's OWN — its log, its tables, its facets, the
- *  hosts whose loaded code speaks for it. Implicit in every context (rule 3): nothing else could
- *  `append` mean at `/agents/x`, and a hop for it would land in another log. Everything else in
- *  `BUILT_IN_ROOTS` is a PROJECT resource or an external capability (`fetch`, `ai`, `browser`),
- *  implicit at the owner root only. */
+ *  hosts whose loaded code speaks for it, and where it lives (`whoami`, `url`: information, not a
+ *  capability). Implicit in every context (rule 3): nothing else could `append` mean at `/agents/x`,
+ *  and a hop for it would land in another log. Everything else in `BUILT_IN_ROOTS` is a PROJECT
+ *  resource or an external capability (`fetch`, `ai`, `browser`), implicit at the owner root only. */
 export const CONTEXT_ROOTS = [
   "whoami",
+  "url",
   "append",
   "readEvents",
   "waitForEvent",

@@ -7,6 +7,7 @@
 //
 // The URL is handed to tests via vitest `provide`/`inject` (see support/setup.ts + support/client.ts).
 
+import { randomUUID } from "node:crypto";
 import { createTestHarness } from "wrangler";
 import type { TestProject } from "vitest/node";
 import { osNextEnvs } from "../../../../envs.ts";
@@ -42,10 +43,14 @@ declare module "vitest" {
      *  its own origin, else `<worker>/mcp` (the local worker, and any deploy without a distinct MCP
      *  origin). support/session tests POST here. */
     mcpBaseUrl: string;
+    /** The run's id, folded into every identifier a test mints (client.ts `freshCtx`): E2E_RUN_ID
+     *  when the run pins one (CI: the workflow run and attempt), else minted here once per run. */
+    runId: string;
   }
 }
 
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
+  project.provide("runId", process.env.E2E_RUN_ID || randomUUID().slice(0, 8));
   // DEPLOYED-TARGET MODE — the proof that counts: `WORKER_BASE_URL=https://os.iterate2.com
   // ADMIN_API_SECRET=… LOGIN_PASSWORD=… pnpm e2e` runs the SAME suite against the deployed worker,
   // no local boot.

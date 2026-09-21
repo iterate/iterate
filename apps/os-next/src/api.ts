@@ -1,5 +1,6 @@
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { OAuthScope } from "iterate/next/oauth-scopes";
+import { appConfigOf, platformOriginOf } from "./app-config.ts";
 import type { Env, Handler } from "./control-plane.ts";
 import { authorizationOf, recordGrantUse, oauthAddresses, providerOptions } from "./oauth.ts";
 import { rpcResponse } from "./rpc.ts";
@@ -27,7 +28,8 @@ export function oauthResponse(
   defaultHandler?: Handler,
 ) {
   const url = new URL(request.url);
-  const { issuer, api, mcp } = oauthAddresses(env, request);
+  const platformOrigin = platformOriginOf(appConfigOf(env), request);
+  const { issuer, api, mcp } = oauthAddresses(env, platformOrigin);
   if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
     const resource =
       url.origin === new URL(mcp).origin && mcp !== `${issuer}/mcp`
@@ -54,9 +56,7 @@ export function oauthResponse(
     request.headers.get("upgrade")?.toLowerCase() === "websocket"
   )
     return rpcResponse(request, env, ctx, null);
-  return new OAuthProvider(providerOptions(env, protectedApi, defaultHandler)).fetch(
-    request,
-    env,
-    ctx,
-  );
+  return new OAuthProvider(
+    providerOptions(env, platformOrigin, protectedApi, defaultHandler),
+  ).fetch(request, env, ctx);
 }

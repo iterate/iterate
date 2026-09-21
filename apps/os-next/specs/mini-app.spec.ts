@@ -54,8 +54,11 @@ test("a no-build mini-app served by a project persists a note through its own ca
           hostname?: string;
         } | null);
   const base = routing?.type === "subdomains" ? routing.hostname : undefined;
-  if (!base)
-    throw new Error("PROJECT_INGRESS_ROUTING (subdomains) is required against a deployed worker");
+  test.skip(
+    !base,
+    "the deployment routes projects by paths or not at all; this spec dials a subdomain",
+  );
+  if (!base) return;
   const projectOrigin = new URL(origin);
   projectOrigin.hostname = `${project}.${base}`;
 

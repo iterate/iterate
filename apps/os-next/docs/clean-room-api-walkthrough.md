@@ -247,7 +247,7 @@ user's org, created on first use. WHO: `authenticate(credentials)` takes one of 
 kinds (`SessionCredentials`): `from-server-cookie` — the OAuth grant the transport already
 resolved, the browser's cookie on a same-origin request or an `Authorization: Bearer` access
 token (a transport carrying none ⇒ `UNAUTHENTICATED`); `admin-secret` — the deployment's
-`APP_CONFIG_ADMIN_API_SECRET`, `{ actor: "admin" }` on every project (with `as: { email }`
+`APP_CONFIG` `secrets.adminBearer`, `{ actor: "admin" }` on every project (with `as: { email }`
 that user's session, no login), verified in-band on a bare `/api` socket (on the upgrade the
 admin secret is a bearer like any other). OAuth grants are the one credential for
 everyone else: a PERSONAL ACCESS TOKEN is `session.grants.mint({ name, projects })` — one
@@ -575,7 +575,7 @@ row `itx.<root> ⇒ itx.builtins.<root>` unless the context's own rows say other
 (rules FIRST, section 9.1), so a root can be shadowed or masked. Which roots are
 implicit depends on the context: at the owner root (`/`; `/users/<id>` or
 `/organizations/<id>` in the global namespace) every root below; everywhere else
-only the thirteen context roots — `whoami`, `append`, `readEvents`, `waitForEvent`,
+only the fourteen context roots — `whoami`, `url`, `append`, `readEvents`, `waitForEvent`,
 `cd`, `facets`, `subscriptions`, `processors`, `schedules`, `rewriteRules`,
 `rpcStubs`, `workers`, `run` — and a project-level name (`kv`, `secrets`, `ai`,
 `fetch`, `repos`, `agents`, …) is reached only through a row. `itx.builtins` is the
@@ -737,7 +737,7 @@ Two rules that follow from the resolver:
   rewriting: a rule may target it — the owner granting the real thing — never
   match it, and loaded code may not call it. A short `itx.<root>` is the
   implicit row `itx.<root> ⇒ itx.builtins.<root>` where that root is implicit
-  (every root at the owner root, the thirteen context roots elsewhere),
+  (every root at the owner root, the fourteen context roots elsewhere),
   consulted only after the context's own rows — so a context may shadow or
   mask a built-in.
 - The prefix `itx` by itself is the shortest legal match, a bare row. With a
@@ -1503,7 +1503,7 @@ the consent page's script is a capnweb client of `/api` (`consent.describe`, `cr
 `projects.create`, `consent.approve` — the session cookie rides the handshake; the worker only gates
 the page); the one machine endpoint beside them (`loginFormPost`) is the sign-in form's plain POST — `POST /login`,
 `/logout` (the session is the signed `__Host-itx-control-plane-session` cookie, `signClaims` under
-`APP_CONFIG_SESSION_SECRET`), `POST /projects` (a program creates projects over `/api`,
+the session-signing secret derived from `APP_CONFIG` `secrets.key`), `POST /projects` (a program creates projects over `/api`,
 `projects.create`), `POST /authorize`. The `/authorize` consent is THE PROJECT SELECTION: the user's
 projects as checkboxes, all checked; approving grants the client the user on the checked ones
 (`props: { actor, email, projects }`; a user with nothing to choose from grants a `projects`-less
@@ -1525,23 +1525,24 @@ The admin secret's projects live in `org_admin`, the deployment's own org (no me
 
 Bindings (`wrangler.jsonc`):
 
-| Binding               | Kind                                         | Used for                                                                                                                                                                                                                                                                                                                                                                               |
-| --------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ITERATE_CONTEXT`     | DO namespace → `IterateContextDurableObject` | every context, `getByName(codec)`                                                                                                                                                                                                                                                                                                                                                      |
-| `LOADER`              | Worker Loader                                | `itx.workers.get`, processors                                                                                                                                                                                                                                                                                                                                                          |
-| `AI`                  | Workers AI                                   | `itx.ai`, the binding verbatim                                                                                                                                                                                                                                                                                                                                                         |
-| `ARTIFACTS`           | Cloudflare Artifacts namespace               | `itx.cfArtifacts` (project-scoped), `itx.git`                                                                                                                                                                                                                                                                                                                                          |
-| `ITX_KV`              | KV                                           | `itx.kv`, keys prefixed `${projectId}:`                                                                                                                                                                                                                                                                                                                                                |
-| `SECRET`              | Durable Object (`SecretDurableObject`)       | THE SECRET CELL, one per secret of a project (`<projectId>:<name>`): the material, its pin and its refresh strategy; `itx.secrets` writes it, egress forwards a placeholder-bearing request to it (src/secrets.ts, src/secret-durable-object.ts)                                                                                                                                       |
-| `DB`                  | D1                                           | the control plane's directory (`definitions.sql`)                                                                                                                                                                                                                                                                                                                                      |
-| `OAUTH_KV`            | KV                                           | the OAuth AS's store (grants, tokens, DCR clients)                                                                                                                                                                                                                                                                                                                                     |
-| `CF_VERSION_METADATA` | version metadata                             | `worker.ts` reads it into `deployId`: every loader cacheKey, and `/version`                                                                                                                                                                                                                                                                                                            |
-| `APP_CONFIG_*` vars   | configuration (`src/app-config.ts`)          | parsed once per isolate into one typed object, an unknown var warned about at boot and ignored: `ENVIRONMENT_NAME`, `PLATFORM_ORIGIN`, `MCP_ORIGIN`, `PROJECT_HOSTNAME_BASE`, `ARTIFACTS_ACCOUNT_ID`, `ARTIFACTS_NAMESPACE`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `TEST_EMAIL_LOGIN`, `SESSION_SECRET` and `ADMIN_API_SECRET` (both required; wrangler secrets on a deployment) |
+| Binding               | Kind                                         | Used for                                                                                                                                                                                                                                                                                                 |
+| --------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ITERATE_CONTEXT`     | DO namespace → `IterateContextDurableObject` | every context, `getByName(codec)`                                                                                                                                                                                                                                                                        |
+| `LOADER`              | Worker Loader                                | `itx.workers.get`, processors                                                                                                                                                                                                                                                                            |
+| `AI`                  | Workers AI                                   | `itx.ai`, the binding verbatim                                                                                                                                                                                                                                                                           |
+| `ARTIFACTS`           | Cloudflare Artifacts namespace               | `itx.cfArtifacts` (project-scoped), `itx.git`                                                                                                                                                                                                                                                            |
+| `ITX_KV`              | KV                                           | `itx.kv`, keys prefixed `${projectId}:`                                                                                                                                                                                                                                                                  |
+| `SECRET`              | Durable Object (`SecretDurableObject`)       | THE SECRET CELL, one per secret of a project (`<projectId>:<name>`): the material, its pin and its refresh strategy; `itx.secrets` writes it, egress forwards a placeholder-bearing request to it (src/secrets.ts, src/secret-durable-object.ts)                                                         |
+| `DB`                  | D1                                           | the control plane's directory (`definitions.sql`)                                                                                                                                                                                                                                                        |
+| `OAUTH_KV`            | KV                                           | the OAuth AS's store (grants, tokens, DCR clients)                                                                                                                                                                                                                                                       |
+| `CF_VERSION_METADATA` | version metadata                             | `worker.ts` reads it into `deployId`: every loader cacheKey, and `/version`                                                                                                                                                                                                                              |
+| `APP_CONFIG` secret   | configuration (`src/app-config.ts`)          | ONE JSON object parsed once per isolate — `urls` (os, mcp, dash, ingressRouting, temporaryCustomHostnames), `login` (password, emailCode, google), `secrets` (key, previousKey, adminBearer); any key also settable alone as `APP_CONFIG_<PATH>__<KEY>`; an unknown key warned about at boot and dropped |
 
-The route `*.project-worker.iterate.com/*` (a wildcard DNS record in the zone) is the project hosts;
+The route `*.iterate2.app/*` (a wildcard DNS record in the zone) is the project hosts on prd; a
+self-host serves them as `/projects/<slug>/<app>/…` on its one origin (`urls.ingressRouting: { type: "paths" }`);
 The e2e lane boots this same config, patched
-(`e2e/support/worker-config.ts`: absolute paths, `APP_CONFIG_ENVIRONMENT_NAME=e2e`,
-`APP_CONFIG_PROJECT_HOSTNAME_BASE=localhost`, vars for the three secrets); the workers lane runs
+(`e2e/support/worker-config.ts`: absolute paths, `APP_CONFIG_URLS__INGRESS_ROUTING` under
+`localhost`, the `APP_CONFIG` object and `APP_CONFIG_SECRETS__KEY` as plain vars); the workers lane runs
 `wrangler.test.jsonc` (no build block, no `AI`).
 
 The loader cacheKey is the JSON array `[kind, deploy, owner, cacheKey ?? contentHash]` (never a `:`-joined string — an owner or a key may contain `:`): the caller's
@@ -1677,7 +1678,7 @@ sees the skipped span in its next range.
 
 ### 9.4 Ancestry is a bare row the creator writes
 
-A child is born with its own log and nothing else — its thirteen implicit
+A child is born with its own log and nothing else — its fourteen implicit
 roots, default-deny for every other name. Whoever creates it writes the bare
 row, targeting the creator's OWN context (not the lexical parent: a child can
 never hold more than its creator): the library's `agents.create(path)`,
@@ -1733,7 +1734,7 @@ reaches the granted rows and nothing else (section 5).
 | itx-expression prefix | a rewrite rule's `match`: dotted names, any step may pin literal args — `itx.greet`, `itx.ai.run('gpt-5')`; `canonicalItxExpressionPrefix` is its one spelling, the table's key                                                                                                                                                                                                                                                                      |
 | rewrite rule          | `{ match, target, description? }`: a call starting with `match` runs as the same call with `match` replaced by `target`; one map entry per canonical match, written by `itx/rewrite-rule-configured { match, target \| null, description? }`; `description` is the one line a model reads; nothing else rides it                                                                                                                                     |
 | bare row (`itx`)      | a row at the bare prefix `itx`; claims what no implicit row claims: at a child, `itx ⇒ itx.builtins.cd('<creator>')` is the creator's surface — the row a create path writes — and `itx ⇒ itx.builtins` the whole local surface; `itx ⇒ null` denies all                                                                                                                                                                                             |
-| built-in              | a root of the kernel record `BuiltInScope`, reached as `itx.builtins.<root>` (the reserved root, the fixed point — never a rule's match, a target's word, never a call loaded code makes) or as the implicit row `itx.<root>` — every root at the owner root, the thirteen context roots everywhere — which the context's own rows come before (shadowable, maskable)                                                                                |
+| built-in              | a root of the kernel record `BuiltInScope`, reached as `itx.builtins.<root>` (the reserved root, the fixed point — never a rule's match, a target's word, never a call loaded code makes) or as the implicit row `itx.<root>` — every root at the owner root, the fourteen context roots everywhere — which the context's own rows come before (shadowable, maskable)                                                                                |
 | InvokeHandle          | a pipelinable `RpcTarget` returned mid-chain (`cd`, `workers.get(...)`); `FacetHandle` and `RpcStubHandle` are its two brands                                                                                                                                                                                                                                                                                                                        |
 | rpc stub              | a live capnweb value a session LENDS under an opaque `rpcStubKey`; the edge owns it, the DO BORROWS it per page and RETURNS it at idle; `itx.builtins.rpcStubs.get(rpcStubKey)` is how the platform's rows name it, and any spelling that resolves there counts; presence is `list()`                                                                                                                                                                |
 | pager                 | the hibernatable WebSocket from the edge relay to the DO, one per key, carrying `{ transportId, rpcStubKey }`; the DO sends `{ type: "page" }` to get a fresh stub lent                                                                                                                                                                                                                                                                              |

@@ -15,8 +15,7 @@ import {
   type SessionAuthority,
   type SessionInput,
 } from "./session.ts";
-import { appConfigOf } from "./app-config.ts";
-import { platformOriginOf } from "./platform-origin.ts";
+import { appConfigOf, platformOriginOf } from "./app-config.ts";
 
 /** Cap’n Web always terminates at /api in the stateless edge. Its root is an
  * already-authorized session — or, on a socket opened BARE (api.ts: no credential on the upgrade),
@@ -29,16 +28,19 @@ export async function rpcResponse(
   ctx: ExecutionContext,
   auth: Authorization | null,
 ) {
+  // THE PLATFORM ORIGIN this transport reached the platform on (app-config.ts): every address and
+  // every caller stamp downstream is at it.
+  const platformOrigin = platformOriginOf(appConfigOf(env), request);
   const projects = new Set<string>();
   const teardown = new SessionTeardown();
   const authorityOf = (authorization: Authorization): SessionAuthority => ({
     principal: authorization.principal,
     grant: authorization.grant?.grantId,
     reach: authorization.reach,
-    grants: new Grants(env, ctx, authorization),
+    grants: new Grants(env, ctx, authorization, platformOrigin),
     scopes: authorization.grant?.scope,
     ...(authorization.grant?.kind === "issuer" && {
-      consent: new Consent(env, ctx, authorization.grant),
+      consent: new Consent(env, ctx, authorization.grant, platformOrigin),
     }),
   });
   // THE GRANT THIS TRANSPORT CARRIES: the upgrade's (resolved by the gate before this call), or the
@@ -52,14 +54,14 @@ export async function rpcResponse(
     waitUntil: (promise) => ctx.waitUntil(promise),
     directory: directory(env.DB),
     appConfig: appConfigOf(env),
-    platformOrigin: platformOriginOf(env, new URL(request.url).origin),
+    platformOrigin,
     onProjectAccess: (projectId) => projects.add(projectId),
     resolveBearer: async (token) => {
       // Claimed BEFORE the gate is awaited: two tokens racing on one socket cannot both bind.
       if (bound || binding) throw new Error("This transport already carries a session");
       binding = true;
       try {
-        const authorization = await authorizationForToken(env, ctx, token);
+        const authorization = await authorizationForToken(env, ctx, token, platformOrigin);
         if (!authorization) return null;
         if (authorization.grant) ctx.waitUntil(recordGrantUse(env, authorization.grant));
         bound = authorization;

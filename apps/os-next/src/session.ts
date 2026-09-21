@@ -55,7 +55,7 @@ export interface SessionInput {
   directory: Directory;
   /** Configuration for operator authentication and context capabilities. */
   appConfig: AppConfig;
-  /** THE PLATFORM ORIGIN this session was reached on (platform-origin.ts) — what every context it
+  /** THE PLATFORM ORIGIN this session was reached on (app-config.ts `platformOriginOf`) — what every context it
    *  vends composes public URLs with (a DO isolate cannot know it: the caller carries it). */
   platformOrigin: string;
   /** A live transport tracks projects whose capabilities it has handed out. */

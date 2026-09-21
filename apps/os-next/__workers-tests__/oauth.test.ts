@@ -20,7 +20,7 @@ const call = (path: string, init?: RequestInit) => {
   if (path === "/login") headers.set("Authorization", `Bearer ${adminSecret}`);
   return SELF.fetch(new Request(`${ORIGIN}${path}`, { redirect: "manual", ...init, headers }));
 };
-const helpers = () => oauthHelpers(bindings);
+const helpers = () => oauthHelpers(bindings, "https://control.test");
 
 beforeAll(async () => {
   await bindings.DB.batch(

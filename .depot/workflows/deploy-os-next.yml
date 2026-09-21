@@ -82,13 +82,14 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       # Deployed-target mode (apps/os-next/e2e/support/global-setup.ts): WORKER_BASE_URL selects
       # the deployed worker; ADMIN_API_SECRET and LOGIN_PASSWORD are read out of the deployment's
-      # `APP_CONFIG` object in Doppler (secrets.adminBearer, login.password — src/app-config.ts).
+      # `APP_CONFIG` object in Doppler (secrets.adminBearer, login.password — src/app-config.ts). Files
+      # run in parallel (vitest.config.ts): every test mints its own project.
       - name: Run e2e against os.iterate2.com
         working-directory: apps/os-next
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           WORKER_BASE_URL: ${{ needs.deploy.outputs.public_url }}
-        run: doppler run -- sh -c 'ADMIN_API_SECRET="$(node -p "JSON.parse(process.env.APP_CONFIG).secrets.adminBearer")" LOGIN_PASSWORD="$(node -p "JSON.parse(process.env.APP_CONFIG).login.password")" pnpm e2e --no-file-parallelism'
+        run: doppler run -- sh -c 'ADMIN_API_SECRET="$(node -p "JSON.parse(process.env.APP_CONFIG).secrets.adminBearer")" LOGIN_PASSWORD="$(node -p "JSON.parse(process.env.APP_CONFIG).login.password")" pnpm e2e'
   notify:
     needs:
       - deploy

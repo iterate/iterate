@@ -66,6 +66,7 @@ test("two literal sources whose djb2 hashes collide never share one Worker Loade
     loadConfined({
       env,
       deployId: "deploy-1",
+      platformOrigin: null,
       itxEntrypoint: {} as Fetcher,
       kind: "worker",
       owner: "prj_u.iterate/",
@@ -85,6 +86,7 @@ test("an owner and a caller's cacheKey that concatenate alike never share one Wo
     loadConfined({
       env,
       deployId: "deploy-1",
+      platformOrigin: null,
       itxEntrypoint: {} as Fetcher,
       kind: "worker",
       owner,
@@ -109,6 +111,7 @@ test("two DIFFERENT facet identities never share one Worker Loader cacheKey", as
     loadConfined({
       env,
       deployId: "deploy-1",
+      platformOrigin: null,
       itxEntrypoint: {} as Fetcher,
       kind: "facet",
       owner: facetLoaderOwner(iterateContextName, className),
@@ -133,6 +136,7 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
     loadConfined({
       env,
       deployId: "deploy-1",
+      platformOrigin: null,
       itxEntrypoint: {} as Fetcher,
       kind: "worker",
       owner: "prj_u.iterate/",
@@ -147,7 +151,7 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
   // with a key: the producer runs when the key is cold …
   const first = await load("todo@3f2a1c");
   expect(first.loaderId).toBe(
-    JSON.stringify(["worker", "deploy-1", "prj_u.iterate/", "todo@3f2a1c"]),
+    JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "todo@3f2a1c"]),
   );
   expect(keys.at(-1)).toBe(first.loaderId);
   await Promise.resolve(); // let getCode's async body run
@@ -167,6 +171,7 @@ test("literal modules: the key is their content hash unless the caller names a c
   const base = {
     env,
     deployId: "deploy-1",
+    platformOrigin: null,
     itxEntrypoint: {} as Fetcher,
     kind: "worker" as const,
     owner: "prj_u.iterate/",
@@ -181,7 +186,7 @@ test("literal modules: the key is their content hash unless the caller names a c
     source: { "cap.js": "export default 1" },
     cacheKey: "v7",
   });
-  expect(named.loaderId).toBe(JSON.stringify(["worker", "deploy-1", "prj_u.iterate/", "v7"]));
+  expect(named.loaderId).toBe(JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "v7"]));
   expect(keys.at(-1)).toBe(named.loaderId);
   await expect(
     loadConfined({ ...base, source: { "index.js": "export default 1" } }),
@@ -201,6 +206,7 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
     loadConfined({
       env,
       deployId: "deploy-1",
+      platformOrigin: null,
       itxEntrypoint: {} as Fetcher,
       kind: "worker",
       owner: "prj_u.iterate/",
@@ -212,7 +218,7 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
   // 1. the producer throws INSIDE getCode — workerd keeps that rejection under the id forever
   const first = await load();
   expect(first.loaderId).toBe(
-    JSON.stringify(["worker", "deploy-1", "prj_u.iterate/", "todo@dead"]),
+    JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "todo@dead"]),
   );
   await expect(warm.get(first.loaderId)).rejects.toThrow(/not landed/);
   expect(produced).toBe(1);
@@ -226,7 +232,7 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
   artifactLanded = true;
   const recovered = await load();
   expect(recovered.loaderId).toBe(
-    `${JSON.stringify(["worker", "deploy-1", "prj_u.iterate/", "todo@dead"])}#1`,
+    `${JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "todo@dead"])}#1`,
   );
   await expect(warm.get(recovered.loaderId)).resolves.toMatchObject({
     modules: { "cap.js": "export default class Built {}" },
@@ -243,6 +249,7 @@ test("prepare resolves the identity without asking the loader; load() is the one
   const prepared = await prepareConfinedWorker({
     env,
     deployId: "deploy-1",
+    platformOrigin: null,
     itxEntrypoint: {} as Fetcher,
     kind: "facet",
     owner: facetLoaderOwner("prj_u.iterate/", "Counter"),
@@ -272,4 +279,23 @@ test("a facet's literal source over the ceiling is refused, coded; a producer ex
       'facet "w"',
     ),
   ).not.toThrow();
+});
+
+test("the platform origin the ITX stub was minted with is part of the loader id: an isolate minted before a self-host learned its origin is never reused after", async () => {
+  const { env } = fakeLoaderEnv();
+  const opts = {
+    env,
+    deployId: "deploy-1",
+    itxEntrypoint: {} as Fetcher,
+    kind: "worker" as const,
+    owner: "prj_u.iterate/",
+    source: { "cap.js": "export default class A {}" },
+    invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
+    where: "workers.get",
+  };
+  const before = await prepareConfinedWorker({ ...opts, platformOrigin: null });
+  const after = await prepareConfinedWorker({ ...opts, platformOrigin: "https://os.example" });
+  const again = await prepareConfinedWorker({ ...opts, platformOrigin: "https://os.example" });
+  expect(before.loaderId).not.toBe(after.loaderId);
+  expect(again.loaderId).toBe(after.loaderId);
 });

@@ -1,4 +1,3 @@
-// isolate-ceilings-deployed.e2e.test.ts — THE ISOLATE CEILINGS against a REAL Durable Object.
 // Local workerd enforces no memory limit (NullIsolateLimitEnforcer), so the proof that counts is the
 // DEPLOYED worker, where the 128 MiB isolate is real:
 //
@@ -10,8 +9,8 @@
 // limited to 32MiB"; the node twin with a heap-capped child is src/stream/memory-budget.test.ts). The
 // CRASH HUNT is deployed-only, OPT-IN (`RUN_ISOLATE_CRASH_HUNT=1`), and DELIBERATELY RESETS DURABLE OBJECTS (and hammers the shared /api
 // edge): it must NEVER point at anything but the throwaway POC worker — every row uses a FRESH ctx =
-// its own DO, a reset clears only in-memory state (the durable log survives), and a laptop's network
-// flakes under parallel files, so run it ONE file at a time. ONE seeded context (24 × 6 MiB = 144 MiB,
+// its own DO, a reset clears only in-memory state (the durable log survives). It runs beside its
+// sibling files like every other: what it measures it measures on its own contexts. ONE seeded context (24 × 6 MiB = 144 MiB,
 // more than the isolate) serves every read-driven row; a DO reset between them is fine — the next call
 // re-materializes the context. Pins:
 //   • read: a client pages the 144 MiB log — every page fits the isolate and the RPC cap (the server
@@ -38,18 +37,23 @@
 
 import { beforeAll, expect, test } from "vitest";
 import { append, codeOf, freshCtx, openItx, rejection } from "./support/client.ts";
+import {
+  MiB,
+  OOMER_SOURCE,
+  blob,
+  isDurableObjectReset,
+  settle,
+} from "./support/isolate-ceilings.ts";
 import { deployedOnly, projectHostsAreLocal } from "./support/project-host.ts";
-
+import { enableFixtureProcessor } from "./support/sources.ts";
 /** The CRASH HUNT rows: they push the isolate to its 128 MiB ceiling (the GC's timing decides) and saturate the
  *  shared /api edge with 200+ MiB of concurrent payload — chronically red across deployed runs with a different
  *  symptom each time (7/8 committed, WebSocket refused, storage timeout). Opt in explicitly; a default deployed run of
  *  this file stays deterministic. Structural gate (`skipIf`), not a parked skip. */
 const crashHunt = test.skipIf(projectHostsAreLocal() || process.env.RUN_ISOLATE_CRASH_HUNT !== "1");
-import { enableFixtureProcessor } from "./support/sources.ts";
 
 // ── the shared 144 MiB seed ──
 
-const MiB = 1024 * 1024;
 const EVENT_COUNT = 24;
 const EVENT_CHARS = 6 * MiB;
 /** The seeded blob for event `n` — deterministic, so a read-back can be checked byte for byte. */
@@ -95,16 +99,9 @@ test(
 // ── the crash hunt's helpers and INLINE fixture sources ──
 
 /** A blob of `chars` code units — the payload that fills a body toward the 8 MiB append ceiling. */
-const blob = (chars: number): string => "q".repeat(chars);
-
 /** The stamped signal of an UNCONTROLLED reset (platform-facts.md §4): `.durableObjectReset` after the
  *  DO → edge → capnweb hops, or the raw message if a hop dropped the stamp. NOT a loaded-isolate OOM
  *  ("Worker exceeded memory limit.", `.overloaded` only) and NOT a facet wedge (SQLITE_TOOBIG). */
-const isDurableObjectReset = (e: any): boolean =>
-  e != null &&
-  (e.durableObjectReset === true ||
-    /isolate exceeded its memory limit and was reset/i.test(String(e.message ?? e)));
-
 /** Retry a call while the platform answers "Durable Object is overloaded. Requests queued for too
  *  long." — its backpressure after a burst (a queue draining), never a reset and never poisoning; any
  *  other failure propagates at once. Bounded: ~15 s. */
@@ -124,12 +121,6 @@ async function retryWhileOverloaded<T>(call: () => Promise<T>): Promise<T> {
 
 /** Settle a promise to a tagged outcome so a reset never escapes as an unhandled rejection (the e2e
  *  config only forgives WebSocket/RPC-session noise; a `durableObjectReset` message would be fatal). */
-const settle = <T>(p: Promise<T>): Promise<{ ok: true; v: T } | { ok: false; e: any }> =>
-  p.then(
-    (v) => ({ ok: true as const, v }),
-    (e) => ({ ok: false as const, e }),
-  );
-
 /** Read one context to its durable head, paging by the server's byte budget. */
 async function pageToHead(itx: any): Promise<number> {
   let after = 0;
@@ -162,14 +153,6 @@ export class HoarderDurableObject extends StreamProcessorDurableObject { process
 };
 
 /** A stateless WorkerEntrypoint that allocates unboundedly — its OWN loaded isolate's memory limit. */
-const OOMER_SOURCE = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-export default class Oomer extends WorkerEntrypoint {
-  async ping() { return "pong"; }
-  async oom() { const a = []; for (;;) a.push(new Array(1e6).fill(1)); }
-}`,
-};
-
 // ─────────────────────────────── RED: the reproducible resets ───────────────────────────────
 
 // RED BY DESIGN — an ACCEPTED client-behaviour limit, deliberately NOT defended (2026-09-07). WHY
@@ -237,41 +220,6 @@ test(
     expect(error.message).toMatch(/32 ?MiB/); // the message says WHY: the platform's RPC ceiling
     const [next] = await append(itx, { type: "after" });
     expect(next.offset).toBe(marker.offset + 1); // the refused batch burned no offset, wrote nothing
-  },
-);
-
-// A stalled live subscriber (a callback that never returns) no longer resets the PRODUCER: past the
-// DO's in-flight budget (subscription-delivery.ts DELIVERY_IN_FLIGHT_BUDGET_CHARS) its pushes are
-// DROPPED with a warn (the client heals by read), so the producer floods on. BORN RED: each
-// fire-and-forget push stayed in flight, retaining its bytes on the DO until it reset at ~125 × 1 MiB
-// (flipped 2026-09-04, the per-context ledger).
-deployedOnly(
-  "SLOW LIVE CLIENT: a subscriber whose callback never resolves has its pushes dropped past the DO in-flight budget — the producer floods on, the DO never resets",
-  { timeout: 300_000 },
-  async () => {
-    const ctx = freshCtx("degrade-slow");
-    // A live callback lent to the DO; it never returns, so every delivered push is retained in flight.
-    await openItx(ctx).subscribe({
-      name: "stall",
-      consumes: ["chunk"],
-      target: () => new Promise(() => {}),
-    });
-    const producer = openItx(ctx);
-    let reset: any;
-    for (let i = 0; i < 300; i++) {
-      const r = await settle(
-        append(producer, { type: "chunk", ephemeral: true, payload: { i, blob: blob(1 * MiB) } }),
-      );
-      if (!r.ok) {
-        if (isDurableObjectReset(r.e)) reset = r.e;
-        break; // the DO is gone; stop flooding
-      }
-    }
-    // HEALTHY expectation: a stalled subscriber blocks nothing but itself, so the producer floods on.
-    expect(
-      reset,
-      `the producer DO reset under the stalled subscriber: ${String(reset?.message ?? "")}`,
-    ).toBeUndefined();
   },
 );
 

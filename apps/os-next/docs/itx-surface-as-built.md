@@ -118,7 +118,7 @@ The one codec every door speaks. String half ⇄ structured half.
 - **The reserved root** is `itx.builtins`: the kernel's record (section 5) and the FIXED POINT of
   rewriting (section 7). `itx.builtins.kv.get('x')` runs as is and reads no rule; `itx.kv.get('x')`
   reaches the same door through the implicit row `itx.kv ⇒ itx.builtins.kv` — present at the owner
-  root; below it only the thirteen context roots are implicit — unless the context's own table says
+  root; below it only the fourteen context roots are implicit — unless the context's own table says
   otherwise. A rule's match may not be rooted there; a target may (the owner's grant of the real
   thing); a call from loaded code may not (section 10). Apex ingress stores its complete worker expression
   in a `project/ingress-configured` event. It adds no implicit rewrite row or subscription.
@@ -183,7 +183,7 @@ nothing. `get` touches no DO: addressing plus the directory's membership answer.
 is a union of two kinds. `from-server-cookie`: the OAuth grant the transport already resolved — the
 OAuth gate (`src/api.ts`) admitted the request's bearer or the browser adapter's cookie before capnweb
 ever opened, so the call only says "hand me that session"; a transport that carries none is
-`UNAUTHENTICATED`. `admin-secret`: `APP_CONFIG_ADMIN_API_SECRET` compared in constant time
+`UNAUTHENTICATED`. `admin-secret`: `APP_CONFIG` `secrets.adminBearer` compared in constant time
 (`verifyAdminSecret`, both SHA-256 hashed) — `{ actor: "admin" }` on every project, or with
 `as: { email }` that user's session without a login (the directory row upserted as `/login` does —
 its id, `user_<email>`, is the actor); a wrong secret is `INVALID_CREDENTIALS`. OAuth grants are the
@@ -218,7 +218,7 @@ runs against it directly and never reads the rule table. A short call `itx.<root
 through the IMPLICIT ROW `itx.<root> ⇒ itx.builtins.<root>` (never stored; applied by the resolver
 when no context row matches) where that root is implicit: at the owner root (`/`; `/users/<id>` or
 `/organizations/<id>` in the global namespace) every root in the table below; at every other
-context only the thirteen context roots — `whoami`, `append`, `readEvents`, `waitForEvent`, `cd`,
+context only the fourteen context roots — `whoami`, `url`, `append`, `readEvents`, `waitForEvent`, `cd`,
 `facets`, `subscriptions`, `processors`, `schedules`, `rewriteRules`, `rpcStubs`, `workers`, `run`.
 A project-level name (`kv`, `secrets`, `ai`, `fetch`, `repos`, `agents`, …) is ambient nowhere
 below the root: a child reaches it through a row — its creator's bare row (section 7) or a grant.
@@ -371,7 +371,7 @@ ONE file: the rules, the one event, the resolver. Every rule is a row in its tab
    call is refused; a matching row rewrites and the loop repeats; NO matching row and a root that
    is IMPLICIT HERE is the row `itx.<root> ⇒ itx.builtins.<root>`, applied and done; anything else
    is `NO_ITX_EXPRESSION_MATCH` (default-deny). Implicit at the owner root: every root (section 5);
-   elsewhere: the thirteen context roots. A rewrite onto `itx.builtins.cd('<path>')…` is one hop
+   elsewhere: the fourteen context roots. A rewrite onto `itx.builtins.cd('<path>')…` is one hop
    into that context's table, the caller's path riding along (a fresh resolve per hop, so a bare row
    may not name its own context). 32 rewrites is the budget.
 6. THE DOOR: a match is rooted at `itx`, never at `itx.builtins`, never at a proxy verb (`invoke`,
@@ -578,8 +578,9 @@ VERBATIM into the DO's fetch lane, where `x-iterate-app` is ALWAYS overwritten f
 URL, host-scoped cookies and WebSocket upgrades survive, so a served page's relative links resolve
 on the same host. The app is one rule row (`provide("itx.apps.site", "itx.workers.get({ source })")`,
 a live stub, a facet) and the log never names a hostname; a label with no row is the lane's 404.
-`<base>` is `APP_CONFIG_PROJECT_HOSTNAME_BASE` (blank ⇒ no project-host ingress); the deployed base is
-`project-worker.iterate.com` (a wildcard DNS record and the route in wrangler.jsonc); the workers
+`<base>` is `urls.ingressRouting.hostname` (`{ type: "subdomains" }`; `{ type: "paths" }` serves projects at
+`/projects/<slug>/<app>/…` on the platform origin instead, every answer sandboxed; unset ⇒ no project
+ingress); prd's is `iterate2.app` (a wildcard DNS record and the route in wrangler.jsonc); the workers
 lane's is `projects.test`, the e2e lane's `localhost`. ADMISSION comes first: a context is created on
 first touch, so before the edge dials a Durable Object for a project host it asks the in-process
 directory whether the project exists — ONE D1 read, `directory(env.DB).getProject(project)`
@@ -652,20 +653,17 @@ whoever it is; unbound, the admin secret every project and a user the projects o
 **Configuration** (`src/worker.ts`). ONE typed object per isolate, parsed once from the
 `APP_CONFIG_*` wrangler vars (the apps/os shape, without its schema library) plus the version-metadata
 binding, loud on a bad variable: the error names it and the shape it wanted, at the first request or
-the first DO construction. An `APP_CONFIG_*` variable the module does not name is warned about at
-boot and ignored, so a typo cannot configure something silently. Configuration is what differs between deployments of the same
-code; a constant is a property of the code — the inventory is the module's header. The vars:
-`APP_CONFIG_ENVIRONMENT_NAME` (`environmentName`, required: "poc" on workers.dev, "test" in the
-workers lane, "e2e" in the e2e lane), `APP_CONFIG_PROJECT_HOSTNAME_BASE` (`projectHostnameBase`,
-blank ⇒ no project-host ingress), `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`
-
-- `APP_CONFIG_ARTIFACTS_NAMESPACE` (the git remotes `itx.cfArtifacts` names), `APP_CONFIG_SESSION_SECRET`
-  (`sessionSecret`, the control plane's cookie; required), `APP_CONFIG_ADMIN_API_SECRET`
-  (`adminApiSecret`, the admin secret; required), `APP_CONFIG_SECRETS_KEY` (`secretsKey`, project
-  secrets' material at rest; required; `…_PREVIOUS` decrypt-only during a rotation) — all wrangler
-  secrets on a deployment; plus `deployId` (`CF_VERSION_METADATA.id`, "unversioned" where the binding is
-  absent), folded into every loader cacheKey. `/version` answers the deploy id and the environment
-  name: `<version id> poc`, e.g. `7474bb76-… poc` (the stamp a deploy smoke waits for).
+the first DO construction. A key the module does not name is warned about at boot and
+ignored, so a typo cannot configure something silently. Configuration is what differs between deployments of the same
+code; a constant is a property of the code — the inventory is the module's header. ONE object, the `APP_CONFIG`
+Worker secret (any key also settable alone as `APP_CONFIG_<PATH>__<KEY>`): `urls` (`os` — the issuer, blank ⇒
+each request's own origin; `mcp`; `dash`; `ingressRouting` — `{ type: "subdomains", hostname }` or
+`{ type: "paths" }`; `temporaryCustomHostnames`), `login` (`password`, `emailCode: { from }`, `google`; each on iff
+present, none ⇒ refuses to boot) and `secrets` (`key` — session signing and project secrets at rest derive
+from it; `previousKey` mid-rotation; `adminBearer`, optional: the operator door); plus `deployId`
+(`CF_VERSION_METADATA.id`, "unversioned" where the binding is absent), folded into every loader cacheKey.
+`/version` answers the deploy id and the platform origin
+name: `<version id> poc`, e.g. `7474bb76-… poc` (the stamp a deploy smoke waits for).
 
 **Tests** (`vitest.config.ts`, the ONE config): four projects — `unit` (in-process node,
 `src/**/*.test.ts`), `workers` (inside workerd via `@cloudflare/vitest-plugin` over
@@ -831,9 +829,8 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
 
 - **Configuration is ONE typed object** (`src/worker.ts`, section 10): `APP_CONFIG_*` vars parsed once
   per isolate by a row table, loud on a bad or unknown variable, plus the deploy identity from the
-  version-metadata binding. Two fields exist because two things read them (`environmentName`,
-  `deployId`); constants stay constants (the inventory is the module header). `/version` answers
-  `<deployId> <environmentName>`.
+  version-metadata binding. Constants stay constants (the inventory is the module header). `/version` answers
+  `<deployId> <platformOrigin>`.
 - **A root-applied non-callable is the coded `NOT_A_METHOD`**, like the dotted case (dispatch.ts): the
   delivery loop treats it as deterministic and halts an uncallable cursor target at the first failure.
 
@@ -845,8 +842,8 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
   `fetch`; the `<app>.<project>` shape and the trusted `x-iterate-app` landed with it, and the public
   `/expression` lane was deleted — a project host is the one HTTP way in). The DO is untouched — the fetch lane
   already resolves the expression, appends the terminal `.fetch`, maps `NO_ITX_EXPRESSION_MATCH` to
-  404 and carries 101s. Deployed under `*.project-worker.iterate.com` (the wildcard DNS record, the
-  route, `APP_CONFIG_PROJECT_HOSTNAME_BASE`); the e2e lane hangs its hosts under `localhost` and
+  404 and carries 101s. Deployed under `*.iterate2.app` (the wildcard DNS record, the
+  route, `urls.ingressRouting`) — or under `/projects/<slug>/<app>/…` on a paths deployment; the e2e lane hangs its hosts under `localhost` and
   reaches them with a Host header (`e2e/support/project-host.ts`). Proof:
   `e2e/ingress-project-host.e2e.test.ts` — the page at `/w?repo=x` with the URL verbatim, its relative
   `app.js` from the same host, a visitor's `x-itx-*` stripped, the apex, a 404 for a label without a
@@ -953,9 +950,9 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
 
 ### Decided on 2026-09-16, done (secrets: material at rest, a use is a fact, a 101 through a secret, the delete order)
 
-- **Material at rest is AES-256-GCM** (`secret-at-rest.ts`) under `APP_CONFIG_SECRETS_KEY`, the
+- **Material at rest is AES-256-GCM** (`secret-at-rest.ts`) under `APP_CONFIG` `secrets.key`, the
   ciphertext bound to the object (owner, name), its pin and the revision it was written at — ADR
-  0005's binding with the write counter in the offset's place. Rotation is lazy: `…_KEY_PREVIOUS`
+  0005's binding with the write counter in the offset's place. Rotation is lazy: `secrets.previousKey`
   opens, the read rewrites under the current key, the old key is dropped once every record has been
   read. A record from before (or under a lost key) is a refusal naming the fix: set it again.
 - **Every dispatch through a secret is a `secrets/used` fact** — the request as received (its
@@ -971,7 +968,7 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
 
 ### Decided on 2026-09-21, done (described rows, naked children, the sandbox)
 
-- **Implicit rows are per context.** Every root at the owner root; the thirteen context roots
+- **Implicit rows are per context.** Every root at the owner root; the fourteen context roots
   everywhere else; nothing project-level is ambient below the root. A bare `itx` row with a target
   claims what no implicit row claims (`itx ⇒ itx.builtins.cd('<creator>')` is the creator's
   surface; `itx ⇒ itx.builtins` the whole local one); a bare `null` denies all. The library's three

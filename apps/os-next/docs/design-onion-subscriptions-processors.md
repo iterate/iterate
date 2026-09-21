@@ -240,8 +240,8 @@ is matched against the context's rows (the most SPECIFIC wins: longest match, th
 args; a bare `itx` row with a target claims what no implicit row claims), a matching mask
 refuses, a matching target rewrites and the loop repeats; with no matching row, a root that is
 IMPLICIT HERE is the row `itx.<root> ⇒ itx.builtins.<root>` (never stored — `list()` and
-`resolve()` spell it out; SINCE 2026-09-21 every root at the owner root and only the thirteen
-context roots — `whoami`, `append`, `readEvents`, `waitForEvent`, `cd`, `facets`, `subscriptions`,
+`resolve()` spell it out; SINCE 2026-09-21 every root at the owner root and only the fourteen
+context roots — `whoami`, `url`, `append`, `readEvents`, `waitForEvent`, `cd`, `facets`, `subscriptions`,
 `processors`, `schedules`, `rewriteRules`, `rpcStubs`, `workers`, `run` — everywhere else, a child
 reaching the project's names through the bare row its creator wrote); anything else is refused
 (32-rewrite budget; `NO_ITX_EXPRESSION_MATCH`, default-deny). A match may not be rooted at

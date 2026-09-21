@@ -127,3 +127,19 @@ test("KILLED MID-RUN, NEVER RE-RUN: the context dies with a script in flight; th
   expect(await itx.kv.get("starts")).toBe("1"); // not run again
   expect(await openScriptRuns(ROOT)).toEqual({});
 });
+
+test("a script's hop to a sibling context carries the platform origin: `itx.cd(path).url()` composes it there, though the sibling was never reached from the edge", async () => {
+  // a project the directory knows (its slug names its URL), reached from this stamped session
+  const itx = await (
+    await openSession()
+  )
+    .authenticate(adminCredentials())
+    .projects.create({ project: `runs-url-${Date.now().toString(36)}` });
+  // the run's own caller carries no origin (loaded code speaks for the project); the context fills
+  // in the one the edge stamped when this session reached it, and the hop to `/child` hands it on
+  const urls = (await itx.run(
+    "async (itx) => ({ here: await itx.url(), sibling: await itx.cd('/child').url({ app: 'site' }) })",
+  )) as { here: string; sibling: string };
+  expect(urls.here).toMatch(/^https:\/\/[a-z0-9-]+\.projects\.test\/$/);
+  expect(urls.sibling).toMatch(/^https:\/\/site--[a-z0-9-]+\.projects\.test\/$/);
+});

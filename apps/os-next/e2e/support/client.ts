@@ -4,6 +4,7 @@
 // the handful of idioms every file used to copy (poll-until, must-reject, the delivery collector).
 // A project host — the one HTTP way into a project — is support/project-host.ts.
 
+import crypto from "node:crypto";
 import { newWebSocketRpcSession } from "capnweb";
 import { WebSocket as UndiciWebSocket } from "undici";
 import type { IterateRpcTarget, SessionCredentials } from "../../src/session.ts";
@@ -43,10 +44,29 @@ export const adminCredentials = (as?: {
 /** A URL on the one shared worker — for the raw HTTP doors that have no itx method (/version, /demo). */
 export const workerUrl = (path: string): string => new URL(path, baseUrl()).toString();
 
+/** THE RUN'S ID — one value for the whole `pnpm e2e` run, minted by global-setup and handed to every
+ *  vitest worker process (support/setup.ts sets `E2E_RUN_ID` from it; a caller may pin it — a commit
+ *  sha in CI). Every identifier a test mints carries it, so no two runs against one deployment can
+ *  land on the same project, repo or account, however many run at once. */
+let memoRunId = "";
+export const runId = (): string =>
+  // Hashed, not truncated: CI pins `<run id>-<attempt>`, and two consecutive GitHub run ids share
+  // their leading digits — the first eight characters would name the same run twice.
+  (memoRunId ||= crypto
+    .createHash("sha1")
+    .update(process.env.E2E_RUN_ID || crypto.randomUUID())
+    .digest("hex")
+    .slice(0, 8));
+
+/** THIS vitest worker process, within the run. Files run in parallel in separate processes, each
+ *  with its own `counter` starting at 0, so the slot is what keeps two processes' ids apart. */
+export const workerSlot = (): string => process.env.VITEST_WORKER_ID || "0";
+
 let counter = 0;
-/** A unique project ctx per call, so tests never collide on a Durable Object (each ctx is its own). */
+/** A unique project ctx per call, so tests never collide on a Durable Object (each ctx is its own):
+ *  `prj_<prefix>_<run>_<worker>_<n>` — unique across runs, across worker processes, and within one. */
 export const freshCtx = (prefix: string): string =>
-  `prj_${prefix}_${Date.now().toString(36)}_${counter++}`;
+  `prj_${prefix}_${runId()}_${workerSlot()}_${counter++}`;
 
 /** `/api` opened BARE (no credential on the upgrade): the socket authenticates in-band with the
  *  admin secret (src/api.ts, src/session.ts). */

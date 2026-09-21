@@ -176,7 +176,7 @@ expect(await itx.kv.get("k")).toBe("v");
 // e2e/context.e2e.test.ts
 ```
 
-`/version` answers `<deployId> <environmentName>`, the stamp a deploy smoke waits for
+`/version` answers `<deployId> <platformOrigin>`, the stamp a deploy smoke waits for
 (`e2e/session.e2e.test.ts`). One more door, supported and not front and center: capnweb's one-shot
 HTTP batch (`newHttpBatchRpcSession`) is served at the same `/api` for a cron or a script — one
 POST, every chained call flushed in it, reads and writes only, no live capability
@@ -365,7 +365,7 @@ what no implicit row claims (chapter 3): the child's `append`, `whoami`, `cd`, i
 facets stay the child's, and every other name walks one hop up to the creator's Durable Object and
 resolves through the creator's rules — so a lend on the root is reachable from every child whose
 row says so, and from that child's children through their rows. A context nobody linked is naked:
-thirteen roots and default-deny.
+fourteen roots and default-deny.
 
 ```ts
 using s = session();
@@ -530,7 +530,7 @@ Every rule below is a row in its table test.
    applied and done; anything else is `NO_ITX_EXPRESSION_MATCH`, default-deny. What is implicit
    depends on where you stand: at the owner root — `/` for a project; `/users/<id>` or
    `/organizations/<id>` in the global namespace — every built-in root; at every other context
-   only the thirteen context roots, `whoami`, `append`, `readEvents`, `waitForEvent`, `cd`,
+   only the fourteen context roots, `whoami`, `url`, `append`, `readEvents`, `waitForEvent`, `cd`,
    `facets`, `subscriptions`, `processors`, `schedules`, `rewriteRules`, `rpcStubs`, `workers`,
    `run`. `kv`, `secrets`, `ai`, `fetch`, `repos`, `agents` and the rest are the project's, ambient
    nowhere below its root. 32 rewrites is the budget.
@@ -756,7 +756,7 @@ chapter appended went somewhere; the next brick is that somewhere.
 ### `append`, `readEvents`, `waitForEvent`
 
 Every context is one append-only event log. The three are built-ins under `itx.builtins`, like
-everything the platform implements, and three of the thirteen roots implicit in EVERY context
+everything the platform implements, and three of the fourteen roots implicit in EVERY context
 (chapter 3): `itx.append` is the row `itx.append ⇒ itx.builtins.append` wherever you stand — a
 child's log is its own, whoever created it — so the short name rides the dotted hop with zero edge
 code, and the kernel's own appends, spelled `itx.builtins.append`, never read the rules:
@@ -1205,7 +1205,7 @@ doors over a `ProcessorEngine`: `processEventBatch(events, range)` (the push doo
 `snapshot()` → `{ offset, state }` (caught up through the log first), `liveSnapshot()` → `{ rev,
 state }` (the live-state seed), and `waitUntilProcessed({ offset, timeoutMs? })` (the barrier,
 default 10 s). The engine appends and reads through `env.ITX.get().append(…)` /
-`.readEvents(…)` — two of the thirteen roots implicit in every context, so a hosted processor's log
+`.readEvents(…)` — two of the fourteen roots implicit in every context, so a hosted processor's log
 is always its own — and disposes both after each call
 (chapter 11). It keeps the reduced state CHECKPOINTED with the offset and contract version it was
 reduced under; a push not contiguous with the checkpoint triggers GAP REPAIR from the log; bumping
@@ -1840,9 +1840,9 @@ secret that proves it — and every door reads the same two kinds:
   a same-origin request only (`isSameOriginBrowserRequest`, `src/lib.ts`: the `Origin` header is this
   origin, or absent), so a foreign site's socket is refused `UNAUTHENTICATED` — the one guard that
   makes an ambient cookie safe over RPC. Who the grant is comes from the issuer's login (`/login`:
-  Google, or an assumed email where `APP_CONFIG_TEST_EMAIL_LOGIN` is on). `projects.get` admits
+  Google, a mailed code, or the deployment's password — the `login` block of `APP_CONFIG`). `projects.get` admits
   members of the owning org only.
-- `admin-secret`: the deployment's `APP_CONFIG_ADMIN_API_SECRET` (a wrangler secret), verified
+- `admin-secret`: the deployment's `APP_CONFIG` `secrets.adminBearer`, verified
   in-band on a bare `/api` socket (or a bearer on the upgrade) — `{ actor: "admin" }`, every project, `list()` is
   the whole directory, `create()` lands in `org_admin`. With `as: { email }` it is that user's
   session without a login (the row upserted like `/login` does), which is how a confinement test
@@ -2190,7 +2190,7 @@ The invariants a reader should now be able to state:
   written by one event — and a lent stub is reached THROUGH a rule naming the physical registry.
 - **The platform never spells a short name; an app never spells `itx.builtins`.** Every expression
   the kernel writes is rooted at `itx.builtins`, the fixed point; rules resolve first; the implicit
-  rows are every root at the owner root and the thirteen context roots everywhere else; a bare row
+  rows are every root at the owner root and the fourteen context roots everywhere else; a bare row
   with a target claims what no implicit row claims, a bare `null` denies all; `null` masks under an
   implicit row and deletes elsewhere; a row carries a `description` a model reads.
 - **Everything else is an event.** The DO has `append` and no configuration verbs; every verb builds

@@ -1,5 +1,6 @@
 import { startAppSession } from "iterate/next/app-server";
 import { sameOriginPath } from "iterate/next/lib";
+import { appConfigOf, platformOriginOf } from "./app-config.ts";
 import type { Env } from "./control-plane.ts";
 import type { User } from "./directory.ts";
 import { oauthAddresses, oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
@@ -17,7 +18,8 @@ export async function startIssuerSession(
   /** what the identity provider said about the person (Google's profile); an email sign-in has none */
   profile: { picture?: string; name?: string } = {},
 ) {
-  const { issuer, api } = oauthAddresses(env, request);
+  const platformOrigin = platformOriginOf(appConfigOf(env), request);
+  const { issuer, api } = oauthAddresses(env, platformOrigin);
   // The issuer's own session holds every scope: it is the person at the issuer, and the consent
   // page creates organizations and projects through it.
   const flow = await startAppSession(
@@ -30,7 +32,7 @@ export async function startIssuerSession(
     },
     sameOriginPath(next, issuer),
   );
-  const helpers = oauthHelpers(env);
+  const helpers = oauthHelpers(env, platformOrigin);
   const authorization = await parseAuthorization(env, new Request(flow.location));
   const approved = await helpers.completeAuthorization({
     request: authorization,

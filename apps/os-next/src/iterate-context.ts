@@ -40,7 +40,6 @@ import {
   type Caller,
 } from "iterate/next/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
-import { ITX_PLATFORM_ORIGIN_HEADER } from "./platform-origin.ts";
 import type { IterateContextDurableObject, Env } from "./iterate-context-durable-object.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
@@ -98,6 +97,13 @@ class SubscriptionHandle extends RpcTarget {
 export interface IterateContextRpcTarget extends Omit<BuiltInScope, "cd"> {}
 
 /** The iterate context (`itx`) at one `{ projectId, path }`, as a client holds it. */
+/** The header the edge (and a session's terminal fetch) stamps a fetch-lane Request with — the
+ *  platform origin the caller reached the platform on (`Caller.platformOrigin` on the wire) — read and
+ *  stripped by the context DO's fetch lane. Inbound `x-itx-*` headers never survive the edge, and
+ *  `ItxEntrypoint.fetch` strips it from a loaded worker's Request, so an outsider's is gone before
+ *  this is set. */
+export const ITX_PLATFORM_ORIGIN_HEADER = "x-itx-platform-origin";
+
 export class IterateContextRpcTarget extends RpcTarget {
   readonly #contextNamespace: IterateContextNamespace;
   readonly #durableObjectAddress: DurableObjectAddress;
@@ -522,7 +528,7 @@ export const DurableObjectNameCodec = {
 export type ItxEntrypointScope = ReturnType<Service<ItxEntrypoint>["get"]>;
 export class ItxEntrypoint extends WorkerEntrypoint<
   Env,
-  { iterateContextName: string; platform?: true }
+  { iterateContextName: string; platform?: true; platformOrigin: string | null }
 > {
   /** THE handoff: the genuine itx scope — the same `IterateContextRpcTarget` class a capnweb client
    *  gets from `projects.get(id)` (capnweb's RpcTarget IS the native `cloudflare:workers` RpcTarget
@@ -535,13 +541,20 @@ export class ItxEntrypoint extends WorkerEntrypoint<
   get(): IterateContextRpcTarget {
     // LOADED code's handle runs as app code; a class of THIS worker mints its stub with
     // `platform: true` from its own exports (sdk/index.ts) and gets the full handle. A loaded isolate's
-    // `ctx.exports` are its own module's, so the prop cannot be forged from inside one.
+    // `ctx.exports` are its own module's, so the prop cannot be forged from inside one. Either speaks
+    // for the project (no principal) at the origin the context was minted with (platform-origin
+    // persisted on the DO): every hop from here — this context, a `cd` to a sibling — carries it, so
+    // a sibling never reached from the edge still composes URLs.
     return new IterateContextRpcTarget(
       this.env.ITERATE_CONTEXT,
       DurableObjectNameCodec.parse(this.ctx.props.iterateContextName),
       new SessionTeardown(),
       (p) => this.ctx.waitUntil(p),
-      { principal: null, ...(!this.ctx.props.platform && { app: true as const }) },
+      {
+        principal: null,
+        platformOrigin: this.ctx.props.platformOrigin,
+        ...(!this.ctx.props.platform && { app: true as const }),
+      },
     );
   }
 
@@ -575,11 +588,19 @@ export class ItxEntrypoint extends WorkerEntrypoint<
 /** Mint the loopback stub for one context — `ctx.exports.ItxEntrypoint({ props })` on the DO's own
  *  state (workers-types puts the worker's export table on it). `Cloudflare.Exports` is `{}` without a
  *  generated `GlobalProps`, hence the cast. */
-export function itxEntrypointFor(ctx: DurableObjectState, iterateContextName: string): Fetcher {
+export function itxEntrypointFor(
+  ctx: DurableObjectState,
+  iterateContextName: string,
+  platformOrigin: string | null,
+): Fetcher {
   const { exports } = ctx as unknown as {
-    exports: { ItxEntrypoint(opts: { props: { iterateContextName: string } }): Fetcher };
+    exports: {
+      ItxEntrypoint(opts: {
+        props: { iterateContextName: string; platformOrigin: string | null };
+      }): Fetcher;
+    };
   };
-  return exports.ItxEntrypoint({ props: { iterateContextName } });
+  return exports.ItxEntrypoint({ props: { iterateContextName, platformOrigin } });
 }
 
 // THE PUBLISHED API IS DECLARED, NOT GENERATED (iterate/next/api): a context satisfies it, checked here.

@@ -39,7 +39,7 @@ async function connect(headers: Record<string, string>) {
 
 test("first consent creates organization and project through the ordinary session, then grants only the chosen project", async () => {
   const user = await directory(bindings.DB).upsertGoogleUser("1357924680", "bootstrap@example.com");
-  const helpers = oauthHelpers(bindings);
+  const helpers = oauthHelpers(bindings, "https://control.test");
   const client = await helpers.createClient({
     clientName: "Claude fixture",
     redirectUris: ["http://127.0.0.1/callback"],
@@ -203,7 +203,10 @@ test("copied issuer client metadata and every scope confer app permissions but n
 test("an issuer session minted before a scope existed still holds every scope â€” its list is not a consent", async () => {
   // the shape of startIssuerSession, with the two scopes an older cookie was minted with
   const user = await directory(bindings.DB).upsertUser("old-issuer-cookie@example.com");
-  const { issuer: issuerOrigin, api: apiResource } = oauthAddresses(bindings);
+  const { issuer: issuerOrigin, api: apiResource } = oauthAddresses(
+    bindings,
+    "https://control.test",
+  );
   const flow = await startAppSession(
     bindings.BROWSER_SESSION,
     {
@@ -215,7 +218,7 @@ test("an issuer session minted before a scope existed still holds every scope â€
     "/",
   );
   const request = await parseAuthorization(bindings, new Request(flow.location));
-  const approved = await oauthHelpers(bindings).completeAuthorization({
+  const approved = await oauthHelpers(bindings, "https://control.test").completeAuthorization({
     request,
     userId: user.id,
     scope: request.scope,

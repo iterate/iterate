@@ -5,6 +5,7 @@ export class CommitHistory {
   head: string;
   private directory: string;
   private main: string;
+  private base?: string | null;
 
   constructor(directory: string, head: string, main: string) {
     this.directory = directory;
@@ -22,10 +23,18 @@ export class CommitHistory {
     return paths.split("\0").filter(Boolean);
   }
 
+  /** Everything this branch changes relative to main, merged-in main changes excluded. */
+  changedSinceMergeBase() {
+    const base = this.mergeBase();
+    if (!base) return null;
+    return this.git("diff", "--name-only", "--no-renames", "-z", base, this.head)
+      .split("\0")
+      .filter(Boolean);
+  }
+
   throughMergeBase() {
-    const bases = this.git("merge-base", "--all", this.head, this.main).trim().split("\n");
-    if (bases.length !== 1) return []; // Criss-cross merges have no single safe boundary.
-    const base = bases[0];
+    const base = this.mergeBase();
+    if (!base) return [];
     const descendants = new Set(
       this.git("rev-list", "--ancestry-path", `${base}..${this.head}`).trim().split("\n"),
     );
@@ -35,6 +44,15 @@ export class CommitHistory {
     // first-parent commits, but never substitute main for unmerged feature code.
     const boundary = commits.findIndex((commit) => !descendants.has(commit));
     return boundary < 0 ? commits : commits.slice(0, boundary);
+  }
+
+  /** Criss-cross merges have no single safe boundary. Both readers ask; Git answers once. */
+  private mergeBase() {
+    if (this.base === undefined) {
+      const bases = this.git("merge-base", "--all", this.head, this.main).trim().split("\n");
+      this.base = bases.length === 1 ? bases[0] : null;
+    }
+    return this.base;
   }
 
   private git(...args: string[]) {

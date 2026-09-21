@@ -219,7 +219,7 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
   const { urls, login } = parsed;
   if (urls.mcp && !urls.os)
     throw new Error(
-      `${fieldNameOf(["urls", "mcp"])}: a separate MCP origin needs urls.os set (platform-origin.ts learns a blank urls.os from the first platform request, which must not be the MCP origin)`,
+      `${fieldNameOf(["urls", "mcp"])}: a separate MCP origin needs urls.os set (with a blank urls.os every request's own origin is the platform's, and the MCP origin is not)`,
     );
   if (urls.mcp && urls.mcp === urls.os)
     throw new Error(`${fieldNameOf(["urls", "mcp"])}: must differ from urls.os`);
@@ -292,6 +292,16 @@ export function sessionSigningSecretOf(config: AppConfig): Promise<string> {
 export function atRestKeysOf(config: AppConfig): { current: string; previous?: string } {
   const previous = config.secrets.previousKey.exposeSecret();
   return { current: config.secrets.key.exposeSecret(), previous: previous || undefined };
+}
+
+/** THE PLATFORM ORIGIN a request reached the platform on — the OAuth issuer identifier, what `/api`,
+ *  `/mcp`, the issuer's pages and every composed URL hang under: `urls.os` when the deployment names
+ *  one (prd, a preview: more than one hostname), else the request's own origin (a self-host: one
+ *  hostname, workers.dev). Pure. The edge computes it once per request and stamps every caller with
+ *  it (`Caller.platformOrigin`); a context persists what its callers said, for the calls that carry
+ *  none (a loaded worker's, an alarm's). */
+export function platformOriginOf(config: AppConfig, request: Request): string {
+  return config.urls.os || new URL(request.url).origin;
 }
 
 export type { Redacted };

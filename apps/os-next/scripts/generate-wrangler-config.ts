@@ -30,6 +30,26 @@ function template() {
  *  scripts/dev.ts), one `env` block per deployment. */
 export function writeWranglerConfig() {
   const base = template();
+  // THE BINDINGS every env block repeats (wrangler does not inherit them): the base minus its
+  // inheritable keys and minus what an env block sets for itself (the resource ids, routes, vars).
+  const {
+    $schema: _schema,
+    name: _name,
+    main: _main,
+    compatibility_date: _compatibilityDate,
+    compatibility_flags: _compatibilityFlags,
+    account_id: _accountId,
+    observability: _observability,
+    workers_dev: _workersDev,
+    routes: _routes,
+    limits: _limits,
+    r2_buckets: _r2,
+    artifacts: _artifacts,
+    d1_databases: _d1,
+    kv_namespaces: _kv,
+    vars: _vars,
+    ...bindings
+  } = base;
   const config = {
     ...base,
     routes: [],
@@ -66,15 +86,7 @@ export function writeWranglerConfig() {
               zone_name: hostname.split(".").slice(-2).join("."),
             })),
           ].filter((route) => !route.pattern.includes(".workers.dev/")),
-          rules: base.rules,
-          assets: base.assets,
-          durable_objects: base.durable_objects,
-          exports: base.exports,
-          worker_loaders: base.worker_loaders,
-          ai: base.ai,
-          browser: base.browser,
-          send_email: base.send_email,
-          version_metadata: base.version_metadata,
+          ...bindings,
           artifacts: [{ binding: "ARTIFACTS", namespace: env.artifactsNamespace }],
           r2_buckets: [{ binding: "FILES", bucket_name: `${env.resourceNamePrefix}-files` }],
           d1_databases: [
@@ -139,6 +151,100 @@ export function writeSelfHostWranglerConfig() {
     appLabel: "apps/os-next (self-host)",
     extraDocs: "apps/os-next/SELF-HOSTING.md",
     config,
+  });
+}
+
+/** The gitignored config `wrangler preview` reads (scripts/preview.ts). */
+export const PREVIEW_CONFIG_NAME = "wrangler.preview.jsonc";
+
+/** THE PARENT of every per-PR preview: a Worker Preview is a branch of an existing worker
+ *  (cloudflare-os `staging-config.ts`: "one must exist before a preview can be created"). This is
+ *  that worker — os-next-preview on the dev/preview account (envs.ts). Nothing reads its data. */
+export const PREVIEW_PARENT = osNextEnvs.preview!;
+
+/** `https://<name>-<worker>.<subdomain>.workers.dev` — Cloudflare derives it from the preview's slug
+ *  and the worker name, so every URL the config needs is known before anything deploys. */
+export function previewUrl(previewName: string): string {
+  const host = new URL(PREVIEW_PARENT.baseUrl).hostname;
+  const prefix = `${PREVIEW_PARENT.workerName}.`;
+  if (!host.startsWith(prefix))
+    throw new Error(`${host} is not the parent worker's workers.dev host`);
+  return `https://${previewName}-${host}`;
+}
+
+/** Every preview-owned resource is `<worker>-<preview>-<binding>`, the name wrangler's preview
+ *  auto-provisioning gives the KV namespaces and the R2 bucket; the D1 database and the Artifacts
+ *  namespace follow it by hand. */
+export const previewResourceName = (previewName: string, binding: string): string =>
+  `${PREVIEW_PARENT.workerName}-${previewName}-${binding}`;
+
+/** A resource list with only its `binding` names kept — how wrangler is told to auto-provision a
+ *  fresh one per preview (cloudflare-os `previewResourceBindings`). */
+const bindingOnly = (resources: { binding: string }[] | undefined) =>
+  (resources || []).map(({ binding }) => ({ binding }));
+
+/** The config `wrangler preview` reads, as a pure function of the template (wrangler.base.jsonc),
+ *  the preview's name and its D1 — the shape of cloudflare-os's `buildPreviewConfigs`, unit-tested
+ *  in preview.test.ts. The top level names the parent (which worker, which account, the entry, the
+ *  assets) and declares the Durable Object classes as a legacy `migrations` entry: the pkg.pr.new
+ *  wrangler build that provisions per-preview KV and R2 predates `exports`, and a preview
+ *  deployment provisions its own namespaces from that entry. The `previews` block is the ONE
+ *  preview's bindings — a preview inherits nothing from the top level, so every binding the worker
+ *  reads is here: KV and R2 binding-only (auto-provisioned), the D1 scripts/preview.ts created, the
+ *  Artifacts namespace by name. Its `urls` are two vars: the preview's own origin and projects as
+ *  paths on it; the secrets (`APP_CONFIG`, `APP_CONFIG_SECRETS__KEY`) are the parent's Previews
+ *  settings, inherited. */
+export function previewWranglerConfig(input: {
+  template: Record<string, any>;
+  previewName: string;
+  d1DatabaseId: string;
+}) {
+  const { template: base, previewName } = input;
+  return {
+    name: PREVIEW_PARENT.workerName,
+    account_id: PREVIEW_PARENT.cloudflareAccountId,
+    main: base.main,
+    compatibility_date: base.compatibility_date,
+    compatibility_flags: base.compatibility_flags,
+    workers_dev: true,
+    preview_urls: true,
+    rules: base.rules,
+    assets: base.assets,
+    migrations: [{ tag: "v1", new_sqlite_classes: Object.keys(base.exports) }],
+    previews: {
+      observability: OBSERVABILITY,
+      limits: base.limits,
+      durable_objects: base.durable_objects,
+      worker_loaders: base.worker_loaders,
+      ai: base.ai,
+      browser: base.browser,
+      send_email: base.send_email,
+      version_metadata: base.version_metadata,
+      kv_namespaces: bindingOnly(base.kv_namespaces),
+      r2_buckets: bindingOnly(base.r2_buckets),
+      d1_databases: base.d1_databases.map(({ binding }: { binding: string }) => ({
+        binding,
+        database_name: previewResourceName(previewName, "db"),
+        database_id: input.d1DatabaseId,
+      })),
+      artifacts: base.artifacts.map(({ binding }: { binding: string }) => ({
+        binding,
+        namespace: previewResourceName(previewName, "repos"),
+      })),
+      vars: {
+        APP_CONFIG_URLS__OS: previewUrl(previewName),
+        APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify(PREVIEW_PARENT.ingressRouting),
+      },
+    },
+  };
+}
+
+/** Write wrangler.preview.jsonc for one preview and return its path. */
+export function writePreviewWranglerConfig(input: { previewName: string; d1DatabaseId: string }) {
+  return writeGeneratedWranglerConfig({
+    configUrl: new URL(`../${PREVIEW_CONFIG_NAME}`, import.meta.url),
+    appLabel: "apps/os-next (one per-PR Worker Preview; scripts/preview.ts)",
+    config: previewWranglerConfig({ template: template(), ...input }),
   });
 }
 

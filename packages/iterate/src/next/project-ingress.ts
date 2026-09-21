@@ -67,6 +67,19 @@ export function projectAddressOf(
   return { app, project, basePath: `/projects/${project}/${app}` };
 }
 
+/** A CUSTOM HOSTNAME — one of a deployment's own that IS a project's apex (os-next
+ *  `urls.temporaryCustomHostnames`, `{ "iterate2.com": "iterate" }`): the apex shape, `app: null`, so the
+ *  project's config worker `fetch` answers exactly as it does on `<project>.<hostname>`. Null for a
+ *  hostname the map does not name — the map's spelling, case and a trailing dot forgiven, no wildcard
+ *  under it. Pure. */
+export function customProjectHostOf(
+  hostname: string,
+  hostnames: Record<string, string>,
+): { app: null; project: string } | null {
+  const project = hostnames[hostname.toLowerCase().replace(/\.$/, "")];
+  return project ? { app: null, project } : null;
+}
+
 /** The URL of `app` (null ⇒ the apex, the config worker) in `project` under `routing`, at `path`
  *  (default "/", must start with "/"). Null when there is no ingress, or when the result would not
  *  parse back to the same address (a bad label; a `path` that climbs out of its app). subdomains:

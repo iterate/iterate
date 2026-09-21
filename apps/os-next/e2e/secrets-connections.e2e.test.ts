@@ -63,7 +63,9 @@ test("waitrose-session: a username/password secret mints its session on first us
   });
 
   // Force a real 401 (the epoch bump kills the stored session) and call again: re-login IS the
-  // refresh — the object logs in again and the retry wins.
+  // refresh — the object logs in again and the retry wins. `graphql-session-login` is the shop's ONE
+  // client for its login door (apps/dummy-petshop/src/worker.ts), so this bump is deployment-wide:
+  // safe because the account above is this run's alone and no other row in the suite logs in there.
   await petshopExpireTokens("graphql-session-login");
   const pets = await bearerCall(itx, "waitrose", "/api/pets");
   expect(pets.status).toBe(200);

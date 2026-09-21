@@ -10,57 +10,15 @@
 // deployed lane runs ONE real turn through Workers AI.
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
+import { freshCtx, openItx, processorNames, readAll, sleep, until } from "./support/client.ts";
 import {
-  collector,
-  freshCtx,
-  openItx,
-  processorNames,
-  readAll,
-  sleep,
-  until,
-} from "./support/client.ts";
-import { deployedOnly } from "./support/project-host.ts";
-
-/** A model that answers from a script of replies, in order, recording what it was asked. A reply
- *  may take its time (`{ text, afterMs }`): the request stays in flight that long — what an
- *  interruption needs to have something to cut short. The fake answers WHOLE (a lent stub carries
- *  no stream), so the loop journals its one chunk window; streaming proper is the deployed story. */
-class ScriptedAi extends RpcTarget {
-  readonly calls: { model: string; messages: { role: string; content: string }[] }[] = [];
-  constructor(private readonly replies: (string | Error | { text: string; afterMs: number })[]) {
-    super();
-  }
-  async run(model: string, inputs: { messages: { role: string; content: string }[] }) {
-    this.calls.push({ model, messages: inputs.messages });
-    const reply = this.replies[Math.min(this.calls.length, this.replies.length) - 1];
-    if (reply instanceof Error) throw reply;
-    if (typeof reply === "string") return { response: reply };
-    await sleep(reply.afterMs);
-    return { response: reply.text };
-  }
-}
-
-const short = (log: { type: string }[]) =>
-  log
-    .filter((e) => /^events\.iterate\.com\/(agent\/|context\/run-)/.test(e.type))
-    .map((e) => e.type.replace("events.iterate.com/", ""));
-/** The default model is OpenAI's astra; a local story pins Workers AI so the fake `itx.ai` answers. */
-const WORKERS_AI_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
-const onWorkersAi = (
-  support: { append: (event: unknown) => Promise<unknown> },
-  model = WORKERS_AI_MODEL,
-) =>
-  support.append({
-    type: "events.iterate.com/agent/configured",
-    payload: { config: { llm: { model } } },
-  });
-
-const assistantWords = (log: { type: string; payload?: unknown }[]) =>
-  log
-    .filter((e) => e.type === "events.iterate.com/agent/context-added")
-    .map((e) => e.payload as { role: string; content: string })
-    .filter((p) => p.role === "assistant")
-    .map((p) => p.content);
+  RED_PNG_BASE64,
+  ScriptedAi,
+  WORKERS_AI_MODEL,
+  assistantWords,
+  onWorkersAi,
+  short,
+} from "./support/agents.ts";
 
 test("itx.agents.create(path) births the agent — the processor row, the request, the certificate on / and on its path with the default prompt; an operator's prompt is its own append; the catalog lists it; an agent not created refuses message()", async () => {
   const itx = openItx(freshCtx("agent"));
@@ -386,10 +344,6 @@ test("bounded: a model that never stops scripting trips the autonomous-turn brea
   expect(await readAll(support)).toHaveLength(quietFrom);
 });
 
-/** A 2×2 solid red PNG — what a vision model is asked about. */
-const RED_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR42mP4z8AARAwQCgAf7gP9Y167WwAAAABJRU5ErkJggg==";
-
 test("an attached image is stored under the agent's path and SHOWN to the model as an image part; a non-image is named", async () => {
   const itx = openItx(freshCtx("agent-vision"));
   const support = itx.cd("/agents/support");
@@ -453,44 +407,6 @@ test("an attached image is stored under the agent's path and SHOWN to the model 
   });
 });
 
-test("streamed: the answer reaches a live subscriber as ephemeral chunk windows before it settles — never a stored row", async () => {
-  const itx = openItx(freshCtx("agent-chunks"));
-  const support = itx.cd("/agents/support");
-  const ai = new ScriptedAi(["Four words, no code."]);
-  await support.provide("itx.ai", ai);
-  const windows = collector();
-  await support.subscribe({
-    name: "chunks",
-    consumes: ["events.iterate.com/agent/llm-response-chunks"],
-    target: windows.fn,
-  });
-  await itx.agents.create("/agents/support");
-  const agent = itx.agents.get("/agents/support");
-  await onWorkersAi(support);
-  await agent.message("Say four words.");
-  const log = await until("the settled request", async () => {
-    const all = await readAll(support);
-    return all.some((e) => e.type === "events.iterate.com/agent/llm-request-settled")
-      ? all
-      : undefined;
-  });
-  const requested = log.find((e) => e.type === "events.iterate.com/agent/llm-request-requested");
-  await until("the chunk window", () => windows.invocations.length >= 1);
-  // The fake answers whole, so its answer is ONE window: the request it belongs to, the provider's
-  // chunk verbatim (Workers AI's `{ response }`), the first sequence number.
-  expect(windows.types()).toEqual(["events.iterate.com/agent/llm-response-chunks"]);
-  expect(windows.invocations[0]!.events[0]!.payload).toEqual({
-    llmRequestOffset: requested.offset,
-    chunks: [{ response: "Four words, no code." }],
-    sequence: 0,
-  });
-  // Ephemeral: the durable log holds no chunk row, and the settlement carries the text.
-  expect(log.filter((e) => e.type === "events.iterate.com/agent/llm-response-chunks")).toEqual([]);
-  expect(
-    log.find((e) => e.type === "events.iterate.com/agent/llm-request-settled")!.payload.result,
-  ).toEqual({ status: "succeeded", text: "Four words, no code." });
-});
-
 test("interrupted: the person's next words cut the running answer short — settled cancelled, and those words start the next turn", async () => {
   const itx = openItx(freshCtx("agent-interrupt"));
   const support = itx.cd("/agents/support");
@@ -552,105 +468,6 @@ test("interrupted: the person's next words cut the running answer short — sett
     paused: null,
   });
 });
-
-deployedOnly(
-  "DEPLOYED: one real turn through the default model, OpenAI's astra streamed from the Responses API on Cloudflare's billing — chunk windows fly, the settlement carries the usage",
-  async () => {
-    const itx = openItx(freshCtx("agent-real"));
-    const support = itx.cd("/agents/support");
-    const windows = collector();
-    await support.subscribe({
-      name: "chunks",
-      consumes: ["events.iterate.com/agent/llm-response-chunks"],
-      target: windows.fn,
-    });
-    await itx.agents.create("/agents/support");
-    const agent = itx.agents.get("/agents/support");
-    await agent.message(
-      "Reply with the single word: pong, then one sentence about what a pong is. No code block.",
-    );
-    const log = await until(
-      "the assistant's prose",
-      async () => {
-        const all = await readAll(support);
-        return assistantWords(all).length > 0 ? all : undefined;
-      },
-      120_000,
-    );
-    expect(assistantWords(log).join("\n")).toMatch(/pong/i);
-    // The stream: at least one window of Responses API events, in order, for this request.
-    const requested = log.find((e) => e.type === "events.iterate.com/agent/llm-request-requested");
-    await until("the chunk windows", () => windows.invocations.length >= 1);
-    const chunkEvents = windows.invocations.flatMap((i) => i.events);
-    expect(chunkEvents.every((e) => e.payload.llmRequestOffset === requested.offset)).toBe(true);
-    expect(chunkEvents.map((e) => e.payload.sequence)).toEqual(
-      chunkEvents.map((_, index) => index),
-    );
-    const deltas = chunkEvents.flatMap((e) =>
-      e.payload.chunks.filter((c: { type?: string }) => c.type === "response.output_text.delta"),
-    );
-    expect(deltas.length).toBeGreaterThan(0);
-    expect(deltas.map((c: { delta: string }) => c.delta).join("")).toMatch(/pong/i);
-    // The cost, twice: on the settlement and as the report a feed shows the context's fullness by.
-    const settled = log.find((e) => e.type === "events.iterate.com/agent/llm-request-settled");
-    expect(settled.payload.result).toMatchObject({
-      status: "succeeded",
-      usage: { inputTokens: expect.any(Number), outputTokens: expect.any(Number) },
-    });
-    expect(
-      log.find((e) => e.type === "events.iterate.com/agent/token-usage-reported")?.payload,
-    ).toMatchObject({ model: "gpt-6-astra", maxContextTokens: 272_000 });
-  },
-  150_000,
-);
-
-deployedOnly(
-  "DEPLOYED: the default model SEES an attached image — a red square is called red",
-  async () => {
-    const itx = openItx(freshCtx("agent-vision-real"));
-    await itx.agents.create("/agents/support");
-    const agent = itx.agents.get("/agents/support");
-    await agent.message({
-      message: "What colour is this image? Answer with one word, no code block.",
-      files: [{ contentType: "image/png", filename: "square.png", data: RED_PNG_BASE64 }],
-    });
-    const words = await until(
-      "the assistant's answer",
-      async () => {
-        const said = assistantWords(await readAll(itx.cd("/agents/support")));
-        return said.length > 0 ? said : undefined;
-      },
-      120_000,
-    );
-    expect(words.join("\n")).toMatch(/red/i);
-  },
-  150_000,
-);
-
-deployedOnly(
-  "DEPLOYED: a Workers AI model, pinned by agent/configured, sees the image too — no OpenAI key needed",
-  async () => {
-    const itx = openItx(freshCtx("agent-vision-cf"));
-    const support = itx.cd("/agents/support");
-    await itx.agents.create("/agents/support");
-    const agent = itx.agents.get("/agents/support");
-    await onWorkersAi(support);
-    await agent.message({
-      message: "What colour is this image? Answer with one word, no code block.",
-      files: [{ contentType: "image/png", filename: "square.png", data: RED_PNG_BASE64 }],
-    });
-    const words = await until(
-      "the assistant's answer",
-      async () => {
-        const said = assistantWords(await readAll(support));
-        return said.length > 0 ? said : undefined;
-      },
-      120_000,
-    );
-    expect(words.join("\n")).toMatch(/red/i);
-  },
-  150_000,
-);
 
 // ── the tree the model reads, and the sandbox the scripts run in ──
 

@@ -83,13 +83,14 @@ can rotate with `previousKey` beside it. A self-host sets the object and the key
 
 ## Hostnames — the issuer, the OS, the projects
 
-| Origin              | What answers                                                                                                                                                                                                                         | Whose                                                                                                                                                                   |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `os.iterate2.com`   | THE HEADLESS PLATFORM — the issuer: `/login`, the `/authorize` consent, `/oauth/*`, `/.well-known/*`, `/api` for bearers                                                                                                             | the platform — this worker; the one origin that is cryptographically load-bearing (the OAuth issuer identifier, the `__Host-` cookie, the resource tokens are bound to) |
-| `mcp.iterate2.com`  | the ONE MCP server, a door beside `/api`                                                                                                                                                                                             | the platform — this worker                                                                                                                                              |
-| `*.iterate2.app`    | project hosts: `<app>--<project>`, `<app>.<project>`, the apex `<project>` (the config worker's `fetch`)                                                                                                                             | userspace                                                                                                                                                               |
-| `iterate2.com`      | the `iterate` project's apex — its config worker's `fetch`, through the custom-hostname door (`urls.temporaryCustomHostnames`, envs.ts)                                                                                              | userspace                                                                                                                                                               |
-| `dash.iterate2.com` | THE DASH — the fat first-party app (apps/dash: sessions and personal access tokens, projects and organizations), an ordinary OAuth client of the platform; agents, notes and voice are apps of the same shape on workers.dev origins | an app; anyone could ship another                                                                                                                                       |
+| Origin                           | What answers                                                                                                                                                                                                                                      | Whose                                                                                                                                                                   |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `os.iterate2.com`                | THE HEADLESS PLATFORM — the issuer: `/login`, the `/authorize` consent, `/oauth/*`, `/.well-known/*`, `/api` for bearers                                                                                                                          | the platform — this worker; the one origin that is cryptographically load-bearing (the OAuth issuer identifier, the `__Host-` cookie, the resource tokens are bound to) |
+| `mcp.iterate2.com`               | the ONE MCP server, a door beside `/api`                                                                                                                                                                                                          | the platform — this worker                                                                                                                                              |
+| `*.iterate2.app`                 | project hosts: `<app>--<project>`, `<app>.<project>`, the apex `<project>` (the config worker's `fetch`)                                                                                                                                          | userspace                                                                                                                                                               |
+| `iterate2.com`                   | the `iterate` project's apex — its config worker's `fetch`, through the custom-hostname door (`urls.temporaryCustomHostnames`, envs.ts)                                                                                                           | userspace                                                                                                                                                               |
+| `dash.iterate2.com`              | THE DASH — the fat first-party app (apps/dash: sessions and personal access tokens, projects and organizations), an ordinary OAuth client of the platform; agents, notes and voice are apps of the same shape on workers.dev origins              | an app; anyone could ship another                                                                                                                                       |
+| `<worker>.<account>.workers.dev` | A SELF-HOST (SELF-HOSTING.md): the same worker on ONE origin — the issuer, `/api`, `/mcp`, and every project under `/projects/<slug>/<app>/…` (`urls.ingressRouting: { type: "paths" }`; the apex at `/projects/<slug>/`; every answer sandboxed) | whoever deployed it                                                                                                                                                     |
 
 The platform serves two pages and nothing else a person looks at: sign-in, because the session
 cookie is the issuer origin's, and consent, because the authorization server is the one that asks.
@@ -153,3 +154,38 @@ pnpm e2e                        # the wire lane alone, against a local worker th
 WORKER_BASE_URL=https://os.iterate2.com ADMIN_API_SECRET=… LOGIN_PASSWORD=… pnpm e2e   # the proof that counts
 pnpm run deploy                 # the build, then wrangler deploy --config wrangler.jsonc --env <name>
 ```
+
+## Previews — one per pull request
+
+Every PR that touches os-next gets its own preview of the worker on Cloudflare Worker Previews
+(`wrangler preview`, private beta), the way [cloudflare/cloudflare-os](https://github.com/cloudflare/cloudflare-os)
+previews itself: a preview named `pr<n>-<branch slug>` is a branch of the parent worker
+`os-next-preview` (`envs.ts` `osNextEnvs.preview`; nothing reads its data) with Durable Object namespaces,
+KV, R2, D1 and an Artifacts namespace of its own, at `https://pr<n>-<slug>-os-next-preview.iterate-dev-preview.workers.dev`.
+`.depot/workflows/preview-os-next.yml` deploys it on every push, runs `pnpm e2e` against it, writes the
+URL and the operations below into the PR body, deletes it when the PR closes, and sweeps nightly.
+Previews live on workers.dev and have no project hosts; the e2e rows that need one skip.
+
+`scripts/preview.ts` is the whole thing (run in this directory, under the parent's Doppler config):
+
+```bash
+doppler run --project project-worker --config preview -- pnpm preview deploy --pr 123 --name my-branch
+doppler run --project project-worker --config preview -- pnpm preview e2e    --pr 123 --name my-branch
+doppler run --project project-worker --config preview -- pnpm preview reset  --pr 123 --name my-branch   # destroy, then deploy from scratch
+doppler run --project project-worker --config preview -- pnpm preview delete --pr 123 --name my-branch
+doppler run --project project-worker --config preview -- pnpm preview sweep
+```
+
+The apps on top — dash, agents, notes, voice — are OAuth clients of the platform and nothing else, so
+each is previewed the same way from its own parent (`dash-preview` and so on, `envs.ts`) under the same
+name, with the PR's os-next preview as its issuer: `https://pr<n>-<slug>-dash-preview.iterate-dev-preview.workers.dev`.
+cloudflare-os rebuilds and redeploys all eighteen of its workers every push; ours deploy only when their own
+paths (or the SDK, the shared UI, `scripts/lib`, `envs.ts`) changed since the merge-base — `--apps all`
+previews every one, `--apps none` skips them. The PR body lists whichever were deployed.
+
+A push redeploys the preview in place and its data carries over; when anything about it is wrong —
+a schema change the idempotent DDL cannot apply, a class renamed, state you want gone — `reset` is the
+answer. The same operations run from CI as `depot ci dispatch ... --workflow preview-os-next.yml
+--input pull-request-number=123 --input action=<deploy|reset|e2e|delete>`; the PR body lists them.
+The wrangler that provisions KV and R2 per preview is the pkg.pr.new build of workers-sdk PR #14416,
+installed into a tmpdir per run exactly as cloudflare-os does, until that ships.

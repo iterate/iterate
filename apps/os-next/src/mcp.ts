@@ -1,11 +1,11 @@
 import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import { errorCode } from "iterate/next/lib";
+import { appConfigOf, platformOriginOf } from "./app-config.ts";
 import type { Env } from "./control-plane.ts";
 import { directory, type Directory, type Reach } from "./directory.ts";
 import { DurableObjectNameCodec } from "./iterate-context.ts";
 import type { Authorization } from "./oauth.ts";
-import { oauthAddresses } from "./oauth.ts";
 
 // MCP uses the same verified authorization as Cap’n Web. It exposes ONE tool, `run`: a script
 // evaluated under that principal in THE CONNECTION'S OWN CONTEXT of a project — `/mcp/inbound/<grantId>`,
@@ -182,6 +182,6 @@ async function buildServer(
 /** The shared bearer gate has established this principal and reach. */
 export function mcpResponse(request: Request, env: Env, authorization: Authorization) {
   return createMcpHandler(() =>
-    buildServer(env, authorization, oauthAddresses(env, request).issuer),
+    buildServer(env, authorization, platformOriginOf(appConfigOf(env), request)),
   ).fetch(request);
 }
