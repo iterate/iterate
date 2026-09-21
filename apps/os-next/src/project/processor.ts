@@ -37,7 +37,11 @@ export class ProjectProcessor extends StreamProcessor<
       case "events.iterate.com/project/created":
         return { ...state, creation: { status: "created", offset: event.offset } };
       case "events.iterate.com/project/create-failed":
-        return { ...state, creation: { status: "failed", offset: event.offset } };
+        // A failure after the certificate is a harmless fact too (an attempt whose own-path append
+        // lost its answer): the entity stays created, and the next create() answers at once.
+        return state.creation?.status === "created"
+          ? undefined
+          : { ...state, creation: { status: "failed", offset: event.offset } };
       case "events.iterate.com/repo/created":
         if (state.repos[event.payload.path]) return undefined;
         return {

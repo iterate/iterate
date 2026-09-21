@@ -319,7 +319,11 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       case "events.iterate.com/agent/created":
         return { ...state, creation: { status: "created", offset: event.offset } };
       case "events.iterate.com/agent/create-failed":
-        return { ...state, creation: { status: "failed", offset: event.offset } };
+        // A failure after the certificate is a harmless fact too (an attempt whose own-path append
+        // lost its answer): the entity stays created, and the next create() answers at once.
+        return state.creation?.status === "created"
+          ? undefined
+          : { ...state, creation: { status: "failed", offset: event.offset } };
 
       case "events.iterate.com/agent/configured": {
         const patch = event.payload.config;

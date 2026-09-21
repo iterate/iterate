@@ -57,6 +57,11 @@ describe("ProjectProcessor — the reduce", () => {
       state: { ...empty, creation: { status: "created", offset: 4 } },
     },
     {
+      name: "a failure after the certificate is a harmless fact too: the project stays created",
+      events: [requested, created, failed],
+      state: { ...empty, creation: { status: "created", offset: 2 } },
+    },
+    {
       name: "a repo's, a workspace's and an agent's certificates each add one entry, by path, stamped with the event's time — the project's own creation untouched",
       events: [
         requested,

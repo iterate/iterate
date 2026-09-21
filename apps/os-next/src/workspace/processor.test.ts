@@ -52,6 +52,11 @@ describe("WorkspaceProcessor — the reduce", () => {
       state: { creation: { status: "created", offset: 2 } },
     },
     {
+      name: "a failure after the certificate is a harmless fact too: the entity stays created",
+      events: [requested, created, failed],
+      state: { creation: { status: "created", offset: 2 } },
+    },
+    {
       name: "an unrelated event leaves the state as it was",
       events: [requested, created, { type: "note", payload: { n: 1 } }],
       state: { creation: { status: "created", offset: 2 } },

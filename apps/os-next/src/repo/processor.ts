@@ -40,7 +40,11 @@ export class RepoProcessor extends StreamProcessor<RepoState, ConsumedEvent<type
       case "events.iterate.com/repo/created":
         return { creation: { status: "created", offset: event.offset } };
       case "events.iterate.com/repo/create-failed":
-        return { creation: { status: "failed", offset: event.offset } };
+        // A failure after the certificate is a harmless fact too (an attempt whose own-path append
+        // lost its answer): the entity stays created, and the next create() answers at once.
+        return state.creation?.status === "created"
+          ? undefined
+          : { creation: { status: "failed", offset: event.offset } };
       default:
         return undefined;
     }

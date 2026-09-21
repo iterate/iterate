@@ -81,6 +81,11 @@ describe("AgentProcessor — the reduce", () => {
       state: { creation: { status: "created", offset: 2 } },
     },
     {
+      name: "a failure after the certificate is a harmless fact too: the entity stays created",
+      events: [requested, created, failed],
+      state: { creation: { status: "created", offset: 2 } },
+    },
+    {
       name: "born with its prompt: the creation is complete, the system item is in the context, nothing is triggered",
       events: [...born, system],
       state: {
