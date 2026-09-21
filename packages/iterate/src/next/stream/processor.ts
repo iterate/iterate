@@ -699,7 +699,7 @@ export type StreamEventInput = {
       whileProcessing?: { offset: number; type: string };
     };
     principal?: { actor: string; email?: string };
-    /** THE CONNECTION the principal acted through: the OAuth grant's id (`grant_…`) — one per
+    /** THE CONNECTION the principal acted through: the OAuth grant's id — one per
      *  connected client (a Claude Code install, a dash sign-in, a personal token). Stamped beside
      *  `principal` by the DO's append root (src/principal.ts); absent for the admin secret and the kernel. */
     grant?: string;
