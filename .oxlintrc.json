@@ -37,7 +37,8 @@
     "**/evalite-export/**",
     ".tmp-ci-build*",
     "**/*ignoreme*",
-    "apps/browser-extension/capnweb.js"
+    "apps/browser-extension/capnweb.js",
+    "apps/os-next/public/capnweb.js"
   ],
   "jsPlugins": [
     "./lint/oxlint-plugin-iterate.ts",

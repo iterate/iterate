@@ -138,7 +138,7 @@ button,
     }
   }
 }
-:is(.quiet, .consent-quiet, .consent-add) {
+:is(.quiet, .consent-add) {
   border-color: transparent;
   padding: 0.4rem 0.5rem;
 }
@@ -154,7 +154,8 @@ button,
   form {
     margin: 0.75rem 0 0;
   }
-  form + form {
+  /* a form that is only a quiet action — Switch account, Use a different email — sits centred */
+  form:has(> .quiet) {
     margin-top: 0.5rem;
     text-align: center;
   }

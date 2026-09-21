@@ -1,12 +1,13 @@
 // The fixed issuer shell: the OAuth AS's bindings, the sign-in POST, and THE ISSUER'S TWO PAGES —
 // /login and the /authorize consent. The pages are FILES — public/login.html and public/authorize.html,
 // with the stylesheet and a script each beside them — served through the assets binding: no
-// framework, no build. What a page shows it asks its JSON sibling for (/login.json, /authorize.json)
-// and what it decides it posts back (POST /authorize); the session that answers is built here the
-// way /api builds one. Everything else a person does with Iterate is an app's — an ordinary OAuth
-// client of this issuer (the dash, on its own origin, first among them).
+// framework, no build. The sign-in page asks /login.json what to show and signs in with plain form
+// posts to /login; the consent page is a capnweb client of /api like any app (public/capnweb.js
+// beside it is the fork's browser bundle, copied by scripts/build.ts; the cookie rides the
+// handshake) — this worker only gates it. Everything else a person does with Iterate is an app's —
+// an ordinary OAuth client of this issuer (the dash, on its own origin, first among them); `/` says
+// so and points at the dash.
 import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
-import { z } from "zod";
 import {
   codedError,
   errorCode,
@@ -26,10 +27,7 @@ import {
 import { directory } from "./directory.ts";
 import { appConfigOf } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
-import { Consent } from "./consent.ts";
-import { Grants } from "./grants.ts";
 import { oauthHelpers } from "./oauth.ts";
-import { IterateRpcTarget, SessionTeardown, type SessionRpcTarget } from "./session.ts";
 import type { Env as DurableObjectEnv } from "./iterate-context-durable-object.ts";
 
 /** Platform bindings for the issuer, public APIs and project ingress. */
@@ -74,17 +72,18 @@ export async function signIn(
 // ── the issuer's pages ──
 
 /** The paths the issuer's pages own on the platform origin, open to a browser that is not signed in
- *  (worker.ts lets them through without a bearer): the two pages, their JSON, their files, the OAuth
- *  client's picture (`clientIcon`) — and `/`, one static page (public/index.html) telling a browser
- *  this origin is deliberately headless and where the dash is. */
+ *  (worker.ts lets them through without a bearer): the two pages, the sign-in page's JSON, their
+ *  files (the consent page's capnweb bundle among them), the OAuth client's picture (`clientIcon`) —
+ *  and `/`, the landing page (`landingPage`) telling a browser this origin is deliberately headless
+ *  and where the dash is. */
 export const issuerPagePaths = [
   "/",
   "/login",
   "/login.json",
   "/login.js",
   "/authorize",
-  "/authorize.json",
   "/authorize.js",
+  "/capnweb.js",
   "/issuer.css",
   "/iterate-logo.svg",
   "/client-icon",
@@ -149,9 +148,6 @@ async function clientIcon(request: Request, env: Env): Promise<Response> {
   });
 }
 
-const json = (body: unknown, status = 200) =>
-  Response.json(body, { status, headers: { "cache-control": "no-store" } });
-
 /** /login.json — what the sign-in page (public/login.js) shows: who is signed in (continue, or switch
  *  account); or that a code is on its way and to whom (the code step); or the sign-ins this
  *  deployment offers — email (a code), Google — and where to continue to; and what went wrong with
@@ -165,15 +161,20 @@ async function loginState(request: Request, env: Env, ctx: ExecutionContext): Pr
   const next = sameOriginPath(url.searchParams.get("next") || "/login", config.platformOrigin);
   const session = await browserAuthorization(env, request, ctx);
   const google = Boolean(config.googleClientId && config.googleClientSecret.exposeSecret());
-  return json({
-    next,
-    signedInAs: session ? session.principal.email || session.principal.actor : null,
-    switchAccount: `/.auth/logout?next=${encodeURIComponent(`/login?next=${encodeURIComponent(next)}`)}`,
-    codeSentTo: session ? null : await loginCodePending(env, request),
-    error: url.searchParams.get("error"),
-    emailSignIn: emailSignInOffered(env),
-    google: google ? `/.auth/identity?next=${encodeURIComponent(next)}` : null,
-  });
+  return Response.json(
+    {
+      next,
+      signedInAs: session ? session.principal.email || session.principal.actor : null,
+      switchAccount: `/.auth/logout?next=${encodeURIComponent(`/login?next=${encodeURIComponent(next)}`)}`,
+      codeSentTo: session ? null : await loginCodePending(env, request),
+      error: url.searchParams.get("error"),
+      emailSignIn: emailSignInOffered(env),
+      google: google ? `/.auth/identity?next=${encodeURIComponent(next)}` : null,
+      // where a signed-in person with nowhere else to go is sent (the landing page's pointer)
+      dash: config.dashOrigin || null,
+    },
+    { headers: { "cache-control": "no-store" } },
+  );
 }
 
 /** The sign-in page's POSTs — plain forms, no script in the loop. An `email` starts the code
@@ -219,126 +220,72 @@ async function loginFormPost(request: Request, env: Env): Promise<Response | nul
   }
 }
 
-/** The signed-in browser's session, built the way rpc.ts builds one for `/api` — the same
- *  IterateRpcTarget, the same `authenticate({ type: "from-server-cookie" })` — for `authorizeHandler`
- *  to call in-process. Null when the browser holds no session. */
-async function browserSession(
-  request: Request,
-  env: Env,
-  ctx: ExecutionContext,
-): Promise<{ session: SessionRpcTarget; teardown: SessionTeardown } | null> {
-  const authorization = await browserAuthorization(env, request, ctx);
-  if (!authorization) return null;
-  const teardown = new SessionTeardown();
-  const root = new IterateRpcTarget(
-    {
-      contextNamespace: env.ITERATE_CONTEXT,
-      waitUntil: (promise) => ctx.waitUntil(promise),
-      directory: directory(env.DB),
-      appConfig: appConfigOf(env),
-    },
-    teardown,
-    {
-      principal: authorization.principal,
-      reach: authorization.reach,
-      grants: new Grants(env, ctx, authorization),
-      scopes: authorization.grant?.scope,
-      ...(authorization.grant?.kind === "issuer" && {
-        consent: new Consent(env, authorization.grant),
-      }),
-    },
-  );
-  return { session: await root.authenticate({ type: "from-server-cookie" }), teardown };
+/** GET /authorize is the consent page (public/authorize.html) for a signed-in browser — no session ⇒
+ *  sign in first, and come back to this very URL. The page itself is a capnweb client of `/api`
+ *  like any app, the cookie riding the handshake: `consent.describe` for what to show, `createOrg`
+ *  and `projects.create` for a project made on the spot, `consent.approve` for the client's
+ *  redirect — this worker only gates the page. */
+async function authorizePage(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  if (await browserAuthorization(env, request, ctx)) return env.ASSETS.fetch(request);
+  const login = `/login?next=${encodeURIComponent(`/authorize${new URL(request.url).search}`)}`;
+  return new Response(null, {
+    status: 303,
+    headers: { Location: login, "Cache-Control": "no-store" },
+  });
 }
 
-/** What the consent page posts (public/authorize.js): approve with the projects ticked (`["*"]` =
- *  every current and future project) and the scopes left ticked, or create a project first — in one
- *  of the person's organizations (`org`), or in a new one named with it (`newOrg`): the one place
- *  the consent flow creates an organization. */
-const ConsentAction = z.discriminatedUnion("action", [
-  z.object({
-    action: z.literal("approve"),
-    projects: z.array(z.string()),
-    scopes: z.array(z.string()),
-  }),
-  z.object({
-    action: z.literal("create-project"),
-    project: z.string(),
-    org: z.string().optional(),
-    newOrg: z.string().optional(),
-  }),
-]);
-
-/** GET /authorize is the consent page (public/authorize.html) for a signed-in browser — no session ⇒
- *  sign in first, and come back to this very URL. GET /authorize.json describes the request for the
- *  page (`consent.describe`: the client, the person's projects and organizations, the scopes asked
- *  for). POST /authorize is one of the page's two actions: approve, which answers the client's
- *  redirect, or create a project, which answers the refreshed description (and the organization the
- *  project went into, so a retry after a refused name lands in the same one). */
-async function authorizeHandler(
-  request: Request,
-  env: Env,
-  ctx: ExecutionContext,
-): Promise<Response> {
-  const url = new URL(request.url);
-  const query = url.search;
-  const page = url.pathname === "/authorize" && request.method !== "POST";
-  const browser = await browserSession(request, env, ctx);
-  if (!browser) {
-    const login = `/login?next=${encodeURIComponent(`/authorize${query}`)}`;
-    return page
-      ? new Response(null, {
-          status: 303,
-          headers: { Location: login, "Cache-Control": "no-store" },
-        })
-      : json({ error: "This session has ended. Sign in again.", login }, 401);
-  }
-  const { session, teardown } = browser;
-  try {
-    if (page) return env.ASSETS.fetch(request);
-    if (request.method !== "POST") return json({ view: await session.consent.describe(query) });
-    const posted = ConsentAction.safeParse(await request.json().catch(() => null));
-    if (!posted.success) return json({ error: "Choose an action." }, 400);
-    const action = posted.data;
-    let orgId: string | undefined;
-    try {
-      if (action.action === "approve") {
-        const result = await session.consent.approve({
-          query,
-          projects: action.projects,
-          scopes: action.scopes,
-        });
-        return "error" in result
-          ? json({ error: result.error }, 400)
-          : json({ redirectTo: result.redirectTo });
-      }
-      // an empty project name is refused before a new organization is made for it
-      if (!action.project.trim()) return json({ error: "Enter a project name." }, 400);
-      // The page sends `newOrg` — typed or still empty — only with "New organization…" chosen, so
-      // an empty one is refused rather than becoming the person's first organization; with neither
-      // named, the project goes to their first (made from their email when they have none).
-      orgId =
-        action.org ||
-        ("newOrg" in action ? (await session.createOrg(action.newOrg || "")).id : undefined);
-      // the new project's context is the session's to hold; the teardown below lets it go
-      await session.projects.create({ project: action.project, orgId });
-    } catch (error) {
-      // A refusal after a new organization was made (the slug taken, say) answers with the fresh
-      // view and that organization's id: the page offers it next, rather than minting another
-      // on the retry.
-      return json(
-        {
-          error: error instanceof Error ? error.message : String(error),
-          orgId,
-          view: await session.consent.describe(query),
-        },
-        400,
-      );
-    }
-    return json({ view: await session.consent.describe(query), orgId });
-  } finally {
-    teardown.disposeAll();
-  }
+/** `/` — the one landing page: this origin is headless (the API, the OAuth issuer, the MCP server;
+ *  sign-in and consent are its only pages) and the dash is where a person's projects, organizations
+ *  and sessions are. Rendered from the configuration, so the hostnames are the deployment's own —
+ *  a preview's, a self-hoster's — never a file's. */
+function landingPage(env: Env): Response {
+  const config = appConfigOf(env);
+  const escape = (text: string) =>
+    text.replace(
+      /[&<>"]/g,
+      (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[character]!,
+    );
+  const dash = config.dashOrigin
+    ? `<p>
+        Your projects, organizations and sessions are in the dash:
+        <a class="button primary" href="${escape(config.dashOrigin)}/">${escape(new URL(config.dashOrigin).host)}</a>
+      </p>`
+    : "";
+  return new Response(
+    `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>iterate platform</title>
+    <link rel="stylesheet" href="/issuer.css" />
+    <link rel="icon" href="/iterate-logo.svg" type="image/svg+xml" />
+  </head>
+  <body>
+    <main class="issuer-card">
+      <img class="issuer-mark" src="/iterate-logo.svg" alt="" width="56" height="56" />
+      <h1>iterate platform</h1>
+      <p>
+        <strong>${escape(new URL(config.platformOrigin).host)}</strong> is deliberately headless: the
+        API (<code>/api</code>), the OAuth issuer and the MCP server. Its only pages are
+        <a href="/login">sign-in</a> and consent.
+      </p>
+      ${dash}
+    </main>
+  </body>
+</html>
+`,
+    {
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        // what public/_headers gives the pages beside it
+        "content-security-policy":
+          "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+      },
+    },
+  );
 }
 
 /** The issuer's pages: the sign-in POST, the two pages and their JSON, their files — with same-origin
@@ -354,9 +301,10 @@ export const issuerHandler: Handler = {
     const { pathname } = new URL(request.url);
     if (!["GET", "HEAD", "POST"].includes(request.method))
       return new Response("Method not allowed", { status: 405 });
-    if (pathname === "/authorize" || (pathname === "/authorize.json" && request.method !== "POST"))
-      return authorizeHandler(request, env, ctx);
+    if (pathname === "/authorize" && request.method !== "POST")
+      return authorizePage(request, env, ctx);
     if (request.method === "POST") return new Response("Not found", { status: 404 });
+    if (pathname === "/") return landingPage(env);
     if (pathname === "/login.json") return loginState(request, env, ctx);
     if (pathname === "/client-icon") return clientIcon(request, env);
     // the pages and their files, as they are in public/
