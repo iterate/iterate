@@ -1,9 +1,9 @@
 // The agent's log as the shared agent-UI reducer (packages/ui) reads it. os-next's agent speaks
-// apps/os's event vocabulary, so the feed model IS apps/os's: `reduceAgentUi` folds every committed
-// event into messages and activities (an LLM step that wrote a script, the code step that ran it,
-// grouped into rounds). Two differences are adapted here: an attachment carries no `url` on os-next (the
-// page signs one when it renders), and a failed script settlement carries fewer fields than
-// apps/os's strict schema (the missing ones follow from `failureKind`).
+// apps/os's event vocabulary for the loop itself, so the feed model IS apps/os's: `reduceAgentUi`
+// folds every committed event into messages and activities (an LLM step that wrote a script, the
+// code step that ran it, grouped into rounds). Adapted here: an attachment carries no `url` on
+// os-next (the page signs one when it renders), and a script run is the CONTEXT's
+// (`context/run-requested` / `run-settled`, `adaptContextRuns` below), not a capability host's.
 import { z } from "zod";
 import { sliceText, type StreamText } from "@iterate-com/shared/chunked-text";
 import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
@@ -39,21 +39,71 @@ export function toAgentEvent(raw: unknown, streamPath: string): Event | null {
     payload.files = payload.files.map((file: unknown) =>
       isRecord(file) && typeof file.url !== "string" ? { ...file, url: "" } : file,
     );
-  if (
-    event.type === "events.iterate.com/capability-host/script-run-settled" &&
-    isRecord(payload) &&
-    isRecord(payload.settlement) &&
-    payload.settlement.status === "failed"
-  ) {
-    const expired = payload.settlement.failureKind === "expired";
-    payload.settlement = {
-      phase: expired ? "before-execution" : "execution",
-      executionMayHaveOccurred: !expired,
-      cancellation: "not-applicable",
-      ...payload.settlement,
-    };
-  }
   return { ...event, payload, streamPath };
+}
+
+/** THE CONTEXT'S RUNS as the shared reducer reads them. os-next's agent asks its context to run a
+ *  script — `context/run-requested { code }`, the request's own offset the run's identity, settled by
+ *  `context/run-settled { requestOffset, settlement }` — while the reducer (packages/ui, apps/os's)
+ *  folds `capability-host/script-run-requested { executionId, code, expiresAt }` and its settlement.
+ *  Translated here, in offset order, and nowhere else: the executionId is rebuilt from the request's
+ *  idempotency key (`agent/run-requested@<assistant offset>` → `agent-output:<offset>`,
+ *  `agent/plain-response@<offset>` → `reply:<offset>` — the ids the reducer links to the assistant's
+ *  message and filters bare replies by), a settlement names its request by offset, a developer item's
+ *  `actor.requestOffset` becomes `actor.executionId`, and a run never expires (a restart settles it
+ *  `interrupted`). Every other event passes through untouched. */
+export function adaptContextRuns(events: readonly Event[]): Event[] {
+  const executionIdByRequestOffset = new Map<number, string>();
+  return events.map((event) => {
+    const payload = isRecord(event.payload) ? event.payload : {};
+    if (event.type === "events.iterate.com/context/run-requested") {
+      const assistant = /^agent\/(run-requested|plain-response)@(\d+)$/.exec(
+        event.idempotencyKey || "",
+      );
+      const executionId = assistant
+        ? `${assistant[1] === "plain-response" ? "reply" : "agent-output"}:${assistant[2]}`
+        : `run:${String(event.offset)}`;
+      executionIdByRequestOffset.set(event.offset, executionId);
+      return {
+        ...event,
+        type: "events.iterate.com/capability-host/script-run-requested",
+        payload: { executionId, code: payload.code, expiresAt: Number.MAX_SAFE_INTEGER },
+      };
+    }
+    if (event.type === "events.iterate.com/context/run-settled") {
+      const requestOffset = typeof payload.requestOffset === "number" ? payload.requestOffset : NaN;
+      const executionId =
+        executionIdByRequestOffset.get(requestOffset) ?? `run:${String(requestOffset)}`;
+      const settlement = isRecord(payload.settlement) ? payload.settlement : {};
+      return {
+        ...event,
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: {
+          executionId,
+          // apps/os's strict settlement carries fields os-next's does not; they follow from the kind
+          settlement:
+            settlement.status === "failed"
+              ? {
+                  phase: "execution",
+                  executionMayHaveOccurred: true,
+                  cancellation: "not-applicable",
+                  ...settlement,
+                }
+              : settlement,
+        },
+      };
+    }
+    if (event.type === "events.iterate.com/agents/context-added" && isRecord(payload.actor)) {
+      const actor = payload.actor;
+      if (actor.type === "script" && typeof actor.requestOffset === "number") {
+        const executionId =
+          executionIdByRequestOffset.get(actor.requestOffset) ??
+          `run:${String(actor.requestOffset)}`;
+        return { ...event, payload: { ...payload, actor: { type: "script", executionId } } };
+      }
+    }
+    return event;
+  });
 }
 
 /** The whole feed from the log: every event in offset order through the shared reducer, then —
