@@ -68,6 +68,18 @@ test("simultaneous claims have one winner and inventory replacement loses prepar
   expect(await resources.acquire({ type: "preview", leaseMs: 60_000 })).toMatchObject({ tags: {} });
 });
 
+test("untagged resources have empty tags even when their slug names an Object property", async () => {
+  await using app = await semaphoreFixture();
+  const { resources } = app.client;
+  await resources.add({ type: "preview", slug: "constructor", data: {} });
+  expect(await resources.find({ type: "preview", slug: "constructor" })).toMatchObject({
+    tags: {},
+  });
+  expect(await resources.list({ type: "preview" })).toMatchObject([
+    { slug: "constructor", tags: {} },
+  ]);
+});
+
 /** Real HTTP contract and coordinator; only the already-authenticated admin context is supplied. */
 async function semaphoreFixture() {
   const output = await build({

@@ -178,7 +178,13 @@ export async function deploy(options: DeployCommandOptions = {}) {
   });
   return await withPreviewE2eTelemetry(target.run, runtime, "deploy", (telemetry) =>
     measurePreviewDeployRun(telemetry, () =>
-      deployPreviewApps({ target, runtime, allApps: Boolean(options.allApps), telemetry }),
+      deployPreviewApps({
+        target,
+        runtime,
+        allApps: Boolean(options.allApps),
+        telemetry,
+        slotSelection: "existing",
+      }),
     ),
   );
 }
@@ -232,6 +238,7 @@ export async function testTarget(options: TestTargetOptions) {
     (await adoptLeaseHeldBySemaphore({
       holder,
       leaseMs: defaultPreviewLeaseMs,
+      allowedSlugs: displaySlot ? [displaySlot.slug] : [],
       preferSlug: displaySlot?.slug ?? null,
       semaphore,
     })) ??
@@ -365,7 +372,13 @@ export async function run(options: DeployCommandOptions = {}) {
   });
   return await withPreviewE2eTelemetry(target.run, runtime, "run", async (telemetry) => {
     await measurePreviewDeployRun(telemetry, () =>
-      deployPreviewApps({ target, runtime, allApps: Boolean(options.allApps), telemetry }),
+      deployPreviewApps({
+        target,
+        runtime,
+        allApps: Boolean(options.allApps),
+        telemetry,
+        slotSelection: "existing",
+      }),
     );
     // A no-deploy result still tests the current head. Both phases use the
     // same report in memory, so GitHub read-after-write lag cannot lose work.
@@ -492,7 +505,7 @@ export async function ciPrepare(
       target.report = new PreviewReport(publishedReport.state, async () => {});
       ({ state, preparedSlot } = await traceOperation("Provision and deploy preview", () =>
         measurePreviewDeployRun(telemetry, () =>
-          deployPreviewApps({ target, runtime, allApps: true, telemetry }),
+          deployPreviewApps({ target, runtime, allApps: true, telemetry, slotSelection: "fresh" }),
         ),
       ));
     }
@@ -1148,11 +1161,13 @@ async function deployPreviewApps({
   allApps,
   runtime,
   telemetry,
+  slotSelection,
 }: {
   target: PreviewTarget;
   allApps: boolean;
   runtime: PreviewRuntime;
   telemetry: PreviewE2eTelemetryArtifact;
+  slotSelection: "fresh" | "existing";
 }) {
   const { run, report } = target;
   const selectedApps =
@@ -1205,7 +1220,7 @@ async function deployPreviewApps({
   try {
     const recordedSlug = current.environmentConfigLease?.slug ?? null;
     environmentConfigLease = await traceOperation("Acquire and clean preview slot", async () =>
-      requestedEnvironment
+      requestedEnvironment || slotSelection === "existing"
         ? (
             await assignEnvironmentConfigLease({
               eraseSlotData: makePreviewSlotDataEraser(runtime, "reset"),
@@ -1626,6 +1641,7 @@ async function testPreviewApps({
     (await adoptLeaseHeldBySemaphore({
       holder,
       leaseMs: defaultPreviewLeaseMs,
+      allowedSlugs: displaySlot ? [displaySlot.slug] : [],
       preferSlug: displaySlot?.slug ?? null,
       semaphore,
     })) ??
@@ -4192,7 +4208,13 @@ function escapeHtml(value: string) {
 
 /** Pair with unwrapHiddenStateBlock: serialize preview state into a hidden markdown comment. */
 function wrapHiddenStateBlock(state: CloudflarePreviewState) {
-  return ["<!--", JSON.stringify(state, null, 2), "-->"].join("\n");
+  // GitHub rewrites terminal escapes in bodies; strip colors before they enter JSON.
+  const json = JSON.stringify(
+    state,
+    (_key, value) => (typeof value === "string" ? stripAnsi(value) : value),
+    2,
+  );
+  return ["<!--", json, "-->"].join("\n");
 }
 
 function unwrapHiddenStateBlock(contents: string) {

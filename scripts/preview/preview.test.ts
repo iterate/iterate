@@ -10,11 +10,22 @@ import {
   cloudflarePreviewApps,
   cloudflarePreviewAdditionalTriggerPaths,
   cloudflarePreviewSharedPaths,
-  environmentConfigLeaseInventory,
   previewInternals,
 } from "./preview.ts";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
+
+test("terminal colors in failure summaries cannot corrupt the published preview state", () => {
+  const body = previewInternals.renderCloudflarePreviewPullRequestBody(
+    "",
+    { apps: {}, environmentConfigLease: null, notice: "Retry failed: \u001b[31mtimeout\u001b[39m" },
+    2751,
+  );
+  expect(body).not.toContain("\\u001b");
+  expect(previewInternals.parseCloudflarePreviewState(body)).toMatchObject({
+    notice: "Retry failed: timeout",
+  });
+});
 
 const WorkflowConcurrency = z.object({
   group: z.string(),

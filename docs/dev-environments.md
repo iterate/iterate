@@ -433,9 +433,10 @@ preview_environment=preview-17
 If the requested slot is unknown or held by another owner, acquisition fails
 without forcing the holder or silently falling back to another slot.
 
-CI and local machines run the **same preview commands against the same
-semaphore**. CI additionally checks the deployment epoch before invoking those
-commands.
+CI and local commands share deployment, testing and Semaphore code. CI
+additionally owns candidate publication and a separate retirement job; manual
+`deploy`/`run` replace the selected preview in place. CI checks the deployment
+epoch before invoking those commands.
 
 The preview CI deployment-epoch check rejects branches from before the
 OS-to-auth Workers RPC migration before any app is touched. Rebase onto current
@@ -500,7 +501,10 @@ holds it.
 
 ### Slot cycling
 
-Product-changing commits deploy into a different slot. The current PR URL stays
+Product-changing CI commits deploy into a different slot. An explicit
+`preview_environment` directive pins a slot and opts out of cycling. Manual
+`preview deploy` and `preview run` keep their existing in-place behavior; CI owns
+the separate retirement job. The current PR URL stays
 published until the candidate passes shared readiness. Then the report switches
 to the new URL and `ci-retire` parks and erases the previous slot. It holds that
 lease for a further 150 seconds before releasing it with preparation tags.

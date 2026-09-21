@@ -121,13 +121,17 @@ const listResourcesProcedure = semaphore.resources.list
     const tagsByType = new Map(
       await Promise.all(
         [...new Set(resources.map((resource) => resource.type))].map(
-          async (type) => [type, await getCoordinator(type).availableTags({ type })] as const,
+          async (type) =>
+            [
+              type,
+              new Map(Object.entries(await getCoordinator(type).availableTags({ type }))),
+            ] as const,
         ),
       ),
     );
     return resources.map((resource) => ({
       ...resource,
-      tags: tagsByType.get(resource.type)?.[resource.slug] || {},
+      tags: tagsByType.get(resource.type)?.get(resource.slug) || {},
     }));
   });
 
@@ -142,8 +146,10 @@ const findResourceProcedure = semaphore.resources.find
       });
     }
 
-    const tags = await getCoordinator(input.type).availableTags({ type: input.type });
-    return { ...resource, tags: tags[input.slug] || {} };
+    const tags = new Map(
+      Object.entries(await getCoordinator(input.type).availableTags({ type: input.type })),
+    );
+    return { ...resource, tags: tags.get(input.slug) || {} };
   });
 
 const acquireResourceProcedure = semaphore.resources.acquire
