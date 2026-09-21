@@ -5,7 +5,9 @@ size: small
 
 Complete: a new userland template handles only the first message, then restores
 250ms. Live preview proves successful injection and the one-second deadline.
-No core changes; the earlier experiment remains untouched.
+No core changes; the earlier experiment remains untouched. The PR keeps the
+config template, generated catalog entry, public-API e2e and documentation;
+the two agent-domain tests were removed at the user's request.
 
 ## Request and decisions
 
@@ -25,9 +27,9 @@ No core changes; the earlier experiment remains untouched.
 ## Checklist
 
 - [x] Create a fresh worktree and commit the specification. *Separate branch from current main; earlier implementation remains available for comparison.*
-- [x] Write a failing behavioral test using the real agent processor and template. *`jev-first-message.test.ts` first failed with no answering request at 250ms; the template now injects context before releasing it.*
+- [x] Write a failing behavioral test using the real agent processor and template. *The prototype spec first failed with no answering request at 250ms, then passed. Both agent-domain specs were subsequently removed at the user's request; the public-API e2e remains.*
 - [x] Implement first-message-only selection entirely in userland. *`configs/jev-docs/worker.ts` uses existing config/context events and durable project-owned markers; core files and contracts are unchanged.*
-- [x] Prove timely context, timeout/error fallback, late-result discard and 250ms later turns. *Nine focused tests also cover malformed output, no matches, replay and existing-agent exclusion.*
+- [x] Prove timely context, timeout/error fallback, late-result discard and 250ms later turns. *Nine prototype tests also covered malformed output, no matches, replay and existing-agent exclusion before removal. Live e2e and recorded preview evidence remain.*
 - [x] Run typechecks/lint and live e2e on a preview without core changes. *OS/templates typecheck, scoped lint and live e2e pass; preview-6 runs main plus the generated template catalog.*
 - [x] Record evidence, complete task, commit and push; return compare and demo links. *Final evidence and links below; draft PR subsequently requested.*
 
@@ -60,7 +62,11 @@ worker retains the existing birth/delivery recovery behavior.
 
 ## Validation and preview evidence
 
-- Real AgentProcessor + actual template: 9 focused tests pass, including a
+The agent-domain test results below are historical: those two files were removed
+at the user's request and remain available in commit `e7c819554`. The config
+implementation and live e2e are unchanged.
+
+- Real AgentProcessor + actual template: 9 focused tests passed, including a
   hanging selector, late completion, malformed data, failure, no matches, replay,
   existing-agent exclusion and exact 250ms subsequent-turn scheduling.
 - The full agent directory passed 243 tests plus one pre-existing expected
