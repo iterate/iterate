@@ -47,6 +47,8 @@
     "**/.iterate/",
     "**/components/ui/",
     "**/components/ai-elements/",
-    "apps/os/wrangler.jsonc"
+    "apps/os/wrangler.jsonc",
+    "apps/browser-extension/capnweb.js",
+    "apps/os-next/public/capnweb.js"
   ]
 }

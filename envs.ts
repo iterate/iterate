@@ -615,6 +615,9 @@ export interface OsNextEnv {
   workerName: string;
   baseUrl: string;
   mcpBaseUrl: string;
+  /** The dash's origin for this deployment (apps/dash) — where the platform's landing page `/` sends
+   *  a person, the platform being headless. Unset ⇒ the page names no dash (a preview has none). */
+  dashBaseUrl?: string;
   projectHostnameBase: string;
   artifactsNamespace: string;
   /** The name the Cloudflare resources were CREATED under (D1 `<prefix>-directory`, KV `<prefix>-oauth|-itx`) —
@@ -664,6 +667,7 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
     // projects and organizations — an ordinary OAuth client of this issuer, like every other app.
     baseUrl: "https://os.iterate2.com",
     mcpBaseUrl: "https://mcp.iterate2.com",
+    dashBaseUrl: "https://dash.iterate2.com",
     projectHostnameBase: "iterate2.app",
     // The apex is the `iterate` project's: its config worker's `fetch` serves iterate2.com.
     projectCustomHostnames: { "iterate2.com": "iterate" },

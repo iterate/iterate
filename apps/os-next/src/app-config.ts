@@ -47,6 +47,10 @@ export const AppConfig = z.object({
   platformOrigin: httpOrigin,
   /** An optional separate MCP origin (blank ⇒ served on the platform origin). */
   mcpOrigin: z.union([z.literal(""), httpOrigin]).default(""),
+  /** The dash's origin (apps/dash: projects, organizations, sessions) — where the platform's one
+   *  landing page (`/`, control-plane.ts) sends a person, this origin being headless. Blank ⇒ the page
+   *  names no dash. */
+  dashOrigin: z.union([z.literal(""), httpOrigin]).default(""),
   /** The base every project host hangs under — `<app>--<project>.<base>`, `<project>.<base>`
    *  (the project host section); blank ⇒ no project-host ingress. */
   projectHostnameBase: z.string().trim().default(""),

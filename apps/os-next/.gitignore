@@ -2,6 +2,8 @@
 # declarations belong in git — a stale generated .ts here shadows them for tsc.
 /src/generated/*
 !/src/generated/*.d.ts
+# scripts/build.ts: the capnweb fork's browser bundle, copied beside the consent page
+/public/capnweb.js
 
 /wrangler.jsonc
 # scripts/preview.ts: the one per-PR Worker Preview's config, and what a deploy reports

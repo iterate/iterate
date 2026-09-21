@@ -31,7 +31,7 @@ import {
   installPrototypeInvokeFallback,
 } from "iterate/next/expression";
 import type { IterateContextApi } from "iterate/next/api";
-import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/next/principal";
+import { ITX_GRANT_HEADER, ITX_PRINCIPAL_HEADER, type Caller } from "iterate/next/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
 import { codedError } from "iterate/next/lib";
 import type { IterateContextDurableObject, Env } from "./iterate-context-durable-object.ts";
@@ -98,24 +98,24 @@ export class IterateContextRpcTarget extends RpcTarget {
   readonly #durableObjectAddress: DurableObjectAddress;
   readonly #sessionTeardown: SessionTeardown;
   readonly #waitUntil: WaitUntil;
-  /** WHO holds this context: the session's verified principal (session.ts), or null (the anonymous
-   *  session, a loaded worker's `env.ITX`). Every dispatch runs under it, so every event it appends
-   *  carries `source.principal`. */
-  readonly #principal: Principal | null;
+  /** WHO holds this context: the session's verified principal and the grant it acts through
+   *  (session.ts), or nobody (the anonymous session, a loaded worker's `env.ITX`). Every dispatch
+   *  runs under it, so every event it appends carries `source.principal` and `source.grant`. */
+  readonly #caller: Caller;
 
   constructor(
     contextNamespace: IterateContextNamespace,
     durableObjectAddress: DurableObjectAddress,
     sessionTeardown: SessionTeardown,
     waitUntil: WaitUntil,
-    principal: Principal | null = null,
+    caller: Caller = { principal: null },
   ) {
     super();
     this.#contextNamespace = contextNamespace;
     this.#durableObjectAddress = durableObjectAddress;
     this.#sessionTeardown = sessionTeardown;
     this.#waitUntil = waitUntil;
-    this.#principal = principal;
+    this.#caller = caller;
   }
 
   /** The context DO's stub, minted PER CALL (a stub is a cheap handle onto one shared connection):
@@ -126,11 +126,11 @@ export class IterateContextRpcTarget extends RpcTarget {
     return this.#contextNamespace.getByName(this.#durableObjectAddress.name);
   }
 
-  /** Dispatch on the DO under this context's principal — the one place the edge chooses the door. */
+  /** Dispatch on the DO under this context's caller — the one place the edge dispatches. */
   #invokeOnDurableObject(itxExpression: ItxExpression, args: unknown[] = []): Promise<unknown> {
-    return this.#durableObject.invoke(itxExpression, args, {
-      principal: this.#principal,
-    }) as Promise<unknown>;
+    // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the call denotes
+    // whatever expression the caller spelled, so `unknown` is the honest contract here.
+    return this.#durableObject.invoke(itxExpression, args, this.#caller) as Promise<unknown>;
   }
 
   /** Another context of THIS project. Absolute by convention (`cd("/agents/support")`); relative
@@ -157,7 +157,7 @@ export class IterateContextRpcTarget extends RpcTarget {
       durableObjectAddress,
       this.#sessionTeardown,
       this.#waitUntil,
-      this.#principal,
+      this.#caller,
     );
   }
 
@@ -177,7 +177,10 @@ export class IterateContextRpcTarget extends RpcTarget {
       const headers = new Headers(terminalFetch.request.headers);
       headers.set(ITX_EXPRESSION_FETCH_HEADER, JSON.stringify(terminalFetch.steps)); // the lane parses a JSON ItxExpression
       headers.delete(ITX_PRINCIPAL_HEADER); // the stamp is this session's, never the Request's own
-      if (this.#principal) headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(this.#principal));
+      headers.delete(ITX_GRANT_HEADER);
+      if (this.#caller.principal)
+        headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(this.#caller.principal));
+      if (this.#caller.grant) headers.set(ITX_GRANT_HEADER, this.#caller.grant);
       return this.#durableObject.fetch(new Request(terminalFetch.request, { headers }));
     }
     return this.#invokeOnDurableObject(itxExpression, args);
@@ -521,10 +524,11 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, { iterateContextName: s
    *  `get().invoke(["itx",["fetch",…]])`: the edge's terminal-fetch fork would overwrite a lane header
    *  the loaded worker already set. */
   override fetch(request: Request): Promise<Response> {
-    // A loaded worker speaks for the project, never for a person: the principal header is the
-    // edge's stamp (worker.ts, iterate-context.ts), stripped here so loaded code cannot forge one.
+    // A loaded worker speaks for the project, never for a person: the principal and grant headers
+    // are the edge's stamp (worker.ts, iterate-context.ts), stripped here so loaded code cannot forge one.
     const headers = new Headers(request.headers);
     headers.delete(ITX_PRINCIPAL_HEADER);
+    headers.delete(ITX_GRANT_HEADER);
     return this.env.ITERATE_CONTEXT.getByName(this.ctx.props.iterateContextName).fetch(
       new Request(request, { headers }),
     );

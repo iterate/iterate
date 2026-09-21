@@ -26,12 +26,17 @@
   }
   const alert = state.error ? el("p", { role: "alert", text: state.error }) : null;
   if (state.signedInAs) {
+    // where to go: on to `next`, or — this page being its own destination — to the dash, where a
+    // person's projects, organizations and sessions are (a deployment without one offers nothing)
+    const onward =
+      state.next !== "/login"
+        ? el("a", { class: "button primary", href: state.next, text: "Continue" })
+        : state.dash
+          ? el("a", { class: "button primary", href: state.dash, text: "Go to the dash" })
+          : null;
     show(
       el("p", {}, "Signed in as ", el("strong", { text: state.signedInAs }), "."),
-      // nowhere to continue to when this page is its own destination
-      state.next === "/login"
-        ? null
-        : el("p", {}, el("a", { class: "button primary", href: state.next, text: "Continue" })),
+      onward && el("p", {}, onward),
       el(
         "form",
         { method: "post", action: state.switchAccount },

@@ -12,7 +12,6 @@ import { parseCodemodeResponse } from "./codemode-format.ts";
 const processor = () =>
   new AgentProcessor({
     stream: () => Promise.reject(new Error("the reduce never calls the model")),
-    runScript: () => Promise.reject(new Error("the reduce never runs a script")),
     readFile: () => Promise.reject(new Error("the reduce never reads a file")),
     now: () => 0,
     sleep: () => Promise.resolve(),
@@ -39,12 +38,12 @@ const assistant = (content: string, llmRequestOffset: number) => ({
   type: "events.iterate.com/agents/context-added",
   payload: { role: "assistant", content, llmRequestOffset },
 });
-const scriptResult = (executionId: string) => ({
+const scriptResult = (requestOffset: number) => ({
   type: "events.iterate.com/agents/context-added",
   payload: {
     role: "developer",
     content: "Your script returned: 1",
-    actor: { type: "script", executionId },
+    actor: { type: "script", requestOffset },
   },
 });
 
@@ -162,22 +161,21 @@ describe("AgentProcessor — the reduce", () => {
         user("hi"),
         requested(3),
         {
-          type: "events.iterate.com/capability-host/script-run-requested",
-          payload: { code: "async (itx) => 1", executionId: "agent-output:6", expiresAt: 7 },
+          type: "events.iterate.com/context/run-requested",
+          payload: { code: "async (itx) => 1" },
         },
         {
-          type: "events.iterate.com/capability-host/script-run-settled",
+          type: "events.iterate.com/context/run-settled",
           payload: {
-            executionId: "agent-output:6",
+            requestOffset: 5,
             settlement: { status: "succeeded", result: 1 },
           },
         },
         settled(4, { status: "succeeded", text: "```ts\nasync (itx) => 1\n```" }),
-        scriptResult("agent-output:6"),
+        scriptResult(5),
         requested(8),
       ],
       view: {
-        activeScriptExecutions: {},
         pendingLlmRequestTrigger: null,
         openRequest: {
           requestedAtOffset: 9,
@@ -205,7 +203,7 @@ describe("AgentProcessor — the reduce", () => {
       events: [
         born,
         system,
-        scriptResult("x"),
+        scriptResult(1), // a script result as the trigger: agent-loop input
         requested(3),
         settled(4, { status: "failed", errorMessage: "boom" }),
         { type: "events.iterate.com/agent/paused", payload: { reason: "enough" } },

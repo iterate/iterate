@@ -1147,7 +1147,7 @@ const s1 = await itx.invoke("itx.facets.get('tally').snapshot()"); // { offset, 
 expect(s1.state.counts["events.iterate.com/itx/rewrite-rule-configured"]).toBe(1);
 const row = (await itx.subscriptions.list()).find((r) => r.name === "tally");
 expect(row.target).toBe("itx.builtins.facets.get('tally').processEventBatch"); // the platform's spelling, source elided
-expect(row.hostedFacet).toEqual({ name: "tally", className: "TallyDurableObject" });
+expect(row.hostedFacet).toEqual({ name: "tally", className: "TallyDurableObject", restarts: 0 });
 expect(row.cursor).toBeUndefined(); // a facet owns its checkpoint
 // e2e/processor-facets.e2e.test.ts
 ```

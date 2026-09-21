@@ -29,7 +29,9 @@ async function signIn(page: Page, origin: string, email: string, next = "/") {
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     return;
   }
-  await page.getByRole("link", { name: "Continue with Google", exact: true }).waitFor();
+  // the page is up (every deployment renders the heading; a preview slot may offer no Google), then
+  // the administrator's identity fixture signs the email in
+  await page.getByRole("heading", { name: "Sign in to iterate", exact: true }).waitFor();
   const response = await page.request.post(`${origin}/login`, {
     headers: { Authorization: `Bearer ${adminSecret(origin)}` },
     form: { email, next },
@@ -147,7 +149,10 @@ test("first Claude consent creates the organization and project on the consent p
     expect(await projectField.inputValue()).toBe("first-consent-studio");
     await projectField.fill(`Consent Studio ${project}`);
     expect(await projectField.inputValue()).toBe(`consent-studio-${project}`);
-    await page.getByText(`Your project will be hosted at consent-studio-${project}.`).waitFor();
+    // where the project will live — only where the deployment serves project hosts (a local worker
+    // does; a deployed target says so with PROJECT_HOSTNAME_BASE, as the e2e lane does)
+    if (isLocal(origin) || process.env.PROJECT_HOSTNAME_BASE)
+      await page.getByText(`Your project will be hosted at consent-studio-${project}.`).waitFor();
     // A refused first try — a slug another organization holds, refused after the organization is
     // made — answers with that organization: the retry offers it, chosen, rather than naming a
     // second one (the inventory at the end counts one).
@@ -254,8 +259,9 @@ test("first Claude consent creates the organization and project on the consent p
       .waitFor();
     expect(new URL(page.url()).search).toBe(flow.url.search);
     expect(await accountAccess.isChecked()).toBe(false);
-    // The consent page opens no socket — it posts JSON, and its session is built in the worker.
-    expect(sockets.filter((url) => new URL(url).pathname === "/api")).toHaveLength(0);
+    // The consent page is a capnweb client of /api like any app: ONE socket for the whole flow,
+    // the session cookie riding its handshake — no JSON sibling, no form post.
+    expect(sockets.filter((url) => new URL(url).pathname === "/api")).toHaveLength(1);
     await page.screenshot({ path: test.info().outputPath("first-consent.png"), fullPage: true });
     await approve.click();
     await page

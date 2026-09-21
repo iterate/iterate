@@ -6,7 +6,7 @@ project-host ingress — `<app>--<project>.<base>`, `<app>.<project>.<base>`, th
 the control plane in-process as its catch-all (`src/control-plane.ts`: OAuth AS + a D1 directory +
 `/mcp`, the ONE MCP server for every project + the issuer's server half) and THE ISSUER'S TWO PAGES —
 `/login` and the `/authorize` consent, files in `public/` the assets binding serves (no framework, no
-build), each asking its JSON sibling what to show — the consent's session built the way `/api` builds one;
+build): sign-in asks `/login.json` what to show and posts plain forms; consent is a capnweb client of `/api`;
 `src/iterate-context-durable-object.ts` is THE CONTEXT — one Durable Object per `{ projectId, path }`
 holding the event log, the core reduce, subscription delivery, the facets, the rpc-stub pagers and
 the fetch door. Everything a client does is one dotted expression on `itx`.
@@ -80,10 +80,12 @@ one is warned about at boot and ignored). The two secrets are wrangler secrets o
 The platform serves two pages and nothing else a person looks at: sign-in, because the session
 cookie is the issuer origin's, and consent, because the authorization server is the one that asks.
 Both are files in `public/` (`login.html`, `authorize.html`, `issuer.css`, a script each, `_headers`
-for their CSP), served by the assets binding; each page's script asks its JSON sibling
-(`/login.json`, `/authorize.json` — `control-plane.ts`) what to show, and the consent page posts its
-actions — approve, create an organization, create a project — to `/authorize`. The session that
-answers is built in the worker the way `/api` builds one. Consent is task-based: an app asks for
+for their CSP), served by the assets binding. The sign-in page's script asks `/login.json`
+(`control-plane.ts`) what to show and signs in with plain form posts to `/login`. The consent page is
+a capnweb client of `/api` like any app — `public/capnweb.js`, the fork's browser bundle copied
+beside it by `scripts/build.ts`, one WebSocket the session cookie rides in on: `consent.describe`
+for what to show, `createOrg` and `projects.create` for a project made on the spot,
+`consent.approve` for the client's redirect; the worker only gates the page. Consent is task-based: an app asks for
 scopes (`iterate`; `account` for sessions and personal access tokens; `organizations:write` to create
 organizations), the person may untick every one but `iterate`, and the grant carries what stayed
 ticked — an app reads `session.info().scopes` and offers a step-up link for what it lacks. Everything
@@ -102,9 +104,9 @@ good for ten minutes and five tries, and the page's code step posts it back. A d
 `424242`, so the specs sign in without a mailbox; the reserved test domains (`example.com`,
 `.test`, …) are never mailed. Google is offered wherever it is configured.
 
-Only that issuer grant receives `session.consent`. The `/authorize` SPA can create an
+Only that issuer grant receives `session.consent`. The `/authorize` page can create an
 organization and project through `session.createOrg` and `session.projects.create`, then
-approve the pending client's access without leaving the flow. Other apps may request account
+approve the pending client's access without leaving the flow — over `/api`, as any client would. Other apps may request account
 permission through explicit consent, but cannot approve grants. All apps use the same
 `/.auth/*` adapter, opaque HttpOnly cookie, public token exchange and `/api` proxy.
 

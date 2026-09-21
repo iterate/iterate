@@ -11,8 +11,9 @@
 // `provide`/`subscribe` and the `processors` root build one and call `append`; a lent stub's rule or
 // row rides its pager upgrade and is appended as the pager is accepted) — there are no
 // configuration verbs here. The events this class appends on its own initiative: the birth and wake
-// records (Stream.appendBirthRecord / appendWakeRecord), a due schedule's batch (`alarm`)
-// and the un-set of whatever named an rpc stub whose
+// records (Stream.appendBirthRecord / appendWakeRecord — the wake record also settles, `interrupted`,
+// every run the last incarnation left open), a due schedule's batch (`alarm`), a requested run's
+// settlement (`#executeRun` — the runner section) and the un-set of whatever named an rpc stub whose
 // last pager closed (onPresence); alarm diagnostics are ephemeral traces. The two effects it runs off a committed
 // event: deleting the facet a removed subscription hosted, and refreshing the startup memo of the
 // facet a hosting subscription configures.
@@ -42,7 +43,8 @@ import {
 } from "iterate/next/expression";
 import {
   ITX_PRINCIPAL_HEADER,
-  stampPrincipal,
+  ITX_GRANT_HEADER,
+  stampCaller,
   type Caller,
   type Principal,
 } from "iterate/next/principal";
@@ -58,6 +60,8 @@ import {
   facetSpecFromHostingTarget,
   type CoreState,
   normalizeControlEvent,
+  RunRequested,
+  type RunSettlement,
 } from "./stream/core-processor.ts";
 import { firstPartyFacetClassOf } from "./first-party-facets.ts";
 import {
@@ -69,7 +73,7 @@ import {
   RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
   type BorrowedRpcStub,
 } from "./context/rpc-stubs.ts";
-import { buildLibrary, type LibraryItx } from "./library.ts";
+import { buildLibrary, executeScript, type LibraryItx } from "./library.ts";
 import {
   STREAM_ALARM_TRACE_EVENT,
   Stream,
@@ -112,14 +116,20 @@ function parseIterateContextDurableObjectName(name: string | undefined) {
  *  and dies in memory, so its release needs no durable alarm: the timer dies with the actor, and so
  *  do the pins. */
 const IDLE_QUIESCE_AFTER_MS = 30_000;
-/** WORKAROUND — on prd (never in local workerd), a Workers-RPC call into a LOADED facet can reject
- *  with V8's clone-version error: seen on alarm-woken incarnations since 2026-09-15, with identical
- *  worker code either side, in bursts. The facet container is then unusable for the incarnation (a
- *  live facet never re-runs its startup) and the cached isolate may be too — so the recovery is a
- *  restart of both and ONE more attempt (`#invokeFacet`). apps/os carries the same recovery for its
- *  dynamic workers (issue #2288). Remove when the platform is fixed. */
-const isClonedDataVersionFailure = (error: unknown) =>
-  error instanceof Error && error.message.includes("Unable to deserialize cloned data");
+/** WORKAROUND for a platform defect — https://github.com/iterate/alarm-loader-facet-repro (the
+ *  reproduction, what was measured, what was ruled out). On prd (never in local workerd) a call into
+ *  a LOADED facet started inside an alarm-woken incarnation can reject at facet start, in windows
+ *  that hit every such facet on a machine for a second to a few minutes: V8's clone-version text
+ *  when the loaded worker's env carries a stub (every facet here does), a bare "internal error;
+ *  reference = …" when it does not. The facet container is then unusable for the incarnation (a
+ *  live facet never re-runs its startup) and the loader's cached entry is too (a fresh loader id
+ *  heals at once) — so the recovery is a restart of both and ONE more attempt (`#invokeFacet`),
+ *  counted per facet (`facet:<name>:restarts`, shown on `processors.list()`). apps/os carries the
+ *  same recovery for its dynamic workers (issue #2288). Remove when the platform is fixed. */
+const isFacetStartPlatformFailure = (error: unknown): error is Error =>
+  error instanceof Error &&
+  (error.message.includes("Unable to deserialize cloned data") ||
+    error.message.startsWith("internal error; reference = "));
 /** How long one facet call may take before the facet is aborted (a call that never answers would
  *  hold the quiesce, and with it this actor, forever). */
 const FACET_CALL_WATCHDOG_MS = 60_000;
@@ -209,7 +219,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // un-set half is `#unsetWhatNamesRpcStub`). They are a client's events: `source.principal` is
     // dropped — the DO owns that field, and a lent stub's rule is unattributed.
     appendEvents: (events) =>
-      void this.#appendAndRunCommittedEffects(events.map((event) => stampPrincipal(event, null))),
+      void this.#appendAndRunCommittedEffects(
+        events.map((event) => stampCaller(event, { principal: null })),
+      ),
     // PRESENCE is physical (`itx.rpcStubs.list()`); its changes are EPHEMERAL facts, never durable
     // rows — the log must never claim a socket is open. A refusal (a paused stream) is nothing to
     // report: a watcher re-seeds from list().
@@ -336,9 +348,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // An alarm trace answers waitForEvent, never a subscription (AlarmTrace says why).
       const events = freshEvents.filter((event) => event.type !== STREAM_ALARM_TRACE_EVENT);
       if (events.length === 0) return;
-      this.#callerStorage.run({ principal: null }, () =>
-        this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset),
-      );
+      this.#callerStorage.run({ principal: null }, () => {
+        this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset);
+        this.#startRequestedRuns(events);
+      });
       this.#alarms.reconcile();
     },
   });
@@ -460,18 +473,99 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return [...contextRows, ...platformRows];
   }
 
-  /** THE LIBRARY (library.ts): its verbs closed over a genuine InvokeHandle over `invoke`, so a
-   *  library call's `itx.fetch(...)` resolves through THIS context's rules (a test may shadow
-   *  `itx.fetch`) with zero hops. An open capnweb socket it holds pins this actor awake; the pins'
-   *  timer closes it. */
-  readonly #library = buildLibrary(
+  /** THE LIBRARY's itx (library.ts): a genuine InvokeHandle over `invoke`, so a library call's
+   *  `itx.fetch(...)` resolves through THIS context's rules (a test may shadow `itx.fetch`) with
+   *  zero hops. The CALLER crosses with it: a library verb runs inside the caller's own dispatch,
+   *  so an event it appends — `itx.run`'s request, `chat.sendMessage` — is attributed to whoever
+   *  called (the ambient store; the kernel's null outside any call). */
+  readonly #libraryItx = new InvokeHandle((steps) => {
     // Every call the library makes (a connection opening, a call through it) is a use of the
     // library's pin: the quiet period runs from the call's end.
-    new InvokeHandle((steps) => {
-      this.#pinCallStarted();
-      return this.invoke(["itx", ...steps]).finally(() => this.#pinCallEnded());
-    }) as unknown as LibraryItx,
-  );
+    this.#pinCallStarted();
+    return this.invoke(
+      ["itx", ...steps],
+      [],
+      this.#callerStorage.getStore() ?? { principal: null },
+    ).finally(() => this.#pinCallEnded());
+    // The handle's dotted surface IS the library's itx: `itx.append(...)`, `itx.workers.get(...)`
+    // reduce into steps (the prototype fallback, iterate-context.ts) and land in the callback above.
+  }) as unknown as LibraryItx;
+  /** THE LIBRARY: its verbs closed over `#libraryItx`. An open capnweb socket it holds pins this
+   *  actor awake; the pins' timer closes it. */
+  readonly #library = buildLibrary(this.#libraryItx);
+
+  // ── the runner: `context/run-requested` → the script in a confined isolate → `run-settled` ──
+
+  /** The script runs THIS incarnation is executing, by the request's offset, so a commit's fan-out
+   *  never starts one twice. The durable ground is core state `scriptRuns`; a run a dead
+   *  incarnation left open is not here, and the wake record settles it `interrupted` (stream.ts) —
+   *  a run is never re-run. */
+  readonly #scriptRunsInFlight = new Set<number>();
+
+  /** THE RUNNER, started at the commit of every `run-requested` — whoever appended it:
+   *  `itx.run` (library.ts: this request, then a wait for its settlement), a client's literal
+   *  append, the agent's loop, a schedule's occurrence. The request's OFFSET is the run's identity:
+   *  the settlement names it. Runs as the kernel: the loaded script's own `env.ITX` calls are
+   *  principal-less anyway (loaded code speaks for the project), and the request event carries who
+   *  asked. Not awaited — the settlement is the run's end, on the log, whether or not the requester
+   *  is still listening. */
+  #startRequestedRuns(committedEvents: StreamEvent[]): void {
+    for (const event of committedEvents) {
+      if (event.type !== "events.iterate.com/context/run-requested") continue;
+      const { code } = RunRequested.parse(event.payload); // normalized at the append boundary
+      if (
+        this.#scriptRunsInFlight.has(event.offset) ||
+        !this.#stream.coreReducedState.scriptRuns[event.offset]
+      )
+        continue;
+      this.#scriptRunsInFlight.add(event.offset);
+      void this.#executeRun(event.offset, code);
+    }
+  }
+
+  async #executeRun(requestOffset: number, code: string): Promise<void> {
+    const settle = (settlement: RunSettlement) =>
+      this.#appendAndRunCommittedEffects([
+        {
+          type: "events.iterate.com/context/run-settled",
+          idempotencyKey: `context/run-settled:${requestOffset}`,
+          payload: { requestOffset, settlement },
+        },
+      ]);
+    try {
+      let settlement: RunSettlement;
+      try {
+        // THE JSON BOUNDARY: the value crossed Workers RPC; a round trip keeps what the log carries
+        // (undefined and functions drop; a bigint or a cycle throws — a runtime failure like any other).
+        const json = JSON.stringify(await executeScript(this.#libraryItx, code));
+        // `json` is absent only for a value JSON has no text for (undefined, a function): the log
+        // then carries no result. (An empty STRING result serializes to `""`, two chars — truthy.)
+        const result: unknown = json ? JSON.parse(json) : undefined;
+        settlement = { status: "succeeded", result };
+      } catch (error) {
+        settlement = {
+          status: "failed",
+          error: String(error instanceof Error ? error.message : error).slice(0, 8_000),
+          failureKind: "runtime",
+        };
+      }
+      try {
+        settle(settlement);
+      } catch (error) {
+        // A result the log refuses (EVENT_TOO_LARGE) fails the run; the refusal is the settlement.
+        if (errorCode(error) !== "EVENT_TOO_LARGE") throw error;
+        settle({
+          status: "failed",
+          error: `${error instanceof Error ? error.message : String(error)} — write a large result to itx.files and return its path`,
+          failureKind: "runtime",
+        });
+      }
+    } catch (error) {
+      reportIssue("iterate-context.run-settle", error, { requestOffset });
+    } finally {
+      this.#scriptRunsInFlight.delete(requestOffset);
+    }
+  }
 
   /** The own-context adapter used by built-ins: a loopback (`itx.cd(<own path>)`, the config
    *  delivery) keeps caller attribution and committed effects and records no wake (it runs inside
@@ -695,7 +789,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // oxlint-disable-next-line iterate/simple-truthiness-check -- the `itx.subscriptions` wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
         ...(s.afterOffset !== undefined && { afterOffset: s.afterOffset }),
         // oxlint-disable-next-line iterate/simple-truthiness-check -- the `itx.subscriptions` wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
-        ...(s.hostedFacet && { hostedFacet: s.hostedFacet }),
+        ...(s.hostedFacet && {
+          hostedFacet: { ...s.hostedFacet, restarts: this.#facetRestarts(s.hostedFacet.name) },
+        }),
         ...(cursor && {
           cursor: {
             confirmedOffset: cursor.confirmedOffset,
@@ -905,7 +1001,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     name: string,
     spec: FacetSpec | undefined,
     itxExpressionSteps: ItxExpression,
-    retriedAfterCloneFailure = false,
+    retriedAfterPlatformFailure = false,
   ): Promise<unknown> {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- name arrives as a client-authored itx expression argument; the static string type is the API contract, not a runtime guarantee, so a non-string is rejected with a usage error
     if (typeof name !== "string")
@@ -1057,17 +1153,25 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         } else if (startupFailed) {
           this.#abortFacetIfRunning(name, "startup failed");
           this.#liveFacetNames.delete(name);
-        } else if (isClonedDataVersionFailure(error) && !retriedAfterCloneFailure) {
-          // The clone-version failure (the constant's doc): restart the facet AND retire its loaded
-          // identity (a cached isolate is suspect too), then the call once more, cold. One extra
-          // attempt, never a loop — a second failure is the caller's. The retry re-delivers a
+        } else if (isFacetStartPlatformFailure(error) && !retriedAfterPlatformFailure) {
+          // The platform failure (the predicate's doc): restart the facet AND retire its loaded
+          // identity (the cached entry is what stays broken), then the call once more, cold. One
+          // extra attempt, never a loop — a second failure is the caller's. The retry re-delivers a
           // pushed batch: durables are offset-guarded by the engine, ephemerals are not (a duplicate
-          // beats a lost batch; at-least-once is the facet contract). Logged, never swallowed, so the
-          // platform condition stays queryable.
-          this.#abortFacetIfRunning(name, "clone-version failure — restarting");
+          // beats a lost batch; at-least-once is the facet contract). Counted on the facet's row and
+          // logged, never swallowed, so the platform condition stays queryable without a log grep.
+          this.#abortFacetIfRunning(name, "platform failure at facet start — restarting");
           this.#liveFacetNames.delete(name);
           retireLoadedIdentity?.();
-          console.warn({ event: "facet.clone-version-retry", namespace: "iterate-context", name });
+          const restarts = this.#facetRestarts(name) + 1;
+          this.ctx.storage.kv.put(`facet:${name}:restarts`, restarts);
+          console.warn({
+            event: "facet.platform-failure-retry",
+            namespace: "iterate-context",
+            name,
+            restarts,
+            message: error.message,
+          });
           return await this.#invokeFacet(name, spec, itxExpressionSteps, true);
         }
         throw error;
@@ -1157,6 +1261,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** Delete a facet, storage included (there is no delete verb: a removed hosting row ends here). A
    *  re-load into the same name is a clean rebuild, never a resume from orphaned state. */
+  /** How many times this facet was restarted after a platform failure at its start (the predicate
+   *  `isFacetStartPlatformFailure`), over the facet's whole life on this context. */
+  #facetRestarts(name: string) {
+    // The row's value is the count this DO wrote in `#invokeFacet` (kv types it `unknown`); absent
+    // until the first restart.
+    return (this.ctx.storage.kv.get(`facet:${name}:restarts`) as number | undefined) ?? 0;
+  }
+
   #deleteFacet(name: string): void {
     if (name === CoreContract.slug)
       throw new Error(`"${name}" is the core reduce — always on, never a facet`);
@@ -1165,6 +1277,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#facetRevived(name);
     this.ctx.storage.kv.delete(`facet:${name}`);
     this.ctx.storage.kv.delete(`facet:${name}:loader-id`);
+    this.ctx.storage.kv.delete(`facet:${name}:restarts`);
     this.#facetStartupMemoByName.delete(name);
     this.#liveFacetNames.delete(name);
   }
@@ -1235,11 +1348,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // The edge's stamp (ingress after the cookie check, a session's terminal fetch): the call runs
         // under that principal, and the header stays on the Request the app receives. Trusted here —
         // the edge sets it and ItxEntrypoint strips a loaded worker's, so it is the edge's JSON or absent.
+        // Asserted, not parsed: the header is the platform's own JSON of a Principal — the edge
+        // writes it after admission and every other source of it is stripped (above), so its shape
+        // is the edge's, and a parse here would only re-check the platform against itself.
         const principal = JSON.parse(
           headers.get(ITX_PRINCIPAL_HEADER) ?? "null",
         ) as Principal | null;
+        const grant = headers.get(ITX_GRANT_HEADER) || undefined;
         const forwarded = new Request(request, { headers });
-        const result = await this.#callerStorage.run({ principal }, () =>
+        const result = await this.#callerStorage.run({ principal, grant }, () =>
           this.#itxExpressionResolver.invoke(itxExpressionEndingInFetch(itxExpression), forwarded),
         );
         return result instanceof Response
@@ -1278,6 +1395,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #egress(request: Request): Promise<Response> {
     const headers = new Headers(request.headers);
     headers.delete(ITX_PRINCIPAL_HEADER);
+    headers.delete(ITX_GRANT_HEADER);
     headers.delete(ITX_EXPRESSION_FETCH_HEADER);
     const outbound = new Request(request, { headers });
     const names = secretNamesReferenced(outbound);

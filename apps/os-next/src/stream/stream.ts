@@ -228,13 +228,33 @@ export class Stream {
 
   /** THE WAKE RECORD, once per incarnation: `stream/woken { incarnation, reason }` — `"alarm"` from
    *  the alarm handler, `"request"` from every other door (an RPC, a fetch, a message on a hibernated
-   *  socket). The first door to open appends it, before its own work; the ones after find it done. */
+   *  socket). The first arrival appends it, before its own work; the ones after find it done.
+   *  In the SAME batch: the `interrupted` settlement of every run the last incarnation left open
+   *  (core state `scriptRuns`). A run is never re-run — the executor that started it died with that
+   *  incarnation, and whoever asked reads the settlement, not a second attempt. */
   appendWakeRecord(reason: "alarm" | "request"): void {
     if (this.#wakeRecorded) return;
-    this.append({
-      type: "events.iterate.com/stream/woken",
-      payload: { incarnation: this.storage.incarnation, reason },
-    });
+    const interrupted = Object.keys(this.#coreReducedState.scriptRuns).map(
+      (requestOffset): StreamEventInput => ({
+        type: "events.iterate.com/context/run-settled",
+        idempotencyKey: `context/run-settled:${requestOffset}`,
+        payload: {
+          requestOffset: Number(requestOffset),
+          settlement: {
+            status: "failed",
+            error: "the context restarted before the script finished; it is not run again",
+            failureKind: "interrupted",
+          },
+        },
+      }),
+    );
+    this.append(
+      {
+        type: "events.iterate.com/stream/woken",
+        payload: { incarnation: this.storage.incarnation, reason },
+      },
+      ...interrupted,
+    );
     this.#wakeRecorded = true;
   }
 
@@ -335,6 +355,8 @@ export class Stream {
       "events.iterate.com/stream/append-schedule-cancelled",
       // the delivery loop's own record of a halted row — a paused stream's ladder must still end
       "events.iterate.com/stream/subscription-delivery-halted",
+      // the runner's own record of a run's end — a paused stream must still close a script it started
+      "events.iterate.com/context/run-settled",
       // Alarm traces are kernel diagnostics, not user work; an operator must still be able to
       // inspect a paused context's current incarnation.
       STREAM_ALARM_TRACE_EVENT,
