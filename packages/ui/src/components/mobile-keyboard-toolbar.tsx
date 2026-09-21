@@ -238,15 +238,14 @@ export function MobileKeyboardToolbar({
         return;
       }
       if (keyDef.action === "search") {
-        setSearchOpen((previous) => {
-          if (previous) {
-            setSearchQuery("");
-            onSearchClose?.();
-            return false;
-          }
+        if (searchOpen) {
+          setSearchOpen(false);
+          setSearchQuery("");
+          onSearchClose?.();
+        } else {
+          setSearchOpen(true);
           setTimeout(() => searchInputRef.current?.focus(), 50);
-          return true;
-        });
+        }
         return;
       }
       if (keyDef.action === "dismiss-kb") {
@@ -261,7 +260,15 @@ export function MobileKeyboardToolbar({
         onKeyPress(keyDef.key);
       }
     },
-    [clearTimer, clearRepeat, onKeyPress, onCtrlToggle, onToggleKeyboard, onSearchClose],
+    [
+      clearTimer,
+      clearRepeat,
+      searchOpen,
+      onKeyPress,
+      onCtrlToggle,
+      onToggleKeyboard,
+      onSearchClose,
+    ],
   );
 
   const handlePointerCancel = useCallback(() => {
@@ -322,32 +329,33 @@ export function MobileKeyboardToolbar({
     [onKeyPress],
   );
 
+  // a tap anywhere dismisses the long-press popup — except in its first 50 ms, while the press
+  // that opened it is still settling
   useEffect(() => {
     if (!popup) return;
-    const dismiss = () => setPopup(null);
-    const timer = setTimeout(() => {
-      document.addEventListener("pointerdown", dismiss, { once: true });
-    }, 50);
-    return () => {
-      clearTimeout(timer);
-      document.removeEventListener("pointerdown", dismiss);
+    const openedAt = performance.now();
+    const dismiss = (event: PointerEvent) => {
+      if (event.timeStamp - openedAt < 50) return;
+      setPopup(null);
     };
+    document.addEventListener("pointerdown", dismiss);
+    return () => document.removeEventListener("pointerdown", dismiss);
   }, [popup]);
 
+  // a tap outside the arrow pad dismisses it — except in its first 200 ms, while the tap that
+  // opened it is still settling
   useEffect(() => {
     if (!arrowsOpen) return;
+    const openedAt = performance.now();
     const dismiss = (event: PointerEvent) => {
-      const target = event.target as HTMLElement;
+      if (event.timeStamp - openedAt < 200) return;
+      // a pointerdown targets an element, and `closest` lives on Element
+      const target = event.target as Element;
       if (target.closest("[data-arrow-popover]") || target.closest("[data-arrow-toggle]")) return;
       setArrowsOpen(false);
     };
-    const timer = setTimeout(() => {
-      document.addEventListener("pointerdown", dismiss);
-    }, 200);
-    return () => {
-      clearTimeout(timer);
-      document.removeEventListener("pointerdown", dismiss);
-    };
+    document.addEventListener("pointerdown", dismiss);
+    return () => document.removeEventListener("pointerdown", dismiss);
   }, [arrowsOpen]);
 
   return (
@@ -524,10 +532,12 @@ export function MobileKeyboardToolbar({
               }
             }}
             placeholder="Search..."
+            aria-label="Search the terminal"
             className="h-7 min-w-0 flex-1 rounded bg-[#2a2a2a] px-2 text-xs font-mono text-[#d4d4d4] placeholder-[#666] outline-none focus:ring-1 focus:ring-[#555]"
           />
           <button
             type="button"
+            aria-label="Previous match"
             onPointerDown={(event) => {
               event.preventDefault();
               if (searchQuery) onSearchPrev?.(searchQuery);
@@ -538,6 +548,7 @@ export function MobileKeyboardToolbar({
           </button>
           <button
             type="button"
+            aria-label="Next match"
             onPointerDown={(event) => {
               event.preventDefault();
               if (searchQuery) onSearchNext?.(searchQuery);
@@ -548,6 +559,7 @@ export function MobileKeyboardToolbar({
           </button>
           <button
             type="button"
+            aria-label="Close search"
             onPointerDown={(event) => {
               event.preventDefault();
               setSearchOpen(false);
