@@ -37,6 +37,7 @@ test("a facet from ctx.exports.<Class>({ props }) sees ctx.props and answers thr
   expect(seen.entryKind).toBe("LoopbackDurableObjectNamespace");
   expect(seen.classKind).toBe("DurableObjectClass");
   expect(seen.snapshot.state).toEqual({
+    creation: null,
     repos: {},
     workspaces: {},
     agents: {},

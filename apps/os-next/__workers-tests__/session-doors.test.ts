@@ -53,7 +53,7 @@ test("the host shapes: `<app>--<project>` and `<app>.<project>` reach the same a
   // the apex: the bundled ConfigWorker's fetch — the project's bare homepage
   const apex = await call("https://routing-shapes.projects.test/", forged);
   expect(apex.status).toBe(404);
-  expect(await apex.text()).toContain("not configured");
+  expect(await apex.text()).toMatch(/no site yet/);
   // a project's own config worker routes the apex; the label a visitor sent is gone
   await itx.append({
     type: "events.iterate.com/project/ingress-configured",

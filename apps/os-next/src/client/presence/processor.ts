@@ -4,14 +4,13 @@
 import {
   type ConsumedEvent,
   type ProcessEventArgs,
-  type ProcessorState,
   type ReduceArgs,
   StreamProcessor,
 } from "iterate/next/stream/processor";
-import { PresenceContract, type PresenceView } from "./contract.ts";
+import { PresenceContract, type PresenceState } from "./contract.ts";
 
 export class PresenceProcessor extends StreamProcessor<
-  ProcessorState<typeof PresenceContract>,
+  PresenceState,
   ConsumedEvent<typeof PresenceContract>
 > {
   readonly contract = PresenceContract;
@@ -22,7 +21,7 @@ export class PresenceProcessor extends StreamProcessor<
   override reduce({
     event,
     state,
-  }: ReduceArgs<PresenceView, ConsumedEvent<typeof PresenceContract>>): PresenceView | undefined {
+  }: ReduceArgs<PresenceState, ConsumedEvent<typeof PresenceContract>>): PresenceState | undefined {
     if (event.type === "tick") return { ...state, ticks: state.ticks + 1 };
     // 'poke' is deliberately NOT reduced — it drives a runtime field, not durable truth.
     return undefined;
@@ -30,12 +29,12 @@ export class PresenceProcessor extends StreamProcessor<
 
   override processEvent({
     event,
-  }: ProcessEventArgs<PresenceView, ConsumedEvent<typeof PresenceContract>>): undefined {
+  }: ProcessEventArgs<PresenceState, ConsumedEvent<typeof PresenceContract>>): undefined {
     // No publish call: the engine re-projects after every batch and emits the delta itself.
     if (event?.type === "poke") this.#lastPokeMs = Date.now();
   }
 
-  override projectLiveState(state: PresenceView): unknown {
+  override projectLiveState(state: PresenceState): unknown {
     return { ticks: state.ticks, lastPokeMs: this.#lastPokeMs };
   }
 }

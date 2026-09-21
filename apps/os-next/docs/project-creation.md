@@ -1,10 +1,18 @@
 # Project creation
 
-Design agreed 2026-09-21; **the creation saga is not implemented**.
-`session.projects.create()` registers a directory entry and returns its root
-context. The project processor maintains catalogs but does not seed a config
-repository or website. Explicit ingress and hostname discovery are deployed;
-the manually repaired bench project does not prove fresh-project provisioning.
+Design agreed 2026-09-21; **the creation saga exists, empty**.
+`session.projects.create()` registers the directory entry, enables the `project`
+processor row on `/`, appends `project/create-requested { slug, orgId }` there under
+the caller and returns the root context at once. The project processor
+(`src/project/processor.ts`) runs the saga from state at head and lands
+`project/created` — today the certificate is the whole saga: the platform
+provisions nothing for a project yet — or `project/create-failed`; the dash
+renders the facet's live state as the creation's progress (`apps/dash`,
+`/projects/<slug>`). The project processor also maintains the catalog. Seeding a
+config repository and configuring the website remain the proposed follow-up
+below, to be done inside that saga through the same `itx.repos.create("/repos/config")`
+a caller uses. Explicit ingress and hostname discovery are deployed; the manually
+repaired bench project does not prove fresh-project provisioning.
 
 ## Explicit publication
 
@@ -47,23 +55,25 @@ Subscriptions use complete targets (including root navigation where needed).
 Follow the [OS project saga](../../os/src/domains/projects/project-processor-implementation.ts).
 Event names below omit `events.iterate.com/`.
 
-| Event                        | Stream                            | Meaning                                              |
-| ---------------------------- | --------------------------------- | ---------------------------------------------------- |
-| `project/create-requested`   | `/`                               | Immutable identity, slug and pinned template version |
-| `repos/create-requested`     | `/repos/config`                   | Provision repository and seed files                  |
-| `repo/commit-completed`      | `/repos/config`                   | Record actual seed commit                            |
-| `repos/created`              | `/repos/config`, forwarded to `/` | Provisioning and seeding completed                   |
-| `project/ingress-configured` | `/`                               | Activate the probed revision                         |
-| `project/created`            | `/`                               | Terminal success, references creation-request offset |
-| `project/worker-updated`     | `/`                               | Ready worker revision and commit                     |
+| Event                        | Stream                                                     | Meaning                                                                |
+| ---------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `project/create-requested`   | `/`                                                        | The directory row's facts (slug, org); a pinned template version later |
+| `repo/create-requested`      | `/repos/config`                                            | Provision repository and seed files                                    |
+| `repo/commit-completed`      | `/repos/config`                                            | Record actual seed commit                                              |
+| `repo/created`               | `/repos/config`, cross-posted to `/` by the repo processor | Provisioning and seeding completed                                     |
+| `project/ingress-configured` | `/`                                                        | Activate the probed revision                                           |
+| `project/created`            | `/`                                                        | Terminal success (existence only; the state keeps its offset)          |
+| `project/create-failed`      | `/`                                                        | Terminal failure, the error on the event                               |
+| `project/worker-updated`     | `/`                                                        | Ready worker revision and commit                                       |
 
-The API registers the directory entry, atomically appends intent and enables
-the project processor, then waits for the matching terminal event by default.
-Caller disconnection must not cancel this durable work.
+The API registers the directory entry, enables the project processor row and
+appends the intent (both idempotent), and returns at once — the dash watches the
+facet's live state for the terminal event. Caller disconnection must not cancel
+this durable work: the processor runs it from state at head, after any eviction.
 
-The repository processor owns provisioning/seeding. Its inline `create()` needs
-durable recovery: reuse the repository and seed commit after redelivery, including
-when a successful push lost its acknowledgement. Never overwrite subsequent
+The repository processor owns provisioning/seeding (`itx.repos.create(path)` opens
+it). Seeding needs durable recovery: reuse the repository and seed commit after
+redelivery, including when a successful push lost its acknowledgement. Never overwrite subsequent
 edits. Pin the template version in the request so deployment cannot change it
 mid-recovery.
 

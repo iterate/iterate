@@ -65,6 +65,8 @@ export const issuerPagePaths = [
   "/capnweb.js",
   "/issuer.css",
   "/iterate-logo.svg",
+  // the prompt an agent follows to deploy and connect a platform of the person's own
+  "/setup-prompt.md",
 ];
 
 /** /login.json — what the sign-in page (public/login.js) shows: who is signed in (continue, or switch
@@ -205,6 +207,9 @@ function landingPage(request: Request, env: Env): Response {
         <a href="/login">sign-in</a> and consent.
       </p>
       ${dash}
+      <p class="muted">
+        Setting this up with an agent? Point it at <a href="/setup-prompt.md">/setup-prompt.md</a>.
+      </p>
     </main>
   </body>
 </html>

@@ -332,6 +332,12 @@ describe("public protocol origins", () => {
     });
   });
 
+  test("with its own origin configured, /mcp on the platform origin sends the caller there — a 308, so a client's POST survives the hop", async () => {
+    const moved = await request("https://os.iterate2.com/mcp");
+    expect(moved.status).toBe(308);
+    expect(moved.headers.get("location")).toBe("https://mcp.iterate2.com/");
+  });
+
   test("MCP does not acquire a Cap'n Web or console route", async () => {
     expect((await request("https://mcp.iterate2.com/api")).status).toBe(404);
     expect((await request("https://mcp.iterate2.com/login")).status).toBe(404);
