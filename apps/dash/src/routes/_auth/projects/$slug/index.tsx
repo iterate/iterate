@@ -25,6 +25,8 @@ const ProjectLive = z.looseObject({
   creation: z
     .object({ status: z.enum(["requested", "created", "failed"]), offset: z.number() })
     .nullable(),
+  /** the catalog's repos, by path: the seeded config repo is the saga's first visible step */
+  repos: z.record(z.string(), z.unknown()),
 });
 
 export const Route = createFileRoute("/_auth/projects/$slug/")({
@@ -71,10 +73,14 @@ function ProjectOverview() {
         .object({ rev: z.number(), state: z.unknown() })
         .parse(await context!.invoke("itx.facets.get('project').liveSnapshot()")),
   });
-  const creation = ProjectLive.safeParse(live.value).data?.creation ?? null;
+  const parsed = ProjectLive.safeParse(live.value).data;
+  const creation = parsed?.creation ?? null;
+  const configRepoSeeded = Boolean(parsed?.repos["/repos/config"]);
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
-      {creation?.status === "requested" ? <ProjectCreationProgress /> : null}
+      {creation?.status === "requested" ? (
+        <ProjectCreationProgress configRepoSeeded={configRepoSeeded} />
+      ) : null}
       {creation?.status === "failed" && context ? (
         <ProjectCreationFailed context={context} offset={creation.offset} />
       ) : null}
@@ -114,10 +120,11 @@ function ProjectOverview() {
 /** apps/os's "Creating project" checklist at the size os-next carries: the request is in (the
  *  directory row and `project/create-requested` — this page exists because it is) and the
  *  certificate is what the project processor owes; the live state swaps this out the moment it lands. */
-function ProjectCreationProgress() {
+function ProjectCreationProgress({ configRepoSeeded }: { configRepoSeeded: boolean }) {
   const steps = [
     { key: "registered", label: "Registering project", done: true },
-    { key: "created", label: "Finalizing project", done: false },
+    { key: "repo", label: "Seeding the config repository", done: configRepoSeeded },
+    { key: "created", label: "Publishing the homepage", done: false },
   ];
   return (
     <section className="rounded-lg border bg-card p-6" data-testid="project-creation-progress">

@@ -1,6 +1,5 @@
 import { expect } from "vitest";
-import { adminCredentials, session } from "./support/client.ts";
-import { FakeArtifacts } from "./support/fake-artifacts.ts";
+import { adminCredentials, readAll, session, until } from "./support/client.ts";
 import { fetchProjectUrl, localOnly, projectUrl } from "./support/project-host.ts";
 
 localOnly("website identity, pinned revisions, and explicit publication agree", async () => {
@@ -11,10 +10,13 @@ localOnly("website identity, pinned revisions, and explicit publication agree", 
   // the project's URL as the platform composes it — the apex under the worker's routing
   const apex = projectUrl({ project: slug, path: "/" });
   expect(identity.projectUrl).toBe(apex.href);
-  const artifacts = await FakeArtifacts.start();
-  try {
-    await root.cd("/repos/config").provide("itx.cfArtifacts", artifacts);
-    await root.repos.create("/repos/config"); // born through the collection; the handle addresses it
+  // The project's own saga seeded `/repos/config` (the homepage worker) and published its commit;
+  // this story's commits land on top of it (the local worker binds Artifacts for real).
+  await until("the project's certificate", async () =>
+    (await readAll(root)).find((e) => e.type === "events.iterate.com/project/created"),
+  );
+  expect((await fetchProjectUrl(apex)).text.trim()).toBe(`Homepage of project ${slug}`);
+  {
     const repo = root.repos.get("/repos/config");
     const source = (joke: string) =>
       `import { WorkerEntrypoint } from 'cloudflare:workers'; export default class extends WorkerEntrypoint { fetch() { return new Response(${JSON.stringify(joke)}); } }`;
@@ -56,7 +58,5 @@ localOnly("website identity, pinned revisions, and explicit publication agree", 
       (await root.subscriptions.list()).filter((s: { name: string }) => s.name === "config"),
     ).toEqual([]);
     expect(await root.rewriteRules.get("itx." + "worker")).toBe(null);
-  } finally {
-    await artifacts.close();
   }
 });

@@ -1,18 +1,22 @@
 # Project creation
 
-Design agreed 2026-09-21; **the creation saga exists, empty**.
-`session.projects.create()` registers the directory entry, enables the `project`
-processor row on `/`, appends `project/create-requested { slug, orgId }` there under
-the caller and returns the root context at once. The project processor
-(`src/project/processor.ts`) runs the saga from state at head and lands
-`project/created` — today the certificate is the whole saga: the platform
-provisions nothing for a project yet — or `project/create-failed`; the dash
-renders the facet's live state as the creation's progress (`apps/dash`,
-`/projects/<slug>`). The project processor also maintains the catalog. Seeding a
-config repository and configuring the website remain the proposed follow-up
-below, to be done inside that saga through the same `itx.repos.create("/repos/config")`
-a caller uses. Explicit ingress and hostname discovery are deployed; the manually
-repaired bench project does not prove fresh-project provisioning.
+**The saga is implemented** (2026-09-21, PR #2760 and its follow-up). `session.projects.create()`
+registers the directory entry, enables the `project` processor row on `/`, appends
+`project/create-requested { slug, orgId }` there under the caller and returns the root context at
+once. The project processor (`src/project/processor.ts`) runs the saga from state at head:
+
+1. `itx.repos.create("/repos/config")` — the same collection a caller uses; a repo that exists answers at once;
+2. when `main` is unborn, ONE seed commit: `worker.ts` (the project's homepage, a plain-JavaScript
+   `WorkerEntrypoint` answering `Homepage of project <slug>`) and `AGENTS.md` (what the repo is);
+3. `project/ingress-configured` on `/`, its target `itx.workers.get({ source: itx.repos.get('/repos/config').readFile('worker.ts', { commitOid }), cacheKey: commitOid })` — the apex answers that exact commit, keyed by it;
+4. `project/created` — or `project/create-failed { error }` on any throw; a later `projects.create`
+   of the same slug is a new attempt.
+
+Every step is idempotent on its own, so an attempt lost with an incarnation is simply run again by
+the next. The dash renders the facet's live state as the creation's progress (`apps/dash`,
+`/projects/<slug>`: registered, the config repo seeded, the homepage published). The project
+processor also maintains the catalog. A later commit is published the same way a caller publishes
+one (below); the platform never touches the seeded files again.
 
 ## Explicit publication
 

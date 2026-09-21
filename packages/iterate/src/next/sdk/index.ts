@@ -26,6 +26,7 @@ export {
   type ConsumedEvent,
   type EventCatalog,
   type EventDefinition,
+  type EmittedEventInput,
   type EventInput,
   type ProcessorContract,
   type ProcessorState,

@@ -1,10 +1,12 @@
 // src/workspace/contract.ts — A WORKSPACE: a domain object on the context at any path
 // (`/workspaces/<name>` by convention). It is ONE private overlay over the project's repos; its facts
 // live on that path's log, and THIS FILE is the only place they are spelled. The rest of the folder
-// derives from it: processor.ts reduces these events and runs the creation saga, durable-object.ts
-// keeps the overlay behind the `created` guard, collection.ts is `itx.workspaces` (`list`, `create`),
-// library.ts hands out the handle (`itx.workspaces.get(path)`: the host's verbs plus the typed
-// `append`). Every type is derived here, never hand-kept:
+// derives from it: processor.ts reduces these events and runs the creation and deletion sagas,
+// durable-object.ts keeps the overlay behind the `created` guard, collection.ts is `itx.workspaces`
+// (`list`, `create`, `delete`), library.ts hands out the handle (`itx.workspaces.get(path)`: the
+// host's verbs plus the typed `append`). Deletion is the creation's mirror: `delete-requested` opens
+// it, the processor lands `deleted` — cross-posted to `/` so the catalog drops the entry — and the
+// overlay goes with the facet. Every type is derived here, never hand-kept:
 //   WorkspaceState                        = ProcessorState<typeof WorkspaceContract>  the reduced state below
 //   ConsumedEvent<typeof WorkspaceContract>                                            what reduce and processEvent see
 //   EventInput<typeof WorkspaceContract>                                               what `itx.workspaces.get(path).append(…)` takes
@@ -14,17 +16,26 @@ import { defineProcessorContract, type ProcessorState } from "iterate/next/strea
 export const WorkspaceContract = defineProcessorContract({
   slug: "workspace",
   version: "1",
-  description: "A workspace: its creation.",
+  description: "A workspace: its creation and deletion.",
   /** THE REDUCED STATE — what the reduce keeps between events: where creation stands, as the OFFSET
    *  of the event that says so (the request, the certificate, or the failure — read that event for
-   *  the error). It is the checkpoint the facet stores, what `snapshot()` and `liveSnapshot()`
-   *  answer, and the guard every verb reads before it touches the overlay. Files are not here: the
-   *  overlay lives in the host's own storage, a commit is a repo fact, and the mount table is derived
-   *  from the project catalog, never stored. */
+   *  the error), and where deletion stands the same way (the request, or the certificate). It is the
+   *  checkpoint the facet stores, what `snapshot()` and `liveSnapshot()` answer, and the guard every
+   *  verb reads before it touches the overlay. Files are not here: the overlay lives in the host's
+   *  own storage, a commit is a repo fact, and the mount table is derived from the project catalog,
+   *  never stored. */
   stateSchema: z.object({
     creation: z
       .object({
         status: z.enum(["requested", "created", "failed"]),
+        offset: z.number().int().positive(),
+      })
+      .nullable()
+      .default(null),
+    /** Where deletion stands, as the offset of the event that says so; null while the workspace lives. */
+    deletion: z
+      .object({
+        status: z.enum(["requested", "deleted"]),
         offset: z.number().int().positive(),
       })
       .nullable()
@@ -45,14 +56,30 @@ export const WorkspaceContract = defineProcessorContract({
       description: "What the creation attempt reported. Terminal until a new request.",
       payloadSchema: z.object({ error: z.string() }),
     },
+    "events.iterate.com/workspace/delete-requested": {
+      description:
+        "Someone asked for this workspace to go (`itx.workspaces.delete(path)`). No payload: the context it lands on IS the workspace. Nothing to tear down (the overlay goes with the facet) — the processor lands deleted; a request after the certificate is a harmless fact.",
+      payloadSchema: z.object({}),
+    },
+    "events.iterate.com/workspace/deleted": {
+      description:
+        "The death certificate: on the workspace's path, and cross-posted to / for the project catalog, which drops the entry — hence it names the path. Terminal: a deleted workspace is not re-creatable.",
+      payloadSchema: z.object({ path: z.string().min(1) }),
+    },
   },
   consumes: [
     "events.iterate.com/workspace/create-requested",
     "events.iterate.com/workspace/created",
     "events.iterate.com/workspace/create-failed",
+    "events.iterate.com/workspace/delete-requested",
+    "events.iterate.com/workspace/deleted",
   ],
-  emits: ["events.iterate.com/workspace/created", "events.iterate.com/workspace/create-failed"],
+  emits: [
+    "events.iterate.com/workspace/created",
+    "events.iterate.com/workspace/create-failed",
+    "events.iterate.com/workspace/deleted",
+  ],
 });
 
-/** The workspace's reduced state: where its creation stands (the contract's `stateSchema`). */
+/** The workspace's reduced state: where its creation and deletion stand (the contract's `stateSchema`). */
 export type WorkspaceState = ProcessorState<typeof WorkspaceContract>;

@@ -10,7 +10,15 @@
 // deployed lane runs ONE real turn through Workers AI.
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { collector, freshCtx, openItx, readAll, sleep, until } from "./support/client.ts";
+import {
+  collector,
+  freshCtx,
+  openItx,
+  processorNames,
+  readAll,
+  sleep,
+  until,
+} from "./support/client.ts";
 import { deployedOnly } from "./support/project-host.ts";
 
 /** A model that answers from a script of replies, in order, recording what it was asked. A reply
@@ -639,3 +647,66 @@ deployedOnly(
   },
   150_000,
 );
+
+test("itx.agents.delete(path) lands the request and the death certificate on the agent's path AND on /, drops the processor row; message() refuses and the loop runs no more turns; a second delete answers at once; never created, nothing to delete; deleted, not re-creatable", async () => {
+  const itx = openItx(freshCtx("agent-delete"));
+  const agent = itx.agents.get("/agents/gone");
+
+  await expect(itx.agents.delete("/agents/gone")).rejects.toThrow(
+    /agent \/agents\/gone: not created — nothing to delete/,
+  );
+  expect(await itx.agents.create("/agents/gone")).toEqual({ path: "/agents/gone" });
+  expect(await processorNames(itx.cd("/agents/gone"))).toEqual(["agent"]);
+
+  expect(await itx.agents.delete("/agents/gone")).toEqual({ path: "/agents/gone" });
+  const own = await readAll(itx.cd("/agents/gone"));
+  expect(short(own)).toEqual([
+    "agent/create-requested",
+    "agent/created",
+    "agent/context-added", // the default prompt, beside the birth certificate
+    "agent/delete-requested",
+    "agent/deleted",
+  ]);
+  expect(
+    own.filter((e) => e.type === "events.iterate.com/agent/deleted").map((e) => e.payload),
+  ).toEqual([{ path: "/agents/gone" }]);
+  expect(short(await readAll(itx))).toEqual(["agent/created", "agent/deleted"]); // both certificates cross to /
+  expect(await processorNames(itx.cd("/agents/gone"))).toEqual([]); // the row went
+
+  // A person's words refuse — nothing lands, nothing is triggered.
+  await expect(agent.message("anyone there?")).rejects.toThrow(/agent \/agents\/gone: deleted/);
+  expect(await readAll(itx.cd("/agents/gone"))).toHaveLength(own.length);
+  // Words appended PAST the verb (the handle's typed append lands under the caller's principal, no
+  // guard) reach the fold — a read hosts the facet anew and it folds the whole log, these words'
+  // trigger included — and still raise no turn: the loop is gated on the deletion, so no request is
+  // recorded long after the debounce window (250 ms) would have closed.
+  await agent.append({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "user", content: "anyone there?", actor: { type: "user" } },
+  });
+  expect(await itx.cd("/agents/gone").facets.get("agent").snapshot()).toMatchObject({
+    state: {
+      creation: { status: "created" },
+      deletion: {
+        status: "deleted",
+        offset: own.find((e) => e.type === "events.iterate.com/agent/deleted").offset,
+      },
+      pendingLlmRequestTrigger: { source: "external" },
+    },
+  });
+  await sleep(1_000);
+  expect(short(await readAll(itx.cd("/agents/gone")))).toEqual([
+    ...short(own),
+    "agent/context-added",
+  ]);
+
+  // Dies once: a second delete answers at once and appends nothing; not re-creatable.
+  expect(await itx.agents.delete("/agents/gone")).toEqual({ path: "/agents/gone" });
+  expect(short(await readAll(itx.cd("/agents/gone")))).toEqual([
+    ...short(own),
+    "agent/context-added",
+  ]);
+  await expect(itx.agents.create("/agents/gone")).rejects.toThrow(
+    /agent \/agents\/gone: deleted — not re-creatable/,
+  );
+});

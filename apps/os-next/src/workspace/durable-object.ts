@@ -9,7 +9,8 @@
 // workspace a DOMAIN OBJECT: it hosts the workspace processor (processor.ts) — the creation saga
 // `itx.workspaces.create(path)` opens, whose certificate is cross-posted to `/` for the catalog
 // `itx.workspaces.list()` reads — and every method refuses until the certificate has landed
-// (`state.creation`).
+// (`state.creation`) and again once deletion has been asked for (`state.deletion`, the saga
+// `itx.workspaces.delete(path)` opens; the overlay goes with the facet when the row is dropped).
 //
 // Storage is this facet's own SQLite: one `files` table, a row per touched path — its content, or the
 // `deleted` flag that makes it a whiteout. Text only, ONE writer, no policies. The repo facets speak
@@ -103,17 +104,17 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
 
   // ── the created guard ──
 
-  /** Every verb starts here: a workspace whose certificate has not landed refuses. Creation is
-   *  terminal, so one confirming read per incarnation. */
-  #confirmedCreated = false;
+  /** Every verb starts here: a workspace whose certificate has not landed refuses, and so does one
+   *  whose deletion has been asked for. Deletion can land at any moment, so the state is read on
+   *  every call (in memory once the facet is caught up). */
   async #created(): Promise<void> {
-    if (this.#confirmedCreated) return;
     const path = await this.#path();
-    if ((await this.snapshot()).state.creation?.status !== "created")
+    const { state } = await this.snapshot();
+    if (state.deletion) throw new Error(`workspace ${path}: deleted`);
+    if (state.creation?.status !== "created")
       throw new Error(
         `workspace ${path}: not created — itx.workspaces.create(${JSON.stringify(path)}) first`,
       );
-    this.#confirmedCreated = true;
   }
 
   /** The mount table: every repo in the project catalog at its OWN path. */
@@ -129,6 +130,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
 
   /** The overlay's copy (a whiteout reads null), else the mounted repo's file at its tip; null when absent. */
   async readFile(path: string): Promise<string | null> {
+    await this.#created();
     const resolved = absolutePath(path);
     const row = this.#row(resolved);
     if (row) return row.deleted ? null : row.content;
@@ -137,6 +139,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
 
   /** The mounted repo's file at its tip whatever the overlay says — what uncommitted work diffs against. */
   async readBase(path: string): Promise<string | null> {
+    await this.#created();
     return this.#readMounted(absolutePath(path), await this.mounts());
   }
 
@@ -161,6 +164,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
   /** Delete from the merged view: the overlay row goes; a file the mount has is WHITED OUT until
    *  committed. False when the path was not a file of the view. */
   async deleteFile(path: string): Promise<boolean> {
+    await this.#created();
     const resolved = absolutePath(path);
     const row = this.#row(resolved);
     const route = routeMount(await this.mounts(), resolved);
@@ -180,6 +184,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
 
   /** Back to the mount's version: the overlay row — a shadowing write or a whiteout — goes. */
   async revert(path: string): Promise<void> {
+    await this.#created();
     this.#sql.exec("DELETE FROM files WHERE path = ?", absolutePath(path));
   }
 
@@ -187,6 +192,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
    *  sorted. A tip path is listed only where it ROUTES to that mount (a repo beneath another's path
    *  hides the parent's files under it), as `readFile` and a commit see them. */
   async listAllFiles(): Promise<string[]> {
+    await this.#created();
     const mounts = await this.mounts();
     const paths = new Set<string>();
     const whiteouts = new Set<string>();
@@ -209,6 +215,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
   /** The overlay's changes grouped by mount (every mount listed, dirty or not), plus the unmounted
    *  scratch — which is never committed. */
   async gitStatus(): Promise<{ mounts: WorkspaceMountStatus[]; unmounted: WorkspaceChange[] }> {
+    await this.#created();
     return this.#status(await this.mounts());
   }
 

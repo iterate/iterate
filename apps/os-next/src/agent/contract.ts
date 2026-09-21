@@ -2,10 +2,12 @@
 // convention) — a conversation driven by a model that acts by writing scripts against that
 // context's `itx`. Its facts live on that path's log, and THIS FILE is the only place they are
 // spelled. The rest of the folder derives from it: processor.ts reduces these events, runs the
-// creation saga and THE LOOP, durable-object.ts is the processor's shell plus `message()`,
-// collection.ts is `itx.agents` (`list`, `create`), library.ts hands out the handle
-// (`itx.agents.get(path)`: the host's verbs plus the typed `append`). Every type is derived here,
-// never hand-kept:
+// creation and deletion sagas and THE LOOP, durable-object.ts is the processor's shell plus
+// `message()`, collection.ts is `itx.agents` (`list`, `create`, `delete`), library.ts hands out the
+// handle (`itx.agents.get(path)`: the host's verbs plus the typed `append`). Deletion is the
+// creation's mirror: `delete-requested` opens it, the processor lands `deleted` — cross-posted to
+// `/` so the catalog drops the entry — and a deleted agent runs no more turns. Every type is derived
+// here, never hand-kept:
 //   AgentState                        = ProcessorState<typeof AgentContract>  the reduced state below
 //   ConsumedEvent<typeof AgentContract>                                        what reduce and processEvent see
 //   EventInput<typeof AgentContract>                                           what `itx.agents.get(path).append(…)` takes
@@ -85,15 +87,24 @@ export const AgentContract = defineProcessorContract({
     "An agent: a conversation on its own context, driven by a model that acts by writing scripts against itx.",
   /** THE REDUCED STATE — what the reduce keeps between events: where creation stands (as the OFFSET
    *  of the event that says so — the request, the certificate, or the failure; read that event for
-   *  the error), the conversation as the model will read it, and the loop's obligations — the one
-   *  pending trigger, the one open request, the breakers' counts, a pause (a script it asked for is
-   *  the CONTEXT's obligation: core state `runs`). It is the checkpoint the facet stores, what
+   *  the error), where deletion stands the same way (the request, or the certificate — set, the loop
+   *  runs no more turns), the conversation as the model will read it, and the loop's obligations —
+   *  the one pending trigger, the one open request, the breakers' counts, a pause (a script it asked
+   *  for is the CONTEXT's obligation: core state `runs`). It is the checkpoint the facet stores, what
    *  `snapshot()` and `liveSnapshot()` answer, the guard `message()` reads before it speaks, and
    *  what the agents app renders as the live status beside the log. */
   stateSchema: z.object({
     creation: z
       .object({
         status: z.enum(["requested", "created", "failed"]),
+        offset: z.number().int().positive(),
+      })
+      .nullable()
+      .default(null),
+    /** Where deletion stands, as the offset of the event that says so; null while the agent lives. */
+    deletion: z
+      .object({
+        status: z.enum(["requested", "deleted"]),
         offset: z.number().int().positive(),
       })
       .nullable()
@@ -185,6 +196,16 @@ export const AgentContract = defineProcessorContract({
       description: "What the birth reported. Terminal until a new request.",
       payloadSchema: z.object({ error: z.string() }),
     },
+    "events.iterate.com/agent/delete-requested": {
+      description:
+        "Someone asked for this agent to go (`itx.agents.delete(path)`). No payload: the context it lands on IS the agent. Nothing to tear down — the processor lands deleted, and the loop runs no more turns from here on; a request after the certificate is a harmless fact.",
+      payloadSchema: z.object({}),
+    },
+    "events.iterate.com/agent/deleted": {
+      description:
+        "The death certificate: on the agent's path, and cross-posted to / for the project catalog, which drops the entry — hence it names the path. Terminal: a deleted agent is not re-creatable.",
+      payloadSchema: z.object({ path: z.string().min(1) }),
+    },
     "events.iterate.com/agent/configured": {
       description:
         "Merges a partial configuration into the agent's config; omitted keys keep their values.",
@@ -254,6 +275,7 @@ export const AgentContract = defineProcessorContract({
     "events.iterate.com/agent/llm-response-chunks": {
       description:
         "EPHEMERAL, never stored: one coalescing window of the provider's streamed events for the request it names — what a feed renders as the answer being written. The settled event carries the durable text.",
+      ephemeral: true,
       payloadSchema: z.object({
         llmRequestOffset: z.number().int().positive(),
         chunks: z.array(z.unknown()).min(1),
@@ -316,6 +338,8 @@ export const AgentContract = defineProcessorContract({
     "events.iterate.com/agent/create-requested",
     "events.iterate.com/agent/created",
     "events.iterate.com/agent/create-failed",
+    "events.iterate.com/agent/delete-requested",
+    "events.iterate.com/agent/deleted",
     "events.iterate.com/agent/configured",
     "events.iterate.com/agent/context-added",
     "events.iterate.com/agent/llm-request-requested",
@@ -327,6 +351,7 @@ export const AgentContract = defineProcessorContract({
   emits: [
     "events.iterate.com/agent/created",
     "events.iterate.com/agent/create-failed",
+    "events.iterate.com/agent/deleted",
     "events.iterate.com/agent/context-added",
     "events.iterate.com/agent/web-message-sent",
     "events.iterate.com/agent/summary-updated",
@@ -340,6 +365,6 @@ export const AgentContract = defineProcessorContract({
   ],
 });
 
-/** The agent's reduced state: where its creation stands, the conversation, and the loop's
- *  obligations (the contract's `stateSchema`). */
+/** The agent's reduced state: where its creation and deletion stand, the conversation, and the
+ *  loop's obligations (the contract's `stateSchema`). */
 export type AgentState = ProcessorState<typeof AgentContract>;

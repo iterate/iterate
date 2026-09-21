@@ -1445,9 +1445,10 @@ Artifacts as a PROXY, project-scoped and by that same path — `create`, `get(pa
 whose `createToken` and `remote()` pipeline across `/api` (its `fork`, whose name escapes the wall,
 is withheld), `list` answering in paths, `delete`. Nothing else. The Artifacts repo NAME
 (`repos--config`, every name forced under `${projectId}.`) is derived inside `repos.ts` and spelled
-nowhere else. Artifacts has no local implementation, so locally a test lends a fake proxy to the
-repo's context whose `remote()` points at an in-memory git remote (`e2e/support/fake-git-server.ts`)
-— the real wire codec runs in both lanes; only the binding is deployed-only.
+nowhere else. The local worker binds Artifacts too (wrangler's local runtime serves it), so the
+real binding's stories run in every lane; a test that must see the wire, or inject a provisioning
+failure, lends a fake proxy to the repo's context whose `remote()` points at an in-memory git remote
+(`e2e/support/fake-git-server.ts`).
 
 ```ts
 await itx.repos.create("/repos/config"); // the repo processor's row, repo/create-requested, then repo/created on / and on its path
@@ -1457,9 +1458,9 @@ const first = await repo.writeFile("worker.ts", source); // one commit on main
 expect(first.commitOid).toMatch(/^[0-9a-f]{40}$/);
 expect(await repo.readFile("worker.ts")).toBe(source);
 await itx.cfArtifacts.delete("/repos/config"); // the proxy speaks the same path
-// e2e/repos.e2e.test.ts (deployed only)
+// e2e/repos.e2e.test.ts
 const tok = await a.cfArtifacts.get(path).createToken("read", 300); // pipelined server-side
-// e2e/cfartifacts.e2e.test.ts (deployed only)
+// e2e/cfartifacts.e2e.test.ts
 ```
 
 To load code from the repository, pass the source producer and its revision explicitly:

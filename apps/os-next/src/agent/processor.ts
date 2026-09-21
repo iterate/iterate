@@ -1,7 +1,9 @@
-// src/agent/processor.ts — THE AGENT PROCESSOR: the pure reduce of the creation facts, the
-// conversation and the loop's obligations, and the effects over that fold — THE SAGA (the birth
-// `itx.agents.create(path)` opens: the certificate on `/` and here with the default prompt beside it)
-// and THE LOOP (apps/os's turn loop, LLM request and codemode parts folded into one class, lean). The
+// src/agent/processor.ts — THE AGENT PROCESSOR: the pure reduce of the creation and deletion facts,
+// the conversation and the loop's obligations, and the effects over that fold — THE SAGAS (the birth
+// `itx.agents.create(path)` opens: the certificate on `/` and here with the default prompt beside it;
+// the death `itx.agents.delete(path)` opens: the certificate on `/` and here, after which the loop
+// runs no more turns) and THE LOOP (apps/os's turn loop, LLM request and codemode parts folded into
+// one class, lean). The
 // model call LIVES HERE (`#stream`): a `@cf/…` model through `itx.ai` (the Workers AI binding under
 // THIS context's rules, so a test lends a fake there), anything else through the account's AI
 // Gateway as a Workers AI partner model, streamed from the Responses API. The host
@@ -22,9 +24,9 @@
 import { z } from "zod";
 import {
   type ConsumedEvent,
+  type EmittedEventInput,
   type ProcessEventArgs,
   type ReduceArgs,
-  type StreamEventInput,
   StreamProcessor,
 } from "iterate/next/stream/processor";
 import type { WithItx } from "iterate/next/sdk";
@@ -118,7 +120,7 @@ class InterruptedError extends Error {
  *  the first settlement stands, the later one was never a fact. */
 async function appendUnlessLost(
   append: AgentArgs["append"],
-  ...events: StreamEventInput[]
+  ...events: AgentEmitted[]
 ): Promise<void> {
   try {
     await append(...events);
@@ -256,7 +258,9 @@ function responsesInput(messages: ChatMessage[]) {
 }
 
 type AgentEvent = ConsumedEvent<typeof AgentContract>;
-type AgentArgs = ProcessEventArgs<AgentState, AgentEvent>;
+type AgentArgs = ProcessEventArgs<AgentState, AgentEvent, AgentEmitted>;
+/** What the loop appends: each type the contract emits, its payload as the catalog spells it. */
+type AgentEmitted = EmittedEventInput<typeof AgentContract>;
 
 /** A settlement as the model reads it next — or null when the script returned nothing: the turn ends. */
 export function renderScriptSettlement(settlement: RunSettlement): string | null {
@@ -295,6 +299,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   /** This incarnation's birth attempt, so one at-head pass does not start a second; the durable
    *  ground is `state.creation`. */
   #creating = false;
+  /** The same for this incarnation's death attempt; the durable ground is `state.deletion`. */
+  #deleting = false;
 
   /** The requests THIS incarnation is running, so a later at-head pass over the same fold does
    *  not start a second attempt; the durable ground is the fold (`openRequest`). */
@@ -312,7 +318,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   reduce({ state, event }: ReduceArgs<AgentState, AgentEvent>): AgentState | undefined {
     switch (event.type) {
       case "events.iterate.com/agent/create-requested":
-        // Born once: a request after the certificate is a harmless fact; after a failure, a new attempt.
+        // Born once: a request after the certificate is a harmless fact; after a failure, a new
+        // attempt. A deleted agent is not re-creatable: `creation` stays as it was, so the request
+        // is a harmless fact there too (the collection refuses it before it lands).
         return state.creation?.status === "created"
           ? undefined
           : { ...state, creation: { status: "requested", offset: event.offset } };
@@ -324,6 +332,14 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         return state.creation?.status === "created"
           ? undefined
           : { ...state, creation: { status: "failed", offset: event.offset } };
+      case "events.iterate.com/agent/delete-requested":
+        // Dies once: a request after the death certificate is a harmless fact. Deletion never
+        // touches `creation` — the log still says the agent was born.
+        return state.deletion?.status === "deleted"
+          ? undefined
+          : { ...state, deletion: { status: "requested", offset: event.offset } };
+      case "events.iterate.com/agent/deleted":
+        return { ...state, deletion: { status: "deleted", offset: event.offset } };
 
       case "events.iterate.com/agent/configured": {
         const patch = event.payload.config;
@@ -455,6 +471,12 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
 
   processEvent(args: AgentArgs): undefined {
     const { event, state, append, blockProcessorWhile } = args;
+    // An agent asked to go acts no more: no consequence of a late event (a script result landing
+    // after the request raises no turn), no interrupt to settle — only the death itself, at head.
+    if (state.deletion) {
+      this.#atHead(args);
+      return;
+    }
     // THE INTERRUPT (apps/os's): cancellation is a property of new input, never a command. The
     // person's words abort whatever this incarnation is streaming, keep what streamed as an
     // assistant item the next turn can see (no llmRequestOffset: a record, never parsed for a
@@ -485,7 +507,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
                     role: "assistant",
                     content: `[Response interrupted by the user's next message; partial output follows]\n${partialText}`,
                   },
-                } satisfies StreamEventInput,
+                } satisfies AgentEmitted,
               ]
             : []),
           {
@@ -513,7 +535,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     ) {
       const { llmRequestOffset } = event.payload;
       const outcome = parseCodemodeResponse(event.payload.content);
-      const consequences: StreamEventInput[] = [];
+      const consequences: AgentEmitted[] = [];
       if (outcome.kind === "malformed" || outcome.kind === "multiple")
         consequences.push({
           type: "events.iterate.com/agent/context-added",
@@ -592,7 +614,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         try {
           const whoami = await this.deps.withItx((itx) => itx.whoami());
           const { path } = whoami;
-          const certificate = {
+          const certificate: AgentEmitted = {
             type: "events.iterate.com/agent/created",
             payload: { path },
             idempotencyKey: `agent/created:${path}`,
@@ -619,6 +641,31 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       return;
     }
     if (state.creation?.status !== "created") return;
+
+    // THE DEATH — the birth's mirror, only of an agent that was born, and the LOOP's gate: a deleted
+    // agent (or one asked to go) runs no more turns, whatever the fold below says. Nothing to tear
+    // down, so the saga is the death certificate alone: `/` first (the catalog drops the entry), then
+    // here — keyed, so a retry appends nothing twice. A throw appends nothing: the next at-head pass
+    // is the retry, and there is no delete-failed fact.
+    if (state.deletion) {
+      if (state.deletion.status !== "requested" || this.#deleting) return;
+      this.#deleting = true;
+      runInBackground(async () => {
+        try {
+          const { path } = await this.#identity();
+          const certificate: AgentEmitted = {
+            type: "events.iterate.com/agent/deleted",
+            payload: { path },
+            idempotencyKey: `agent/deleted:${path}`,
+          };
+          await appendTo("/", certificate); // the project catalog first
+          await append(certificate); // this path last: closes the obligation
+        } finally {
+          this.#deleting = false;
+        }
+      });
+      return;
+    }
     const now = this.#now();
 
     // A person's words resume a paused loop; the loop's own never do (they are what paused it).
@@ -665,7 +712,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       // closed and appends at once.
       const windowMs = state.config.llmRequestDebounceMs + retryBackoffMs(state);
       const windowClosesInMs = trigger.atMs + windowMs - now;
-      const intent = {
+      const intent: AgentEmitted = {
         type: "events.iterate.com/agent/llm-request-requested",
         idempotencyKey: this.idempotencyKey(`request/${String(trigger.offset)}`),
         payload: {
@@ -781,7 +828,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           AgentEvent,
           { type: "events.iterate.com/agent/llm-request-settled" }
         >["payload"]["result"],
-        ...alongside: StreamEventInput[]
+        ...alongside: AgentEmitted[]
       ) => {
         closeWindow();
         await windows; // every window before the terminal fact
@@ -854,7 +901,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
                   inputTokens: usage.inputTokens,
                   outputTokens: usage.outputTokens,
                 },
-              } satisfies StreamEventInput,
+              } satisfies AgentEmitted,
             ]
           : []),
       );
