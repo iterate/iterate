@@ -30,7 +30,9 @@ import {
   StreamProcessor,
 } from "iterate/next/stream/processor";
 import type { WithItx } from "iterate/next/sdk";
+import type { RewriteRuleListEntry } from "iterate/next/api";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
+import type { BuiltInScope } from "../context/built-ins.ts";
 import type { RunSettlement } from "../stream/core-processor.ts";
 import {
   AgentContract,
@@ -64,8 +66,9 @@ export function retryBackoffMs(
 export function buildChatMessages(
   items: AgentState["contextItems"],
   images: Map<string, { contentType: string; base64: string }>,
+  tree: RewriteRuleListEntry[] = [],
 ): ChatMessage[] {
-  return items.map((item) => {
+  const messages = items.map((item): ChatMessage => {
     const role = item.role === "developer" ? "system" : item.role;
     if (!item.files?.length) return { role, content: item.content };
     const parts: Extract<ChatMessage["content"], unknown[]> = [];
@@ -83,6 +86,51 @@ export function buildChatMessages(
     if (parts.length === 0) return { role, content: text };
     return { role, content: [{ type: "text", text }, ...parts] };
   });
+  // THE TREE this turn — the sandbox's `rewriteRules.list()`, rendered — as one system message after
+  // the journaled system items, before the conversation: what the model's scripts can spell.
+  const rendered = renderCapabilityTree(tree);
+  if (rendered) {
+    const firstNonSystem = messages.findIndex((message) => message.role !== "system");
+    messages.splice(firstNonSystem === -1 ? messages.length : firstNonSystem, 0, {
+      role: "system",
+      content: rendered,
+    });
+  }
+  return messages;
+}
+
+/** The sandbox's table as the model reads it: one line per name it can spell (`match — description`,
+ *  a row without a description shows its target), grouped by the context each row came from when
+ *  more than one; masks and the bare `itx` row are not names. Null when nothing is spellable (a jail
+ *  with no grants yet): then no tree message at all. */
+export function renderCapabilityTree(rows: RewriteRuleListEntry[]): string | null {
+  const visible = rows.filter((row) => row.target && row.match !== "itx");
+  if (visible.length === 0) return null;
+  const line = (row: RewriteRuleListEntry): string =>
+    `${row.match} — ${row.description || `⇒ ${row.target}`}`;
+  const contexts = [...new Set(visible.map((row) => row.context))];
+  const body =
+    contexts.length === 1
+      ? visible.map(line)
+      : contexts.flatMap((context) => [
+          `from ${context}:`,
+          ...visible.filter((row) => row.context === context).map(line),
+        ]);
+  return [
+    "`itx` IS THIS CONTEXT'S CAPABILITY TREE (`await itx.rewriteRules.list()`) — every name below is one you can spell inside a tag; nothing else resolves:",
+    ...body,
+  ].join("\n");
+}
+
+/** The sandbox's own fixed point, reached over the `cd` handle's dotted proxy. An InvokeHandle
+ *  answers ANY name at runtime (the sibling context does the answering); the assertion is how
+ *  TypeScript learns the two words this loop spells there — nothing here can check it, so an
+ *  assertion is the only way to say it (library.ts's facet handles, the same). */
+function sandboxBuiltins(
+  itx: ItxEntrypointScope,
+  sandbox: string,
+): Pick<BuiltInScope, "rewriteRules" | "append"> {
+  return (itx.builtins.cd(sandbox) as unknown as { builtins: BuiltInScope }).builtins;
 }
 
 /** How a non-image (or gone) attachment is named to the model. */
@@ -302,6 +350,50 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   /** The same for this incarnation's death attempt; the durable ground is `state.deletion`. */
   #deleting = false;
 
+  /** Whether this incarnation has asserted the sandbox rows (below) — done at birth and once more
+   *  before the first model call, so an agent born before the sandbox existed has them. */
+  #sandboxAsserted = false;
+
+  /** THE SANDBOX: this agent's scripts run on `<agent>/sandbox`, a child of their own — the row on
+   *  THIS context redirects every requested run there (the context's runner honours it,
+   *  iterate-context-durable-object.ts `#executeRun`), so the facet's own calls and the scripts'
+   *  never share a table. The sandbox's one row: everything a script does not claim, this agent
+   *  answers (its own chain up to the root). A jail is the owner replacing THAT row with `null` and
+   *  appending its grants beside it. The redirect is idempotent on its key; the link is the DEFAULT
+   *  the creator supplies where the owner has said nothing — written only while the sandbox has no
+   *  bare `itx` row, so an owner's row, a jail's `null` included, is never overwritten. */
+  async #assertSandbox(path: string): Promise<void> {
+    // The rows are the PLATFORM's table rows, not this entity's events (the contract declares none
+    // of them), so they go through the context's own fixed point, not the engine's typed `append`.
+    const sandbox = `${path}/sandbox`;
+    await this.deps.withItx((itx) =>
+      itx.builtins.append({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        idempotencyKey: `itx.run@${sandbox}`,
+        payload: {
+          match: "itx.run",
+          // Physical past the hop too: the sandbox's own `run` may be walled (a jail's bare null),
+          // and the runner is the kernel's act — the ROWS govern what the script says, not this.
+          target: ["itx", "builtins", ["cd", sandbox], "builtins", "run"],
+          description: "this agent's scripts run in its sandbox, `<agent>/sandbox`",
+        },
+      }),
+    );
+    await this.deps.withItx(async (itx) => {
+      const there = sandboxBuiltins(itx, sandbox);
+      if (await there.rewriteRules.get("itx")) return;
+      await there.append({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        idempotencyKey: `itx@${path}`,
+        payload: {
+          match: "itx",
+          target: ["itx", "builtins", ["cd", path]],
+          description: "everything this sandbox does not claim, the agent answers",
+        },
+      });
+    });
+  }
+
   /** The requests THIS incarnation is running, so a later at-head pass over the same fold does
    *  not start a second attempt; the durable ground is the fold (`openRequest`). */
   readonly #llmRequestsInFlight = new Map<
@@ -350,8 +442,6 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             maxAutonomousTurns: patch.maxAutonomousTurns ?? state.config.maxAutonomousTurns,
             llmRequestExpiryMs: patch.llmRequestExpiryMs ?? state.config.llmRequestExpiryMs,
             llmRequestDebounceMs: patch.llmRequestDebounceMs ?? state.config.llmRequestDebounceMs,
-            // oxlint-disable-next-line iterate/simple-truthiness-check -- an explicit "" is a PRESENT value that disables the plain-response handler (an agent that only acts), distinct from an absent patch that keeps the current expression
-            plainResponse: patch.plainResponse ?? state.config.plainResponse,
             llmRequestRetryPolicy: {
               maxAttempts:
                 patch.llmRequestRetryPolicy?.maxAttempts ??
@@ -555,24 +645,14 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           payload: { code: outcome.code },
         });
       }
-      // A tag's accompanying prose is the message, sent directly. A response with NO tag is a plain
-      // reply: it becomes a `<codemode>` script that invokes the agent's configured `plainResponse`
-      // expression with the text (`itx.chat.sendMessage` by default) — so the agent's whole output
-      // is code, one turn is one activity, and where a reply GOES is per-agent (web, Slack, ...).
-      if (outcome.kind === "script" && outcome.prose)
+      // The prose — beside a tag or on its own — is the message, appended directly on this context.
+      // Where a reply GOES from here is a subscriber's business (events are the interface), never a
+      // script the model's sandbox would need a row for.
+      if ((outcome.kind === "script" || outcome.kind === "none") && outcome.prose)
         consequences.push({
           type: "events.iterate.com/agent/web-message-sent",
           idempotencyKey: this.idempotencyKey("codemode-prose", event),
           payload: { message: outcome.prose, llmRequestOffset },
-        });
-      if (outcome.kind === "none" && outcome.prose && state.config.plainResponse)
-        consequences.push({
-          type: "events.iterate.com/context/run-requested",
-          idempotencyKey: this.idempotencyKey("plain-response", event),
-          payload: {
-            // The configured expression is trusted config, not model output: baked in as the callable.
-            code: `async (itx) => { await ${state.config.plainResponse}(${JSON.stringify(outcome.prose)}); }`,
-          },
         });
       if (consequences.length > 0) blockProcessorWhile(() => append(...consequences));
     }
@@ -614,6 +694,11 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         try {
           const whoami = await this.deps.withItx((itx) => itx.whoami());
           const { path } = whoami;
+          // THE SANDBOX ROWS FIRST: `create()` answers when the certificate lands, and an owner's
+          // jail on the sandbox may follow at once — the link must already be there for the jail to
+          // replace, never land after it (the check-then-append in `#assertSandbox` reads "no row
+          // yet" only until the owner's null has landed; before the certificate, nothing races it).
+          await this.#assertSandbox(path);
           const certificate: AgentEmitted = {
             type: "events.iterate.com/agent/created",
             payload: { path },
@@ -776,6 +861,16 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       STREAM_IDLE_BUDGET_MS,
     );
     try {
+      const { path } = await this.#identity();
+      if (!this.#sandboxAsserted) {
+        // Once per incarnation, before the first model call: an agent born before the sandbox
+        // existed gets its rows here, so the tree below is the table its scripts will run against.
+        await this.#assertSandbox(path);
+        this.#sandboxAsserted = true;
+      }
+      const tree = await this.deps.withItx((itx) =>
+        sandboxBuiltins(itx, `${path}/sandbox`).rewriteRules.list(),
+      );
       const items = state.contextItems.filter((item) => item.offset < open.requestedAtOffset);
       // The images the model will see: read now, the freshest bytes at the request; one that is
       // gone (deleted meanwhile) is named instead of shown.
@@ -792,7 +887,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             // named by its hint line instead
           }
         }
-      const messages = buildChatMessages(items, images);
+      const messages = buildChatMessages(items, images, tree);
       // THE CHUNK WINDOWS (apps/os's coalescing): provider events pile into one buffer; a window
       // closes CHUNK_WINDOW_MS after its first event (or at the size cap) and lands as one
       // ephemeral append, windows in order — each waits for the one before. Nothing is stored:

@@ -21,6 +21,22 @@ function urlVars(env: OsNextEnv): Record<string, string> {
   return vars;
 }
 
+/** A hostname's registrable domain — its zone, for the two-label domains this deployment uses. */
+export const registrableDomainOf = (hostname: string): string =>
+  hostname.split(".").slice(-2).join(".");
+
+/** The zones a deployment owns: those of its own hostnames and its SaaS project-host zones. A custom
+ *  hostname under one of these routes on that zone (and gets a DNS record); any other is a Cloudflare
+ *  for SaaS custom hostname (ensure-resources creates it on the first SaaS zone). */
+export function ownZonesOf(env: OsNextEnv): Set<string> {
+  return new Set([
+    registrableDomainOf(new URL(env.baseUrl).hostname),
+    registrableDomainOf(new URL(env.mcpBaseUrl).hostname),
+    ...(env.ingressRouting?.type === "subdomains" ? [env.ingressRouting.hostname] : []),
+    ...(env.cloudflareForSaasProjectHostnameBases || []),
+  ]);
+}
+
 function template() {
   return JSON5.parse(readFileSync(new URL("../wrangler.base.jsonc", import.meta.url), "utf8"));
 }
@@ -80,10 +96,18 @@ export function writeWranglerConfig() {
                   },
                 ]
               : []),
-            // A custom hostname is a project's apex: its zone is the hostname's registrable domain.
-            ...Object.keys(env.temporaryCustomHostnames || {}).map((hostname) => ({
-              pattern: `${hostname}/*`,
-              zone_name: hostname.split(".").slice(-2).join("."),
+            // A custom hostname is a project's apex. One whose zone is this account's (iterate2.com)
+            // gets its own route on that zone; one whose zone lives in ANOTHER account is a Cloudflare
+            // for SaaS custom hostname on a SaaS zone, reached through that zone's one `*\/*` route.
+            ...Object.keys(env.temporaryCustomHostnames || {})
+              .filter((hostname) => ownZonesOf(env).has(registrableDomainOf(hostname)))
+              .map((hostname) => ({
+                pattern: `${hostname}/*`,
+                zone_name: registrableDomainOf(hostname),
+              })),
+            ...(env.cloudflareForSaasProjectHostnameBases || []).map((zone) => ({
+              pattern: "*/*",
+              zone_name: zone,
             })),
           ].filter((route) => !route.pattern.includes(".workers.dev/")),
           ...bindings,

@@ -34,10 +34,15 @@ const sqlAsText: Plugin = {
 
 /** Teardown/async-transport noise only: disposing a capnweb session whose peer still delivers (a
  *  deliberate move in the reconnect/unsubscribe tests, and pager sockets still parked at teardown)
- *  surfaces the peer close as an unhandled rejection. Everything else stays fatal. */
+ *  surfaces the peer close as an unhandled rejection; and the workers pool closing its module
+ *  resolver while a saga a test started (a project's birth seeding its config repo) still runs in
+ *  the background after the test ended — `EnvironmentTeardownError`, the harness's, never the
+ *  worker's. Everything else stays fatal. */
 const onUnhandledError = (error: unknown): boolean | void => {
   const message = (error as { message?: string }).message ?? "";
   if (/RPC session|WebSocket|RPC_STUB_OFFLINE|disposed/i.test(message)) return false;
+  if ((error as { name?: string }).name === "EnvironmentTeardownError") return false;
+  if (/EnvironmentTeardownError|Closing rpc while/.test(message)) return false;
 };
 
 /** THE LONG POLES FIRST. vitest orders files by their cached durations, and CI has no cache — so the
@@ -72,6 +77,8 @@ export default defineConfig({
     // it orders every project's files, and only the e2e files are named in LONG_POLES.
     sequence: { sequencer: LongPolesFirst },
     globalSetup: ["./vitest.global-setup.ts"],
+    // Read at the ROOT: a project's own `onUnhandledError` is not consulted (vitest 4).
+    onUnhandledError,
     projects: [
       {
         plugins: [sqlAsText],

@@ -46,10 +46,10 @@ class FakeAi extends RpcTarget {
 test("MISHA'S TEST on the real root: provide('itx.ai', fake) shadows the binding; resolve ends at the stub; dispose restores the platform row", async () => {
   const ctx = freshCtx("ai-shadow");
   const itx = openItx(ctx);
-  expect(await itx.rewriteRules.get("itx.ai")).toEqual({
+  expect(await itx.rewriteRules.get("itx.ai")).toMatchObject({
     match: "itx.ai",
     target: "itx.builtins.ai",
-    origin: "platform",
+    context: "/",
   });
   const fake = new FakeAi();
   const handle = await itx.provide("itx.ai", fake);
@@ -68,12 +68,12 @@ test("MISHA'S TEST on the real root: provide('itx.ai', fake) shadows the binding
   // (asserted through the TABLE: the real binding is never called locally)
   await until("the platform row is back", async () => {
     const row = await itx.rewriteRules.get("itx.ai");
-    return row?.origin === "platform" ? row : undefined;
+    return row?.target === "itx.builtins.ai" ? row : undefined;
   });
-  expect(await itx.rewriteRules.get("itx.ai")).toEqual({
+  expect(await itx.rewriteRules.get("itx.ai")).toMatchObject({
     match: "itx.ai",
     target: "itx.builtins.ai",
-    origin: "platform",
+    context: "/",
   });
 });
 
@@ -86,7 +86,7 @@ test("THE DREAM: `itx.fable ⇒ itx.ai.run('@cf/…', @)` pins the model; the ca
   expect(await itx.rewriteRules.get("itx.fable")).toEqual({
     match: "itx.fable",
     target: `itx.ai.run('${MODEL}',@)`,
-    origin: "context",
+    context: "/",
   });
   expect(await itx.fable({ prompt: "hi" })).toEqual({
     response: `deterministic:${MODEL}`,

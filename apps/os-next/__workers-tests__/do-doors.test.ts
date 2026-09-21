@@ -35,7 +35,6 @@ import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "capnweb";
 import { beforeAll, expect, test } from "vitest";
 import { parse, print, type ItxExpression } from "iterate/next/expression";
-import { restoreRuleTarget } from "../src/context/itx-expression-rewriting.ts";
 import { adminCredentials, applyDirectorySchema, openSession, stub, until } from "./support.ts";
 
 beforeAll(applyDirectorySchema);
@@ -267,12 +266,12 @@ test("a handle's undo is a COMPARE-AND-SET decided in the reduce: a stale remova
   });
   await s.append({
     type: "events.iterate.com/itx/rewrite-rule-configured",
-    payload: { match: "itx.x", target: restoreRuleTarget("itx.x"), ifTarget: parse("itx.tab1") },
+    payload: { match: "itx.x", target: null, ifTarget: parse("itx.tab1") },
   });
   expect(print((await rewriteRulesOf(ctx))["itx.x"].target)).toBe("itx.tab2");
   await s.append({
     type: "events.iterate.com/itx/rewrite-rule-configured",
-    payload: { match: "itx.x", target: restoreRuleTarget("itx.x"), ifTarget: parse("itx.tab2") },
+    payload: { match: "itx.x", target: null, ifTarget: parse("itx.tab2") },
   }); // B's own undo
   expect((await rewriteRulesOf(ctx))["itx.x"]).toBeUndefined();
   // SUBSCRIPTIONS: the row's identity is its configure offset.
