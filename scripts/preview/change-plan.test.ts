@@ -61,6 +61,133 @@ test("Docs is an explicit allowlist; shipped markdown remains product work", () 
   });
 });
 
+test("os-next owns every path inside it, whatever else that path looks like", () => {
+  expect(
+    classifyChanges([
+      "apps/os-next/scripts/x.ts",
+      "apps/os-next/foo.tsx",
+      "apps/os-next/e2e/x.e2e.test.ts",
+      "apps/os-next/src/components/thing.tsx",
+      "apps/os-next/README.md",
+      "apps/os-next/src/routes.generated.ts",
+      ".depot/workflows/preview-os-next.yml",
+      "apps/os/index.ts",
+      ".depot/workflows/preview.yml",
+      "envs.ts",
+      "packages/shared/src/index.ts",
+      "scripts/lib/thing.ts",
+    ]),
+  ).toEqual({
+    OsNext: [
+      "apps/os-next/scripts/x.ts",
+      "apps/os-next/foo.tsx",
+      "apps/os-next/e2e/x.e2e.test.ts",
+      "apps/os-next/src/components/thing.tsx",
+      "apps/os-next/README.md",
+      "apps/os-next/src/routes.generated.ts",
+      ".depot/workflows/preview-os-next.yml",
+    ],
+    Product: ["apps/os/index.ts"],
+    CI: [".depot/workflows/preview.yml"],
+    // apps/os depends on these, so they keep deploying and testing the fleet.
+    Default: ["envs.ts", "packages/shared/src/index.ts"],
+    Scripts: ["scripts/lib/thing.ts"],
+  });
+});
+
+test.each([
+  ["apps/os-next/src/runtime.ts"],
+  ["apps/os-next/e2e/boot.e2e.test.ts"],
+  [".depot/workflows/preview-os-next.yml"],
+])("an os-next-only head at %s skips the apps/os preview entirely", async (path) => {
+  using repo = repository();
+  repo.commit({ "apps/os/index.ts": "main" });
+  repo.git("switch", "-c", "feature");
+  repo.commit({ "apps/os-next/src/boot.ts": "os-next work" });
+  repo.commit({ [path]: "more os-next work" });
+  const plan = await planPreview(repo.history(), {
+    findPreviewResult: async () => {
+      throw new Error("A skipped preview consults no ancestor result");
+    },
+    findPreviewDeployment: async () => {
+      throw new Error("A skipped preview consults no deployment");
+    },
+  });
+  expect(plan).toMatchObject({ action: "skip", changes: { OsNext: [path] } });
+});
+
+test("an os-next branch skips even when the merge-base has no result of its own", async () => {
+  using repo = repository();
+  repo.commit({ "apps/os/index.ts": "untested main product" });
+  repo.git("switch", "-c", "feature");
+  repo.commit({ "apps/os-next/src/boot.ts": "os-next work" });
+  expect(
+    await planPreview(repo.history(), {
+      findPreviewResult: async () => null,
+      findPreviewDeployment: async () => null,
+    }),
+  ).toMatchObject({ action: "skip" });
+});
+
+test.each([["apps/os/index.ts"], ["packages/shared/src/index.ts"]])(
+  "os-next mixed with %s still deploys the fleet",
+  async (path) => {
+    using repo = repository();
+    repo.commit({ "apps/os/index.ts": "main" });
+    repo.git("switch", "-c", "feature");
+    repo.commit({ "apps/os-next/src/boot.ts": "os-next work" });
+    const head = repo.commit({
+      [path]: "shared change",
+      "apps/os-next/src/more.ts": "and os-next",
+    });
+    expect(
+      await planPreview(repo.history(), {
+        findPreviewResult: async () => null,
+        findPreviewDeployment: async () => null,
+      }),
+    ).toMatchObject({ action: "deploy", reason: expect.stringContaining(head) });
+  },
+);
+
+test("an os-next branch carrying an untested apps/os commit deploys, revert or not", async () => {
+  using repo = repository();
+  repo.commit({ "apps/os/index.ts": "main" });
+  repo.git("switch", "-c", "feature");
+  repo.commit({ "apps/os/index.ts": "untested product change" });
+  repo.commit({ "apps/os-next/src/boot.ts": "os-next work" });
+  const evidence = {
+    findPreviewResult: async () => null,
+    findPreviewDeployment: async () => null,
+  };
+  expect(await planPreview(repo.history(), evidence)).toMatchObject({ action: "deploy" });
+  // Reverting apps/os leaves main's tree in place, so the branch is os-next again.
+  repo.commit({ "apps/os/index.ts": "main" });
+  expect(await planPreview(repo.history(), evidence)).toMatchObject({ action: "skip" });
+});
+
+test("docs alongside os-next keep their existing inherit-or-deploy treatment", async () => {
+  using repo = repository();
+  const main = repo.commit({ "apps/os/index.ts": "main product" });
+  repo.git("switch", "-c", "feature");
+  repo.commit({ "apps/os-next/src/boot.ts": "os-next work" });
+  repo.commit({ "docs/os-next.md": "docs" });
+  expect(
+    await planPreview(repo.history(), {
+      findPreviewResult: async (commit) =>
+        commit === main
+          ? { commit, conclusion: "success" as const, url: "https://depot.dev/main-preview" }
+          : null,
+      findPreviewDeployment: async () => null,
+    }),
+  ).toMatchObject({ action: "inherit", result: { commit: main } });
+  expect(
+    await planPreview(repo.history(), {
+      findPreviewResult: async () => null,
+      findPreviewDeployment: async () => null,
+    }),
+  ).toMatchObject({ action: "deploy", reason: expect.stringContaining(main) });
+});
+
 test.each(["success", "failure"] as const)(
   "docs inherit %s across more docs through the merge-base",
   async (conclusion) => {
