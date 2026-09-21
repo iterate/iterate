@@ -23,6 +23,7 @@ import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { AgentUiLlmStep } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { ContextView } from "@iterate-com/ui/components/context-view/context-view";
+import { ContextViewState } from "@iterate-com/ui/components/context-view/context-view-search";
 import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
 import { InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
 import { LiveStateValue } from "../../components/live-state-value.tsx";
@@ -56,12 +57,14 @@ const AgentList = z.array(z.object({ path: z.string(), createdAt: z.string() }))
 const FEED_SUBSCRIPTION = ["*", "events.iterate.com/agent/llm-response-chunks"];
 
 export const Route = createFileRoute("/_auth/projects/$slug")({
-  validateSearch: z.object({
-    agent: z.string().optional(),
-    view: z.enum(["chat", "events"]).optional(),
-    llmRequest: z.number().int().positive().optional(),
-    scriptExecution: z.string().optional(),
-    event: z.number().int().positive().optional(),
+  // THE PAGE IS A LINK: the agent, the tab, the two trace inspectors — and the context view's every
+  // choice (mode, filter, the inspected event, the open sheet) on the Events tab. A hand-edited value
+  // is an absent key, never an error page.
+  validateSearch: ContextViewState.extend({
+    agent: z.string().optional().catch(undefined),
+    view: z.enum(["chat", "events"]).optional().catch(undefined),
+    llmRequest: z.number().int().positive().optional().catch(undefined),
+    scriptExecution: z.string().optional().catch(undefined),
   }),
   loaderDeps: ({ search }) => ({ agent: search.agent }),
   loader: async ({ context, params, deps }) => {
@@ -295,9 +298,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
     ? { kind: "llmRequest", llmRequestOffset: search.llmRequest }
     : search.scriptExecution
       ? { kind: "scriptExecution", executionId: search.scriptExecution }
-      : search.event
-        ? { kind: "event", offset: search.event }
-        : null;
+      : null;
   const onInspect = useCallback(
     (next: Inspected) =>
       void navigate({
@@ -307,7 +308,6 @@ function AgentConversation({ project, path }: { project: string; path: string })
           ...prev,
           llmRequest: next?.kind === "llmRequest" ? next.llmRequestOffset : undefined,
           scriptExecution: next?.kind === "scriptExecution" ? next.executionId : undefined,
-          event: next?.kind === "event" ? next.offset : undefined,
         }),
         replace: true,
       }),
@@ -428,6 +428,15 @@ function AgentConversation({ project, path }: { project: string; path: string })
             presence={iterateContext.presence}
             renderCoreState={() => <LiveStateValue state={iterateContext.liveState.core} />}
             renderLiveState={(name) => <LiveStateValue state={iterateContext.liveState[name]} />}
+            state={search}
+            onStateChange={(patch) =>
+              void navigate({
+                to: "/projects/$slug",
+                params: { slug },
+                search: (previous) => ({ ...previous, ...patch }),
+                replace: true,
+              })
+            }
             emptyText="Nothing has happened on this agent yet."
           />
         </div>

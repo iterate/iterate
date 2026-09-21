@@ -4,7 +4,7 @@
 // URL-backed by the route's search params, so any trace is a shareable link. The Events view is
 // the raw log: one row per event, click to inspect.
 import { useState } from "react";
-import { CheckIcon, ChevronLeftIcon, ChevronRightIcon, CopyIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon, CopyIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { MessageResponse } from "@iterate-com/ui/components/ai-elements/message";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
@@ -32,7 +32,6 @@ import {
   isRecord,
   llmTrace,
   scriptTrace,
-  shortEventType,
   type LlmTrace,
 } from "../lib/agent-events.ts";
 import { StreamingCursor, StreamingText } from "./streaming-text.tsx";
@@ -41,7 +40,6 @@ import { StreamingCursor, StreamingText } from "./streaming-text.tsx";
 export type Inspected =
   | { kind: "llmRequest"; llmRequestOffset: number }
   | { kind: "scriptExecution"; executionId: string }
-  | { kind: "event"; offset: number }
   | null;
 
 export function InspectorSheet({
@@ -82,8 +80,6 @@ export function InspectorSheet({
           />
         ) : inspected?.kind === "scriptExecution" ? (
           <ScriptTraceContent events={events} executionId={inspected.executionId} />
-        ) : inspected?.kind === "event" ? (
-          <RawEventContent events={events} offset={inspected.offset} onInspect={onInspect} />
         ) : null}
       </SheetContent>
     </Sheet>
@@ -480,72 +476,6 @@ function ScriptTraceContent({
           )}
         </TabsContent>
       </Tabs>
-    </>
-  );
-}
-
-// ── one raw event, with Prev/Next through the log ──
-
-function RawEventContent({
-  events,
-  offset,
-  onInspect,
-}: {
-  events: readonly Event[];
-  offset: number;
-  onInspect: (next: Inspected) => void;
-}) {
-  const index = events.findIndex((event) => event.offset === offset);
-  const event = events[index];
-  const previous = index > 0 ? events[index - 1] : undefined;
-  const next = index >= 0 ? events[index + 1] : undefined;
-  if (!event)
-    return (
-      <SheetHeader>
-        <SheetTitle>Event #{offset}</SheetTitle>
-        <SheetDescription>No event at that offset on this path.</SheetDescription>
-      </SheetHeader>
-    );
-  // Signal first: type and payload, then the rest of the envelope as the wire carried it.
-  const { streamPath: _path, type, payload, offset: at, createdAt, ...rest } = event;
-  const ordered = { type, payload, ...rest, offset: at, createdAt };
-  return (
-    <>
-      <SheetHeader className="shrink-0 pr-12">
-        <SheetTitle className="truncate font-mono text-base">
-          #{event.offset} {shortEventType(event.type)}
-        </SheetTitle>
-        <SheetDescription>
-          {formatDateTime(Date.parse(event.createdAt))}
-          {previous
-            ? ` · +${formatSeconds(Date.parse(event.createdAt) - Date.parse(previous.createdAt))} after #${String(previous.offset)}`
-            : ""}
-        </SheetDescription>
-      </SheetHeader>
-      <div className="flex shrink-0 items-center gap-2 px-4 pb-3">
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!previous}
-          onClick={() => previous && onInspect({ kind: "event", offset: previous.offset })}
-        >
-          <ChevronLeftIcon data-icon="inline-start" /> Prev
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!next}
-          onClick={() => next && onInspect({ kind: "event", offset: next.offset })}
-        >
-          Next <ChevronRightIcon data-icon="inline-end" />
-        </Button>
-        <span className="ml-auto font-mono text-[10px] text-muted-foreground/70">
-          {index + 1} of {events.length}
-        </span>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto border-t p-4">
-        <SerializedObjectCodeBlock data={ordered} initialFormat="yaml" showToggle showCopyButton />
-      </div>
     </>
   );
 }
