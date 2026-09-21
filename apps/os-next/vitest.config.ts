@@ -41,10 +41,11 @@ const onUnhandledError = (error: unknown): boolean | void => {
 };
 
 /** THE LONG POLES FIRST. vitest orders files by their cached durations, and CI has no cache — so the
- *  80 s row that waits a real deadline can start after ninety seconds of short files and the run
- *  ends at 170 s instead of its 90 s floor. These files start in slot one, longest first; everything
- *  else follows vitest's own order. A file that stops being long just drops off this list. */
+ *  80 s row that waits a real deadline started after ninety seconds of short files and the run ended
+ *  at 170 s instead of its 90 s floor (measured 2026-09-21). These files start in slot one, longest
+ *  first; everything else follows vitest's own order. A file that stops being long drops off this list. */
 const LONG_POLES = [
+  "e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts",
   "e2e/isolate-ceilings-slow-client.e2e.test.ts",
   "e2e/scheduled-appends-dormant.e2e.test.ts",
   "e2e/isolate-ceilings-deployed.e2e.test.ts",
@@ -67,6 +68,9 @@ class LongPolesFirst extends BaseSequencer {
 
 export default defineConfig({
   test: {
+    // The sequencer is a ROOT option — vitest reads `ctx.config.sequence.sequencer`, never a project's;
+    // it orders every project's files, and only the e2e files are named in LONG_POLES.
+    sequence: { sequencer: LongPolesFirst },
     globalSetup: ["./vitest.global-setup.ts"],
     projects: [
       {
@@ -120,7 +124,7 @@ export default defineConfig({
           // them per test, support/setup.ts disposes that test's alone) against its own project, so the
           // only thing two rows share is the worker under test. A file that reads worker-global state —
           // its own worker's logs, one seeded context it also resets — marks itself `describe.sequential`.
-          sequence: { concurrent: true, sequencer: LongPolesFirst },
+          sequence: { concurrent: true },
           onUnhandledError,
         },
       },
