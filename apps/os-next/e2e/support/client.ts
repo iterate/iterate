@@ -4,6 +4,7 @@
 // the handful of idioms every file used to copy (poll-until, must-reject, the delivery collector).
 // A project host — the one HTTP way into a project — is support/project-host.ts.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import { newWebSocketRpcSession } from "capnweb";
 import { WebSocket as UndiciWebSocket } from "undici";
@@ -76,15 +77,30 @@ const wsApi = (): string => {
   return u.toString();
 };
 
-const openSessions: any[] = [];
-const openSockets: WebSocket[] = [];
+/** What one owner — a test, or the file around it — has open on the wire. */
+type OpenTransports = { sessions: any[]; sockets: WebSocket[] };
+
+/** THE SESSIONS TO DISPOSE belong to the RUNNING TEST, not to the module: the tests in one file run
+ *  CONCURRENTLY (vitest.config.ts `sequence.concurrent`), so a module-level list would have the first
+ *  test to finish close its siblings' live sessions. support/setup.ts opens a fresh store per test
+ *  (`enterTestTransports` in `beforeEach` — vitest's runner carries the store into the test body and
+ *  into that test's own `afterEach`) and disposes THAT store alone. */
+const testTransports = new AsyncLocalStorage<OpenTransports>();
+/** The fallback owner: whatever opens a session with no test running — a file's `beforeAll`, the
+ *  bench lane — disposed once per file (`disposeFileSessions`, support/setup.ts `afterAll`). */
+const fileTransports: OpenTransports = { sessions: [], sockets: [] };
+const openTransports = (): OpenTransports => testTransports.getStore() ?? fileTransports;
+
+/** Own the sessions the current test opens — support/setup.ts calls this in `beforeEach`. */
+export const enterTestTransports = (): void =>
+  testTransports.enterWith({ sessions: [], sockets: [] });
 
 /** A raw capnweb session — an `IterateRpcTarget` stub: `authenticate(adminCredentials())
  *  .projects.get(ctx)` is the itx. For flows that need the session itself (its identity, its
  *  `[Symbol.dispose]`). */
 export function session(): any {
   const s = newWebSocketRpcSession(wsApi());
-  openSessions.push(s);
+  openTransports().sessions.push(s);
   return s;
 }
 
@@ -94,8 +110,9 @@ export function publicSession(token: string) {
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const ws = new UndiciWebSocket(url, { headers: { Authorization: `Bearer ${token}` } });
   const transport = newWebSocketRpcSession<IterateRpcTarget>(ws as unknown as WebSocket);
-  openSessions.push(transport);
-  openSockets.push(ws as unknown as WebSocket);
+  const open = openTransports();
+  open.sessions.push(transport);
+  open.sockets.push(ws as unknown as WebSocket);
   return transport.authenticate({ type: "from-server-cookie" });
 }
 
@@ -104,10 +121,11 @@ export function publicSession(token: string) {
  *  attaches, so a wrapped `send` / an early "message" listener sees every frame in wire order. */
 export function rawSession(prepare?: (ws: WebSocket) => void): { session: any; ws: WebSocket } {
   const ws = new WebSocket(wsApi());
-  openSockets.push(ws);
+  const open = openTransports();
+  open.sockets.push(ws);
   prepare?.(ws);
   const s = newWebSocketRpcSession(ws as any) as any;
-  openSessions.push(s);
+  open.sessions.push(s);
   return { session: s, ws };
 }
 
@@ -118,17 +136,15 @@ export function openItx(ctx: string): any {
   return session().authenticate(adminCredentials()).projects.get(ctx);
 }
 
-/** Dispose every session (and close every raw socket) opened since the last call — wired to
- *  afterEach in support/setup.ts. */
-export function disposeSessions(): void {
-  for (const s of openSessions.splice(0)) {
+function dispose(open: OpenTransports): void {
+  for (const s of open.sessions.splice(0)) {
     try {
       (s as Partial<Disposable>)[Symbol.dispose]?.();
     } catch {
       /* already broken */
     }
   }
-  for (const ws of openSockets.splice(0)) {
+  for (const ws of open.sockets.splice(0)) {
     try {
       ws.close();
     } catch {
@@ -136,6 +152,14 @@ export function disposeSessions(): void {
     }
   }
 }
+
+/** Dispose every session (and close every raw socket) THIS TEST opened — wired to afterEach in
+ *  support/setup.ts; a sibling test running at the same time keeps its own. */
+export const disposeSessions = (): void => dispose(openTransports());
+
+/** Dispose what the FILE opened outside any test (a `beforeAll`, the bench lane) — afterEach never
+ *  reaches those; support/setup.ts wires this to afterAll. */
+export const disposeFileSessions = (): void => dispose(fileTransports);
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 

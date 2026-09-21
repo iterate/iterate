@@ -8,9 +8,10 @@
 //   • e2e     — ONE real worker booted once by e2e/support/global-setup.ts (local workerd by default;
 //               the DEPLOYED worker with `WORKER_BASE_URL=https://os.iterate2.com`,
 //               the proof that counts), every file a capnweb client at /api exactly like a production
-//               client, ALL files in parallel — every test mints its own project, and what a test measures
-//               it measures on its own contexts; tests within a file sequential (the per-test
-//               session-dispose in support/setup.ts must not race a sibling)
+//               client, ALL files in parallel AND all tests within a file concurrent — every test mints
+//               its own project, and what a test measures it measures on its own contexts; the run's
+//               floor is its slowest TEST. A file whose rows genuinely need an order says so itself
+//               (`describe.sequential`)
 //   • bench   — vitest's benchmark runner (tinybench) over the same client + worker (`pnpm bench`),
 //               files one at a time so scenarios never share the wire; `BENCH_OUT=<file.json>` writes
 //               the raw samples
@@ -89,7 +90,11 @@ export default defineConfig({
           // remote worker, not CPU, so the runner's cpus-1 default is the wrong shape on a CI box.
           maxWorkers: process.env.CI ? 8 : undefined,
           fileParallelism: true,
-          sequence: { concurrent: false },
+          // TESTS IN ONE FILE CONCURRENT TOO: each one opens its own sessions (support/client.ts keeps
+          // them per test, support/setup.ts disposes that test's alone) against its own project, so the
+          // only thing two rows share is the worker under test. A file that reads worker-global state —
+          // its own worker's logs, one seeded context it also resets — marks itself `describe.sequential`.
+          sequence: { concurrent: true },
           onUnhandledError,
         },
       },

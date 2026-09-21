@@ -3,8 +3,8 @@
 // each test's capnweb sessions afterwards (sessions left open at teardown turn into
 // unhandled-rejection noise — the cloudflare-os lesson).
 
-import { afterEach, inject } from "vitest";
-import { disposeSessions } from "./client.ts";
+import { afterAll, afterEach, beforeEach, inject } from "vitest";
+import { disposeFileSessions, disposeSessions, enterTestTransports } from "./client.ts";
 
 process.env.WORKER_BASE_URL = inject("workerBaseUrl");
 process.env.ADMIN_API_SECRET = inject("adminApiSecret");
@@ -15,4 +15,10 @@ process.env.OPENAI_API_KEY = inject("openaiApiKey");
 // The run's id, the same in every worker process: client.ts folds it into every identifier a test mints.
 process.env.E2E_RUN_ID = inject("runId");
 
+// The tests in a file run CONCURRENTLY (vitest.config.ts `sequence.concurrent`), so each one owns the
+// sessions it opens: this hook enters that test's store (client.ts), and the afterEach below disposes
+// that store alone — never a sibling still on the wire.
+beforeEach(() => enterTestTransports());
 afterEach(() => disposeSessions());
+// What a file opened outside a test — a `beforeAll`, the bench lane — belongs to the file.
+afterAll(() => disposeFileSessions());
