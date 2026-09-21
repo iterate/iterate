@@ -8,9 +8,8 @@ export async function planPreview(
   evidence: PreviewEvidence,
 ): Promise<PreviewDecision> {
   const changes = classifyChanges(history.changedFiles(history.head));
-  const commits = history.throughMergeBase();
 
-  for (const commit of commits) {
+  for (const commit of history.throughMergeBase()) {
     const result = commit === history.head ? null : await evidence.findPreviewResult(commit);
     if (result) {
       // hooray, we landed on a commit with a result we can just inherit, no need to deploy or test.
@@ -18,7 +17,9 @@ export async function planPreview(
       return { action: "inherit", changes, result, reason };
     }
 
-    const actionsNeeded = getActionsNeeded(classifyChanges(history.changedFiles(commit)));
+    const actionsNeeded = getActionsNeeded(
+      commit === history.head ? changes : classifyChanges(history.changedFiles(commit)),
+    );
 
     if (actionsNeeded.deploy) {
       return { action: "deploy", changes, reason: `${commit} changed product behavior.` };
@@ -27,7 +28,7 @@ export async function planPreview(
     if (actionsNeeded.test) {
       // Tests must run. Search from head: a newer commit may have a usable
       // deployment, even though we have already passed it while looking for results.
-      for (const candidate of commits) {
+      for (const candidate of history.throughMergeBase()) {
         const deployment = await evidence.findPreviewDeployment(candidate);
         // We found a usable deployment before hitting a change that requires a newer one.
         if (deployment)
@@ -47,10 +48,18 @@ export async function planPreview(
       }
 
       // The tests still need to run; never resume inheriting older results.
-      return { action: "deploy", changes, reason: "No usable deployment through the merge-base." };
+      return {
+        action: "deploy",
+        changes,
+        reason: history.stopReason || "No usable deployment through the merge-base.",
+      };
     }
   }
-  return { action: "deploy", changes, reason: "No usable result up to merge-base." };
+  return {
+    action: "deploy",
+    changes,
+    reason: history.stopReason || "No usable result up to merge-base.",
+  };
 }
 
 type PreviewEvidence = {

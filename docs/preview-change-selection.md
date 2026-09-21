@@ -28,6 +28,23 @@ the feature branch. If main is its second parent, inspect that merge and newer
 first-parent commits, then stop; substituting main would omit feature code.
 Multiple merge-bases fall back to deployment. Git/API errors remain errors.
 
+Plan uses an ordinary depth-one checkout to get its scripts. The history reader
+reads the actual commit's parent header (Git's revision walker hides parents at
+shallow boundaries), then fetches three additional generations only if that
+parent is missing. Fetches use `--filter=blob:none` and no tags; filename diffs
+disable rename detection, so historical file contents are not downloaded.
+A product head can decide deployment immediately, without fetching main. A
+test head can also reuse its own verified deployment without inspecting main.
+
+Only a search for older evidence fetches main, once, at depth four. The reader
+then deepens head and that pinned main SHA as needed to prove the merge-base:
+3, 9, 27, then up to three batches of 81 generations. Finding a merge-base is
+not enough if another shallow path could hide a newer or second one; every
+path above the candidate bases must be complete. Budget exhaustion deploys
+head with an explicit reason. Each fetch is logged and has a 15-second timeout;
+transport and authentication failures fail planning. No checkout, index, or
+working-tree files change during these metadata fetches.
+
 For docs, look for a conclusive result **before** classifying each ancestor.
 Stop at an untested behavior change instead of walking past it to an older
 green. A product change needs deployment; a test change needs tests and starts
@@ -96,7 +113,7 @@ registry yet.
 ## Workflow and rollout
 
 ```text
-plan:    checkout full history → install → decide → signal preview-plan
+plan:    checkout head → install → decide (fetch metadata as needed) → signal preview-plan
 prepare: checkout → install → wait for preview-plan → deploy/reuse → ready
                                            │                          │
              inherit: skip remaining steps │                          │

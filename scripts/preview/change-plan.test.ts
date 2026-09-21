@@ -6,6 +6,187 @@ import { expect, test } from "vitest";
 import { CommitHistory } from "./commit-history.ts";
 import { classifyChanges, planPreview } from "./change-plan.ts";
 
+test("a depth-one product checkout decides from head without fetching main or old file contents", async () => {
+  using repo = repository();
+  repo.commit({ "apps/os/index.ts": "old product", "docs/unchanged.md": "old docs" });
+  const oldBlob = repo.git("rev-parse", "HEAD:apps/os/index.ts");
+  repo.git("switch", "-c", "feature");
+  const head = repo.commit({ "apps/os/index.ts": "new product" });
+  const checkout = repo.shallowCheckout();
+
+  expect(
+    await planPreview(checkout.history, {
+      findPreviewResult: async () => {
+        throw new Error("Product head needs no old results");
+      },
+      findPreviewDeployment: async () => {
+        throw new Error("Product head needs no old deployment");
+      },
+    }),
+  ).toMatchObject({ action: "deploy", changes: { Product: ["apps/os/index.ts"] } });
+  expect(checkout.git("rev-parse", "HEAD")).toBe(head);
+  expect(checkout.git("status", "--porcelain")).toBe("");
+  expect(checkout.git("for-each-ref", "--format=%(refname)", "refs/remotes/origin/main")).toBe("");
+  expect(checkout.git("rev-list", "--objects", "--missing=print", "HEAD")).toContain(`?${oldBlob}`);
+});
+
+test("a baked parent tree needs no fetch even when checkout marks head as shallow", async () => {
+  using repo = repository();
+  const parent = repo.commit({ "apps/os/index.ts": "old product" });
+  repo.git("switch", "-c", "feature");
+  repo.commit({ "apps/os/index.ts": "new product" });
+  const checkout = repo.shallowCheckout();
+  checkout.git("fetch", "--depth=1", "--filter=blob:none", "origin", parent);
+  checkout.git("remote", "set-url", "origin", join(repo.directory, "missing-remote"));
+  expect(
+    await planPreview(checkout.history, {
+      findPreviewResult: async () => null,
+      findPreviewDeployment: async () => null,
+    }),
+  ).toMatchObject({ action: "deploy", changes: { Product: ["apps/os/index.ts"] } });
+});
+
+test("a shallow docs checkout fetches enough metadata to inherit through the merge-base", async () => {
+  using repo = repository();
+  repo.commit({ "apps/os/index.ts": "old product" });
+  for (let i = 0; i < 2; i++) repo.commit({ "apps/os/index.ts": `product ${i}` });
+  const base = repo.git("rev-parse", "HEAD");
+  repo.git("switch", "-c", "feature");
+  for (let i = 0; i < 7; i++) repo.commit({ "README.md": `docs ${i}` });
+  repo.git("switch", "main");
+  for (let i = 0; i < 2; i++) repo.commit({ "apps/os/index.ts": `main ${i}` });
+  repo.git("switch", "feature");
+  const checkout = repo.shallowCheckout();
+  const lookedUp: string[] = [];
+
+  expect(
+    await planPreview(checkout.history, {
+      findPreviewResult: async (commit) => {
+        lookedUp.push(commit);
+        return commit === base
+          ? { commit, conclusion: "failure", url: "https://depot.dev/failed-preview" }
+          : null;
+      },
+      findPreviewDeployment: async () => {
+        throw new Error("Docs inherit without deployment lookup");
+      },
+    }),
+  ).toMatchObject({
+    action: "inherit",
+    changes: { Docs: ["README.md"] },
+    result: { commit: base, conclusion: "failure" },
+  });
+  expect(lookedUp.at(-1)).toBe(base);
+  expect(checkout.git("status", "--porcelain")).toBe("");
+});
+
+test("a shallow test head can reuse its own deployment without fetching main", async () => {
+  using repo = repository();
+  repo.commit({ "apps/os/index.ts": "product" });
+  repo.git("switch", "-c", "feature");
+  const head = repo.commit({ "specs/new.spec.ts": "new test" });
+  const checkout = repo.shallowCheckout();
+  expect(
+    await planPreview(checkout.history, {
+      findPreviewResult: async () => {
+        throw new Error("New tests cannot inherit old outcomes");
+      },
+      findPreviewDeployment: async (commit) => ({ commit, slot: "preview-2" }),
+    }),
+  ).toMatchObject({ action: "reuse", deployment: { commit: head, slot: "preview-2" } });
+  expect(checkout.git("for-each-ref", "--format=%(refname)", "refs/remotes/origin/main")).toBe("");
+});
+
+test("a failed metadata fetch remains a planning error", async () => {
+  using repo = repository();
+  repo.commit({ "apps/os/index.ts": "product" });
+  repo.git("switch", "-c", "feature");
+  repo.commit({ "README.md": "docs" });
+  const checkout = repo.shallowCheckout();
+  checkout.git("remote", "set-url", "origin", join(repo.directory, "missing-remote"));
+  await expect(
+    planPreview(checkout.history, {
+      findPreviewResult: async () => null,
+      findPreviewDeployment: async () => null,
+    }),
+  ).rejects.toThrow(/git fetch/);
+});
+
+test("a shallow criss-cross history cannot inherit from either merge-base", async () => {
+  using repo = repository();
+  repo.commit({ "README.md": "base" });
+  repo.git("switch", "-c", "feature");
+  const left = repo.commit({ "docs/left.md": "left" });
+  repo.git("switch", "main");
+  const right = repo.commit({ "docs/right.md": "right" });
+  repo.git("merge", "--no-ff", left, "-m", "merge left");
+  repo.git("switch", "feature");
+  repo.git("merge", "--no-ff", right, "-m", "merge right");
+  repo.commit({ "docs/head.md": "head" });
+  const checkout = repo.shallowCheckout();
+  expect(
+    await planPreview(checkout.history, {
+      findPreviewResult: async () => {
+        throw new Error("Neither merge-base is a safe boundary");
+      },
+      findPreviewDeployment: async () => null,
+    }),
+  ).toMatchObject({ action: "deploy", reason: expect.stringContaining("no single merge-base") });
+});
+
+test("a shallow rename keeps both paths, including newlines", async () => {
+  using repo = repository();
+  repo.commit({ "apps/os/old\nname.ts": "product" });
+  repo.git("switch", "-c", "feature");
+  repo.git("mv", "apps/os/old\nname.ts", "README.md");
+  repo.commit({});
+  const checkout = repo.shallowCheckout();
+  expect(
+    await planPreview(checkout.history, {
+      findPreviewResult: async () => null,
+      findPreviewDeployment: async () => null,
+    }),
+  ).toMatchObject({
+    action: "deploy",
+    changes: { Product: ["apps/os/old\nname.ts"], Docs: ["README.md"] },
+  });
+});
+
+test("a real root commit has no missing parent to fetch", async () => {
+  using repo = repository();
+  repo.commit({ "README.md": "docs" });
+  repo.git("switch", "-c", "feature");
+  const checkout = repo.shallowCheckout();
+  expect(checkout.history.changedFiles(checkout.history.head)).toEqual(["README.md"]);
+  expect(checkout.git("config", "--get-regexp", "remote.origin")).not.toContain("promisor");
+});
+
+test("a shallow remote that cannot supply the merge-base exhausts a bounded metadata budget", async () => {
+  using repo = repository();
+  repo.commit({ "apps/os/index.ts": "product" });
+  repo.git("switch", "-c", "feature");
+  for (let i = 0; i < 7; i++) repo.commit({ "README.md": `docs ${i}` });
+  const remote = join(repo.directory, "remote.ignoreme");
+  repo.git("clone", "--depth=4", "--no-single-branch", `file://${repo.directory}`, remote);
+  repo.git("-C", remote, "config", "uploadpack.allowFilter", "true");
+  repo.git("-C", remote, "branch", "main", "origin/main");
+  const checkout = repo.shallowCheckout();
+  checkout.git("remote", "set-url", "origin", `file://${remote}`);
+  expect(
+    await planPreview(checkout.history, {
+      findPreviewResult: async () => {
+        throw new Error("Unproven ancestry cannot inherit");
+      },
+      findPreviewDeployment: async () => {
+        throw new Error("Docs do not look up deployments");
+      },
+    }),
+  ).toMatchObject({
+    action: "deploy",
+    reason: expect.stringContaining("metadata fetch budget exhausted"),
+  });
+});
+
 test("a docs commit inherits its failed product parent's result", async () => {
   using repo = repository();
   repo.commit({ "apps/os/index.ts": "main" });
@@ -239,29 +420,32 @@ test("an empty head inherits, while a product-to-doc rename still deploys", asyn
   });
 });
 
-test("a side-branch merge-base cannot substitute main for unmerged feature code", async () => {
-  using repo = repository();
-  repo.commit({ "README.md": "base" });
-  repo.git("switch", "-c", "feature");
-  repo.commit({ "apps/os/index.ts": "feature product" });
-  repo.git("switch", "main");
-  const main = repo.commit({ "docs/main.md": "main documentation" });
-  repo.git("switch", "feature");
-  repo.git("merge", "--no-ff", "main", "-m", "merge main");
-  const merge = repo.git("rev-parse", "HEAD");
-  const head = repo.commit({ "specs/new.spec.ts": "test" });
-  const lookedUp: string[] = [];
-  expect(
-    await planPreview(repo.history(), {
-      findPreviewResult: async () => null,
-      findPreviewDeployment: async (commit) => {
-        lookedUp.push(commit);
-        return commit === main ? { commit, slot: "preview-1" } : null;
-      },
-    }),
-  ).toMatchObject({ action: "deploy" });
-  expect(lookedUp).toEqual([head, merge]);
-});
+test.each([false, true])(
+  "a side-branch merge-base cannot substitute main for unmerged feature code (shallow=%s)",
+  async (shallow) => {
+    using repo = repository();
+    repo.commit({ "README.md": "base" });
+    repo.git("switch", "-c", "feature");
+    repo.commit({ "apps/os/index.ts": "feature product" });
+    repo.git("switch", "main");
+    const main = repo.commit({ "docs/main.md": "main documentation" });
+    repo.git("switch", "feature");
+    repo.git("merge", "--no-ff", "main", "-m", "merge main");
+    const merge = repo.git("rev-parse", "HEAD");
+    const head = repo.commit({ "specs/new.spec.ts": "test" });
+    const lookedUp: string[] = [];
+    expect(
+      await planPreview(shallow ? repo.shallowCheckout().history : repo.history(), {
+        findPreviewResult: async () => null,
+        findPreviewDeployment: async (commit) => {
+          lookedUp.push(commit);
+          return commit === main ? { commit, slot: "preview-1" } : null;
+        },
+      }),
+    ).toMatchObject({ action: "deploy" });
+    expect(lookedUp).toEqual([head, merge]);
+  },
+);
 
 test("lookup errors are not missing deployments", async () => {
   using repo = repository();
@@ -278,27 +462,30 @@ test("lookup errors are not missing deployments", async () => {
   ).rejects.toThrow("Inventory unavailable");
 });
 
-test("docs inherit a tested merge even when main is its second parent", async () => {
-  using repo = repository();
-  repo.commit({ "README.md": "base" });
-  repo.git("switch", "-c", "feature");
-  repo.commit({ "apps/os/index.ts": "feature product" });
-  repo.git("switch", "main");
-  repo.commit({ "docs/main.md": "main doc" });
-  repo.git("switch", "feature");
-  repo.git("merge", "--no-ff", "main", "-m", "merge main");
-  const merge = repo.git("rev-parse", "HEAD");
-  repo.commit({ "docs/review.md": "docs after green merge" });
-  expect(
-    await planPreview(repo.history(), {
-      findPreviewResult: async (commit) =>
-        commit === merge
-          ? { commit, conclusion: "success", url: "https://depot.dev/merged-preview" }
-          : null,
-      findPreviewDeployment: async () => null,
-    }),
-  ).toMatchObject({ action: "inherit", result: { commit: merge } });
-});
+test.each([false, true])(
+  "docs inherit a tested merge even when main is its second parent (shallow=%s)",
+  async (shallow) => {
+    using repo = repository();
+    repo.commit({ "README.md": "base" });
+    repo.git("switch", "-c", "feature");
+    repo.commit({ "apps/os/index.ts": "feature product" });
+    repo.git("switch", "main");
+    repo.commit({ "docs/main.md": "main doc" });
+    repo.git("switch", "feature");
+    repo.git("merge", "--no-ff", "main", "-m", "merge main");
+    const merge = repo.git("rev-parse", "HEAD");
+    repo.commit({ "docs/review.md": "docs after green merge" });
+    expect(
+      await planPreview(shallow ? repo.shallowCheckout().history : repo.history(), {
+        findPreviewResult: async (commit) =>
+          commit === merge
+            ? { commit, conclusion: "success", url: "https://depot.dev/merged-preview" }
+            : null,
+        findPreviewDeployment: async () => null,
+      }),
+    ).toMatchObject({ action: "inherit", result: { commit: merge } });
+  },
+);
 
 function repository() {
   const directory = mkdtempSync(join(tmpdir(), "preview-change-plan-"));
@@ -312,6 +499,7 @@ function repository() {
   git("config", "user.email", "ci-test@iterate.com");
   git("config", "user.name", "CI planner test");
   git("config", "commit.gpgsign", "false");
+  git("config", "uploadpack.allowFilter", "true");
   return {
     directory,
     git,
@@ -326,6 +514,24 @@ function repository() {
       return git("rev-parse", "HEAD");
     },
     history: () => new CommitHistory(directory, "HEAD", "main"),
+    shallowCheckout() {
+      const checkout = join(directory, "checkout.ignoreme");
+      git(
+        "clone",
+        "--depth=1",
+        "--single-branch",
+        "--branch=feature",
+        `file://${directory}`,
+        checkout,
+      );
+      const checkoutGit = (...args: string[]) =>
+        execFileSync("git", args, {
+          cwd: checkout,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+        }).trim();
+      return { history: new CommitHistory(checkout, "HEAD", "origin/main"), git: checkoutGit };
+    },
     [Symbol.dispose]() {
       rmSync(directory, { recursive: true, force: true });
     },
