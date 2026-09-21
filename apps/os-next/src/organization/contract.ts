@@ -12,12 +12,14 @@
 //   ConsumedEvent<typeof OrganizationContract>                         what the reduce sees
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
+import { SecretContract } from "../secret/contract.ts";
 
 export const OrganizationContract = defineProcessorContract({
   slug: "organization",
-  version: "1",
+  // 2: the record grew `secrets` — the organization's own secrets' catalog.
+  version: "2",
   description:
-    "The organization's record: created, renamed, deleted, and every project created in it.",
+    "The organization's record: created, renamed, deleted, every project created in it, and the catalog of its own secrets.",
   /** THE REDUCED STATE — the organization's record, folded from the facts below: what a member
    *  reads through live state. */
   stateSchema: z.object({
@@ -27,6 +29,19 @@ export const OrganizationContract = defineProcessorContract({
     /** Every project created in the organization, by id: its slug and when. */
     projects: z
       .record(z.string(), z.object({ slug: z.string(), createdAt: z.string() }))
+      .default({}),
+    /** Every secret set under this owner, by its path (`/secrets/<name>`, what the placeholder
+     *  spells; the context lives under this root): the pin, the refresh strategy's kind, and when
+     *  it was first set — never a value. What `itx.secrets.list()` reads here. */
+    secrets: z
+      .record(
+        z.string(),
+        z.object({
+          urls: z.array(z.string()),
+          refresh: z.enum(["oauth-refresh-token", "waitrose-session"]).optional(),
+          createdAt: z.string(),
+        }),
+      )
       .default({}),
   }),
   events: {
@@ -48,11 +63,16 @@ export const OrganizationContract = defineProcessorContract({
       payloadSchema: z.object({ projectId: z.string().min(1), slug: z.string().min(1) }),
     },
   },
+  // THE RELATIONSHIP: the organization consumes its secrets' certificates without owning them
+  // (src/secret/contract.ts: cross-posted from `/organizations/<orgId>/secrets/<name>`).
+  processorDeps: [SecretContract],
   consumes: [
     "events.iterate.com/organization/created",
     "events.iterate.com/organization/renamed",
     "events.iterate.com/organization/deleted",
     "events.iterate.com/organization/project-created",
+    "events.iterate.com/secret/set",
+    "events.iterate.com/secret/deleted",
   ],
   emits: [],
 });

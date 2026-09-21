@@ -22,7 +22,11 @@ describe("OrganizationProcessor — the organization's record folded from facts"
     events: { type: string; payload?: unknown }[];
     state: OrganizationState;
   }[] = [
-    { name: "the empty record", events: [], state: { name: null, deletedAt: null, projects: {} } },
+    {
+      name: "the empty record",
+      events: [],
+      state: { name: null, deletedAt: null, projects: {}, secrets: {} },
+    },
     {
       name: "created sets the name, renamed replaces it; a project created in it is a row by id, stamped with the event's time; the same project again is ignored",
       events: [
@@ -39,6 +43,7 @@ describe("OrganizationProcessor — the organization's record folded from facts"
           prj_1: { slug: "monkey", createdAt: expect.any(String) },
           prj_2: { slug: "voice", createdAt: expect.any(String) },
         },
+        secrets: {},
       },
     },
     {
@@ -49,7 +54,7 @@ describe("OrganizationProcessor — the organization's record folded from facts"
         { type: "events.iterate.com/organization/deleted", payload: {} },
         { type: "events.iterate.com/organization/deleted", payload: {} },
       ],
-      state: { name: "Booper", deletedAt: expect.any(String), projects: {} },
+      state: { name: "Booper", deletedAt: expect.any(String), projects: {}, secrets: {} },
     },
     {
       name: "a malformed payload for a KNOWN type is skipped by the contract, never reduced",
@@ -58,7 +63,7 @@ describe("OrganizationProcessor — the organization's record folded from facts"
         { type: "events.iterate.com/organization/project-created", payload: { projectId: "x" } },
         created("Booper"),
       ],
-      state: { name: "Booper", deletedAt: null, projects: {} },
+      state: { name: "Booper", deletedAt: null, projects: {}, secrets: {} },
     },
   ];
   for (const { name, events, state } of rows)

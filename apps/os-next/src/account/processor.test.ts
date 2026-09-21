@@ -22,7 +22,13 @@ describe("AccountProcessor — the account state folded from facts", () => {
     {
       name: "the empty state",
       events: [],
-      state: { authentications: [], personalAccessTokens: {}, endedGrants: {}, consents: [] },
+      state: {
+        authentications: [],
+        personalAccessTokens: {},
+        endedGrants: {},
+        consents: [],
+        secrets: {},
+      },
     },
     {
       name: "an authentication fact appends to authentications (no credential material, only the fact)",
@@ -32,6 +38,7 @@ describe("AccountProcessor — the account state folded from facts", () => {
         personalAccessTokens: {},
         endedGrants: {},
         consents: [],
+        secrets: {},
       },
     },
     {
@@ -65,6 +72,7 @@ describe("AccountProcessor — the account state folded from facts", () => {
       ],
       state: {
         authentications: [],
+        secrets: {},
         personalAccessTokens: {
           grant_a: {
             name: "laptop",
@@ -108,6 +116,7 @@ describe("AccountProcessor — the account state folded from facts", () => {
         personalAccessTokens: {},
         endedGrants: {},
         consents: [],
+        secrets: {},
       },
     },
     {
@@ -124,6 +133,7 @@ describe("AccountProcessor — the account state folded from facts", () => {
         personalAccessTokens: {},
         endedGrants: {},
         consents: [],
+        secrets: {},
       },
     },
   ];

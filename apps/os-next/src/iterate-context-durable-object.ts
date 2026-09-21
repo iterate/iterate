@@ -4,7 +4,7 @@
 // (stream/subscription-delivery.ts), the facets (`ctx.facets`, context/worker-loader.ts), the rpc
 // stubs (context/rpc-stubs.ts), and the fetch door (the pager upgrade, the fetch lane,
 // egress). Each module's header says what it does; this file is the wiring and the doors.
-//   egress — `#egress`: a `getSecret("/secrets/NAME")` request is forwarded to its secret's own Durable Object (secrets.ts)
+//   egress — `#egress`: a `getSecret("/secrets/NAME")` request is forwarded to the context at that path, whose `secret` facet substitutes and dispatches (secret/durable-object.ts)
 //
 // PURE WORKERS-RPC: capnweb never terminates here — the stateless `/api` worker relays. Dispatch is
 // ONE door, `invoke(call)`; every OTHER change to this context is an appended event (the edge's
@@ -96,8 +96,7 @@ import {
   ITX_PLATFORM_ORIGIN_HEADER,
 } from "./iterate-context.ts";
 import { resourceScope } from "./context/paths.ts";
-import { secretNamesReferenced } from "./secrets.ts";
-import type { SecretDurableObject } from "./secret-durable-object.ts";
+import { secretPathsReferenced } from "./secrets.ts";
 import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "./app-config.ts";
 import {
   ItxExpressionResolver,
@@ -201,9 +200,6 @@ export interface Env extends AppConfigEnv {
   DB: D1Database;
   /** Cloudflare Artifacts (beta) — the ONE bound namespace behind `itx.cfArtifacts`, project-scoped. */
   ARTIFACTS: ArtifactsNamespace;
-  /** THE SECRETS (secret-durable-object.ts): one Durable Object per secret, `<owner>:<name>` —
-   *  egress forwards a placeholder-bearing request to its object. */
-  SECRET: DurableObjectNamespace<SecretDurableObject>;
 }
 
 /** The app label an app sees — apps/os's header. Written at the fetch lane alone (`fetch` below),
@@ -754,11 +750,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         platformOrigin,
       });
     },
-    secrets: () =>
-      Object.entries(this.#stream.coreReducedState.secrets).map(([name, secret]) => ({
-        name,
-        ...secret,
-      })),
     invoke: (call) => this.invoke(call),
     // a sibling context by path; the own path is this DO itself — a ReachableContext structurally (stream.ts)
     context: (p) =>
@@ -798,7 +789,27 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     },
     facets: {
       get: (name, spec) =>
-        new FacetHandle((itxExpressionSteps) => this.#invokeFacet(name, spec, itxExpressionSteps)),
+        new FacetHandle((itxExpressionSteps) => {
+          // A FACET REACHED BY ITX EXPRESSION ANSWERS RPC AND PLAIN HTTP — NEVER A WEBSOCKET. A
+          // socket terminates at the edge (a session's /api pager socket on this DO, a project host's
+          // lent-stub upgrade leg), and the facet behind it is reached by itx expression; a socket a
+          // facet HELD would die with it, unseen by the parent (1006, measured 2026-09-13). Refused
+          // BEFORE the memo: an upgrade aimed at a facet materializes nothing. The one facet that
+          // PROXIES a socket — the `secret` facet, dialling a pinned host for egress and handing the
+          // 101 straight back — is reached by `#egress`, never by expression.
+          const [first] = itxExpressionSteps;
+          if (
+            Array.isArray(first) &&
+            first[0] === "fetch" &&
+            first[1] instanceof Request &&
+            first[1].headers.get("Upgrade")?.toLowerCase() === "websocket"
+          )
+            throw codedError(
+              "FACET_NO_UPGRADE",
+              `facet "${name}": a facet answers RPC and plain HTTP, never a WebSocket — a socket terminates at the edge; reach the facet by itx expression`,
+            );
+          return this.#invokeFacet(name, spec, itxExpressionSteps);
+        }),
     },
     schedules: {
       list: () => Object.values(this.#stream.coreReducedState.schedules),
@@ -1159,22 +1170,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         "itx.facets.get(name, spec?): name the facet; pass { source, className } to load and host it",
       );
     if (itxExpressionSteps.length === 0) throw new Error(`facet: name a method`);
-    // A FACET ANSWERS RPC AND PLAIN HTTP — NEVER A WEBSOCKET. A socket terminates at the edge (a
-    // session's /api pager socket on this DO, a project host's lent-stub upgrade leg), and the
-    // facet behind it is reached by itx expression; so the test release aborts an idle facet
-    // with nothing to lose, and no socket is ever held by a facet the parent cannot see.
-    // Refused BEFORE the memo: an upgrade aimed at a facet materializes nothing.
-    const [first] = itxExpressionSteps;
-    if (
-      Array.isArray(first) &&
-      first[0] === "fetch" &&
-      first[1] instanceof Request &&
-      first[1].headers.get("Upgrade")?.toLowerCase() === "websocket"
-    )
-      throw codedError(
-        "FACET_NO_UPGRADE",
-        `facet "${name}": a facet answers RPC and plain HTTP, never a WebSocket — a socket terminates at the edge; reach the facet by itx expression`,
-      );
     // The core reduce answers at its facet-shaped address with a synthesized view — it is not a
     // facet, pins nothing, needs no watchdog, and can never be hosted.
     if (name === CoreContract.slug) {
@@ -1282,8 +1277,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         }
       });
       this.#liveFacetNames.add(name); // live from here
-      // The call walks the steps receiver-preservingly — a `.fetch(request)` included (plain HTTP;
-      // the upgrade was refused above). The watchdog (FACET_CALL_WATCHDOG_MS) aborts a facet that
+      // The call walks the steps receiver-preservingly — a `.fetch(request)` included (plain HTTP
+      // by expression, the upgrade refused at the `facets.get` door; a WebSocket upgrade from
+      // `#egress` to the `secret` facet, whose 101 rides the fetch channel back). The watchdog (FACET_CALL_WATCHDOG_MS) aborts a facet that
       // never answers: its pending call rejects, the counter drains, the next call re-materializes it.
       const call = walkSteps({ value: facet, receiver: undefined }, itxExpressionSteps).then(
         (walked) => walked.value,
@@ -1579,35 +1575,42 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** EGRESS: a request that names a secret — `getSecret("/secrets/NAME")` in its URL or headers —
-   *  is FORWARDED to that secret's Durable Object (secret-durable-object.ts), which substitutes, pins,
-   *  dispatches, and refreshes on a 401; one request, one secret (a second name is a 502 — no
-   *  cross-secret chaining). A request naming none goes straight to the terminal fetch. Either way
-   *  the platform's own headers never leave: the principal stamp (actor + email) and the expression
-   *  would ride whatever an app forwards outbound. The hop counter stays — the edge's re-entry guard
-   *  reads it when an app fetches its own host. WS-safe: only the headers are rewritten, so a 101
-   *  flows straight back either way. */
+   *  is FORWARDED to the context at that path under the RESOURCE OWNER's root (iterate-context.ts
+   *  `resourceScope`: a project's `/secrets/NAME`, a user's `/users/<id>/secrets/NAME` — so a user's
+   *  placeholder reaches the user's own secret, never a shared one), and there to its `secret` facet
+   *  (secret/durable-object.ts), which substitutes, pins, dispatches, and refreshes on a 401; one
+   *  request, one secret (a second name is a 502 — no cross-secret chaining). A request naming none
+   *  goes straight to the terminal fetch. Either way the platform's own headers never leave: the
+   *  principal stamp (actor + email) and the expression would ride whatever an app forwards
+   *  outbound. The hop counter stays — the edge's re-entry guard reads it when an app fetches its
+   *  own host. WS-safe: only the headers are rewritten, and every hop is a fetch channel — the
+   *  other context's `fetch` door, then `ctx.facets.get(name).fetch` — so a 101 flows straight back
+   *  either way (measured: __workers-tests__/secret-facet-proxies-a-socket.test.ts). */
   #egress(request: Request): Promise<Response> {
     const headers = new Headers(request.headers);
     headers.delete(ITX_PRINCIPAL_HEADER);
     headers.delete(ITX_GRANT_HEADER);
     headers.delete(ITX_EXPRESSION_FETCH_HEADER);
     const outbound = new Request(request, { headers });
-    const names = secretNamesReferenced(outbound);
-    if (names.length === 0) return fetch(outbound);
-    if (names.length > 1)
+    const paths = secretPathsReferenced(outbound);
+    if (paths.length === 0) return fetch(outbound);
+    if (paths.length > 1)
       return Promise.resolve(
         new Response(
-          `itx.fetch: one request, one secret — this one names ${names.map((name) => JSON.stringify(name)).join(", ")}\n`,
+          `itx.fetch: one request, one secret — this one names ${paths.map((path) => JSON.stringify(path)).join(", ")}\n`,
           { status: 502 },
         ),
       );
-    // The object is the RESOURCE OWNER's (iterate-context.ts `resourceScope`) — the one derivation
-    // `itx.secrets` keys it by, so a user's placeholder reaches the user's own secret, never a shared one.
-    const owner = resourceScope(
-      this.#durableObjectAddress.projectId,
-      this.#durableObjectAddress.path,
-    );
-    return this.env.SECRET.getByName(`${owner.id}:${names[0]}`).fetch(outbound);
+    const { projectId, path } = this.#durableObjectAddress;
+    const secretPath = resolveContextPath(resourceScope(projectId, path).rootPath, `.${paths[0]}`);
+    // This context IS the secret's: its facet dials. Hosted on demand, row or no row — a secret
+    // never set refuses inside the facet ("no stored project secret"), the same 502 as before.
+    if (secretPath === path)
+      return this.#invokeFacet("secret", undefined, [["fetch", outbound]]) as Promise<Response>;
+    // Another context's: its own `fetch` door lands in ITS `#egress`, the branch above.
+    return this.env.ITERATE_CONTEXT.getByName(
+      DurableObjectNameCodec.stringify({ projectId, path: secretPath }),
+    ).fetch(outbound);
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {

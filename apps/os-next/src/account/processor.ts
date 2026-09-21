@@ -1,7 +1,9 @@
-// src/account/processor.ts — THE ACCOUNT PROCESSOR: the pure reduce of the authentication facts into
-// the account's state; the kernel's `ProcessorEngine` drives it and projects it to live state, exactly
+// src/account/processor.ts — THE ACCOUNT PROCESSOR: the pure reduce of the account's facts into its
+// state, and of the user's own secrets' certificates (cross-posted from `/users/<id>/secrets/<name>`)
+// into their catalog; the kernel's `ProcessorEngine` drives it and projects it to live state, exactly
 // as a project processor. No effect lives here. Imports only the pure kernel, so a unit test constructs
 // it with `new` and reduces rows (processor.test.ts, in node).
+import { jsonEqual } from "iterate/next/lib";
 import {
   type ConsumedEvent,
   type ReduceArgs,
@@ -52,6 +54,25 @@ export class AccountProcessor extends StreamProcessor<
     }
     if (event.type === "events.iterate.com/account/consent-approved")
       return { ...state, consents: [...state.consents, { ...event.payload, at: event.createdAt }] };
+    if (event.type === "events.iterate.com/secret/set") {
+      // The latest write is the row (a rotation keeps the row, a new pin or strategy replaces
+      // it); the first set's time stays. The same pin and strategy again is a no-op.
+      const { path, urls, refresh } = event.payload;
+      const known = state.secrets[path];
+      if (known && known.refresh === refresh && jsonEqual(known.urls, urls)) return undefined;
+      return {
+        ...state,
+        secrets: {
+          ...state.secrets,
+          [path]: { urls, refresh, createdAt: known?.createdAt ?? event.createdAt },
+        },
+      };
+    }
+    if (event.type === "events.iterate.com/secret/deleted") {
+      if (!state.secrets[event.payload.path]) return undefined;
+      const { [event.payload.path]: _gone, ...secrets } = state.secrets;
+      return { ...state, secrets };
+    }
     return undefined;
   }
 }

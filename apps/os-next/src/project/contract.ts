@@ -14,15 +14,17 @@ import { defineProcessorContract, type ProcessorState } from "iterate/next/strea
 import { RepoContract } from "../repo/contract.ts";
 import { WorkspaceContract } from "../workspace/contract.ts";
 import { AgentContract } from "../agent/contract.ts";
+import { SecretContract } from "../secret/contract.ts";
 
 export const ProjectContract = defineProcessorContract({
   slug: "project",
   // 2: the catalog grew `agents`; 3: `mcpConnections`; 4: the state grew `creation`, and the certificates
-  // it folds were renamed (`repo/created`, `agent/created`). A checkpoint reduced under an older
-  // version is reused as-is by the engine, so the bump is what re-reduces every existing root log.
-  version: "4",
+  // it folds were renamed (`repo/created`, `agent/created`); 5: the catalog grew `secrets`. A checkpoint
+  // reduced under an older version is reused as-is by the engine, so the bump is what re-reduces
+  // every existing root log.
+  version: "5",
   description:
-    "The project: where its own creation stands, and the catalog of every repo, workspace and agent born under it (from the birth and death certificates cross-posted to /) and every MCP connection born under it.",
+    "The project: where its own creation stands, and the catalog of every repo, workspace, agent and secret born under it (from the certificates cross-posted to /) and every MCP connection born under it.",
   /** THE REDUCED STATE — what the reduce keeps between events: where the project's OWN creation
    *  stands, as the OFFSET of the event that says so (the request, the certificate, or the failure —
    *  read that event for the error), and the CATALOG of what exists under it — read by each
@@ -45,6 +47,19 @@ export const ProjectContract = defineProcessorContract({
      *  context its scripts run on and are logged at (`/mcp/inbound/grants/<grantId>`), and when it was born. */
     mcpConnections: z
       .record(z.string(), z.object({ path: z.string(), createdAt: z.string() }))
+      .default({}),
+    /** Every secret set under the project, by its path (`/secrets/<name>`, what the placeholder
+     *  spells): the pin, the refresh strategy's kind, and when it was first set — never a value.
+     *  What `itx.secrets.list()` reads. */
+    secrets: z
+      .record(
+        z.string(),
+        z.object({
+          urls: z.array(z.string()),
+          refresh: z.enum(["oauth-refresh-token", "waitrose-session"]).optional(),
+          createdAt: z.string(),
+        }),
+      )
       .default({}),
   }),
   events: {
@@ -72,7 +87,7 @@ export const ProjectContract = defineProcessorContract({
     },
   },
   // THE RELATIONSHIP: the project consumes the entities' certificates without owning them.
-  processorDeps: [RepoContract, WorkspaceContract, AgentContract],
+  processorDeps: [RepoContract, WorkspaceContract, AgentContract, SecretContract],
   consumes: [
     "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
@@ -84,6 +99,8 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/repo/deleted",
     "events.iterate.com/workspace/deleted",
     "events.iterate.com/agent/deleted",
+    "events.iterate.com/secret/set",
+    "events.iterate.com/secret/deleted",
   ],
   emits: [
     "events.iterate.com/project/created",
