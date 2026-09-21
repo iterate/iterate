@@ -13,7 +13,10 @@ export type FeedItem =
   /** A run of the platform's housekeeping — one quiet row, expandable. */
   | { kind: "housekeeping"; key: string; events: ContextViewEvent[] };
 
-const dayOf = (event: ContextViewEvent) => event.createdAt.slice(0, 10);
+/** The LOCAL calendar day an event fell on — the day the reader's clock says, the same day the
+ *  separator labels (feed-rows.tsx); grouping by the UTC date would open a second "Today" for an
+ *  evening anywhere east or west of Greenwich. */
+const dayOf = (event: ContextViewEvent) => new Date(event.createdAt).toDateString();
 const factOf = (event: ContextViewEvent) => JSON.stringify([event.type, event.payload ?? null]);
 
 export function foldEvents(events: readonly ContextViewEvent[], mode: ContextViewMode): FeedItem[] {

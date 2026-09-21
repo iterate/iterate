@@ -1,4 +1,5 @@
 // Folding the log for reading: days, housekeeping runs, repeated facts — and that the raw modes fold nothing.
+// The fixture's two days sit 48 h apart at noon UTC, so they are two local days in every timezone.
 import { describe, expect, test } from "vitest";
 import { foldEvents, lastEventOf } from "./folds.tsx";
 import { housekeepingSummary } from "./core-renderers.tsx";
@@ -20,10 +21,10 @@ const log: ContextViewEvent[] = [
   at(5, "account/authenticated", { credential: "cookie" }),
   at(6, "account/authenticated", { credential: "cookie" }),
   at(7, "account/authenticated", { credential: "admin-secret" }),
-  at(8, "stream/woken", { incarnation: 2 }, "2026-09-22T08:00:00.000Z"),
-  at(9, "stream/subscription-configured", { name: "sub-1" }, "2026-09-22T08:00:00.000Z"),
-  at(10, "live-state/changed", undefined, "2026-09-22T08:00:01.000Z"),
-  at(11, "account/grant-minted", { grantId: "grant_a" }, "2026-09-22T08:00:02.000Z"),
+  at(8, "stream/woken", { incarnation: 2 }, "2026-09-23T12:00:00.000Z"),
+  at(9, "stream/subscription-configured", { name: "sub-1" }, "2026-09-23T12:00:00.000Z"),
+  at(10, "live-state/changed", undefined, "2026-09-23T12:00:01.000Z"),
+  at(11, "account/grant-minted", { grantId: "grant_a" }, "2026-09-23T12:00:02.000Z"),
 ];
 
 describe("foldEvents", () => {

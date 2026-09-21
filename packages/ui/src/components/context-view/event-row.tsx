@@ -13,11 +13,14 @@ import {
   rendererFor,
 } from "./types.tsx";
 
+/** The row's clock: `19:36:58` in the reader's zone, always the 24-hour cycle — eight characters
+ *  that fit the fixed gutter in every locale (a 12-hour locale's ` PM` would run into the sentence). */
 export function formatClockTime(ms: number): string {
   return new Date(ms).toLocaleTimeString(undefined, {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
+    hourCycle: "h23",
   });
 }
 
