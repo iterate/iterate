@@ -1,8 +1,10 @@
 # Project camera filters
 
-The mobile app's camera (✨ button) loads filters from the project's repos:
-any file matching `filters/<name>.filter.js` appears in the picker. Write
-one — or ask iterate to — and reopen the camera.
+In the mobile camera, scroll the filter picker to **Project filters** and tap
+it to load files matching `filters/<name>.filter.js` from the project's repos.
+Opening the camera or using built-in filters does not scan repositories.
+The button shows loading, retry and empty-result feedback. Tap it again to
+refresh after writing a filter — or asking iterate to write one.
 
 **For agents**: copy this whole document into the project repo (for example
 as `filters/README.md`) so "add a paper toss filter" prompts have the
@@ -38,7 +40,7 @@ The file is ONE JavaScript object expression (not a module, no imports):
 
 On iPhone, filters run in JavaScriptCore with native drawing and file recording.
 Browser/Android uses the WebView renderer. These are trusted project scripts;
-keep them bounded. Errors appear over the camera; fix the file and reopen.
+keep them bounded. Errors appear over the camera; fix the file, reopen and tap Project filters to refresh.
 There is no DOM, browser storage, fetch, or timer API in the iPhone engine.
 Keep game state on `this` and animate using `timeMs`.
 

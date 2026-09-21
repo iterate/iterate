@@ -13,8 +13,6 @@ import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { mobileWebsiteEnvs } from "../../../../envs.ts";
 import { deployApp } from "../../../../scripts/lib/deploy-app.ts";
-import { MEDIAPIPE_WASM_GZ_URL } from "../../src/lib/filters/mediapipe-assets.generated.ts";
-import { verifyFilterAssets } from "./verify-filter-assets.ts";
 
 /** Deploy apps/mobile/website — see scripts/lib/deploy-app.ts for the pipeline. */
 export default async function deploy(
@@ -35,17 +33,11 @@ export default async function deploy(
     // The checked-in wrangler.jsonc carries the env blocks, so deploy selects
     // one with --env instead of a built per-env config.
     build: "checked-in-config",
-    prepare: verifyFilterAssets,
     smokes: (env) => [
       // The install page renders its honest fallback even with an empty
       // bucket, so anything under 500 proves the worker + R2 binding serve.
       { url: `${env.baseUrl}/m/install/preview`, ok: (status) => status < 500, label: "install" },
       { url: `${env.baseUrl}/`, ok: (status) => status < 500, label: "root" },
-      {
-        url: `${env.baseUrl}/filter-assets/${MEDIAPIPE_WASM_GZ_URL.split("/").at(-1)}`,
-        ok: (status) => status === 200,
-        label: "filter asset",
-      },
     ],
   });
 }

@@ -14,6 +14,7 @@ import { z } from "zod";
 import { mobileWebsiteEnvs } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { AnimalAnchors, createAssetStore, syncAssetManifest } from "./filter-asset-store.ts";
+import { verifyFilterAssets } from "./verify-filter-assets.ts";
 
 type Options = {
   /** Only this full slug, e.g. cartoon-dog or animal-cat. */
@@ -421,4 +422,14 @@ export async function all(options: Options = {}) {
   if (options.slug && !/^(backdrop|animal|cartoon|encyclopaedia)-/.test(options.slug)) {
     throw new Error(`Unknown asset slug: ${options.slug}`);
   }
+}
+
+/** Verify all manifest URLs in R2 before publishing an app update; never generate art. */
+export async function verify() {
+  const ctx = await resolveEnvContext({
+    envs: mobileWebsiteEnvs,
+    dopplerProject: "os",
+    env: "prd",
+  });
+  await verifyFilterAssets(ctx);
 }

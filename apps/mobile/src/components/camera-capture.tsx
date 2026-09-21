@@ -44,14 +44,14 @@ export function CameraCaptureModal(props: {
   const captureAbort = useRef<AbortController | null>(null);
   const { facing, setFacing } = useCameraFacing();
   // Project-authored filters: filters/<name>.filter.js files in any of the
-  // project's repos, fetched here (native side holds the session) and
-  // evaluated inside the platform filter engine. Ask iterate to write
-  // one and it shows up in the ✨ picker.
+  // project's repos, fetched only when Project filters is pressed (native
+  // side holds the session) and evaluated inside the platform filter engine.
   const { projectId } = useGlobalSearchParams<{ projectId?: string }>();
   const dynamicFilters = useQuery({
     queryKey: ["camera-dynamic-filters", projectId],
-    enabled: props.visible && typeof projectId === "string",
-    staleTime: 60_000,
+    // Explicit refetch only: opening/reopening the camera, focus changes and
+    // cache invalidation must not start repository scans.
+    enabled: false,
     queryFn: async () => {
       const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
       const project = await getProjectItx(baseUrl, projectId!);
@@ -348,6 +348,34 @@ export function CameraCaptureModal(props: {
                 </Pressable>
               );
             })}
+            {projectId ? (
+              <Pressable
+                accessibilityLabel={
+                  dynamicFilters.isError ? "Retry project filters" : "Load project filters"
+                }
+                accessibilityRole="button"
+                disabled={snap.isPending || record.isPending || dynamicFilters.isFetching}
+                onPress={() => void dynamicFilters.refetch()}
+                style={styles.filterChip}
+              >
+                <View style={styles.projectFilterIcon}>
+                  {dynamicFilters.isFetching ? (
+                    <ActivityIndicator color={colors.text} />
+                  ) : (
+                    <Text style={styles.filterChipEmoji}>🧪</Text>
+                  )}
+                </View>
+                <Text style={styles.filterChipLabel}>
+                  {dynamicFilters.isFetching
+                    ? "Loading…"
+                    : dynamicFilters.isError
+                      ? "Retry project filters"
+                      : dynamicFilters.isSuccess && dynamicFilters.data.length === 0
+                        ? "No project filters"
+                        : "Project filters"}
+                </Text>
+              </Pressable>
+            ) : null}
           </ScrollView>
         )}
         <View style={[styles.bottomBar, { paddingBottom: insets.bottom + spacing.lg }]}>
@@ -458,6 +486,7 @@ const styles = StyleSheet.create({
   },
   filterChipSelected: { borderColor: colors.text, borderWidth: 2 },
   filterChipEmoji: { fontSize: 26 },
+  projectFilterIcon: { height: 32, alignItems: "center", justifyContent: "center" },
   filterChipLabel: { color: colors.text, fontSize: 11 },
   recordingPill: {
     flexDirection: "row",

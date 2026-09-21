@@ -1,14 +1,15 @@
 import { readFile } from "node:fs/promises";
+import { URL } from "node:url";
 import { z } from "zod";
-import type { mobileWebsiteEnvs } from "../../../../envs.ts";
-import type { EnvContext } from "../../../../scripts/lib/env-context.ts";
-import { createAssetStore } from "../../scripts/filter-asset-store.ts";
+import type { mobileWebsiteEnvs } from "../../../envs.ts";
+import type { EnvContext } from "../../../scripts/lib/env-context.ts";
 import {
   MEDIAPIPE_WASM_GZ_URL,
   FACE_LANDMARKER_MODEL_GZ_URL,
-} from "../../src/lib/filters/mediapipe-assets.generated.ts";
+} from "../src/lib/filters/mediapipe-assets.generated.ts";
+import { createAssetStore } from "./filter-asset-store.ts";
 
-/** Deploys verify published data. Only the manual generator may create art. */
+/** Check published data before releasing updated asset manifests. */
 export async function verifyFilterAssets(ctx: EnvContext<typeof mobileWebsiteEnvs.prd>) {
   const store = createAssetStore({
     objectsUrl: `https://api.cloudflare.com/client/v4/accounts/${ctx.env.cloudflareAccountId}/r2/buckets/${ctx.env.workerName}-state/objects`,
@@ -23,7 +24,7 @@ export async function verifyFilterAssets(ctx: EnvContext<typeof mobileWebsiteEnv
     "flashcards-photo",
   ]) {
     const source = await readFile(
-      new URL(`../../src/lib/filters/${name}.generated.json`, import.meta.url),
+      new URL(`../src/lib/filters/${name}.generated.json`, import.meta.url),
       "utf8",
     );
     const manifest = z
@@ -44,10 +45,8 @@ export async function verifyFilterAssets(ctx: EnvContext<typeof mobileWebsiteEnv
   }
   if (missing.length) {
     throw new Error(
-      `Unpublished filter assets:\n${missing.join("\n")}\nRun the manual generator and commit the updated manifests before deploying.`,
+      `Unpublished filter assets:\n${missing.join("\n")}\nRun the manual generator and commit the updated manifests before publishing an app update.`,
     );
   }
-  console.log(
-    `Filter assets: ${urls.length} uploaded objects verified; no generation or uploads during deploy`,
-  );
+  console.log(`Filter assets: ${urls.length} uploaded objects verified; no generation or uploads`);
 }

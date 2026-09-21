@@ -17,8 +17,9 @@ High-level status: the user tried the native iPhone build and confirmed it works
 Flashcard preloading and the picker fix are delivered. September 21 review fixes
 protect saving, correct the recording timer, and isolate sound failures; local
 checks pass and the refreshed native preview build is ready. The asset pipeline
-now keeps prompts/manifests in Git and verifies hosted data; image generation is
-manual. Current artwork and URLs were preserved.
+now keeps prompts/manifests in Git; publishing verifies hosted data manually.
+Website deploys do not depend on filter assets, and project discovery is opt-in.
+Current artwork and URLs were preserved.
 
 ## Why this shape (assumptions made while AFK)
 
@@ -540,3 +541,20 @@ production website deployment was needed for this change.
 The manual MediaPipe command also passes against R2 and preserves all loader,
 WASM and model constants. Its async entry point supports the mobile package's
 CommonJS tooling; no top-level-await/module-mode change is required.
+
+
+## September 21: isolate discovery and asset verification
+
+- [x] Keep missing filter assets out of general website deployment. *Removed
+  both the asset preflight and asset smoke from `website/scripts/deploy.ts`;
+  verification is now the explicit `generate-filters verify` publishing step.*
+- [x] Discover project filters only on request. *The camera query is disabled
+  until an explicit refetch from the Project filters button; cached results
+  remain usable. The button provides loading, retry and empty-result feedback.*
+- [x] Retain uncapped native recording. *User explicitly declined a limit:
+  longer clips may be saved locally without sending. Upload behavior is unchanged.*
+
+Validation: the explicit `pnpm generate-filters verify` command finds all 218
+objects. All 284 mobile tests and 21 website tests pass, along with both
+typechecks, focused lint/format and iOS export. No native recording or upload
+code changed.

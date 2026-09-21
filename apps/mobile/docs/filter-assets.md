@@ -71,10 +71,14 @@ For a MediaPipe upgrade, update the package and its patch together, then run
 It reads the installed loader/WASM and pinned Google model, uploads missing
 compressed data, then updates the TypeScript manifest. JavaScript stays bundled.
 
-Website deployment verifies all referenced R2 objects before deploying and
-smoke-tests an asset afterwards. It never generates or uploads art. The worker
-route must be deployed before releasing the first app build using these URLs;
-subsequent artwork changes need only the manual upload and manifest update.
+Before publishing an app update with changed manifests, run
+`pnpm generate-filters verify` from `apps/mobile`. It checks every image and
+tracker URL directly in R2 without generating or uploading anything.
+
+General website deployment is independent of filter assets: a missing flashcard
+must not block an installer-site fix. The worker route must be deployed before
+releasing the first app build using these URLs; subsequent artwork changes need
+only the manual upload, verification and manifest update.
 
 Retain published R2 hashes indefinitely: older app versions still use them.
 The scripts never delete objects. Prompts let us replace lost art, not reproduce
