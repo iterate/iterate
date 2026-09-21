@@ -35,17 +35,19 @@ export function ContextActivity({
   const log = useContextLog(itx);
   const processors = useContextProcessors(itx, log.events);
   const presence = useContextPresence(itx, log.events);
-  // The first visit enables the context's own fold, once: the row is durable, so the check is a
-  // read of the table, and only a table that has loaded (caughtUp) and lacks the row asks for it.
-  const enabled = useRef(false);
+  // The first visit enables the context's own fold, once per context: the row is durable, so the
+  // check is a read of the table, and only a table that has loaded and lacks the row asks for it.
+  // A page that swaps contexts on one mount (one route, another organization) asks again for the
+  // new one.
+  const enabledFor = useRef<ActivityItx | undefined>(undefined);
   useEffect(() => {
-    if (!itx || !ensureProcessor || !log.caughtUp || enabled.current) return;
+    if (!itx || !ensureProcessor || !processors.loaded || enabledFor.current === itx) return;
     if (processors.rows.some((row) => row.name === ensureProcessor)) return;
-    enabled.current = true;
+    enabledFor.current = itx;
     itx.processors.enable(ensureProcessor).catch(() => {
-      enabled.current = false; // let a later render retry
+      if (enabledFor.current === itx) enabledFor.current = undefined; // let a later render retry
     });
-  }, [itx, ensureProcessor, log.caughtUp, processors.rows]);
+  }, [itx, ensureProcessor, processors.loaded, processors.rows]);
   return (
     <ContextView
       title={title}

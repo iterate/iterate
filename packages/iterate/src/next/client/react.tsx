@@ -219,9 +219,12 @@ export type ContextTablesItx = {
 export function useContextProcessors(
   itx: ContextTablesItx | undefined,
   events: readonly ContextLogEvent[],
-): { rows: ContextProcessorRow[]; error?: string } {
-  const [rows, setRows] = useState<ContextProcessorRow[]>([]);
-  const [error, setError] = useState<string | undefined>();
+): { rows: ContextProcessorRow[]; loaded: boolean; error?: string } {
+  // The table and the last failure remember WHICH itx they came from: a page that swaps contexts
+  // (one route, another organization) shows an empty, not-yet-loaded table for the new one rather
+  // than the old one's rows or error until the new read lands.
+  const [table, setTable] = useState<{ itx: ContextTablesItx; rows: ContextProcessorRow[] }>();
+  const [failure, setFailure] = useState<{ itx: ContextTablesItx; message: string }>();
   const tableVersion = events.reduce(
     (last, event) =>
       event.type.startsWith("events.iterate.com/stream/subscription-") ? event.offset : last,
@@ -233,16 +236,22 @@ export function useContextProcessors(
     Promise.resolve(itx.processors.list()).then(
       (list) => {
         if (disposed) return;
-        setRows(list);
-        setError(undefined); // a read that recovered clears the last failure
+        setTable({ itx, rows: list });
+        setFailure(undefined); // a read that recovered clears the last failure
       },
-      (e: unknown) => !disposed && setError(e instanceof Error ? e.message : String(e)),
+      (e: unknown) =>
+        !disposed && setFailure({ itx, message: e instanceof Error ? e.message : String(e) }),
     );
     return () => {
       disposed = true;
     };
   }, [itx, tableVersion]);
-  return { rows, error };
+  const current = itx && table?.itx === itx ? table : undefined;
+  return {
+    rows: current?.rows || [],
+    loaded: Boolean(current),
+    error: itx && failure?.itx === itx ? failure.message : undefined,
+  };
 }
 
 /** One presence: who acted on the context and when last, from the log's stamps. */
@@ -255,19 +264,21 @@ export function useContextPresence(
   itx: ContextTablesItx | undefined,
   events: readonly ContextLogEvent[],
 ): { rpcStubs: string[]; actors: ContextPresence[] } {
-  const [rpcStubs, setRpcStubs] = useState<string[]>([]);
+  const [census, setCensus] = useState<{ itx: ContextTablesItx; rpcStubs: string[] }>();
   const head = events.at(-1)?.offset ?? 0;
   useEffect(() => {
     if (!itx?.rpcStubs) return;
     let disposed = false;
     Promise.resolve(itx.rpcStubs.list()).then(
-      (list) => !disposed && setRpcStubs(list),
+      (list) => !disposed && setCensus({ itx, rpcStubs: list }),
       () => undefined, // presence is nice to have; a failed census shows nothing
     );
     return () => {
       disposed = true;
     };
   }, [itx, head]);
+  // keyed by its itx: a swapped context shows no census until its own lands
+  const rpcStubs = itx && census?.itx === itx ? census.rpcStubs : [];
   const actors = useMemo(() => {
     const byActor = new Map<string, ContextPresence>();
     for (const event of events) {
