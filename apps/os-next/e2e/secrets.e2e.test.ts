@@ -13,8 +13,10 @@
 // value arrives at a pinned origin) is deployed-only: it egresses to one of THIS project's own apps
 // on a real project host. Every dispatch through a secret is a `secret/used` fact ON THE SECRET'S
 // PATH (the request as received — placeholders, never values — and the status); a WebSocket upgrade
-// through a secret is a dispatch like any other (deployed-only: the petshop's capnweb door over
-// egress). The connection mechanisms that refresh a credential are secrets-connections.e2e.test.ts.
+// through a secret is a dispatch like any other — the petshop's capnweb door over egress, dialled
+// from a nested context (deployed-only: the local worker cannot make an outbound upgrade; the
+// platform pin, inside workerd, is __workers-tests__/secret-facet-proxies-a-socket.test.ts). The
+// connection mechanisms that refresh a credential are secrets-connections.e2e.test.ts.
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx, processorNames, readAll, runId, workerUrl } from "./support/client.ts";
@@ -333,8 +335,12 @@ test("a use is a fact: an egress through a secret appends `secret/used` on the s
   expect(JSON.stringify([await readAll(itx), await readAll(ver)])).not.toContain("the-value");
 });
 
+// DEPLOYED ONLY (measured 2026-09-21): the local worker under wrangler cannot make an OUTBOUND
+// WebSocket upgrade — its terminal fetch answers `TypeError: fetch failed` — while the deployed worker
+// and the workers lane (vitest-pool-workers, workerd's own fetch) can; the local proof of the same
+// path is __workers-tests__/secret-facet-proxies-a-socket.test.ts.
 deployedOnly(
-  "DEPLOYED: a WebSocket 101 through a secret — the petshop's capnweb door over egress, the bearer as a secret in the upgrade header; the socket comes back and the use is a fact with status 101",
+  "DEPLOYED: a WebSocket 101 through a secret — the petshop's capnweb door dialled from a NESTED context (`/agents/dialler`), whose egress forwards the upgrade to /secrets/shop and its facet substitutes the bearer, dials, and hands the 101 back; the capnweb call answers over it; the use is a fact on the secret's path with status 101",
   async () => {
     const shop = petshopBaseUrl();
     const login = await fetch(`${shop}/api/legacy-login`, {
@@ -353,14 +359,26 @@ deployedOnly(
     const options = JSON.stringify({
       headers: { authorization: 'Bearer getSecret("/secrets/shop")' },
     });
+    // Dialled from a sibling context, never the secret's own: the caller's `#egress` forwards the
+    // upgrade to the context at /secrets/shop (a fetch hop), and that one's to its facet.
+    const dialler = itx.cd("/agents/dialler");
     expect(
-      await itx.invoke(
+      await dialler.invoke(
         `itx.connectToCapnweb(${JSON.stringify(wsUrl)}, ${options}).getPet('pet-1')`,
       ),
     ).toMatchObject({ id: "pet-1", name: "Biscuit" });
+    // A second call rides the same held session (the library memoizes the connection).
+    expect(
+      await dialler.invoke(
+        `itx.connectToCapnweb(${JSON.stringify(wsUrl)}, ${options}).getPet('pet-2')`,
+      ),
+    ).toMatchObject({ id: "pet-2" });
     expect(await usedFacts(itx.cd("/secrets/shop"))).toEqual([
       { method: "GET", url: `${shop}/capnweb`, status: 101 },
     ]);
+    // The bearer never entered any log — the dialler's, the secret's, the root's.
+    for (const context of [dialler, itx.cd("/secrets/shop"), itx])
+      expect(JSON.stringify(await readAll(context))).not.toContain(accessToken);
   },
   30_000,
 );
