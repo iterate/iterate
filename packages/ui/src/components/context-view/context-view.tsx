@@ -6,26 +6,27 @@
 // live state. apps/os's three modes: Pretty (sentences, housekeeping folded, repeats counted),
 // Pretty + raw (every event, sentence and raw line), Raw (the log as data). Nothing here ever
 // scrolls sideways; the inspector shows what a line cuts.
-// Pure: every datum arrives as a prop from the SDK's hooks (`iterate/next/react`).
+// CONTROLLED: every choice a person makes here is `state` (context-view-search.ts — a URL's search
+// in every app) and comes back as an `onStateChange` patch, so a view is a link: the mode, the
+// filter, the inspected event, the open sheet. Only the folds opened in place stay local — scroll-
+// position-grade ephemera. Pure otherwise: every datum arrives as a prop from the SDK's hooks.
 import { useMemo, useState, type ReactNode } from "react";
 import { FilterIcon, LayersIcon } from "lucide-react";
 import { Button } from "../button.tsx";
 import { Input } from "../input.tsx";
 import { Spinner } from "../spinner.tsx";
 import { cn } from "../../lib/utils.ts";
+import {
+  contextViewFilterOf,
+  RIGHT_EDGE_CLOSED,
+  type ContextViewState,
+} from "./context-view-search.ts";
 import { coreEventInspectors, coreEventRenderers } from "./core-renderers.tsx";
 import { EventInspector } from "./event-inspector.tsx";
 import { EventRow } from "./event-row.tsx";
 import { DaySeparator, HousekeepingRow, RepeatRow } from "./feed-rows.tsx";
+import { actorLabel, filterEvents, shortEventType, typeCounts } from "./filters.tsx";
 import { foldEvents, lastEventOf } from "./folds.tsx";
-import {
-  actorLabel,
-  EMPTY_FILTER,
-  filterEvents,
-  shortEventType,
-  typeCounts,
-  type ContextViewFilter,
-} from "./filters.tsx";
 import { PresenceStrip } from "./presence-strip.tsx";
 import { ProcessorsPanel } from "./processors-panel.tsx";
 import type {
@@ -54,6 +55,8 @@ export function ContextView({
   presence = { actors: [], rpcStubs: [] },
   renderCoreState,
   renderLiveState,
+  state,
+  onStateChange,
   defaultMode = "pretty",
   emptyText = "Nothing has happened on this context yet.",
   className,
@@ -70,16 +73,19 @@ export function ContextView({
   presence?: { actors: readonly ContextViewPresence[]; rpcStubs: readonly string[] };
   renderCoreState?: () => ReactNode;
   renderLiveState?: (facetName: string) => ReactNode;
-  /** How the rows read at first — the switch in the strip changes it. */
+  /** The view's state — the route's parsed search (`validateSearch: ContextViewState`). */
+  state: ContextViewState;
+  /** A patch to the state; an `undefined` value drops the key (the route spreads it into the search). */
+  onStateChange: (patch: Partial<ContextViewState>) => void;
+  /** How the log reads when `state.mode` is unset. */
   defaultMode?: ContextViewMode;
   emptyText?: string;
   className?: string;
 }) {
-  const [filter, setFilter] = useState<ContextViewFilter>(EMPTY_FILTER);
-  const [filtering, setFiltering] = useState(false);
-  const [inspected, setInspected] = useState<number | undefined>();
-  const [processorsOpen, setProcessorsOpen] = useState(false);
-  const [mode, setMode] = useState<ContextViewMode>(defaultMode);
+  const mode = state.mode || defaultMode;
+  const filter = useMemo(() => contextViewFilterOf(state), [state]);
+  const filtering = Boolean(state.filter);
+  const inspected = state.event;
   /** The folds opened in place, by item key. */
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   // the platform's own events read as sentences everywhere; an app's renderers lie over them
@@ -87,20 +93,21 @@ export function ContextView({
   const allInspectors = useMemo(() => ({ ...coreEventInspectors, ...inspectors }), [inspectors]);
   const shown = useMemo(() => filterEvents(events, filter), [events, filter]);
   const items = useMemo(() => foldEvents(shown, mode), [shown, mode]);
+  const types = useMemo(() => typeCounts(events), [events]);
+  const filtered = Boolean(filter.query) || filter.types.size > 0 || Boolean(filter.actor);
+  const toggleType = (type: string) => {
+    const next = filter.types.has(type)
+      ? [...filter.types].filter((held) => held !== type)
+      : [...filter.types, type];
+    onStateChange({ types: next.length > 0 ? next : undefined });
+  };
   const toggleOpened = (key: string) =>
     setOpened((held) => {
       const next = new Set(held);
       if (!next.delete(key)) next.add(key);
       return next;
     });
-  const types = useMemo(() => typeCounts(events), [events]);
-  const filtered = Boolean(filter.query) || filter.types.size > 0 || Boolean(filter.actor);
-  const toggleType = (type: string) =>
-    setFilter((held) => {
-      const next = new Set(held.types);
-      if (!next.delete(type)) next.add(type);
-      return { ...held, types: next };
-    });
+  const inspect = (offset: number) => onStateChange({ ...RIGHT_EDGE_CLOSED, event: offset });
   return (
     <div className={cn("flex min-h-0 min-w-0 flex-col gap-2", className)}>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
@@ -112,9 +119,7 @@ export function ContextView({
         <PresenceStrip
           actors={presence.actors}
           rpcStubs={presence.rpcStubs}
-          onPick={(actor) =>
-            setFilter((held) => ({ ...held, actor: held.actor === actor ? undefined : actor }))
-          }
+          onPick={(actor) => onStateChange({ actor: filter.actor === actor ? undefined : actor })}
         />
         <div
           role="tablist"
@@ -127,7 +132,9 @@ export function ContextView({
               type="button"
               role="tab"
               aria-selected={mode === candidate.id}
-              onClick={() => setMode(candidate.id)}
+              onClick={() =>
+                onStateChange({ mode: candidate.id === defaultMode ? undefined : candidate.id })
+              }
               className={cn(
                 "rounded px-2 py-0.5 whitespace-nowrap",
                 mode === candidate.id
@@ -143,15 +150,16 @@ export function ContextView({
         <Button
           variant={filtering || filtered ? "secondary" : "ghost"}
           size="sm"
-          onClick={() => setFiltering((held) => !held)}
+          onClick={() => onStateChange({ filter: filtering ? undefined : true })}
           aria-label="Filter"
+          aria-expanded={filtering}
         >
           <FilterIcon className="size-4" />
         </Button>
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => setProcessorsOpen(true)}
+          onClick={() => onStateChange({ ...RIGHT_EDGE_CLOSED, processors: true })}
           aria-label="Processors"
         >
           <LayersIcon className="size-4" />
@@ -162,7 +170,7 @@ export function ContextView({
         <div className="flex flex-col gap-2">
           <Input
             value={filter.query}
-            onChange={(e) => setFilter((held) => ({ ...held, query: e.target.value }))}
+            onChange={(e) => onStateChange({ q: e.target.value || undefined })}
             placeholder="Search type or payload"
             className="h-8 text-sm"
           />
@@ -172,6 +180,7 @@ export function ContextView({
                 key={type}
                 type="button"
                 onClick={() => toggleType(type)}
+                aria-pressed={filter.types.has(type)}
                 className={cn(
                   "rounded px-1.5 py-0.5 font-mono text-xs hover:bg-muted",
                   filter.types.has(type) ? "bg-muted text-foreground" : "text-muted-foreground",
@@ -183,7 +192,7 @@ export function ContextView({
             {filtered ? (
               <button
                 type="button"
-                onClick={() => setFilter(EMPTY_FILTER)}
+                onClick={() => onStateChange({ q: undefined, types: undefined, actor: undefined })}
                 className="px-1.5 py-0.5 text-xs text-muted-foreground underline-offset-2 hover:underline"
               >
                 clear
@@ -221,7 +230,7 @@ export function ContextView({
                 open={opened.has(item.key)}
                 onToggle={() => toggleOpened(item.key)}
                 selected={inspected}
-                onOpen={setInspected}
+                onOpen={inspect}
               />
             );
           if (item.kind === "housekeeping")
@@ -234,7 +243,7 @@ export function ContextView({
                 open={opened.has(item.key)}
                 onToggle={() => toggleOpened(item.key)}
                 selected={inspected}
-                onOpen={setInspected}
+                onOpen={inspect}
               />
             );
           return (
@@ -246,7 +255,7 @@ export function ContextView({
               mode={mode}
               showWho={showWho}
               selected={inspected === item.event.offset}
-              onOpen={setInspected}
+              onOpen={inspect}
             />
           );
         })}
@@ -255,11 +264,11 @@ export function ContextView({
         event={inspected === undefined ? undefined : events.find((e) => e.offset === inspected)}
         renderers={allRenderers}
         inspectors={allInspectors}
-        onClose={() => setInspected(undefined)}
+        onClose={() => onStateChange({ event: undefined })}
       />
       <ProcessorsPanel
-        open={processorsOpen}
-        onClose={() => setProcessorsOpen(false)}
+        open={Boolean(state.processors)}
+        onClose={() => onStateChange({ processors: undefined })}
         processors={processors}
         renderCoreState={renderCoreState}
         renderLiveState={renderLiveState}
