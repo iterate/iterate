@@ -14,6 +14,7 @@
 #include "iterate/kit/platforms/pcm5122.h"
 #include "iterate/kit/platforms/tas2780.h"
 #include "iterate/kit/platforms/xmos_spi.h"
+#include "satellite1_power_policy.h"
 
 #include <sounds_generated.inc>
 
@@ -42,15 +43,15 @@ static bool satellite1_activate_amplifier(void) {
   if (!iterate_kit_tas2780_shutdown(&amp) ||
       !iterate_kit_tas2780_set_output_level(&amp, 8) ||
       !iterate_kit_tas2780_activate(&amp)) return false;
-  if (power_status.state == ITERATE_KIT_PD_READY &&
-      amp.pvdd_centivolts * 10U < power_status.millivolts * 9U / 10U) {
-    ESP_LOGE("satellite1", "amplifier rail below PD contract: %ucV, requested %umV",
+  const bool pd_ready = power_status.state == ITERATE_KIT_PD_READY;
+  if (iterate_kit_satellite1_pd_rail_is_low(
+          pd_ready, power_status.millivolts, amp.pvdd_centivolts)) {
+    ESP_LOGW("satellite1", "amplifier rail below PD contract: %ucV, requested %umV; keeping 15 dBV",
         amp.pvdd_centivolts, power_status.millivolts);
-    return false;
   }
-  const uint32_t contract_mw = (uint32_t)power_status.millivolts * power_status.milliamps / 1000U;
-  if (power_status.state == ITERATE_KIT_PD_READY && contract_mw >= 30000U &&
-      amp.pvdd_centivolts >= 1800U) {
+  if (iterate_kit_satellite1_output_level_for_power(
+          pd_ready, power_status.millivolts, power_status.milliamps,
+          amp.pvdd_centivolts) == ITERATE_KIT_SATELLITE1_HIGH_POWER_OUTPUT_LEVEL) {
     if (!iterate_kit_tas2780_shutdown(&amp) ||
         !iterate_kit_tas2780_set_output_level(&amp, 18) ||
         !iterate_kit_tas2780_activate(&amp)) return false;

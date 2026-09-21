@@ -278,6 +278,10 @@ iterate_kit_add_test(iterate-kit-tas2780-registers-test tas2780_registers_test.c
   INCLUDES "${ITERATE_KIT_BOARD_CHIPS}/include"
   LINK iterate-kit-core iterate-kit-capabilities)
 
+iterate_kit_add_test(iterate-kit-satellite1-power-policy-test satellite1_power_policy_test.c
+  ../devices/satellite1/satellite1_power_policy.c
+  INCLUDES ../devices/satellite1)
+
 iterate_kit_add_test(iterate-kit-pcm5122-registers-test pcm5122_registers_test.c
   "${ITERATE_KIT_BOARD_CHIPS}/codecs/pcm5122_registers.c"
   INCLUDES "${ITERATE_KIT_BOARD_CHIPS}/include"
