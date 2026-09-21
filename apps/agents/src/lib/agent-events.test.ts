@@ -155,7 +155,7 @@ describe("adaptContextRuns — the context's runs in the reducer's vocabulary", 
     for (const idle of [true, false]) {
       const { items } = reduceAgentFeed(adaptContextRuns(turn("plain-response")), idle);
       expect(items.some((item) => item.kind === "activity")).toBe(false);
-      expect(items.filter((item) => item.kind === "assistant").map((item) => item.text)).toEqual([
+      expect(items.flatMap((item) => (item.kind === "assistant" ? [item.text] : []))).toEqual([
         "Done.",
       ]);
     }
