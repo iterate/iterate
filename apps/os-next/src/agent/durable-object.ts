@@ -3,8 +3,8 @@
 // the processor's (processor.ts); this host is what the processor cannot be: the two effects reached
 // through `itx` — the model (a `@cf/…` model through `itx.ai`, the Workers AI binding under THIS
 // context's rules, so a test lends a fake there; an OpenAI model through the account's AI Gateway
-// with the platform's key, streamed from the Responses API) and the script runner (`itx.run`, a
-// confined isolate over this context's itx) —
+// with the platform's key, streamed from the Responses API) and the files — a script the loop asks
+// for is the CONTEXT's to run (`context/run-requested`, iterate-context-durable-object.ts) —
 // plus the two doors a client calls: `create()`, which lands the birth (the certificate cross-posted to
 // `/` first, then on this path with the system prompt beside it), and `message(text)`, a person's words.
 // The library enables the processor row beside `create()`: subscribed, the loop runs on every commit
@@ -268,11 +268,6 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
       if (text.trim() === "") throw new Error("the model answered with no text");
       return { text: text.trim(), usage };
     },
-    // THE SANDBOX: scripts run on `<agent>/sandbox`, a child born (in `create`) with one row — the
-    // link back to this agent — so a normal agent's scripts see this agent's chain and a jailed
-    // agent's owner replaces that one row with null. Spelled through the fixed point: this facet is
-    // the platform's, the sandbox's table is the SCRIPT's world, never the facet's.
-    runScript: (code) => this.withItx((itx) => itx.cd("./sandbox").builtins.run(code)),
     // The tree the model is shown each turn: the SANDBOX's list — exactly what its scripts can spell.
     rewriteRules: () => this.withItx((itx) => itx.cd("./sandbox").builtins.rewriteRules.list()),
     readFile: (path) => this.withItx((itx) => itx.files.get(path).bytes()),
@@ -316,9 +311,25 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
         },
       }),
     );
-    // The sandbox's one row: everything a script does not claim, this agent answers (its own
-    // chain up to the root). A jail is the owner replacing this row with `null` — before or with the
-    // first message — and appending its grants beside it.
+    // THE SANDBOX: this agent's scripts run on `<agent>/sandbox`, a child of their own — the row on
+    // THIS context redirects every requested run there (the context's runner honours it,
+    // iterate-context-durable-object.ts `#executeRun`), so the facet's own calls and the scripts'
+    // never share a table. The sandbox's one row: everything a script does not claim, this agent
+    // answers (its own chain up to the root). A jail is the owner replacing THAT row with `null` —
+    // before or with the first message — and appending its grants beside it.
+    await this.withItx((itx) =>
+      itx.builtins.append({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        idempotencyKey: `itx.run@${path}/sandbox`,
+        payload: {
+          match: "itx.run",
+          // Physical past the hop too: the sandbox's own `run` may be walled (a jail's bare null),
+          // and the runner is the kernel's act — the ROWS govern what the script says, not this.
+          target: ["itx", "builtins", ["cd", `${path}/sandbox`], "builtins", "run"],
+          description: "this agent's scripts run in its sandbox, `<agent>/sandbox`",
+        },
+      }),
+    );
     await this.withItx((itx) =>
       itx.cd("./sandbox").builtins.append({
         type: "events.iterate.com/itx/rewrite-rule-configured",

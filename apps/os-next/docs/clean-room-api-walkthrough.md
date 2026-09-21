@@ -717,7 +717,7 @@ type SubscriptionListEntry = {
   /** Where the cursor lane started (0 = the whole log); absent = at the configure. */
   afterOffset?: number;
   /** Set when this row HOSTS a facet (a processor): its name, class and cacheKey — never the source. */
-  hostedFacet?: { name: string; className: string; cacheKey?: string };
+  hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };
   /** Present ONLY when the stream keeps the cursor (a target that cannot own its progress). */
   cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
   halted?: { afterOffset: number; attempts: number; error?: string };
@@ -799,7 +799,7 @@ type CoreState = {
       consumes?: string[];
       configuredAtOffset: number;
       afterOffset?: number; // where the cursor lane starts (0 = the whole log); absent = configuredAtOffset
-      hostedFacet?: { name: string; className: string; cacheKey?: string }; // the row hosts a facet (source elided)
+      hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number }; // the row hosts a facet (source elided); restarts = platform-failure restarts
       halted?: { afterOffset: number; attempts: number; error?: string };
       resumed?: { afterOffset?: number; atOffset: number };
     }

@@ -33,7 +33,12 @@ import {
   installPrototypeInvokeFallback,
 } from "iterate/next/expression";
 import type { IterateContextApi, RewriteRuleConfigured } from "iterate/next/api";
-import { ITX_APP_HEADER, ITX_PRINCIPAL_HEADER, type Principal } from "iterate/next/principal";
+import {
+  ITX_APP_HEADER,
+  ITX_GRANT_HEADER,
+  ITX_PRINCIPAL_HEADER,
+  type Caller,
+} from "iterate/next/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
 import type { IterateContextDurableObject, Env } from "./iterate-context-durable-object.ts";
 import {
@@ -97,31 +102,24 @@ export class IterateContextRpcTarget extends RpcTarget {
   readonly #durableObjectAddress: DurableObjectAddress;
   readonly #sessionTeardown: SessionTeardown;
   readonly #waitUntil: WaitUntil;
-  /** WHO holds this context: the session's verified principal (session.ts), or null (the anonymous
-   *  session, a loaded worker's `env.ITX`). Every dispatch runs under it, so every event it appends
-   *  carries `source.principal`. */
-  readonly #principal: Principal | null;
-  /** True for LOADED CODE's handle (`env.ITX.get()` in a worker, a facet, a script): every dispatch
-   *  runs as `Caller.app` — the fixed point and any `cd` above this context are refused on what it
-   *  hands in, `cd` goes through this context's table, and the two lending verbs are not its to
-   *  call. False for a session's handle and for the platform's own classes. */
-  readonly #app: boolean;
+  /** WHO holds this context: the session's verified principal and the grant it acts through
+   *  (session.ts), or nobody (the anonymous session, a loaded worker's `env.ITX`). Every dispatch
+   *  runs under it, so every event it appends carries `source.principal` and `source.grant`. */
+  readonly #caller: Caller;
 
   constructor(
     contextNamespace: IterateContextNamespace,
     durableObjectAddress: DurableObjectAddress,
     sessionTeardown: SessionTeardown,
     waitUntil: WaitUntil,
-    principal: Principal | null = null,
-    app = false,
+    caller: Caller = { principal: null },
   ) {
     super();
     this.#contextNamespace = contextNamespace;
     this.#durableObjectAddress = durableObjectAddress;
     this.#sessionTeardown = sessionTeardown;
     this.#waitUntil = waitUntil;
-    this.#principal = principal;
-    this.#app = app;
+    this.#caller = caller;
   }
 
   /** The context DO's stub, minted PER CALL (a stub is a cheap handle onto one shared connection):
@@ -132,12 +130,11 @@ export class IterateContextRpcTarget extends RpcTarget {
     return this.#contextNamespace.getByName(this.#durableObjectAddress.name);
   }
 
-  /** Dispatch on the DO under this context's principal — the one place the edge chooses the door. */
+  /** Dispatch on the DO under this context's caller — the one place the edge dispatches. */
   #invokeOnDurableObject(itxExpression: ItxExpression, args: unknown[] = []): Promise<unknown> {
-    return this.#durableObject.invoke(itxExpression, args, {
-      principal: this.#principal,
-      ...(this.#app && { app: true as const }),
-    }) as Promise<unknown>;
+    // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the call denotes
+    // whatever expression the caller spelled, so `unknown` is the honest contract here.
+    return this.#durableObject.invoke(itxExpression, args, this.#caller) as Promise<unknown>;
   }
 
   /** Another context of THIS project. Absolute by convention (`cd("/agents/support")`); relative
@@ -158,7 +155,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     // LOADED CODE's `cd` is an expression through THIS context's table (`itx.cd ⇒ null` is a wall,
     // and the resolver's app wall keeps it to self and descendants) — the dotted surface of the handle
     // it gets back accumulates onto one `invoke`, exactly as the built-in `cd` root answers.
-    if (this.#app)
+    if (this.#caller.app)
       return new InvokeHandle((steps) =>
         this.invoke(["itx", ["cd", path], ...steps]),
       ) as unknown as IterateContextRpcTarget;
@@ -171,7 +168,7 @@ export class IterateContextRpcTarget extends RpcTarget {
       durableObjectAddress,
       this.#sessionTeardown,
       this.#waitUntil,
-      this.#principal,
+      this.#caller,
     );
   }
 
@@ -191,9 +188,12 @@ export class IterateContextRpcTarget extends RpcTarget {
       const headers = new Headers(terminalFetch.request.headers);
       headers.set(ITX_EXPRESSION_FETCH_HEADER, JSON.stringify(terminalFetch.steps)); // the lane parses a JSON ItxExpression
       headers.delete(ITX_PRINCIPAL_HEADER); // the stamp is this session's, never the Request's own
-      if (this.#principal) headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(this.#principal));
+      headers.delete(ITX_GRANT_HEADER);
+      if (this.#caller.principal)
+        headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(this.#caller.principal));
+      if (this.#caller.grant) headers.set(ITX_GRANT_HEADER, this.#caller.grant);
       headers.delete(ITX_APP_HEADER); // likewise this handle's, never the Request's own
-      if (this.#app) headers.set(ITX_APP_HEADER, "1");
+      if (this.#caller.app) headers.set(ITX_APP_HEADER, "1");
       return this.#durableObject.fetch(new Request(terminalFetch.request, { headers }));
     }
     return this.#invokeOnDurableObject(itxExpression, args);
@@ -242,7 +242,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     // LOADED CODE may lend its OWN object (a live stub answers with the code's own authority and
     // dies with its invocation); a pure rewrite or a deny is a ROW, and a row from loaded code is
     // `itx.append`'s business — through its context's table, where a jail's wall stands.
-    if (this.#app && (!target || typeof target === "string" || Array.isArray(target)))
+    if (this.#caller.app && (!target || typeof target === "string" || Array.isArray(target)))
       throw codedError(
         "FORBIDDEN",
         "loaded code writes a row with itx.append({ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match, target, description } }); provide lends a live stub only",
@@ -322,7 +322,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     // target is a ROW the delivery loop runs as the kernel — that is `itx.append`'s business, through
     // the code's own table — and a removal likewise.
     if (
-      this.#app &&
+      this.#caller.app &&
       (!input.target || typeof input.target === "string" || Array.isArray(input.target))
     )
       throw codedError(
@@ -519,8 +519,7 @@ export class ItxEntrypoint extends WorkerEntrypoint<
       DurableObjectNameCodec.parse(this.ctx.props.iterateContextName),
       new SessionTeardown(),
       (p) => this.ctx.waitUntil(p),
-      null,
-      !this.ctx.props.platform,
+      { principal: null, ...(!this.ctx.props.platform && { app: true as const }) },
     );
   }
 
@@ -530,10 +529,11 @@ export class ItxEntrypoint extends WorkerEntrypoint<
    *  `get().invoke(["itx",["fetch",…]])`: the edge's terminal-fetch fork would overwrite a lane header
    *  the loaded worker already set. */
   override fetch(request: Request): Promise<Response> {
-    // A loaded worker speaks for the project, never for a person: the principal header is the
-    // edge's stamp (worker.ts, iterate-context.ts), stripped here so loaded code cannot forge one.
+    // A loaded worker speaks for the project, never for a person: the principal and grant headers
+    // are the edge's stamp (worker.ts, iterate-context.ts), stripped here so loaded code cannot forge one.
     const headers = new Headers(request.headers);
     headers.delete(ITX_PRINCIPAL_HEADER);
+    headers.delete(ITX_GRANT_HEADER);
     headers.delete(ITX_APP_HEADER);
     if (!this.ctx.props.platform) {
       // A raw `fetch(url)` from loaded code IS `itx.fetch(request)` at its context — through the

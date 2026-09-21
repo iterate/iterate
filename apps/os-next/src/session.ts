@@ -5,7 +5,7 @@ import { RpcTarget } from "capnweb";
 import { z } from "zod";
 import type { IterateApi } from "iterate/next/api";
 import { codedError } from "iterate/next/lib";
-import { verifyAdminSecret, type Principal } from "iterate/next/principal";
+import { verifyAdminSecret, type Caller, type Principal } from "iterate/next/principal";
 import type { Consent } from "./consent.ts";
 import type { Grants } from "./grants.ts";
 import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
@@ -167,6 +167,9 @@ export class IterateRpcTarget extends RpcTarget {
  *  the directory you reach one through (apps/os: "a session is what authenticate() returns"). */
 export type SessionAuthority = {
   principal: SessionPrincipal;
+  /** The OAuth grant this session IS — the connection, stamped beside the principal on every event
+   *  (`source.grant`); absent for the admin secret and the in-band cookie/admin authenticate. */
+  grant?: string;
   reach: Reach;
   grants?: Grants;
   consent?: Consent;
@@ -188,7 +191,7 @@ export class SessionRpcTarget extends RpcTarget {
     this.#projects = new ProjectCollection(
       input,
       sessionTeardown,
-      authority.principal,
+      { principal: authority.principal, grant: authority.grant },
       authority.reach,
     );
     this.#organizations = new OrganizationCollection(
@@ -334,7 +337,7 @@ export class SessionRpcTarget extends RpcTarget {
       DurableObjectNameCodec.address({ projectId: GLOBAL_PROJECT_ID, path }),
       this.#sessionTeardown,
       this.#input.waitUntil,
-      this.#authority.principal,
+      { principal: this.#authority.principal, grant: this.#authority.grant },
     );
   }
 }
@@ -381,20 +384,15 @@ class ProjectCollection extends RpcTarget {
   readonly #input: SessionInput;
   readonly #sessionTeardown: SessionTeardown;
   readonly #reach: Reach;
-  /** The verified principal stamped on context events. */
-  readonly #contextPrincipal: Principal;
+  /** The verified caller — principal and grant — stamped on context events. */
+  readonly #caller: Caller;
 
-  constructor(
-    input: SessionInput,
-    sessionTeardown: SessionTeardown,
-    principal: SessionPrincipal,
-    reach: Reach,
-  ) {
+  constructor(input: SessionInput, sessionTeardown: SessionTeardown, caller: Caller, reach: Reach) {
     super();
     this.#input = input;
     this.#sessionTeardown = sessionTeardown;
     this.#reach = reach;
-    this.#contextPrincipal = principal;
+    this.#caller = caller;
   }
 
   /** The projects this session reaches, as directory rows: the projects of the orgs the user
@@ -451,7 +449,7 @@ class ProjectCollection extends RpcTarget {
       DurableObjectNameCodec.parse(projectId),
       this.#sessionTeardown,
       this.#input.waitUntil,
-      this.#contextPrincipal,
+      this.#caller,
     );
   }
 }

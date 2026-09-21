@@ -32,17 +32,88 @@ const reduceAll = (events: StreamEvent[], initial = CoreContract.initialState())
   events.reduce((s, e) => reduceCoreEvent({ event: e, state: s }) ?? s, initial);
 
 describe("the contract", () => {
-  test("slug `core` v12.0.0; the every-field-defaulted initial state", () => {
+  test("slug `core` v13.0.0; the every-field-defaulted initial state", () => {
     expect(CoreContract.slug).toBe("core");
-    expect(CoreContract.version).toBe("12.0.0");
+    expect(CoreContract.version).toBe("13.0.0");
     expect(CoreContract.initialState()).toEqual({
       paused: null,
       itxExpressionRewriteRules: {},
       subscriptions: {},
       ingressTarget: null,
       schedules: {},
+      scriptRuns: {},
       secrets: {},
     });
+    // the events it OWNS beyond its control events: the run pair, schemas right here
+    expect(Object.keys(CoreContract.events)).toEqual([
+      "events.iterate.com/context/run-requested",
+      "events.iterate.com/context/run-settled",
+    ]);
+  });
+});
+
+describe("the scriptRuns table — by the request's offset: requested opens, settled closes, nothing else", () => {
+  const requested = (offset: number) =>
+    at(offset, "events.iterate.com/context/run-requested", { code: "async (itx) => 1" });
+  const settled = (offset: number, requestOffset: number) =>
+    at(offset, "events.iterate.com/context/run-settled", {
+      requestOffset,
+      settlement: { status: "succeeded", result: 1 },
+    });
+
+  test("requested → a row at its own offset { requestedAt } (the event's identity; the code stays on the event)", () => {
+    expect(reduceAll([requested(5)]).scriptRuns).toEqual({
+      5: { requestedAt: new Date(5000).toISOString() },
+    });
+  });
+  test("settled removes the row; settled twice, or for a request never made → undefined (keep the state)", () => {
+    const open = reduceAll([requested(5)]);
+    const closed = reduceAll([settled(7, 5)], open);
+    expect(closed.scriptRuns).toEqual({});
+    expect(reduceCoreEvent({ event: settled(8, 5), state: closed })).toBeUndefined();
+    expect(reduceCoreEvent({ event: settled(8, 99), state: open })).toBeUndefined();
+  });
+  test("two open runs are two rows; each settles on its own", () => {
+    const state = reduceAll([requested(5), requested(6), settled(7, 5)]);
+    expect(Object.keys(state.scriptRuns)).toEqual(["6"]);
+  });
+  test("a malformed payload THROWS at the reduce (an empty code, a missing settlement) — the host skips it", () => {
+    expect(() =>
+      reduceCoreEvent({
+        event: at(5, "events.iterate.com/context/run-requested", { code: "" }),
+        state: CoreContract.initialState(),
+      }),
+    ).toThrow();
+    expect(() =>
+      reduceCoreEvent({
+        event: at(6, "events.iterate.com/context/run-settled", { requestOffset: 5 }),
+        state: reduceAll([requested(5)]),
+      }),
+    ).toThrow();
+  });
+  test("the append boundary (normalizeControlEvent) parses both payloads against the contract's schemas and refuses an ephemeral one — the table is rebuilt from the durable log", () => {
+    expect(
+      normalizeControlEvent({
+        type: "events.iterate.com/context/run-requested",
+        payload: { code: "async (itx) => 1", extra: "dropped" },
+      }).payload,
+    ).toEqual({ code: "async (itx) => 1" });
+    expect(() =>
+      normalizeControlEvent({
+        type: "events.iterate.com/context/run-settled",
+        payload: {
+          requestOffset: 5,
+          settlement: { status: "failed", error: "x", failureKind: "expired" },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      normalizeControlEvent({
+        type: "events.iterate.com/context/run-requested",
+        ephemeral: true,
+        payload: { code: "async (itx) => 1" },
+      }),
+    ).toThrow(/durable/);
   });
 });
 
@@ -1018,6 +1089,23 @@ describe("rule 8 at a CHILD (nothing project-level implicit; the bare null; the 
       atChild(3, { match: "itx", target: null }),
     ]);
     expect(Object.keys(s.itxExpressionRewriteRules).sort()).toEqual(["itx", "itx.append"]);
+  });
+  test("`null` at a name a stored SHORTER row with a target would answer — the parent link, a granted root — is KEPT as a mask (the chain is cut there); without that row it deletes", () => {
+    const linked = reduceAll([
+      atChild(1, { match: "itx", target: "itx.builtins.cd('/')" }),
+      atChild(2, { match: "itx.tool", target: null }),
+      atChild(3, { match: "itx.repos", target: "itx.builtins.cd('/').repos" }),
+      atChild(4, { match: "itx.repos.get('secret')", target: null }),
+    ]);
+    expect(Object.keys(linked.itxExpressionRewriteRules).sort()).toEqual([
+      "itx",
+      "itx.repos",
+      "itx.repos.get('secret')",
+      "itx.tool",
+    ]);
+    expect(linked.itxExpressionRewriteRules["itx.tool"]).toMatchObject({ target: null });
+    const unlinked = reduceAll([atChild(1, { match: "itx.tool", target: null })]);
+    expect(unlinked.itxExpressionRewriteRules).toEqual({});
   });
   test("behind a bare null the physical spelling of a context root is the grant through the wall and is STORED; a description rides the row", () => {
     const s = reduceAll([

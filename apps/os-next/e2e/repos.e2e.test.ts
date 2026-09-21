@@ -139,6 +139,14 @@ localOnly(
     expect(await repo.readFile("worker.ts")).toBe("export default 1;\n");
     expect(await repo.listFiles()).toEqual({ commitOid: first.commitOid, paths: ["worker.ts"] });
     expect(await repo.tip()).toBe(first.commitOid);
+    // several files under the module names a loaded worker wants (a no-build app's `source`, one
+    // call); a path that is not there is a refusal, never a silent hole
+    expect(await repo.readModules({ "w.js": "worker.ts" })).toEqual({
+      "w.js": "export default 1;\n",
+    });
+    expect((await rejection(repo.readModules({ "x.js": "missing.ts" }))).message).toMatch(
+      /no file at "missing.ts"/,
+    );
     expect(artifacts.snapshots).toBe(1);
 
     // A push from OUTSIDE the facet moves the tip: the next read sees it, with ONE more fetch.

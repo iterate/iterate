@@ -1,7 +1,7 @@
 // library.ts — THE LIBRARY: the built-ins that could be userspace, ONE file the boundary test reads
 // whole. Five concepts:
 //   the library — `buildLibrary` (the memoized roots) + the rule, and the two refusal helpers
-//   run         — `itx.run(script)`: the text of `async (itx) => …` as a loaded worker's one call
+//   run         — `itx.run(script)`: the text of `async (itx) => …`, requested on the log (`context/run-requested`), run by the context's runner, its settlement awaited
 //   capnweb     — `itx.connectToCapnweb(url)`: a remote capnweb API as a pipelinable handle
 //   mcp         — `itx.connectToMcp(url)`: an MCP client over Streamable HTTP
 //   openapi     — `itx.connectToOpenApi(spec)`: an OpenAPI 3 service as an RpcTarget of operationIds
@@ -24,8 +24,9 @@ import {
   print,
   walkStepsOnRpcStub,
 } from "iterate/next/expression";
+import { errorCode, resolveContextPath } from "iterate/next/lib";
 import type { Caller } from "iterate/next/principal";
-import { resolveContextPath } from "iterate/next/lib";
+import type { RunSettled } from "./stream/core-processor.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import type { AgentDurableObject } from "./agent/durable-object.ts";
 import type { ProjectView } from "./project/contract.ts";
@@ -67,19 +68,20 @@ import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
  *  more of itx — never by importing something else. */
 export type LibraryItx = Pick<
   BuiltInScope,
-  "append" | "fetch" | "workers" | "cd" | "r2" | "whoami" | "builtins"
+  "append" | "waitForEvent" | "fetch" | "workers" | "cd" | "r2" | "whoami" | "builtins"
 >;
 
 /** The library's roots, exactly as the built-ins record spreads them in: each verb closed over ONE
  *  `itx`. `BuiltInScope` (context/built-ins.ts) extends this, so the typed surface has them once. */
 export interface LibraryRoots {
-  /** A script — the text of `async (itx) => { … }` — run ONCE in a confined isolate as a loaded
-   *  worker's one call: the text is wrapped in a WorkerEntrypoint whose `run` hands the script
-   *  `env.ITX.get()` (this context, as `workers.get` hosts it) and returns what the script returns
-   *  (over Workers RPC, so JSON-serializable). Sugar over `itx.workers.get({ source }).run()`: the
-   *  same text is the same module, so the loader's content hash reuses the warm isolate across calls.
-   *  A script bakes in its own values — an agent writes it whole (an alternative to a tool call), so
-   *  `run` takes no arguments. */
+  /** A script — the text of `async (itx) => { … }` — run ONCE against this context, ON THE LOG:
+   *  `run` appends `context/run-requested { code }` (attributed to the caller), the context's
+   *  runner starts it at that commit in a confined isolate (`executeScript`: a WorkerEntrypoint
+   *  whose `run` hands the script `env.ITX.get()`), and `run` resolves with the `run-settled`
+   *  event's result — or rejects with its error. So every script that ever ran is a pair of events
+   *  on the context it ran against, and a run the context's restart interrupted is settled as such,
+   *  never re-run. JSON in, JSON out. A script bakes in its own values — an agent writes it whole
+   *  (an alternative to a tool call), so `run` takes no arguments. */
   run(script: string): Promise<unknown>;
   /** An MCP server over Streamable HTTP: `callTool(name, args)`, `listTools()`, and one method per
    *  tool whose name is a legal identifier. */
@@ -99,7 +101,7 @@ export interface LibraryRoots {
    *  tip — git spoken from inside the facet, its token and remote from `itx.cfArtifacts` (which derives the Artifacts repo's name from the path). `get(path)` is that
    *  facet, hosted on its first call and addressed after; `create()` births it, and every other
    *  method refuses until it has. Every call on the handle is one dotted expression on the facet
-   *  (`RepoDurableObject`'s methods: `create` `tip` `readFile` `listFiles` `commitFiles` `writeFile`
+   *  (`RepoDurableObject`'s methods: `create` `tip` `readFile` `readModules` `listFiles` `commitFiles` `writeFile`
    *  `log`). `list()` is the project catalog: the birth certificates cross-posted to `/`, folded by
    *  the project processor (src/project/). */
   repos: {
@@ -161,7 +163,7 @@ export type FileHandle = {
 /** What a repo handle's dotted members reach: the repo facet's own methods. */
 export type RepoFacet = Pick<
   RepoDurableObject,
-  "create" | "tip" | "readFile" | "listFiles" | "commitFiles" | "writeFile" | "log"
+  "create" | "tip" | "readFile" | "readModules" | "listFiles" | "commitFiles" | "writeFile" | "log"
 >;
 /** What an agent handle's dotted members reach: the agent facet's own doors. */
 export type AgentFacet = Pick<AgentDurableObject, "create" | "message">;
@@ -284,14 +286,19 @@ export function buildLibrary(
   };
 }
 
-// ── run ── `itx.run(script)`: a script as a loaded worker's one call. The script is the text of a
-// function of one parameter — `async (itx) => …` — spliced VERBATIM into the template below (a
-// caller's own code in its own confined isolate: the trusted-client doctrine), so a text that is not
-// one function expression fails at load, in the loader's words. It takes no arguments: a script is an
-// agent's whole output (an alternative to a tool call), its values baked in. The template is the
-// smallest WorkerEntrypoint that hosts it: `run()` mints the itx scope for the call and disposes it
-// after, as the SDK's ConfigWorker does. The call rides `itx.workers.get(...).run()` on the handle
-// the library holds, so a rule on `itx.workers` applies to it like any other call.
+// ── run ── `itx.run(script)`: a request on the log, its settlement awaited. `runScript` appends
+// `context/run-requested` and waits for the `run-settled` naming that request's offset; the EXECUTION is the
+// context DO's runner (iterate-context-durable-object.ts `#executeRun`), which calls `executeScript`
+// below at the request's commit — so a literal `run-requested` appended by anyone (a client over
+// /api, the agent's loop, a schedule) runs exactly as `itx.run` does, and both leave the same pair
+// of events. The script is the text of a function of one parameter — `async (itx) => …` — spliced
+// VERBATIM into the template below (a caller's own code in its own confined isolate: the
+// trusted-client doctrine), so a text that is not one function expression fails at load, in the
+// loader's words. It takes no arguments: a script is an agent's whole output (an alternative to a
+// tool call), its values baked in. The template is the smallest WorkerEntrypoint that hosts it:
+// `run()` mints the itx scope for the call and disposes it after, as the SDK's ConfigWorker does.
+// The call rides `itx.workers.get(...).run()` on the handle the library holds, so a rule on
+// `itx.workers` applies to it like any other call.
 
 /** The module `run` loads: `script` spliced in as `const script = (…)`. Exported for the unit pin. */
 export function runScriptModule(script: string): { "cap.js": string } {
@@ -314,25 +321,63 @@ export function runScriptModule(script: string): { "cap.js": string } {
   };
 }
 
+/** THE EXECUTION: the script's one call in its confined isolate — what the context's runner does
+ *  with a requested run. Same text, same module: the loader's content hash reuses the warm isolate. */
+export async function executeScript(itx: LibraryItx, code: string): Promise<unknown> {
+  // TWO dotted calls, never one chain: the handle's dotted surface dispatches at the first call, and
+  // in-process the record hands the worker's handle back as a VALUE (a genuine RpcTarget), so `run`
+  // is its own dispatch on that value — exactly what a remote holder of the same handle would do.
+  // Minted at the FIXED POINT — the loader is the kernel's act; the ROWS govern the script's world
+  // (its `env.ITX` is this context's app handle, and the table decides what it may say).
+  const worker = (await itx.builtins.workers.get({ source: runScriptModule(code) })) as unknown as {
+    run(): Promise<unknown>;
+  };
+  return worker.run();
+}
+
 /** `script` is wire-fed (`itx.run` over capnweb; the array-form expression carries no argument
  *  validation), so it is typed `unknown` here and the runtime check IS the contract — `LibraryRoots.run`
  *  keeps the `string` signature callers see. */
 export function runScript(itx: LibraryItx, script: unknown): Promise<unknown> {
   if (typeof script !== "string" || !script.trim())
     throw new Error("itx.run(script): script is the text of a function, `async (itx) => { … }`");
-  // TWO dotted calls, never one chain: the handle's dotted surface dispatches at the first call, and
-  // in-process the record hands the worker's handle back as a VALUE (a genuine RpcTarget), so `run`
-  // is its own dispatch on that value — exactly what a remote holder of the same handle would do.
-  return (async () => {
-    // The host is minted at the fixed point — the loader is the kernel's act; the ROWS govern the
-    // script's world (its `env.ITX` is this context's app handle, and the table decides what it says).
-    const worker = (await itx.builtins.workers.get({
-      source: runScriptModule(script),
-    })) as unknown as {
-      run(): Promise<unknown>;
-    };
-    return worker.run();
-  })();
+  return requestAndAwaitRun(itx, script);
+}
+
+async function requestAndAwaitRun(itx: LibraryItx, script: string): Promise<unknown> {
+  // The request and the wait are the KERNEL's own log traffic, spelled at the fixed point: a
+  // context's rows say what its code may spell (the script's `env.ITX`), never whether the runner
+  // may write its request — a jail's bare null must not wall the platform's own plumbing.
+  const [requested] = await itx.builtins.append({
+    type: "events.iterate.com/context/run-requested",
+    payload: { code: script },
+  });
+  const requestOffset = requested!.offset; // the run's identity: its settlement names it
+  // The runner started at that commit. Wait for ITS settlement — as long as the script takes: the
+  // caller's own call holds the context, and each wait is capped (stream.ts), so re-arm on timeout
+  // from the last event seen; a settlement of another run in between is skipped, not lost.
+  let afterOffset = requestOffset;
+  for (;;) {
+    let settled;
+    try {
+      settled = await itx.builtins.waitForEvent({
+        type: "events.iterate.com/context/run-settled",
+        afterOffset,
+        timeoutMs: 120_000,
+      });
+    } catch (error) {
+      if (errorCode(error) !== "WAIT_TIMEOUT") throw error;
+      continue;
+    }
+    afterOffset = settled.offset;
+    // Validated at the append boundary against CoreContract's schema (core-processor.ts), so the
+    // payload IS a RunSettled: read as such, never re-parsed — the library takes only itx, and the
+    // contract's TYPE is free to import where its runtime is not (library.test.ts, the boundary).
+    const { requestOffset: settledOffset, settlement } = settled.payload as RunSettled;
+    if (settledOffset !== requestOffset) continue;
+    if (settlement.status === "succeeded") return settlement.result;
+    throw Object.assign(new Error(settlement.error), { failureKind: settlement.failureKind });
+  }
 }
 
 // ── the entities ── `itx.repos.get(path)`, `itx.workspaces.get(path)`: a repo (src/repo/) and a

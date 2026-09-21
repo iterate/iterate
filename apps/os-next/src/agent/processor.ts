@@ -22,6 +22,7 @@ import {
   type StreamEventInput,
   StreamProcessor,
 } from "iterate/next/stream/processor";
+import type { RunSettlement } from "../stream/core-processor.ts";
 import {
   AgentContract,
   type AgentView,
@@ -31,7 +32,8 @@ import {
 } from "./contract.ts";
 import { parseCodemodeResponse } from "./codemode-format.ts";
 
-/** What the host injects: the model and the script runner, both reached through `itx` there. */
+/** What the host injects: the model and the files, both reached through `itx` there. A script is
+ *  not run here — the loop appends the context's `run-requested` and reads its `run-settled`. */
 export type AgentDeps = {
   /** One STREAMED model call over the conversation so far: every provider event the stream carries
    *  reaches `onChunk` as it arrives, with the text it adds ("" for a reasoning or bookkeeping
@@ -43,8 +45,6 @@ export type AgentDeps = {
     signal: AbortSignal;
     onChunk(chunk: unknown, textDelta: string): void;
   }): Promise<{ text: string; usage?: LlmUsage }>;
-  /** Run `async (itx) => …` in this agent's sandbox; what it returned (JSON), or a throw. */
-  runScript(code: string): Promise<unknown>;
   /** The sandbox's `rewriteRules.list()` — the tree the model is shown this turn. */
   rewriteRules(): Promise<RewriteRuleListEntry[]>;
   /** A stored file's bytes (`itx.files.get(path).bytes()`); throws when it is gone. */
@@ -182,12 +182,7 @@ type AgentEvent = ConsumedEvent<typeof AgentContract>;
 type AgentArgs = ProcessEventArgs<AgentView, AgentEvent>;
 
 /** A settlement as the model reads it next — or null when the script returned nothing: the turn ends. */
-export function renderScriptSettlement(
-  settlement: Extract<
-    AgentEvent,
-    { type: "events.iterate.com/capability-host/script-run-settled" }
-  >["payload"]["settlement"],
-): string | null {
+export function renderScriptSettlement(settlement: RunSettlement): string | null {
   if (settlement.status === "failed")
     return `Your script failed (${settlement.failureKind}):\n\`\`\`\n${settlement.error}\n\`\`\``;
   if (settlement.result === undefined) return null;
@@ -201,13 +196,12 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
     super();
   }
 
-  /** The obligations THIS incarnation is running, so a later at-head pass over the same fold does
-   *  not start a second attempt; the durable ground is the fold (`openRequest`, `activeScriptExecutions`). */
+  /** The requests THIS incarnation is running, so a later at-head pass over the same fold does
+   *  not start a second attempt; the durable ground is the fold (`openRequest`). */
   readonly #llmRequestsInFlight = new Map<
     number,
     { controller: AbortController; partialText: string }
   >();
-  readonly #scriptExecutionsInFlight = new Set<string>();
 
   reduce({ state, event }: ReduceArgs<AgentView, AgentEvent>): AgentView | undefined {
     switch (event.type) {
@@ -335,23 +329,6 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
           ? { ...state, paused: null, autonomousTurnCount: 0, consecutiveLlmFailures: 0 }
           : undefined;
 
-      case "events.iterate.com/capability-host/script-run-requested": {
-        const { executionId, code, expiresAt } = event.payload;
-        if (state.activeScriptExecutions[executionId]) return undefined;
-        return {
-          ...state,
-          activeScriptExecutions: {
-            ...state.activeScriptExecutions,
-            [executionId]: { code, requestedAtOffset: event.offset, expiresAt },
-          },
-        };
-      }
-
-      case "events.iterate.com/capability-host/script-run-settled": {
-        const { [event.payload.executionId]: settled, ...rest } = state.activeScriptExecutions;
-        return settled ? { ...state, activeScriptExecutions: rest } : undefined;
-      }
-
       default:
         return undefined;
     }
@@ -432,13 +409,9 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
             payload: { activity: outcome.status },
           });
         consequences.push({
-          type: "events.iterate.com/capability-host/script-run-requested",
-          idempotencyKey: this.idempotencyKey("script-run-requested", event),
-          payload: {
-            code: outcome.code,
-            executionId: `agent-output:${String(event.offset)}`,
-            expiresAt: Date.parse(event.createdAt) + state.config.llmRequestExpiryMs,
-          },
+          type: "events.iterate.com/context/run-requested",
+          idempotencyKey: this.idempotencyKey("run-requested", event),
+          payload: { code: outcome.code },
         });
       }
       // The prose — beside a tag or on its own — is the message, appended directly on this context.
@@ -453,7 +426,9 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
       if (consequences.length > 0) blockProcessorWhile(() => append(...consequences));
     }
 
-    if (event?.type === "events.iterate.com/capability-host/script-run-settled") {
+    // THE CONTEXT ran the script (whoever asked — this loop, or anything else on this context);
+    // its settlement is the model's next input.
+    if (event?.type === "events.iterate.com/context/run-settled") {
       const rendered = renderScriptSettlement(event.payload.settlement);
       if (rendered)
         blockProcessorWhile(() =>
@@ -463,7 +438,7 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
             payload: {
               role: "developer",
               content: rendered,
-              actor: { type: "script", executionId: event.payload.executionId },
+              actor: { type: "script", requestOffset: event.payload.requestOffset },
             },
           }),
         );
@@ -558,30 +533,6 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
         this.#llmRequestsInFlight.set(open.requestedAtOffset, inFlight);
         runInBackground(() => this.#runLlmRequest(open, state, append, inFlight));
       }
-    }
-
-    // Open scripts nobody HERE is running: the same, per executionId.
-    for (const [executionId, row] of Object.entries(state.activeScriptExecutions)) {
-      if (this.#scriptExecutionsInFlight.has(executionId)) continue;
-      if (now >= row.expiresAt) {
-        runInBackground(() =>
-          append({
-            type: "events.iterate.com/capability-host/script-run-settled",
-            idempotencyKey: this.idempotencyKey(`script-run-settled/${executionId}`),
-            payload: {
-              executionId,
-              settlement: {
-                status: "failed",
-                error: "the script expired before it ran",
-                failureKind: "expired",
-              },
-            },
-          }),
-        );
-        continue;
-      }
-      this.#scriptExecutionsInFlight.add(executionId);
-      runInBackground(() => this.#runScript(executionId, row.code, append));
     }
   }
 
@@ -742,33 +693,6 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
       clearTimeout(expiry);
       clearTimeout(idle);
       this.#llmRequestsInFlight.delete(open.requestedAtOffset);
-    }
-  }
-
-  /** The script against this context; what it returned or threw is the settlement. */
-  async #runScript(executionId: string, code: string, append: AgentArgs["append"]): Promise<void> {
-    try {
-      let settlement: Extract<
-        AgentEvent,
-        { type: "events.iterate.com/capability-host/script-run-settled" }
-      >["payload"]["settlement"];
-      try {
-        // `result` undefined is the turn's end (renderScriptSettlement); JSON drops it on the wire.
-        settlement = { status: "succeeded", result: await this.deps.runScript(code) };
-      } catch (error) {
-        settlement = {
-          status: "failed",
-          error: String(error instanceof Error ? error.message : error).slice(0, 8_000),
-          failureKind: "runtime",
-        };
-      }
-      await append({
-        type: "events.iterate.com/capability-host/script-run-settled",
-        idempotencyKey: this.idempotencyKey(`script-run-settled/${executionId}`),
-        payload: { executionId, settlement },
-      });
-    } finally {
-      this.#scriptExecutionsInFlight.delete(executionId);
     }
   }
 }

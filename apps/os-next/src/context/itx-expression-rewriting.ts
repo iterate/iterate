@@ -449,11 +449,9 @@ export function normalizeRewriteRuleConfigured(
   ifTarget?: ItxExpression | null;
 } {
   const matchPrefix = parseItxExpressionPrefix(payload.match);
+  const d = payload.description;
   // oxlint-disable-next-line iterate/simple-truthiness-check -- wire-fed: a present non-string (a number, an object) must be refused at the door, not coerced
-  if (
-    payload.description &&
-    (typeof payload.description !== "string" || payload.description.length > 500)
-  )
+  if (d && (typeof d !== "string" || d.length > 500))
     throw new Error("a rewrite rule's description is one line: a string of at most 500 chars");
   const description = payload.description ? { description: payload.description } : {};
   if (matchPrefix[0] !== "itx")

@@ -72,6 +72,9 @@ patchedDependencies:
   '@cloudflare/worker-bundler@0.2.1':
     hash: f39a50f1ade4d1d29fc948f70eae8d247734e183cd09c2e1b08199ac532d287f
     path: patches/@cloudflare__worker-bundler@0.2.1.patch
+  '@cloudflare/workers-oauth-provider@0.10.3':
+    hash: fbcd0263b43afb9251740d80ff2c67fa975f89a3007f0774dbe5b9a473a2f732
+    path: patches/@cloudflare__workers-oauth-provider@0.10.3.patch
   '@cloudflare/workers-types@4.20260621.1':
     hash: ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2
     path: patches/@cloudflare__workers-types@4.20260621.1.patch
@@ -1300,7 +1303,7 @@ importers:
     dependencies:
       '@cloudflare/workers-oauth-provider':
         specifier: 0.10.3
-        version: 0.10.3
+        version: 0.10.3(patch_hash=fbcd0263b43afb9251740d80ff2c67fa975f89a3007f0774dbe5b9a473a2f732)
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -16059,7 +16062,7 @@ snapshots:
   '@cloudflare/workerd-windows-64@1.20260911.1':
     optional: true
 
-  '@cloudflare/workers-oauth-provider@0.10.3': {}
+  '@cloudflare/workers-oauth-provider@0.10.3(patch_hash=fbcd0263b43afb9251740d80ff2c67fa975f89a3007f0774dbe5b9a473a2f732)': {}
 
   '@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)': {}
 

@@ -10,7 +10,7 @@
 // Dynamic code has two doors, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
-import { stampPrincipal, type Caller } from "iterate/next/principal";
+import { stampCaller, type Caller } from "iterate/next/principal";
 import { codedError, resolveContextPath } from "iterate/next/lib";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
 import {
@@ -441,7 +441,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   /** THE append: every event appended through this scope carries WHO appended it — the DO's own
    *  stamp, never a client's (src/principal.ts): the session's verified principal, or none. */
   const append = (...events: StreamEventInput[]) =>
-    ownContext().append(...events.map((event) => stampPrincipal(event, deps.caller().principal)));
+    ownContext().append(...events.map((event) => stampCaller(event, deps.caller())));
   /** Secrets are the RESOURCE OWNER's: the value's key is owner-scoped, so the catalog lives in ONE
    *  log — the owner's root context (`owner.rootPath`: a project's `/`, a user's `/users/<id>`).
    *  Each `secrets` verb runs `here` on that root, and on a context below it runs as the same call

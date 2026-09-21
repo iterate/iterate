@@ -22,7 +22,11 @@ const agentBorn = (path: string) => ({
 describe("ProjectProcessor — the catalog folded from cross-posted birth certificates", () => {
   const rows: { name: string; events: { type: string; payload?: unknown }[]; view: ProjectView }[] =
     [
-      { name: "the empty catalog", events: [], view: { repos: {}, workspaces: {}, agents: {} } },
+      {
+        name: "the empty catalog",
+        events: [],
+        view: { repos: {}, workspaces: {}, agents: {}, mcpClients: {} },
+      },
       {
         name: "a repo's, a workspace's and an agent's certificates each add one entry, by path, stamped with the event's time",
         events: [
@@ -34,6 +38,7 @@ describe("ProjectProcessor — the catalog folded from cross-posted birth certif
           repos: { "/repos/config": { createdAt: expect.any(String) } },
           workspaces: { "/workspaces/notes": { createdAt: expect.any(String) } },
           agents: { "/agents/support": { createdAt: expect.any(String) } },
+          mcpClients: {},
         },
       },
       {
@@ -53,6 +58,33 @@ describe("ProjectProcessor — the catalog folded from cross-posted birth certif
           },
           workspaces: {},
           agents: { "/agents/support": { createdAt: expect.any(String) } },
+          mcpClients: {},
+        },
+      },
+      {
+        name: "an MCP client connects once per grant — the connection's path and first time; a second connect is ignored",
+        events: [
+          {
+            type: "events.iterate.com/project/mcp-client-connected",
+            payload: { grantId: "grant_a", path: "/mcp/inbound/grant_a" },
+          },
+          {
+            type: "events.iterate.com/project/mcp-client-connected",
+            payload: { grantId: "grant_a", path: "/mcp/inbound/grant_a" },
+          },
+          {
+            type: "events.iterate.com/project/mcp-client-connected",
+            payload: { grantId: "admin", path: "/mcp/inbound/admin" },
+          },
+        ],
+        view: {
+          repos: {},
+          workspaces: {},
+          agents: {},
+          mcpClients: {
+            grant_a: { path: "/mcp/inbound/grant_a", createdAt: expect.any(String) },
+            admin: { path: "/mcp/inbound/admin", createdAt: expect.any(String) },
+          },
         },
       },
       {
@@ -62,7 +94,12 @@ describe("ProjectProcessor — the catalog folded from cross-posted birth certif
           { type: "events.iterate.com/agent/created", payload: {} },
           workspaceBorn("/w"),
         ],
-        view: { repos: {}, workspaces: { "/w": { createdAt: expect.any(String) } }, agents: {} },
+        view: {
+          repos: {},
+          workspaces: { "/w": { createdAt: expect.any(String) } },
+          agents: {},
+          mcpClients: {},
+        },
       },
     ];
   for (const { name, events, view } of rows)

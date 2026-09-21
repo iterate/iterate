@@ -11,6 +11,10 @@ export type Principal = { actor: string; email?: string };
  *  `cd`, including calls without a principal. */
 export type Caller = {
   principal: Principal | null;
+  /** THE CONNECTION the principal acts through: the OAuth grant's id (`grant_…`) — one per connected
+   *  client (a Claude Code install, a dash sign-in, a personal token), the same across every call it
+   *  makes. Absent for the admin secret and the kernel. */
+  grant?: string;
   /** The context the call ORIGINATED at — stamped by the first `cd` hop and forwarded by every later
    *  one, so a relative path resolved after a hop (`repos.get('./x')` answered at the root) still
    *  means the caller's `./x`. Absent until a hop. */
@@ -23,18 +27,26 @@ export type Caller = {
 /** The header the edge sets on a Request it forwards on a principal's behalf — the ingress after
  *  the cookie check, a session's terminal `fetch` — and strips from every inbound Request. */
 export const ITX_PRINCIPAL_HEADER = "x-itx-principal";
+/** The grant's header beside it (the caller's `grant`), set and stripped exactly where the
+ *  principal's is. */
+export const ITX_GRANT_HEADER = "x-itx-grant";
 /** The header a loaded worker's `env.ITX.fetch` sets on the Request it forwards, so the fetch lane
  *  runs the call as app code; stripped from every Request that arrives from outside. */
 export const ITX_APP_HEADER = "x-itx-app";
 
-/** The event as the log stores it: `source.principal` is the platform's — set from the session's
- *  verified principal, a client-supplied one dropped (an anonymous session's event carries none). */
-export function stampPrincipal<E extends { source?: Record<string, unknown> }>(
+/** The event as the log stores it: `source.principal` and `source.grant` are the platform's — set
+ *  from the admitted caller, client-supplied ones dropped (an anonymous session's event carries
+ *  neither, the kernel's none). */
+export function stampCaller<E extends { source?: Record<string, unknown> }>(
   event: E,
-  principal: Principal | null,
+  caller: Caller,
 ): E {
-  const { principal: _clientSupplied, ...source } = event.source || {};
-  if (principal) return { ...event, source: { ...source, principal } };
+  const { principal: _clientPrincipal, grant: _clientGrant, ...source } = event.source || {};
+  if (caller.principal) {
+    const stamped: Record<string, unknown> = { ...source, principal: caller.principal };
+    if (caller.grant) stamped.grant = caller.grant;
+    return { ...event, source: stamped };
+  }
   return Object.keys(source).length > 0
     ? { ...event, source }
     : (({ source: _dropped, ...rest }) => rest as E)(event);

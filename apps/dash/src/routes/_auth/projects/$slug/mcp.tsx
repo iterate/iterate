@@ -39,8 +39,8 @@ function ProjectMcp() {
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">MCP</h1>
         <p className="text-sm text-muted-foreground">
-          One tool, <code>run</code>: a script evaluated in this project's context, under your
-          grant.
+          One tool, <code>run</code>: a script evaluated in your connection's own context of this
+          project, under your grant — every script you run is on that context's log.
         </p>
       </div>
       <Card>
