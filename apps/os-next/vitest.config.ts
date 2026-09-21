@@ -20,6 +20,7 @@
 
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { defineConfig, type Plugin } from "vitest/config";
+import { BaseSequencer, type TestSpecification } from "vitest/node";
 
 // A `.sql` file imports as its text — what wrangler's `rules` (type `Text` for the .sql glob) do
 // for the worker's own bundle (src/worker.ts applies src/control-plane.sql at boot), done here for
@@ -38,6 +39,31 @@ const onUnhandledError = (error: unknown): boolean | void => {
   const message = (error as { message?: string }).message ?? "";
   if (/RPC session|WebSocket|RPC_STUB_OFFLINE|disposed/i.test(message)) return false;
 };
+
+/** THE LONG POLES FIRST. vitest orders files by their cached durations, and CI has no cache — so the
+ *  80 s row that waits a real deadline can start after ninety seconds of short files and the run
+ *  ends at 170 s instead of its 90 s floor. These files start in slot one, longest first; everything
+ *  else follows vitest's own order. A file that stops being long just drops off this list. */
+const LONG_POLES = [
+  "e2e/isolate-ceilings-slow-client.e2e.test.ts",
+  "e2e/scheduled-appends-dormant.e2e.test.ts",
+  "e2e/isolate-ceilings-deployed.e2e.test.ts",
+  "e2e/agents-streamed.e2e.test.ts",
+  "e2e/stream.e2e.test.ts",
+  "e2e/scheduled-appends.e2e.test.ts",
+  "e2e/agents.e2e.test.ts",
+  "e2e/agents-deployed.e2e.test.ts",
+  "e2e/session.e2e.test.ts",
+];
+class LongPolesFirst extends BaseSequencer {
+  override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
+    const ordered = await super.sort(files);
+    const rank = (spec: TestSpecification) =>
+      LONG_POLES.findIndex((pole) => spec.moduleId.endsWith(pole));
+    const poles = ordered.filter((spec) => rank(spec) >= 0).sort((a, b) => rank(a) - rank(b));
+    return [...poles, ...ordered.filter((spec) => rank(spec) < 0)];
+  }
+}
 
 export default defineConfig({
   test: {
@@ -94,7 +120,7 @@ export default defineConfig({
           // them per test, support/setup.ts disposes that test's alone) against its own project, so the
           // only thing two rows share is the worker under test. A file that reads worker-global state —
           // its own worker's logs, one seeded context it also resets — marks itself `describe.sequential`.
-          sequence: { concurrent: true },
+          sequence: { concurrent: true, sequencer: LongPolesFirst },
           onUnhandledError,
         },
       },
