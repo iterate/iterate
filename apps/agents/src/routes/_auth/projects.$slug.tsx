@@ -3,12 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { CircleIcon } from "lucide-react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/next/app";
-import {
-  useContextLog,
-  useContextPresence,
-  useContextProcessors,
-  useLiveState,
-} from "iterate/next/react";
+import { useIterateContext, useLiveState } from "iterate/next/react";
 import {
   Conversation,
   ConversationContent,
@@ -30,7 +25,7 @@ import type { AgentUiLlmStep } from "@iterate-com/ui/components/events/agent-ui-
 import { ContextView } from "@iterate-com/ui/components/context-view/context-view";
 import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
 import { InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
-import { FacetLiveState } from "../../components/facet-live-state.tsx";
+import { LiveStateValue } from "../../components/live-state-value.tsx";
 import { agentEventRenderers } from "../../lib/agent-event-renderers.tsx";
 import { AgentsNav } from "../../components/agents-nav.tsx";
 import { AgentComposer, type StreamInterrupt } from "../../components/composer.tsx";
@@ -188,24 +183,30 @@ function useAgentContext(
   return { context, error };
 }
 
-/** The agent's log, from the SDK's `useContextLog` over its context (subscribed for every committed
- *  event and the streamed chunk windows, caught up with `readEvents`), then — for the chat and its
- *  traces — as the shared reducer reads it: the wire envelope tagged with the path, the context's
- *  script runs in the reducer's vocabulary (agent-events.ts). The raw log itself feeds the Events
- *  view untouched. */
-function useAgentLog(context: Context | undefined, path: string) {
-  const log = useContextLog(context, { consumes: FEED_SUBSCRIPTION });
+/** The agent's log, from the SDK's ONE `useIterateContext` over its context (subscribed for every
+ *  committed event and the streamed chunk windows, caught up with `readEvents`; the processors
+ *  table, who is here and the named facets' live state ride the same subscription), then — for the
+ *  chat and its traces — as the shared reducer reads it: the wire envelope tagged with the path, the
+ *  context's script runs in the reducer's vocabulary (agent-events.ts). The raw log itself feeds the
+ *  Events view untouched. */
+function useAgentLog(context: Context | undefined, path: string, liveState: string[]) {
+  const iterateContext = useIterateContext(context, { consumes: FEED_SUBSCRIPTION, liveState });
   const events = useMemo(
     () =>
       adaptContextRuns(
-        log.events.flatMap((event) => {
+        iterateContext.events.flatMap((event) => {
           const tagged = toAgentEvent(event, path);
           return tagged ? [tagged] : [];
         }),
       ),
-    [log.events, path],
+    [iterateContext.events, path],
   );
-  return { log, events, caughtUp: log.caughtUp, error: log.error || null };
+  return {
+    iterateContext,
+    events,
+    caughtUp: iterateContext.caughtUp,
+    error: iterateContext.error || null,
+  };
 }
 
 /** apps/os's interrupt affordance for the running turn, shared by the composer and the queued
@@ -258,10 +259,25 @@ function AgentConversation({ project, path }: { project: string; path: string })
   const navigate = useNavigate();
   const { slug } = Route.useParams();
   const { context, error: connectError } = useAgentContext(api, project, path);
-  const { log, events, caughtUp, error: logError } = useAgentLog(context, path);
+  // The Events view's panel shows the core reduce's live state and every hosted facet's. The facet
+  // names come from the processors table the same hook loads, so they feed back through state: the
+  // render after the table lands opens them (state-adjust-during-render per react.dev — no effect).
+  const [liveStateNames, setLiveStateNames] = useState(["core"]);
+  const {
+    iterateContext,
+    events,
+    caughtUp,
+    error: logError,
+  } = useAgentLog(context, path, liveStateNames);
+  const wantedLiveStateNames = [
+    "core",
+    ...iterateContext.processors.rows.flatMap((row) =>
+      row.hostedFacet ? [row.hostedFacet.name] : [],
+    ),
+  ];
+  if (JSON.stringify(wantedLiveStateNames) !== JSON.stringify(liveStateNames))
+    setLiveStateNames(wantedLiveStateNames);
   const error = connectError || logError;
-  const processors = useContextProcessors(context, log.events);
-  const presence = useContextPresence(context, log.events);
   const live = useLiveState<unknown>(context, {
     key: "agent",
     door: async () =>
@@ -420,14 +436,14 @@ function AgentConversation({ project, path }: { project: string; path: string })
           <ContextView
             className="mx-auto w-full max-w-3xl px-4 py-2 md:px-6"
             title={<span className="font-mono text-xs">{path}</span>}
-            events={log.events}
+            events={iterateContext.events}
             caughtUp={caughtUp}
             error={error || undefined}
             renderers={agentEventRenderers}
-            processors={processors.rows}
-            presence={presence}
-            renderCoreState={() => <FacetLiveState itx={context} name="core" />}
-            renderLiveState={(name) => <FacetLiveState itx={context} name={name} />}
+            processors={iterateContext.processors.rows}
+            presence={iterateContext.presence}
+            renderCoreState={() => <LiveStateValue state={iterateContext.liveState.core} />}
+            renderLiveState={(name) => <LiveStateValue state={iterateContext.liveState[name]} />}
             emptyText="Nothing has happened on this agent yet."
           />
         </div>
