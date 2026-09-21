@@ -32,6 +32,7 @@ import { adminCredentials, freshCtx, openItx, session, workerUrl } from "./suppo
 import {
   fetchProjectHost,
   freshDnsSafeProjectSlug,
+  onProjectHost,
   projectHostnameBase,
   registerProject,
   wsRoundTripOnProjectHost,
@@ -40,30 +41,33 @@ import { SOURCES } from "./support/sources.ts";
 
 // ── the project host: HTTP and WebSocket, a loaded worker and a lent stub ──
 
-test("a project host serves a LOADED WORKER as an app: GET → 200 HTML, WebSocket upgrade → 101 echo, clean close", async () => {
-  const slug = freshDnsSafeProjectSlug("capcode");
-  const projectId = await registerProject(slug);
-  // A rule whose target is a stateless dynamic worker (its .fetch serves the host) — the target is
-  // an itx EXPRESSION (workers.get({ source })), same as every other rule.
-  const itx = openItx(projectId);
-  await itx.provide("itx.apps.site", ["itx", "workers", ["get", { source: SOURCES.site }]]);
-  const host = `site--${slug}.${projectHostnameBase()}`;
+onProjectHost(
+  "a project host serves a LOADED WORKER as an app: GET → 200 HTML, WebSocket upgrade → 101 echo, clean close",
+  async () => {
+    const slug = freshDnsSafeProjectSlug("capcode");
+    const projectId = await registerProject(slug);
+    // A rule whose target is a stateless dynamic worker (its .fetch serves the host) — the target is
+    // an itx EXPRESSION (workers.get({ source })), same as every other rule.
+    const itx = openItx(projectId);
+    await itx.provide("itx.apps.site", ["itx", "workers", ["get", { source: SOURCES.site }]]);
+    const host = `site--${slug}.${projectHostnameBase()}`;
 
-  const page = await fetchProjectHost(host, "/");
-  expect(page.status, page.text).toBe(200);
-  expect(page.text).toContain("dynamic web capability");
+    const page = await fetchProjectHost(host, "/");
+    expect(page.status, page.text).toBe(200);
+    expect(page.text).toContain("dynamic web capability");
 
-  const ws = await wsRoundTripOnProjectHost(host, "/", "hello-from-eyeball", 15_000);
-  expect(ws.error).toBeUndefined();
-  expect(ws.opened).toBe(true);
-  expect(ws.echo).toBe("site-echo:hello-from-eyeball");
-  expect(ws.closeCode).toBe(1000);
+    const ws = await wsRoundTripOnProjectHost(host, "/", "hello-from-eyeball", 15_000);
+    expect(ws.error).toBeUndefined();
+    expect(ws.opened).toBe(true);
+    expect(ws.echo).toBe("site-echo:hello-from-eyeball");
+    expect(ws.closeCode).toBe(1000);
 
-  // observability is the core reduce's snapshot (the rewrite above already committed, so the wake
-  // record has reduced)
-  const snap = await itx.invoke("itx.facets.get('core').snapshot()");
-  expect(typeof snap.state.incarnation).toBe("number");
-});
+    // observability is the core reduce's snapshot (the rewrite above already committed, so the wake
+    // record has reduced)
+    const snap = await itx.invoke("itx.facets.get('core').snapshot()");
+    expect(typeof snap.state.incarnation).toBe("number");
+  },
+);
 
 /** A fetch-shaped live rpc stub that records what it saw (method, path AND query, body — the
  *  request must cross intact, not just some response come back) and answers a distinctive Response. */
@@ -81,22 +85,25 @@ class HttpDevice extends RpcTarget {
   }
 }
 
-test("lent stub HTTP fetch: an eyeball POST on the project host reaches the Node provider's fetch() and its Response rides back out", async () => {
-  const slug = freshDnsSafeProjectSlug("caplivehttp");
-  const projectId = await registerProject(slug);
-  const device = new HttpDevice();
-  await session()
-    .authenticate(adminCredentials())
-    .projects.get(projectId)
-    .provide("itx.apps.device", device);
-  const host = `device--${slug}.${projectHostnameBase()}`;
+onProjectHost(
+  "lent stub HTTP fetch: an eyeball POST on the project host reaches the Node provider's fetch() and its Response rides back out",
+  async () => {
+    const slug = freshDnsSafeProjectSlug("caplivehttp");
+    const projectId = await registerProject(slug);
+    const device = new HttpDevice();
+    await session()
+      .authenticate(adminCredentials())
+      .projects.get(projectId)
+      .provide("itx.apps.device", device);
+    const host = `device--${slug}.${projectHostnameBase()}`;
 
-  const res = await fetchProjectHost(host, "/hunt?probe=1", {}, { method: "POST", body: "ping" });
-  expect(res.status, res.text).toBe(201);
-  expect(res.text).toBe("pong-from-node-provider");
-  expect(res.headers["x-device"]).toBe("node-live-cap");
-  expect(device.saw).toEqual([`POST ${host}/hunt?probe=1 body=ping`]); // the URL as the eyeball spelled it
-});
+    const res = await fetchProjectHost(host, "/hunt?probe=1", {}, { method: "POST", body: "ping" });
+    expect(res.status, res.text).toBe(201);
+    expect(res.text).toBe("pong-from-node-provider");
+    expect(res.headers["x-device"]).toBe("node-live-cap");
+    expect(device.saw).toEqual([`POST ${host}/hunt?probe=1 body=ping`]); // the URL as the eyeball spelled it
+  },
+);
 
 /** The device: a fetch-shaped live rpc stub that upgrades WebSockets — the workerd fetch-handler
  *  idiom verbatim, running in Node. */
@@ -113,39 +120,45 @@ class WsDevice extends RpcTarget {
   }
 }
 
-test("lent stub WebSocket fetch: a plain eyeball WebSocket on the project host opens (101), echoes, and closes through the Node provider", async () => {
-  const slug = freshDnsSafeProjectSlug("caplivews");
-  const projectId = await registerProject(slug);
-  await session()
-    .authenticate(adminCredentials())
-    .projects.get(projectId)
-    .provide("itx.apps.device", new WsDevice());
-  const host = `device--${slug}.${projectHostnameBase()}`;
-  // Sanity: the rule still answers plain HTTP (so the assertions below are about the UPGRADE).
-  const plain = await fetchProjectHost(host, "/");
-  expect(plain.text).toBe("http-fallback");
+onProjectHost(
+  "lent stub WebSocket fetch: a plain eyeball WebSocket on the project host opens (101), echoes, and closes through the Node provider",
+  async () => {
+    const slug = freshDnsSafeProjectSlug("caplivews");
+    const projectId = await registerProject(slug);
+    await session()
+      .authenticate(adminCredentials())
+      .projects.get(projectId)
+      .provide("itx.apps.device", new WsDevice());
+    const host = `device--${slug}.${projectHostnameBase()}`;
+    // Sanity: the rule still answers plain HTTP (so the assertions below are about the UPGRADE).
+    const plain = await fetchProjectHost(host, "/");
+    expect(plain.text).toBe("http-fallback");
 
-  const ws = await wsRoundTripOnProjectHost(host, "/", "hello-device");
-  expect(ws.error).toBeUndefined();
-  expect(ws.opened).toBe(true);
-  expect(ws.echo).toBe("device-echo:hello-device");
-  expect(ws.closeCode).toBe(1000);
-});
+    const ws = await wsRoundTripOnProjectHost(host, "/", "hello-device");
+    expect(ws.error).toBeUndefined();
+    expect(ws.opened).toBe(true);
+    expect(ws.echo).toBe("device-echo:hello-device");
+    expect(ws.closeCode).toBe(1000);
+  },
+);
 
 // The workerd-provider half of the same lane is pinned in __workers-tests__/ws-fetch-live-101
 // .test.ts (the dedicated fetch-upgrade leg; the DO mints the eyeball pair natively). A tunnel
 // (`iterate tunnel bla 3000`) is this same lent stub proxying to localhost — the same three hops.
 
-test("a hop count the platform never wrote (an app spelling `NaN` to defeat the budget) is over budget on arrival: 508, never a loop", async () => {
-  // before admission — the count is read first, so the project need not exist
-  const response = await fetchProjectHost(
-    `site--${freshDnsSafeProjectSlug("nan-hops")}.${projectHostnameBase()}`,
-    "/",
-    { "x-itx-expression-hops": "NaN" },
-  );
-  expect(response.status).toBe(508);
-  expect(response.text).toContain('"NaN"');
-});
+onProjectHost(
+  "a hop count the platform never wrote (an app spelling `NaN` to defeat the budget) is over budget on arrival: 508, never a loop",
+  async () => {
+    // before admission — the count is read first, so the project need not exist
+    const response = await fetchProjectHost(
+      `site--${freshDnsSafeProjectSlug("nan-hops")}.${projectHostnameBase()}`,
+      "/",
+      { "x-itx-expression-hops": "NaN" },
+    );
+    expect(response.status).toBe(508);
+    expect(response.text).toContain('"NaN"');
+  },
+);
 
 test("the old RPC routes are GONE — /expression, /call, /ws and /cap are no capnweb endpoint: the platform host's browser-auth gate sends an unauthenticated GET to /.auth/login (302), never an itx result; a /ws upgrade gets no 101", async () => {
   // A project host is the one HTTP way into a project. The old /expression, /call, /ws and /cap

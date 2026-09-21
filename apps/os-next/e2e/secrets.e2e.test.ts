@@ -18,6 +18,7 @@ import { petshopBaseUrl } from "./support/petshop.ts";
 import { oauthSession } from "./support/principal.ts";
 import {
   deployedOnly,
+  deployedOnProjectHost,
   freshDnsSafeProjectSlug,
   projectHostnameBase,
   registerProject,
@@ -140,7 +141,7 @@ test("`{ field }` in the egress placeholder: a field the JSON value has no strin
   expect(left.text).not.toMatch(/no stored project secret|pinned to|no string at field/);
 });
 
-deployedOnly(
+deployedOnProjectHost(
   "DEPLOYED: the value arrives at a pinned origin — an egress to one of this project's own apps, on its real host",
   async () => {
     const slug = freshDnsSafeProjectSlug("secrets-arrive");

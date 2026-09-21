@@ -6,6 +6,7 @@
 // wildcard DNS is real and the default dispatcher does. One test runs both ways.
 import { Agent, buildConnector, fetch as undiciFetch, WebSocket as UndiciWebSocket } from "undici";
 import { test } from "vitest";
+import type { TestContext } from "vitest";
 import { adminCredentials, session, workerUrl } from "./client.ts";
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);
@@ -22,6 +23,50 @@ export const deployedOnly = test.skipIf(projectHostsAreLocal());
  *  platform answers 403). Rows that only touch the proxy (create, its failure) still run deployed —
  *  the fake proxy is called back over the WebSocket — and the real binding's rows run `deployedOnly`. */
 export const localOnly = test.skipIf(!projectHostsAreLocal());
+
+/** Does the worker under test HAVE project-host ingress at all? The local worker always does (its
+ *  hosts hang under `localhost`); a deployed one only where `APP_CONFIG_PROJECT_HOSTNAME_BASE` names
+ *  a base. A `*.workers.dev` preview deploy leaves it blank — workers.dev has no wildcard
+ *  subdomains, and the `previews` config block has no routes — so `<app>--<project>.<base>` exists
+ *  nowhere to dial there, by design. */
+export const projectHostsAvailable = (): boolean =>
+  projectHostsAreLocal() || Boolean(process.env.PROJECT_HOSTNAME_BASE);
+
+/** What a row that dials a project host is missing when it skips — the reason on the skipped row. */
+const NO_PROJECT_HOSTS = "no project-host ingress on this deployment (PROJECT_HOSTNAME_BASE blank)";
+
+/** `test(name, fn, timeout?)` — the two project-host gates below are spelled exactly like `test`. */
+type ProjectHostRow = (
+  name: string,
+  fn: (ctx: TestContext) => Promise<unknown>,
+  timeout?: number,
+) => void;
+
+/** `test`, for a row that DIALS a project host: it runs against the local worker and against a
+ *  deployment that has the ingress, and skips — saying what is missing — against one that does not.
+ *  Every row reaching `projectHostnameBase()` goes through this or `deployedOnProjectHost`;
+ *  `projectHostnameBase()` still throws for a caller that reached it through neither. */
+export const onProjectHost: ProjectHostRow = (name, fn, timeout) =>
+  test(
+    name,
+    async (ctx) => {
+      ctx.skip(!projectHostsAvailable(), NO_PROJECT_HOSTS);
+      await fn(ctx);
+    },
+    timeout,
+  );
+
+/** `deployedOnly` AND `onProjectHost`: a row only a real deployment can prove, on a host only a
+ *  deployment that has the ingress owns. */
+export const deployedOnProjectHost: ProjectHostRow = (name, fn, timeout) =>
+  deployedOnly(
+    name,
+    async (ctx) => {
+      ctx.skip(!projectHostsAvailable(), NO_PROJECT_HOSTS);
+      await fn(ctx);
+    },
+    timeout,
+  );
 
 /** The base project hosts hang under: `localhost` for the local worker (worker-config.ts), the
  *  deployed worker's `APP_CONFIG_PROJECT_HOSTNAME_BASE` (wrangler.jsonc) otherwise. */

@@ -28,13 +28,14 @@ import { beforeAll, describe, expect, test } from "vitest";
 import { adminCredentials, freshCtx, openItx, workerUrl } from "./support/client.ts";
 import {
   deployedOnly,
+  deployedOnProjectHost,
   freshDnsSafeProjectSlug,
   projectHostnameBase,
   registerProject,
 } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
 
-deployedOnly(
+deployedOnProjectHost(
   "a loaded worker serves capnweb behind a project host, dialed with connectToCapnweb over the batch transport — the path arriving verbatim",
   async () => {
     const slug = freshDnsSafeProjectSlug("capnweb-host");
