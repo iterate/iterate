@@ -499,12 +499,17 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     secret.invoke(["itx", "facets", ["get", "secret"], call], [], deps.caller());
   /** The fact of a write or a deletion: on the secret's own path (`secret`), attributed to the
    *  caller, then cross-posted to the owner's root for the catalog. */
+  const crossPostSecretFact = (event: StreamEventInput) =>
+    deps.context(owner.rootPath).invoke(["itx", "builtins", ["append", event]], [], deps.caller());
   const secretFact = async (secret: ReachableContext, event: StreamEventInput): Promise<void> => {
     await secret.append(stampCaller(event, deps.caller()));
-    await deps
-      .context(owner.rootPath)
-      .invoke(["itx", "builtins", ["append", event]], [], deps.caller());
+    await crossPostSecretFact(event);
   };
+  /** The `secret` processor rows on the secret's context — one while the secret lives. */
+  const secretRows = (secret: ReachableContext) =>
+    secret.invoke(["itx", "builtins", "processors", ["list"]], [], deps.caller()) as Promise<
+      { name: string }[]
+    >;
 
   // Each root implements one member of `BuiltInScope` above (the canonical doc of the surface); the
   // comments here add only the WHY of a code branch.
@@ -667,8 +672,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // crash window fails LOUD. A clear not yet followed by its fact leaves a log that says set
       // while egress answers 502 ("no stored project secret") until the delete is retried; the
       // other order would leave live material behind a log that says it is gone — silent. The
-      // `secret` processor row goes LAST, and again on a retry: a call that lost its answer between
-      // the fact and the disable would otherwise leave the row (and the facet's storage) behind.
+      // `secret` processor row goes LAST, so the row standing IS the mark of a delete not finished:
+      // a retry (a call that lost its answer after its own-path fact — before the cross-post, or
+      // before the disable) cross-posts the certificate again (the catalog drops the entry once; a
+      // second root fact is harmless) and takes the row; a delete that finished answers at once
+      // and appends nothing.
       delete: (secretPath) =>
         onSecretContext(secretPath, ["delete", secretPath], async (secret) => {
           // The facet is the platform's own SecretDurableObject and `snapshot()` the engine's
@@ -678,22 +686,18 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             [],
             deps.caller(),
           )) as { state: SecretState };
-          if (!state.material) {
-            if (!state.deletion)
-              throw new Error(`secret ${secretPath}: never set — nothing to delete`);
-          } else {
+          if (!state.material && !state.deletion)
+            throw new Error(`secret ${secretPath}: never set — nothing to delete`);
+          const deleted: StreamEventInput = {
+            type: "events.iterate.com/secret/deleted",
+            payload: { path: secretPath },
+          };
+          const rowStands = (await secretRows(secret)).some((row) => row.name === "secret");
+          if (state.material) {
             await secretFacet(secret, ["clear"]);
-            await secretFact(secret, {
-              type: "events.iterate.com/secret/deleted",
-              payload: { path: secretPath },
-            });
-          }
-          const rows = (await secret.invoke(
-            ["itx", "builtins", "processors", ["list"]],
-            [],
-            deps.caller(),
-          )) as { name: string }[];
-          if (rows.some((row) => row.name === "secret"))
+            await secretFact(secret, deleted);
+          } else if (rowStands) await crossPostSecretFact(deleted);
+          if (rowStands)
             await secret.invoke(
               ["itx", "builtins", "processors", ["disable", "secret"]],
               [],
