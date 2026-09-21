@@ -536,3 +536,7 @@ lint/format, and the iOS export pass. With local binaries removed, the real
 `generate-filters all` run kept all 216 images and generated none. The deployment
 preflight verified all 218 referenced R2 objects. No AI image regeneration or
 production website deployment was needed for this change.
+
+The manual MediaPipe command also passes against R2 and preserves all loader,
+WASM and model constants. Its async entry point supports the mobile package's
+CommonJS tooling; no top-level-await/module-mode change is required.
