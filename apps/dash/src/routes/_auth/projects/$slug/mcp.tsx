@@ -1,7 +1,7 @@
 // /projects/<slug>/mcp — connect a coding agent to this project over MCP: the server, the one-line
 // installs for Claude Code and the Codex CLI, the sign-in that follows (the platform's OAuth, this
-// project ticked at consent), how the `run` tool picks the project — and the clients that have
-// connected, from the project's catalog (`mcpClients.list()`: one row per grant, with the context
+// project ticked at consent), how the `run` tool picks the project — and the connections born
+// under it, from the project's catalog (`mcpConnections.list()`: one row per grant, with the context
 // its scripts run on). Every command is copyable.
 import { createFileRoute, getRouteApi } from "@tanstack/react-router";
 import {
@@ -25,11 +25,11 @@ const shell = getRouteApi("/_auth");
 const projectRoute = getRouteApi("/_auth/projects/$slug");
 
 export const Route = createFileRoute("/_auth/projects/$slug/mcp")({
-  // The project's connected clients, and — when the session may read the account — the person's
-  // own grants, so a client of theirs shows by its name and another member's by its grant id.
+  // The project's MCP connections, and — when the session may read the account — the person's
+  // own grants, so a connection of theirs shows by its client's name, a teammate's by grant id.
   loader: async ({ context }) => {
     const [clients, grants] = await Promise.all([
-      context.api.projects.get(context.project.id).mcpClients.list(),
+      context.api.projects.get(context.project.id).mcpConnections.list(),
       context.info.scopes.includes("account") ? context.api.grants.list() : null,
     ]);
     return { clients, grants: grants?.items ?? [] };
@@ -115,17 +115,18 @@ function ProjectMcp() {
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle>Connected clients</CardTitle>
+          <CardTitle>Connections</CardTitle>
           <CardDescription>
-            Every client that has run a script here, by its grant — your own by name, a teammate's
-            by grant id. Its scripts run on, and are logged at, the context shown.
+            Every connection that has run a script here, by its grant — your own by the client's
+            name, a teammate's by grant id. Its scripts run on, and are logged at, the context
+            shown.
           </CardDescription>
         </CardHeader>
         <CardContent>
           {clients.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No client has connected yet.</p>
+            <p className="text-sm text-muted-foreground">No connection yet.</p>
           ) : (
-            <Table data-testid="mcp-clients">
+            <Table data-testid="mcp-connections">
               <TableHeader>
                 <TableRow>
                   <TableHead>Client</TableHead>

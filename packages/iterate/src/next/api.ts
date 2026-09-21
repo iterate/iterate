@@ -161,9 +161,9 @@ export interface IterateContextApi {
     get(path: string): InvokeHandle;
     list(): Promise<{ path: string; createdAt: string }[]>;
   };
-  /** The MCP clients that connected to the project, by grant: each connection's context path
-   *  (`/mcp/inbound/<grantId>`, its transcript) and when it first connected. */
-  mcpClients: {
+  /** The MCP connections born under the project, by grant: each connection's context path
+   *  (`/mcp/inbound/<grantId>`, its transcript) and when it was born (the grant's first run). */
+  mcpConnections: {
     list(): Promise<{ grantId: string; path: string; createdAt: string }[]>;
   };
 }

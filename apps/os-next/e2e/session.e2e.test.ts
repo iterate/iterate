@@ -275,10 +275,10 @@ test("a personal access token — one OAuth grant the account mints — is the u
   });
   expect(
     (await readAll(api.projects.get(projectId))).find(
-      (e) => e.type === "events.iterate.com/project/mcp-client-connected",
+      (e) => e.type === "events.iterate.com/project/mcp-connection-created",
     )?.payload,
   ).toEqual({ grantId: grant!.id, path: connectionPath });
-  expect(await api.projects.get(projectId).mcpClients.list()).toEqual([
+  expect(await api.projects.get(projectId).mcpConnections.list()).toEqual([
     { grantId: grant!.id, path: connectionPath, createdAt: expect.any(String) },
   ]);
   // THE ACCOUNT'S RECORD: the mint is a fact on the person's own context, stamped with them and

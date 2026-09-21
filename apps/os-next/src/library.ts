@@ -44,7 +44,7 @@ import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 // pipelinable handle).
 //
 // The verbs: `run` · `connectToMcp` · `connectToOpenApi` · `connectToCapnweb` · `repos.get`/`list` ·
-// `workspaces.get`/`list` · `agents.get`/`list` · `mcpClients.list` · `files.get`/`list`. `run` is sugar over `itx.workers.get` (the run section); the entity handles
+// `workspaces.get`/`list` · `agents.get`/`list` · `mcpConnections.list` · `files.get`/`list`. `run` is sugar over `itx.workers.get` (the run section); the entity handles
 // over `itx.cd(path).facets.get` (the entities section). The three connectors each
 // return a connection RpcTarget a caller can hold across calls, and each does ALL its HTTP through
 // `itx.fetch` (egress: `getSecret("/secrets/NAME")` placeholders in headers substitute for free; a user
@@ -133,11 +133,11 @@ export interface LibraryRoots {
     get(path: string): InvokeHandle & AgentFacet;
     list(): Promise<{ path: string; createdAt: string }[]>;
   };
-  /** THE CONNECTED MCP CLIENTS of the project: every grant that ran a script over MCP — the
-   *  connection's context path (`/mcp/inbound/<grantId>`, its transcript) and when it first
-   *  connected. The project catalog's `mcpClients`, folded from `project/mcp-client-connected`
-   *  (mcp.ts appends it to `/` on a grant's first use). */
-  mcpClients: {
+  /** THE MCP CONNECTIONS of the project: every grant whose connection context was born here (its
+   *  first run over MCP) — the context's path (`/mcp/inbound/<grantId>`, its transcript) and when.
+   *  The project catalog's `mcpConnections`, folded from `project/mcp-connection-created` (mcp.ts
+   *  cross-posts it to `/`). */
+  mcpConnections: {
     list(): Promise<{ grantId: string; path: string; createdAt: string }[]>;
   };
   /** THE FILES (apps/os's `itx.files`, lean): project file storage as a PATH namespace over `itx.r2`
@@ -279,9 +279,9 @@ export function buildLibrary(itx: LibraryItx): {
             ...agent,
           })),
       },
-      mcpClients: {
+      mcpConnections: {
         list: async () =>
-          Object.entries((await projectCatalog(itx)).mcpClients).map(([grantId, client]) => ({
+          Object.entries((await projectCatalog(itx)).mcpConnections).map(([grantId, client]) => ({
             grantId,
             ...client,
           })),
