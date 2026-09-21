@@ -25,11 +25,14 @@ export class AccountProcessor extends StreamProcessor<
     if (event.type === "events.iterate.com/account/grant-minted") {
       const { grantId, ...token } = event.payload;
       if (state.personalAccessTokens[grantId]) return undefined; // minted once
+      // Both facts are published after the fact, in whatever order they land: an end already
+      // recorded closes the row as it is born.
+      const endedAt = state.endedGrants[grantId]?.at ?? null;
       return {
         ...state,
         personalAccessTokens: {
           ...state.personalAccessTokens,
-          [grantId]: { ...token, mintedAt: event.createdAt, endedAt: null },
+          [grantId]: { ...token, mintedAt: event.createdAt, endedAt },
         },
       };
     }

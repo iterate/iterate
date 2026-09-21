@@ -1,6 +1,6 @@
 // src/organization/processor.ts — the organization processor's PURE class (the triplet's middle):
-// folds the organization's facts into its record. Imports only the pure kernel, so the node lane
-// constructs it with `new` (processor.test.ts); the host (durable-object.ts) reduces it on demand.
+// folds the organization's facts into its record. Imports only the pure kernel, so the unit tests
+// construct it with `new` (processor.test.ts); the host (durable-object.ts) reduces it on demand.
 import {
   type ConsumedEvent,
   type ProcessorState,

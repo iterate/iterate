@@ -45,6 +45,11 @@ describe("AccountProcessor — the account view folded from facts", () => {
           { type: "events.iterate.com/account/grant-ended", payload: { grantId: "grant_b" } },
           { type: "events.iterate.com/account/grant-ended", payload: { grantId: "grant_a" } },
           { type: "events.iterate.com/account/grant-ended", payload: { grantId: "grant_a" } },
+          // the end landed before the mint (both are published after the fact): born closed
+          {
+            type: "events.iterate.com/account/grant-minted",
+            payload: { grantId: "grant_b", name: "phone", projects: [], expiresAt: 5 },
+          },
           {
             type: "events.iterate.com/account/consent-approved",
             payload: {
@@ -62,6 +67,13 @@ describe("AccountProcessor — the account view folded from facts", () => {
               name: "laptop",
               projects: ["prj_1"],
               expiresAt: 9,
+              mintedAt: expect.any(String),
+              endedAt: expect.any(String),
+            },
+            grant_b: {
+              name: "phone",
+              projects: [],
+              expiresAt: 5,
               mintedAt: expect.any(String),
               endedAt: expect.any(String),
             },
