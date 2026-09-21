@@ -37,6 +37,7 @@ import {
   assertSecretPath,
   normalizeSecretRecord,
   type SecretCatalogEntry,
+  type SecretHmacVerification,
   type SecretMaterial,
   type SecretRefresh,
 } from "../secrets.ts";
@@ -202,6 +203,15 @@ export interface BuiltInScope extends LibraryRoots {
      *  set again. */
     delete(path: string): Promise<{ path: string }>;
     list(): Promise<SecretCatalogEntry[]>;
+    /** THE VERIFY LANE — a webhook's signature checked against a secret WITHOUT revealing it: is
+     *  `signature` (hex, either case) the HMAC-SHA256 of `payload` (a string is its UTF-8 bytes)
+     *  under the secret's material — the whole value, or the string at `field` of a JSON value?
+     *  Runs in the secret's facet on its own context; one bit comes back. Constant-time, and a
+     *  secret never set (or a material with no key at the field) answers false, never a description
+     *  — the candidate comes from an unauthenticated door. The caller assembles the signed bytes the
+     *  provider's scheme names (Stripe `${t}.${body}` with its own tolerance check on `t`, GitHub the
+     *  body, Slack `v0:${t}:${body}`) and strips the scheme's prefix (`sha256=`, `v0=`). */
+    verifyHmac(path: string, input: SecretHmacVerification): Promise<boolean>;
   };
   /** THE FIRST BINDINGS ROOT: Cloudflare's Workers AI binding, VERBATIM — `run(model, inputs,
    *  options?)`, `models()`, `gateway(id).run({ provider, endpoint, headers, query })`, `toMarkdown()`,
@@ -719,6 +729,12 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         };
         return Object.entries(state.secrets).map(([path, row]) => ({ path, ...row }));
       },
+      verifyHmac: (secretPath, input) =>
+        onSecretContext(
+          secretPath,
+          ["verifyHmac", secretPath, input],
+          (secret) => secretFacet(secret, ["verifyHmac", input]) as Promise<boolean>,
+        ),
     },
     ai: env.AI, // the binding object itself — dispatch walks its methods
     browser: cfBrowser(env.BROWSER),

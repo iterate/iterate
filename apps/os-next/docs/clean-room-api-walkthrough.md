@@ -605,7 +605,10 @@ interface BuiltInScope {
    *  sent to those origins ONLY; `refresh` is `oauth-refresh-token` or `waitrose-session`, run by the
    *  facet on a 401), `beginOAuth(path, options)` (the provider's authorize URL; the platform's callback
    *  and the facet obtain the first tokens), `completeOAuth(path, { code, nonce })` (the callback's),
-   *  `delete(path)`, and a `list()` of paths, pins, strategy kinds and `createdAt`, never a value. Every
+   *  `delete(path)`, and a `list()` of paths, pins, strategy kinds and `createdAt`, never a value —
+   *  plus `verifyHmac(path, { payload, signature, field? })`, the one bit a webhook door needs: is the
+   *  hex signature the HMAC-SHA256 of the payload under the secret? (the facet computes it; nothing
+   *  comes out; a secret never set answers false). Every
    *  writing verb runs on the secret's own context and lands its fact there — `secret/set { path, urls,
    *  refresh? }`, `secret/deleted { path }` — attributed to the caller, cross-posted to the owner's root
    *  (the catalog `list()` reads: the `project` facet's `secrets`); the value never enters a log. The
@@ -620,6 +623,10 @@ interface BuiltInScope {
     completeOAuth(path: string, input: { code: string; nonce: string }): Promise<{ path: string }>;
     delete(path: string): Promise<{ path: string }>;
     list(): Promise<{ path: string; urls: string[]; refresh?: string; createdAt: string }[]>;
+    verifyHmac(
+      path: string,
+      input: { payload: string | Uint8Array; signature: string; field?: string },
+    ): Promise<boolean>;
   };
 
   /** Workers AI, the binding verbatim; Cloudflare Artifacts project-scoped (the escape hatch); the

@@ -217,7 +217,7 @@ export const BUILT_IN_ROOT_DESCRIPTIONS: Record<BuiltInRoot, string> = {
   url: "this project's public URL over HTTP — the apex or an app's, at a path: `url({ app?, path? })`; only from a session that reached the platform on an origin",
   kv: "key-value strings, the project's own: `kv.get(k)` · `kv.put(k, v)` · `kv.list(prefix)` · `kv.delete(k)`",
   secrets:
-    'names only, never values: `secrets.list()`; a `getSecret("/secrets/x")` placeholder in an outbound request is substituted at egress',
+    'names only, never values: `secrets.list()`; a `getSecret("/secrets/x")` placeholder in an outbound request is substituted at egress; `secrets.verifyHmac(path, { payload, signature })` checks a webhook\'s HMAC-SHA256 hex signature without revealing the secret',
   ai: "Workers AI, verbatim: `ai.run(model, inputs)`",
   browser: 'browser rendering: `browser.quickAction("markdown", { url })`',
   r2: "the object store, verbatim (`files` is the friendlier surface)",

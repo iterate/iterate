@@ -1554,6 +1554,9 @@ first-party facet `secret` (`src/secret/`: contract · processor · durable-obje
 (a required pin of origins, an optional refresh strategy the facet runs on a 401), `beginOAuth(path,
 options)` (the provider's authorize URL; the platform's callback and the facet obtain the first
 tokens), `delete(path)`, and a `list()` of paths, pins, strategy kinds and `createdAt`, never a value.
+The one reading verb reveals nothing either: `verifyHmac(path, { payload, signature, field? })` answers
+whether a webhook's hex signature is the HMAC-SHA256 of the payload under the secret — computed in the
+facet, one bit out, false for a secret never set.
 Every writing verb runs on the secret's own context, so the log's order is the value's: it appends
 the fact on that path — `events.iterate.com/secret/set { path, urls, refresh? }`, `secret/deleted
 { path }` — attributed to the caller, cross-posts the same fact to the project's root, and puts the
