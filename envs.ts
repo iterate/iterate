@@ -636,7 +636,9 @@ export interface OsNextEnv {
   resources: { directoryDbId: string; oauthKvId: string; itxKvId: string };
 }
 export const osNextEnvs: Record<string, OsNextEnv> = {
-  // Isolated API preview; workers.dev only (no project-host routing).
+  // THE BASELINE for per-PR Worker Previews (apps/os-next/scripts/preview.ts, the cloudflare-os
+  // recipe): every `pr<n>-<branch>` preview is a branch of this worker with resources of its own;
+  // nothing reads the baseline's data. workers.dev only (no project-host routing).
   preview_2: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview_2",

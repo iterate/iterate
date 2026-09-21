@@ -133,3 +133,31 @@ pnpm e2e                        # the wire lane alone, against a local worker th
 WORKER_BASE_URL=https://os.iterate2.com ADMIN_API_SECRET=… pnpm e2e   # the proof that counts
 pnpm run deploy                 # the build, then wrangler deploy --config wrangler.jsonc --env <name>
 ```
+
+## Previews — one per pull request
+
+Every PR that touches os-next gets its own preview of the worker on Cloudflare Worker Previews
+(`wrangler preview`, private beta), the way [cloudflare/cloudflare-os](https://github.com/cloudflare/cloudflare-os)
+previews itself: a preview named `pr<n>-<branch slug>` is a branch of the baseline worker
+`os-next-preview-2` (`envs.ts` `osNextEnvs.preview_2`) with Durable Object namespaces, KV, R2, D1 and
+an Artifacts namespace of its own, at `https://pr<n>-<slug>-os-next-preview-2.iterate-dev-preview.workers.dev`.
+`.depot/workflows/preview-os-next.yml` deploys it on every push, runs `pnpm e2e` against it, writes the
+URL and the operations below into the PR body, deletes it when the PR closes, and sweeps nightly.
+Previews live on workers.dev and have no project hosts; the e2e rows that need one skip.
+
+`scripts/preview.ts` is the whole thing (run in this directory, under the baseline's Doppler config):
+
+```bash
+doppler run --project project-worker --config preview_2 -- pnpm preview deploy --pr 123 --name my-branch
+doppler run --project project-worker --config preview_2 -- pnpm preview e2e    --pr 123 --name my-branch
+doppler run --project project-worker --config preview_2 -- pnpm preview reset  --pr 123 --name my-branch   # destroy, then deploy from scratch
+doppler run --project project-worker --config preview_2 -- pnpm preview delete --pr 123 --name my-branch
+doppler run --project project-worker --config preview_2 -- pnpm preview sweep
+```
+
+A push redeploys the preview in place and its data carries over; when anything about it is wrong —
+a schema change the idempotent DDL cannot apply, a class renamed, state you want gone — `reset` is the
+answer. The same operations run from CI as `depot ci dispatch ... --workflow preview-os-next.yml
+--input pull-request-number=123 --input action=<deploy|reset|e2e|delete>`; the PR body lists them.
+The wrangler that provisions KV and R2 per preview is the pkg.pr.new build of workers-sdk PR #14416,
+installed into a tmpdir per run exactly as cloudflare-os does, until that ships.

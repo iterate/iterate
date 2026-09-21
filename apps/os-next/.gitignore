@@ -4,3 +4,6 @@
 !/src/generated/*.d.ts
 
 /wrangler.jsonc
+# scripts/preview.ts: the one per-PR Worker Preview's config, and what a deploy reports
+/wrangler.preview.jsonc
+/output/

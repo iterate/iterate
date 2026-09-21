@@ -34,7 +34,7 @@ export default defineConfig({
       {
         test: {
           name: "unit",
-          include: ["src/**/*.test.ts", "examples/**/*.test.ts"],
+          include: ["src/**/*.test.ts", "examples/**/*.test.ts", "scripts/*.test.ts"],
           // The edge and DO modules reach the control plane, whose OAuth provider imports
           // cloudflare:workers; inlined so the unit tests' `vi.mock("cloudflare:workers")` covers it.
           server: { deps: { inline: ["@cloudflare/workers-oauth-provider"] } },
