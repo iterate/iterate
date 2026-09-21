@@ -16,6 +16,24 @@ test("a completed preview reports the whole run's red result", () => {
   });
 });
 
+test("Depot's nested reusable-workflow names still identify a settled preview", () => {
+  const run = checks("run", 1, "success").map((check) => ({
+    ...check,
+    name: check.name.replace("Preview / ", "Preview / Preview / deploy + e2e / "),
+  }));
+  expect(previewResultFromChecks("candidate", run, [settled("run", 9, "success")])).toMatchObject({
+    commit: "candidate",
+    conclusion: "success",
+  });
+  expect(
+    previewResultFromChecks(
+      "candidate",
+      run.filter((check) => !check.name.endsWith("3/6")),
+      [settled("run", 9, "success")],
+    ),
+  ).toBeNull();
+});
+
 test("a newer incomplete workflow blocks an older green, even if the old finalizer appeared last", () => {
   const old = checks("old", 1, "success");
   old.at(-1)!.id = 1000;

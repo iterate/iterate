@@ -278,3 +278,10 @@ shards, then restored the preview. Its [settlement](https://depot.dev/orgs/0p91s
 recorded `tests=success; deployment=restored; check=106277241289`. The following
 evidence-only commit tests docs inheritance; its result is recorded in the PR
 body so the acceptance record does not itself require another push.
+
+The first docs-only push exposed an existing evidence-reader mismatch: Depot
+reported `Preview / Preview / deploy + e2e / App tests`, while the reader
+removed only one prefix and rejected the settled run. A regression now covers
+those actual nested names, and the reader matches the leaf job name while
+retaining every provenance and completeness check. Replaying the real
+`44107d152` checks/statuses then recognized its settled success.

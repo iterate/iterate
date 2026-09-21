@@ -5,7 +5,7 @@ size: medium
 
 # Fetch preview planning history only when needed
 
-Status: implementation complete. Normal checkout, filtered metadata fetching, early head decisions, and bounded merge-base discovery pass local checks and a full settled preview run. The draft awaits review; PR monitoring is registered.
+Status: lazy metadata fetching passed local checks and a full settled preview run. Docs-only acceptance exposed a pre-existing result-parser bug with Depot's nested job names; its regression, small fix, and replay of the real settled GitHub response now pass; repeat CI and docs inheritance remain. The draft awaits review; PR monitoring is registered.
 
 The Plan job should use the ordinary actions/checkout defaults to get the checked-in scripts. Planning must fetch additional Git metadata only as needed, rather than making checkout fetch the entire repository history before any decision is possible.
 
@@ -35,3 +35,4 @@ The Plan job should use the ordinary actions/checkout defaults to get the checke
 
 - Live product acceptance: [workflow `tt77gkjqqt`](https://depot.dev/orgs/0p91s0lz49/workflows/tt77gkjqqt) passed deployment, app tests, all six browser shards and restoration. Settlement recorded `tests=success; deployment=restored; check=106277241289`. Plan took 31s versus 55s in the spec-only baseline; checkout fetch took 0.432s versus 27.185s.
 - This evidence-only commit also provides the docs inheritance acceptance push after settlement; its result is recorded in the PR body to avoid another validation-only commit.
+- Docs acceptance at `4e5795d75` correctly classified Docs and fetched only head/main metadata, but deployed because `previewResultFromChecks` stripped only one workflow-name prefix. Actual Depot check names contain `Preview / Preview / deploy + e2e /`; the parser could not find the completed finalizer. Added a failing regression using the observed nested names, then normalized the leaf job name while retaining all provenance, completeness and settlement checks. The separate unit CI failure was the unchanged Markdown multiplayer test exceeding its 10-second budget.
