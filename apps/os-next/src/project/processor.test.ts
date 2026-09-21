@@ -31,7 +31,7 @@ const empty: ProjectState = {
   repos: {},
   workspaces: {},
   agents: {},
-  mcpClients: {},
+  mcpConnections: {},
 };
 
 describe("ProjectProcessor — the reduce", () => {
@@ -70,7 +70,7 @@ describe("ProjectProcessor — the reduce", () => {
         repos: { "/repos/config": { createdAt: expect.any(String) } },
         workspaces: { "/workspaces/notes": { createdAt: expect.any(String) } },
         agents: { "/agents/support": { createdAt: expect.any(String) } },
-        mcpClients: {},
+        mcpConnections: {},
       },
     },
     {
@@ -96,21 +96,21 @@ describe("ProjectProcessor — the reduce", () => {
       name: "an MCP client connects once per grant — the connection's path and first time; a second connect is ignored",
       events: [
         {
-          type: "events.iterate.com/project/mcp-client-connected",
+          type: "events.iterate.com/project/mcp-connection-created",
           payload: { grantId: "grant_a", path: "/mcp/inbound/grant_a" },
         },
         {
-          type: "events.iterate.com/project/mcp-client-connected",
+          type: "events.iterate.com/project/mcp-connection-created",
           payload: { grantId: "grant_a", path: "/mcp/inbound/grant_a" },
         },
         {
-          type: "events.iterate.com/project/mcp-client-connected",
+          type: "events.iterate.com/project/mcp-connection-created",
           payload: { grantId: "admin", path: "/mcp/inbound/admin" },
         },
       ],
       state: {
         ...empty,
-        mcpClients: {
+        mcpConnections: {
           grant_a: { path: "/mcp/inbound/grant_a", createdAt: expect.any(String) },
           admin: { path: "/mcp/inbound/admin", createdAt: expect.any(String) },
         },

@@ -17,12 +17,12 @@ import { AgentContract } from "../agent/contract.ts";
 
 export const ProjectContract = defineProcessorContract({
   slug: "project",
-  // 2: the catalog grew `agents`; 3: `mcpClients`; 4: the state grew `creation`, and the certificates
+  // 2: the catalog grew `agents`; 3: `mcpConnections`; 4: the state grew `creation`, and the certificates
   // it folds were renamed (`repo/created`, `agent/created`). A checkpoint reduced under an older
   // version is reused as-is by the engine, so the bump is what re-reduces every existing root log.
   version: "4",
   description:
-    "The project: where its own creation stands, and the catalog of every repo, workspace and agent born under it (from the birth certificates cross-posted to /) and every MCP client that connected.",
+    "The project: where its own creation stands, and the catalog of every repo, workspace and agent born under it (from the birth certificates cross-posted to /) and every MCP connection born under it.",
   /** THE REDUCED STATE — what the reduce keeps between events: where the project's OWN creation
    *  stands, as the OFFSET of the event that says so (the request, the certificate, or the failure —
    *  read that event for the error), and the CATALOG of what exists under it — read by each
@@ -41,9 +41,9 @@ export const ProjectContract = defineProcessorContract({
     workspaces: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
     /** Every agent born under the project, by path — announced by its own (userspace) processor. */
     agents: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
-    /** Every MCP client that connected to the project, by its grant (the connection — mcp.ts): the
-     *  context path its scripts run on and are logged at, and when it first connected. */
-    mcpClients: z
+    /** Every MCP connection born under the project, by its grant (the connection — mcp.ts): the
+     *  context its scripts run on and are logged at (`/mcp/inbound/<grantId>`), and when it was born. */
+    mcpConnections: z
       .record(z.string(), z.object({ path: z.string(), createdAt: z.string() }))
       .default({}),
   }),
@@ -62,11 +62,12 @@ export const ProjectContract = defineProcessorContract({
       description: "What provisioning reported. Terminal until a new request.",
       payloadSchema: z.object({ error: z.string() }),
     },
-    /** The one catalog fact the project owns itself: an MCP client's first use of the project (mcp.ts
-     *  appends it to `/`, idempotent on the grant), naming the connection's context. */
-    "events.iterate.com/project/mcp-client-connected": {
+    /** The one certificate the catalog owns beside its own: the birth of an MCP connection's context
+     *  under the project — the grant's first run here (mcp.ts appends it to `/`, idempotent on the
+     *  grant), the context that cannot cross-post its own birth. */
+    "events.iterate.com/project/mcp-connection-created": {
       description:
-        "An MCP client connected to this project through an OAuth grant; its scripts run on, and are logged at, `path`.",
+        "An MCP connection's context was born under this project — the grant's first run here; its scripts run on, and are logged at, `path`.",
       payloadSchema: z.object({ grantId: z.string().min(1), path: z.string().min(1) }),
     },
   },
@@ -76,7 +77,7 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
-    "events.iterate.com/project/mcp-client-connected",
+    "events.iterate.com/project/mcp-connection-created",
     "events.iterate.com/repo/created",
     "events.iterate.com/workspace/created",
     "events.iterate.com/agent/created",

@@ -32,6 +32,7 @@ import type { BuiltInScope } from "./context/built-ins.ts";
 import { AgentContract } from "./agent/contract.ts";
 import type { AgentDurableObject } from "./agent/durable-object.ts";
 import { RepoContract } from "./repo/contract.ts";
+import type { ProjectState } from "./project/contract.ts";
 import type { RepoDurableObject } from "./repo/durable-object.ts";
 import { WorkspaceContract } from "./workspace/contract.ts";
 import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
@@ -48,7 +49,7 @@ import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 // pipelinable handle).
 //
 // The verbs: `run` · `connectToMcp` · `connectToOpenApi` · `connectToCapnweb` · `repos.get`/`list`/`create` ·
-// `workspaces.get`/`list`/`create` · `agents.get`/`list`/`create` · `files.get`/`list`. `run` is sugar over
+// `workspaces.get`/`list`/`create` · `agents.get`/`list`/`create` · `mcpConnections.list` · `files.get`/`list`. `run` is sugar over
 // `itx.workers.get` (the run section); an entity's `get(path)` is a handle over `itx.cd(path).facets.get`,
 // its `list()` and `create(path)` one dispatch on the collection the `project` facet on `/` carries
 // (the entities section). The three connectors each
@@ -152,6 +153,13 @@ export interface LibraryRoots {
     get(path: string): InvokeHandle & AgentFacet;
     list(): Promise<{ path: string; createdAt: string }[]>;
     create(path: string): Promise<{ path: string }>;
+  };
+  /** THE MCP CONNECTIONS of the project: every grant whose connection context was born here (its
+   *  first run over MCP) — the context's path (`/mcp/inbound/<grantId>`, its transcript) and when.
+   *  The project catalog's `mcpConnections`, folded from `project/mcp-connection-created` (mcp.ts
+   *  cross-posts it to `/`). */
+  mcpConnections: {
+    list(): Promise<{ grantId: string; path: string; createdAt: string }[]>;
   };
   /** THE FILES (apps/os's `itx.files`, lean): project file storage as a PATH namespace over `itx.r2`
    *  — a file is its path (leading slash), its bytes and a content type; last write wins, no
@@ -305,6 +313,16 @@ export function buildLibrary(itx: LibraryItx): {
             cursor = page.cursor;
           }
         },
+      },
+      // The MCP connections born under the project — a catalog entry with no `create`: mcp.ts births
+      // the connection's context and appends its certificate to `/` itself. Read off the `project`
+      // facet's state, the same catalog the collections list from (the shape is ours, asserted).
+      mcpConnections: {
+        list: async () =>
+          Object.entries(
+            ((await projectFacet(itx, [["snapshot"]])) as { state: ProjectState }).state
+              .mcpConnections,
+          ).map(([grantId, connection]) => ({ grantId, ...connection })),
       },
     },
     holdsOpenSocket: () => [...liveConnections.values()].some((c) => c.holdsSocket),

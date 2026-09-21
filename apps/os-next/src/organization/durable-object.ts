@@ -1,0 +1,17 @@
+// src/organization/durable-object.ts — the organization processor's HOST: the first-party facet
+// `organization` (first-party-facets.ts) on the context at `/organizations/<orgId>`, hosted from
+// `ctx.exports` — ordinary bundled worker code pulling `OrganizationProcessor` from ./processor.ts,
+// exactly as the account's host does. Its row is enabled where the first fact is published
+// (session.ts `publishGlobalFact`), idempotently.
+import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
+import type { ItxEntrypointScope } from "../iterate-context.ts";
+import type { OrganizationState } from "./contract.ts";
+import { OrganizationProcessor } from "./processor.ts";
+
+export class OrganizationDurableObject extends StreamProcessorDurableObject<
+  OrganizationState,
+  { ITX?: ItxEntrypointService },
+  ItxEntrypointScope
+> {
+  processor = new OrganizationProcessor();
+}

@@ -6,7 +6,7 @@
 import { describe, expect, test } from "vitest";
 import { reduceProcessor } from "../stream/test-support.ts";
 import { AccountProcessor } from "./processor.ts";
-import type { AccountState } from "./contract.ts";
+import { type AccountState } from "./contract.ts";
 
 const authenticated = (operationId: string, credential: "from-server-cookie" | "admin-secret") => ({
   type: "events.iterate.com/account/authenticated",
@@ -19,11 +19,79 @@ describe("AccountProcessor — the account state folded from facts", () => {
     events: { type: string; payload?: unknown }[];
     state: AccountState;
   }[] = [
-    { name: "the empty state", events: [], state: { authentications: [] } },
+    {
+      name: "the empty state",
+      events: [],
+      state: { authentications: [], personalAccessTokens: {}, endedGrants: {}, consents: [] },
+    },
     {
       name: "an authentication fact appends to authentications (no credential material, only the fact)",
       events: [authenticated("op-1", "admin-secret")],
-      state: { authentications: [{ credential: "admin-secret", at: 1, operationId: "op-1" }] },
+      state: {
+        authentications: [{ credential: "admin-secret", at: 1, operationId: "op-1" }],
+        personalAccessTokens: {},
+        endedGrants: {},
+        consents: [],
+      },
+    },
+    {
+      name: "a token minted, a grant ended, a consent approved: each a fact where it happened — the token's row closes when its grant ends; a stranger's end is recorded too; a second mint or end is ignored",
+      events: [
+        {
+          type: "events.iterate.com/account/grant-minted",
+          payload: { grantId: "grant_a", name: "laptop", projects: ["prj_1"], expiresAt: 9 },
+        },
+        {
+          type: "events.iterate.com/account/grant-minted",
+          payload: { grantId: "grant_a", name: "again", projects: [], expiresAt: 1 },
+        },
+        { type: "events.iterate.com/account/grant-ended", payload: { grantId: "grant_b" } },
+        { type: "events.iterate.com/account/grant-ended", payload: { grantId: "grant_a" } },
+        { type: "events.iterate.com/account/grant-ended", payload: { grantId: "grant_a" } },
+        // the end landed before the mint (both are published after the fact): born closed
+        {
+          type: "events.iterate.com/account/grant-minted",
+          payload: { grantId: "grant_b", name: "phone", projects: [], expiresAt: 5 },
+        },
+        {
+          type: "events.iterate.com/account/consent-approved",
+          payload: {
+            clientId: "c1",
+            clientName: "Claude Code",
+            projects: null,
+            scopes: ["iterate"],
+          },
+        },
+      ],
+      state: {
+        authentications: [],
+        personalAccessTokens: {
+          grant_a: {
+            name: "laptop",
+            projects: ["prj_1"],
+            expiresAt: 9,
+            mintedAt: expect.any(String),
+            endedAt: expect.any(String),
+          },
+          grant_b: {
+            name: "phone",
+            projects: [],
+            expiresAt: 5,
+            mintedAt: expect.any(String),
+            endedAt: expect.any(String),
+          },
+        },
+        endedGrants: { grant_b: { at: expect.any(String) }, grant_a: { at: expect.any(String) } },
+        consents: [
+          {
+            clientId: "c1",
+            clientName: "Claude Code",
+            projects: null,
+            scopes: ["iterate"],
+            at: expect.any(String),
+          },
+        ],
+      },
     },
     {
       name: "facts fold in order; an unrelated event leaves the state as it was",
@@ -37,6 +105,9 @@ describe("AccountProcessor — the account state folded from facts", () => {
           { credential: "from-server-cookie", at: 1, operationId: "op-1" },
           { credential: "admin-secret", at: 1, operationId: "op-2" },
         ],
+        personalAccessTokens: {},
+        endedGrants: {},
+        consents: [],
       },
     },
     {
@@ -50,6 +121,9 @@ describe("AccountProcessor — the account state folded from facts", () => {
       ],
       state: {
         authentications: [{ credential: "from-server-cookie", at: 1, operationId: "op-2" }],
+        personalAccessTokens: {},
+        endedGrants: {},
+        consents: [],
       },
     },
   ];

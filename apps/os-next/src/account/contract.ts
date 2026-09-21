@@ -1,44 +1,108 @@
-// src/account/contract.ts — THE ACCOUNT: a user's account context (global, `/users/<id>`) records
-// authentication FACTS, and THIS FILE is the only place they are spelled. processor.ts folds them into
-// the reduced state a client reads through live state — the SAME StreamProcessor kernel every project
-// processor uses, no new framework; durable-object.ts is the host (`ctx.exports`, first-party-facets.ts).
-// Every type is derived here, never hand-kept:
-//   AccountState                        = ProcessorState<typeof AccountContract>  the reduced state below
-//   ConsumedEvent<typeof AccountContract>                                          what reduce sees
-// No D1: the processor only reduces its own stream. Credentials are NOT here: a personal access token
-// is an OAuth grant (grants.ts), listed and ended through `session.grants`, never an account event.
+// src/account/contract.ts — THE ACCOUNT: a person's context, `/users/<id>` in the deployment-global
+// namespace, where the control-plane FACTS about them land — an authentication (session.ts), a
+// personal access token minted or a grant ended (grants.ts), a consent approved (consent.ts) — each
+// appended by the verb that did it, stamped with the caller. This file is the only place those events
+// and their payloads are spelled; processor.ts folds them into the state a client reads through live
+// state, durable-object.ts hosts it as the first-party facet `account` (first-party-facets.ts), the
+// row enabled where the first fact is published (session.ts `publishGlobalFact`). No D1: the
+// processor only reduces its own stream. Credentials are NOT here: a token is an OAuth grant
+// (grants.ts), listed and ended through `session.grants`. Every type is derived:
+//   AccountState = ProcessorState<typeof AccountContract>   the reduced state below
+//   ConsumedEvent<typeof AccountContract>                    what the reduce sees
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
 
-/** `events.iterate.com/account/authenticated` payload (platform FACT, idempotency key
- *  `authenticated/<operationId>`). NO credential material — only which KIND, when, and a stable op id
- *  (dedup on retry). Once the append type-gate is enforced a client cannot forge this type. Hoisted
- *  because it is spelled twice: the event's payload, and the row of the state's list. */
+// Each fact's payload is spelled once and used twice — by its event and by the state that keeps it.
+
+/** `events.iterate.com/account/authenticated` (idempotency key `authenticated/<operationId>`): NO
+ *  credential material — only which KIND, when, and a stable op id (dedup on retry). Once the append
+ *  type-gate is enforced a client cannot forge this type. */
 const AuthenticationFact = z.object({
   credential: z.enum(["from-server-cookie", "admin-secret"]),
   at: z.number(),
   operationId: z.string(),
 });
 export type AuthenticationFact = z.infer<typeof AuthenticationFact>;
+/** `events.iterate.com/account/grant-minted`: a personal access token minted through
+ *  `session.grants.mint` (grants.ts) — the grant's id, the name given, the projects it reaches. */
+export const GrantMinted = z.object({
+  grantId: z.string().min(1),
+  name: z.string(),
+  projects: z.array(z.string()),
+  expiresAt: z.number(),
+});
+export type GrantMinted = z.infer<typeof GrantMinted>;
+/** `events.iterate.com/account/grant-ended`: a grant ended — a session logged out, a token revoked
+ *  (grants.ts `end` / `endCurrent`). */
+export const GrantEnded = z.object({ grantId: z.string().min(1) });
+export type GrantEnded = z.infer<typeof GrantEnded>;
+/** `events.iterate.com/account/consent-approved`: the person approved a client at consent
+ *  (consent.ts): which client, the projects ticked (`null` = every project, current and future)
+ *  and the scopes left ticked. The grant's id is not known at approval — the provider mints it
+ *  on the code exchange — so the client and the moment are the record. */
+export const ConsentApproved = z.object({
+  clientId: z.string().min(1),
+  clientName: z.string(),
+  projects: z.array(z.string()).nullable(),
+  scopes: z.array(z.string()),
+});
+export type ConsentApproved = z.infer<typeof ConsentApproved>;
 
 export const AccountContract = defineProcessorContract({
   slug: "account",
-  version: "1",
-  description: "The user's account: authentications.",
-  /** THE REDUCED STATE — the user's authentications, in order. The list IS the event it is folded
-   *  from — no re-spelling of the payload shape. It is what a client reads through live state. */
+  // 2: the state grew tokens, ended grants and consents (the control-plane facts).
+  version: "2",
+  description:
+    "The user's account: authentications, personal access tokens, ended grants, consents.",
+  /** THE REDUCED STATE — the record of the account, folded from the facts above: what a client
+   *  reads through live state. The lists ARE the events they are folded from — no re-spelling. */
   stateSchema: z.object({
     authentications: z.array(AuthenticationFact).default([]),
+    /** Personal access tokens minted, by grant id — and when each was ended. */
+    personalAccessTokens: z
+      .record(
+        z.string(),
+        z.object({
+          name: z.string(),
+          projects: z.array(z.string()),
+          expiresAt: z.number(),
+          mintedAt: z.string(),
+          endedAt: z.string().nullable(),
+        }),
+      )
+      .default({}),
+    /** Every grant ended — a session logged out, a token revoked — by grant id: when. */
+    endedGrants: z.record(z.string(), z.object({ at: z.string() })).default({}),
+    /** Every consent approved, in order: the client and what it was given. */
+    consents: z.array(ConsentApproved.extend({ at: z.string() })).default([]),
   }),
   events: {
     "events.iterate.com/account/authenticated": {
       description: "A successful authentication on the user's account (platform fact).",
       payloadSchema: AuthenticationFact,
     },
+    "events.iterate.com/account/grant-minted": {
+      description: "A personal access token was minted for the account (platform fact).",
+      payloadSchema: GrantMinted,
+    },
+    "events.iterate.com/account/grant-ended": {
+      description:
+        "A grant of the account ended: a session logged out, a token revoked (platform fact).",
+      payloadSchema: GrantEnded,
+    },
+    "events.iterate.com/account/consent-approved": {
+      description: "The person approved a client at consent (platform fact).",
+      payloadSchema: ConsentApproved,
+    },
   },
-  consumes: ["events.iterate.com/account/authenticated"],
+  consumes: [
+    "events.iterate.com/account/authenticated",
+    "events.iterate.com/account/grant-minted",
+    "events.iterate.com/account/grant-ended",
+    "events.iterate.com/account/consent-approved",
+  ],
   emits: [],
 });
 
-/** The account's reduced state: the user's authentications (the contract's `stateSchema`). */
+/** The account's reduced state: its record (the contract's `stateSchema`). */
 export type AccountState = ProcessorState<typeof AccountContract>;

@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { IterateApi } from "iterate/next/api";
 import { codedError } from "iterate/next/lib";
 import { verifyAdminSecret, type Caller, type Principal } from "iterate/next/principal";
+import type { StreamEventInput } from "iterate/next/stream/processor";
 import type { Consent } from "./consent.ts";
 import type { Grants } from "./grants.ts";
 import {
@@ -133,45 +134,57 @@ export class IterateRpcTarget extends RpcTarget {
    *  waitUntil), off the connection's hot path: it is "nice to see", not authoritative, so a lost one
    *  on eviction is fine. Only a human (a principal with an email) has an account context — the admin
    *  and project credentials name none. The fact rides `session.user`'s stream, where the
-   *  AccountProcessor folds it into the account state (src/account/contract.ts) — so the `account`
-   *  processor row is enabled there first, idempotently (the door appends nothing for a row already
-   *  hosting it): the account processor is hosted from `ctx.exports` (first-party-facets.ts), and
-   *  this is the one place that enables it. NOTE: the boundary is per-authenticate for now (a
-   *  reconnect re-publishes); narrowing it to credential-establishment is a later refinement.
-   *  Attribution is the user's until the platform principal lands. */
+   *  AccountProcessor folds it into the account view (src/account/contract.ts). NOTE: the boundary is
+   *  per-authenticate for now (a reconnect re-publishes); narrowing it to credential-establishment is
+   *  a later refinement. Attribution is the user's until the platform principal lands. */
   #publishAuthenticationFact(
     principal: SessionPrincipal,
     credential: "from-server-cookie" | "admin-secret",
   ): void {
     if (!principal.email) return;
-    const name = DurableObjectNameCodec.stringify({
-      projectId: GLOBAL_PROJECT_ID,
-      path: `/users/${principal.actor}`,
-    });
     const operationId = crypto.randomUUID();
-    const fact = {
-      type: "events.iterate.com/account/authenticated",
-      payload: { credential, at: Date.now(), operationId } satisfies AuthenticationFact,
-      idempotencyKey: `authenticated/${operationId}`,
-    };
-    const account = this.#input.contextNamespace.getByName(name);
-    this.#input.waitUntil(
-      // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the calls denote
-      // whatever expression is spelled, so `unknown` is the honest contract here.
-      (
-        account.invoke(["itx", "processors", ["enable", "account"]], [], {
-          principal,
-        }) as Promise<unknown>
-      )
-        .then(
-          () => account.invoke(["itx", ["append", fact]], [], { principal }) as Promise<unknown>,
-        )
-        .then(
-          () => undefined,
-          () => undefined,
-        ),
+    publishGlobalFact(
+      this.#input,
+      `/users/${principal.actor}`,
+      "account",
+      {
+        type: "events.iterate.com/account/authenticated",
+        payload: { credential, at: Date.now(), operationId } satisfies AuthenticationFact,
+        idempotencyKey: `authenticated/${operationId}`,
+      },
+      { principal },
     );
   }
+}
+
+/** A CONTROL-PLANE FACT, appended to the global context of the entity it happened to — the
+ *  organization (`/organizations/<id>`: created, renamed, deleted, a project created in it), the
+ *  person (`/users/<id>`: authenticated; grants.ts and consent.ts add a token minted, a grant
+ *  ended, a consent approved) — stamped with the caller, principal and grant: the audit lives where
+ *  it happened, attributed to who did it and through which connection. Best-effort and ASYNC
+ *  (waitUntil), off the verb's own path: the directory stays the truth for the state, this is the
+ *  record of it — a fact lost to an eviction is a gap in the record, never a failed action. */
+function publishGlobalFact(
+  input: SessionInput,
+  path: string,
+  /** The first-party processor that folds the fact (first-party-facets.ts): its row on the context
+   *  is enabled first — idempotent at the door, so every fact re-asks and only the first appends. */
+  processor: "account" | "organization",
+  fact: StreamEventInput,
+  caller: Caller,
+): void {
+  const name = DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path });
+  const context = input.contextNamespace.getByName(name);
+  input.waitUntil(
+    // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; neither answer is
+    // read, so `unknown` is all the promises need to be.
+    (context.invoke(["itx", "processors", ["enable", processor]], [], caller) as Promise<unknown>)
+      .then(() => context.invoke(["itx", ["append", fact]], [], caller) as Promise<unknown>)
+      .then(
+        () => undefined,
+        () => undefined,
+      ),
+  );
 }
 
 /** What you authenticate into: a catalog that vends contexts. A session is NOT a context — it is
@@ -268,23 +281,66 @@ export class SessionRpcTarget extends RpcTarget {
     return reach;
   }
 
-  /** A new organization named `name`, the person its owner. */
-  createOrg(name: string) {
+  /** WHO this session is, as an event's stamp: the principal and the grant it acts through. */
+  get #caller(): Caller {
+    return { principal: this.#authority.principal, grant: this.#authority.grant };
+  }
+
+  /** A new organization named `name`, the person its owner — and the fact of it on the
+   *  organization's own context (src/organization/). */
+  async createOrg(name: string) {
     const { userId } = this.#organizationsWriter("create");
-    return this.#input.directory.createOrg(userId, z.string().trim().min(1).parse(name));
+    const org = await this.#input.directory.createOrg(userId, z.string().trim().min(1).parse(name));
+    publishGlobalFact(
+      this.#input,
+      `/organizations/${org.id}`,
+      "organization",
+      {
+        type: "events.iterate.com/organization/created",
+        idempotencyKey: "organization/created",
+        payload: { name: org.name },
+      },
+      this.#caller,
+    );
+    return org;
   }
 
   /** Rename an organization the person owns. */
-  updateOrg(orgId: string, input: { name: string }) {
+  async updateOrg(orgId: string, input: { name: string }) {
     const { userId } = this.#organizationsWriter("rename");
     const data = z.object({ name: z.string().trim().min(1) }).parse(input);
-    return this.#input.directory.renameOrg(userId, z.string().min(1).parse(orgId), data.name);
+    const org = await this.#input.directory.renameOrg(
+      userId,
+      z.string().min(1).parse(orgId),
+      data.name,
+    );
+    publishGlobalFact(
+      this.#input,
+      `/organizations/${org.id}`,
+      "organization",
+      { type: "events.iterate.com/organization/renamed", payload: { name: org.name } },
+      this.#caller,
+    );
+    return org;
   }
 
-  /** Delete an organization the person owns, while it holds no project. */
-  deleteOrg(orgId: string) {
+  /** Delete an organization the person owns, while it holds no project. The fact lands on the
+   *  organization's context, which outlives the directory row as its record. */
+  async deleteOrg(orgId: string) {
     const { userId } = this.#organizationsWriter("delete");
-    return this.#input.directory.deleteOrg(userId, z.string().min(1).parse(orgId));
+    const id = z.string().min(1).parse(orgId);
+    await this.#input.directory.deleteOrg(userId, id);
+    publishGlobalFact(
+      this.#input,
+      `/organizations/${id}`,
+      "organization",
+      {
+        type: "events.iterate.com/organization/deleted",
+        idempotencyKey: "organization/deleted",
+        payload: {},
+      },
+      this.#caller,
+    );
   }
 
   get consent() {
@@ -348,7 +404,7 @@ export class SessionRpcTarget extends RpcTarget {
       DurableObjectNameCodec.address({ projectId: GLOBAL_PROJECT_ID, path }),
       this.#sessionTeardown,
       this.#input.waitUntil,
-      { principal: this.#authority.principal, grant: this.#authority.grant },
+      this.#caller,
     );
   }
 }
@@ -418,16 +474,7 @@ class ProjectCollection extends RpcTarget {
    *  by name when they have several, created on first use when they have none), or in the
    *  deployment's own org for the admin secret — and vend its root context. A grant narrowed to
    *  named projects creates none: FORBIDDEN. A slug ANY org already holds is refused, coded
-   *  (PROJECT_NAME_TAKEN); the same org's again is idempotent.
-   *
-   *  THE DIRECTORY ROW, THEN THE SAGA — the same rule every entity collection follows: the `project`
-   *  facet's state is read first; a project already created, or one whose creation is open, gets
-   *  its context back and nothing appended; otherwise (never requested, or the last attempt failed)
-   *  the `project` processor row is enabled on `/` and a NEW `project/create-requested` appended
-   *  there — the row's facts, under this caller. The context is returned AT ONCE (apps/os's
-   *  `waitUntilCreated: false`): the project processor (src/project/processor.ts) lands
-   *  `project/created` or `project/create-failed` from state at head, and the dash watches the
-   *  facet's live state. */
+   *  (PROJECT_NAME_TAKEN); the same org's again is idempotent. */
   async create(input: { project: string; orgId?: string }): Promise<IterateContextRpcTarget> {
     const data = z.object({ project: z.string(), orgId: z.string().optional() }).parse(input);
     const project = await this.#input.directory.createProject(
@@ -435,6 +482,26 @@ class ProjectCollection extends RpcTarget {
       data.project,
       data.orgId,
     );
+    // The fact of it, on the organization it was created in (idempotent on the project: the same
+    // org's same slug again is the same project).
+    publishGlobalFact(
+      this.#input,
+      `/organizations/${project.orgId}`,
+      "organization",
+      {
+        type: "events.iterate.com/organization/project-created",
+        idempotencyKey: `organization/project-created/${project.id}`,
+        payload: { projectId: project.id, slug: project.slug },
+      },
+      this.#caller,
+    );
+    // THE SAGA — the rule every entity collection follows: the `project` facet's state is read first;
+    // a project already created, or one whose creation is open, gets its context back and nothing
+    // appended; otherwise (never requested, or the last attempt failed) the `project` processor row
+    // is enabled on `/` and a NEW `project/create-requested` appended there — the row's facts, under
+    // this caller. The context is returned AT ONCE (apps/os's `waitUntilCreated: false`): the
+    // project processor (src/project/processor.ts) lands `project/created` or `project/create-failed`
+    // from state at head, and the dash watches the facet's live state.
     const context = this.#context(project.id);
     // The facet is the platform's own ProjectDurableObject and `snapshot()` the engine's
     // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.

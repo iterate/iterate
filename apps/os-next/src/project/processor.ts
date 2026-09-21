@@ -56,12 +56,15 @@ export class ProjectProcessor extends StreamProcessor<
           ...state,
           agents: { ...state.agents, [event.payload.path]: { createdAt: event.createdAt } },
         };
-      case "events.iterate.com/project/mcp-client-connected": {
+      case "events.iterate.com/project/mcp-connection-created": {
         const { grantId, path } = event.payload;
-        if (state.mcpClients[grantId]) return undefined;
+        if (state.mcpConnections[grantId]) return undefined;
         return {
           ...state,
-          mcpClients: { ...state.mcpClients, [grantId]: { path, createdAt: event.createdAt } },
+          mcpConnections: {
+            ...state.mcpConnections,
+            [grantId]: { path, createdAt: event.createdAt },
+          },
         };
       }
       default:
