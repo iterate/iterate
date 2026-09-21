@@ -97,6 +97,13 @@ function OrganizationSettings() {
         <h1 className="text-2xl font-semibold tracking-tight">{org.name}</h1>
         {org.role ? <Badge variant="secondary">{org.role}</Badge> : null}
         <Identifier value={org.id} />
+        <Link
+          to="/organizations/$orgId/activity"
+          params={{ orgId: org.id }}
+          className="text-sm text-muted-foreground underline-offset-2 hover:underline"
+        >
+          Activity
+        </Link>
       </div>
       {error ? (
         <p role="alert" className="text-sm text-destructive">

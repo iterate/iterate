@@ -3,6 +3,7 @@
 // first-party apps.
 import { Link, useMatchRoute } from "@tanstack/react-router";
 import {
+  Activity,
   Building2,
   ExternalLink,
   FolderKanban,
@@ -158,6 +159,16 @@ function TopLevelNav() {
               >
                 <KeyRound />
                 <span>Sessions</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                tooltip="Activity"
+                isActive={Boolean(matchRoute({ to: "/activity", fuzzy: false }))}
+                render={<Link to="/activity" />}
+              >
+                <Activity />
+                <span>Activity</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
