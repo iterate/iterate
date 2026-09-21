@@ -268,7 +268,13 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
       if (text.trim() === "") throw new Error("the model answered with no text");
       return { text: text.trim(), usage };
     },
-    runScript: (code) => this.withItx((itx) => itx.run(code)),
+    // THE SANDBOX: scripts run on `<agent>/sandbox`, a child born (in `create`) with one row — the
+    // link back to this agent — so a normal agent's scripts see this agent's chain and a jailed
+    // agent's owner replaces that one row with null. Spelled through the fixed point: this facet is
+    // the platform's, the sandbox's table is the SCRIPT's world, never the facet's.
+    runScript: (code) => this.withItx((itx) => itx.cd("./sandbox").builtins.run(code)),
+    // The tree the model is shown each turn: the SANDBOX's list — exactly what its scripts can spell.
+    rewriteRules: () => this.withItx((itx) => itx.cd("./sandbox").builtins.rewriteRules.list()),
     readFile: (path) => this.withItx((itx) => itx.files.get(path).bytes()),
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -307,6 +313,20 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
           content: input.systemPrompt
             ? `${DEFAULT_AGENT_SYSTEM_PROMPT}\n\nINSTRUCTIONS FROM THE OPERATOR (they add to the rules above, never replace them):\n${input.systemPrompt}${projectContext}`
             : DEFAULT_AGENT_SYSTEM_PROMPT + projectContext,
+        },
+      }),
+    );
+    // The sandbox's one row: everything a script does not claim, this agent answers (its own
+    // chain up to the root). A jail is the owner replacing this row with `null` — before or with the
+    // first message — and appending its grants beside it.
+    await this.withItx((itx) =>
+      itx.cd("./sandbox").builtins.append({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        idempotencyKey: `itx@${path}`,
+        payload: {
+          match: "itx",
+          target: ["itx", "builtins", ["cd", path]],
+          description: "everything this sandbox does not claim, the agent answers",
         },
       }),
     );

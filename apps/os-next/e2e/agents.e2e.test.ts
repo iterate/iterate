@@ -142,16 +142,13 @@ test("the loop: a person's words → the model → a script run against itx → 
     "agent/llm-request-requested",
     "agent/llm-request-settled",
     "agents/context-added", // the assistant: a bare reply (no tag)
-    "capability-host/script-run-requested", // the plain-response handler (itx.chat.sendMessage)
-    "agents/web-message-sent", // its sendMessage
-    "capability-host/script-run-settled",
+    "agents/web-message-sent", // appended directly — the reply is an event, not a script
   ]);
   const said = (type: string) => log.filter((e) => e.type === type).map((e) => e.payload);
   expect(said("events.iterate.com/agents/web-message-sent")).toEqual([
-    // The tag's prose is sent directly (with the request it came from); the bare reply is sent by
-    // the plain-response handler's sendMessage — a plain message, no request offset.
+    // The tag's prose and the bare reply alike are appended directly, each with the request it came from.
     { message: "Let me store that.", llmRequestOffset: expect.any(Number) },
-    { message: "Stored 42 under answer." },
+    { message: "Stored 42 under answer.", llmRequestOffset: expect.any(Number) },
   ]);
   expect(said("events.iterate.com/agent/summary-updated")).toEqual([
     { activity: "Storing the answer" },
@@ -171,12 +168,13 @@ test("the loop: a person's words → the model → a script run against itx → 
   expect(ai.calls).toHaveLength(2);
   expect(ai.calls[1]!.model).toBe(WORKERS_AI_MODEL);
   expect(ai.calls[1]!.messages.map((m) => m.role)).toEqual([
-    "system",
+    "system", // the journaled prompt
+    "system", // the capability tree, rendered this turn
     "user",
     "assistant",
     "system",
   ]);
-  expect(ai.calls[1]!.messages[3]!.content).toContain('"stored": true');
+  expect(ai.calls[1]!.messages[4]!.content).toContain('"stored": true');
   // Idle: no obligation open, one autonomous turn counted, nothing paused.
   expect((await support.facets.get("agent").snapshot()).state).toMatchObject({
     openRequest: null,
@@ -211,7 +209,7 @@ test("debounced: two messages inside the window are answered by ONE request that
   expect(short(first).filter((t) => t === "agent/llm-request-settled")).toHaveLength(1);
   expect(ai.calls).toHaveLength(1);
   // The one call saw both messages — the prompt is built from the log at run time.
-  expect(ai.calls[0]!.messages.map((m) => m.role)).toEqual(["system", "user", "user"]);
+  expect(ai.calls[0]!.messages.map((m) => m.role)).toEqual(["system", "system", "user", "user"]);
   // The window, not a coincidence: the request landed at least the window after the FIRST words
   // (said[0] is the system prompt).
   const said = first.filter((e) => e.type === "events.iterate.com/agents/context-added");
@@ -387,7 +385,7 @@ test("an attached image is stored under the agent's path and SHOWN to the model 
   expect(assistantWords(log)).toEqual(["A red square and a note."]);
   // The model saw the pixels (a data: URL of the stored bytes) and was told about the note.
   const [call] = ai.calls;
-  const message = call!.messages[1] as unknown as {
+  const message = call!.messages[2] as unknown as {
     role: string;
     content: { type: string; text?: string; image_url?: { url: string } }[];
   };
@@ -595,3 +593,145 @@ deployedOnly(
   },
   150_000,
 );
+
+// ── the tree the model reads, and the sandbox the scripts run in ──
+
+test("the model is shown the SANDBOX's rewriteRules.list() every turn: a capability provided at the root with a description reaches the prompt, tagged with the context it came from", async () => {
+  const itx = openItx(freshCtx("agent-tree"));
+  const support = itx.cd("/agents/support");
+  const ai = new ScriptedAi(["Nothing to do."]);
+  await support.provide("itx.ai", ai);
+  await itx.provide({
+    match: "itx.tool",
+    target: "itx.whoami",
+    description: "who this project is, really: itx.tool()",
+  });
+  const agent = itx.agents.get("/agents/support");
+  await agent.create({ systemPrompt: "Be terse." });
+  await onWorkersAi(support);
+  await agent.message("hello");
+  await until("the model was asked", () => (ai.calls.length > 0 ? true : undefined));
+  const system = ai.calls[0]!.messages.filter((m) => m.role === "system").map((m) => m.content);
+  const tree = system.find((content) =>
+    content.includes("CAPABILITY TREE (`await itx.rewriteRules.list()`)"),
+  );
+  expect(tree).toBeDefined();
+  expect(tree).toContain("itx.tool — who this project is, really: itx.tool()");
+  expect(tree).toContain("from /:"); // rows are grouped by the context they came from
+  expect(tree).toContain("itx.kv — "); // the root's implicit rows, described
+  // and the sandbox's own list says the same, row by row
+  const rows = (await itx.cd("/agents/support/sandbox").rewriteRules.list()) as {
+    match: string;
+    context: string;
+    description?: string;
+  }[];
+  expect(rows.find((row) => row.match === "itx.tool")).toMatchObject({
+    context: "/",
+    description: "who this project is, really: itx.tool()",
+  });
+  expect(rows.find((row) => row.match === "itx.append")).toMatchObject({
+    context: "/agents/support/sandbox",
+  });
+});
+
+test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injected script reaches nothing but the grant, and the tables are untouched afterwards", async () => {
+  const ctx = freshCtx("agent-jail");
+  const itx = openItx(ctx);
+  const agentPath = "/agents/web/v1";
+  const support = itx.cd(agentPath);
+  const catalogue = new (class extends RpcTarget {
+    search(input: { q: string }) {
+      return [{ name: `${input.q}.com`, price: 42 }];
+    }
+  })();
+  await itx.provide({
+    match: "itx.catalogue",
+    target: catalogue,
+    description: "search the catalogue",
+  });
+  const scripts = [
+    "return await itx.kv.list()",
+    "return await itx.cd('/').whoami()",
+    "return await itx.builtins.whoami()",
+    "const r = await fetch('https://example.com/'); return r.status",
+    "await itx.append({ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match: 'itx', target: \"itx.builtins.cd('/')\" } }); return 'granted myself'",
+    "await itx.schedules.set({ key: 'later', when: { afterMs: 10 }, events: [{ type: 't' }] }); return 'scheduled'",
+    "return await itx.catalogue.search({ q: 'ship' })",
+  ];
+  const ai = new ScriptedAi([
+    ...scripts.map((code) => `<codemode status="probing">\n${code}\n</codemode>`),
+    "Done probing.",
+  ]);
+  await support.provide("itx.ai", ai);
+  const agent = itx.agents.get(agentPath);
+  await agent.create({ systemPrompt: "Probe." });
+  await onWorkersAi(support);
+  // THE OWNER's jail, in ONE batch: the mask replaces the sandbox's link, the grant sits beside it
+  // (the append itself resolves before the mask lands; afterwards the owner writes through
+  // `builtins`, which a session may spell and loaded code may not)
+  await itx.cd(`${agentPath}/sandbox`).append(
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: {
+        match: "itx",
+        target: null,
+        description: "this agent's scripts get only the rows below",
+      },
+    },
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: {
+        match: "itx.catalogue",
+        target: "itx.builtins.cd('/').catalogue",
+        description: "search the catalogue: itx.catalogue.search({ q })",
+      },
+    },
+  );
+  const rootRulesBefore = await itx.rewriteRules.list();
+  await agent.message("Probe everything.");
+  await until(
+    "every script settled",
+    async () =>
+      (await readAll(support)).filter(
+        (e) => e.type === "events.iterate.com/capability-host/script-run-settled",
+      ).length >= scripts.length
+        ? true
+        : undefined,
+    60_000,
+  );
+  const settled = (await readAll(support))
+    .filter((e) => e.type === "events.iterate.com/capability-host/script-run-settled")
+    .map((e) => e.payload.settlement as { status: string; result?: unknown; error?: string });
+  expect(settled.map((s) => s.status)).toEqual([
+    "failed",
+    "failed",
+    "failed",
+    "succeeded",
+    "failed",
+    "failed",
+    "succeeded",
+  ]);
+  expect(settled[0]!.error).toMatch(/is masked/); // kv: the bare null
+  expect(settled[1]!.error).toMatch(/masked|goes down only/); // cd('/'): the wall, or the app rule
+  expect(settled[2]!.error).toMatch(/not a loaded worker's word/); // itx.builtins
+  expect(settled[3]!.result).toBe(404); // raw fetch: the lane found no `itx.fetch` row
+  expect(settled[4]!.error).toMatch(/is masked/); // the self-grant: append is masked
+  expect(settled[5]!.error).toMatch(/is masked/); // schedules: masked
+  expect(settled[6]!.result).toEqual([{ name: "ship.com", price: 42 }]); // the one grant
+  // nothing moved: the root's table and the sandbox's are what the owner wrote
+  expect(await itx.rewriteRules.list()).toEqual(rootRulesBefore);
+  expect(await itx.cd(`${agentPath}/sandbox`).builtins.rewriteRules.list()).toEqual([
+    {
+      match: "itx",
+      target: null,
+      description: "this agent's scripts get only the rows below",
+      context: `${agentPath}/sandbox`,
+    },
+    {
+      match: "itx.catalogue",
+      target: "itx.builtins.cd('/').catalogue",
+      description: "search the catalogue: itx.catalogue.search({ q })",
+      context: `${agentPath}/sandbox`,
+    },
+  ]);
+});

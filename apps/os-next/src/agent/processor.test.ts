@@ -6,13 +6,19 @@
 import { describe, expect, test } from "vitest";
 import { reduceProcessor } from "../stream/test-support.ts";
 import { type AgentView } from "./contract.ts";
-import { AgentProcessor, buildChatMessages, renderScriptSettlement } from "./processor.ts";
+import {
+  AgentProcessor,
+  buildChatMessages,
+  renderCapabilityTree,
+  renderScriptSettlement,
+} from "./processor.ts";
 import { parseCodemodeResponse } from "./codemode-format.ts";
 
 const processor = () =>
   new AgentProcessor({
     stream: () => Promise.reject(new Error("the reduce never calls the model")),
     runScript: () => Promise.reject(new Error("the reduce never runs a script")),
+    rewriteRules: () => Promise.resolve([]),
     readFile: () => Promise.reject(new Error("the reduce never reads a file")),
     now: () => 0,
     sleep: () => Promise.resolve(),
@@ -232,7 +238,6 @@ describe("AgentProcessor — the reduce", () => {
         config: {
           llm: { model: "@cf/x" },
           maxAutonomousTurns: 2,
-          plainResponse: "itx.chat.sendMessage",
           llmRequestExpiryMs: 600_000,
           llmRequestDebounceMs: 250,
           llmRequestRetryPolicy: { maxAttempts: 3, backoffBaseMs: 10_000, backoffMaxMs: 60_000 },
@@ -378,5 +383,54 @@ describe("the assistant's output, parsed (the codemode-tag grammar, codemode-for
     expect(
       renderScriptSettlement({ status: "failed", error: "boom", failureKind: "runtime" }),
     ).toContain("boom");
+  });
+});
+
+describe("the capability tree the model reads", () => {
+  test("renderCapabilityTree: one line per row, masks and the sandbox's own link omitted, grouped by context only when there are two", () => {
+    expect(renderCapabilityTree([])).toBeNull();
+    expect(
+      renderCapabilityTree([
+        { match: "itx", target: "itx.builtins.cd('/agents/a')", context: "/agents/a/sandbox" },
+        { match: "itx.kv", target: null, context: "/agents/a/sandbox" },
+        {
+          match: "itx.catalogue",
+          target: "itx.builtins.cd('/').catalogue",
+          description: "search the catalogue: itx.catalogue({ q })",
+          context: "/agents/a/sandbox",
+        },
+      ]),
+    ).toBe(
+      [
+        "`itx` IS THIS CONTEXT'S CAPABILITY TREE (`await itx.rewriteRules.list()`) — every name below is one you can spell inside a tag; nothing else resolves:",
+        "itx.catalogue — search the catalogue: itx.catalogue({ q })",
+      ].join("\n"),
+    );
+    expect(
+      renderCapabilityTree([
+        {
+          match: "itx.append",
+          target: "itx.builtins.append",
+          description: "write here",
+          context: "/a",
+        },
+        { match: "itx.tool", target: "itx.builtins.rpcStubs.get('itx.tool')", context: "/" },
+      ]),
+    ).toContain(
+      "from /a:\nitx.append — write here\nfrom /:\nitx.tool — ⇒ itx.builtins.rpcStubs.get('itx.tool')",
+    );
+  });
+
+  test("buildChatMessages: the tree rides as ONE system message after the journaled system prompt, fresh each turn; none when the tree is empty", () => {
+    const items = [
+      { offset: 1, role: "system", content: "rules", files: [] },
+      { offset: 2, role: "user", content: "hi", files: [] },
+    ] as unknown as AgentView["contextItems"];
+    expect(buildChatMessages(items, new Map())).toHaveLength(2);
+    const withTree = buildChatMessages(items, new Map(), [
+      { match: "itx.kv", target: "itx.builtins.kv", description: "kv", context: "/" },
+    ]);
+    expect(withTree.map((m) => m.role)).toEqual(["system", "system", "user"]);
+    expect(withTree[1]!.content).toContain("itx.kv — kv");
   });
 });

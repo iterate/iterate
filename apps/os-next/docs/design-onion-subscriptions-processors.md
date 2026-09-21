@@ -230,20 +230,28 @@ that starts with `match` runs as the same call with `match` replaced by `target`
 `target` an `itx.…` expression. ONE event, `itx/rewrite-rule-configured { match, target | null }`
 (`rewriteRuleConfiguredEvent`, both halves canonicalized through the codec, string at rest), reduced
 by the core reduce into `state.itxExpressionRewriteRules`, a MAP by canonical match: a configured
-target REPLACES the entry; `null` MASKS it where a platform row lies beneath (kept as a row, the
-call refused) and deletes it elsewhere; the platform-equivalent target `itx.builtins.<match…>`
-deletes — no shadow stack, no removal by identity, no offset on a row. SINCE 2026-09-04 (the
-builtins root, rule 5): RULES FIRST. The fixed point is `itx.builtins`, the reserved root — a call
-rooted there runs as is and never reads the table; any other `itx.…` call is matched against the
-context's rows (the most SPECIFIC wins: longest match, then most pinned args), a matching mask
-refuses, a matching target rewrites and the loop repeats; with no matching row, a root that is a
-built-in is THE IMPLICIT PLATFORM ROW `itx.<root> ⇒ itx.builtins.<root>` (never stored — `list()`
-and `resolve()` spell it out); anything else is refused (32-rewrite budget; `NO_ITX_EXPRESSION_MATCH`,
-default-deny). A match may not be rooted at `itx.builtins` nor start with a proxy verb; the
-platform never spells a short name in an event it writes. The `delivery`, `processor` and `lane` fields of the old
-row are gone; `itx.subscribers.*` stops being a convention; a rewrite rule is a name for a target
-and nothing else. The edge verb is ONE: `provide(match, stub | expression | null)` → a disposable
-`RewriteRuleHandle`; a live stub is lent under the key = the canonical match and the rule
+target REPLACES the entry; `null` MASKS it where an implicit row lies beneath at that path (kept
+as a row, the call refused) and deletes it elsewhere — a bare `itx ⇒ null` denies all; a target
+saying what the implicit row beneath says is not stored; a `null` with `ifTarget` is a
+compare-and-set deletion — no shadow stack, no removal by identity, no offset on a row. SINCE
+2026-09-04 (the builtins root, rule 5): RULES FIRST. The fixed point is `itx.builtins`, the
+reserved root — a call rooted there runs as is and never reads the table; any other `itx.…` call
+is matched against the context's rows (the most SPECIFIC wins: longest match, then most pinned
+args; a bare `itx` row with a target claims what no implicit row claims), a matching mask
+refuses, a matching target rewrites and the loop repeats; with no matching row, a root that is
+IMPLICIT HERE is the row `itx.<root> ⇒ itx.builtins.<root>` (never stored — `list()` and
+`resolve()` spell it out; SINCE 2026-09-21 every root at the owner root and only the thirteen
+context roots — `whoami`, `append`, `readEvents`, `waitForEvent`, `cd`, `facets`, `subscriptions`,
+`processors`, `schedules`, `rewriteRules`, `rpcStubs`, `workers`, `run` — everywhere else, a child
+reaching the project's names through the bare row its creator wrote); anything else is refused
+(32-rewrite budget; `NO_ITX_EXPRESSION_MATCH`, default-deny). A match may not be rooted at
+`itx.builtins` nor start with a proxy verb; a target may name `itx.builtins` (the owner's grant),
+loaded code may not call it, and the platform never spells a short name in an event it writes.
+The `delivery`, `processor` and `lane` fields of the old row are gone; `itx.subscribers.*` stops
+being a convention; a rewrite rule is a name for a target, plus one line of `description` a model
+reads, and nothing else. The edge verb is ONE: `provide({ match, target, description? })` —
+`provide(match, stub | expression | null)` for short — → a disposable `RewriteRuleHandle`; a live
+stub is lent under the key = the canonical match and the rule
 `match ⇒ itx.builtins.rpcStubs.get('<match>')` is written with it; an expression is the rule alone.
 The rule dies with the stub: the handle's dispose recalls the stub, and when the key's LAST pager
 closes the DO un-sets every rule and subscription whose target resolves to that stub (a reconnect
@@ -547,7 +555,14 @@ class IterateContext extends RpcTarget {
   invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown>; // THE dispatch door; a terminal .fetch(Request) rides the fetch lane (x-itx-expression; root egress included)
   // THE ONE FRONT DOOR: make `match` mean `target`. A live stub is THE ONE PHYSICAL ACT (the client's
   // capnweb stub must live in this stateless worker, never in the DO): lent under the key = the canonical
-  // match, plus the rule match ⇒ itx.builtins.rpcStubs.get('<match>'); an expression is the rule alone; null masks or deletes.
+  // match, plus the rule match ⇒ itx.builtins.rpcStubs.get('<match>'); an expression is the rule alone; null masks where an
+  // implicit row lies beneath, deletes elsewhere, denies all at bare `itx`. The input is the event's payload — `description`
+  // is the one line a model reads, riding the row into rewriteRules.list() — or the (match, target) shorthand.
+  provide(input: {
+    match: ItxExpressionInput;
+    target: ClientRpcStub | ItxExpressionInput | null;
+    description?: string;
+  }): Promise<RewriteRuleHandle>;
   provide(
     match: ItxExpressionInput,
     target: ClientRpcStub | ItxExpressionInput | null,

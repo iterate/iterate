@@ -13,6 +13,7 @@ import {
   parse,
   parseItxExpressionPrefix,
   print,
+  type ItxExpression,
   type ItxExpressionInput,
   InvokeHandle,
 } from "iterate/next/expression";
@@ -23,9 +24,22 @@ import {
   type ItxExpressionRewriteRule,
   matchItxExpressionPrefix,
   resolveItxExpression,
-  restoreRuleTarget,
   rowsNamingRpcStub,
+  BUILT_IN_ROOTS,
+  CONTEXT_ROOTS,
 } from "./itx-expression-rewriting.ts";
+
+/** The roots implicit at the owner root (every built-in) and at a child (the context roots) —
+ *  `implicitRootsAt` for the two kinds of path, without a projectId. */
+const ROOT: ReadonlySet<string> = new Set(BUILT_IN_ROOTS);
+const CHILD: ReadonlySet<string> = new Set(CONTEXT_ROOTS);
+/** The platform-equivalent target of a match: at the owner root, where these tests run, a
+ *  deletion (rule 8) — the spelling a client may still use to un-set a row it wrote. */
+const restoreRuleTarget = (match: ItxExpressionInput): ItxExpression => [
+  "itx",
+  "builtins",
+  ...parseItxExpressionPrefix(match).slice(1),
+];
 
 const table = (rows: string[]): ItxExpressionRewriteRule[] =>
   rows.map((row) => {
@@ -38,7 +52,7 @@ const table = (rows: string[]): ItxExpressionRewriteRule[] =>
 /** The chain of rewrites, printed — or the refusal. */
 const chain = (rules: string[], call: string): string[] | string => {
   try {
-    return resolveItxExpression(() => table(rules), parse(call)).map((step) => print(step));
+    return resolveItxExpression(() => table(rules), parse(call), ROOT).map((step) => print(step));
   } catch (error) {
     return `THROWS ${(error as Error).message}`;
   }
@@ -80,12 +94,18 @@ describe("resolveItxExpression — the call that runs", () => {
       call: "itx.builtins.kv.get('k')",
       becomes: "itx.builtins.kv.get('k')",
     },
-    // THE WHOLE-CONTEXT OVERRIDE: a bare `itx` row claims every short-named call (its target must be
-    // the physical spelling — a short target would be its own next match; see the refusals)
+    // A BARE `itx` ROW WITH A TARGET claims only what no implicit row claims (rule 3): at the owner
+    // root every built-in is implicit, so only an unknown name goes to the row — the context's own
+    // `append` stays its own.
+    {
+      rules: ["itx ⇒ itx.builtins.rpcStubs.get('itx')"],
+      call: "itx.anything({ type: 't' })",
+      becomes: "itx.builtins.rpcStubs.get('itx').anything({type:'t'})",
+    },
     {
       rules: ["itx ⇒ itx.builtins.rpcStubs.get('itx')"],
       call: "itx.append({ type: 't' })",
-      becomes: "itx.builtins.rpcStubs.get('itx').append({type:'t'})",
+      becomes: "itx.builtins.append({type:'t'})",
     },
     {
       rules: ["itx ⇒ itx.builtins.rpcStubs.get('itx')"],
@@ -272,9 +292,9 @@ describe("resolveItxExpression — the call that runs", () => {
     },
     // a self-referential rule errors at the depth budget, never spins
     { rules: ["itx.loop ⇒ itx.loop"], call: "itx.loop.go()", throws: /depth 32/ },
-    // …and so does a bare `itx` row with a SHORT target: the row claims its own target (the proxy
-    // always writes the physical spelling for exactly this reason)
-    { rules: ["itx ⇒ itx.rpcStubs.get('itx')"], call: "itx.append(1)", throws: /depth 32/ },
+    // a bare `itx` row with a SHORT, unclaimed target claims its own target: a loop, refused by the
+    // depth budget — a name an implicit row answers never re-enters it (`itx.append` above)
+    { rules: ["itx ⇒ itx.cam.get('itx')"], call: "itx.nothing(1)", throws: /depth 32/ },
     // RULE 7 refusals: a nested `@` or a `...@` needs EXACTLY one argument — never a guess
     {
       rules: ["itx.ask ⇒ itx.ai.gateway('g').run({ query: @ })"],
@@ -327,15 +347,34 @@ describe("resolveItxExpression — the call that runs", () => {
     expect(chain([], "itx.builtins.kv.get('k')")).toEqual(["itx.builtins.kv.get('k')"]); // already there
   });
 
+  test("AT A CHILD only the context roots are implicit: a project root hops through the parent link, the context's own log stays its own, and a bare null denies all", () => {
+    const link = ["itx ⇒ itx.builtins.cd('/agents/a')"];
+    const runsAt = (rules: string[], call: string, roots: ReadonlySet<string>) =>
+      print(resolveItxExpression(() => table(rules), parse(call), roots).at(-1)!);
+    expect(runsAt(link, "itx.kv.get('k')", CHILD)).toBe("itx.builtins.cd('/agents/a').kv.get('k')");
+    expect(runsAt(link, "itx.tool.hello()", CHILD)).toBe(
+      "itx.builtins.cd('/agents/a').tool.hello()",
+    );
+    expect(runsAt(link, "itx.append({ type: 't' })", CHILD)).toBe(
+      "itx.builtins.append({type:'t'})",
+    );
+    expect(runsAt(link, "itx.cd('./x').whoami()", CHILD)).toBe("itx.builtins.cd('./x').whoami()");
+    expect(() => runsAt([], "itx.kv.get('k')", CHILD)).toThrow(/no rewrite rule matches/);
+    expect(() => runsAt(["itx ⇒ null"], "itx.append(1)", CHILD)).toThrow(/is masked/);
+    expect(runsAt(["itx ⇒ null", "itx.append ⇒ itx.builtins.append"], "itx.append(1)", CHILD)).toBe(
+      "itx.builtins.append(1)",
+    );
+  });
+
   test("a builtins-rooted call NEVER reads the table (the fixed point is checked before the rules)", () => {
     const neverRead = () => {
       throw new Error("the table was read");
     };
-    expect(print(resolveItxExpression(neverRead, parse("itx.builtins.kv.get('k')")).at(-1)!)).toBe(
-      "itx.builtins.kv.get('k')",
-    );
+    expect(
+      print(resolveItxExpression(neverRead, parse("itx.builtins.kv.get('k')"), ROOT).at(-1)!),
+    ).toBe("itx.builtins.kv.get('k')");
     // …while a short name does (and the read happens once)
-    expect(() => resolveItxExpression(neverRead, parse("itx.kv.get('k')"))).toThrow(
+    expect(() => resolveItxExpression(neverRead, parse("itx.kv.get('k')"), ROOT)).toThrow(
       /the table was read/,
     );
   });
@@ -487,7 +526,7 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
     });
   });
 
-  test("the REMOVAL spelling is the platform-equivalent target `itx.builtins.<match…>` (the reduce deletes the row)", () => {
+  test("the platform-equivalent target `itx.builtins.<match…>` is an ordinary target at the door — the reduce decides: a deletion where it restates an implicit row, a grant elsewhere (rule 8)", () => {
     expect(
       normalizeControlEvent({
         type: "events.iterate.com/itx/rewrite-rule-configured",
@@ -534,13 +573,13 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
       target: "itx.whoami",
       throws: /may not be rooted at "itx\.builtins"/,
     },
-    { match: "itx", target: "itx.cam", throws: /whole-context override .* "itx\.builtins/ }, // a short target would be its own next match
-    ...["cd", "invoke", "provide", "subscribe"].map((verb) => ({
+    // a bare row's short target is legal at the door — it loops at resolve time, where the budget catches it
+    ...["invoke", "provide", "subscribe"].map((verb) => ({
       match: `itx.${verb}`,
       target: "itx.kv",
       throws: new RegExp(`may not start with the proxy's own verb "${verb}"`),
     })),
-    { match: "itx.cd('/x')", target: "itx.kv", throws: /proxy's own verb "cd"/ },
+    // `cd` is a NAME, not a proxy verb: `itx.cd ⇒ null` (a wall) and `itx.cd('/x') ⇒ …` are rows
     { match: "itx.a(@)", target: "itx.kv", throws: /legal only in a rewrite rule's target/ }, // rule 7: never in a match…
     { match: ["itx", ["a", { "@": true }]], target: "itx.kv", throws: /not its match/ }, // …in either half
     {
@@ -644,6 +683,7 @@ describe("rowsNamingRpcStub — decided against a frozen table, whatever the con
     test(`${order}: the fake's own row and a row naming the key through the user's own registry go; the alias stays`, () => {
       const { ruleUnsets, subscriptionNames } = rowsNamingRpcStub({
         rpcStubKey: "itx.ai",
+        implicitRoots: ROOT,
         rules: table([...rules]),
         subscriptionTargets: {
           viaShortSpelling: parse("itx.rpcStubs.get('itx.ai')"),
@@ -742,7 +782,13 @@ const setup = () => {
       }),
     list: () => [...lentRpcStubs.keys()],
   };
-  const resolver = new ItxExpressionResolver({ builtIns: { ...builtIns, rpcStubs }, rewriteRules });
+  const resolver = new ItxExpressionResolver({
+    builtIns: { ...builtIns, rpcStubs },
+    rewriteRules,
+    implicitRoots: ROOT,
+    path: "/",
+    caller: () => ({ principal: null }),
+  });
   /** The edge's `provide(match, expression | null)`: build the ONE event, append it. A refusal throws
    *  at the door — nothing is appended. */
   const rewrite = (match: ItxExpressionInput, target: ItxExpressionInput | null) =>
@@ -1038,7 +1084,7 @@ describe("the rule table — a MAP by match: set replaces, null masks or deletes
     });
   });
 
-  test("THE WHOLE-CONTEXT OVERRIDE: a lent stub at bare `itx` catches EVERY short-named call — built-ins included — while `itx.builtins.…` stays physical", async () => {
+  test("A BARE `itx` ROW WITH A TARGET: a lent stub there catches every name no implicit row claims — at the owner root only unknown names; the built-ins stay the context's own", async () => {
     const { invoke, provide, remove } = setup();
     const osCalls: string[] = [];
     provide("itx", {
@@ -1050,10 +1096,22 @@ describe("the rule table — a MAP by match: set replaces, null masks or deletes
     });
     expect(await invoke("itx.anything('x')")).toBe("handled upstream");
     expect(osCalls).toEqual(["anything(x)"]);
-    expect(await invoke("itx.whoami()")).toBe("the override's whoami"); // rules first: the platform row is shadowed
+    expect(await invoke("itx.whoami()")).toEqual({ projectId: "prj_t", path: "/" }); // implicit outranks the bare row
     expect(await invoke("itx.builtins.whoami()")).toEqual({ projectId: "prj_t", path: "/" });
-    remove("itx"); // `itx ⇒ itx.builtins`: the override is gone
+    remove("itx"); // `itx ⇒ itx.builtins` at the owner root restates the default: the row is gone
+    await expect(invoke("itx.anything('x')")).rejects.toThrow(/no rewrite rule matches/);
+  });
+
+  test("A BARE `itx ⇒ null` DENIES ALL — one row is a jail, the context's own roots included; a longer row still grants through it", async () => {
+    const { invoke, rewrite } = setup();
+    rewrite("itx", null);
+    await expect(invoke("itx.whoami()")).rejects.toThrow(/is masked/);
+    await expect(invoke("itx.append({ type: 't' })")).rejects.toThrow(/is masked/);
+    await expect(invoke("itx.anything('x')")).rejects.toThrow(/is masked/);
+    expect(await invoke("itx.builtins.whoami()")).toEqual({ projectId: "prj_t", path: "/" }); // the physical door is the kernel's
+    rewrite("itx.whoami", "itx.builtins.whoami"); // a grant through the wall
     expect(await invoke("itx.whoami()")).toEqual({ projectId: "prj_t", path: "/" });
+    await expect(invoke("itx.append({ type: 't' })")).rejects.toThrow(/is masked/);
   });
 
   test("a rule to a key nothing is lent under answers offline until the rule is un-set — the table never auto-unsets", async () => {

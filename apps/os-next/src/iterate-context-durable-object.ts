@@ -18,9 +18,15 @@
 // facet a hosting subscription configures.
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  codedError,
+  errorCode,
+  reportIssue,
+  resolveContextPath,
+  withTimeout,
+} from "iterate/next/lib";
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
-import { codedError, errorCode, reportIssue, withTimeout } from "iterate/next/lib";
 import {
   REVIVE_AFTER_MAX_MS,
   REVIVE_AFTER_MS,
@@ -41,11 +47,13 @@ import {
   RpcStubHandle,
 } from "iterate/next/expression";
 import {
+  ITX_APP_HEADER,
   ITX_PRINCIPAL_HEADER,
   stampPrincipal,
   type Caller,
   type Principal,
 } from "iterate/next/principal";
+import type { RewriteRuleListEntry } from "iterate/next/api";
 import {
   assertFacetSourceWithinCeiling,
   facetLoaderOwner,
@@ -77,25 +85,24 @@ import {
   type StreamPage,
 } from "./stream/stream.ts";
 import { AlarmCoordinator } from "./alarm-coordinator.ts";
-import { DurableObjectNameCodec, itxEntrypointFor, resourceScope } from "./iterate-context.ts";
+import { DurableObjectNameCodec, itxEntrypointFor } from "./iterate-context.ts";
+import { resourceScope } from "./context/paths.ts";
 import { secretNamesReferenced } from "./secrets.ts";
 import type { SecretDurableObject } from "./secret-durable-object.ts";
 import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
 import {
   ItxExpressionResolver,
-  restoreRuleTarget,
   rowsNamingRpcStub,
   rpcStubKeysNamed,
+  implicitRootsAt,
+  BUILT_IN_ROOT_DESCRIPTIONS,
   type ItxExpressionRewriteRule,
+  type BuiltInRoot,
   BUILT_IN_ROOTS,
 } from "./context/itx-expression-rewriting.ts";
 import { signedFileUrl } from "./context/file-urls.ts";
 import { directory } from "./directory.ts";
-import {
-  buildBuiltIns,
-  type RewriteRuleListEntry,
-  type SubscriptionListEntry,
-} from "./context/built-ins.ts";
+import { buildBuiltIns, type SubscriptionListEntry } from "./context/built-ins.ts";
 import type { ArtifactsNamespace } from "./context/repos.ts";
 import { SubscriptionDelivery, type DeliveryDeadline } from "./stream/subscription-delivery.ts";
 
@@ -203,6 +210,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** The `env.ITX` / `globalOutbound` stub every worker this context loads receives (iterate-context.ts `ItxEntrypoint`).
    *  Minted once: it names the context, not an incarnation, and a warm loader never re-reads it. */
   readonly #itxEntrypoint = itxEntrypointFor(this.ctx, this.#durableObjectAddress.name);
+  /** The roots with an implicit row HERE (itx-expression-rewriting.ts rule 3): every built-in at the
+   *  resource owner's root, the context roots anywhere else. Fixed for the DO's life — a path is. */
+  readonly #implicitRoots = implicitRootsAt(
+    this.#durableObjectAddress.projectId,
+    this.#durableObjectAddress.path,
+  );
   /** This deployment's configuration (worker.ts `appConfigOf`) — a malformed var throws here, naming it. */
   readonly #appConfig = appConfigOf(this.env);
   /** context/rpc-stubs.ts — wired to the fetch door and the two WebSocket handlers below. */
@@ -249,7 +262,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     for (const { match, ifTarget } of ruleUnsets)
       void this.append({
         type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match, target: restoreRuleTarget(match), ifTarget },
+        payload: { match, target: null, ifTarget },
       }).catch(() => undefined);
     for (const name of subscriptionNames)
       void this.append({
@@ -262,9 +275,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #rowsForRpcStubCensus(): {
     rules: ItxExpressionRewriteRule[];
     subscriptionTargets: Record<string, ItxExpression>;
+    implicitRoots: ReadonlySet<string>;
   } {
     const { itxExpressionRewriteRules, subscriptions } = this.#stream.coreReducedState;
     return {
+      implicitRoots: this.#implicitRoots,
       rules: Object.values(itxExpressionRewriteRules),
       subscriptionTargets: Object.fromEntries(
         Object.entries(subscriptions).map(([name, row]) => [name, row.target]),
@@ -440,30 +455,70 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#stream.read(afterOffset, limit, options); // sync on the Stream, a promise over Workers RPC
   }
 
-  /** THE EFFECTIVE rule table, read: the context's own rows (masks as `target: null`, a template's
-   *  `@` spelled) plus the implicit platform rows the context has not re-set — one per built-in root
-   *  — none at all under a bare
-   *  `itx` row, which claims every call before a platform row could. */
-  #rewriteRuleList(): RewriteRuleListEntry[] {
-    const contextRows = Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules).map(
+  /** THE EFFECTIVE table, DESCRIBED — the tree this context can spell (itx-expression-rewriting.ts
+   *  rule 3): its own rows (a template's `@` spelled, a mask as `target: null`, each with the
+   *  description its event carried); the implicit rows HERE not shadowed by an own `itx.<root>` row,
+   *  each with the platform's one-liner — none under a bare null, which denies all; and, behind a
+   *  bare row that hops (`itx ⇒ itx.builtins.cd(path)`), THAT context's list minus what this one
+   *  claims, every row keeping the `context` it was read from — a bare `itx ⇒ itx.builtins` lists
+   *  every root as local. `depth` bounds the hops. Addressing, so read under no principal. */
+  async #rewriteRuleList(depth = 3): Promise<RewriteRuleListEntry[]> {
+    const ownPath = this.#durableObjectAddress.path;
+    const rules = Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules);
+    const own = rules.map(
       (rule): RewriteRuleListEntry => ({
         match: print(rule.match),
         target: rule.target && print(rule.target, { holes: true }),
-        origin: "context",
+        description: rule.description,
+        context: ownPath,
       }),
     );
-    const reset = new Set(contextRows.map((row) => row.match));
-    if (reset.has("itx")) return contextRows;
-    const platformRows: RewriteRuleListEntry[] = [
-      ...BUILT_IN_ROOTS.map(
-        (root): RewriteRuleListEntry => ({
+    const claimed = new Set(own.map((row) => row.match));
+    const implicit = (roots: Iterable<string>): RewriteRuleListEntry[] =>
+      [...roots]
+        .filter((root) => !claimed.has(`itx.${root}`))
+        .map((root) => ({
           match: `itx.${root}`,
           target: `itx.builtins.${root}`,
-          origin: "platform",
+          description: BUILT_IN_ROOT_DESCRIPTIONS[root as BuiltInRoot],
+          context: ownPath,
+        }));
+    const bare = rules.find((rule) => rule.match.length === 1);
+    if (bare && !bare.target) return own; // one row denies all: nothing implicit, nothing inherited
+    const rows = [...own, ...implicit(this.#implicitRoots)];
+    if (!bare?.target) return rows;
+    const target = bare.target;
+    if (target.length === 2 && target[1] === "builtins")
+      return [
+        ...rows,
+        ...implicit(BUILT_IN_ROOTS.filter((root) => !this.#implicitRoots.has(root))),
+      ];
+    const cdStep = target[2];
+    if (
+      depth > 0 &&
+      target.length === 3 &&
+      target[1] === "builtins" &&
+      Array.isArray(cdStep) &&
+      cdStep[0] === "cd" &&
+      typeof cdStep[1] === "string"
+    ) {
+      const there = resolveContextPath(ownPath, cdStep[1]);
+      if (there === ownPath) return rows;
+      const inherited = (await this.env.ITERATE_CONTEXT.getByName(
+        DurableObjectNameCodec.stringify({
+          projectId: this.#durableObjectAddress.projectId,
+          path: there,
         }),
-      ),
-    ].filter((row) => !reset.has(row.match));
-    return [...contextRows, ...platformRows];
+      ).invoke(["itx", "builtins", "rewriteRules", ["list", depth - 1]], [], {
+        principal: null,
+      })) as RewriteRuleListEntry[];
+      const shadowed = new Set(rows.map((row) => row.match));
+      return [
+        ...rows,
+        ...inherited.filter((row) => row.match !== "itx" && !shadowed.has(row.match)),
+      ];
+    }
+    return rows;
   }
 
   /** THE LIBRARY (library.ts): its verbs closed over a genuine InvokeHandle over `invoke`, so a
@@ -473,10 +528,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #library = buildLibrary(
     // Every call the library makes (a connection opening, a call through it) is a use of the
     // library's pin: the quiet period runs from the call's end.
+    // Through the OWN-context adapter, not the public door: the ambient caller (who is asking, and
+    // from which context) rides into every library call, so a create path writes the parent link for
+    // the right creator and a relative `./x` answered here is the caller's.
     new InvokeHandle((steps) => {
       this.#pinCallStarted();
-      return this.invoke(["itx", ...steps]).finally(() => this.#pinCallEnded());
+      return this.#localContext.invoke(["itx", ...steps]).finally(() => this.#pinCallEnded());
     }) as unknown as LibraryItx,
+    { caller: () => this.#callerStorage.getStore() ?? { principal: null } },
   );
 
   /** The own-context adapter used by built-ins: a loopback (`itx.cd(<own path>)`, the config
@@ -576,16 +635,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       get: (name) => this.#subscriptionList().find((s) => s.name === name) ?? null,
     },
     rewriteRules: {
-      list: () => this.#rewriteRuleList(),
+      list: (depth?: number) => this.#rewriteRuleList(depth),
       // Canonicalized the same way `provide` canonicalized the match; an unparseable one is no row.
-      get: (match) => {
+      get: async (match) => {
         let key: string;
         try {
           key = canonicalItxExpressionPrefix(match);
         } catch {
           return null;
         }
-        return this.#rewriteRuleList().find((row) => row.match === key) ?? null;
+        return (await this.#rewriteRuleList()).find((row) => row.match === key) ?? null;
       },
       // PURE: the chain of rewrites, printed — nothing dispatched, nothing noted as activity.
       resolve: (call) => this.#itxExpressionResolver.resolve(call).map((step) => print(step)),
@@ -601,6 +660,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #itxExpressionResolver = new ItxExpressionResolver({
     rewriteRules: () => Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules),
     builtIns: this.#builtIns,
+    implicitRoots: this.#implicitRoots,
+    path: this.#durableObjectAddress.path,
+    caller: () => this.#callerStorage.getStore() ?? { principal: null },
   });
 
   // ── SUBSCRIPTION DELIVERY: the one loop (subscription-delivery.ts), wired to this DO ──
@@ -1226,10 +1288,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // a loaded worker's own `env.ITX.fetch` — resolved as a terminal-fetch call with the live Request
     // as its one runtime arg; the routing header is stripped so it never reaches the capability or
     // egress); everything else is EGRESS.
-    const pager = this.#rpcStubs.acceptRpcStubPagerWebSocket(request);
-    if (pager) return pager;
-    const upgradeLeg = this.#rpcStubFetch.acceptFetchUpgradeLeg(request);
-    if (upgradeLeg) return upgradeLeg;
+    // LOADED CODE's fetch (`ItxEntrypoint.fetch` set the header): never the pager door nor the
+    // upgrade leg — both append rows past every table — and the lane runs as app code.
+    const app = request.headers.get(ITX_APP_HEADER) !== null;
+    if (!app) {
+      const pager = this.#rpcStubs.acceptRpcStubPagerWebSocket(request);
+      if (pager) return pager;
+      const upgradeLeg = this.#rpcStubFetch.acceptFetchUpgradeLeg(request);
+      if (upgradeLeg) return upgradeLeg;
+    }
     const itxExpressionHeader = request.headers.get(ITX_EXPRESSION_FETCH_HEADER);
     // oxlint-disable-next-line iterate/simple-truthiness-check -- an untrusted HTTP header: present (even empty) selects the fetch lane, absent (null) routes to egress — that distinction must not collapse
     if (itxExpressionHeader !== null) {
@@ -1246,6 +1313,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
               : parse(itxExpressionHeader);
         const headers = new Headers(request.headers);
         headers.delete(ITX_EXPRESSION_FETCH_HEADER);
+        headers.delete(ITX_APP_HEADER);
         // THE APP LABEL the app sees (`x-iterate-app`, apps/os's header) is derived HERE, from the
         // expression, on every fetch-lane Request — a project host's, a session's terminal fetch, a
         // loaded worker's `env.ITX.fetch` — so whatever a visitor or loaded code wrote is overwritten
@@ -1264,8 +1332,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           headers.get(ITX_PRINCIPAL_HEADER) ?? "null",
         ) as Principal | null;
         const forwarded = new Request(request, { headers });
-        const result = await this.#callerStorage.run({ principal }, () =>
-          this.#itxExpressionResolver.invoke(itxExpressionEndingInFetch(itxExpression), forwarded),
+        const result = await this.#callerStorage.run(
+          { principal, ...(app && { app: true as const }) },
+          () =>
+            this.#itxExpressionResolver.invoke(
+              itxExpressionEndingInFetch(itxExpression),
+              forwarded,
+            ),
         );
         return result instanceof Response
           ? result
@@ -1283,6 +1356,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         return new Response(`fetch lane error: ${message}\n`, { status });
       }
     }
+    // Bare egress is the PLATFORM's (a first-party facet's raw `fetch(url)`); loaded code's fetch
+    // always names an expression (`ItxEntrypoint.fetch`), so an app Request without one is refused.
+    if (app) return new Response("fetch lane: no expression\n", { status: 404 });
     return this.#egress(request);
   }
 

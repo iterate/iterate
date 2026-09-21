@@ -357,21 +357,28 @@ expect(await b.invoke("itx.clash(1)")).toBe(101);
 // e2e/session.e2e.test.ts
 ```
 
-Contexts can still inherit from one another — through the rules, not the registry. A child's
-WHOLE-CONTEXT override, `provide("itx", "itx.builtins.cd('/')")`, sends every call no more specific
-row of the child claims — the built-in roots included — to the project root, resolved through the
-root's rules, so a lend on the root is reachable from every child that says so. The target must be
-the physical spelling `itx.builtins.cd('/')`: the door refuses `itx.cd('/')`, which would re-enter
-the table the row just claimed (chapter 3 has the rule):
+A child is born with its own log and nothing else. Whoever creates it writes one bare row — `itx`,
+the shortest legal match — whose target is the creator's own context; the library's
+`agents.get(path).create()`, `repos.get(path).create()` and `workspaces.get(path).create()` do
+(`src/library.ts`), and nothing writes it for a context you merely `cd` into. That row claims only
+what no implicit row claims (chapter 3): the child's `append`, `whoami`, `cd`, its rules and its
+facets stay the child's, and every other name walks one hop up to the creator's Durable Object and
+resolves through the creator's rules — so a lend on the root is reachable from every child whose
+row says so, and from that child's children through their rows. A context nobody linked is naked:
+thirteen roots and default-deny.
 
 ```ts
 using s = session();
 const root = s.authenticate(adminCredentials()).projects.get("acme-support");
 await root.provide("itx.tool", new Tools("root")); // lent at the root only
-await root.cd("/x").provide("itx", "itx.builtins.cd('/')"); // /x inherits: every unclaimed call goes to the root, through its rules
-expect(await root.cd("/x").invoke("itx.tool.hello()")).toBe("hello-from-root"); // (composed)
-expect(await root.cd("/x").builtins.whoami()).toEqual({ projectId: "acme-support", path: "/x" }); // the physical door at /x is still /x
-// e2e/rewrite-rules.e2e.test.ts — the whole-context override row (`root.cd("/x").provide("itx", live)`) and the door row (`itx.cd('/x')` refused, "physical spelling"; `itx.builtins.cd('/y')` accepted)
+await root.cd("/x").provide({
+  match: "itx",
+  target: "itx.builtins.cd('/')",
+  description: "everything this context does not claim, its creator answers",
+}); // the row a create path appends durably; here, session-scoped
+expect(await root.cd("/x").invoke("itx.tool.hello()")).toBe("hello-from-root"); // a miss: one hop to the root, through its rules
+expect(await root.cd("/x").whoami()).toEqual({ projectId: "acme-support", path: "/x" }); // implicit at /x: never a miss
+// e2e/rewrite-rules.e2e.test.ts — a linked child's append and whoami stay the child's; a bare row may not name its own context
 ```
 
 **What this brick leaves on the table:** the name you called the stub by was a string we never
@@ -421,7 +428,7 @@ canonically (whitespace, quotes and key order normalized), an array is shape-che
 (`e2e/rewrite-rules.e2e.test.ts`). One sizing rule follows: a STRING expression is
 capped at 2 KiB (`EXPRESSION_TOO_LONG`); anything bigger — a worker's source — rides the array half,
 plain data that never meets the JSON5 parser. Two reserved spellings belong to chapter 3: `@`, the
-caller's input, and the root `itx.builtins`, the physical scope.
+caller's input, and the root `itx.builtins`, the kernel's record — a target's word, never a call's.
 
 ### `cd(path)` is pure addressing
 
@@ -440,7 +447,10 @@ const [self] = await itx.invoke("itx.cd('').append({type:'self-ping'})"); // '' 
 There are two `cd` doors on purpose. The edge `IterateContext.cd(path)` returns an EDGE context, so
 a later `provide` on it lends in your session (`a.cd("/sub").provide(…)` in chapter 1); the built-in
 `itx.cd(path)` inside an expression is for expressions evaluated INSIDE the DO, where there is no
-edge — a subscription target `itx.cd('/archive').append`. Same resolver, two evaluation sites. A
+edge — a subscription target `itx.cd('/archive').append`. Same resolver, two evaluation sites. Loaded
+code (`env.ITX`) has a third: its `cd` goes through its own table, so a row can mask it, and goes
+DOWN only — itself and its descendants, never a parent or a sibling — the way `..` never escapes `/`
+here; what it reaches above itself, it reaches through its rows (chapter 3). A
 context's Durable Object name is `{projectId}.iterate{path}`, the project id gated to `[A-Za-z0-9_-]`
 at the one place every name is parsed — the isolation wall: a `:` can never be spelled, so a
 project-prefixed KV key can never alias another project's.
@@ -494,7 +504,7 @@ for (const call of ["itx.store.get('k')", "itx.whoami()", "itx.builtins.kv.get('
 // e2e/rewrite-rules.e2e.test.ts
 ```
 
-### The seven rules, in plain words
+### The eight rules, in plain words
 
 `src/context/itx-expression-rewriting.ts` is one file: the rules, the one event, the resolver.
 Every rule below is a row in its table test.
@@ -503,48 +513,84 @@ Every rule below is a row in its table test.
    `itx.ai.run('gpt-5')`.
 2. **A name step matches the same property** — or, as the final step, a call of that name. A call
    step matches a call whose leading args equal the pinned literals; pinned args are CONSUMED.
-3. **The most specific row wins:** longest match, then most pinned args. A bare `itx` row matches
-   every call — the whole-context override.
+3. **The most specific row wins:** longest match, then most pinned args. The implicit rows
+   (rule 5) compete as rows of length two, so a bare `itx` row WITH a target claims only what no
+   implicit row claims — `itx ⇒ itx.builtins.cd('/agents/x')` is how a child reaches its creator
+   (chapter 1), `itx ⇒ itx.builtins` is the whole local surface in one row — and a bare
+   `itx ⇒ null` claims everything: one row denies all.
 4. **The rewrite is the target, then the unpinned args, then the call's remaining steps.** Args
    fold into the target's final step when it is a name (`itx.grok ⇒ itx.openai.chat`, so
    `itx.grok(x)` becomes `itx.openai.chat(x)`); otherwise they become an anonymous call on the
    target's result (`itx.cam ⇒ itx.builtins.rpcStubs.get('cam')`, so `itx.cam(1)` becomes
    `itx.builtins.rpcStubs.get('cam')(1)`). A target denotes a VALUE; calling the match calls it.
-5. **The fixed point is `itx.builtins`.** A call rooted there runs as is and never reads the
-   table. Any other `itx.…` call: RULES FIRST — a matching row whose target is `null` is a MASK and
-   the call is refused; a matching row rewrites and the loop repeats; no matching row and a root
-   that is a built-in is the IMPLICIT PLATFORM ROW `itx.<root> ⇒ itx.builtins.<root>`, applied and
-   done; anything else is `NO_ITX_EXPRESSION_MATCH`, default-deny. 32 rewrites is the budget.
+5. **The fixed point is `itx.builtins`,** the kernel's record. A call rooted there runs as is and
+   never reads the table. Any other `itx.…` call: RULES FIRST — a matching row whose target is
+   `null` is a MASK and the call is refused; a matching row rewrites and the loop repeats; no
+   matching row and a root that is IMPLICIT HERE is the row `itx.<root> ⇒ itx.builtins.<root>`,
+   applied and done; anything else is `NO_ITX_EXPRESSION_MATCH`, default-deny. What is implicit
+   depends on where you stand: at the owner root — `/` for a project; `/users/<id>` or
+   `/organizations/<id>` in the global namespace — every built-in root; at every other context
+   only the thirteen context roots, `whoami`, `append`, `readEvents`, `waitForEvent`, `cd`,
+   `facets`, `subscriptions`, `processors`, `schedules`, `rewriteRules`, `rpcStubs`, `workers`,
+   `run`. `kv`, `secrets`, `ai`, `fetch`, `repos`, `agents` and the rest are the project's, ambient
+   nowhere below its root. 32 rewrites is the budget.
 6. **The door.** A match is rooted at `itx`, never at `itx.builtins`, never at a proxy verb
-   (`cd`, `invoke`, `provide`, `subscribe`). A target is
-   rooted at `itx`. A whole-context override must target the physical spelling `itx.builtins.…`
-   and may not name its own context.
+   (`invoke`, `provide`, `subscribe`; `itx.cd` is a legal match, so `itx.cd ⇒ null` is a row). A
+   target is rooted at `itx`; `itx.builtins.…` is a legal target — the owner's grant of the real
+   thing — and a bare row may not name its own context. Loaded code (`env.ITX` in a worker, a facet,
+   a script) never spells `itx.builtins` in a call — the door refuses it, as the codec refuses
+   `__proto__`; its `cd` goes down only, to itself and its descendants; `provide` and `subscribe`
+   are not on its handle, so a loaded worker writes rows with `itx.append` and lends nothing.
 7. **`@` is the caller's input.** A target whose final call step holds `@` is a template. As a
    top-level argument `@` is the unpinned argument list, spliced; nested inside an object or array
    literal it is THE one argument; `...@` as an object entry merges the one argument's fields under
    the template's own keys, the template winning.
+8. **Un-setting.** `target: null` deletes the row, kept as a MASK only where an implicit row lies
+   beneath the match here (a row must exist to deny). A handle's undo and a dead stub's census
+   send `null` with `ifTarget`: a compare-and-set delete, never a mask. There is no restore
+   spelling: at a child the target `itx.builtins.<x>` is a grant and is stored; at the owner root
+   it equals the implicit row and deletes.
 
 The resolver (`resolveItxExpression` in the same file) is rule 5 as a loop: while the call is not
-rooted at `itx.builtins`, pick the most specific context row and rewrite (a `null` target throws
-`NO_ITX_EXPRESSION_MATCH` "is masked"); with no row, a built-in root becomes `itx.builtins.<root>` and
-the loop ends; anything else is
-`NO_ITX_EXPRESSION_MATCH` "no rewrite rule matches … (default-deny; configure a rule first)".
+rooted at `itx.builtins`, pick the most specific row — the context's own and the implicit ones —
+and rewrite (a `null` target throws `NO_ITX_EXPRESSION_MATCH` "is masked"); no row is
+`NO_ITX_EXPRESSION_MATCH` "no rewrite rule matches … (default-deny; configure a rule first)". A
+rewrite onto `itx.builtins.cd('<path>')…` is one hop: the call goes on in that context, against its
+rows, with a fresh budget and the caller's path beside it (so the library's `repos.get('./x')` stays
+relative to whoever called) — which is why a bare row may not name its own context.
 
-### The implicit platform rows, and `itx.builtins`
+### The implicit rows, and `itx.builtins`
 
 The built-ins are a plain record (`src/context/built-ins.ts`, the `BuiltInScope` interface), and THE
-RECORD IS `itx.builtins`. `itx.builtins.kv.get('x')` runs against it directly and reads no rule. The
-short name `itx.kv.get('x')` reaches the same door through the implicit platform row — never stored,
-applied by the resolver when no context row matches. `itx.rewriteRules.list()` is the EFFECTIVE
-table, your rows plus the platform rows, each with its origin:
+RECORD IS `itx.builtins` — the kernel's word, spelled by the kernel's own appends and by a rule's
+target, never by a call an app makes. The short name `itx.kv.get('x')` reaches it through the
+implicit row `itx.kv ⇒ itx.builtins.kv` — never stored, applied by the resolver when no context row
+matches, present at the owner root only (rule 5). `itx.rewriteRules.list()` is the EFFECTIVE table:
+your rows, the implicit rows described by the platform, and, behind a bare row that hops, the rows
+of the context it names — each with the `context` it was read from and, when it has one, its
+`description`, one line a model reads (≤ 500 chars):
 
 ```ts
 const before = await itx.rewriteRules.list();
-expect(before).toContainEqual({ match: "itx.kv", target: "itx.builtins.kv", origin: "platform" });
-await itx.provide("itx.kv", "itx.builtins.whoami");
+expect(before).toContainEqual({
+  match: "itx.kv",
+  target: "itx.builtins.kv",
+  description: expect.any(String),
+  context: "/",
+});
+await itx.provide({
+  match: "itx.kv",
+  target: "itx.builtins.whoami",
+  description: "kv answers whoami here",
+});
 const after = await itx.rewriteRules.list();
 expect(after.filter((row) => row.match === "itx.kv")).toEqual([
-  { match: "itx.kv", target: "itx.builtins.whoami", origin: "context" }, // replaced the platform row in the listing
+  {
+    match: "itx.kv",
+    target: "itx.builtins.whoami",
+    description: "kv answers whoami here",
+    context: "/",
+  }, // replaced the implicit row in the listing
 ]);
 // e2e/rewrite-rules.e2e.test.ts
 ```
@@ -552,31 +598,37 @@ expect(after.filter((row) => row.match === "itx.kv")).toEqual([
 The platform never spells a short name: every expression it writes — the proxy's own append, a lent
 stub's rule, a processor's row — is rooted at `itx.builtins`, so a row you put at `itx.rpcStubs`
 redirects YOUR calls and nothing the platform relies on. Mask `itx.rpcStubs` with `null`, and
-`provide("itx.tool", fn)` still lands and serves while `itx.builtins.rpcStubs.list()` still answers
+`provide("itx.tool", fn)` still lands and serves: the registry it lent to is the kernel's
 (`e2e/rewrite-rules.e2e.test.ts`).
 
-### Masks: `provide(match, null)`
+### Masks and deletions: `provide(match, null)`
 
-`null` is a deliberate DENY where a platform row lies beneath, and a plain deletion elsewhere. A mask
-refuses the short name; the physical door still answers; a partial mask refuses only what it claims;
-disposing the deny lifts it; the platform-equivalent target deletes the row explicitly:
+`null` is a deliberate DENY where an implicit row lies beneath — the row is kept, `{ match, target:
+null }`, and the short name is refused — and a plain deletion elsewhere; a bare `itx ⇒ null` denies
+all (rule 3). A partial mask refuses only what it claims; disposing the deny lifts it; a row that
+says what the implicit row beneath already says is no row at all:
 
 ```ts
 await itx.kv.put("k", "v");
 const deny = await itx.provide("itx.kv", null);
 expect((await rejection(itx.kv.get("k"))).code).toBe("NO_ITX_EXPRESSION_MATCH"); // "is masked"
-expect(await itx.builtins.kv.get("k")).toBe("v"); // the row: { match: "itx.kv", target: null, origin: "context" }
+expect(await itx.rewriteRules.get("itx.kv")).toEqual({
+  match: "itx.kv",
+  target: null,
+  context: "/",
+});
 await itx.provide("itx.kv.put", null); // a partial mask under the root
 deny[Symbol.dispose](); // lifts the mask at itx.kv…
 expect(await itx.kv.get("k")).toBe("v");
 expect((await rejection(itx.kv.put("k", "w"))).code).toBe("NO_ITX_EXPRESSION_MATCH"); // …the partial one stands
-await itx.provide("itx.kv.put", "itx.builtins.kv.put"); // the platform-equivalent target DELETES the row
-expect(await itx.rewriteRules.get("itx.kv.put")).toBeNull();
+await itx.provide("itx.kv.put", "itx.builtins.kv.put"); // what the implicit row already says: the mask is gone
+expect(await itx.kv.put("k", "w")).toEqual({ ok: true });
 // e2e/rewrite-rules.e2e.test.ts
 ```
 
-Under a name with nothing beneath, `null` simply deletes and the match is default-deny
-(`e2e/rewrite-rules.e2e.test.ts`).
+Under a name with nothing beneath, `null` simply deletes and the match is default-deny — at a child
+that is every project-level name, so `itx.kv ⇒ null` there is a deletion and `itx.kv.put ⇒
+itx.builtins.kv.put` there is a grant, stored (`e2e/rewrite-rules.e2e.test.ts`).
 
 ### Pinned arguments
 
@@ -596,7 +648,7 @@ expect(await itx.invoke("itx.llm.run('live', 7)")).toBe("live:[7]"); // the pinn
 
 ### `@`, the caller's input
 
-`itx.ai` is Cloudflare's Workers AI binding, verbatim, under the platform row. THE DREAM is one
+`itx.ai` is Cloudflare's Workers AI binding, verbatim, under its implicit row at the root. THE DREAM is one
 rule: `itx.fable ⇒ itx.ai.run('@cf/…', @)` pins the model and splices the caller's inputs and
 options into the call:
 
@@ -645,16 +697,16 @@ a string target is parsed at the reduce, and a malformed one is skipped without 
 
 ### Shadowing a root with a stub, and what dies with the stub
 
-Misha's test, on the real root: `provide("itx.ai", fake)` shadows the binding for the context;
-`itx.builtins.ai` stays the real one; disposing the handle restores the platform row — because the
-DO un-sets the rule when the stub's LAST pager closes, and a removal is spelled as the
-platform-equivalent target, never as `null` (which would mask):
+Misha's test, on the real root: `provide("itx.ai", fake)` shadows the binding for the context; the
+kernel's `itx.builtins.ai` stays the real one; disposing the handle gives the implicit row back —
+because the DO un-sets the rule when the stub's LAST pager closes, and an un-set is a deletion of
+the row the stub wrote, never a mask:
 
 ```ts
-expect(await itx.rewriteRules.get("itx.ai")).toEqual({
+expect(await itx.rewriteRules.get("itx.ai")).toMatchObject({
   match: "itx.ai",
   target: "itx.builtins.ai",
-  origin: "platform",
+  context: "/", // implicit here, described by the platform
 });
 const handle = await itx.provide("itx.ai", new FakeAi());
 expect(await itx.rewriteRules.resolve("itx.ai.run")).toEqual([
@@ -662,36 +714,30 @@ expect(await itx.rewriteRules.resolve("itx.ai.run")).toEqual([
   "itx.builtins.rpcStubs.get('itx.ai').run",
 ]);
 handle[Symbol.dispose]();
-await until(async () => (await itx.rewriteRules.get("itx.ai"))?.origin === "platform");
+await until(async () => (await itx.rewriteRules.get("itx.ai"))?.target === "itx.builtins.ai");
 // e2e/ai-root-shadow-and-fable.e2e.test.ts
 ```
 
 What names a dead stub is decided against one frozen table: every rule and every subscription whose
 target RESOLVES to `itx.builtins.rpcStubs.get('<key>')` goes. So a user's alias to a shadowed root
 (`itx.me ⇒ itx.whoami`, with a fake at `itx.whoami`) survives the fake dying in either configuration
-order and resolves to the platform row beneath (`e2e/rewrite-rules.e2e.test.ts`).
+order and resolves to the implicit row beneath (`e2e/rewrite-rules.e2e.test.ts`).
 
 ### The compare-and-set undo: a handle only ever removes the row it wrote
 
-An expression rule's handle appends the removal spelling when disposed — but only while the row is
-still its own. The removal carries the target this handle wrote (`ifTarget`), and the core reduce
-compares inside the commit:
+An expression rule's handle, disposed, appends a deletion — `{ match, target: null }` — but only
+while the row is still its own: the deletion carries the target this handle wrote as `ifTarget`,
+and the core reduce compares inside the commit:
 
 ```ts
-// context/itx-expression-rewriting.ts — abridged
-export function rewriteRuleRemovedEvent(match, ifTarget?) {
-  const matchPrefix = parseItxExpressionPrefix(match);
-  const event = rewriteRuleConfiguredEvent(matchPrefix, [
-    "itx",
-    "builtins",
-    ...matchPrefix.slice(1),
-  ]);
-  return ifTarget === undefined ? event : { ...event, payload: { ...event.payload, ifTarget } };
-}
 // stream/core-processor.ts — the reduce's one line for it
 if ("ifTarget" in payload && (!existing || !jsonEqual(existing.target, payload.ifTarget)))
   return undefined; // a replacement owns the match now; a stale undo is a no-op
 ```
+
+A `null` that carries `ifTarget` deletes and never masks: whatever lies beneath shows through — the
+implicit row at the owner root, nothing at a child — so a disposed session row cannot leave a grant
+behind where it stood.
 
 So a session that provided `itx.m ⇒ itx.kv` and let go after another session's live provider took
 the match over un-sets nothing (`e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts`). Two known reds sit
@@ -710,10 +756,10 @@ chapter appended went somewhere; the next brick is that somewhere.
 ### `append`, `readEvents`, `waitForEvent`
 
 Every context is one append-only event log. The three are built-ins under `itx.builtins`, like
-everything the platform implements: `itx.append` is the implicit platform row
-`itx.append ⇒ itx.builtins.append`, exactly as `itx.kv` is `itx.kv ⇒ itx.builtins.kv` (chapter 3) —
-so the short name rides the dotted hop with zero edge code, and the physical spelling
-`itx.builtins.append` always works and never reads the rules:
+everything the platform implements, and three of the thirteen roots implicit in EVERY context
+(chapter 3): `itx.append` is the row `itx.append ⇒ itx.builtins.append` wherever you stand — a
+child's log is its own, whoever created it — so the short name rides the dotted hop with zero edge
+code, and the kernel's own appends, spelled `itx.builtins.append`, never read the rules:
 
 ```ts
 const [committed] = await itx.append({ type: "mark", payload: { n: 1 } });
@@ -1158,8 +1204,9 @@ The host (`src/sdk/index.ts`) is one abstract field, `processor`, and four
 doors over a `ProcessorEngine`: `processEventBatch(events, range)` (the push door),
 `snapshot()` → `{ offset, state }` (caught up through the log first), `liveSnapshot()` → `{ rev,
 state }` (the live-state seed), and `waitUntilProcessed({ offset, timeoutMs? })` (the barrier,
-default 10 s). The engine appends and reads through `env.ITX.get().builtins.append(…)` /
-`.readEvents(…)` — the platform never spells a short name — and disposes both after each call
+default 10 s). The engine appends and reads through `env.ITX.get().append(…)` /
+`.readEvents(…)` — two of the thirteen roots implicit in every context, so a hosted processor's log
+is always its own — and disposes both after each call
 (chapter 11). It keeps the reduced state CHECKPOINTED with the offset and contract version it was
 reduced under; a push not contiguous with the checkpoint triggers GAP REPAIR from the log; bumping
 `contract.version` re-reduces from offset 0 through `reduce` only — side effects never re-run, and
@@ -1728,8 +1775,18 @@ the handle the library holds, so a rule on
 `itx.workers` applies to it like any other call. The same text is the same module, and the loader's
 content hash reuses the warm isolate across calls. The script's `itx` is THIS context — but with no
 principal: loaded code speaks for the project, never for a person, so an append inside carries no
-`source.principal`. A text that is not one function expression fails at load, in the loader's words,
-and does not poison the isolate id.
+`source.principal`. It is loaded code's handle (chapter 3): every call through this context's rows,
+`itx.builtins` refused, `cd` down only, no `provide` and no `subscribe`. A text that is not one
+function expression fails at load, in the loader's words, and does not poison the isolate id.
+
+An agent's scripts run this way in `<agent>/sandbox`, a child the agent's `create()` births with
+one row, the bare row targeting the agent (`src/agent/durable-object.ts`: `runScript` is
+`itx.cd("./sandbox").builtins.run(code)` on the facet's platform handle). So a script sees the
+agent's tree — sandbox, agent, creator, root, one hop per row — and appends to the sandbox's own
+log. An owner who replaces that row with `null` and appends grants beside it, in one batch, has a
+jail: the scripts reach the granted rows and nothing else. The agent's prompt is that child's
+`itx.rewriteRules.list()`, rendered each turn (`src/agent/processor.ts` `buildChatMessages`):
+one line per row, `itx.<name> — <description>`, masks omitted.
 
 ```ts
 expect(await itx.run("async (itx) => itx.whoami()")).toEqual(await itx.whoami());
@@ -1743,7 +1800,7 @@ await itx.run("async (itx) => { await itx.append({ type: 'run/hello', payload: {
 Today one flat root holds both groups: the kernel roots, implemented against `ctx` and `env`, and
 the library, written against `itx` alone — `itx.builtins.kv` and `itx.builtins.connectToMcp` sit
 side by side, and nothing in the spelling says which is which. The alternative is two namespaces,
-`itx.builtins.kernel.*` and `itx.builtins.lib.*` (or two platform rows, `itx.kernel` and `itx.lib`).
+`itx.builtins.kernel.*` and `itx.builtins.lib.*` (or two implicit rows, `itx.kernel` and `itx.lib`).
 The trade: one root is one spelling and no level to learn; two make the litmus test visible in the
 name, and let the library move to userspace without a rename. Not decided.
 
@@ -1927,7 +1984,7 @@ overwritten — the admin session's with `{ actor: "admin" }` — and the platfo
 ```ts
 const itx = api.projects.get(projectId); // the OAuth grant's session, above
 await itx.append({ type: "note", payload: { n: 1 }, source: { principal: { actor: "forged" } } });
-await itx.provide("itx.demo", "itx.builtins.kv"); // the platform's own row, appended for this session
+await itx.provide("itx.demo", "itx.builtins.kv"); // a grant of the kernel's kv, appended for this session
 await openItx(projectId).append({
   type: "note",
   payload: { n: 2 },
@@ -2110,7 +2167,7 @@ measured deployed only, in `e2e/isolate-ceilings-deployed.e2e.test.ts`.
 | 0       | the session, `/api`, `whoami`, the dotted hop                                  | `src/worker.ts`, `src/session.ts`, `src/iterate-context.ts`, `src/context/expression.ts` (the prototype hop)                       |
 | 1       | rpc stubs: lend, borrow, page, recall, presence                                | `src/context/rpc-stubs.ts`, `src/session.ts`                                                                                       |
 | 2       | itx expressions, the codec, `cd`                                               | `src/context/expression.ts`, `src/iterate-context.ts`                                                                              |
-| 3       | rewrite rules, the seven rules, `itx.builtins`, masks, `@`                     | `src/context/itx-expression-rewriting.ts`, `src/context/built-ins.ts`                                                              |
+| 3       | rewrite rules, the eight rules, `itx.builtins`, masks, `@`                     | `src/context/itx-expression-rewriting.ts`, `src/context/built-ins.ts`                                                              |
 | 4       | the stream, offsets, idempotency, ephemerals, the core reduce                  | `src/stream/stream.ts`, `packages/iterate/src/next/stream/processor.ts`, `src/stream/core-processor.ts`                            |
 | 5       | subscriptions, push vs cursor, the ladder, `consumes`                          | `src/stream/core-processor.ts`, `src/stream/subscription-delivery.ts`                                                              |
 | 6       | facets, processors, live state                                                 | the DO's `#invokeFacet`, `packages/iterate/src/next/stream/processor.ts`, `src/sdk/index.ts`, `src/client/`                        |
@@ -2127,9 +2184,11 @@ The invariants a reader should now be able to state:
 - **Two words, kept apart.** An rpc stub is physical, lives at the edge, and is borrowed, returned
   and paged for by the DO. A rewrite rule is data — `{ match, target }` in a map by canonical match,
   written by one event — and a lent stub is reached THROUGH a rule naming the physical registry.
-- **The platform never spells a short name.** Every expression it writes is rooted at
-  `itx.builtins`, the fixed point; rules resolve first, the platform rows are implicit, `null` masks
-  under a platform row and deletes elsewhere, the platform-equivalent target deletes.
+- **The platform never spells a short name; an app never spells `itx.builtins`.** Every expression
+  the kernel writes is rooted at `itx.builtins`, the fixed point; rules resolve first; the implicit
+  rows are every root at the owner root and the thirteen context roots everywhere else; a bare row
+  with a target claims what no implicit row claims, a bare `null` denies all; `null` masks under an
+  implicit row and deletes elsewhere; a row carries a `description` a model reads.
 - **Everything else is an event.** The DO has `append` and no configuration verbs; every verb builds
   an event and appends it, session-scoped through its handle, durable as the raw event.
 - **Runtime state is reduced state.** Rules, subscription rows, the pause and the secrets catalog are

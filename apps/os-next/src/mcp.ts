@@ -57,7 +57,7 @@ function buildServer(env: Env, authorization: Authorization): McpServer {
     {
       title: "Run a script",
       description:
-        "Run a script in a project's context, under this token's principal — THE way to do work in a project over MCP. The script is the text of an async function of one parameter, `itx`: `async (itx) => { ... }` — a coding agent's whole output, an alternative to a tool call, its values baked in (no arguments). It is evaluated once in a confined worker with `itx` bound to the project (`itx.kv`, `itx.append`, `itx.readEvents`, `itx.connectToMcp`, `itx.workers.get`, …) and returns a JSON-serializable value. This is `itx.run`.",
+        "Run a script in a project's context, under this token's principal — THE way to do work in a project over MCP. The script is the text of an async function of one parameter, `itx`: `async (itx) => { ... }` — a coding agent's whole output, an alternative to a tool call, its values baked in (no arguments). It is evaluated once in a confined worker with `itx` bound to the project (`itx.kv`, `itx.append`, `itx.readEvents`, `itx.connectToMcp`, `itx.workers.get`, …) and returns a JSON-serializable value. This is `itx.run`. `await itx.rewriteRules.list()` is the tree — every capability this context can spell, each with a one-line description and the context it comes from; read it first.",
       inputSchema: fromJsonSchema(
         {
           type: "object",

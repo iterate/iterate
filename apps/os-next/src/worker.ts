@@ -27,7 +27,8 @@ import { FILES_APP_LABEL, serveProjectFileRequest } from "./context/file-urls.ts
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
 import { directory } from "./directory.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
-import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./iterate-context.ts";
+import { DurableObjectNameCodec } from "./iterate-context.ts";
+import { GLOBAL_PROJECT_ID, resourceScope } from "./context/paths.ts";
 import { IterateRpcTarget, SessionTeardown, type SessionInput } from "./session.ts";
 import { authorizationForToken, recordGrantUse, cleanGrantActivity } from "./oauth.ts";
 

@@ -101,7 +101,7 @@ describe("the library", () => {
     for (const { verb, connect, handshake } of verbs)
       test(`${verb}: two connects with the same arguments are ONE connection — the same object back, one handshake`, async () => {
         const { itx, seen } = remotes();
-        const { roots } = buildLibrary(itx);
+        const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }) });
         const a = await connect(roots);
         const b = await connect(roots);
         expect(b).toBe(a);
@@ -110,7 +110,9 @@ describe("the library", () => {
 
     test("releaseConnections closes what it holds (MCP: the session's DELETE) and forgets it; the next connect is a fresh handshake, a new object, and works", async () => {
       const { itx, seen } = remotes();
-      const { roots, releaseConnections } = buildLibrary(itx);
+      const { roots, releaseConnections } = buildLibrary(itx, {
+        caller: () => ({ principal: null }),
+      });
       const a = await roots.connectToMcp("https://mcp.example/");
       releaseConnections();
       await new Promise((r) => setTimeout(r, 10)); // the close rides a `.then` off the memoized promise
@@ -162,7 +164,9 @@ describe("the library", () => {
           return json({ jsonrpc: "2.0", id: body.id, result });
         },
       } as unknown as LibraryItx;
-      const { roots, releaseConnections } = buildLibrary(itx);
+      const { roots, releaseConnections } = buildLibrary(itx, {
+        caller: () => ({ principal: null }),
+      });
       const conn = await roots.connectToMcp("https://mcp.example/");
       releaseConnections();
       await new Promise((r) => setTimeout(r, 10)); // the close rides a `.then` off the memoized promise
@@ -207,7 +211,9 @@ describe("the library", () => {
           return json({ jsonrpc: "2.0", id: body.id, result });
         },
       } as unknown as LibraryItx;
-      const { roots, releaseConnections } = buildLibrary(itx);
+      const { roots, releaseConnections } = buildLibrary(itx, {
+        caller: () => ({ principal: null }),
+      });
       const conn = await roots.connectToMcp("https://mcp.example/"); // establishes s-1
       releaseConnections();
       await new Promise((r) => setTimeout(r, 10)); // closes s-1 (DELETE s-1)
@@ -243,7 +249,9 @@ describe("the library", () => {
         removeEventListener() {},
       };
       const itx = { fetch: async () => ({ status: 101, webSocket }) } as unknown as LibraryItx;
-      const { roots, releaseConnections } = buildLibrary(itx);
+      const { roots, releaseConnections } = buildLibrary(itx, {
+        caller: () => ({ principal: null }),
+      });
       await roots.connectToCapnweb("wss://ws.example/rpc");
       releaseConnections();
       await new Promise((r) => setTimeout(r, 10));
@@ -262,7 +270,7 @@ describe("the library", () => {
           return new Response("down", { status: 503 });
         },
       } as unknown as LibraryItx;
-      const { roots } = buildLibrary(itx);
+      const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }) });
       await expect(roots.connectToMcp("https://mcp.example/")).rejects.toThrow(/503/);
       await expect(roots.connectToMcp("https://mcp.example/")).rejects.toThrow(/503/);
       expect(attempts).toBe(2);
@@ -270,7 +278,7 @@ describe("the library", () => {
 
     test("the memo is keyed by the options too, and two spellings of one options object are one key", async () => {
       const { itx, seen } = remotes();
-      const { roots } = buildLibrary(itx);
+      const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }) });
       const a = await roots.connectToMcp("https://mcp.example/", { headers: { a: "1", b: "2" } });
       const b = await roots.connectToMcp("https://mcp.example/", { headers: { b: "2", a: "1" } });
       const c = await roots.connectToMcp("https://mcp.example/", { headers: { a: "other" } });
@@ -295,19 +303,21 @@ describe("run", () => {
   function host(): { itx: LibraryItx; loaded: unknown[]; runs: () => number } {
     const loaded: unknown[] = [];
     let ran = 0;
+    // The host is minted at the FIXED POINT (`itx.builtins.workers.get`): the loader is the kernel's act.
+    const workers = {
+      get: (spec: unknown) => {
+        loaded.push(spec);
+        return {
+          run: async (...args: unknown[]) => {
+            ran += 1;
+            return { calledWith: args.length }; // run() is called with NO arguments
+          },
+        };
+      },
+    };
     const itx = {
       fetch: async () => new Response(null),
-      workers: {
-        get: (spec: unknown) => {
-          loaded.push(spec);
-          return {
-            run: async (...args: unknown[]) => {
-              ran += 1;
-              return { calledWith: args.length }; // run() is called with NO arguments
-            },
-          };
-        },
-      },
+      builtins: { workers },
     } as unknown as LibraryItx;
     return { itx, loaded, runs: () => ran };
   }
@@ -325,9 +335,9 @@ describe("run", () => {
     expect(module["cap.js"]).toContain("itx[Symbol.dispose]?.();");
   });
 
-  test("run(script) loads that module through itx.workers.get and calls run() with no arguments", async () => {
+  test("run(script) loads that module through itx.builtins.workers.get (the kernel's mint) and calls run() with no arguments", async () => {
     const { itx, loaded, runs } = host();
-    const { roots } = buildLibrary(itx);
+    const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }) });
     await expect(roots.run("async (itx) => 1")).resolves.toEqual({ calledWith: 0 });
     expect(loaded).toEqual([{ source: runScriptModule("async (itx) => 1") }]);
     expect(runs()).toBe(1);
@@ -1078,6 +1088,7 @@ const ALLOWED_RUNTIME_IMPORTS = new Set([
   "cloudflare:workers",
   "zod", // an npm package a userspace worker could bundle too — used to PARSE untrusted MCP responses
   "iterate/next/expression", // the codec — the package's, as a userspace worker would import it
+  "iterate/next/lib", // pure helpers of the same package (codedError, jsonEqual, resolveContextPath) — bundled the same way
 ]);
 
 describe("the library boundary", () => {

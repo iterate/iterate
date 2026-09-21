@@ -303,3 +303,17 @@ export function isLocalOrigin(origin: string) {
       url.hostname === "127.0.0.1")
   );
 }
+
+/** Resolve a `cd` target against a context's own path — the one resolver every `cd` door
+ *  (the edge method, the built-in root, the library's relative handles) shares. Absolute ("/agents/x") stands alone; relative
+ *  ("agents/x", "../inbox", ".") joins onto `base`. `.` and `..` resolve; the root cannot be
+ *  escaped ("/.." is "/"). The result is canonical: leading slash, no trailing slash but for "/". */
+export function resolveContextPath(basePath: string, contextPath: string): string {
+  const segments: string[] = [];
+  for (const seg of `${contextPath.startsWith("/") ? "" : basePath}/${contextPath}`.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") segments.pop();
+    else segments.push(seg);
+  }
+  return `/${segments.join("/")}`;
+}

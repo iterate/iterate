@@ -22,10 +22,10 @@ class FakeBrowser extends RpcTarget {
 test("provide('itx.browser', fake) shadows the binding; resolve ends at the stub; dispose restores the platform row", async () => {
   const ctx = freshCtx("browser-shadow");
   const itx = openItx(ctx);
-  expect(await itx.rewriteRules.get("itx.browser")).toEqual({
+  expect(await itx.rewriteRules.get("itx.browser")).toMatchObject({
     match: "itx.browser",
     target: "itx.builtins.browser",
-    origin: "platform",
+    context: "/",
   });
   const fake = new FakeBrowser();
   const handle = await itx.provide("itx.browser", fake);
@@ -38,12 +38,12 @@ test("provide('itx.browser', fake) shadows the binding; resolve ends at the stub
   handle[Symbol.dispose]();
   await until("the platform row is back", async () => {
     const row = await itx.rewriteRules.get("itx.browser");
-    return row?.origin === "platform" ? row : undefined;
+    return row?.target === "itx.builtins.browser" ? row : undefined;
   });
-  expect(await itx.rewriteRules.get("itx.browser")).toEqual({
+  expect(await itx.rewriteRules.get("itx.browser")).toMatchObject({
     match: "itx.browser",
     target: "itx.builtins.browser",
-    origin: "platform",
+    context: "/",
   });
 });
 

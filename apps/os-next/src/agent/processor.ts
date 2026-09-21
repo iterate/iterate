@@ -14,6 +14,7 @@
 // the open request or the open scripts, tripping a breaker — runs at head in the BACKGROUND: any later
 // delivery over the same fold re-derives it, so an attempt lost to an eviction costs nothing, and every
 // append is idempotency-keyed so a retry appends nothing twice.
+import type { RewriteRuleListEntry } from "iterate/next/api";
 import {
   type ConsumedEvent,
   type ProcessEventArgs,
@@ -42,8 +43,10 @@ export type AgentDeps = {
     signal: AbortSignal;
     onChunk(chunk: unknown, textDelta: string): void;
   }): Promise<{ text: string; usage?: LlmUsage }>;
-  /** Run `async (itx) => …` against this context; what it returned (JSON), or a throw. */
+  /** Run `async (itx) => …` in this agent's sandbox; what it returned (JSON), or a throw. */
   runScript(code: string): Promise<unknown>;
+  /** The sandbox's `rewriteRules.list()` — the tree the model is shown this turn. */
+  rewriteRules(): Promise<RewriteRuleListEntry[]>;
   /** A stored file's bytes (`itx.files.get(path).bytes()`); throws when it is gone. */
   readFile(path: string): Promise<Uint8Array>;
   now(): number;
@@ -61,15 +64,40 @@ export function retryBackoffMs(
   return Math.min(2 ** (state.consecutiveLlmFailures - 1) * backoffBaseMs, backoffMaxMs);
 }
 
+/** The tree the model reads, rendered from the SANDBOX's `rewriteRules.list()`: one line per row,
+ *  `itx.<name> — <description>` (`⇒ <target>` when undescribed), masks and the sandbox's own link
+ *  omitted, grouped by the context a row came from when there is more than one. Nothing is
+ *  journaled: the list is state, and the model sees it as it stands this turn. */
+export function renderCapabilityTree(rows: RewriteRuleListEntry[]): string | null {
+  const visible = rows.filter((row) => row.target && row.match !== "itx");
+  if (visible.length === 0) return null;
+  const line = (row: RewriteRuleListEntry): string =>
+    `${row.match} — ${row.description || `⇒ ${row.target}`}`;
+  const contexts = [...new Set(visible.map((row) => row.context))];
+  const body =
+    contexts.length === 1
+      ? visible.map(line)
+      : contexts.flatMap((context) => [
+          `from ${context}:`,
+          ...visible.filter((row) => row.context === context).map(line),
+        ]);
+  return [
+    "`itx` IS THIS CONTEXT'S CAPABILITY TREE (`await itx.rewriteRules.list()`) — every name below is one you can spell inside a tag; nothing else resolves:",
+    ...body,
+  ].join("\n");
+}
+
 /** The conversation as the model reads it. An item's images become image parts (a data: URL of the
  *  bytes in `images`, keyed by path — a vision model sees the pixels); any other attachment, or an
  *  image whose bytes are gone, is a line naming it and how a script reads it (apps/os's hint line).
- *  The developer's notes read as system instructions. */
+ *  The developer's notes read as system instructions. The capability tree, when given, rides as one
+ *  system message after the journaled system prompt — fresh every turn, never in the log. */
 export function buildChatMessages(
   items: AgentView["contextItems"],
   images: Map<string, { contentType: string; base64: string }>,
+  tree: RewriteRuleListEntry[] = [],
 ): ChatMessage[] {
-  return items.map((item) => {
+  const messages = items.map((item): ChatMessage => {
     const role = item.role === "developer" ? "system" : item.role;
     if (!item.files?.length) return { role, content: item.content };
     const parts: Extract<ChatMessage["content"], unknown[]> = [];
@@ -87,6 +115,15 @@ export function buildChatMessages(
     if (parts.length === 0) return { role, content: text };
     return { role, content: [{ type: "text", text }, ...parts] };
   });
+  const rendered = renderCapabilityTree(tree);
+  if (rendered) {
+    const firstNonSystem = messages.findIndex((message) => message.role !== "system");
+    messages.splice(firstNonSystem === -1 ? messages.length : firstNonSystem, 0, {
+      role: "system",
+      content: rendered,
+    });
+  }
+  return messages;
 }
 
 /** How a non-image (or gone) attachment is named to the model. */
@@ -186,8 +223,6 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
             maxAutonomousTurns: patch.maxAutonomousTurns ?? state.config.maxAutonomousTurns,
             llmRequestExpiryMs: patch.llmRequestExpiryMs ?? state.config.llmRequestExpiryMs,
             llmRequestDebounceMs: patch.llmRequestDebounceMs ?? state.config.llmRequestDebounceMs,
-            // oxlint-disable-next-line iterate/simple-truthiness-check -- an explicit "" is a PRESENT value that disables the plain-response handler (an agent that only acts), distinct from an absent patch that keeps the current expression
-            plainResponse: patch.plainResponse ?? state.config.plainResponse,
             llmRequestRetryPolicy: {
               maxAttempts:
                 patch.llmRequestRetryPolicy?.maxAttempts ??
@@ -406,26 +441,14 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
           },
         });
       }
-      // A tag's accompanying prose is the message, sent directly. A response with NO tag is a plain
-      // reply: it becomes a `<codemode>` script that invokes the agent's configured `plainResponse`
-      // expression with the text (`itx.chat.sendMessage` by default) — so the agent's whole output
-      // is code, one turn is one activity, and where a reply GOES is per-agent (web, Slack, ...).
-      if (outcome.kind === "script" && outcome.prose)
+      // The prose — beside a tag or on its own — is the message, appended directly on this context.
+      // Where a reply GOES from here is a subscriber's business (events are the interface), never a
+      // script the model's sandbox would have to be granted a door for.
+      if ((outcome.kind === "script" || outcome.kind === "none") && outcome.prose)
         consequences.push({
           type: "events.iterate.com/agents/web-message-sent",
           idempotencyKey: this.idempotencyKey("codemode-prose", event),
           payload: { message: outcome.prose, llmRequestOffset },
-        });
-      if (outcome.kind === "none" && outcome.prose && state.config.plainResponse)
-        consequences.push({
-          type: "events.iterate.com/capability-host/script-run-requested",
-          idempotencyKey: this.idempotencyKey("plain-response", event),
-          payload: {
-            // The configured expression is trusted config, not model output: baked in as the callable.
-            code: `async (itx) => { await ${state.config.plainResponse}(${JSON.stringify(outcome.prose)}); }`,
-            executionId: `reply:${String(event.offset)}`,
-            expiresAt: Date.parse(event.createdAt) + state.config.llmRequestExpiryMs,
-          },
         });
       if (consequences.length > 0) blockProcessorWhile(() => append(...consequences));
     }
@@ -602,7 +625,7 @@ export class AgentProcessor extends StreamProcessor<AgentView, AgentEvent> {
             // named by its hint line instead
           }
         }
-      const messages = buildChatMessages(items, images);
+      const messages = buildChatMessages(items, images, await this.deps.rewriteRules());
       // THE CHUNK WINDOWS (apps/os's coalescing): provider events pile into one buffer; a window
       // closes CHUNK_WINDOW_MS after its first event (or at the size cap) and lands as one
       // ephemeral append, windows in order — each waits for the one before. Nothing is stored:

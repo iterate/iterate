@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { CoreContract, normalizeControlEvent, reduceCoreEvent } from "../stream/core-processor.ts";
 import { normalizeIngressConfigured } from "./ingress.ts";
-import { resolveItxExpression } from "./itx-expression-rewriting.ts";
+import { BUILT_IN_ROOTS, resolveItxExpression } from "./itx-expression-rewriting.ts";
 
 const target: import("iterate/next/expression").ItxExpression = [
   "itx",
@@ -43,10 +43,10 @@ test("ephemeral ingress configuration cannot be published", () => {
 });
 
 test("a singular worker name has no implicit platform resolution", () => {
-  expect(() => resolveItxExpression(() => [], ["itx", "worker", "fetch"])).toThrow(
-    "no rewrite rule matches",
-  );
-  expect(resolveItxExpression(() => [], target).at(-1)).toEqual([
+  expect(() =>
+    resolveItxExpression(() => [], ["itx", "worker", "fetch"], new Set(BUILT_IN_ROOTS)),
+  ).toThrow("no rewrite rule matches");
+  expect(resolveItxExpression(() => [], target, new Set(BUILT_IN_ROOTS)).at(-1)).toEqual([
     "itx",
     "builtins",
     ...target.slice(1),

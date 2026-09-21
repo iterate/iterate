@@ -11,8 +11,8 @@
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
 import { stampPrincipal, type Caller } from "iterate/next/principal";
+import { codedError, resolveContextPath } from "iterate/next/lib";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
-import { codedError } from "iterate/next/lib";
 import {
   print,
   type ItxExpression,
@@ -22,6 +22,7 @@ import {
   InvokeHandle,
   RpcStubHandle,
 } from "iterate/next/expression";
+import type { RewriteRuleListEntry } from "iterate/next/api";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
   ScheduleKey,
@@ -31,12 +32,7 @@ import {
 } from "../stream/scheduled-appends.ts";
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
 import type { LibraryRoots } from "../library.ts";
-import {
-  DurableObjectNameCodec,
-  GLOBAL_PROJECT_ID,
-  resolveContextPath,
-  resourceScope,
-} from "../iterate-context.ts";
+import { DurableObjectNameCodec } from "../iterate-context.ts";
 import {
   assertSecretName,
   normalizeSecretRecord,
@@ -46,6 +42,7 @@ import {
 } from "../secrets.ts";
 import type { SecretDurableObject } from "../secret-durable-object.ts";
 import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.ts";
+import { GLOBAL_PROJECT_ID, resourceScope } from "./paths.ts";
 import {
   assertFacetSourceWithinCeiling,
   facetSpecOf,
@@ -57,14 +54,6 @@ import {
 import type { BuiltInRoot } from "./itx-expression-rewriting.ts";
 import { cfBrowser } from "./browser.ts";
 import { projectScopedArtifacts, type ArtifactsNamespace, type ArtifactsScope } from "./repos.ts";
-
-/** One row of `itx.rewriteRules.list()`: a context row (`target` a string, or `null` for a mask) or an
- *  implicit platform row. */
-export type RewriteRuleListEntry = {
-  match: string;
-  target: string | null;
-  origin: "platform" | "context";
-};
 
 /** One row of `itx.subscriptions.list()`. */
 export type SubscriptionListEntry = {
@@ -270,8 +259,8 @@ export interface BuiltInScope extends LibraryRoots {
    *  never a verb here. `resolve(call)` is the PURE half of `invoke`: the chain of rewrites, each
    *  printed, nothing dispatched — `invoke(call) ≡ invoke(resolve(call).at(-1))`. */
   rewriteRules: {
-    list(): RewriteRuleListEntry[];
-    get(match: string): RewriteRuleListEntry | null;
+    list(depth?: number): Promise<RewriteRuleListEntry[]>;
+    get(match: string): Promise<RewriteRuleListEntry | null>;
     resolve(call: ItxExpressionInput): string[];
   };
   /** The facets of this context. `get(name)` ADDRESSES one that is already running (a processor, a
@@ -668,9 +657,15 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     waitForEvent: deps.waitForEvent,
     // WHO crosses with the call: a sibling context runs it under the caller's principal (a Workers-RPC
     // hop, where the ambient store does not reach), so an event appended there is attributed too.
-    cd: (contextPath: string) =>
-      new InvokeHandle((itxExpressionSteps) => {
-        const siblingPath = resolveContextPath(path, contextPath);
+    cd: (contextPath: string) => {
+      // Captured when the handle is MADE: a handle held by loaded code and called later runs as that
+      // code, never as whoever holds the store then. A relative path resolves against the caller's
+      // ORIGINATING context when the call rode a hop here (`repos.get('./x')` answered at the root is
+      // the caller's `./x`); a row's target should spell an absolute path.
+      const caller = deps.caller();
+      const base = caller.path || path;
+      return new InvokeHandle((itxExpressionSteps) => {
+        const siblingPath = resolveContextPath(base, contextPath);
         // Global contexts are addressed by identity, never navigated through cd.
         if (projectId === GLOBAL_PROJECT_ID)
           throw Object.assign(
@@ -681,10 +676,15 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             { retryable: false },
           );
         const context = deps.context(siblingPath); // a ReachableContext
-        // The caller crosses with the call: the sibling runs it under the same Caller, so an event
-        // appended there is attributed too.
-        return context.invoke(["itx", ...itxExpressionSteps], [], deps.caller());
-      }),
+        // The caller crosses with the call — the sibling runs it under the same Caller, so an event
+        // appended there is attributed too — stamped with the context it originated at (once, at the
+        // first hop) so a relative path there still means the caller's.
+        return context.invoke(["itx", ...itxExpressionSteps], [], {
+          ...caller,
+          path: caller.path || path,
+        });
+      });
+    },
     fetch: (request: Request) => deps.egress(request),
     rpcStubs: deps.rpcStubs,
     facets: deps.facets,

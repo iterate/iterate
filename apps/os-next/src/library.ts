@@ -24,6 +24,8 @@ import {
   print,
   walkStepsOnRpcStub,
 } from "iterate/next/expression";
+import type { Caller } from "iterate/next/principal";
+import { resolveContextPath } from "iterate/next/lib";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import type { AgentDurableObject } from "./agent/durable-object.ts";
 import type { ProjectView } from "./project/contract.ts";
@@ -63,7 +65,10 @@ import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
  *  what the library uses today — `fetch`, the connectors' HTTP; `workers`, the host `run` loads
  *  into; `cd`, the sibling a repo or workspace facet is hosted on. Widen it HERE when a module needs
  *  more of itx — never by importing something else. */
-export type LibraryItx = Pick<BuiltInScope, "append" | "fetch" | "workers" | "cd" | "r2">;
+export type LibraryItx = Pick<
+  BuiltInScope,
+  "append" | "fetch" | "workers" | "cd" | "r2" | "whoami" | "builtins"
+>;
 
 /** The library's roots, exactly as the built-ins record spreads them in: each verb closed over ONE
  *  `itx`. `BuiltInScope` (context/built-ins.ts) extends this, so the typed surface has them once. */
@@ -76,10 +81,6 @@ export interface LibraryRoots {
    *  A script bakes in its own values — an agent writes it whole (an alternative to a tool call), so
    *  `run` takes no arguments. */
   run(script: string): Promise<unknown>;
-  /** THE AGENT'S VOICE: `itx.chat.sendMessage(text)` appends a web-message-sent to THIS context —
-   *  the visible chat message. It is the default `plainResponse` handler, and an agent may call it
-   *  from inside a script for a mid-run update. Returns once the message is on the stream. */
-  chat: { sendMessage(message: string): Promise<{ ok: true }> };
   /** An MCP server over Streamable HTTP: `callTool(name, args)`, `listTools()`, and one method per
    *  tool whose name is a legal identifier. */
   connectToMcp(url: string, options?: McpConnectOptions): Promise<McpConnection>;
@@ -182,7 +183,14 @@ export type WorkspaceFacet = Pick<
 /** The library, built once per context: the verbs closed over one `itx`, memoizing the live
  *  connections the connectors open, and the one release door. Nothing is constructed here: a wake
  *  pays nothing for the library until a verb runs. */
-export function buildLibrary(itx: LibraryItx): {
+export function buildLibrary(
+  itx: LibraryItx,
+  deps: {
+    /** WHO is calling — the DO's ambient caller: its originating `path` names the CREATOR a create
+     *  path links a new context to. The one thing the library reads beside `itx`. */
+    caller: () => Caller;
+  },
+): {
   roots: LibraryRoots;
   /** Whether the library holds an open SOCKET — a capnweb WebSocket session — the one kind of
    *  connection that keeps this actor resident (measured: like a borrowed stub), so the pins' release
@@ -210,15 +218,6 @@ export function buildLibrary(itx: LibraryItx): {
   return {
     roots: {
       run: (script) => runScript(itx, script),
-      chat: {
-        sendMessage: async (message) => {
-          await itx.append({
-            type: "events.iterate.com/agents/web-message-sent",
-            payload: { message },
-          });
-          return { ok: true as const };
-        },
-      },
       connectToMcp: (url, options) =>
         memoized(["mcp", url, options], false, () => connectToMcp(itx, url, options)),
       connectToOpenApi: (specOrUrl, options) =>
@@ -230,7 +229,7 @@ export function buildLibrary(itx: LibraryItx): {
           connectToCapnweb(itx, url, options),
         ),
       repos: {
-        get: (path) => repoHandle(itx, path),
+        get: (path) => repoHandle(itx, path, deps.caller()),
         list: async () =>
           Object.entries((await projectCatalog(itx)).repos).map(([path, repo]) => ({
             path,
@@ -238,7 +237,7 @@ export function buildLibrary(itx: LibraryItx): {
           })),
       },
       workspaces: {
-        get: (path) => workspaceHandle(itx, path),
+        get: (path) => workspaceHandle(itx, path, deps.caller()),
         list: async () =>
           Object.entries((await projectCatalog(itx)).workspaces).map(([path, workspace]) => ({
             path,
@@ -259,7 +258,7 @@ export function buildLibrary(itx: LibraryItx): {
         },
       },
       agents: {
-        get: (path) => agentHandle(itx, path),
+        get: (path) => agentHandle(itx, path, deps.caller()),
         list: async () =>
           Object.entries((await projectCatalog(itx)).agents).map(([path, agent]) => ({
             path,
@@ -325,7 +324,11 @@ export function runScript(itx: LibraryItx, script: unknown): Promise<unknown> {
   // in-process the record hands the worker's handle back as a VALUE (a genuine RpcTarget), so `run`
   // is its own dispatch on that value — exactly what a remote holder of the same handle would do.
   return (async () => {
-    const worker = (await itx.workers.get({ source: runScriptModule(script) })) as unknown as {
+    // The host is minted at the fixed point — the loader is the kernel's act; the ROWS govern the
+    // script's world (its `env.ITX` is this context's app handle, and the table decides what it says).
+    const worker = (await itx.builtins.workers.get({
+      source: runScriptModule(script),
+    })) as unknown as {
       run(): Promise<unknown>;
     };
     return worker.run();
@@ -344,11 +347,45 @@ export function runScript(itx: LibraryItx, script: unknown): Promise<unknown> {
 // folds the cross-posted certificates; hosted the same way, on first read.
 
 /** A facet on the context at `path`: the call's steps, relative to the facet, as one dispatch there. */
-function facetHandle(itx: LibraryItx, path: string, name: string): InvokeHandle {
+/** The caller a handle was MADE for, and the context its relative paths mean. A handle is a VALUE
+ *  that outlives the call that made it — its later calls arrive in a fresh RPC continuation with no
+ *  ambient caller — so the caller is captured here, once, and every relative path (`./x` from a
+ *  child, answered at the root through its link) resolves against the caller's originating context,
+ *  else this one. */
+async function handleOrigin(itx: LibraryItx, caller: Caller): Promise<string> {
+  return caller.path || ((await itx.whoami()) as { path: string }).path;
+}
+
+function facetHandle(itx: LibraryItx, path: string, name: string, caller: Caller): InvokeHandle {
   return new InvokeHandle(async (itxExpressionSteps) => {
+    const origin = await handleOrigin(itx, caller);
+    const absolute = resolveContextPath(origin, path);
     // TWO dotted calls, never one chain (the `run` section says why): the sibling's handle first —
     // in-process a VALUE — then the facet chain relative to it.
-    const context = await itx.cd(path);
+    const context = await itx.cd(absolute);
+    const [first] = itxExpressionSteps;
+    if (Array.isArray(first) && first[0] === "create") {
+      // THE PARENT LINK, the creator's act (itx-expression-rewriting.ts rule 3): everything the new
+      // context does not claim, its creator answers — the caller's originating context. Absolute,
+      // so the row reads plainly; a context creating on itself writes none (a self-hop is a loop).
+      // Idempotent on the creator.
+      const creator = origin;
+      if (creator !== absolute)
+        await context.invoke([
+          [
+            "append",
+            {
+              type: "events.iterate.com/itx/rewrite-rule-configured",
+              payload: {
+                match: "itx",
+                target: ["itx", "builtins", ["cd", creator]],
+                description: "everything this context does not claim, its creator answers",
+              },
+              idempotencyKey: `itx@${creator}`,
+            },
+          ],
+        ]);
+    }
     return context.invoke(["facets", ["get", name], ...itxExpressionSteps]);
   });
 }
@@ -359,8 +396,12 @@ function facetHandle(itx: LibraryItx, path: string, name: string): InvokeHandle 
 // guarantees (the spec's `className` IS that class) and the type system cannot see.
 
 /** The `workspace` facet on the context at `path`. */
-function workspaceHandle(itx: LibraryItx, path: string): InvokeHandle & WorkspaceFacet {
-  return facetHandle(itx, path, "workspace") as InvokeHandle & WorkspaceFacet;
+function workspaceHandle(
+  itx: LibraryItx,
+  path: string,
+  caller: Caller,
+): InvokeHandle & WorkspaceFacet {
+  return facetHandle(itx, path, "workspace", caller) as InvokeHandle & WorkspaceFacet;
 }
 
 // ── the files ── `itx.files.get(path)`: the path's object in `itx.r2` (already the owner's slice),
@@ -442,11 +483,32 @@ function fileHandle(itx: LibraryItx, path: string): InvokeHandle & FileHandle {
  *  `itx.processors.enable`, spelled HERE because the library is what knows the facet's spec; DURABLE,
  *  so the loop runs on every commit and outlives this session; enabled ONCE, a row already there is
  *  left alone — and then the facet's own birth, idempotent on its side. */
-function agentHandle(itx: LibraryItx, path: string): InvokeHandle & AgentFacet {
+function agentHandle(itx: LibraryItx, path: string, caller: Caller): InvokeHandle & AgentFacet {
   return new InvokeHandle(async (itxExpressionSteps) => {
-    const context = await itx.cd(path);
+    const origin = await handleOrigin(itx, caller);
+    const absolute = resolveContextPath(origin, path);
+    const context = await itx.cd(absolute);
     const [first] = itxExpressionSteps;
     if (Array.isArray(first) && first[0] === "create") {
+      // THE PARENT LINK first (spelled as in facetHandle — the creator's act, rule 3), then the
+      // processor row, then the facet's own birth: the agent's `itx.ai`, `itx.files` and its
+      // sandbox's every unclaimed name resolve through this row from the first turn.
+      const creator = origin;
+      if (creator !== absolute)
+        await context.invoke([
+          [
+            "append",
+            {
+              type: "events.iterate.com/itx/rewrite-rule-configured",
+              payload: {
+                match: "itx",
+                target: ["itx", "builtins", ["cd", creator]],
+                description: "everything this context does not claim, its creator answers",
+              },
+              idempotencyKey: `itx@${creator}`,
+            },
+          ],
+        ]);
       const rows = (await context.invoke(["processors", ["list"]])) as { name: string }[];
       if (!rows.some((row) => row.name === "agent"))
         await context.invoke(["processors", ["enable", "agent"]]);
@@ -457,8 +519,8 @@ function agentHandle(itx: LibraryItx, path: string): InvokeHandle & AgentFacet {
 
 /** The `repo` facet on the context at `path` — any path; the facet derives the Artifacts name from
  *  it and refuses one it cannot back. */
-function repoHandle(itx: LibraryItx, path: string): InvokeHandle & RepoFacet {
-  return facetHandle(itx, path, "repo") as InvokeHandle & RepoFacet;
+function repoHandle(itx: LibraryItx, path: string, caller: Caller): InvokeHandle & RepoFacet {
+  return facetHandle(itx, path, "repo", caller) as InvokeHandle & RepoFacet;
 }
 
 /** THE CATALOG: the `project` facet's view on `/` — what `repos.list()`, `workspaces.list()` and

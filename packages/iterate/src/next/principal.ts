@@ -9,10 +9,23 @@ export type Principal = { actor: string; email?: string };
  *  capnweb-exposed, so a client cannot supply its own `Caller`. Authority is inferred FROM the
  *  principal (no separate scopes/trust field). Global contexts remain non-navigable through
  *  `cd`, including calls without a principal. */
-export type Caller = { principal: Principal | null };
+export type Caller = {
+  principal: Principal | null;
+  /** The context the call ORIGINATED at — stamped by the first `cd` hop and forwarded by every later
+   *  one, so a relative path resolved after a hop (`repos.get('./x')` answered at the root) still
+   *  means the caller's `./x`. Absent until a hop. */
+  path?: string;
+  /** Set when the caller is LOADED CODE — a worker, a facet, a script — holding a context through
+   *  `env.ITX`. Under it the resolver refuses the fixed point (`itx.builtins…`) and any `cd` above
+   *  the caller's own context on the INPUT expression; rewrites the owner wrote are never subject. */
+  app?: true;
+};
 /** The header the edge sets on a Request it forwards on a principal's behalf — the ingress after
  *  the cookie check, a session's terminal `fetch` — and strips from every inbound Request. */
 export const ITX_PRINCIPAL_HEADER = "x-itx-principal";
+/** The header a loaded worker's `env.ITX.fetch` sets on the Request it forwards, so the fetch lane
+ *  runs the call as app code; stripped from every Request that arrives from outside. */
+export const ITX_APP_HEADER = "x-itx-app";
 
 /** The event as the log stores it: `source.principal` is the platform's — set from the session's
  *  verified principal, a client-supplied one dropped (an anonymous session's event carries none). */

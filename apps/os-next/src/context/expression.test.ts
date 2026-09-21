@@ -12,7 +12,7 @@ import {
   installPrototypeInvokeFallback,
 } from "iterate/next/expression";
 import type { ItxExpressionRewriteRule } from "./itx-expression-rewriting.ts";
-import { ItxExpressionResolver } from "./itx-expression-rewriting.ts";
+import { BUILT_IN_ROOTS, ItxExpressionResolver } from "./itx-expression-rewriting.ts";
 
 // Plausible itx expressions in CANONICAL form — exactly what `print` emits (single-quoted strings,
 // unquoted identifier keys, no spaces). Each row is checked BOTH directions.
@@ -142,7 +142,13 @@ const rewriteRule = (match: string, target: string): ItxExpressionRewriteRule =>
   target: parse(target),
 });
 const resolverOver = (s: ReturnType<typeof scope>, ...rewriteRules: ItxExpressionRewriteRule[]) =>
-  new ItxExpressionResolver({ builtIns: s.builtIns, rewriteRules: () => rewriteRules });
+  new ItxExpressionResolver({
+    builtIns: s.builtIns,
+    rewriteRules: () => rewriteRules,
+    implicitRoots: new Set(BUILT_IN_ROOTS),
+    path: "/",
+    caller: () => ({ principal: null }),
+  });
 
 describe("walkSteps + resolve", () => {
   test("pipelined chain: call → await stub → call again", async () => {

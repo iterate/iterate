@@ -19,26 +19,33 @@
 //      replaces every matched step, so a residual would have nowhere to go).
 //   3. The most SPECIFIC matching row of the CONTEXT's table wins: longest match, then most pinned
 //      args. (One row per match, so two rows with DIFFERENT matches of equal length and pins cannot
-//      both match one call.) A bare `itx` row matches every call — the whole-context override.
+//      both match one call.) THE IMPLICIT ROWS compete as rows of length 2 (`implicitRootsAt`,
+//      below): every built-in root at the owner root, only the CONTEXT roots elsewhere — so an own
+//      `itx.<root>` row shadows one. A bare `itx` row WITH a target claims only what no longer row
+//      claims: the parent link `itx ⇒ itx.builtins.cd('/agents/x')` sends every unclaimed name up
+//      while the context's own log stays its own. A bare `itx ⇒ null` claims EVERYTHING: one row
+//      denies all (a jail is that row plus its grants).
 //   4. The rewrite: the target, then the unpinned args — folded into the target's final step when
 //      that step is a name (`itx.grok ⇒ itx.openai.chat`, `itx.grok({…})` ⇒ `itx.openai.chat({…})`),
 //      else an ANONYMOUS call on the target's result (`itx.cam ⇒ itx.builtins.rpcStubs.get('cam')`,
 //      `itx.cam(1)` ⇒ `itx.builtins.rpcStubs.get('cam')(1)`) — then the call's steps after the match.
 //      A target denotes a VALUE; calling the match calls that value.
 //   5. THE FIXED POINT is `itx.builtins`: a call rooted there runs as is and never reads the table
-//      (the whole facet-push path, every platform-spelled append). Any other `itx.…` call, RULES
-//      FIRST: a matching row (rule 3) whose target is `null` is a MASK — the call is refused,
-//      default-deny, even though a platform row lies beneath; a matching row with a target rewrites
-//      and the loop repeats; NO matching row and a root that is a built-in (`BUILT_IN_ROOTS`, below)
-//      is THE IMPLICIT PLATFORM ROW `itx.<root> ⇒ itx.builtins.<root>` — applied, and the call is at
-//      the fixed point; anything else is refused. 32 rewrites is the budget (a self-referential rule
-//      errors, never spins). The platform rows are never materialized on this path; `list()` and
-//      `resolve()` are the only readers that spell them out.
+//      (the whole facet-push path, every kernel-spelled append). It is the PLATFORM'S word: loaded
+//      code (`Caller.app` — a worker, a facet, a script holding `env.ITX`) may not spell it, nor `cd`
+//      above its own context, on the INPUT it hands in (`ItxExpressionResolver`'s wall; rewrites the
+//      owner wrote are never checked). Any other `itx.…` call, RULES FIRST: the winning row (rule 3)
+//      with a `null` target is a MASK — refused, default-deny; a winning row with a target rewrites
+//      and the loop repeats — unless it is the bare row and the call's root is implicit HERE, when
+//      the implicit row applies instead; no winner and an implicit root ⇒ the implicit row
+//      `itx.<root> ⇒ itx.builtins.<root>`, and the call is at the fixed point; anything else is
+//      refused. 32 rewrites is the budget (a self-referential rule errors, never spins). Implicit
+//      rows are never stored; `list()` spells them, described.
 //   6. THE DOOR (`normalizeRewriteRuleConfigured`, run at the append boundary): a match is rooted at `itx`; never at `itx.builtins`
 //      (the fixed point is what every call rewrites TO, never a name a row claims); never at one of
-//      the proxy's own verbs (`cd`, `invoke`, `provide`, `subscribe` — the dotted surface never
-//      hands those to the table, so such a row could fire from a string invoke but never from the
-//      sugar). A target is rooted at `itx`.
+//      the proxy's own verbs (`invoke`, `provide`, `subscribe` — the dotted surface never hands
+//      those to the table; `cd` IS a name, so `itx.cd ⇒ null` is a legal wall). A target is rooted
+//      at `itx`. `description`, when present, is one line (≤ 500 chars) a model reads for the name.
 //   7. `@` IS THE CALLER'S INPUT (expression.ts lexes it; targets only, final step only — the door
 //      refuses it in a match, in a non-final step, and `parse` refuses it in a call). A target whose
 //      final call step holds `@` is a TEMPLATE, and rule 4's fold does not apply to it: as a top-level
@@ -49,6 +56,11 @@
 //      own keys (the template wins: a pinned `model` cannot be talked out of) — two or more args, or
 //      none, where one is required is a refusal at rewrite time. The one reserved literal is the
 //      marker's array-half spelling, `{ "@": true }` (and the entry key `"...@"`).
+//   8. UN-SETTING: `target: null` deletes the row — kept as a MASK only where an implicit row lies
+//      beneath the match HERE (a row must exist to deny). A handle's undo and a dead stub's census
+//      send `null` WITH `ifTarget`: a compare-and-set DELETE, never a mask. There is no "restore"
+//      spelling: at a child the platform-equivalent target `itx.builtins.<x>` is a GRANT and is
+//      stored; at the owner root it equals the implicit row and deletes (core-processor.ts).
 //
 // THE PLATFORM NEVER SPELLS A SHORT NAME: every expression the platform itself writes — the proxy's
 // own append, a lent stub's rule (`match ⇒ itx.builtins.rpcStubs.get('<match>')`), a processor's
@@ -60,7 +72,9 @@
 // the match as its canonical STRING (the table's key) and the target in the PARSED form; the core
 // reduce parses the match once and takes the target as it is.
 
-import { codedError, jsonEqual } from "iterate/next/lib";
+import type { Caller } from "iterate/next/principal";
+import { codedError, jsonEqual, resolveContextPath } from "iterate/next/lib";
+import type { RewriteRuleConfigured } from "iterate/next/api";
 import {
   callOn,
   walkSteps,
@@ -75,6 +89,7 @@ import {
   type ItxExpressionInput,
   type ItxExpressionPrefix,
 } from "iterate/next/expression";
+import { GLOBAL_PROJECT_ID, resourceScope } from "./paths.ts";
 
 /** One rewrite rule: a canonical match prefix and the target it rewrites to (both parsed once, at
  *  reduce; a call step pins literal args, `itx.ai.run('gpt-5')` — expression.ts). A `null` target is a
@@ -111,7 +126,6 @@ export const BUILT_IN_ROOTS = [
   "workers",
   // THE LIBRARY (library.ts): first-party verbs that take only `itx` — could be userspace
   "run",
-  "chat",
   "connectToMcp",
   "connectToOpenApi",
   "connectToCapnweb",
@@ -130,10 +144,112 @@ export function isBuiltInRoot(root: unknown): root is BuiltInRoot {
   return typeof root === "string" && BUILT_IN_ROOT_SET.has(root);
 }
 
-export type ItxExpressionRewriteRule = { match: ItxExpressionPrefix; target: ItxExpression | null };
+/** THE CONTEXT ROOTS: the built-ins that are a context's OWN — its log, its tables, its facets, the
+ *  hosts whose loaded code speaks for it. Implicit in every context (rule 3): nothing else could
+ *  `append` mean at `/agents/x`, and a hop for it would land in another log. Everything else in
+ *  `BUILT_IN_ROOTS` is a PROJECT resource or a door to the world, implicit at the owner root only. */
+export const CONTEXT_ROOTS = [
+  "whoami",
+  "append",
+  "readEvents",
+  "waitForEvent",
+  "cd",
+  "facets",
+  "subscriptions",
+  "processors",
+  "schedules",
+  "rewriteRules",
+  "rpcStubs",
+  "workers",
+  "run",
+] as const satisfies readonly BuiltInRoot[];
+
+const ALL_ROOTS: ReadonlySet<string> = BUILT_IN_ROOT_SET;
+const CONTEXT_ROOT_SET: ReadonlySet<string> = new Set<string>(CONTEXT_ROOTS);
+
+/** THE ONE PREDICATE (rule 3): which roots have an implicit row at `path` — every built-in at a
+ *  project's root, the context roots anywhere below it. The GLOBAL namespace is not navigable (no
+ *  `cd`, so nothing there can inherit through a link): a user's or an organization's subtree is that
+ *  owner's own, and every context in it has every root — `/users/<id>/x` reads its owner's kv and
+ *  shares its owner's secrets catalog, as before. Read by the resolver, the reduce and `list()`. */
+export function implicitRootsAt(projectId: string, path: string): ReadonlySet<string> {
+  if (projectId === GLOBAL_PROJECT_ID) return ALL_ROOTS;
+  return resourceScope(projectId, path).rootPath === resolveContextPath("/", path)
+    ? ALL_ROOTS
+    : CONTEXT_ROOT_SET;
+}
+
+/** Rule 8's two questions about a match, against the roots implicit HERE. An implicit row lies
+ *  BENEATH `itx` (all of them) and beneath any `itx.<root>…` whose root is implicit — a `null` there
+ *  is kept as a mask. A match IS an implicit row only when it is exactly `itx.<root>` with `root`
+ *  implicit, or the bare `itx` at the owner root (where every root is) — the platform-equivalent
+ *  target there restates the default and deletes; anywhere else it is a grant and is stored. */
+export function implicitRowBeneath(
+  match: ItxExpressionPrefix,
+  implicitRoots: ReadonlySet<string>,
+): boolean {
+  if (match.length === 1) return implicitRoots.size > 0;
+  const root = itxExpressionStepName(match[1]);
+  return !!root && implicitRoots.has(root);
+}
+export function isImplicitRow(
+  match: ItxExpressionPrefix,
+  implicitRoots: ReadonlySet<string>,
+): boolean {
+  if (match.length === 1) return implicitRoots.size === BUILT_IN_ROOTS.length;
+  if (match.length !== 2 || typeof match[1] !== "string") return false;
+  return implicitRoots.has(match[1]);
+}
+
+/** One line per built-in — what `rewriteRules.list()` says for an implicit row, and so what a model
+ *  reads for it. Kept beside the list so a root added here is described here. */
+export const BUILT_IN_ROOT_DESCRIPTIONS: Record<BuiltInRoot, string> = {
+  whoami: "who this context is: `itx.whoami()` → { projectId, path }",
+  kv: "key-value strings, the project's own: `kv.get(k)` · `kv.put(k, v)` · `kv.list(prefix)` · `kv.delete(k)`",
+  secrets:
+    'names only, never values: `secrets.list()`; a `getSecret("/secrets/x")` placeholder in an outbound request is substituted at egress',
+  ai: "Workers AI, verbatim: `ai.run(model, inputs)`",
+  browser: 'browser rendering: `browser.quickAction("markdown", { url })`',
+  r2: "the object store, verbatim (`files` is the friendlier door)",
+  cfArtifacts: "the Artifacts binding, project-scoped (`repos` is the friendlier door)",
+  append: "write events to this log: `itx.append({ type, payload })`",
+  schedules:
+    "durable future appends: `schedules.set({ key, when, events })` · `schedules.cancel(key)`",
+  readEvents: "read this log: `(await itx.readEvents(afterOffset, limit)).events`",
+  waitForEvent: "block until an event lands: `waitForEvent({ type, afterOffset, timeoutMs })`",
+  cd: "a context below this one: `itx.cd('./sandbox')`",
+  fetch: "the internet through the project's egress: `itx.fetch(new Request(url))`",
+  rpcStubs: "live values clients lent here: `rpcStubs.list()` · `rpcStubs.get(key)`",
+  rewriteRules: "this table, described: `await rewriteRules.list()`",
+  facets: "a durable facet hosted here: `facets.get(name)`",
+  subscriptions: "the rows delivered each commit: `subscriptions.list()`",
+  processors: "hosted processors: `processors.enable(name, spec)` · `list()` · `disable(name)`",
+  workers: "load code as a stateless worker: `workers.get({ source }).run()`",
+  run: 'a fresh confined run of a script you write as text: `itx.run("async (itx) => …")`',
+  connectToMcp:
+    "a live MCP handle: `(await itx.connectToMcp(url)).listTools()`, one method per tool",
+  connectToOpenApi:
+    "a live OpenAPI handle: one method per operationId, `call(operationId, input)` too",
+  connectToCapnweb: "a live capnweb handle: `itx.connectToCapnweb(url)`, dotted calls pipelined",
+  repos:
+    "git on Artifacts; `/repos/config` is the project's code: `repos.get(path).readFile(f)` · `commitFiles({ message, changes })` · `repos.list()`",
+  workspaces:
+    "a private overlay over the repos: `workspaces.get(path).writeFile(f, text)` · `gitCommit({ message, scope })`",
+  agents:
+    "other agents, each a conversation on its own path: `agents.get(path).message(text)` · `agents.list()`",
+  files:
+    "project files: `files.get(path).put({ contentType, data })` · `.bytes()` · `.url()` · `files.list(prefix)`",
+};
+
+export type ItxExpressionRewriteRule = {
+  match: ItxExpressionPrefix;
+  target: ItxExpression | null;
+  /** The one line a model reads for `match` here (rule 6). */
+  description?: string;
+};
 
 /** The proxy's own verbs — a match may not start with one (rule 6). */
-const PROXY_VERBS: readonly string[] = ["cd", "invoke", "provide", "subscribe"];
+const PROXY_VERBS: readonly string[] = ["invoke", "provide", "subscribe"];
 
 /** Is `call` at the fixed point — rooted at `itx.builtins` (a NAME step; `itx.builtins(…)` is not)? */
 export function isBuiltInsRooted(call: ItxExpression): boolean {
@@ -258,15 +374,15 @@ function applyItxExpressionRewriteRule(
 }
 
 /** Rules 3–5 together, PURE: the CHAIN of rewrites from `call` to the call that runs — `call` itself
- *  first, the builtins-rooted call last (one element when `call` is already there). Throws
- *  NO_ITX_EXPRESSION_MATCH when no row matches and the root is no built-in, or when the winning row is
- *  a mask (default-deny), and a depth error after 32 rewrites. `rules` is a THUNK read at most once,
- *  and NOT AT ALL when the call is already builtins-rooted: a fixed-point dispatch never materializes
- *  the table. The implicit platform row is applied here, never stored; "is this root built in" is the
- *  leaf list's one predicate (`isBuiltInRoot`, above). */
+ *  first, the builtins-rooted call last (one element when `call` is already there). `implicitRoots`
+ *  is what has an implicit row HERE (`implicitRootsAt`). Throws NO_ITX_EXPRESSION_MATCH when nothing
+ *  claims the call, or when the winning row is a mask (default-deny), and a depth error after 32
+ *  rewrites. `rules` is a THUNK read at most once, and NOT AT ALL when the call is already
+ *  builtins-rooted: a fixed-point dispatch never materializes the table. */
 export function resolveItxExpression(
   rules: () => readonly ItxExpressionRewriteRule[],
   call: ItxExpression,
+  implicitRoots: ReadonlySet<string>,
 ): ItxExpression[] {
   const chain: ItxExpression[] = [call];
   let current = call;
@@ -275,26 +391,29 @@ export function resolveItxExpression(
     if (isBuiltInsRooted(current)) return chain;
     if (rewrites >= 32)
       throw new Error(`itx-expression rewriting exceeded depth 32 — self-referential rule?`);
+    const root = itxExpressionStepName(current[1]);
+    const implicit = current[0] === "itx" && !!root && implicitRoots.has(root);
     const winner =
       current[0] === "itx" ? pickItxExpressionRewriteRule((rulesList ||= rules()), current) : null;
-    if (winner) {
+    // A bare row WITH a target yields to an implicit row (the context's own log stays its own under
+    // a parent link); a bare NULL yields to nothing — one row denies all.
+    const yields = !!winner && winner.rule.match.length === 1 && !!winner.rule.target && implicit;
+    if (winner && !yields) {
       if (!winner.rule.target)
         throw codedError(
           "NO_ITX_EXPRESSION_MATCH",
-          `${JSON.stringify(print(current))} is masked: the rule at ${JSON.stringify(print(winner.rule.match))} is null (default-deny; provide a target, or restore the platform row with itx.builtins.…)`,
+          `${JSON.stringify(print(current))} is masked: the rule at ${JSON.stringify(print(winner.rule.match))} is null (default-deny; provide a target)`,
         );
       current = applyItxExpressionRewriteRule(winner.rule.target, winner.match);
       chain.push(current);
       continue;
     }
-    const root = itxExpressionStepName(current[1]);
-    if (current[0] === "itx" && isBuiltInRoot(root)) {
-      // THE IMPLICIT PLATFORM ROW: `itx.<root> ⇒ itx.builtins.<root>` — the fixed point, done.
+    if (implicit) {
+      // THE IMPLICIT ROW: `itx.<root> ⇒ itx.builtins.<root>` — the fixed point, done.
       current = ["itx", "builtins", ...current.slice(1)];
       chain.push(current);
       return chain;
     }
-
     throw codedError(
       "NO_ITX_EXPRESSION_MATCH",
       `no rewrite rule matches ${JSON.stringify(print(current))} (default-deny; configure a rule first)`,
@@ -320,13 +439,23 @@ export function resolveItxExpression(
  *  target may carry a whole facet source, which the reduce must never re-parse through the string
  *  codec (its 2 KiB cap). So call sites write `itx.append({ type, payload: { match, target } })`
  *  literally. A `null` target is the caller's deliberate MASK (deny); the platform-equivalent target
- *  from `restoreRuleTarget` is a removal (the reduce turns it into a deletion). */
-export function normalizeRewriteRuleConfigured(payload: {
-  match: ItxExpressionInput;
-  target: ItxExpressionInput | null;
-  ifTarget?: ItxExpressionInput | null;
-}): { match: ItxExpression; target: ItxExpression | null; ifTarget?: ItxExpression | null } {
+ *  with `ifTarget` is a compare-and-set removal (rule 8). */
+export function normalizeRewriteRuleConfigured(
+  payload: RewriteRuleConfigured & { ifTarget?: ItxExpressionInput | null },
+): {
+  match: ItxExpression;
+  target: ItxExpression | null;
+  description?: string;
+  ifTarget?: ItxExpression | null;
+} {
   const matchPrefix = parseItxExpressionPrefix(payload.match);
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- wire-fed: a present non-string (a number, an object) must be refused at the door, not coerced
+  if (
+    payload.description &&
+    (typeof payload.description !== "string" || payload.description.length > 500)
+  )
+    throw new Error("a rewrite rule's description is one line: a string of at most 500 chars");
+  const description = payload.description ? { description: payload.description } : {};
   if (matchPrefix[0] !== "itx")
     throw new Error(
       `a rewrite rule's match must be rooted at "itx" (every call starts there — ${JSON.stringify(print(matchPrefix))} could never match one)`,
@@ -353,14 +482,6 @@ export function normalizeRewriteRuleConfigured(payload: {
     throw new Error(
       `a rewrite rule's target must be rooted at "itx" (a bare built-in root is unspellable — targets resolve through the rules; the physical spelling is "itx.builtins.…")`,
     );
-  if (
-    matchPrefix.length === 1 &&
-    targetExpression &&
-    itxExpressionStepName(targetExpression[1]) !== "builtins"
-  )
-    throw new Error(
-      `a whole-context override (match "itx") must target the physical spelling "itx.builtins.…" — ${JSON.stringify(print(targetExpression, { holes: true }))} would re-enter the table it just claimed, every call`,
-    );
   if (targetExpression && targetExpression.slice(0, -1).some(containsItxExpressionHole))
     throw new Error(
       `\`@\` (the caller's input) is legal only in the target's FINAL step — ${JSON.stringify(print(targetExpression, { holes: true }))} holds it earlier (rule 7)`,
@@ -371,7 +492,8 @@ export function normalizeRewriteRuleConfigured(payload: {
   // `ifTarget` (a handle's compare-and-set undo) is normalized the SAME way as `target` — the reduce
   // jsonEquals it against the stored (parsed) target, so a string `ifTarget` must become the same
   // parsed shape here or the undo would silently never match. `null` is the mask sentinel, kept as-is.
-  if (!("ifTarget" in payload)) return { match: matchPrefix, target: targetExpression };
+  if (!("ifTarget" in payload))
+    return { match: matchPrefix, target: targetExpression, ...description };
   // oxlint-disable-next-line iterate/simple-truthiness-check -- a PRESENT key with an undefined value (reachable over capnweb, never JSON) is malformed and refused loudly here; folding it into the null sentinel would silently turn a handle's undo into a mask-lift
   if (payload.ifTarget === undefined)
     throw new Error(
@@ -380,16 +502,7 @@ export function normalizeRewriteRuleConfigured(payload: {
   const ifTarget =
     // oxlint-disable-next-line iterate/simple-truthiness-check -- like `target` above: null is the explicit sentinel (compare against a masked, null-target row), distinct from a malformed empty-string ifTarget that normalization must still parse and reject
     payload.ifTarget === null ? null : normalizedItxExpression(payload.ifTarget, { holes: true });
-  return { match: matchPrefix, target: targetExpression, ifTarget };
-}
-
-/** The platform-equivalent target for a match (`itx.ai ⇒ itx.builtins.ai`, `itx ⇒ itx.builtins`) — a
- *  rule REMOVAL: an `itx.append({ type: "…rewrite-rule-configured", payload: { match, target:
- *  restoreRuleTarget(match) } })` the reduce turns into a deletion (back to the platform row when one
- *  lies beneath), so a disposed handle RESTORES `itx.ai` rather than masking it (`null` is a deny). */
-export function restoreRuleTarget(match: ItxExpressionInput): ItxExpression {
-  const matchPrefix = parseItxExpressionPrefix(match);
-  return ["itx", "builtins", ...matchPrefix.slice(1)];
+  return { match: matchPrefix, target: targetExpression, ...description, ifTarget };
 }
 
 // ── WHAT NAMES A LENT STUB (pure; the DO appends the removals it decides) ──
@@ -416,11 +529,12 @@ export function rowsNamingRpcStub(args: {
   rpcStubKey: string;
   rules: readonly ItxExpressionRewriteRule[];
   subscriptionTargets: Record<string, ItxExpression>;
+  implicitRoots: ReadonlySet<string>;
 }): {
   ruleUnsets: { match: ItxExpressionPrefix; ifTarget: ItxExpression }[];
   subscriptionNames: string[];
 } {
-  const { rpcStubKey, rules, subscriptionTargets } = args;
+  const { rpcStubKey, rules, subscriptionTargets, implicitRoots } = args;
   const direct = rules.filter(
     (rule) => rule.target && namesRpcStubDirectly(rule.target, rpcStubKey),
   );
@@ -428,7 +542,7 @@ export function rowsNamingRpcStub(args: {
   const namesThroughRemaining = (target: ItxExpression): boolean => {
     try {
       return namesRpcStubDirectly(
-        resolveItxExpression(() => remaining, target).at(-1)!,
+        resolveItxExpression(() => remaining, target, implicitRoots).at(-1)!,
         rpcStubKey,
       );
     } catch {
@@ -455,8 +569,9 @@ export function rowsNamingRpcStub(args: {
 export function rpcStubKeysNamed(args: {
   rules: readonly ItxExpressionRewriteRule[];
   subscriptionTargets: Record<string, ItxExpression>;
+  implicitRoots: ReadonlySet<string>;
 }): Set<string> {
-  const { rules, subscriptionTargets } = args;
+  const { rules, subscriptionTargets, implicitRoots } = args;
   const keys = new Set<string>();
   const targets = [
     ...rules.flatMap((rule) => (rule.target ? [rule.target] : [])),
@@ -464,7 +579,7 @@ export function rpcStubKeysNamed(args: {
   ];
   for (const target of targets) {
     try {
-      const resolved = resolveItxExpression(() => rules, target).at(-1)!;
+      const resolved = resolveItxExpression(() => rules, target, implicitRoots).at(-1)!;
       const getStep = resolved[3];
       if (
         resolved[1] === "builtins" &&
@@ -485,25 +600,64 @@ export function rpcStubKeysNamed(args: {
 
 export class ItxExpressionResolver {
   /** The built-ins: a plain record whose keys (kv, append, readEvents, cd, …) are the physical-layer
-   *  roots — `itx.builtins.<root>` reaches them directly; `itx.<root>` reaches them through the
-   *  implicit platform row unless the context's table says otherwise (rule 5). The record's keys and
-   *  the leaf list `resolveItxExpression` consults are one set (built-ins.ts asserts it at the type
-   *  level); the record is walked here, the list decides there. */
+   *  roots — `itx.builtins.<root>` reaches them directly; `itx.<root>` reaches them through an implicit
+   *  row where one exists (rule 3) unless the context's table says otherwise. */
   readonly #builtIns: Record<string, unknown>;
   readonly #rewriteRules: () => readonly ItxExpressionRewriteRule[];
+  readonly #implicitRoots: ReadonlySet<string>;
+  readonly #path: string;
+  readonly #caller: () => Caller;
 
   constructor(args: {
     builtIns: Record<string, unknown>;
     rewriteRules: () => readonly ItxExpressionRewriteRule[];
+    /** The roots with an implicit row HERE (`implicitRootsAt`). */
+    implicitRoots: ReadonlySet<string>;
+    /** This context's canonical path: the base of loaded code's `cd`, and its ceiling. */
+    path: string;
+    /** WHO is calling right now — the DO's ambient caller. */
+    caller: () => Caller;
   }) {
     this.#builtIns = args.builtIns;
     this.#rewriteRules = args.rewriteRules;
+    this.#implicitRoots = args.implicitRoots;
+    this.#path = args.path;
+    this.#caller = args.caller;
+  }
+
+  /** THE APP WALL (rule 5): loaded code hands in short names and nothing else — never the fixed
+   *  point, never a `cd` above its own context (self and descendants only, resolved step by step). On
+   *  the INPUT only: the rows a call rewrites through are the owner's grants and are never checked, so
+   *  a parent link `itx ⇒ itx.builtins.cd('/agents/x')` carries a script up exactly as far as its
+   *  owner said. Codec-style, kin to the reserved names `parse` refuses — nothing here is policy. */
+  #admit(expression: ItxExpression): void {
+    if (!this.#caller().app) return;
+    let base = this.#path;
+    for (const step of expression) {
+      const name = typeof step === "string" ? step : step[0];
+      if (name === "builtins")
+        throw codedError(
+          "FORBIDDEN",
+          `"itx.builtins" is not a loaded worker's word — this context's rows say what its code may spell (${JSON.stringify(print(expression, { holes: true }))})`,
+        );
+      if (Array.isArray(step) && step[0] === "cd" && typeof step[1] === "string") {
+        const to = resolveContextPath(base, step[1]);
+        if (to !== base && !to.startsWith(`${base}/`))
+          throw codedError(
+            "FORBIDDEN",
+            `cd goes down only for loaded code: ${JSON.stringify(step[1])} from ${JSON.stringify(base)} would leave it`,
+          );
+        base = to;
+      }
+    }
   }
 
   /** PURE: the chain of rewrites from `call` to the builtins-rooted call that would run (rules 3–5).
    *  Nothing is dispatched. The one law: `invoke(call)` ≡ `invoke(resolve(call).at(-1))`. */
   resolve(call: ItxExpressionInput): ItxExpression[] {
-    return resolveItxExpression(this.#rewriteRules, normalizedItxExpression(call));
+    const expression = normalizedItxExpression(call);
+    this.#admit(expression);
+    return resolveItxExpression(this.#rewriteRules, expression, this.#implicitRoots);
   }
 
   /** Resolve + run one call: the chain's last element, walked against the physical scope from the
@@ -520,7 +674,10 @@ export class ItxExpressionResolver {
       expression = [...expression.slice(0, -1), [last, ...extraArgs]];
       extraArgs = [];
     }
-    const rewritten = this.resolve(expression).at(-1)!;
+    this.#admit(expression);
+    const rewritten = resolveItxExpression(this.#rewriteRules, expression, this.#implicitRoots).at(
+      -1,
+    )!;
     const rootName = itxExpressionStepName(rewritten[2]);
     const roots = () => Object.keys(this.#builtIns).join(", ");
     if (!rootName)

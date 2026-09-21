@@ -259,6 +259,10 @@ test("the catalog is the PROJECT's: a secret set from one context is listed from
   const root = openItx(projectId);
   const a = root.cd("/a");
   const b = root.cd("/b");
+  // nothing project-level is implicit below the root: each child reaches the catalog through the row
+  // its creator would have written — here the session writes the link itself
+  await a.provide("itx", "itx.builtins.cd('/')");
+  await b.provide("itx", "itx.builtins.cd('/')");
   await a.secrets.set("shared", "v", { urls: ["https://api.example.com"] });
   expect(await b.secrets.list()).toEqual([{ name: "shared", urls: ["https://api.example.com"] }]);
   expect(await root.secrets.list()).toEqual([

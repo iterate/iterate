@@ -151,9 +151,9 @@ packages/v3/project-worker/
                                  ItxExpressionInput / ItxExpressionPrefix; walkSteps / callOn (execute a
                                  rewritten call's steps on a live object graph); the dotted door — the
                                  prototype hop, InvokeHandle + the two brands FacetHandle / RpcStubHandle
-      itx-expression-rewriting.ts  THE RULES 1–7 (match / pick / apply / rules-first to the fixed point
-                                 `itx.builtins` / the door / `@`), the ONE event (rewriteRuleConfiguredEvent),
-                                 the reader (ItxExpressionResolver); BUILT_IN_ROOTS (the platform rows' names)
+      itx-expression-rewriting.ts  THE RULES 1–8 (match / pick / apply / rules-first to the fixed point
+                                 `itx.builtins` / the door / `@` / un-setting), the ONE event (rewriteRuleConfiguredEvent),
+                                 the reader (ItxExpressionResolver); BUILT_IN_ROOTS (the roots the implicit rows name)
       rpc-stubs.ts               the rpc stubs, both sides: DO side the BORROWED table (lendRpcStub /
                                  invokeRpcStub / returnBorrowedRpcStubs) then the PAGERS (the one-shot pager
                                  upgrade, presence events); edge side lendRpcStubOverPager (the DON'T-PIN
@@ -366,7 +366,15 @@ class IterateContext extends RpcTarget {
    *  `match ⇒ itx.builtins.rpcStubs.get('<match>')`, un-set by the DO when the stub's last pager closes;
    *  re-providing the same match re-lends (reconnect — the pager is replaced) — OR an itx EXPRESSION,
    *  a pure rewrite: literally `append(rewriteRuleConfiguredEvent(match, target))` — OR `null`, which
-   *  un-sets the rule at `match`. */
+   *  masks `match` where an implicit row lies beneath and deletes the row elsewhere (a bare
+   *  `itx ⇒ null` denies all). The input is the event's payload, `{ match, target, description? }` —
+   *  `description` is the one line a model reads for the name (≤ 500 chars) and rides the row into
+   *  `rewriteRules.list()` — or the shorthand `(match, target)`. Not on loaded code's handle. */
+  provide(input: {
+    match: ItxExpressionInput;
+    target: ClientRpcStub | ItxExpressionInput | null;
+    description?: string;
+  }): Promise<RewriteRuleHandle>;
   provide(
     match: ItxExpressionInput,
     target: ClientRpcStub | ItxExpressionInput | null,
@@ -426,7 +434,7 @@ using rule = await itx.provide("itx.db", "itx.kv");
 await itx.append(rewriteRuleConfiguredEvent("itx.db", "itx.kv"));
 await itx.append({
   type: "events.iterate.com/itx/rewrite-rule-configured",
-  payload: { match: "itx.db", target: "itx.kv" }, // both halves strings; `target: null` deletes
+  payload: { match: "itx.db", target: "itx.kv", description: "the project's key-value store" }, // both halves strings; `target: null` masks or deletes
 });
 ```
 
@@ -562,10 +570,17 @@ type ClientRpcStub = { dup(): ClientRpcStub; [k: string]: unknown };
 
 `src/context/built-ins.ts`. These are the kernel — and the record IS `itx.builtins`,
 the reserved root, the fixed point of rewriting: `itx.builtins.<root>…` runs against
-it directly and reads no rule; a short `itx.<root>…` reaches it through the implicit
-platform row `itx.<root> ⇒ itx.builtins.<root>` unless the context's own rows say
-otherwise (rules FIRST, section 9.1), so a root can be shadowed or masked and
-`itx.builtins.…` is always the physical door.
+it directly and reads no rule. A short `itx.<root>…` reaches it through the implicit
+row `itx.<root> ⇒ itx.builtins.<root>` unless the context's own rows say otherwise
+(rules FIRST, section 9.1), so a root can be shadowed or masked. Which roots are
+implicit depends on the context: at the owner root (`/`; `/users/<id>` or
+`/organizations/<id>` in the global namespace) every root below; everywhere else
+only the thirteen context roots — `whoami`, `append`, `readEvents`, `waitForEvent`,
+`cd`, `facets`, `subscriptions`, `processors`, `schedules`, `rewriteRules`,
+`rpcStubs`, `workers`, `run` — and a project-level name (`kv`, `secrets`, `ai`,
+`fetch`, `repos`, `agents`, …) is reached only through a row. `itx.builtins` is the
+kernel's word: a rule's target may name it (a grant of the real thing), the kernel's
+own appends spell it, and a call from loaded code may not (section 5).
 
 ```ts
 interface BuiltInScope {
@@ -636,13 +651,15 @@ interface BuiltInScope {
     list(): string[];
   };
 
-  /** The rewrite-rule table, READ — the EFFECTIVE table: the context's rows (a slice of core, a mask
-   *  as `target: null`) plus the implicit platform rows, each `origin: "platform" | "context"`.
-   *  Written by the edge's `provide` — sugar over the ONE `itx/rewrite-rule-configured` event — never
-   *  a verb here. `resolve(call)` is the pure chain: `invoke(call) ≡ invoke(resolve(call).at(-1))`. */
+  /** The rewrite-rule table, READ — the EFFECTIVE table, described: the context's rows (a slice of
+   *  core, a mask as `target: null`), the implicit rows with the platform's one-liners, and, behind a
+   *  bare row that hops (`itx ⇒ itx.builtins.cd(path)`), the rows of the context it names (a Durable
+   *  Object hop, hence async; depth-capped). `context` is the path a row was read from. Written by the
+   *  edge's `provide` — sugar over the ONE `itx/rewrite-rule-configured` event — never a verb here.
+   *  `resolve(call)` is the pure chain: `invoke(call) ≡ invoke(resolve(call).at(-1))`. */
   rewriteRules: {
-    list(): RewriteRuleListEntry[]; // { match: string; target: string | null; origin: "platform" | "context" }
-    get(match: string): RewriteRuleListEntry | null;
+    list(): Promise<RewriteRuleListEntry[]>; // { match: string; target: string | null; description?: string; context: string }
+    get(match: string): Promise<RewriteRuleListEntry | null>;
     resolve(call: ItxExpressionInput): string[];
   };
 
@@ -716,14 +733,17 @@ Two rules that follow from the resolver:
 
 - A rewrite rule's target must be rooted at `itx`
   (`itx.provide("itx.greet", "itx.kv.get")` is legal; `"kv.get"` is rejected
-  when the event is built). The physical spelling is `itx.builtins.<root>`, the
-  fixed point of rewriting: a rule may target it, never match it. A short
-  `itx.<root>` is the implicit platform row `itx.<root> ⇒ itx.builtins.<root>`,
+  when the event is built). `itx.builtins.<root>` is the fixed point of
+  rewriting: a rule may target it — the owner granting the real thing — never
+  match it, and loaded code may not call it. A short `itx.<root>` is the
+  implicit row `itx.<root> ⇒ itx.builtins.<root>` where that root is implicit
+  (every root at the owner root, the thirteen context roots elsewhere),
   consulted only after the context's own rows — so a context may shadow or
-  mask a built-in, and `itx.builtins.…` always reaches the real one.
-- The prefix `itx` by itself is the shortest legal match and acts as a
-  default rule: it claims any call whose root is not a built-in. This is how
-  ancestry is spelled (section 9.4).
+  mask a built-in.
+- The prefix `itx` by itself is the shortest legal match, a bare row. With a
+  target it claims what no implicit row claims: `itx ⇒ itx.builtins.cd('<creator>')`
+  is how a child reaches its creator (section 9.4), `itx ⇒ itx.builtins` the
+  whole local surface. With `null` it claims everything: one row denies all.
 
 ### 4.5 Facets you can address, and the one always-on core reduce
 
@@ -761,12 +781,14 @@ type CoreState = {
   incarnation?: number; // from stream/woken — grows across hibernation wakes
   paused: { reason: string } | null; // stream/paused / stream/resumed
   // THE REWRITE-RULE TABLE: a MAP by canonical match — a configured target REPLACES; `null` MASKS
-  // under a built-in root (kept as a row) and deletes elsewhere; the target `itx.builtins.<match…>` deletes
+  // where an implicit row lies beneath at THIS path (kept as a row) and deletes elsewhere; a target
+  // saying what the implicit row beneath says is not stored; `ifTarget` makes a null a compare-and-set delete
   itxExpressionRewriteRules: Record<
     string, // canonicalItxExpressionPrefix(match), e.g. "itx.greet" or "itx.ai.run('gpt-5')"
     {
       match: ItxExpressionPrefix; // parsed once from the event's string
       target: ItxExpression | null; // a lent stub's is itx.builtins.rpcStubs.get('<rpcStubKey>'); null = a mask
+      description?: string; // the one line a model reads; rides into rewriteRules.list()
     }
   >;
   // THE SUBSCRIPTIONS TABLE: by name; a same-named configure REPLACES
@@ -811,7 +833,15 @@ the reduce only — it never arms the quiet-clock alarm.
 
 A loaded isolate receives exactly two things: `env.ITX` (a stub of
 `ItxEntrypoint`, section 8) and a `globalOutbound` that routes every `fetch()`
-through the context's egress. The processor SDK is injected as `./processor.js`
+through the context's egress — as `itx.fetch(request)` at this context, through
+its table. `env.ITX.get()` is loaded code's handle (`caller.app`,
+`src/iterate-context.ts`): every call resolves through this context's rows; a
+`builtins` step is refused; `cd` goes through the table and down only, to itself
+and its descendants; `provide` and `subscribe` throw `FORBIDDEN`, so a loaded
+worker writes rows with `itx.append` and lends nothing. The platform's own
+facets (repo, workspace, agent), minted from `ctx.exports` with
+`platform: true` (`packages/iterate/src/next/sdk/index.ts`), keep the full
+handle. The processor SDK is injected as `./processor.js`
 into every load, so `import { ... } from "./processor.js"` always works. Every
 example below hands the source over as its modules (`{ "cap.js": CODE }`) —
 the only shape there is.
@@ -1387,8 +1417,8 @@ class IterateContextDurableObject extends DurableObject<Env> {
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent>;
 
   // ── dispatch: ONE door ──
-  /** parse → RULES FIRST, until the call is rooted at `itx.builtins` (a bare built-in root is the
-   *  implicit platform row; most specific match wins; default-deny; 32-rewrite budget) → walk the
+  /** parse → RULES FIRST, until the call is rooted at `itx.builtins` (a root implicit here is its
+   *  implicit row; most specific match wins; default-deny; 32-rewrite budget) → walk the
    *  record. `...args` are LIVE args, folded into a name-final call before the rules. */
   invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown>;
 
@@ -1539,7 +1569,7 @@ sequenceDiagram
   Note over E: prototype hop reduces to<br/>["itx","greet",["run","jonas"]]
   E->>D: invoke(expression)   (Workers RPC)
   D->>R: resolve(expression)
-  loop until the call is rooted at itx.builtins (the fixed point; a bare built-in root is the implicit platform row) — 32 rewrites max
+  loop until the call is rooted at itx.builtins (the fixed point; a root implicit here is its implicit row) — 32 rewrites max
     R->>R: pick the most SPECIFIC matching rule: longest match, then most pinned args
     R->>R: rewrite: target, then the unpinned args, then the steps after the match
   end
@@ -1595,8 +1625,8 @@ appends `rpc-stub/attached`, losing its last appends `rpc-stub/detached` (both
 ephemeral; a replaced pager emits neither). A provided stub's rule dies with
 the stub, and the un-set is the DO's: disposing the handle (or the session
 ending) recalls the stub — the DO appends the un-set when the key's last pager
-closes, `rewrite-rule-configured { match, target: 'itx.builtins.<match…>' }` (the removal
-spelling — a `null` would MASK a platform row) for every rewrite rule and
+closes, `rewrite-rule-configured { match, target: null, ifTarget }` (a compare-and-set
+deletion: the row goes only while it is still the one the stub wrote, and never masks) for every rewrite rule and
 `subscription-configured { name, null }` for every subscription whose target RESOLVES to
 `itx.builtins.rpcStubs.get('<rpcStubKey>')`, decided against one frozen table
 (`#unsetWhatNamesRpcStub`, run from the directory's `onPresence("detached")`)
@@ -1645,16 +1675,29 @@ sequenceDiagram
 with `readEvents(afterOffset)`. A subscriber whose `consumes` skipped a batch still
 sees the skipped span in its next range.
 
-### 9.4 Ancestry as a default rule
+### 9.4 Ancestry is a bare row the creator writes
 
-There is no parent link. A child spells one with the shortest legal match and
-a target in the parent:
+A child is born with its own log and nothing else — its thirteen implicit
+roots, default-deny for every other name. Whoever creates it writes the bare
+row, targeting the creator's OWN context (not the lexical parent: a child can
+never hold more than its creator): the library's `agents.get(path).create()`,
+`repos.get(path).create()` and `workspaces.get(path).create()` append it on the
+child in the same act as the birth (`src/library.ts`), keyed `itx@<creator>`; a
+context merely touched by `cd` gets none.
 
 ```ts
 const child = itx.cd("/agents/support");
-// in-worker spelling; a client appends the literal (section 4.2)
-await child.append(rewriteRuleConfiguredEvent("itx", "itx.builtins.cd('/')")); // durable: misses go to the project root (a whole-context override must name the physical spelling)
-await child.someRootCapability.doThing(1); // not a built-in, no longer match → the default rule
+// what a create path appends on the child; a client appends the same literal (section 4.2)
+await child.append({
+  type: "events.iterate.com/itx/rewrite-rule-configured",
+  payload: {
+    match: "itx",
+    target: "itx.builtins.cd('/')",
+    description: "everything this context does not claim, its creator answers",
+  },
+  idempotencyKey: "itx@/",
+});
+await child.someRootCapability.doThing(1); // not implicit here, no longer match → the bare row
 ```
 
 ```mermaid
@@ -1662,17 +1705,21 @@ sequenceDiagram
   participant C as child DO (/agents/support)
   participant R as root DO (/)
   Note over C: invoke(["itx","someRootCapability",["doThing",1]])
-  C->>C: "someRootCapability" is not a built-in → the rule at "itx" wins (the steps after the match = the whole tail)
-  C->>C: rewrite → ["itx",["cd","/"],"someRootCapability",["doThing",1]] — root cd is a built-in
-  C->>R: invoke(["itx","someRootCapability",["doThing",1]])   (one Workers-RPC hop)
-  R->>R: resolve against the ROOT's rules (its own default rule may forward again)
+  C->>C: "someRootCapability" is not implicit here → the bare row wins (the steps after the match = the whole tail)
+  C->>C: rewrite → ["itx","builtins",["cd","/"],"someRootCapability",["doThing",1]] — the fixed point, one hop
+  C->>R: invoke(["itx","someRootCapability",["doThing",1]]) with the caller's path   (one Workers-RPC hop)
+  R->>R: resolve against the ROOT's rules (its own bare row may forward again)
   R-->>C: value
 ```
 
-Built-ins never fall through (`whoami`, `kv`, `append`, `readEvents` stay the
-child's). Nothing appends this rule for you today. The 32-rewrite budget does
-not survive a `cd` hop, so do not configure `itx ⇒ itx.cd('/')` on the root
-itself.
+The implicit roots never fall through (`whoami`, `append`, `readEvents`, `cd`
+stay the child's — its log is its own); `kv`, `secrets`, `fetch` and every other
+project-level name walk up one hop per row, and the built-in runs at the root
+with the caller's path beside it, so `repos.get('./x')` from the child stays the
+child's. Each hop resolves afresh, which is why a bare row may not name its own
+context. A context whose bare row is `null` — an agent's `<agent>/sandbox`, once
+its owner replaces the link with a mask and appends grants in the same batch —
+reaches the granted rows and nothing else (section 5).
 
 ---
 
@@ -1684,9 +1731,9 @@ itself.
 | session               | what `/api` hands you: `IterateRpcTarget → authenticate(credentials) → SessionRpcTarget → projects.list()/get(project)/create({ project })`; a session is not a context, it is how you reach one — and who you are (`whoami()`: the OAuth grant's user — a personal access token's included — the admin's `as`, or the admin)                                                                                                                        |
 | itx expression        | `["itx", ...steps]` (`ItxExpression`) or its string form; either half is an `ItxExpressionInput`; the persisted currency of every target                                                                                                                                                                                                                                                                                                             |
 | itx-expression prefix | a rewrite rule's `match`: dotted names, any step may pin literal args — `itx.greet`, `itx.ai.run('gpt-5')`; `canonicalItxExpressionPrefix` is its one spelling, the table's key                                                                                                                                                                                                                                                                      |
-| rewrite rule          | `{ match, target }`: a call starting with `match` runs as the same call with `match` replaced by `target`; one map entry per canonical match, written by `itx/rewrite-rule-configured { match, target \| null }`; nothing else rides it                                                                                                                                                                                                              |
-| default rule          | a rule at the bare prefix `itx`; claims any non-built-in call                                                                                                                                                                                                                                                                                                                                                                                        |
-| built-in              | a root of `BuiltInScope`, reached as `itx.builtins.<root>` (the reserved root, the fixed point — never a rule's match) or as the implicit platform row `itx.<root>`, which the context's own rows come before (shadowable, maskable)                                                                                                                                                                                                                 |
+| rewrite rule          | `{ match, target, description? }`: a call starting with `match` runs as the same call with `match` replaced by `target`; one map entry per canonical match, written by `itx/rewrite-rule-configured { match, target \| null, description? }`; `description` is the one line a model reads; nothing else rides it                                                                                                                                     |
+| bare row (`itx`)      | a row at the bare prefix `itx`; claims what no implicit row claims: at a child, `itx ⇒ itx.builtins.cd('<creator>')` is the creator's surface — the row a create path writes — and `itx ⇒ itx.builtins` the whole local surface; `itx ⇒ null` denies all                                                                                                                                                                                             |
+| built-in              | a root of the kernel record `BuiltInScope`, reached as `itx.builtins.<root>` (the reserved root, the fixed point — never a rule's match, a target's word, never a call loaded code makes) or as the implicit row `itx.<root>` — every root at the owner root, the thirteen context roots everywhere — which the context's own rows come before (shadowable, maskable)                                                                                |
 | InvokeHandle          | a pipelinable `RpcTarget` returned mid-chain (`cd`, `workers.get(...)`); `FacetHandle` and `RpcStubHandle` are its two brands                                                                                                                                                                                                                                                                                                                        |
 | rpc stub              | a live capnweb value a session LENDS under an opaque `rpcStubKey`; the edge owns it, the DO BORROWS it per page and RETURNS it at idle; `itx.builtins.rpcStubs.get(rpcStubKey)` is how the platform's rows name it, and any spelling that resolves there counts; presence is `list()`                                                                                                                                                                |
 | pager                 | the hibernatable WebSocket from the edge relay to the DO, one per key, carrying `{ transportId, rpcStubKey }`; the DO sends `{ type: "page" }` to get a fresh stub lent                                                                                                                                                                                                                                                                              |

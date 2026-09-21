@@ -8,9 +8,9 @@ import { codedError } from "iterate/next/lib";
 import { verifyAdminSecret, type Principal } from "iterate/next/principal";
 import type { Consent } from "./consent.ts";
 import type { Grants } from "./grants.ts";
+import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import {
   DurableObjectNameCodec,
-  GLOBAL_PROJECT_ID,
   IterateContextRpcTarget,
   type IterateContextNamespace,
   type WaitUntil,
