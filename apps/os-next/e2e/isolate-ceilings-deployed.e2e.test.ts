@@ -50,7 +50,14 @@ import { enableFixtureProcessor } from "./support/sources.ts";
  *  shared /api edge with 200+ MiB of concurrent payload — chronically red across deployed runs with a different
  *  symptom each time (7/8 committed, WebSocket refused, storage timeout). Opt in explicitly; a default deployed run of
  *  this file stays deterministic. Structural gate (`skipIf`), not a parked skip. */
-const crashHunt = test.skipIf(projectHostsAreLocal() || process.env.RUN_ISOLATE_CRASH_HUNT !== "1");
+const crashHunt = test.skipIf(
+  projectHostsAreLocal() || process.env.RUN_ISOLATE_CRASH_HUNT !== "1",
+).sequential;
+
+// EVERY ROW HERE IS `sequential` (the file's rows alone — every other e2e file's run concurrently):
+// they share ONE seeded 144 MiB context and they MEASURE a shared ceiling — concurrent readers of the
+// seeded log are themselves one of the rows, and the crash hunt's resets and 28 MiB bursts would land
+// in a sibling's measurement.
 
 // ── the shared 144 MiB seed ──
 
@@ -74,7 +81,7 @@ beforeAll(async () => {
 
 // ── the memory pins ──
 
-test(
+test.sequential(
   "read: a client pages a 144 MiB log — every page fits the isolate and the RPC cap, every body byte-identical",
   { timeout: 300_000 },
   async () => {
@@ -194,7 +201,7 @@ crashHunt(
   },
 );
 
-test(
+test.sequential(
   "facet catch-up: a processor enabled over a 144 MiB log reduces every event through its loopback read",
   { timeout: 300_000 },
   async () => {
@@ -205,7 +212,7 @@ test(
   },
 );
 
-test(
+test.sequential(
   "append: one event past the platform ceiling is refused at the door with EVENT_TOO_LARGE, nothing written",
   { timeout: 120_000 },
   async () => {
@@ -360,7 +367,7 @@ crashHunt(
   },
 );
 
-deployedOnly(
+deployedOnly.sequential(
   "LOADED-ISOLATE OOM: a stateless WorkerEntrypoint that allocates unboundedly OOMs its OWN loaded isolate — the caller gets `Worker exceeded memory limit.` (.overloaded, NO .durableObjectReset) and the parent DO is untouched (a ceiling that HOLDS at the loaded-isolate boundary)",
   { timeout: 120_000 },
   async () => {

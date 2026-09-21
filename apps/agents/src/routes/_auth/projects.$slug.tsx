@@ -31,6 +31,7 @@ import { ContextView } from "@iterate-com/ui/components/context-view/context-vie
 import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
 import { InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
 import { FacetLiveState } from "../../components/facet-live-state.tsx";
+import { agentEventRenderers } from "../../lib/agent-event-renderers.tsx";
 import { AgentsNav } from "../../components/agents-nav.tsx";
 import { AgentComposer, type StreamInterrupt } from "../../components/composer.tsx";
 import { QueuedMessagesPanel } from "../../components/queued-messages.tsx";
@@ -422,6 +423,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
             events={log.events}
             caughtUp={caughtUp}
             error={error || undefined}
+            renderers={agentEventRenderers}
             processors={processors.rows}
             presence={presence}
             renderCoreState={() => <FacetLiveState itx={context} name="core" />}

@@ -1,6 +1,7 @@
 // How the dash reads a fact: one sentence per event type the control plane and the platform record
 // on a person's, an organization's or a project's context — the context view's renderer registry.
-// Anything not named here falls back to the view's default row (the type and a payload glance).
+// The platform's own events (the stream's lifecycle, script runs) come with the view's renderers;
+// anything not named there or here falls back to the view's default row (the type and a glance).
 import type { EventRenderers } from "@iterate-com/ui/components/context-view/types";
 
 const str = (value: unknown, fallback = "") => (typeof value === "string" ? value : fallback);
@@ -76,39 +77,4 @@ export const factRenderers: EventRenderers = {
       </>
     );
   },
-  "events.iterate.com/context/run-requested": (e) => {
-    const code = str(record(e.payload).code);
-    return <>Ran a script {mono(code.split("\n")[0]!.slice(0, 100))}</>;
-  },
-  "events.iterate.com/context/run-settled": (e) => {
-    const p = record(e.payload);
-    const s = record(p.settlement);
-    return s.status === "succeeded" ? (
-      <>
-        Script {mono(`#${String(p.requestOffset)}`)} returned{" "}
-        {mono(JSON.stringify(s.result ?? null).slice(0, 100))}
-      </>
-    ) : (
-      <>
-        Script {mono(`#${String(p.requestOffset)}`)} failed ({str(s.failureKind)}):{" "}
-        {str(s.error).slice(0, 140)}
-      </>
-    );
-  },
-  "events.iterate.com/stream/created": () => (
-    <span className="text-muted-foreground">The context was born</span>
-  ),
-  "events.iterate.com/stream/woken": (e) => (
-    <span className="text-muted-foreground">
-      Woke ({str(record(e.payload).reason)}, incarnation {String(record(e.payload).incarnation)})
-    </span>
-  ),
-  "events.iterate.com/stream/subscription-configured": (e) => (
-    <span className="text-muted-foreground">
-      Subscription {mono(str(record(e.payload).name))} configured
-    </span>
-  ),
-  "events.iterate.com/live-state/changed": () => (
-    <span className="text-muted-foreground">Live state changed</span>
-  ),
 };

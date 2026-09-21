@@ -5,6 +5,7 @@ import {
   EMPTY_FILTER,
   filterEvents,
   payloadPreview,
+  payloadSummary,
   shortEventType,
   typeCounts,
 } from "./filters.tsx";
@@ -79,4 +80,31 @@ test("the short forms: the prefix dropped, the payload on one line and cut", () 
   expect(payloadPreview({ a: 1 })).toBe('{"a":1}');
   expect(payloadPreview("x".repeat(200), 20)).toHaveLength(20);
   expect(payloadPreview(undefined)).toBe("");
+});
+
+describe("payloadSummary", () => {
+  test("an object reads as its fields, strings to their first line, nested values to their shape", () => {
+    expect(
+      payloadSummary({
+        role: "system",
+        content: "You are an agent.\nSecond line never shows",
+        target: ["itx", "builtins"],
+        config: { llm: {}, maxAutonomousTurns: 3, other: 1, more: 2 },
+        n: 4,
+      }),
+    ).toBe(
+      "role system · content You are an agent. · target [2] · config {llm, maxAutonomousTurns, other, …} · n 4",
+    );
+  });
+  test("more than five fields end in an ellipsis; a long line is cut", () => {
+    const wide = Object.fromEntries(Array.from({ length: 7 }, (_, i) => [`k${String(i)}`, i]));
+    expect(payloadSummary(wide)).toBe("k0 0 · k1 1 · k2 2 · k3 3 · k4 4 · …");
+    expect(payloadSummary({ a: "x".repeat(200) }, 30)).toHaveLength(30);
+  });
+  test("nothing, arrays and scalars", () => {
+    expect(payloadSummary(undefined)).toBe("");
+    expect(payloadSummary(null)).toBe("null");
+    expect(payloadSummary([1, 2, 3])).toBe("3 items");
+    expect(payloadSummary(42)).toBe("42");
+  });
 });
