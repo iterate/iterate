@@ -605,12 +605,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         let redirect: ItxExpression | undefined;
         try {
           const resolvedRun = this.#itxExpressionResolver.resolve(["itx", ["run", code]]).at(-1)!;
-          const runStep = resolvedRun[2];
           const runsHere =
             resolvedRun.length === 3 &&
             resolvedRun[1] === "builtins" &&
-            Array.isArray(runStep) &&
-            runStep[0] === "run";
+            itxExpressionStepName(resolvedRun[2]) === "run";
           if (!runsHere) redirect = resolvedRun;
         } catch (error) {
           if (errorCode(error) !== "NO_ITX_EXPRESSION_MATCH") throw error;
