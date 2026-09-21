@@ -671,12 +671,10 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
     ingressRouting: { type: "subdomains", hostname: "iterate2.app" },
     // Each apex is its project's: the config worker's `fetch` serves it. Every zone must exist in
     // the prd account for the route to deploy; the DNS record appears on `ensure-resources --env prd`.
-    temporaryCustomHostnames: {
-      "iterate2.com": "iterate",
-      "garple.com": "garple",
-      "lispwoso.com": "lispwoso",
-      "templestein.com": "templestein",
-    },
+    // garple.com, lispwoso.com and templestein.com return here once their zones exist in the prd
+    // account: wrangler refuses a route on a zone the account lacks (code 10083), and that refusal
+    // failed every prd deploy after #2759 without rolling the upload back.
+    temporaryCustomHostnames: { "iterate2.com": "iterate" },
     artifactsNamespace: "project-worker-prd-repos",
     resourceNamePrefix: "project-worker-prd",
     resources: {
