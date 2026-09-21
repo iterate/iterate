@@ -69,10 +69,10 @@ test("a malformed pager header is a 400; a well-formed one attaches the pager AN
   // The pager is attached, the key is present, and its rule exists — nothing else was called.
   expect((await transportState(ctx)).rpcStubPagers).toBe(1);
   expect(await presence(ctx)).toEqual(["itx.k1"]);
-  expect(await ruleAt(ctx, "itx.k1")).toEqual({
+  expect(await ruleAt(ctx, "itx.k1")).toMatchObject({
     match: "itx.k1",
-    target: "itx.rpcStubs.get('itx.k1')", // stored as the lender spelled it (it resolves through the platform row)
-    origin: "context",
+    target: "itx.rpcStubs.get('itx.k1')", // stored as the lender spelled it (it resolves through the implicit row)
+    context: "/",
   });
   ok.webSocket!.close(1000, "test done");
 });

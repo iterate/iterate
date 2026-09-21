@@ -33,7 +33,7 @@
 // sweep's PR lookups), PREVIEW_WRANGLER (a wrangler binary instead of the pinned one).
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -565,12 +565,27 @@ async function waitFor(url: string, ok: (status: number, text: string) => boolea
   throw new Error(`${url} never answered as expected`);
 }
 
+/** A laptop deploy bundles whatever node_modules holds. After a merge that changed pnpm-lock.yaml a
+ *  stale install ships the OLD dependency — 2026-09-21 a since-removed pnpm patch was missing from
+ *  the bundle and every session the preview minted was refused at /api. CI runs `pnpm install`
+ *  first; a laptop is told to. */
+function assertFreshInstall() {
+  const root = path.resolve(ROOT, "../..");
+  const lockfile = statSync(path.join(root, "pnpm-lock.yaml")).mtimeMs;
+  const installed = statSync(path.join(root, "node_modules", ".modules.yaml"), {
+    throwIfNoEntry: false,
+  })?.mtimeMs;
+  if (installed === undefined || lockfile > installed)
+    throw new Error("pnpm-lock.yaml is newer than node_modules: run `pnpm install` first");
+}
+
 async function deployPreview(
   previewName: string,
   prNumber: string | undefined,
   branch: string,
   apps: StartApp[],
 ) {
+  assertFreshInstall();
   // The apps' vite builds run beside os-next's build, the D1 and the wrangler install.
   const appBuilds = Promise.all(apps.map((app) => buildStartApp(app, "preview")));
   await build();

@@ -88,15 +88,15 @@ export type ItxEntrypointService = { get(): ItxScope };
  *  facets pass the Workers-RPC STUB of a context (every dotted step pipelined; a property there is a
  *  promise), which no plain-promise interface can name — so the constraint is this, not `ItxScope`. */
 export type ProcessorScope = {
-  builtins: {
-    append(...events: StreamEventInput[]): Promise<unknown>;
-    readEvents(afterOffset?: number, limit?: number): Promise<unknown>;
-    /** The engine's claim on the context's alarm (processor.ts rule 3): "come back by `at`", or null. */
-    processors: { claim(name: string, at: number | null): Promise<unknown> };
-    /** Another context of the project — where `appendTo` lands: its handle, whose `invoke` takes the
-     *  steps relative to `itx` (an InvokeHandle on the platform's stub; the declared API elsewhere). */
-    cd(path: string): { invoke(call: unknown): unknown };
-  };
+  append(...events: StreamEventInput[]): Promise<unknown>;
+  readEvents(afterOffset?: number, limit?: number): Promise<unknown>;
+  /** The engine's claim on the context's alarm (processor.ts rule 3): "come back by `at`", or null. */
+  processors: { claim(name: string, at: number | null): Promise<unknown> };
+  /** Another context of the project — where `appendTo` lands — by its dotted surface (`.append`),
+   *  which the platform's handle and a loaded worker's alike answer. Through the table like every
+   *  other word here: a loaded processor's `cd` goes down only (the app wall), the platform's own
+   *  go anywhere. */
+  cd(path: string): { append(...events: StreamEventInput[]): Promise<unknown> };
 };
 
 /** THE SCOPE ACCESSOR a host hands its processor: one pipelined round trip on the context's itx,
@@ -160,7 +160,10 @@ export abstract class StreamProcessorDurableObject<
           ItxEntrypoint: (options: { props: object }) => ItxEntrypointService;
         }
       ).ItxEntrypoint({
-        props: { iterateContextName: this.ctx.props.iterateContextName },
+        // PLATFORM: this worker's own class, minted from its own exports — the full handle, the fixed
+        // point spellable, `cd` free to go up. A LOADED class never reaches this branch (it has
+        // `env.ITX`, baked in by the loader, and its own module's exports).
+        props: { iterateContextName: this.ctx.props.iterateContextName, platform: true },
       })) as unknown as {
       get(): Scope;
     };
@@ -170,22 +173,22 @@ export abstract class StreamProcessorDurableObject<
   #engineBuiltOnFirstUse?: ProcessorEngine<State>;
   get #engine(): ProcessorEngine<State> {
     return (this.#engineBuiltOnFirstUse ??= new ProcessorEngine(this.processor, {
-      // THE PLATFORM NEVER SPELLS A SHORT NAME: the engine's own emits, catch-up and gap repair go to
-      // the fixed point, `itx.builtins.…` — a context's rows (a whole-context override, a mask at
-      // `itx.append`) redirect the processor's calls to `itx.…`, never its log traffic.
+      // The engine's own emits, catch-up and gap repair are the CONTEXT ROOTS `append`, `readEvents`,
+      // `processors.claim` — implicit in every context (itx-expression-rewriting.ts rule 3), so they
+      // resolve to this log with no row and no hop; a row at `itx.append` is the OWNER's deliberate
+      // wall (a jailed processor halts visibly), never a loaded worker's — the fixed point is not a
+      // loaded worker's word. `appendTo` is `cd` through the same table: a first-party saga (the
+      // platform's mint) reaches `/`; a loaded processor's `cd` goes down only.
       stream: {
         // A stub scope's answers are pipelined shapes by type and plain data on the wire (the
         // engine awaits them): the engine's own types, asserted.
         append: (...events) =>
-          this.withItx((itx) => itx.builtins.append(...events)) as Promise<StreamEvent[]>,
+          this.withItx((itx) => itx.append(...events)) as Promise<StreamEvent[]>,
         appendTo: (path, ...events) =>
-          this.withItx((itx) => itx.builtins.cd(path).invoke([["append", ...events]])) as Promise<
-            StreamEvent[]
-          >,
+          this.withItx((itx) => itx.cd(path).append(...events)) as Promise<StreamEvent[]>,
         read: (after, limit) =>
-          this.withItx((itx) => itx.builtins.readEvents(after, limit)) as Promise<StreamPage>,
-        claim: (at) =>
-          this.withItx((itx) => itx.builtins.processors.claim(this.ctx.props.name, at)),
+          this.withItx((itx) => itx.readEvents(after, limit)) as Promise<StreamPage>,
+        claim: (at) => this.withItx((itx) => itx.processors.claim(this.ctx.props.name, at)),
       },
       storage: new ReduceCheckpointTable(this.ctx.storage.sql),
     }));

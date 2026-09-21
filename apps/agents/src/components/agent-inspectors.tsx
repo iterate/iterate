@@ -252,8 +252,8 @@ function ResponseView({
   outcome: LlmTrace["outcome"];
   onInspect: (next: Inspected) => void;
   scriptExecutionId: string | undefined;
-  /** The script the loop ran from this response — a codemode action, or the plain-response handler
-   *  (`itx.chat.sendMessage(...)`) for a bare reply. Shown when the raw text carries no tag of its own. */
+  /** The script the loop ran from this response — a codemode action. Shown when the raw text carries
+   *  no tag of its own (a bare reply is appended directly by the loop and runs nothing). */
   derivedScriptCode: string | undefined;
 }) {
   const streaming = Boolean(liveStep);

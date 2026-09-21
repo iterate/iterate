@@ -145,21 +145,26 @@ describe("ProjectProcessor — the reduce", () => {
       events: [
         {
           type: "events.iterate.com/project/mcp-connection-created",
-          payload: { grantId: "grant_a", path: "/mcp/inbound/grant_a" },
+          payload: { grantId: "grant_a", path: "/mcp/inbound/grants/grant_a" },
         },
         {
           type: "events.iterate.com/project/mcp-connection-created",
-          payload: { grantId: "grant_a", path: "/mcp/inbound/grant_a" },
+          payload: { grantId: "grant_a", path: "/mcp/inbound/grants/grant_a" },
         },
         {
           type: "events.iterate.com/project/mcp-connection-created",
           payload: { grantId: "admin", path: "/mcp/inbound/admin" },
         },
+        // the connection's context moved: the row follows the path, its birth stays the first one
+        {
+          type: "events.iterate.com/project/mcp-connection-created",
+          payload: { grantId: "grant_a", path: "/mcp/inbound/grants/moved/grant_a" },
+        },
       ],
       state: {
         ...empty,
         mcpConnections: {
-          grant_a: { path: "/mcp/inbound/grant_a", createdAt: expect.any(String) },
+          grant_a: { path: "/mcp/inbound/grants/moved/grant_a", createdAt: expect.any(String) },
           admin: { path: "/mcp/inbound/admin", createdAt: expect.any(String) },
         },
       },

@@ -528,7 +528,7 @@ test("console and project browsers use the same CIMD flow and independent grants
       ),
     ).toEqual({
       projectId: browserA.id,
-      path: expect.stringMatching(/^\/mcp\/inbound\/grant_/), // the token's own connection context, named by its grant (mcp.ts)
+      path: expect.stringMatching(/^\/mcp\/inbound\/grants\/[A-Za-z0-9_-]{16}$/), // the token's own connection context, named by its grant (mcp.ts)
       projectSlug: "browser-a",
       projectUrl: "https://browser-a.projects.test/",
     });

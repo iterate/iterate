@@ -36,12 +36,24 @@ export type WaitForEventFilter = {
   timeoutMs?: number;
 };
 
-/** One row of `rewriteRules.list()`: a context row (`target` a string, or `null` for a mask) or a
- *  platform row. */
+/** The `rewrite-rule-configured` event's payload — what `provide` takes, what `itx.append` writes
+ *  durably: make `match` mean `target` (an expression, or `null` to deny). `description` is the one
+ *  line a model reads for the name; it rides the row into `rewriteRules.list()`. */
+export type RewriteRuleConfigured = {
+  match: ItxExpressionInput;
+  target: ItxExpressionInput | null;
+  /** What the name means here, in one line (≤ 500 chars). */
+  description?: string;
+};
+
+/** One row of `rewriteRules.list()` — the tree a context can spell. `context` is the path the row
+ *  was read from: this context for its own rows and its implicit rows, the target context for the
+ *  rows a bare hop row (`itx ⇒ itx.builtins.cd(path)`) reaches. A mask lists as `target: null`. */
 export type RewriteRuleListEntry = {
   match: string;
   target: string | null;
-  origin: "platform" | "context";
+  description?: string;
+  context: string;
 };
 
 /** One row of `subscriptions.list()` / `processors.list()`. */
@@ -72,33 +84,18 @@ export interface IterateContextApi {
   invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown>;
   /** Another context of this project, by path (`..` and `/` allowed; the global namespace is not). */
   cd(path: string): IterateContextApi;
-  /** The fixed point every call rewrites TO: the physical roots, never a rule's. */
-  builtins: {
-    append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-    readEvents(
-      afterOffset?: number,
-      limit?: number,
-      options?: { includeEphemeral?: boolean },
-    ): Promise<StreamPage>;
-    /** Durable batches appended after a deadline (`afterMs`), at an instant (`at`) or on an interval
-     *  (`everyMs`); a key set again is replaced; a receipt cancels exactly the definition it names. */
-    schedules: {
-      set(
-        input: {
-          key: string | [string, string];
-          when: { at: string } | { afterMs: number } | { everyMs: number };
-          events: StreamEventInput[];
-        },
-        options?: { idempotencyKey?: string },
-      ): Promise<ScheduleReceipt>;
-      cancel(schedule: string | [string, string] | ScheduleReceipt): Promise<StreamEvent[]>;
-    };
-    /** A hosted processor's claim on this context's alarm: "revive me by `at`" (a facet with a
-     *  `runInBackground` attempt in flight), or `null` to release it. */
-    processors: { claim(name: string, at: number | null): Promise<void> };
-    /** Another context of the project, physically — its handle (`invoke` takes steps relative to
-     *  `itx`): where a processor's `appendTo` lands. */
-    cd(path: string): InvokeHandle;
+  /** Durable batches appended after a deadline (`afterMs`), at an instant (`at`) or on an interval
+   *  (`everyMs`); a key set again is replaced; a receipt cancels exactly the definition it names. */
+  schedules: {
+    set(
+      input: {
+        key: string | [string, string];
+        when: { at: string } | { afterMs: number } | { everyMs: number };
+        events: StreamEventInput[];
+      },
+      options?: { idempotencyKey?: string },
+    ): Promise<ScheduleReceipt>;
+    cancel(schedule: string | [string, string] | ScheduleReceipt): Promise<StreamEvent[]>;
   };
   whoami():
     | { projectId: string; path: string; projectSlug?: string; projectUrl?: string }
@@ -117,9 +114,11 @@ export interface IterateContextApi {
     delete(key: string): Promise<{ ok: true }>;
     list(prefix?: string): Promise<{ keys: string[] }>;
   };
+  /** The table this context resolves against, described — the tree a model reads. `list()` follows a
+   *  bare hop row into the context it names (a Durable Object hop, hence async). */
   rewriteRules: {
-    list(): RewriteRuleListEntry[];
-    get(match: string): RewriteRuleListEntry | null;
+    list(): Promise<RewriteRuleListEntry[]>;
+    get(match: string): Promise<RewriteRuleListEntry | null>;
     resolve(call: ItxExpressionInput): string[];
   };
   facets: { get(name: string, spec?: FacetSpec): FacetHandle };
@@ -134,6 +133,9 @@ export interface IterateContextApi {
     ): Promise<{ name: string }>;
     disable(name: string): Promise<void>;
     list(): SubscriptionListEntry[];
+    /** A hosted processor's claim on this context's alarm: "revive me by `at`" (a facet with a
+     *  `runInBackground` attempt in flight), or `null` to release it. */
+    claim(name: string, at: number | null): Promise<void>;
   };
   workers: {
     get(spec: {
@@ -151,7 +153,10 @@ export interface IterateContextApi {
     consumes?: string[];
     afterOffset?: number;
   }): Promise<{ [Symbol.dispose](): void }>;
-  /** A rewrite rule of this context: `match` ⇒ `target` (an expression, or null for a mask). */
+  /** A rewrite rule of this context, session-scoped (the handle's dispose removes it): the event's
+   *  payload `{ match, target, description? }`, or the shorthand `(match, target)`. `target` is an
+   *  expression, or null to deny. The durable spelling is the same payload through `itx.append`. */
+  provide(input: RewriteRuleConfigured): Promise<{ [Symbol.dispose](): void }>;
   provide(
     match: ItxExpressionInput,
     target: ItxExpressionInput | null,
@@ -162,9 +167,10 @@ export interface IterateContextApi {
   run(script: string): Promise<unknown>;
   /** The project's repos, workspaces and agents as domain objects — one shape each: `get(path)` is
    *  the entity's facet on the context at `path` (its verbs, plus the typed `append` on that
-   *  context), `list()` the project catalog, `create(path)` the creation saga on that path
-   *  (the processor row, the request, the terminal fact — created, or create-failed thrown),
-   *  `delete(path)` the deletion saga (the request, `deleted` cross-posted to `/`, the row disabled). */
+   *  context), `list()` the project catalog, `create(path)` the creation saga on that path (the
+   *  parent link the caller's context writes first, then the processor row, the request, the
+   *  terminal fact — created, or create-failed thrown), `delete(path)` the deletion saga (the
+   *  request, `deleted` cross-posted to `/`, the row disabled). A relative `path` means the caller's. */
   repos: {
     get(path: string): InvokeHandle;
     list(): Promise<{ path: string; createdAt: string }[]>;
@@ -184,7 +190,7 @@ export interface IterateContextApi {
     delete(path: string): Promise<{ path: string }>;
   };
   /** The MCP connections born under the project, by grant: each connection's context path
-   *  (`/mcp/inbound/<grantId>`, its transcript) and when it was born (the grant's first run). */
+   *  (`/mcp/inbound/grants/<grantId>`, its transcript) and when it was born (the grant's first run). */
   mcpConnections: {
     list(): Promise<{ grantId: string; path: string; createdAt: string }[]>;
   };

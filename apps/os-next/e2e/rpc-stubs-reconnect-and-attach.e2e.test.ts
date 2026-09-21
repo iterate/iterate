@@ -173,7 +173,10 @@ test.fails("an EXPRESSION handle disposed after another session provided the IDE
   await openItx(ctx).provide("itx.same", "itx.builtins.whoami"); // the second session, the same rule
   first[Symbol.dispose]();
   await sleep(1_000);
-  expect(await openItx(ctx).rewriteRules.get("itx.same")).toMatchObject({ origin: "context" });
+  expect(await openItx(ctx).rewriteRules.get("itx.same")).toMatchObject({
+    target: "itx.builtins.whoami",
+    context: "/",
+  });
 });
 
 // ── the attach carries the rule: the ORDER of two events on the shared offset sequence.

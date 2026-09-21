@@ -27,20 +27,21 @@
 import {
   normalizedItxExpression,
   type ItxExpressionInput,
-  itxExpressionStepName,
   parseItxExpressionPrefix,
   type ItxExpression,
-  type ItxExpressionPrefix,
   print,
 } from "iterate/next/expression";
 import { jsonEqual } from "iterate/next/lib";
 import { z } from "zod";
 import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/next/stream/processor";
+import type { RewriteRuleConfigured } from "iterate/next/api";
 import { normalizeIngressConfigured } from "../context/ingress.ts";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
-  isBuiltInRoot,
+  implicitRootsAt,
+  implicitRowBeneath,
   isBuiltInsRooted,
+  isImplicitRow,
   normalizeRewriteRuleConfigured,
   resolveItxExpression,
   type ItxExpressionRewriteRule,
@@ -101,9 +102,11 @@ export function facetSpecFromHostingTarget(
  *  as given and hosts nothing until it can. */
 function resolveThroughState(state: CoreState, target: ItxExpression): ItxExpression | undefined {
   try {
-    return resolveItxExpression(() => Object.values(state.itxExpressionRewriteRules), target).at(
-      -1,
-    );
+    return resolveItxExpression(
+      () => Object.values(state.itxExpressionRewriteRules),
+      target,
+      implicitRootsAt(state.projectId || "", state.path || "/"),
+    ).at(-1);
   } catch {
     return undefined;
   }
@@ -230,14 +233,6 @@ function withHostedFacetMarkersFollowingRules(
   return subscriptions ? { ...state, subscriptions } : state;
 }
 
-/** Does a `null` at `match` MASK a platform row (kept as a row) or merely delete (nothing beneath)?
- *  A bare `itx` masks everything; a match under a built-in root masks that root's calls it claims. */
-function matchShadowsAPlatformRow(match: ItxExpressionPrefix): boolean {
-  if (match.length === 1) return true;
-  const name = itxExpressionStepName(match[1]);
-  return isBuiltInRoot(name);
-}
-
 /** One subscription row (by name; a same-named configure REPLACES). */
 export type Subscription = {
   /** The target, parsed; its terminal is callable with (events, range). */
@@ -272,9 +267,12 @@ export type CoreState = {
   incarnation?: number;
   paused: { reason: string } | null;
   /** THE REWRITE-RULE TABLE, by canonical match (a map — no stack, no identity beyond the match): a
-   *  configured target REPLACES; `null` is kept as a MASK when the match shadows a platform row
-   *  (`itx.kv`, `itx.ai.run('gpt-5')`, bare `itx`) and DELETES otherwise; the platform-equivalent
-   *  target `itx.builtins.<match…>` DELETES the row (back to the platform row). */
+   *  configured target REPLACES; `null` is kept as a MASK where something beneath would answer the
+   *  match HERE (an implicit row: `itx.kv` and `itx.ai.run('gpt-5')` at the owner root, `itx.append`
+   *  anywhere, the bare `itx` — one row denies all; or a stored shorter row with a target: `itx.tool`
+   *  behind the parent link) and DELETES otherwise; `null` with `ifTarget` is a handle's
+   *  compare-and-set DELETE; a target equal to the implicit row it would restate deletes (the
+   *  default said as much), the same spelling elsewhere is a grant and is stored (rule 8). */
   itxExpressionRewriteRules: Record<string, ItxExpressionRewriteRule>;
   /** THE SUBSCRIPTIONS TABLE, by name. */
   subscriptions: Record<string, Subscription>;
@@ -334,7 +332,8 @@ function parseSubscriptionName(name: string): string {
 export const CoreContract = {
   slug: "core",
   // 11: the ingress target; 12: the scriptRuns table (`context/run-requested` / `run-settled`).
-  version: "12.0.0",
+  // 13: rule 8 — a null with `ifTarget` deletes; a physical target restates only an implicit row in effect.
+  version: "13.0.0",
   /** THE EVENTS THIS CONTRACT OWNS beyond its control events (the run events section above). */
   events: {
     "events.iterate.com/context/run-requested": {
@@ -447,11 +446,9 @@ export function reduceCoreEvent(
       const matchPrefix = parseItxExpressionPrefix(payload.match as ItxExpressionInput);
       const matchString = print(matchPrefix);
       const existing = state.itxExpressionRewriteRules[matchString];
-      // THE COMPARE-AND-SET of a handle's undo (`ifTarget`): the removal applies only while the row's
-      // target is still the one the handle wrote — a replacement owns the match now and a stale undo
-      // is a no-op. Decided inside the commit, so there is no read-then-append window.
-      if ("ifTarget" in payload && (!existing || !jsonEqual(existing.target, payload.ifTarget)))
-        return undefined;
+      // What has an implicit row HERE (rule 3) decides what a null and a platform-equivalent target
+      // mean (rule 8). The event carries the path; the state has it only after the birth record.
+      const implicitRoots = implicitRootsAt(state.projectId || "", event.path || state.path || "/");
       // Every change to the rules table re-derives the subscriptions' hosting markers through it.
       const withRule = (rule: ItxExpressionRewriteRule | undefined): CoreState => {
         const rules = draftOf(state.itxExpressionRewriteRules, draftTables);
@@ -463,21 +460,50 @@ export function reduceCoreEvent(
           draftTables,
         );
       };
+      // THE COMPARE-AND-SET of a handle's undo and a dead stub's census (`ifTarget`): a DELETE that
+      // applies only while the row's target is still the one the handle wrote — a replacement owns
+      // the match now and a stale undo is a no-op. Decided inside the commit, so there is no
+      // read-then-append window. Never a mask: a disposed session row leaves nothing behind.
+      if ("ifTarget" in payload)
+        return existing && jsonEqual(existing.target, payload.ifTarget)
+          ? withRule(undefined)
+          : undefined;
+      const description =
+        typeof payload.description === "string" ? { description: payload.description } : {};
       if (payload.target === null) {
-        // A MASK where a platform row lies beneath (rule 5: the call is refused, not defaulted);
-        // a plain deletion anywhere else (a mask there would equal a deletion and only grow the table).
-        if (!matchShadowsAPlatformRow(matchPrefix))
-          return existing ? withRule(undefined) : undefined;
-        if (existing && !existing.target) return undefined;
-        return withRule({ match: matchPrefix, target: null });
+        // A MASK where something beneath would answer the match — an implicit row, or a stored
+        // SHORTER row with a target (the parent link `itx ⇒ itx.builtins.cd('/agents/a')`, a granted
+        // root `itx.repos ⇒ …`): the call is refused, not answered. A plain deletion anywhere else
+        // (a mask there would equal a deletion and only grow the table).
+        const answeredBeneath =
+          implicitRowBeneath(matchPrefix, implicitRoots) ||
+          Object.values(state.itxExpressionRewriteRules).some(
+            (row) =>
+              !!row.target &&
+              row.match.length < matchPrefix.length &&
+              row.match.every((step, i) => jsonEqual(step, matchPrefix[i])),
+          );
+        if (!answeredBeneath) return existing ? withRule(undefined) : undefined;
+        if (existing && !existing.target && jsonEqual(existing.description, payload.description))
+          return undefined;
+        return withRule({ match: matchPrefix, target: null, ...description });
       }
       const target = normalizedItxExpression(payload.target as ItxExpressionInput, { holes: true }); // a target may hold `@` (rule 7); stored as the parsed form
-      // THE PLATFORM-EQUIVALENT TARGET (`itx.kv ⇒ itx.builtins.kv`, `itx ⇒ itx.builtins`) is "back to
-      // the platform row": the row is deleted, never stored — so an un-mask is one ordinary event and
-      // the table never carries a row that only restates the default.
-      if (jsonEqual(target, ["itx", "builtins", ...matchPrefix.slice(1)]))
+      // A target that restates THE implicit row of its match (`itx.kv ⇒ itx.builtins.kv` at the owner
+      // root, `itx ⇒ itx.builtins` there, `itx.append ⇒ itx.builtins.append` anywhere) is "back to
+      // the default": the row is deleted, never stored, so the table never carries a row that only
+      // repeats it — UNLESS a bare null stands, which took that default away: then the same spelling
+      // is the grant through the wall and is stored (so a jail writes its mask first, its grants
+      // after). At a child, a project root's physical target is a grant either way.
+      const wall =
+        matchPrefix.length > 1 && state.itxExpressionRewriteRules["itx"]?.target === null;
+      if (
+        !wall &&
+        isImplicitRow(matchPrefix, implicitRoots) &&
+        jsonEqual(target, ["itx", "builtins", ...matchPrefix.slice(1)])
+      )
         return existing ? withRule(undefined) : undefined;
-      return withRule({ match: matchPrefix, target });
+      return withRule({ match: matchPrefix, target, ...description });
     }
 
     case "events.iterate.com/stream/subscription-configured": {
@@ -637,9 +663,10 @@ export function normalizeControlEvent(event: StreamEventInput): StreamEventInput
       ),
     };
   if (event.type === "events.iterate.com/itx/rewrite-rule-configured") {
-    const payload = event.payload as {
-      match: ItxExpressionInput;
-      target: ItxExpressionInput | null;
+    // A literal event's payload is wire-fed JSON (`unknown`); `normalizeRewriteRuleConfigured` parses
+    // `match`, `target` and `ifTarget` and shape-checks `description`, throwing on anything else — the
+    // assertion only names the shape it is about to check.
+    const payload = event.payload as RewriteRuleConfigured & {
       ifTarget?: ItxExpressionInput | null;
     };
     // normalizeRewriteRuleConfigured parses match, target AND ifTarget into the stored (parsed)

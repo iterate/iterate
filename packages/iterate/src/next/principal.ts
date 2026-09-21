@@ -11,10 +11,18 @@ export type Principal = { actor: string; email?: string };
  *  `cd`, including calls without a principal. */
 export type Caller = {
   principal: Principal | null;
-  /** THE CONNECTION the principal acts through: the OAuth grant's id (`grant_…`) — one per connected
+  /** THE CONNECTION the principal acts through: the OAuth grant's id — one per connected
    *  client (a Claude Code install, a dash sign-in, a personal token), the same across every call it
    *  makes. Absent for the admin secret and the kernel. */
   grant?: string;
+  /** The context the call ORIGINATED at — stamped by the first `cd` hop and forwarded by every later
+   *  one, so a relative path resolved after a hop (`repos.get('./x')` answered at the root) still
+   *  means the caller's `./x`. Absent until a hop. */
+  path?: string;
+  /** Set when the caller is LOADED CODE — a worker, a facet, a script — holding a context through
+   *  `env.ITX`. Under it the resolver refuses the fixed point (`itx.builtins…`) and any `cd` above
+   *  the caller's own context on the INPUT expression; rewrites the owner wrote are never subject. */
+  app?: true;
   /** THE PLATFORM ORIGIN the caller reached the platform on (os-next platform-origin.ts) — what a
    *  public URL is composed from (`itx.url`, a signed file URL). Absent for a caller with none (a
    *  loaded worker's `env.ITX`, the kernel); the context then uses the last one it was reached on. */
@@ -26,6 +34,9 @@ export const ITX_PRINCIPAL_HEADER = "x-itx-principal";
 /** The grant's header beside it (the caller's `grant`), set and stripped exactly where the
  *  principal's is. */
 export const ITX_GRANT_HEADER = "x-itx-grant";
+/** The header a loaded worker's `env.ITX.fetch` sets on the Request it forwards, so the context's
+ *  fetch runs the call as app code; stripped from every Request that arrives from outside. */
+export const ITX_APP_HEADER = "x-itx-app";
 
 /** The event as the log stores it: `source.principal` and `source.grant` are the platform's — set
  *  from the admitted caller, client-supplied ones dropped (an anonymous session's event carries

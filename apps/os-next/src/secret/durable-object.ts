@@ -32,11 +32,8 @@ import {
   sessionSigningSecretOf,
   type AppConfigEnv,
 } from "../app-config.ts";
-import {
-  DurableObjectNameCodec,
-  resourceScope,
-  type ItxEntrypointScope,
-} from "../iterate-context.ts";
+import { resourceScope } from "../context/paths.ts";
+import { DurableObjectNameCodec, type ItxEntrypointScope } from "../iterate-context.ts";
 import {
   decryptSecretMaterial,
   encryptSecretMaterial,

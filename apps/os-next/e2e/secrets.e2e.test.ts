@@ -362,6 +362,8 @@ deployedOnly(
     // Dialled from a sibling context, never the secret's own: the caller's `#egress` forwards the
     // upgrade to the context at /secrets/shop (a fetch hop), and that one's to its facet.
     const dialler = itx.cd("/agents/dialler");
+    // A context merely cd-ed into is naked: the library roots reach it through the creator's link.
+    await dialler.provide("itx", "itx.builtins.cd('/')");
     expect(
       await dialler.invoke(
         `itx.connectToCapnweb(${JSON.stringify(wsUrl)}, ${options}).getPet('pet-1')`,
@@ -388,6 +390,10 @@ test("the catalog is the PROJECT's: a secret set from one nested context is list
   const root = openItx(projectId);
   const a = root.cd("/a");
   const b = root.cd("/b");
+  // nothing project-level is implicit below the root: each child reaches the catalog through the row
+  // its creator would have written — here the session writes the link itself
+  await a.provide("itx", "itx.builtins.cd('/')");
+  await b.provide("itx", "itx.builtins.cd('/')");
   const row = {
     path: "/secrets/shared",
     urls: ["https://api.example.com"],

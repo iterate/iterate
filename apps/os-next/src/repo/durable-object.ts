@@ -166,6 +166,31 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     return Object.hasOwn(files, path) ? files[path]! : null;
   }
 
+  /** Several files at once, each under the name a loaded worker's module map wants for it —
+   *  `readModules({ 'cap.js': 'apps/site/worker.js', 'site.js': 'apps/site/site.js' })` is a
+   *  no-build app's whole `source`, one call (a source expression yields ONE value, and the loader
+   *  takes the module map). A path that does not exist is a refusal, never a silent hole. */
+  async readModules(
+    modules: Record<string, string>,
+    options?: { commitOid: string },
+  ): Promise<Record<string, string>> {
+    await this.#created();
+    const revision = z
+      .object({ commitOid: z.string().regex(/^[a-f0-9]{40}$/) })
+      .optional()
+      .parse(options);
+    const { files } = await this.#fresh(revision?.commitOid);
+    const out: Record<string, string> = {};
+    for (const [moduleName, path] of Object.entries(
+      z.record(z.string(), z.string()).parse(modules),
+    )) {
+      if (!Object.hasOwn(files, path))
+        throw new Error(`readModules: no file at ${JSON.stringify(path)}`);
+      out[moduleName] = files[path]!;
+    }
+    return out;
+  }
+
   async listFiles(): Promise<{ commitOid: string | null; paths: string[] }> {
     await this.#created();
     const { tip, files } = await this.#fresh();

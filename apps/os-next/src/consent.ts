@@ -14,7 +14,8 @@ import {
   projectAddressOf,
   type IngressRouting,
 } from "iterate/next/project-ingress";
-import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./iterate-context.ts";
+import { DurableObjectNameCodec } from "./iterate-context.ts";
+import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import { type ConsentApproved } from "./account/contract.ts";
 import type { Env } from "./control-plane.ts";
 import { directory, type Org, type Project } from "./directory.ts";

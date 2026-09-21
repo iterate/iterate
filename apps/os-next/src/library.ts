@@ -25,7 +25,8 @@ import {
   walkStepsOnRpcStub,
   type ItxExpression,
 } from "iterate/next/expression";
-import { errorCode } from "iterate/next/lib";
+import { codedError, errorCode, resolveContextPath } from "iterate/next/lib";
+import type { Caller } from "iterate/next/principal";
 import type { EventInput, StreamEvent } from "iterate/next/stream/processor";
 import type { RunSettled } from "./stream/core-processor.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
@@ -74,7 +75,7 @@ import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
  *  more of itx — never by importing something else. */
 export type LibraryItx = Pick<
   BuiltInScope,
-  "append" | "waitForEvent" | "fetch" | "workers" | "cd" | "r2"
+  "append" | "waitForEvent" | "fetch" | "workers" | "cd" | "r2" | "builtins"
 >;
 
 /** The library's roots, exactly as the built-ins record spreads them in: each verb closed over ONE
@@ -89,10 +90,6 @@ export interface LibraryRoots {
    *  never re-run. JSON in, JSON out. A script bakes in its own values — an agent writes it whole
    *  (an alternative to a tool call), so `run` takes no arguments. */
   run(script: string): Promise<unknown>;
-  /** THE AGENT'S VOICE: `itx.chat.sendMessage(text)` appends a web-message-sent to THIS context —
-   *  the visible chat message. It is the default `plainResponse` handler, and an agent may call it
-   *  from inside a script for a mid-run update. Returns once the message is on the stream. */
-  chat: { sendMessage(message: string): Promise<{ ok: true }> };
   /** An MCP server over Streamable HTTP: `callTool(name, args)`, `listTools()`, and one method per
    *  tool whose name is a legal identifier. */
   connectToMcp(url: string, options?: McpConnectOptions): Promise<McpConnection>;
@@ -161,7 +158,7 @@ export interface LibraryRoots {
     delete(path: string): Promise<{ path: string }>;
   };
   /** THE MCP CONNECTIONS of the project: every grant whose connection context was born here (its
-   *  first run over MCP) — the context's path (`/mcp/inbound/<grantId>`, its transcript) and when.
+   *  first run over MCP) — the context's path (`/mcp/inbound/grants/<grantId>`, its transcript) and when.
    *  The project catalog's `mcpConnections`, folded from `project/mcp-connection-created` (mcp.ts
    *  cross-posts it to `/`). */
   mcpConnections: {
@@ -201,7 +198,7 @@ export type FileHandle = {
  *  of the repo's events on that context (`entityHandle`). */
 export type RepoFacet = Pick<
   RepoDurableObject,
-  "tip" | "readFile" | "listFiles" | "commitFiles" | "writeFile" | "log"
+  "tip" | "readFile" | "readModules" | "listFiles" | "commitFiles" | "writeFile" | "log"
 > & { append(...events: EventInput<typeof RepoContract>[]): Promise<StreamEvent[]> };
 /** What an agent handle's dotted members reach: the agent facet's own methods, and the typed
  *  `append` of the agent's events on that context. */
@@ -227,7 +224,18 @@ export type WorkspaceFacet = Pick<
 /** The library, built once per context: the verbs closed over one `itx`, memoizing the live
  *  connections the connectors open, and the one release door. Nothing is constructed here: a wake
  *  pays nothing for the library until a verb runs. */
-export function buildLibrary(itx: LibraryItx): {
+export function buildLibrary(
+  itx: LibraryItx,
+  deps: {
+    /** WHO is calling right now — read when a handle is MADE (a handle is a value that outlives the
+     *  call; its later dispatches arrive with no ambient caller), so a relative path (`./x` from a
+     *  child, answered at the root through its link) means the caller's, and a creation's parent
+     *  link names the caller's context. */
+    caller: () => Caller;
+    /** This context's path — a relative path's base when the caller carries none. */
+    path: string;
+  },
+): {
   roots: LibraryRoots;
   /** Whether the library holds an open SOCKET — a capnweb WebSocket session — the one kind of
    *  connection that keeps this actor resident (measured: like a borrowed stub), so the pins' release
@@ -255,15 +263,6 @@ export function buildLibrary(itx: LibraryItx): {
   return {
     roots: {
       run: (script) => runScript(itx, script),
-      chat: {
-        sendMessage: async (message) => {
-          await itx.append({
-            type: "events.iterate.com/agent/web-message-sent",
-            payload: { message },
-          });
-          return { ok: true as const };
-        },
-      },
       connectToMcp: (url, options) =>
         memoized(["mcp", url, options], false, () => connectToMcp(itx, url, options)),
       connectToOpenApi: (specOrUrl, options) =>
@@ -280,38 +279,61 @@ export function buildLibrary(itx: LibraryItx): {
       // (`projectFacet`): the platform's own `<Entity>CollectionRpcTarget`, whose `list` and
       // `create` answer exactly these shapes — ours, so the wire's copy is asserted, not re-validated.
       repos: {
-        get: (path) => entityHandle(itx, path, "repo", RepoContract) as InvokeHandle & RepoFacet,
+        get: (path) =>
+          entityHandle(itx, path, "repo", RepoContract, deps.caller(), deps.path) as InvokeHandle &
+            RepoFacet,
         list: () =>
           projectFacet(itx, [["repos"], ["list"]]) as Promise<
             { path: string; createdAt: string }[]
           >,
-        create: (path) =>
-          projectFacet(itx, [["repos"], ["create", path]]) as Promise<{ path: string }>,
-        delete: (path) =>
-          projectFacet(itx, [["repos"], ["delete", path]]) as Promise<{ path: string }>,
+        create: (path) => createEntity(itx, path, "repos", deps.caller(), deps.path),
+        delete: async (path) =>
+          projectFacet(itx, [
+            ["repos"],
+            ["delete", resolveContextPath(originOf(deps.caller(), deps.path), path)],
+          ]) as Promise<{ path: string }>,
       },
       workspaces: {
         get: (path) =>
-          entityHandle(itx, path, "workspace", WorkspaceContract) as InvokeHandle & WorkspaceFacet,
+          entityHandle(
+            itx,
+            path,
+            "workspace",
+            WorkspaceContract,
+            deps.caller(),
+            deps.path,
+          ) as InvokeHandle & WorkspaceFacet,
         list: () =>
           projectFacet(itx, [["workspaces"], ["list"]]) as Promise<
             { path: string; createdAt: string }[]
           >,
-        create: (path) =>
-          projectFacet(itx, [["workspaces"], ["create", path]]) as Promise<{ path: string }>,
-        delete: (path) =>
-          projectFacet(itx, [["workspaces"], ["delete", path]]) as Promise<{ path: string }>,
+        create: (path) => createEntity(itx, path, "workspaces", deps.caller(), deps.path),
+        delete: async (path) =>
+          projectFacet(itx, [
+            ["workspaces"],
+            ["delete", resolveContextPath(originOf(deps.caller(), deps.path), path)],
+          ]) as Promise<{ path: string }>,
       },
       agents: {
-        get: (path) => entityHandle(itx, path, "agent", AgentContract) as InvokeHandle & AgentFacet,
+        get: (path) =>
+          entityHandle(
+            itx,
+            path,
+            "agent",
+            AgentContract,
+            deps.caller(),
+            deps.path,
+          ) as InvokeHandle & AgentFacet,
         list: () =>
           projectFacet(itx, [["agents"], ["list"]]) as Promise<
             { path: string; createdAt: string }[]
           >,
-        create: (path) =>
-          projectFacet(itx, [["agents"], ["create", path]]) as Promise<{ path: string }>,
-        delete: (path) =>
-          projectFacet(itx, [["agents"], ["delete", path]]) as Promise<{ path: string }>,
+        create: (path) => createEntity(itx, path, "agents", deps.caller(), deps.path),
+        delete: async (path) =>
+          projectFacet(itx, [
+            ["agents"],
+            ["delete", resolveContextPath(originOf(deps.caller(), deps.path), path)],
+          ]) as Promise<{ path: string }>,
       },
       files: {
         get: (path) => fileHandle(itx, path),
@@ -396,7 +418,7 @@ export async function executeScript(itx: LibraryItx, code: string): Promise<unkn
   // TWO dotted calls, never one chain: the handle's dotted surface dispatches at the first call, and
   // in-process the record hands the worker's handle back as a VALUE (a genuine RpcTarget), so `run`
   // is its own dispatch on that value — exactly what a remote holder of the same handle would do.
-  const worker = (await itx.workers.get({ source: runScriptModule(code) })) as unknown as {
+  const worker = (await itx.builtins.workers.get({ source: runScriptModule(code) })) as unknown as {
     run(): Promise<unknown>;
   };
   return worker.run();
@@ -412,7 +434,10 @@ export function runScript(itx: LibraryItx, script: unknown): Promise<unknown> {
 }
 
 async function requestAndAwaitRun(itx: LibraryItx, script: string): Promise<unknown> {
-  const [requested] = await itx.append({
+  // The request and the wait are the KERNEL's own log traffic, spelled at the fixed point: a context's
+  // rows say what its code may spell, never whether the runner may write its request (a jail's bare
+  // null must not wall the platform's own plumbing).
+  const [requested] = await itx.builtins.append({
     type: "events.iterate.com/context/run-requested",
     payload: { code: script },
   });
@@ -424,7 +449,7 @@ async function requestAndAwaitRun(itx: LibraryItx, script: string): Promise<unkn
   for (;;) {
     let settled;
     try {
-      settled = await itx.waitForEvent({
+      settled = await itx.builtins.waitForEvent({
         type: "events.iterate.com/context/run-settled",
         afterOffset,
         timeoutMs: 120_000,
@@ -459,11 +484,70 @@ async function requestAndAwaitRun(itx: LibraryItx, script: string): Promise<unkn
 // processor row, `<entity>/create-requested`, then `<entity>/created` (cross-posted to `/` by the
 // entity's processor, which provisions at head from state) or `<entity>/create-failed`, thrown.
 
+/** The context a handle's relative paths mean, and a creation's CREATOR: the caller's originating
+ *  context (`Caller.path`, stamped by the first hop — `./x` from a child, answered at the root
+ *  through its link, is the child's `./x`), else this one (`ownPath`). */
+const originOf = (caller: Caller, ownPath: string): string => caller.path || ownPath;
+
+/** THE CREATION, from the caller's context: the path resolved against it, THE PARENT LINK written on
+ *  the new context first — the creator's act (itx-expression-rewriting.ts rule 3): everything the
+ *  new context does not claim, its creator answers; absolute, so the row reads plainly; idempotent
+ *  on the creator; none when a context creates on itself (a self-hop is a loop) — then the
+ *  collection's saga on the `project` facet (`<entity>/create-requested` … `created`). A created
+ *  entity answers at once there, so calling this again is how an entity born before the link
+ *  existed gets one. */
+async function createEntity(
+  itx: LibraryItx,
+  path: string,
+  collection: "repos" | "workspaces" | "agents",
+  caller: Caller,
+  ownPath: string,
+): Promise<{ path: string }> {
+  const creator = originOf(caller, ownPath);
+  const absolute = resolveContextPath(creator, path);
+  // A context never creates its own ancestor: the link it would write there points back down at
+  // itself — a two-context cycle — and a child never holds more than its creator.
+  if (creator !== absolute && creator.startsWith(absolute === "/" ? "/" : `${absolute}/`))
+    throw codedError(
+      "FORBIDDEN",
+      `${collection}.create(${JSON.stringify(path)}) from ${JSON.stringify(creator)}: a context does not create its own ancestor`,
+    );
+  if (creator !== absolute) {
+    // The link is the creator's DEFAULT, written only while the context has no bare `itx` row: a
+    // context already linked (or jailed) by whoever created it first is never re-pointed by a later
+    // `create(path)` from somewhere else — that would cut it off from the surface its owner gave it.
+    const context = await itx.builtins.cd(absolute);
+    const bare = await context.invoke(["builtins", "rewriteRules", ["get", "itx"]]);
+    if (!bare)
+      await context.invoke([
+        [
+          "append",
+          {
+            type: "events.iterate.com/itx/rewrite-rule-configured",
+            payload: {
+              match: "itx",
+              target: ["itx", "builtins", ["cd", creator]],
+              description: "everything this context does not claim, its creator answers",
+            },
+            idempotencyKey: `itx@${creator}`,
+          },
+        ],
+      ]);
+  }
+  return projectFacet(itx, [[collection], ["create", absolute]]) as Promise<{ path: string }>;
+}
+
+// THE LIBRARY'S HOPS ARE ADDRESSING, spelled at the fixed point (`itx.builtins.cd`): a physical grant
+// at a jailed context (`itx.repos ⇒ itx.builtins.repos` beside the bare `null`) runs these verbs
+// THERE, where `itx.cd` is masked — the verbs must still reach the entity's context and the catalog
+// at `/`. What a context may reach OF the library its table says; how the library gets there is not
+// the table's business (the same rule as the runner's own log traffic, below).
+
 /** ONE dispatch on the `project` facet at `/` — the catalog host, where the collections live. */
 async function projectFacet(itx: LibraryItx, steps: ItxExpression): Promise<unknown> {
   // TWO dotted calls, never one chain (the `run` section says why): the root's handle first —
   // in-process a VALUE — then the facet chain relative to it.
-  const context = await itx.cd("/");
+  const context = await itx.builtins.cd("/");
   return context.invoke(["facets", ["get", "project"], ...steps]);
 }
 
@@ -486,11 +570,13 @@ function entityHandle(
   path: string,
   name: string,
   contract: EntityContract,
+  caller: Caller,
+  ownPath: string,
 ): InvokeHandle {
   return new InvokeHandle(async (itxExpressionSteps) => {
     // TWO dotted calls, never one chain (the `run` section says why): the sibling's handle first —
-    // in-process a VALUE — then the chain relative to it.
-    const context = await itx.cd(path);
+    // in-process a VALUE — then the chain relative to it. The path means the CALLER's `./x`.
+    const context = await itx.builtins.cd(resolveContextPath(originOf(caller, ownPath), path));
     const [first, ...rest] = itxExpressionSteps;
     if (Array.isArray(first) && first[0] === "append" && rest.length === 0) {
       const [, ...events] = first;

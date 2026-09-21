@@ -8,7 +8,7 @@ import { DurableObjectNameCodec } from "./iterate-context.ts";
 import type { Authorization } from "./oauth.ts";
 
 // MCP uses the same verified authorization as Cap’n Web. It exposes ONE tool, `run`: a script
-// evaluated under that principal in THE CONNECTION'S OWN CONTEXT of a project — `/mcp/inbound/<grantId>`,
+// evaluated under that principal in THE CONNECTION'S OWN CONTEXT of a project — `/mcp/inbound/grants/<grantId>`,
 // the grant being the connection (the 2026-07-28 revision is per-request: no session id, and the
 // same OAuth grant is what every call of one client carries) — so every script a client ever ran is
 // that context's log, `context/run-requested` + `run-settled` stamped with who and through which
@@ -55,7 +55,7 @@ async function projectOfToolCall(
  *  scripts run. Read once per request from the directory, like the tool's own project check. */
 async function serverInstructions(d1Directory: Directory, reach: Reach): Promise<string> {
   const where = [
-    "One tool, `run`: a script — the text of `async (itx) => { … }` — evaluated in YOUR CONNECTION'S context of a project, `/mcp/inbound/<your grant>`.",
+    "One tool, `run`: a script — the text of `async (itx) => { … }` — evaluated in YOUR CONNECTION'S context of a project, `/mcp/inbound/grants/<your grant>`.",
     "`itx.kv`, `itx.files`, `itx.repos`, `itx.agents`, `itx.secrets` are the project's wherever a script runs; `itx.append` / `itx.readEvents` / `itx.provide` are your connection's own context; the project root is `itx.cd('/')`.",
     "Every run is on your connection's log (`context/run-requested` / `run-settled`), attributed to you and this grant.",
   ];
@@ -88,7 +88,7 @@ async function buildServer(
   const { reach, principal, grant } = authorization;
   // THE CONNECTION: the grant (a personal token, a Claude Code sign-in); the admin secret has none,
   // so every admin client shares one context per project.
-  const connectionPath = `/mcp/inbound/${grant?.grantId ?? "admin"}`;
+  const connectionPath = grant ? `/mcp/inbound/grants/${grant.grantId}` : "/mcp/inbound/admin";
   const caller = { principal, grant: grant?.grantId, platformOrigin };
   const mcpServer = new McpServer(
     { name: "control-plane", version: "0.1.0" },
@@ -100,7 +100,7 @@ async function buildServer(
     {
       title: "Run a script",
       description:
-        "Run a script in your connection's context of a project (`/mcp/inbound/<your grant>`), under this token's principal — THE way to do work in a project over MCP. The script is the text of an async function of one parameter, `itx`: `async (itx) => { ... }` — a coding agent's whole output, an alternative to a tool call, its values baked in (no arguments). It is evaluated once in a confined worker with `itx` bound to that context (`itx.kv`, `itx.files`, `itx.repos`, `itx.agents` are the project's; `itx.append`/`itx.readEvents` are the connection's own log; the project root is `itx.cd('/')`) and returns a JSON-serializable value. Every run is logged there, attributed to you. This is `itx.run`.",
+        "Run a script in your connection's context of a project (`/mcp/inbound/grants/<your grant>`), under this token's principal — THE way to do work in a project over MCP. The script is the text of an async function of one parameter, `itx`: `async (itx) => { ... }` — a coding agent's whole output, an alternative to a tool call, its values baked in (no arguments). It is evaluated once in a confined worker with `itx` bound to that context (`itx.kv`, `itx.files`, `itx.repos`, `itx.agents` are the project's; `itx.append`/`itx.readEvents` are the connection's own log; the project root is `itx.cd('/')`) and returns a JSON-serializable value. Every run is logged there, attributed to you. This is `itx.run`. `await itx.rewriteRules.list()` is the tree — every capability this context can spell, each with a one-line description and the context it comes from; read it first.",
       inputSchema: fromJsonSchema(
         {
           type: "object",
@@ -142,7 +142,8 @@ async function buildServer(
               "append",
               {
                 type: "events.iterate.com/project/mcp-connection-created",
-                idempotencyKey: `mcp-connection-created/${grant?.grantId ?? "admin"}`,
+                // one row per connection AND path: a connection whose context moved is born again there
+                idempotencyKey: `mcp-connection-created${connectionPath}`,
                 payload: { grantId: grant?.grantId ?? "admin", path: connectionPath },
               },
             ],

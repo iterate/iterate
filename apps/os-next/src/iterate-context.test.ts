@@ -12,7 +12,8 @@ vi.mock("cloudflare:workers", () => ({
   RpcPromise: class {},
   RpcProperty: class {},
 }));
-import { DurableObjectNameCodec, resourceScope } from "./iterate-context.ts";
+import { DurableObjectNameCodec } from "./iterate-context.ts";
+import { resourceScope } from "./context/paths.ts";
 
 // ── durable object names ── the codec's projectId charset gate, applied at parse:
 // `[A-Za-z0-9_-]` only, because a ":" in a projectId would breach the `${projectId}:` kv/secret

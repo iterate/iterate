@@ -105,7 +105,7 @@ describe("the library", () => {
     for (const { verb, connect, handshake } of verbs)
       test(`${verb}: two connects with the same arguments are ONE connection — the same object back, one handshake`, async () => {
         const { itx, seen } = remotes();
-        const { roots } = buildLibrary(itx);
+        const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" });
         const a = await connect(roots);
         const b = await connect(roots);
         expect(b).toBe(a);
@@ -114,7 +114,10 @@ describe("the library", () => {
 
     test("releaseConnections closes what it holds (MCP: the session's DELETE) and forgets it; the next connect is a fresh handshake, a new object, and works", async () => {
       const { itx, seen } = remotes();
-      const { roots, releaseConnections } = buildLibrary(itx);
+      const { roots, releaseConnections } = buildLibrary(itx, {
+        caller: () => ({ principal: null }),
+        path: "/",
+      });
       const a = await roots.connectToMcp("https://mcp.example/");
       releaseConnections();
       await new Promise((r) => setTimeout(r, 10)); // the close rides a `.then` off the memoized promise
@@ -166,7 +169,10 @@ describe("the library", () => {
           return json({ jsonrpc: "2.0", id: body.id, result });
         },
       } as unknown as LibraryItx;
-      const { roots, releaseConnections } = buildLibrary(itx);
+      const { roots, releaseConnections } = buildLibrary(itx, {
+        caller: () => ({ principal: null }),
+        path: "/",
+      });
       const conn = await roots.connectToMcp("https://mcp.example/");
       releaseConnections();
       await new Promise((r) => setTimeout(r, 10)); // the close rides a `.then` off the memoized promise
@@ -211,7 +217,10 @@ describe("the library", () => {
           return json({ jsonrpc: "2.0", id: body.id, result });
         },
       } as unknown as LibraryItx;
-      const { roots, releaseConnections } = buildLibrary(itx);
+      const { roots, releaseConnections } = buildLibrary(itx, {
+        caller: () => ({ principal: null }),
+        path: "/",
+      });
       const conn = await roots.connectToMcp("https://mcp.example/"); // establishes s-1
       releaseConnections();
       await new Promise((r) => setTimeout(r, 10)); // closes s-1 (DELETE s-1)
@@ -247,7 +256,10 @@ describe("the library", () => {
         removeEventListener() {},
       };
       const itx = { fetch: async () => ({ status: 101, webSocket }) } as unknown as LibraryItx;
-      const { roots, releaseConnections } = buildLibrary(itx);
+      const { roots, releaseConnections } = buildLibrary(itx, {
+        caller: () => ({ principal: null }),
+        path: "/",
+      });
       await roots.connectToCapnweb("wss://ws.example/rpc");
       releaseConnections();
       await new Promise((r) => setTimeout(r, 10));
@@ -266,7 +278,7 @@ describe("the library", () => {
           return new Response("down", { status: 503 });
         },
       } as unknown as LibraryItx;
-      const { roots } = buildLibrary(itx);
+      const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" });
       await expect(roots.connectToMcp("https://mcp.example/")).rejects.toThrow(/503/);
       await expect(roots.connectToMcp("https://mcp.example/")).rejects.toThrow(/503/);
       expect(attempts).toBe(2);
@@ -274,7 +286,7 @@ describe("the library", () => {
 
     test("the memo is keyed by the options too, and two spellings of one options object are one key", async () => {
       const { itx, seen } = remotes();
-      const { roots } = buildLibrary(itx);
+      const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" });
       const a = await roots.connectToMcp("https://mcp.example/", { headers: { a: "1", b: "2" } });
       const b = await roots.connectToMcp("https://mcp.example/", { headers: { b: "2", a: "1" } });
       const c = await roots.connectToMcp("https://mcp.example/", { headers: { a: "other" } });
@@ -311,36 +323,40 @@ describe("run", () => {
     const appended: StreamEventInput[] = [];
     const waits: WaitForEventFilter[] = [];
     let ran = 0;
+    // The host is minted at the FIXED POINT (`itx.builtins.workers.get`), and the request and the wait
+    // are spelled there too (`itx.builtins.append` / `waitForEvent`): the runner's plumbing is the
+    // kernel's act, never subject to the context's table (a jail's bare null).
+    const workers = {
+      get: (spec: unknown) => {
+        loaded.push(spec);
+        return {
+          run: async (...args: unknown[]) => {
+            ran += 1;
+            return { calledWith: args.length }; // run() is called with NO arguments
+          },
+        };
+      },
+    };
+    const append = async (...events: StreamEventInput[]) => {
+      appended.push(...events);
+      const firstOffset = 10 + appended.length - events.length;
+      return events.map((event, i) => ({
+        ...event,
+        offset: firstOffset + i,
+        createdAt: "t",
+        path: "/",
+      }));
+    };
+    const waitForEvent = async (filter: WaitForEventFilter) => {
+      waits.push(filter);
+      const next = settlements.shift();
+      if (next === "timeout") throw codedError("WAIT_TIMEOUT", "no event");
+      if (!next) throw new Error("the test scripted no more settlements");
+      return next;
+    };
     const itx = {
       fetch: async () => new Response(null),
-      append: async (...events: StreamEventInput[]) => {
-        appended.push(...events);
-        const firstOffset = 10 + appended.length - events.length;
-        return events.map((event, i) => ({
-          ...event,
-          offset: firstOffset + i,
-          createdAt: "t",
-          path: "/",
-        }));
-      },
-      waitForEvent: async (filter: WaitForEventFilter) => {
-        waits.push(filter);
-        const next = settlements.shift();
-        if (next === "timeout") throw codedError("WAIT_TIMEOUT", "no event");
-        if (!next) throw new Error("the test scripted no more settlements");
-        return next;
-      },
-      workers: {
-        get: (spec: unknown) => {
-          loaded.push(spec);
-          return {
-            run: async (...args: unknown[]) => {
-              ran += 1;
-              return { calledWith: args.length }; // run() is called with NO arguments
-            },
-          };
-        },
-      },
+      builtins: { workers, append, waitForEvent },
     } as unknown as LibraryItx;
     return { itx, loaded, appended, waits, runs: () => ran };
   }
@@ -379,7 +395,9 @@ describe("run", () => {
       "timeout",
       settledAt(13, 10, { status: "succeeded", result: { n: 1 } }), // ours: the request landed at 10
     ]);
-    await expect(buildLibrary(itx).roots.run(script)).resolves.toEqual({ n: 1 });
+    await expect(
+      buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" }).roots.run(script),
+    ).resolves.toEqual({ n: 1 });
     expect(appended).toEqual([
       { type: "events.iterate.com/context/run-requested", payload: { code: script } },
     ]);
@@ -396,7 +414,11 @@ describe("run", () => {
     const { itx } = host([
       settledAt(11, 10, { status: "failed", error: "boom", failureKind: "interrupted" }),
     ]);
-    await expect(buildLibrary(itx).roots.run("async () => 1")).rejects.toMatchObject({
+    await expect(
+      buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" }).roots.run(
+        "async () => 1",
+      ),
+    ).rejects.toMatchObject({
       message: "boom",
       failureKind: "interrupted",
     });
@@ -1148,7 +1170,7 @@ const ALLOWED_RUNTIME_IMPORTS = new Set([
   "cloudflare:workers",
   "zod", // an npm package a userspace worker could bundle too — used to PARSE untrusted MCP responses
   "iterate/next/expression", // the codec — the package's, as a userspace worker would import it
-  "iterate/next/lib", // the error codes — in the SDK bundle every userspace worker gets
+  "iterate/next/lib", // the package's pure helpers (error codes, resolveContextPath) — in the SDK bundle every userspace worker gets
   // The entities' CONTRACTS — pure zod over `defineProcessorContract` (the SDK's), no stream, DO or
   // context runtime: the vocabulary a handle's typed `append` validates against, which a userspace
   // worker would import from the SDK just the same.

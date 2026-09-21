@@ -21,8 +21,10 @@
 //   ItxEntrypoint        — a loaded worker's WHOLE WORLD: `env.ITX.get()` and `globalOutbound`, both addressing the DO
 
 import { RpcTarget } from "capnweb";
+import { codedError, resolveContextPath } from "iterate/next/lib";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import {
+  InvokeHandle,
   canonicalItxExpressionPrefix,
   normalizedItxExpression,
   type ItxExpression,
@@ -30,10 +32,14 @@ import {
   print,
   installPrototypeInvokeFallback,
 } from "iterate/next/expression";
-import type { IterateContextApi } from "iterate/next/api";
-import { ITX_GRANT_HEADER, ITX_PRINCIPAL_HEADER, type Caller } from "iterate/next/principal";
+import type { IterateContextApi, RewriteRuleConfigured } from "iterate/next/api";
+import {
+  ITX_APP_HEADER,
+  ITX_GRANT_HEADER,
+  ITX_PRINCIPAL_HEADER,
+  type Caller,
+} from "iterate/next/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
-import { codedError } from "iterate/next/lib";
 import type { IterateContextDurableObject, Env } from "./iterate-context-durable-object.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
@@ -42,11 +48,9 @@ import {
   type ClientRpcStub,
   type IterateContextDurableObjectStub,
 } from "./context/rpc-stubs.ts";
-import {
-  normalizeRewriteRuleConfigured,
-  restoreRuleTarget,
-} from "./context/itx-expression-rewriting.ts";
+import { normalizeRewriteRuleConfigured } from "./context/itx-expression-rewriting.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
+import { GLOBAL_PROJECT_ID, PROJECT_ID } from "./context/paths.ts";
 import { SessionTeardown } from "./session.ts";
 
 export type IterateContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
@@ -157,6 +161,20 @@ export class IterateContextRpcTarget extends RpcTarget {
         "FORBIDDEN",
         "a global context is reached by identity (session.user, session.organizations), never by path",
       );
+    // LOADED CODE's `cd` is an expression through THIS context's table (`itx.cd ⇒ null` is a wall,
+    // and the resolver's app wall keeps it to self and descendants) — the dotted surface of the handle
+    // it gets back accumulates onto one `invoke`, exactly as the built-in `cd` root answers.
+    if (this.#caller.app)
+      return new InvokeHandle((steps) =>
+        // The proxy hands relative steps; a caller's own `.invoke("itx.whoami()")` is a whole call.
+        this.invoke([
+          "itx",
+          ["cd", path],
+          ...(typeof steps === "string" || steps[0] === "itx"
+            ? normalizedItxExpression(steps as ItxExpressionInput).slice(1)
+            : steps),
+        ]),
+      ) as unknown as IterateContextRpcTarget;
     const durableObjectAddress = DurableObjectNameCodec.address({
       projectId: this.#durableObjectAddress.projectId,
       path: resolveContextPath(this.#durableObjectAddress.path, path),
@@ -191,6 +209,8 @@ export class IterateContextRpcTarget extends RpcTarget {
       if (this.#caller.principal)
         headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(this.#caller.principal));
       if (this.#caller.grant) headers.set(ITX_GRANT_HEADER, this.#caller.grant);
+      headers.delete(ITX_APP_HEADER); // likewise this handle's, never the Request's own
+      if (this.#caller.app) headers.set(ITX_APP_HEADER, "1");
       if (this.#caller.platformOrigin)
         headers.set(ITX_PLATFORM_ORIGIN_HEADER, this.#caller.platformOrigin);
       return this.#durableObject.fetch(new Request(terminalFetch.request, { headers }));
@@ -209,14 +229,42 @@ export class IterateContextRpcTarget extends RpcTarget {
    *      un-sets that rule when the stub's LAST pager closes. Re-providing the same match re-lends
    *      (reconnect — the pager is replaced);
    *    • an itx EXPRESSION — a pure rewrite: literally `append({ type: "…/rewrite-rule-configured", payload: { match, target } })`;
-   *    • `null` — MASK `match` when a platform row lies beneath it, delete the row otherwise (and
-   *      recall a stub THIS session lent under it).
+   *    • `null` — deny `match`: kept as a MASK where an implicit row lies beneath it (a bare `itx`
+   *      denies all), a deletion otherwise (and a stub THIS session lent under it is recalled).
+   *  The object form is the event's payload (`RewriteRuleConfigured`) and may carry `description`,
+   *  the one line a model reads for the name; `(match, target)` is its shorthand.
    *  Either way the durable thing made is the rule, so the handle is a `RewriteRuleHandle`: disposing
    *  it, or the session ending, un-does the act. */
-  async provide(
+  provide(input: RewriteRuleConfigured): Promise<RewriteRuleHandle>;
+  provide(
     match: ItxExpressionInput,
     target: ClientRpcStub | ItxExpressionInput | null,
+  ): Promise<RewriteRuleHandle>;
+  async provide(
+    matchOrInput:
+      | ItxExpressionInput
+      | (Omit<RewriteRuleConfigured, "target"> & {
+          target: ClientRpcStub | ItxExpressionInput | null;
+        }),
+    maybeTarget?: ClientRpcStub | ItxExpressionInput | null,
   ): Promise<RewriteRuleHandle> {
+    // The object form IS the event's payload (`RewriteRuleConfigured`, its target widened to a live
+    // stub); `(match, target)` is its shorthand. An expression is a string or an array, so the check
+    // narrows to the object form.
+    const input =
+      typeof matchOrInput === "string" || Array.isArray(matchOrInput)
+        ? { match: matchOrInput, target: maybeTarget || null }
+        : matchOrInput;
+    const { match, target } = input;
+    // LOADED CODE may lend its OWN object (a live stub answers with the code's own authority and
+    // dies with its invocation); a pure rewrite or a deny is a ROW, and a row from loaded code is
+    // `itx.append`'s business — through its context's table, where a jail's wall stands.
+    if (this.#caller.app && (!target || typeof target === "string" || Array.isArray(target)))
+      throw codedError(
+        "FORBIDDEN",
+        "loaded code writes a row with itx.append({ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match, target, description } }); provide lends a live stub only",
+      );
+    const description = input.description ? { description: input.description } : {};
     const matchString = canonicalItxExpressionPrefix(match);
     const sessionTeardownKey = this.#sessionTeardownKey(matchString);
     if (!target || typeof target === "string" || Array.isArray(target)) {
@@ -228,10 +276,11 @@ export class IterateContextRpcTarget extends RpcTarget {
       const { target: expectedTarget } = normalizeRewriteRuleConfigured({
         match: matchString,
         target,
+        ...description,
       });
       const event: StreamEventInput = {
         type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match: matchString, target: expectedTarget },
+        payload: { match: matchString, target: expectedTarget, ...description },
       };
       this.#refuseAnOverrideNamingItsOwnContext(matchString, expectedTarget);
       await this.#append(event);
@@ -245,13 +294,17 @@ export class IterateContextRpcTarget extends RpcTarget {
       payload: {
         match: matchString,
         target: ["itx", "builtins", "rpcStubs", ["get", matchString]],
+        ...description,
       },
     };
+    // LOADED CODE's row goes through its own table FIRST (a jail's mask refuses it, and nothing is
+    // lent); the platform's rides the pager and the DO appends it as it accepts the pager.
+    if (this.#caller.app) await this.#append(ruleEvent);
     const pager = await lendRpcStubOverPager(
       () => this.#durableObject,
       target,
       matchString,
-      [ruleEvent],
+      this.#caller.app ? [] : [ruleEvent],
       this.#waitUntil,
     );
     // Registered with the session so a dying session recalls it even when the handle was never
@@ -285,6 +338,17 @@ export class IterateContextRpcTarget extends RpcTarget {
     /** Where the cursor lane starts (0 = the whole log); absent = from now. A push target ignores it. */
     afterOffset?: number;
   }): Promise<SubscriptionHandle> {
+    // LOADED CODE may lend a live callback (its own, fed its own context's events); an expression
+    // target is a ROW the delivery loop runs as the kernel — that is `itx.append`'s business, through
+    // the code's own table — and a removal likewise.
+    if (
+      this.#caller.app &&
+      (!input.target || typeof input.target === "string" || Array.isArray(input.target))
+    )
+      throw codedError(
+        "FORBIDDEN",
+        "loaded code writes a subscription row with itx.append({ type: 'events.iterate.com/stream/subscription-configured', payload: { name, target, consumes } }); subscribe lends a live callback only",
+      );
     // oxlint-disable-next-line iterate/simple-truthiness-check -- only an ABSENT name gets a minted one; an empty-string name is a caller bug that must reach the reduce and be refused there (parseSubscriptionName), never silently become a fresh row per call
     const name = input.name ?? `sub-${crypto.randomUUID().slice(0, 8)}`;
     const rpcStubKey = `subscription:${name}`;
@@ -304,11 +368,12 @@ export class IterateContextRpcTarget extends RpcTarget {
           ...consumes,
         },
       };
+      if (this.#caller.app) await this.#append(row); // loaded code's row: its table first, as in `provide`
       const pager = await lendRpcStubOverPager(
         () => this.#durableObject,
         input.target as ClientRpcStub,
         rpcStubKey,
-        [row],
+        this.#caller.app ? [] : [row],
         this.#waitUntil,
       );
       const lease = this.#sessionTeardown.add(sessionTeardownKey, pager);
@@ -332,27 +397,28 @@ export class IterateContextRpcTarget extends RpcTarget {
 
   // ── processors: durable configuration, two lines each over the subscription event ──
 
-  /** THE ONE WRITE: every verb above builds an event and appends it here, spelled `itx.builtins.append`
-   *  — the platform never spells a short name (context/itx-expression-rewriting.ts), so a context's own
-   *  rows redirect the user's calls, never this. */
+  /** THE ONE WRITE: every verb above builds an event and appends it here. The platform's is spelled
+   *  `itx.builtins.append`, so a context's own rows redirect the user's calls, never this. LOADED
+   *  CODE's goes through ITS table under the context root `append` — implicit everywhere, so a child
+   *  writes; a jail's bare null (or a mask at `itx.append`) refuses a live lend's row, a live
+   *  subscription's and an undo exactly as it refuses `itx.append` — and the door walls the row's
+   *  target (context/built-ins.ts `append`). */
   #append(event: StreamEventInput): Promise<unknown> {
-    return this.#invokeOnDurableObject(["itx", "builtins", ["append", event]]);
+    return this.#invokeOnDurableObject(
+      this.#caller.app ? ["itx", ["append", event]] : ["itx", "builtins", ["append", event]],
+    );
   }
 
-  /** An undo's REMOVAL of a rule: un-set ONLY the row this handle wrote — the removal carries the
-   *  target it wrote (`ifTarget`) and the core reduce applies it only while the row's target is still
-   *  that (a later provide at the same match owns the row now); spelled as the removal (back to the
-   *  platform row beneath, if any), never as a mask. Fire-and-forget under waitUntil (a disposer
-   *  cannot await), a refusal ignored. */
+  /** An undo's REMOVAL of a rule: un-set ONLY the row this handle wrote — `null` WITH the target it
+   *  wrote (`ifTarget`), which the core reduce applies as a compare-and-set DELETE only while the
+   *  row's target is still that (a later provide at the same match owns the row now); never a mask,
+   *  never a "restore" (rule 8: at a child that spelling would be a grant). Fire-and-forget under
+   *  waitUntil (a disposer cannot await), a refusal ignored. */
   #removeRuleInBackground(matchString: string, expectedTarget: ItxExpression | null): void {
     this.#waitUntil(
       this.#append({
         type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: {
-          match: matchString,
-          target: restoreRuleTarget(matchString),
-          ifTarget: expectedTarget,
-        },
+        payload: { match: matchString, target: null, ifTarget: expectedTarget },
       }).catch(() => undefined),
     );
   }
@@ -411,64 +477,10 @@ const DURABLE_OBJECT_HOST_SUFFIX = ".iterate";
 // The projectId is the kv/secret prefix AND a loader-cacheKey component — a ":" (or worse) in it
 // collapses the isolation wall (prj_x + key "a:b" would address the same cell as project prj_x:a
 // + key "b"). Gate it at the ONE place every name is parsed.
-const PROJECT_ID = /^[A-Za-z0-9_-]+$/;
-
-/** The reserved projectId of the deployment-global namespace: the control plane's own contexts —
- *  `/users/<id>`, `/organizations/<id>`, and `/projects/<id>` records — live here. A global context
- *  is an ORDINARY context at this projectId: same codec, same built-ins, same surface as a project's
- *  (`session.user` is exactly `session.projects.get(...)` one namespace over) — except that it is NOT
- *  NAVIGABLE: `cd` is refused on a global edge handle (IterateContextRpcTarget.cd) and, for a
- *  principal, inside a global DO (built-ins.ts `cd`). A project's id is minted (`prj_<hex>`), so the word is never one;
- *  `projects.get` refuses it all the same. */
-export const GLOBAL_PROJECT_ID = "global";
-
-/** THE RESOURCE OWNER of a context: `id` is the half every project-scoped resource key is prefixed
- *  with (`itx.kv`'s `${id}:`, a secret cell's `${id}:${name}` Durable Object, the Artifacts `${id}.`
- *  repo prefix) and `rootPath` the context whose log holds its secrets catalog. */
-export type ResourceScope = { id: string; rootPath: string };
-
-/** THE ONE DERIVATION of a context's resource owner (`ResourceScope`). A project owns its resources
- *  whole — `{ id: projectId, rootPath: "/" }`, every key byte-identical to a plain project prefix.
- *  The global namespace is no owner: one "project" shared by every user's and organization's
- *  context, where the path mask partitions nothing a resource is keyed by — so there the owner is
- *  the OWNER SUBTREE: under `/users/<id>` or `/organizations/<id>` it is `{ id:
- *  "global--<kind>--<id>", rootPath: "/<kind>/<id>" }`, and the global root `/` (or any other global
- *  path) is `{ id: "global", rootPath: "/" }`, the kernel's own. The `--` join is the project-host
- *  label convention (`<app>--<project>`); the owner id is held to the projectId charset, so the
- *  joined id stays inside `[A-Za-z0-9_-]` and the `:` and `.` delimiters still cannot collide, and
- *  no project can spell it (a project id is minted, `prj_<hex>`). User
- *  A's `itx.kv.put('k')` is never user B's `itx.kv.get('k')`, and a user's context IS its own
- *  secrets root. */
-export function resourceScope(projectId: string, path: string): ResourceScope {
-  if (projectId !== GLOBAL_PROJECT_ID) return { id: projectId, rootPath: "/" };
-  const [kind, ownerId] = resolveContextPath("/", path).split("/").slice(1);
-  if (!ownerId || (kind !== "users" && kind !== "organizations"))
-    return { id: GLOBAL_PROJECT_ID, rootPath: "/" };
-  if (!PROJECT_ID.test(ownerId))
-    throw codedError(
-      "INVALID_CONTEXT",
-      `invalid ${kind} id ${JSON.stringify(ownerId)}: only [A-Za-z0-9_-] (it is half of every resource key)`,
-    );
-  return { id: `${GLOBAL_PROJECT_ID}--${kind}--${ownerId}`, rootPath: `/${kind}/${ownerId}` };
-}
 
 /** A parsed DO address. `name` is its own canonical string form — parse once, carry both
  *  halves together (no separate re-stringify field at call sites). */
 export type DurableObjectAddress = { projectId: string; path: string; name: string };
-
-/** Resolve a `cd` target against a context's own path — the one resolver both `cd` doors (the
- *  edge method and the built-in root) share. Absolute ("/agents/x") stands alone; relative
- *  ("agents/x", "../inbox", ".") joins onto `base`. `.` and `..` resolve; the root cannot be
- *  escaped ("/.." is "/"). The result is canonical: leading slash, no trailing slash but for "/". */
-export function resolveContextPath(basePath: string, contextPath: string): string {
-  const segments: string[] = [];
-  for (const seg of `${contextPath.startsWith("/") ? "" : basePath}/${contextPath}`.split("/")) {
-    if (seg === "" || seg === ".") continue;
-    if (seg === "..") segments.pop();
-    else segments.push(seg);
-  }
-  return `/${segments.join("/")}`;
-}
 
 export const DurableObjectNameCodec = {
   /** Formats the project-scoped Durable Object name `{projectId}.iterate{path}` — the path in the
@@ -516,24 +528,33 @@ export const DurableObjectNameCodec = {
 export type ItxEntrypointScope = ReturnType<Service<ItxEntrypoint>["get"]>;
 export class ItxEntrypoint extends WorkerEntrypoint<
   Env,
-  { iterateContextName: string; platformOrigin: string | null }
+  { iterateContextName: string; platform?: true; platformOrigin: string | null }
 > {
-  /** THE handoff: the genuine itx scope — the SAME `IterateContextRpcTarget` RpcTarget a capnweb client gets
-   *  from `projects.get(id)` (capnweb's RpcTarget IS the native `cloudflare:workers` RpcTarget on
-   *  workerd), so loaded code writes plain dotted access and mid-chain handles pipeline natively. A
+  /** THE handoff: the genuine itx scope — the same `IterateContextRpcTarget` class a capnweb client
+   *  gets from `projects.get(id)` (capnweb's RpcTarget IS the native `cloudflare:workers` RpcTarget
+   *  on workerd), under `Caller.app` unless minted `platform: true`, so loaded code writes plain
+   *  dotted access and mid-chain handles pipeline natively while the fixed point and a `cd` above
+   *  its context are refused. A
    *  fresh SessionTeardown per call: this hop lends nothing session-long (a loaded worker's callbacks
    *  ride as Workers-RPC stubs through the call args, never the pager). Re-resolved per call — never
    *  a stub held across calls (the back-channel rule). */
   get(): IterateContextRpcTarget {
-    // Loaded code speaks for the project (no principal) at the origin the context was minted with
-    // (platform-origin persisted on the DO): every hop from here — this context, a `cd` to a
-    // sibling — carries it, so a sibling never reached from the edge still composes URLs.
+    // LOADED code's handle runs as app code; a class of THIS worker mints its stub with
+    // `platform: true` from its own exports (sdk/index.ts) and gets the full handle. A loaded isolate's
+    // `ctx.exports` are its own module's, so the prop cannot be forged from inside one. Either speaks
+    // for the project (no principal) at the origin the context was minted with (platform-origin
+    // persisted on the DO): every hop from here — this context, a `cd` to a sibling — carries it, so
+    // a sibling never reached from the edge still composes URLs.
     return new IterateContextRpcTarget(
       this.env.ITERATE_CONTEXT,
       DurableObjectNameCodec.parse(this.ctx.props.iterateContextName),
       new SessionTeardown(),
       (p) => this.ctx.waitUntil(p),
-      { principal: null, platformOrigin: this.ctx.props.platformOrigin },
+      {
+        principal: null,
+        platformOrigin: this.ctx.props.platformOrigin,
+        ...(!this.ctx.props.platform && { app: true as const }),
+      },
     );
   }
 
@@ -548,7 +569,16 @@ export class ItxEntrypoint extends WorkerEntrypoint<
     const headers = new Headers(request.headers);
     headers.delete(ITX_PRINCIPAL_HEADER);
     headers.delete(ITX_GRANT_HEADER);
+    headers.delete(ITX_APP_HEADER);
     headers.delete(ITX_PLATFORM_ORIGIN_HEADER);
+    if (!this.ctx.props.platform) {
+      // A raw `fetch(url)` from loaded code IS `itx.fetch(request)` at its context — through the
+      // table (no `itx.fetch` row below the owner root, no egress); a self-addressed `env.ITX.fetch`
+      // keeps its expression and runs as app code like any other.
+      headers.set(ITX_APP_HEADER, "1");
+      if (!headers.has(ITX_EXPRESSION_FETCH_HEADER))
+        headers.set(ITX_EXPRESSION_FETCH_HEADER, "itx.fetch");
+    }
     return this.env.ITERATE_CONTEXT.getByName(this.ctx.props.iterateContextName).fetch(
       new Request(request, { headers }),
     );

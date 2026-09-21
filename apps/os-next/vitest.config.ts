@@ -8,9 +8,10 @@
 //   • e2e     — ONE real worker booted once by e2e/support/global-setup.ts (local workerd by default;
 //               the DEPLOYED worker with `WORKER_BASE_URL=https://os.iterate2.com`,
 //               the proof that counts), every file a capnweb client at /api exactly like a production
-//               client, ALL files in parallel — every test mints its own project, and what a test measures
-//               it measures on its own contexts; tests within a file sequential (the per-test
-//               session-dispose in support/setup.ts must not race a sibling)
+//               client, ALL files in parallel AND all tests within a file concurrent — every test mints
+//               its own project, and what a test measures it measures on its own contexts; the run's
+//               floor is its slowest TEST. A file whose rows genuinely need an order says so itself
+//               (`describe.sequential`)
 //   • bench   — vitest's benchmark runner (tinybench) over the same client + worker (`pnpm bench`),
 //               files one at a time so scenarios never share the wire; `BENCH_OUT=<file.json>` writes
 //               the raw samples
@@ -19,6 +20,7 @@
 
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { defineConfig, type Plugin } from "vitest/config";
+import { BaseSequencer, type TestSpecification } from "vitest/node";
 
 // A `.sql` file imports as its text — what wrangler's `rules` (type `Text` for the .sql glob) do
 // for the worker's own bundle (src/worker.ts applies src/control-plane.sql at boot), done here for
@@ -32,15 +34,51 @@ const sqlAsText: Plugin = {
 
 /** Teardown/async-transport noise only: disposing a capnweb session whose peer still delivers (a
  *  deliberate move in the reconnect/unsubscribe tests, and pager sockets still parked at teardown)
- *  surfaces the peer close as an unhandled rejection. Everything else stays fatal. */
+ *  surfaces the peer close as an unhandled rejection; and the workers pool closing its module
+ *  resolver while a saga a test started (a project's birth seeding its config repo) still runs in
+ *  the background after the test ended — `EnvironmentTeardownError`, the harness's, never the
+ *  worker's. Everything else stays fatal. */
 const onUnhandledError = (error: unknown): boolean | void => {
   const message = (error as { message?: string }).message ?? "";
   if (/RPC session|WebSocket|RPC_STUB_OFFLINE|disposed/i.test(message)) return false;
+  if ((error as { name?: string }).name === "EnvironmentTeardownError") return false;
+  if (/EnvironmentTeardownError|Closing rpc while/.test(message)) return false;
 };
+
+/** THE LONG POLES FIRST. vitest orders files by their cached durations, and CI has no cache — so the
+ *  80 s row that waits a real deadline started after ninety seconds of short files and the run ended
+ *  at 170 s instead of its 90 s floor (measured 2026-09-21). These files start in slot one, longest
+ *  first; everything else follows vitest's own order. A file that stops being long drops off this list. */
+const LONG_POLES = [
+  "e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts",
+  "e2e/isolate-ceilings-slow-client.e2e.test.ts",
+  "e2e/scheduled-appends-dormant.e2e.test.ts",
+  "e2e/isolate-ceilings-deployed.e2e.test.ts",
+  "e2e/agents-streamed.e2e.test.ts",
+  "e2e/stream.e2e.test.ts",
+  "e2e/scheduled-appends.e2e.test.ts",
+  "e2e/agents.e2e.test.ts",
+  "e2e/agents-deployed.e2e.test.ts",
+  "e2e/session.e2e.test.ts",
+];
+class LongPolesFirst extends BaseSequencer {
+  override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
+    const ordered = await super.sort(files);
+    const rank = (spec: TestSpecification) =>
+      LONG_POLES.findIndex((pole) => spec.moduleId.endsWith(pole));
+    const poles = ordered.filter((spec) => rank(spec) >= 0).sort((a, b) => rank(a) - rank(b));
+    return [...poles, ...ordered.filter((spec) => rank(spec) < 0)];
+  }
+}
 
 export default defineConfig({
   test: {
+    // The sequencer is a ROOT option — vitest reads `ctx.config.sequence.sequencer`, never a project's;
+    // it orders every project's files, and only the e2e files are named in LONG_POLES.
+    sequence: { sequencer: LongPolesFirst },
     globalSetup: ["./vitest.global-setup.ts"],
+    // Read at the ROOT: a project's own `onUnhandledError` is not consulted (vitest 4).
+    onUnhandledError,
     projects: [
       {
         plugins: [sqlAsText],
@@ -89,7 +127,11 @@ export default defineConfig({
           // remote worker, not CPU, so the runner's cpus-1 default is the wrong shape on a CI box.
           maxWorkers: process.env.CI ? 8 : undefined,
           fileParallelism: true,
-          sequence: { concurrent: false },
+          // TESTS IN ONE FILE CONCURRENT TOO: each one opens its own sessions (support/client.ts keeps
+          // them per test, support/setup.ts disposes that test's alone) against its own project, so the
+          // only thing two rows share is the worker under test. A file that reads worker-global state —
+          // its own worker's logs, one seeded context it also resets — marks itself `describe.sequential`.
+          sequence: { concurrent: true },
           onUnhandledError,
         },
       },

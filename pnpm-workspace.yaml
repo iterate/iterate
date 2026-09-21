@@ -115,7 +115,6 @@ patchedDependencies:
   '@better-auth/oauth-provider@1.6.9': patches/@better-auth__oauth-provider@1.6.9.patch
   '@cloudflare/sandbox@0.12.3': patches/@cloudflare__sandbox@0.12.3.patch
   '@cloudflare/worker-bundler@0.2.1': patches/@cloudflare__worker-bundler@0.2.1.patch
-  '@cloudflare/workers-oauth-provider@0.10.3': patches/@cloudflare__workers-oauth-provider@0.10.3.patch
   '@cloudflare/workers-types@4.20260621.1': patches/@cloudflare__workers-types@4.20260621.1.patch
   '@codemirror/merge@6.12.2': patches/@codemirror__merge@6.12.2.patch
   '@journeyapps/wa-sqlite@1.7.0': patches/@journeyapps__wa-sqlite@1.7.0.patch
