@@ -1,0 +1,15 @@
+{
+  "name": "iterate-opencode-project-worker",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "An Iterate project that hosts opencode v2 inside a userland Durable Object.",
+  "dependencies": {
+    "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250620.0",
+    "typescript": "^5.9.3"
+  }
+}

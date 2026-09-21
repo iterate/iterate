@@ -38,7 +38,8 @@
     ".tmp-ci-build*",
     "**/*ignoreme*",
     "apps/browser-extension/capnweb.js",
-    "apps/os-next/public/capnweb.js"
+    "apps/os-next/public/capnweb.js",
+    "configs/opencode/vendor/opencode-workerd.js"
   ],
   "jsPlugins": [
     "./lint/oxlint-plugin-iterate.ts",

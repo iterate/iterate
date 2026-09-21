@@ -9,9 +9,17 @@ branch: opencode-v2-poc
 
 ## Status summary
 
-Not started. Task fleshed out from research on 2026-09-21; decisions below
-are best guesses made while Misha was away. Implementation follows in
-separate commits on this branch (no PR — review via the compare link).
+Working locally (2026-09-21). opencode v2 boots inside a userland Durable
+Object of a project born from the new `configs/opencode` template, answers
+`itx.worker.opencode.prompt({ text })` with GPT-5.4 replies, keeps session
+history across prompts, and gets its API key through the platform's secret
+cell with zero core changes. Remaining: preview deploy + browser demo of the
+app host (local dev has no app hostnames).
+
+Core changes needed: none. Two userland workarounds were needed, both
+recorded in the log: the opencode dependency tree must be prebundled (the
+platform bundler cannot install/resolve it), and Worker Loader modules have
+no `import.meta.url`.
 
 ## Ask (verbatim gist)
 
@@ -91,16 +99,16 @@ separate commits on this branch (no PR — review via the compare link).
 
 ## Checklist
 
-- [ ] task file committed in isolation
-- [ ] `configs/opencode/` template: worker.ts, apps/opencode/opencode.ts, package.json, tsconfigs, README
-- [ ] DO boots `OpenCodeWorkerd.create` on the facet's own SQLite storage; `prompt`/`sessions`/`messages` RPC methods
-- [ ] project worker: `opencode` getter (capability tree) + `x-iterate-app: opencode` fetch route (project-member auth)
-- [ ] secret bootstrap on `project/created`; collect link on the app root page
-- [ ] local proof: project created from the template on `pnpm dev`, one prompt round-trips through opencode → egress → anthropic
-- [ ] bundling evidence: Plan A outcome recorded; Plan B applied if needed
+- [x] task file committed in isolation _(74290cf27)_
+- [x] `configs/opencode/` template: worker.ts, apps/opencode/opencode.ts, package.json, tsconfigs, README _(plus `vendor/` — see log)_
+- [x] DO boots `OpenCodeWorkerd.create` on the facet's own SQLite storage; `prompt`/`sessions`/`messages` RPC methods _(`health` too; `apps/opencode/opencode.ts`)_
+- [x] project worker: `opencode` getter (capability tree) + `x-iterate-app: opencode` fetch route (project-member auth) _(`worker.ts`)_
+- [x] ~~secret bootstrap on `project/created`~~; collect link on the app root page _(`collectFromUser` creates the secret itself on submit, so no bootstrap event handler; the app root page mints the link while `hasMaterial` is false)_
+- [x] local proof: project created from the template on `pnpm dev`, one prompt round-trips through opencode → egress → ~~anthropic~~ OpenAI _(switched provider: the platform has no Anthropic key in any Doppler config, only an invalid one in dev; OpenAI is what the platform itself uses)_
+- [x] bundling evidence: Plan A outcome recorded; Plan B applied _(see log)_
 - [ ] preview deploy on a manually leased slot; demo project; link + screenshot in the final commit message
-- [ ] lint/typecheck/knip green (`pnpm lint`, `pnpm typecheck`, `pnpm knip`)
-- [ ] README in the template + this task's implementation log: what core lacked, if anything
+- [x] lint/typecheck/knip green _(oxlint + oxfmt on the template, `typecheck:template`, `pnpm knip`; the vendored bundle is in both lint ignore lists)_
+- [x] README in the template + this task's implementation log: what core lacked, if anything _(nothing; two userland workarounds)_
 
 ## Out of scope (follow-ups)
 
@@ -113,4 +121,59 @@ separate commits on this branch (no PR — review via the compare link).
 
 ## Implementation log
 
-(appended during implementation)
+All on a local `pnpm dev` (test project `oc`, `prj_6cafa8cee4e44a98adca71f89e5408d8`),
+files pushed into the project repo with `itx.repos.get("/repos/config").commitFiles`
+via `pnpm cli itx run --file`.
+
+**Plan A (npm dependency) fails in the platform bundler — not on memory,
+on resolution.** With `"@opencode/sdk": "2.0.12"` in the template's
+package.json, the worker-bundler sidecar installed the tree in ~25s (no
+OOM), then esbuild failed:
+`node-fetch/src/index.js: No matching export in "fetch-blob/index.js" for import "File"`
+(×5) — the installer lays out a flat `node_modules`, so two packages that
+pin different `fetch-blob` majors get one of them; and its own resolver
+does not honour the `workerd` export condition, so node-only variants of
+`@opencode/core` chunks were pulled in (hundreds of `Failed to resolve
+'path'/'fs'/...` warnings for chunks the workerd build never touches). This
+is the platform gap, if there is one: **the dynamic-worker installer cannot
+handle a real dependency tree with conflicting transitive pins or
+condition-gated exports.** (Related: tasks/2026-09-08-tarball-transitive-dependencies.md.)
+
+**Plan B (prebundled) works.** `esbuild entry.ts --bundle --minify
+--format=esm --platform=node --main-fields=module,main --conditions=workerd
+--external:cloudflare:*` → 12.7MB / 2.9MB gzipped, committed as
+`configs/opencode/vendor/opencode-workerd.js`. The platform builds the
+13MB file into the facet artifact and loads it in ~8s (repo commit of the
+13MB file: 5s). Three startup fixes, each found by one round-trip:
+
+1. `Dynamic require of "node:fs" is not supported` — CJS deps inside an ESM
+   bundle. Banner: `import { createRequire } from "node:module"; const require = createRequire(...)`.
+2. `createRequire`: `import.meta.url` is **undefined in Worker Loader
+   modules**; pass a literal absolute path instead.
+3. `No such module "impl/format"` — `--platform=node` defaults main-fields
+   to `main,module`, picking jsonc-parser's UMD build whose `require`
+   branch now fires; `--main-fields=module,main` fixes it.
+4. (mine) Worker Loader rejects non-class exports from the entry module
+   (`Incorrect type for map entry 'ANTHROPIC_ORIGIN'`); constants went
+   module-private.
+5. `@opencode/client` 2.0.12 has `server.info()`, not the `health.get()`
+   the docs show.
+
+**The credential path works exactly as designed.** First prompt without a
+secret: opencode reported `provider.transport: secret has not been
+created: /secrets/anthropic-api-key` — the egress door refused the
+placeholder, the error rode back through opencode's session. After
+`itx.secrets.get(path).create({ egress, material })`: the secret's audit
+showed `usedCount: 1, lastUsedUrl: https://api.anthropic.com/v1/messages`
+and Anthropic answered 401 — the dev Doppler `ANTHROPIC_API_KEY` is
+invalid (401 from curl too; no other config has one). Switched to
+`openai/gpt-5.4` + `/secrets/openai-api-key`; reply: "Hi there, hope you're
+doing well!" (9.3s wall clock for the CLI round trip). Follow-up in the
+same session recalled "teal". `sessions()` lists them.
+
+**Timing.** Warm `prompt` round trip from the CLI: 5–10s. The facet's
+`blockConcurrencyWhile` boot is inside that on a cold object.
+
+**Not done / follow-ups** (beyond the out-of-scope list above): the
+`worker-updated` warm-up calls `health()` on every config commit — cheap,
+but it means the object boots on deploy; drop it if that ever matters.

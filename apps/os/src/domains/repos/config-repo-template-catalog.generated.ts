@@ -5,6 +5,7 @@
 export const CONFIG_REPO_TEMPLATE_CATALOG = [
   { label: "Default", path: "configs/default" },
   { label: "Codemode tag", path: "configs/codemode-tag" },
+  { label: "Opencode", path: "configs/opencode" },
   { label: "Voice agent", path: "configs/voice-agent" },
   { label: "With voice", path: "configs/with-voice" },
 ] as const;

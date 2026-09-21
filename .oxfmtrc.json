@@ -28,6 +28,7 @@
     "apps/kit/firmware/components/avatar/src/face_avatar_catalog_generated.inc",
     "configs/default/prompts/",
     "configs/codemode-tag/prompts/",
+    "configs/opencode/vendor/opencode-workerd.js",
     "apps/os/src/domains/agents/prompt-scenarios/*.md",
     "apps/os/src/domains/agents/prompt-scenarios/explainer-shell.html",
     "explainers/prompt-sections.html",
