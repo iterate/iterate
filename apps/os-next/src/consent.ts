@@ -9,14 +9,16 @@ import {
   OAuthScopes,
   type ConsentScope,
 } from "iterate/next/oauth-scopes";
-import { projectAddressOf, type IngressRouting } from "iterate/next/project-ingress";
+import {
+  customProjectHostOf,
+  projectAddressOf,
+  type IngressRouting,
+} from "iterate/next/project-ingress";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./iterate-context.ts";
 import { type ConsentApproved } from "./account/contract.ts";
 import type { Env } from "./control-plane.ts";
 import { directory, type Org, type Project } from "./directory.ts";
-import { customProjectHostOf } from "./hosts.ts";
 import { appConfigOf } from "./app-config.ts";
-import { platformOriginOf } from "./platform-origin.ts";
 import {
   authorizationOf,
   oauthAddresses,
@@ -31,7 +33,7 @@ export type ConsentView =
       kind: "consent";
       query: string;
       clientName: string;
-      /** the OAuth client id — what the page asks `/client-icon` for the client's picture by */
+      /** the OAuth client id (the consent hero shows the client by its initials) */
       clientId: string;
       email: string;
       /** the identity provider's picture of the signed-in person, when the sign-in brought one */
@@ -56,13 +58,18 @@ export type ConsentView =
 /** A platform-served project CIMD client can receive only that project's authority — on a host
  *  under the project hostname base or on a project's custom apex (the same two hostname checks
  *  worker.ts admits a project host with). */
-async function projectsForClient(env: Env, clientId: string, userId: string) {
+async function projectsForClient(
+  env: Env,
+  platformOrigin: string,
+  clientId: string,
+  userId: string,
+) {
   const projects = await directory(env.DB).listProjects(userId);
   const url = URL.canParse(clientId) ? new URL(clientId) : null;
   const config = appConfigOf(env);
   const host =
     url?.pathname === "/.auth/client.json"
-      ? (projectAddressOf(config.urls.ingressRouting, url, platformOriginOf(env)) ??
+      ? (projectAddressOf(config.urls.ingressRouting, url, platformOrigin) ??
         customProjectHostOf(url.hostname, config.urls.temporaryCustomHostnames))
       : null;
   if (!host) return { projects, projectBound: false };
@@ -95,13 +102,16 @@ export class Consent extends RpcTarget {
   readonly #env: Env;
   readonly #ctx: ExecutionContext;
   readonly #grant: AccessGrant;
-  constructor(env: Env, ctx: ExecutionContext, grant: AccessGrant) {
+  /** the platform origin this session reached the platform on (app-config.ts `platformOriginOf`) */
+  readonly #platformOrigin: string;
+  constructor(env: Env, ctx: ExecutionContext, grant: AccessGrant, platformOrigin: string) {
     super();
     if (grant.kind !== "issuer")
       throw codedError("FORBIDDEN", "Sign in to iterate to approve access.");
     this.#env = env;
     this.#ctx = ctx;
     this.#grant = grant;
+    this.#platformOrigin = platformOrigin;
   }
   async #request(query: unknown) {
     // Issuing a new grant must not spend the live transport's revocation grace.
@@ -110,14 +120,14 @@ export class Consent extends RpcTarget {
     const search = z.string().parse(query).replace(/^\?/, "");
     return parseAuthorization(
       this.#env,
-      new Request(`${oauthAddresses(this.#env).issuer}/authorize?${search}`),
+      new Request(`${oauthAddresses(this.#env, this.#platformOrigin).issuer}/authorize?${search}`),
     );
   }
   async describe(query: string): Promise<ConsentView> {
     const env = this.#env;
     try {
       const request = await this.#request(query);
-      const client = await oauthHelpers(env).lookupClient(request.clientId);
+      const client = await oauthHelpers(env, this.#platformOrigin).lookupClient(request.clientId);
       const denied = new URL(request.redirectUri);
       denied.searchParams.set("error", "access_denied");
       denied.searchParams.set("error_description", "The user declined access.");
@@ -142,7 +152,12 @@ export class Consent extends RpcTarget {
           name: this.#grant.name,
           email: this.#grant.email,
         }),
-        ...(await projectsForClient(env, request.clientId, this.#grant.userId)),
+        ...(await projectsForClient(
+          env,
+          this.#platformOrigin,
+          request.clientId,
+          this.#grant.userId,
+        )),
       };
     } catch (error) {
       return authorizationFailure(error);
@@ -167,9 +182,10 @@ export class Consent extends RpcTarget {
       .parse(input);
     try {
       const request = await this.#request(data.query);
-      const client = await oauthHelpers(env).lookupClient(request.clientId);
+      const client = await oauthHelpers(env, this.#platformOrigin).lookupClient(request.clientId);
       const { projects, projectBound } = await projectsForClient(
         env,
+        this.#platformOrigin,
         request.clientId,
         this.#grant.userId,
       );
@@ -185,7 +201,7 @@ export class Consent extends RpcTarget {
         ),
       );
       const clientName = client?.clientName ?? request.clientId;
-      const approved = await oauthHelpers(env).completeAuthorization({
+      const approved = await oauthHelpers(env, this.#platformOrigin).completeAuthorization({
         request,
         userId: this.#grant.userId,
         metadata: { clientName },

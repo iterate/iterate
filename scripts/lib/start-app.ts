@@ -21,6 +21,14 @@ import { fileURLToPath } from "node:url";
 import { Generator, getConfig } from "@tanstack/router-generator";
 import { createCli, t } from "trpc-cli";
 import { z } from "zod";
+import {
+  agentsEnvs,
+  dashEnvs,
+  envs as osEnvs,
+  notesEnvs,
+  osNextEnvs,
+  voiceEnvs,
+} from "../../envs.ts";
 import { deployApp } from "./deploy-app.ts";
 import { ensureProxiedDnsRecord } from "./deploy-helpers.ts";
 import { resolveEnvContext, type DeployableEnv } from "./env-context.ts";
@@ -44,6 +52,36 @@ export interface StartApp {
   nothingToErase: string;
 }
 
+/** The registrable domain of a URL or hostname — its last two labels (`os.iterate2.com` ⇒ `iterate2.com`;
+ *  a workers.dev origin ⇒ `<subdomain>.workers.dev`, the account's own). */
+function registrableDomainOf(urlOrHostname: string): string {
+  const hostname = urlOrHostname.includes("://") ? new URL(urlOrHostname).hostname : urlOrHostname;
+  const labels = hostname.split(".");
+  return labels.slice(hostname.endsWith(".workers.dev") ? -3 : -2).join(".");
+}
+
+/** THE ZONES THAT ARE OURS, from envs.ts: every os-next deployment's origins, its project wildcard
+ *  and custom apexes, and the first-party apps' origins — deduped and sorted. The browser-auth gate
+ *  (`appAuth` `denyZones`) refuses to connect an app to an issuer under any of them: a project host
+ *  or a custom apex is userspace and could serve a look-alike issuer. */
+function ownZones(): string[] {
+  const zones = new Set<string>();
+  for (const env of Object.values(osNextEnvs)) {
+    zones.add(registrableDomainOf(env.baseUrl));
+    zones.add(registrableDomainOf(env.mcpBaseUrl));
+    if (env.dashBaseUrl) zones.add(registrableDomainOf(env.dashBaseUrl));
+    if (env.ingressRouting?.type === "subdomains") zones.add(env.ingressRouting.hostname);
+    for (const hostname of Object.keys(env.temporaryCustomHostnames || {})) zones.add(hostname);
+  }
+  for (const envs of [dashEnvs, agentsEnvs, notesEnvs, voiceEnvs])
+    for (const env of Object.values(envs) as { baseUrl: string }[])
+      zones.add(registrableDomainOf(env.baseUrl));
+  // apps/os's project hosts (`<app>.<project>.iterate.app`, the preview zones) are userspace too
+  for (const env of Object.values(osEnvs))
+    for (const base of env.projectHostnameBases) zones.add(base);
+  return [...zones].sort();
+}
+
 /** Write the app's gitignored wrangler.jsonc from its envs.ts map and return the path. */
 export function writeWranglerConfig(app: StartApp) {
   const bindings = {
@@ -54,9 +92,8 @@ export function writeWranglerConfig(app: StartApp) {
       ITERATE_ORIGIN: "https://os.iterate2.com",
       // our own zones: project hosts and custom apexes are userspace and could serve a look-alike
       // issuer, so the browser-auth gate refuses to CONNECT to an issuer under them (the default
-      // issuer is exempt) — envs.ts osNextEnvs.prd names the same hostnames
-      ITERATE_DENY_ZONES:
-        "iterate2.app,project-worker.iterate.com,iterate2.com,iterate.com,iterate.workers.dev,iterate-dev-preview.workers.dev,garple.com,lispwoso.com,templestein.com",
+      // issuer is exempt) — derived from envs.ts, never spelled twice
+      ITERATE_DENY_ZONES: ownZones().join(","),
     },
     observability: OBSERVABILITY,
     assets: { binding: "ASSETS", not_found_handling: "none", run_worker_first: true },

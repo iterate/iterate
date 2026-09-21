@@ -176,7 +176,7 @@ expect(await itx.kv.get("k")).toBe("v");
 // e2e/context.e2e.test.ts
 ```
 
-`/version` answers `<deployId> <environmentName>`, the stamp a deploy smoke waits for
+`/version` answers `<deployId> <platformOrigin>`, the stamp a deploy smoke waits for
 (`e2e/session.e2e.test.ts`). One more door, supported and not front and center: capnweb's one-shot
 HTTP batch (`newHttpBatchRpcSession`) is served at the same `/api` for a cron or a script — one
 POST, every chained call flushed in it, reads and writes only, no live capability
@@ -1779,9 +1779,9 @@ secret that proves it — and every door reads the same two kinds:
   a same-origin request only (`isSameOriginBrowserRequest`, `src/lib.ts`: the `Origin` header is this
   origin, or absent), so a foreign site's socket is refused `UNAUTHENTICATED` — the one guard that
   makes an ambient cookie safe over RPC. Who the grant is comes from the issuer's login (`/login`:
-  Google, or an assumed email where `APP_CONFIG_TEST_EMAIL_LOGIN` is on). `projects.get` admits
+  Google, a mailed code, or the deployment's password — the `login` block of `APP_CONFIG`). `projects.get` admits
   members of the owning org only.
-- `admin-secret`: the deployment's `APP_CONFIG_ADMIN_API_SECRET` (a wrangler secret), verified
+- `admin-secret`: the deployment's `APP_CONFIG` `secrets.adminBearer`, verified
   in-band on a bare `/api` socket (or a bearer on the upgrade) — `{ actor: "admin" }`, every project, `list()` is
   the whole directory, `create()` lands in `org_admin`. With `as: { email }` it is that user's
   session without a login (the row upserted like `/login` does), which is how a confinement test

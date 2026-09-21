@@ -16,6 +16,7 @@ vi.mock("cloudflare:workers", () => ({
   RpcPromise: class {},
   RpcProperty: class {},
 }));
+import { customProjectHostOf } from "iterate/next/project-ingress";
 import worker from "./worker.ts";
 import {
   appConfigOf,
@@ -24,7 +25,6 @@ import {
   sessionSigningSecretOf,
   type AppConfig,
 } from "./app-config.ts";
-import { customProjectHostOf } from "./hosts.ts";
 import type { Env } from "./control-plane.ts";
 
 // ── app config ── THE TABLE for the app config: what the vars become, what is refused (by name),

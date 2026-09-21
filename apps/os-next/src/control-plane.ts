@@ -21,10 +21,9 @@ import {
   signInWithPassword,
   startLoginCode,
 } from "./login-code.ts";
-import { appConfigOf } from "./app-config.ts";
+import { appConfigOf, platformOriginOf } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import type { User } from "./directory.ts";
-import { oauthAddresses } from "./oauth.ts";
 import type { Env as DurableObjectEnv } from "./iterate-context-durable-object.ts";
 
 /** Platform bindings for the issuer, public APIs and project ingress. */
@@ -81,7 +80,7 @@ async function loginState(request: Request, env: Env, ctx: ExecutionContext): Pr
   const url = new URL(request.url);
   const next = sameOriginPath(
     url.searchParams.get("next") || "/login",
-    oauthAddresses(env, request).issuer,
+    platformOriginOf(config, request),
   );
   const session = await browserAuthorization(env, request, ctx);
   return Response.json(
@@ -175,7 +174,7 @@ async function authorizePage(request: Request, env: Env, ctx: ExecutionContext):
  *  a preview's, a self-hoster's — never a file's. */
 function landingPage(request: Request, env: Env): Response {
   const config = appConfigOf(env);
-  const { issuer } = oauthAddresses(env, request);
+  const issuer = platformOriginOf(config, request);
   const escape = (text: string) =>
     text.replace(
       /[&<>"]/g,

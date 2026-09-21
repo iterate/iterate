@@ -34,7 +34,6 @@ import type { IterateContextApi } from "iterate/next/api";
 import { ITX_GRANT_HEADER, ITX_PRINCIPAL_HEADER, type Caller } from "iterate/next/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
 import { codedError } from "iterate/next/lib";
-import { ITX_PLATFORM_ORIGIN_HEADER } from "./platform-origin.ts";
 import type { IterateContextDurableObject, Env } from "./iterate-context-durable-object.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
@@ -94,6 +93,13 @@ class SubscriptionHandle extends RpcTarget {
 export interface IterateContextRpcTarget extends Omit<BuiltInScope, "cd"> {}
 
 /** The iterate context (`itx`) at one `{ projectId, path }`, as a client holds it. */
+/** The header the edge (and a session's terminal fetch) stamps a fetch-lane Request with — the
+ *  platform origin the caller reached the platform on (`Caller.platformOrigin` on the wire) — read and
+ *  stripped by the context DO's fetch lane. Inbound `x-itx-*` headers never survive the edge, and
+ *  `ItxEntrypoint.fetch` strips it from a loaded worker's Request, so an outsider's is gone before
+ *  this is set. */
+export const ITX_PLATFORM_ORIGIN_HEADER = "x-itx-platform-origin";
+
 export class IterateContextRpcTarget extends RpcTarget {
   readonly #contextNamespace: IterateContextNamespace;
   readonly #durableObjectAddress: DurableObjectAddress;

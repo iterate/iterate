@@ -1,4 +1,5 @@
 import { appAuth, appSession } from "iterate/next/app-server";
+import { appConfigOf, platformOriginOf } from "./app-config.ts";
 import { oauthResponse } from "./api.ts";
 import type { Env } from "./control-plane.ts";
 import { authorizationForToken, oauthAddresses } from "./oauth.ts";
@@ -17,13 +18,18 @@ export async function browserAuthorization(env: Env, request: Request, ctx: Exec
   const session = appSession(env.BROWSER_SESSION, request);
   const token = await session?.bearer();
   if (!token) return null;
-  const authorization = await authorizationForToken(env, ctx, token);
+  const authorization = await authorizationForToken(
+    env,
+    ctx,
+    token,
+    platformOriginOf(appConfigOf(env), request),
+  );
   if (!authorization) await session!.discard();
   return authorization;
 }
 
 export function browserClient(request: Request, env: Env, ctx: ExecutionContext) {
-  const { issuer, api } = oauthAddresses(env, request);
+  const { issuer, api } = oauthAddresses(env, platformOriginOf(appConfigOf(env), request));
   return appAuth(request, {
     sessions: env.BROWSER_SESSION,
     issuer,

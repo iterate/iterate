@@ -42,11 +42,14 @@ export class Grants extends RpcTarget {
   readonly #env: Env;
   readonly #ctx: ExecutionContext;
   readonly #auth: Authorization;
-  constructor(env: Env, ctx: ExecutionContext, auth: Authorization) {
+  /** the platform origin this session reached the platform on (app-config.ts `platformOriginOf`) */
+  readonly #platformOrigin: string;
+  constructor(env: Env, ctx: ExecutionContext, auth: Authorization, platformOrigin: string) {
     super();
     this.#env = env;
     this.#ctx = ctx;
     this.#auth = auth;
+    this.#platformOrigin = platformOrigin;
   }
   #account() {
     const grant = this.#auth.grant;
@@ -85,7 +88,7 @@ export class Grants extends RpcTarget {
   async endCurrent() {
     const grant = this.#auth.grant;
     if (!grant) throw codedError("FORBIDDEN", "The administrator credential has no user session.");
-    const ended = await revokeGrant(this.#env, grant);
+    const ended = await revokeGrant(this.#env, this.#platformOrigin, grant);
     this.#publishAccountFact(grant.userId, {
       type: "events.iterate.com/account/grant-ended",
       idempotencyKey: `account/grant-ended/${grant.grantId}`,
@@ -98,7 +101,10 @@ export class Grants extends RpcTarget {
   async list(cursor?: string) {
     const env = this.#env;
     const session = this.#account();
-    const page = await oauthHelpers(env).listUserGrants(session.sub, { limit: 50, cursor });
+    const page = await oauthHelpers(env, this.#platformOrigin).listUserGrants(session.sub, {
+      limit: 50,
+      cursor,
+    });
     type Activity = {
       grant_id: string;
       last_used_at: number | null;
@@ -154,7 +160,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
       items: [...items, ...cleanup],
       cursor: page.cursor,
       projects: await directory(env.DB).reachableProjects(session.reach),
-      canMintToken: mintsPersonalAccessTokens(oauthAddresses(env).issuer),
+      canMintToken: mintsPersonalAccessTokens(this.#platformOrigin),
     };
   }
 
@@ -172,13 +178,15 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
       let owned: GrantSummary | undefined;
       let cursor: string | undefined;
       do {
-        const page = await oauthHelpers(env).listUserGrants(session.sub, { cursor });
+        const page = await oauthHelpers(env, this.#platformOrigin).listUserGrants(session.sub, {
+          cursor,
+        });
         owned = page.items.find((grant) => grant.id === grantId);
         cursor = page.cursor;
       } while (!owned && cursor);
       if (!owned) throw codedError("GRANT_NOT_FOUND", "Session not found");
     }
-    const ended = await revokeGrant(env, { userId: session.sub, grantId });
+    const ended = await revokeGrant(env, this.#platformOrigin, { userId: session.sub, grantId });
     this.#publishAccountFact(session.sub, {
       type: "events.iterate.com/account/grant-ended",
       idempotencyKey: `account/grant-ended/${grantId}`,
@@ -195,7 +203,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
    * reads the row three times — so the id is returned only once the provider sees it. */
   async #consoleClientId(issuer: string, redirectUri: string): Promise<string> {
     if (!isLocalOrigin(issuer)) return `${issuer}/.auth/client.json`;
-    const helpers = oauthHelpers(this.#env);
+    const helpers = oauthHelpers(this.#env, this.#platformOrigin);
     const client = await helpers.createClient({
       clientName: new URL(issuer).host,
       redirectUris: [redirectUri],
@@ -224,7 +232,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
     if (!(await authorizationOf(env, session.grant)))
       throw codedError("UNAUTHENTICATED", "This session has ended. Sign in again.");
     const data = MintInput.parse(input);
-    const { issuer, api, mcp } = oauthAddresses(env);
+    const { issuer, api, mcp } = oauthAddresses(env, this.#platformOrigin);
     if (!mintsPersonalAccessTokens(issuer))
       throw codedError("FORBIDDEN", "Personal access tokens require an HTTPS deployment.");
     const projects = (await directory(env.DB).reachableProjects(session.reach))
@@ -239,7 +247,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
       redirectUri,
       resources: [api, mcp],
     });
-    const helpers = oauthHelpers(env);
+    const helpers = oauthHelpers(env, this.#platformOrigin);
     const auth = await parseAuthorization(env, new Request(flow.url));
     const expiresAt = Math.min(
       data.expiresAt ?? Date.now() + 30 * 24 * 3600_000,
@@ -266,7 +274,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
     if (!code) throw new Error("The token authorization did not produce a code.");
     // Personal token minting runs the code→token exchange through the SAME provider gate in process
     // (browser apps hit its public endpoint instead).
-    const response = await new OAuthProvider(providerOptions(env)).fetch(
+    const response = await new OAuthProvider(providerOptions(env, this.#platformOrigin)).fetch(
       new Request(`${issuer}/oauth/token`, {
         method: "POST",
         body: new URLSearchParams({
