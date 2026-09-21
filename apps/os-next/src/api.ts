@@ -27,7 +27,7 @@ export function oauthResponse(
   defaultHandler?: Handler,
 ) {
   const url = new URL(request.url);
-  const { issuer, api, mcp } = oauthAddresses(env);
+  const { issuer, api, mcp } = oauthAddresses(env, request);
   if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
     const resource =
       url.origin === new URL(mcp).origin && mcp !== `${issuer}/mcp`

@@ -20,6 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
+import { httpOriginOf } from "../../../../lib/origins.ts";
 
 const shell = getRouteApi("/_auth");
 const projectRoute = getRouteApi("/_auth/projects/$slug");
@@ -52,8 +53,20 @@ function ProjectMcp() {
   const { project } = projectRoute.useRouteContext();
   const { info } = shell.useRouteContext();
   const { clients, grants } = Route.useLoaderData();
-  // the MCP server: its own origin when the deployment has one, else `/mcp` on the platform's
-  const server = info.mcpOrigin ? `${info.mcpOrigin}/` : `${info.platformOrigin}/mcp`;
+  // the MCP server: its own origin when the deployment has one, else `/mcp` on the platform's — each
+  // parsed first (lib/origins.ts): what goes into a copyable command must be an http(s) origin
+  const mcpOrigin = httpOriginOf(info.mcpOrigin);
+  const platformOrigin = httpOriginOf(info.platformOrigin);
+  const server = mcpOrigin ? `${mcpOrigin}/` : platformOrigin ? `${platformOrigin}/mcp` : null;
+  if (!server)
+    return (
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-2 p-4 md:p-8">
+        <h1 className="text-2xl font-semibold tracking-tight">MCP</h1>
+        <p className="text-sm text-muted-foreground">
+          This deployment reports no usable MCP server address.
+        </p>
+      </div>
+    );
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
       <div className="flex flex-col gap-1">

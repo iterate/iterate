@@ -2,7 +2,9 @@
 // (wrangler.jsonc `main: src/worker.ts` — `wrangler dev`, `wrangler deploy`, the test harness), so
 // this writes only what the worker cannot import from source:
 //
-//   1. wrangler.jsonc from the root envs.ts (scripts/generate-wrangler-config.ts).
+//   1. wrangler.jsonc from the root envs.ts, and wrangler.self-host.jsonc — the same bindings with no
+//      ids, for a deployment into someone else's account (SELF-HOSTING.md) — both from
+//      scripts/generate-wrangler-config.ts.
 //   2. src/generated/processor-sdk.js — the text of `iterate/next/sdk` bundled for a LOADED isolate:
 //      what context/worker-loader.ts injects into every loaded worker as "processor.js" (zod, the
 //      capnweb fork and json5 inlined; cloudflare:workers is the isolate's own). A neutral platform
@@ -27,7 +29,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import process from "node:process";
 import { build as esbuild, type Plugin } from "esbuild";
-import { writeWranglerConfig } from "./generate-wrangler-config.ts";
+import { writeSelfHostWranglerConfig, writeWranglerConfig } from "./generate-wrangler-config.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -81,6 +83,7 @@ async function presenceProcessorSource(): Promise<{ "cap.js": string }> {
 /** Everything above, written. */
 export async function build(): Promise<void> {
   writeWranglerConfig();
+  writeSelfHostWranglerConfig();
   mkdirSync(path.join(root, "src/generated"), { recursive: true });
   writeFileSync(
     path.join(root, "src/generated/processor-sdk.js"),

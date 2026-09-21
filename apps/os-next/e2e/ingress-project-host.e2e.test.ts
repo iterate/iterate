@@ -16,7 +16,7 @@ import {
   fetchProjectHost,
   freshDnsSafeProjectSlug,
   localOnly,
-  projectHostnameBase,
+  ingressHostname,
   projectHostsAreLocal,
   registerProject,
 } from "./support/project-host.ts";
@@ -70,7 +70,7 @@ export default class extends ConfigWorker {
 test("an app is served at / on its project host — URL verbatim, relative asset intact, x-itx-* stripped, x-iterate-app the host's label; both app shapes; the apex is the config worker's fetch; a label with no rule is 404", async () => {
   const slug = freshDnsSafeProjectSlug("ingress");
   const projectId = await registerProject(slug);
-  const base = projectHostnameBase();
+  const base = ingressHostname();
   const itx = openItx(projectId);
   await itx.provide("itx.apps.site", siteRule());
   const host = `site--${slug}.${base}`;
@@ -133,7 +133,7 @@ test("an app is served at / on its project host — URL verbatim, relative asset
   expect(missing.status, missing.text).toBe(404);
 });
 
-// A CUSTOM HOSTNAME (`APP_CONFIG_PROJECT_CUSTOM_HOSTNAMES`, worker-config.ts: `custom-apex.test` ⇒
+// A CUSTOM HOSTNAME (`urls.temporaryCustomHostnames`, worker-config.ts: `custom-apex.test` ⇒
 // `custom-apex-project`) is that project's apex outside the base: the config worker's `fetch`
 // answers, the same row a `<project>.<base>` apex lands on. LOCAL ONLY: the deployed map is prd's
 // (`iterate2.com` ⇒ the `iterate` project), proven by hand against iterate2.com.
@@ -172,7 +172,7 @@ test("a project host verifies an OAuth bearer, strips credentials and rejects a 
   const projectId = await registerProject(slug, member);
   const itx = openItx(projectId);
   await itx.provide("itx.apps.site", siteRule());
-  const host = `site--${slug}.${projectHostnameBase()}`;
+  const host = `site--${slug}.${ingressHostname()}`;
   const { token, principal } = await oauthSession(projectId, member);
   const echo = await fetchProjectHost(host, "/echo", {
     Authorization: `Bearer ${token}`,
@@ -216,7 +216,7 @@ test
       const slug = freshDnsSafeProjectSlug("ingress-loop");
       const itx = openItx(await registerProject(slug));
       await itx.provide("itx.apps.loop", ["itx", "workers", ["get", { source: SRC_SELF_LOOP }]]);
-      const answer = await fetch(`https://loop--${slug}.${projectHostnameBase()}/`, {
+      const answer = await fetch(`https://loop--${slug}.${ingressHostname()}/`, {
         signal: AbortSignal.timeout(10_000),
       });
       expect(answer.status).toBe(508);
@@ -227,7 +227,7 @@ deployedOnly("deployed: a WebSocket upgrade on the project host reaches the app"
   const slug = freshDnsSafeProjectSlug("ingress-ws");
   const itx = openItx(await registerProject(slug));
   await itx.provide("itx.apps.site", siteRule());
-  const ws = new WebSocket(`wss://site--${slug}.${projectHostnameBase()}/ws`);
+  const ws = new WebSocket(`wss://site--${slug}.${ingressHostname()}/ws`);
   const echo = await new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("no echo within 10 s")), 10_000);
     ws.addEventListener("open", () => ws.send("hi"));
@@ -245,7 +245,7 @@ deployedOnly("deployed: a WebSocket upgrade on the project host reaches the app"
 // edge, before any Durable Object is dialled — a stranger's label under the wildcard mints nothing.
 test("a host for a project the directory does not know is 421, and its label is never an app", async () => {
   const unknown = freshDnsSafeProjectSlug("ingress-unknown"); // never registered
-  const answer = await fetchProjectHost(`site--${unknown}.${projectHostnameBase()}`, "/");
+  const answer = await fetchProjectHost(`site--${unknown}.${ingressHostname()}`, "/");
   expect(answer.status, answer.text).toBe(421);
   expect(answer.text).toContain(unknown);
 });

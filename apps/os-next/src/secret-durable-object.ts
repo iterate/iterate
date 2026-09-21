@@ -19,7 +19,12 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { signClaims } from "iterate/next/principal";
-import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
+import {
+  appConfigOf,
+  atRestKeysOf,
+  sessionSigningSecretOf,
+  type AppConfigEnv,
+} from "./app-config.ts";
 import type { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import {
   decryptSecretMaterial,
@@ -118,11 +123,7 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   #keys(): MaterialKeys {
-    const config = appConfigOf(this.env);
-    return {
-      current: config.secretsKey.exposeSecret(),
-      previous: config.secretsKeyPrevious.exposeSecret() || undefined,
-    };
+    return atRestKeysOf(appConfigOf(this.env));
   }
 
   /** The write counter, bumped: the number the write that follows is fenced by. */
@@ -147,6 +148,8 @@ export class SecretDurableObject extends DurableObject<Env> {
   async beginOAuth(
     options: NormalizedSecretOAuthOptions,
     catalog: string,
+    /** the platform origin the callback hangs under — the caller's (a DO isolate knows none itself) */
+    platformOrigin: string,
   ): Promise<{ authorizationUrl: string }> {
     const config = appConfigOf(this.env);
     const { owner, name } = this.#address();
@@ -159,8 +162,8 @@ export class SecretDurableObject extends DurableObject<Env> {
       exp: Date.now() + 10 * 60_000,
     };
     const { pending, authorizationUrl } = await beginSecretOAuth(options, {
-      redirectUri: `${config.platformOrigin}${SECRET_OAUTH_CALLBACK_PATH}`,
-      state: await signClaims(state, config.sessionSecret.exposeSecret()),
+      redirectUri: `${platformOrigin}${SECRET_OAUTH_CALLBACK_PATH}`,
+      state: await signClaims(state, await sessionSigningSecretOf(config)),
       nonce,
     });
     await this.#bump(); // a new attempt is a write: an exchange started before it will not land

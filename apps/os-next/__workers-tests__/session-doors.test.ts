@@ -6,7 +6,7 @@ import type { Env } from "../src/control-plane.ts";
 import { applyDirectorySchema, SRC_ECHO_APP } from "./support.ts";
 
 const bindings = env as unknown as Env;
-const ADMIN = { type: "admin-secret", secret: bindings.APP_CONFIG_ADMIN_API_SECRET! } as const;
+const ADMIN = { type: "admin-secret", secret: bindings.APP_CONFIG_SECRETS__ADMIN_BEARER! } as const;
 const sessions: Disposable[] = [];
 const call = (url: string, init?: RequestInit) =>
   SELF.fetch(new Request(url, { redirect: "manual", ...init }));
@@ -15,7 +15,7 @@ afterEach(() => {
   for (const session of sessions.splice(0)) session[Symbol.dispose]();
 });
 async function api() {
-  const response = await call("https://control.test/internal/rpc", {
+  const response = await call("https://control.test/api", {
     headers: { Upgrade: "websocket" },
   });
   response.webSocket!.accept();

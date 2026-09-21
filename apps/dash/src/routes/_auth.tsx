@@ -12,8 +12,10 @@ import {
   useRouter,
   useRouterState,
 } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import { ArrowLeft, KeyRound, Plus } from "lucide-react";
 import { createIterateClient } from "iterate/next/app";
+import { projectUrlOf, type IngressRouting } from "iterate/next/project-ingress";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import {
   DropdownMenuGroup,
@@ -23,6 +25,7 @@ import {
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { DashBreadcrumbs } from "../components/dash-breadcrumbs.tsx";
 import { DashNav } from "../components/dash-nav.tsx";
+import { httpOriginOf } from "../lib/origins.ts";
 import { projectsByOrg } from "../lib/projects.ts";
 
 const iterate = createIterateClient({ scopes: ["iterate", "account", "organizations:write"] });
@@ -37,16 +40,18 @@ export const Route = createFileRoute("/_auth")({
   component: Shell,
 });
 
-/** A project's own site: `<slug>.<base>` on the platform's scheme and port — null when the
- *  deployment serves no project hosts. The slug, never the id: the id is how a project is addressed,
- *  the slug is its hostname's label. */
+/** A project's own site under this deployment's ingress (`projectUrlOf`) — null when the deployment
+ *  serves no project hosts. The slug, never the id: the id is how a project is addressed, the slug is
+ *  its label in a hostname or a path. The platform's origin is parsed first: it comes from the
+ *  issuer's `info()`, and only an http(s) origin may become an href. */
 export function projectHostOf(
-  info: { platformOrigin: string; projectHostnameBase: string | null | undefined },
+  info: { platformOrigin: string; ingressRouting: IngressRouting },
   slug: string,
 ) {
-  if (!info.projectHostnameBase) return null;
-  const origin = new URL(info.platformOrigin);
-  return `${origin.protocol}//${slug}.${info.projectHostnameBase}${origin.port ? `:${origin.port}` : ""}/`;
+  const origin = httpOriginOf(info.platformOrigin);
+  return origin
+    ? (projectUrlOf(info.ingressRouting, origin, { project: slug })?.href ?? null)
+    : null;
 }
 
 function Shell() {
@@ -55,6 +60,26 @@ function Shell() {
   const router = useRouter();
   const href = useRouterState({ select: (state) => state.location.href });
   const { slug } = useParams({ strict: false });
+  // which issuer this browser is connected to (the gate's `/.auth/session.json`): the shell says so
+  // whenever it is not the deployment's own, so a person can tell their self-host from ours
+  const [issuerHost, setIssuerHost] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/.auth/session.json", { headers: { accept: "application/json" } })
+      .then((response) =>
+        response.ok
+          ? (response.json() as Promise<{ issuer: string | null; defaultIssuer: string }>)
+          : null,
+      )
+      .then((session) => {
+        if (cancelled || !session?.issuer || session.issuer === session.defaultIssuer) return;
+        setIssuerHost(new URL(session.issuer).host);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   // the URL names a project by slug (its id works too)
   const active = projects.find((project) => project.slug === slug || project.id === slug);
   const matches = useMatches();
@@ -96,7 +121,14 @@ function Shell() {
       nav={
         <DashNav project={active || null} host={active ? projectHostOf(info, active.slug) : null} />
       }
-      header={<DashBreadcrumbs orgs={orgs} projects={projects} page={page} />}
+      header={
+        <>
+          <DashBreadcrumbs orgs={orgs} projects={projects} page={page} />
+          {issuerHost && (
+            <span className="ml-auto text-xs text-muted-foreground">Connected to {issuerHost}</span>
+          )}
+        </>
+      }
       account={{ email: info.principal.email || info.principal.actor }}
       accountActions={
         <>

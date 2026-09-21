@@ -12,6 +12,7 @@ import { verifyAdminSecret, type Principal } from "iterate/next/principal";
 import type { Env, Handler } from "./control-plane.ts";
 import { type Reach } from "./directory.ts";
 import { appConfigOf } from "./app-config.ts";
+import { platformOriginOf } from "./platform-origin.ts";
 
 /** Encrypted by the provider. Every grant is created through parseAuthorization,
  * so this version also proves the grant has a nonempty, allowed resource audience. */
@@ -51,14 +52,16 @@ export type Authorization = {
   grant: AccessGrant | null;
 };
 
-/** Canonical resource identifiers, including the MCP root's explicit slash. */
-export function oauthAddresses(env: Env) {
+/** Canonical resource identifiers, including the MCP root's explicit slash. The issuer is the
+ *  platform origin (platform-origin.ts): `urls.os`, else what the edge remembered, else — on a
+ *  deployment that named no origin — the origin of `request`, a platform request in hand. */
+export function oauthAddresses(env: Env, request?: Request) {
   const config = appConfigOf(env);
-  const issuer = config.platformOrigin;
+  const issuer = platformOriginOf(env, request && new URL(request.url).origin);
   return {
     issuer,
     api: `${issuer}/api`,
-    mcp: config.mcpOrigin ? `${config.mcpOrigin}/` : `${issuer}/mcp`,
+    mcp: config.urls.mcp ? `${config.urls.mcp}/` : `${issuer}/mcp`,
   };
 }
 
@@ -168,7 +171,7 @@ export function providerOptions(
     clientIdMetadataDocumentEnabled: true,
     allowPlainPKCE: false,
     async resolveExternalToken({ token }) {
-      if (!(await verifyAdminSecret(token, appConfigOf(env).adminApiSecret.exposeSecret())))
+      if (!(await verifyAdminSecret(token, appConfigOf(env).secrets.adminBearer.exposeSecret())))
         return null;
       return { props: { kind: "admin" }, audience: [api, mcp] };
     },

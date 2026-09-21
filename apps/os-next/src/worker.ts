@@ -2,17 +2,12 @@
 // Cap’n Web terminates at /api; project application requests enter the context DO.
 
 import * as cloudflareWorkers from "cloudflare:workers";
-import {
-  newWorkersRpcResponse,
-  RpcPromise as CapnwebRpcPromise,
-  RpcSession,
-  RpcStub as CapnwebRpcStub,
-  WebSocketTransport,
-} from "capnweb";
+import { RpcPromise as CapnwebRpcPromise, RpcStub as CapnwebRpcStub } from "capnweb";
 import { auth } from "iterate/next/sdk";
 import { verifyClaims } from "iterate/next/principal";
 import { registerPipelinedRpcBrand } from "iterate/next/expression";
 import { ITX_GRANT_HEADER, ITX_PRINCIPAL_HEADER, type Principal } from "iterate/next/principal";
+import { projectAddressOf } from "iterate/next/project-ingress";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 // the one worker's env: the DO's bindings plus the in-process control plane's (control-plane.ts `Env`)
 import type { Env as WorkerEnv } from "./control-plane.ts";
@@ -21,14 +16,19 @@ import { isSecretOAuthState, SECRET_OAUTH_CALLBACK_PATH } from "./secret-oauth.t
 import type { Reach } from "./directory.ts";
 import { oauthResponse } from "./api.ts";
 import { issuerHandler, issuerPagePaths } from "./control-plane.ts";
-import { appConfigOf } from "./app-config.ts";
-import { customProjectHostOf, projectHostOf, hostnameLabelsUnderBase } from "./hosts.ts";
+import { appConfigOf, sessionSigningSecretOf } from "./app-config.ts";
+import { customProjectHostOf } from "./hosts.ts";
+import {
+  ITX_PLATFORM_ORIGIN_HEADER,
+  platformOriginOf,
+  rememberPlatformOrigin,
+} from "./platform-origin.ts";
 import { FILES_APP_LABEL, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
-import { directory } from "./directory.ts";
+import { directory, ensureDirectorySchema } from "./directory.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./iterate-context.ts";
-import { IterateRpcTarget, SessionTeardown, type SessionInput } from "./session.ts";
+import type { SessionInput } from "./session.ts";
 import { authorizationForToken, recordGrantUse, cleanGrantActivity } from "./oauth.ts";
 
 /** A project host's re-entry count — THE COUNT THE APP FORWARDS: an app that fetches its own host
@@ -37,6 +37,38 @@ import { authorizationForToken, recordGrantUse, cleanGrantActivity } from "./oau
  *  with fresh Requests is its own cost. */
 const PROJECT_HOST_HOPS_HEADER = "x-itx-expression-hops";
 const PROJECT_HOST_MAX_HOPS = 4;
+
+/** THE BASE PATH an app is served under (paths ingress: `/projects/<project>/<app>`), apps/os's header
+ *  style beside `x-iterate-app`: the edge strips it from the URL the app sees and says it here, so
+ *  the app's own links and its browser adapter can compose absolute paths. Set or deleted by the
+ *  edge on every project request, so a visitor's spelling never reaches an app. Empty under
+ *  subdomains (the app owns its origin). */
+const ITERATE_BASE_PATH_HEADER = "x-iterate-base-path";
+
+/** THE SANDBOX every document served through paths ingress runs in: an opaque origin — no cookies,
+ *  no storage, no scripting of other frames, `Origin: null` on every request it makes — so a
+ *  project's app on the platform's own origin can neither spend the issuer's cookie nor read another
+ *  project's. Set by the edge AFTER the app answers; an app cannot remove it. A WebSocket answer
+ *  carries no document and is left alone. */
+const PATHS_INGRESS_SANDBOX =
+  "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
+
+/** The Request without its base path (paths ingress): the same method, body and upgrade, the URL
+ *  starting at the app's root. */
+function withoutBasePath(request: Request, basePath: string): Request {
+  if (!basePath) return request;
+  const url = new URL(request.url);
+  url.pathname = url.pathname.slice(basePath.length) || "/";
+  return new Request(url, request);
+}
+
+/** An app's answer through paths ingress, sandboxed (PATHS_INGRESS_SANDBOX). */
+function sandboxed(response: Response): Response {
+  if (response.webSocket) return response;
+  const answer = new Response(response.body, response);
+  answer.headers.set("content-security-policy", PATHS_INGRESS_SANDBOX);
+  return answer;
+}
 
 /** WHO a project host's request is, as the lane into a context reads it: `principal` is the
  *  verified stamp the context runs the call under (null: nobody) and `grant` the OAuth grant it
@@ -61,6 +93,10 @@ function projectHostRequestTo(
     hops: number;
     appCookies: string | null;
     identity: ProjectHostIdentity;
+    /** paths ingress: the prefix stripped from the URL and said in `x-iterate-base-path` */
+    basePath: string;
+    /** the platform origin this request reached the platform on (platform-origin.ts) */
+    platformOrigin: string;
   },
 ): Request {
   const headers = new Headers(request.headers);
@@ -70,10 +106,13 @@ function projectHostRequestTo(
   if (routing.identity.platformBearer) headers.delete("authorization");
   headers.set(ITX_EXPRESSION_FETCH_HEADER, routing.app ? `itx.apps.${routing.app}` : "");
   headers.set(PROJECT_HOST_HOPS_HEADER, String(routing.hops));
+  headers.set(ITX_PLATFORM_ORIGIN_HEADER, routing.platformOrigin);
+  if (routing.basePath) headers.set(ITERATE_BASE_PATH_HEADER, routing.basePath);
+  else headers.delete(ITERATE_BASE_PATH_HEADER);
   if (routing.identity.principal)
     headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(routing.identity.principal));
   if (routing.identity.grant) headers.set(ITX_GRANT_HEADER, routing.identity.grant);
-  return new Request(request, { headers });
+  return new Request(withoutBasePath(request, routing.basePath), { headers });
 }
 
 /** A secret's OWNER (iterate-context.ts `resourceScope`), read back from its id: a project's id,
@@ -139,7 +178,7 @@ async function secretOAuthCallback(
     });
   const claims = await verifyClaims(
     url.searchParams.get("state") ?? "",
-    sessionInput.appConfig.sessionSecret.exposeSecret(),
+    await sessionSigningSecretOf(sessionInput.appConfig),
   );
   if (!isSecretOAuthState(claims) || claims.exp <= Date.now())
     return answer(400, "This link is not one the platform issued, or it has expired.");
@@ -211,6 +250,7 @@ export { ItxEntrypoint } from "./iterate-context.ts";
 
 export default {
   async scheduled(_event: ScheduledController, env: WorkerEnv) {
+    await ensureDirectorySchema(env.DB);
     await cleanGrantActivity(env);
   },
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
@@ -231,24 +271,35 @@ export default {
     // it names — or, with no app label, the project's config worker — the Request riding into the
     // DO's fetch lane with its URL, the app's own cookies and a WebSocket upgrade intact. The browser adapter reserves /api and /.auth/* on every host.
     const appConfig = appConfigOf(env);
-    const { projectHostnameBase, environmentName, deployId } = appConfig;
-    if (appConfig.mcpOrigin && url.origin === appConfig.mcpOrigin) {
+    const { deployId } = appConfig;
+    // THE DIRECTORY SCHEMA, at boot (directory.ts): the first request of an isolate awaits it, so a
+    // deployment has no migration step.
+    await ensureDirectorySchema(env.DB);
+    if (appConfig.urls.mcp && url.origin === appConfig.urls.mcp) {
       // MCP's public root is its protocol endpoint; /api remains Cap'n Web.
       if (url.pathname !== "/" && !url.pathname.startsWith("/.well-known/"))
         return new Response("Not found", { status: 404 });
       return oauthResponse(request, env, ctx);
     }
+    // THE PLATFORM ORIGIN (platform-origin.ts): `urls.os`, else what this isolate remembered, else
+    // this request's own — a candidate until the request is known not to be a project's (below).
+    const platformOrigin = platformOriginOf(env, url.origin);
     /** What every session and every lane's identity is built from — ONE object per request. */
     const sessionInput: SessionInput = {
       contextNamespace: env.ITERATE_CONTEXT,
       waitUntil: (promise) => ctx.waitUntil(promise),
       directory: directory(env.DB),
       appConfig,
+      platformOrigin,
     };
-    // A project host under the base, or one of the deployment's custom hostnames (a project's apex).
+    const routing = appConfig.urls.ingressRouting;
+    // A project under the ingress routing (iterate/next/project-ingress: subdomains — a host under
+    // the wildcard; paths — `/<project>[/<app>]` on the platform origin), or one of the deployment's
+    // custom hostnames (a project's apex).
+    const customHost = customProjectHostOf(url.hostname, appConfig.urls.temporaryCustomHostnames);
     const projectHost =
-      projectHostOf(url.hostname, projectHostnameBase) ??
-      customProjectHostOf(url.hostname, appConfig.projectCustomHostnames);
+      projectAddressOf(routing, url, platformOrigin) ??
+      (customHost && { ...customHost, basePath: "" });
     if (projectHost) {
       // ADMISSION, before any Durable Object is dialled: a context is created on first touch, so a
       // hostname whose project the in-process directory does not know must never reach one — else
@@ -264,16 +315,25 @@ export default {
       const projectId = project.id;
       // THE FILES HOST (context/file-urls.ts): `files--<project>` serves a signed file URL straight
       // from the bucket, before any session or DO — the token in the URL is the authorization.
-      if (projectHost.app === FILES_APP_LABEL)
-        return serveProjectFileRequest({
+      if (projectHost.app === FILES_APP_LABEL) {
+        const file = await serveProjectFileRequest({
           bucket: env.FILES,
-          secret: appConfig.sessionSecret.exposeSecret(),
+          secret: await sessionSigningSecretOf(appConfig),
           project: projectId,
           keyPrefix: `${resourceScope(projectId, "/").id}/`,
-          request,
+          request: withoutBasePath(request, projectHost.basePath),
         });
-      const browserResponse = await browserClient(request, env, ctx);
-      if (browserResponse) return browserResponse;
+        // Under paths a stored HTML or SVG file is a document on the platform's own origin: it runs
+        // sandboxed exactly as an app's answer does (an opaque origin, no cookie to spend).
+        return routing?.type === "paths" ? sandboxed(file) : file;
+      }
+      // The browser adapter's doors (`/api`, `/.auth/*`) are an app's OWN under subdomains — its
+      // origin. Under paths the app shares the platform's origin, whose `/api` and `/.auth/*` are
+      // the issuer's: an app there has no cookie sign-in of its own (it authenticates in-band).
+      if (routing?.type !== "paths") {
+        const browserResponse = await browserClient(request, env, ctx);
+        if (browserResponse) return browserResponse;
+      }
       const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
       const authorization = bearer
         ? await authorizationForToken(env, ctx, bearer)
@@ -290,7 +350,7 @@ export default {
         return new Response("This session cannot access this project", { status: 403 });
       if (authorization?.grant) ctx.waitUntil(recordGrantUse(env, authorization.grant));
       // the visitor's own cookies reach the app; the platform's cookie and bearer never do
-      return env.ITERATE_CONTEXT.getByName(
+      const answer = await env.ITERATE_CONTEXT.getByName(
         DurableObjectNameCodec.stringify({ projectId, path: "/" }),
       ).fetch(
         projectHostRequestTo(request, {
@@ -302,68 +362,41 @@ export default {
             grant: authorization?.grant?.grantId,
             platformBearer: Boolean(bearer && authorization),
           },
+          basePath: projectHost.basePath,
+          platformOrigin,
         }),
       );
+      // Under paths the app answered on the platform's own origin: its document runs sandboxed.
+      return routing?.type === "paths" ? sandboxed(answer) : answer;
     }
-    // Under the base there are project hosts and nothing else: a hostname there that fails the
-    // grammar (`site--prj_1`, `a.b.c`, `--x`) names no project host and must not fall through to the
-    // control plane — a working platform origin on a name the platform never chose. 421.
-    if (hostnameLabelsUnderBase(url.hostname, projectHostnameBase))
+    // Under a subdomains wildcard there are project hosts and nothing else: a hostname there that
+    // fails the grammar (`site--prj_1`, `a.b.c`, `--x`) names no project host and must not fall
+    // through to the control plane — a working platform origin on a name the platform never chose. 421.
+    if (
+      routing?.type === "subdomains" &&
+      url.hostname.toLowerCase().replace(/\.$/, "").endsWith(`.${routing.hostname}`)
+    )
       return new Response(
-        `421: ${url.hostname} is not a project host under ${projectHostnameBase}\n`,
+        `421: ${url.hostname} is not a project host under ${routing.hostname}\n`,
         { status: 421 },
       );
 
-    if (url.origin !== appConfig.platformOrigin)
+    // A platform request, then: on a deployment that named no `urls.os`, this origin is it.
+    rememberPlatformOrigin(env, url.origin);
+    if (url.origin !== platformOrigin)
       return new Response("Unknown platform origin", { status: 421 });
 
-    // `<deployId> <environmentName>`: Cloudflare's version id of this deploy — the stamp a smoke
-    // waits for (`wrangler deploy` prints it) — and which deployment this is (the app config section below).
-    if (url.pathname === "/version") return new Response(`${deployId} ${environmentName}\n`);
-
-    // Explicit operator fixtures. Public clients authenticate at the HTTP boundary.
-    if (url.pathname === "/internal/rpc") {
-      const root = new IterateRpcTarget(sessionInput, new SessionTeardown(), null);
-      // A one-shot HTTP batch — a CLI script or cron does one POST, no socket handshake. (Batch
-      // sessions cannot hold live capabilities: a live provide needs the relay to outlive the
-      // response — the relay's lend call simply fails there, which is the honest error.)
-      if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
-        return newWorkersRpcResponse(request, root);
-      // The WebSocket session spelled out (what newWorkersRpcResponse does) so the transport is ours:
-      // a peer's `["abort", …]` frame is its only word on WHY it left — the ESP32's C client says
-      // CAPNWEB_E_TOKEN_LIMIT and kin there — and capnweb consumes it without a hook.
-      const pair = new WebSocketPair();
-      pair[0].accept();
-      const transport = new WebSocketTransport(pair[0] as unknown as WebSocket);
-      new RpcSession(
-        {
-          send: (message) => transport.send(message),
-          receive: async () => {
-            const message = await transport.receive();
-            if (message.startsWith('["abort"'))
-              console.warn({
-                event: "rpc-session-aborted-by-peer",
-                namespace: "worker",
-                message: "the client aborted its capnweb session and said why",
-                door: "internal-rpc",
-                reason: (JSON.parse(message) as [string, unknown])[1],
-              });
-            return message;
-          },
-          abort: (reason) => transport.abort(reason),
-        },
-        root,
-      );
-      return new Response(null, { status: 101, webSocket: pair[1] });
-    }
+    // `<deployId> <platformOrigin>`: Cloudflare's version id of this deploy — the stamp a smoke
+    // waits for (`wrangler deploy` prints it) — and the origin this deployment answers on.
+    if (url.pathname === "/version") return new Response(`${deployId} ${platformOrigin}\n`);
 
     // A project secret's OAuth callback (secret-oauth.ts): the provider sends the human back here
-    // with the code. Its own reserved path, `/.secrets/`, beside `/version` and `/internal/rpc`.
+    // with the code. Its own reserved path, `/.secrets/`, beside `/version`.
     if (url.pathname === SECRET_OAUTH_CALLBACK_PATH)
       return secretOAuthCallback(request, env, ctx, sessionInput);
     const identityResponse = await identityDoor(request, env);
     if (identityResponse) return identityResponse;
-    if (!appConfig.mcpOrigin && url.pathname === "/mcp") return oauthResponse(request, env, ctx);
+    if (!appConfig.urls.mcp && url.pathname === "/mcp") return oauthResponse(request, env, ctx);
     const browserResponse = await browserClient(request, env, ctx);
     if (browserResponse) return browserResponse;
     if (url.pathname.startsWith("/api")) return new Response("Not found", { status: 404 });

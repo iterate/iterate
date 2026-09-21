@@ -91,6 +91,7 @@ import {
 
 export const BUILT_IN_ROOTS = [
   "whoami",
+  "url",
   "kv",
   "secrets",
   "ai",

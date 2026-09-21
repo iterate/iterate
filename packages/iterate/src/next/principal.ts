@@ -15,6 +15,10 @@ export type Caller = {
    *  client (a Claude Code install, a dash sign-in, a personal token), the same across every call it
    *  makes. Absent for the admin secret and the kernel. */
   grant?: string;
+  /** THE PLATFORM ORIGIN the caller reached the platform on (os-next platform-origin.ts) — what a
+   *  public URL is composed from (`itx.url`, a signed file URL). Absent for a caller with none (a
+   *  loaded worker's `env.ITX`, the kernel); the context then uses the last one it was reached on. */
+  platformOrigin?: string | null;
 };
 /** The header the edge sets on a Request it forwards on a principal's behalf — the ingress after
  *  the cookie check, a session's terminal `fetch` — and strips from every inbound Request. */

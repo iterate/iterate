@@ -203,7 +203,7 @@ describe("security requirements — the global namespace is not navigable", () =
       projectId: expect.stringMatching(/^prj_[0-9a-f]{32}$/),
       path: "/",
       projectSlug: "global",
-      projectUrl: "https://global.projects.test",
+      projectUrl: "https://global.projects.test/",
     });
     const listed = (await s.projects.list()) as { id: string; slug: string }[];
     expect(listed.map(({ id, slug }) => ({ id, slug }))).toEqual([
