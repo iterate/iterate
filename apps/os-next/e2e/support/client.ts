@@ -35,10 +35,26 @@ export const adminCredentials = (as?: {
 /** A URL on the one shared worker — for the raw HTTP doors that have no itx method (/version, /demo). */
 export const workerUrl = (path: string): string => new URL(path, baseUrl()).toString();
 
+/** THE RUN'S ID — one value for the whole `pnpm e2e` run, minted by global-setup and handed to every
+ *  vitest worker process (support/setup.ts sets `E2E_RUN_ID` from it; a caller may pin it — a commit
+ *  sha in CI). Every identifier a test mints carries it, so no two runs against one deployment can
+ *  land on the same project, repo or account, however many run at once. */
+let memoRunId = "";
+export const runId = (): string =>
+  (memoRunId ||= (process.env.E2E_RUN_ID || crypto.randomUUID())
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .slice(0, 8));
+
+/** THIS vitest worker process, within the run. Files run in parallel in separate processes, each
+ *  with its own `counter` starting at 0, so the slot is what keeps two processes' ids apart. */
+export const workerSlot = (): string => process.env.VITEST_WORKER_ID || "0";
+
 let counter = 0;
-/** A unique project ctx per call, so tests never collide on a Durable Object (each ctx is its own). */
+/** A unique project ctx per call, so tests never collide on a Durable Object (each ctx is its own):
+ *  `prj_<prefix>_<run>_<worker>_<n>` — unique across runs, across worker processes, and within one. */
 export const freshCtx = (prefix: string): string =>
-  `prj_${prefix}_${Date.now().toString(36)}_${counter++}`;
+  `prj_${prefix}_${runId()}_${workerSlot()}_${counter++}`;
 
 const wsApi = (): string => {
   const u = new URL("/internal/rpc", baseUrl());

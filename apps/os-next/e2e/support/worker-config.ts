@@ -41,9 +41,13 @@ export function e2eWorkerConfig(platformOrigin = "http://127.0.0.1"): Unstable_R
       APP_CONFIG_PLATFORM_ORIGIN: platformOrigin,
       APP_CONFIG_MCP_ORIGIN: "",
       APP_CONFIG_PROJECT_HOSTNAME_BASE: "localhost",
-      // One custom hostname (a project's apex outside the base) for the ingress test that proves the
-      // custom-hostname branch; the project it names is registered by that test.
-      APP_CONFIG_PROJECT_CUSTOM_HOSTNAMES: "custom-apex.test=custom-apex-project",
+      // Two custom hostnames (a project's apex outside the base) for the ingress test that proves the
+      // custom-hostname branch; the projects they name are registered by that test. The second one's
+      // project is never given an ingress target, so the "reaches its project, but nothing is
+      // configured" 404 is a row of its own — one a RETRY inside the same run still sees (the first
+      // project keeps the ingress its own row configured, this worker outliving any one attempt).
+      APP_CONFIG_PROJECT_CUSTOM_HOSTNAMES:
+        "custom-apex.test=custom-apex-project,custom-apex-bare.test=custom-apex-bare-project",
       APP_CONFIG_SESSION_SECRET: "e2e-session-secret",
       APP_CONFIG_SECRETS_KEY: "e2e-secrets-key",
       APP_CONFIG_ADMIN_API_SECRET: E2E_ADMIN_API_SECRET,

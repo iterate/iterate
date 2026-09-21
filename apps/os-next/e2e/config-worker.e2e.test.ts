@@ -121,25 +121,32 @@ deployedOnly(
     const root = openItx(freshCtx("config-artifacts"));
     const repo = root.repos.get("/repos/config");
     await repo.create();
-    const { commitOid } = await repo.writeFile("worker.ts", source("artifacts"));
-    await root.subscribe({
-      name: "config",
-      target: [
-        "itx",
-        "workers",
-        [
-          "get",
-          { source: "itx.repos.get('/repos/config').readFile('worker.ts')", cacheKey: commitOid },
+    // The repository is REAL — one row in the account's Artifacts namespace. Deleted whatever
+    // happens, like every other row that creates one (cfartifacts.e2e.test.ts), so the namespace the
+    // paging proofs read stays the suite's own repos and not a landfill of past runs'.
+    try {
+      const { commitOid } = await repo.writeFile("worker.ts", source("artifacts"));
+      await root.subscribe({
+        name: "config",
+        target: [
+          "itx",
+          "workers",
+          [
+            "get",
+            { source: "itx.repos.get('/repos/config').readFile('worker.ts')", cacheKey: commitOid },
+          ],
+          "processEventBatch",
         ],
-        "processEventBatch",
-      ],
-      consumes: [PING],
-    });
-    const [ping] = await append(root, { type: PING });
-    await until("the repo-sourced worker answered", async () =>
-      (await readAll(root)).find(
-        (event) => event.type === PONG && event.payload?.pinged === ping.offset,
-      ),
-    );
+        consumes: [PING],
+      });
+      const [ping] = await append(root, { type: PING });
+      await until("the repo-sourced worker answered", async () =>
+        (await readAll(root)).find(
+          (event) => event.type === PONG && event.payload?.pinged === ping.offset,
+        ),
+      );
+    } finally {
+      await root.cfArtifacts.delete("/repos/config");
+    }
   },
 );

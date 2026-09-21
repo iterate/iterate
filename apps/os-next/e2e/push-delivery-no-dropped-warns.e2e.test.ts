@@ -1,3 +1,5 @@
+// SERIAL LANE (vitest.config.ts): it boots a SECOND workerd and reads that worker's global
+// console — a sibling's load on this machine is noise in the number it asserts.
 // push-delivery-no-dropped-warns.e2e.test.ts — the three pins that read the WORKER'S CONSOLE: the
 // delivery loop emits `delivery.push.dropped` for a push that fails with anything but
 // RPC_STUB_OFFLINE and `subscription-delivery.deliver` / `.cursor` for a delivery that threw; these tests assert

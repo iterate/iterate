@@ -1,3 +1,5 @@
+// SERIAL LANE (vitest.config.ts): 1.5 s and 75 s WALL-CLOCK deadlines, asserted fired or
+// not-fired either side of a sleep.
 import { expect, test } from "vitest";
 import { freshCtx, openItx, readAll, disposeSessions, sleep } from "./support/client.ts";
 import {

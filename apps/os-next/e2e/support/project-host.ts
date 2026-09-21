@@ -6,8 +6,7 @@
 // wildcard DNS is real and the default dispatcher does. One test runs both ways.
 import { Agent, buildConnector, fetch as undiciFetch, WebSocket as UndiciWebSocket } from "undici";
 import { test } from "vitest";
-import type { TestContext } from "vitest";
-import { adminCredentials, session, workerUrl } from "./client.ts";
+import { adminCredentials, runId, session, workerSlot, workerUrl } from "./client.ts";
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);
 const worker = (): URL => new URL(workerUrl("/"));
@@ -32,41 +31,17 @@ export const localOnly = test.skipIf(!projectHostsAreLocal());
 export const projectHostsAvailable = (): boolean =>
   projectHostsAreLocal() || Boolean(process.env.PROJECT_HOSTNAME_BASE);
 
-/** What a row that dials a project host is missing when it skips — the reason on the skipped row. */
-const NO_PROJECT_HOSTS = "no project-host ingress on this deployment (PROJECT_HOSTNAME_BASE blank)";
-
-/** `test(name, fn, timeout?)` — the two project-host gates below are spelled exactly like `test`. */
-type ProjectHostRow = (
-  name: string,
-  fn: (ctx: TestContext) => Promise<unknown>,
-  timeout?: number,
-) => void;
-
 /** `test`, for a row that DIALS a project host: it runs against the local worker and against a
- *  deployment that has the ingress, and skips — saying what is missing — against one that does not.
- *  Every row reaching `projectHostnameBase()` goes through this or `deployedOnProjectHost`;
+ *  deployment that has the ingress, and skips against one that does not (the helper's NAME is the
+ *  reason). Every row reaching `projectHostnameBase()` goes through this or `deployedOnProjectHost`;
  *  `projectHostnameBase()` still throws for a caller that reached it through neither. */
-export const onProjectHost: ProjectHostRow = (name, fn, timeout) =>
-  test(
-    name,
-    async (ctx) => {
-      ctx.skip(!projectHostsAvailable(), NO_PROJECT_HOSTS);
-      await fn(ctx);
-    },
-    timeout,
-  );
+export const onProjectHost = test.skipIf(!projectHostsAvailable());
 
 /** `deployedOnly` AND `onProjectHost`: a row only a real deployment can prove, on a host only a
  *  deployment that has the ingress owns. */
-export const deployedOnProjectHost: ProjectHostRow = (name, fn, timeout) =>
-  deployedOnly(
-    name,
-    async (ctx) => {
-      ctx.skip(!projectHostsAvailable(), NO_PROJECT_HOSTS);
-      await fn(ctx);
-    },
-    timeout,
-  );
+export const deployedOnProjectHost = test.skipIf(
+  projectHostsAreLocal() || !projectHostsAvailable(),
+);
 
 /** The base project hosts hang under: `localhost` for the local worker (worker-config.ts), the
  *  deployed worker's `APP_CONFIG_PROJECT_HOSTNAME_BASE` (wrangler.jsonc) otherwise. */
@@ -110,10 +85,15 @@ export async function registerProject(slug: string, as?: { email: string }): Pro
 }
 
 /** A fresh project slug — a DNS label, the one the project's hosts carry (`freshCtx` names carry
- *  `_`, which no hostname may). `registerProject(slug)` turns it into a project and hands back the id. */
+ *  `_`, which no hostname may). `registerProject(slug)` turns it into a project and hands back the id.
+ *  Same shape as `freshCtx`: the run's id and this worker process's slot, then a per-process counter
+ *  — unique across runs and across the processes running files in parallel. */
 let counter = 0;
-export const freshDnsSafeProjectSlug = (prefix: string): string =>
-  `prj-${prefix}-${Date.now().toString(36)}-${counter++}`;
+export const freshDnsSafeProjectSlug = (prefix: string): string => {
+  const slug = `prj-${prefix}-${runId()}-${workerSlot()}-${counter++}`.toLowerCase();
+  if (slug.length > 63) throw new Error(`project slug "${slug}" is longer than a DNS label allows`);
+  return slug;
+};
 
 /** `path` on `host` — a GET, or `init`'s method and body — through `projectHostDispatcher`. */
 export async function fetchProjectHost(

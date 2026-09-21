@@ -32,10 +32,40 @@ declare module "vitest" {
      *  serves MCP on its own origin, else `<worker>/mcp` (the local worker, and any deploy without a
      *  distinct MCP origin). support/session tests POST here. */
     mcpBaseUrl: string;
+    /** THE RUN'S ID — minted here once and carried by every identifier a test mints (client.ts
+     *  `runId`), so two runs against one deployment never collide. `E2E_RUN_ID` pins it. */
+    runId: string;
   }
 }
 
+/** The local worker the two e2e projects (`e2e`, `e2e-serial`) SHARE. vitest runs a globalSetup once
+ *  per project, in the one node process, so the boot is a process-global promise and the last
+ *  project's teardown closes it — two workerd harnesses over one `.wrangler` state directory is not
+ *  a thing, and the second boot would be pure waste even where it worked. */
+type LocalWorker = { baseUrl: string; close: () => Promise<void> };
+type SharedLocalWorker = { refs: number; worker: Promise<LocalWorker> };
+const LOCAL_WORKER = Symbol.for("os-next.e2e.local-worker");
+const localWorkerHolder = globalThis as unknown as Record<symbol, SharedLocalWorker | undefined>;
+
+function acquireLocalWorker(): Promise<LocalWorker> {
+  const shared = (localWorkerHolder[LOCAL_WORKER] ??= { refs: 0, worker: bootLocalWorker() });
+  shared.refs++;
+  return shared.worker;
+}
+
+async function releaseLocalWorker(): Promise<void> {
+  const shared = localWorkerHolder[LOCAL_WORKER];
+  if (!shared || --shared.refs > 0) return;
+  localWorkerHolder[LOCAL_WORKER] = undefined;
+  await (await shared.worker).close();
+}
+
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
+  // One id for the whole run, on every project (client.ts folds it into every ctx, slug, repo path
+  // and account the suite mints) — minted into the run's own env so the second project's globalSetup
+  // reads the first's. Pinnable: a commit sha makes a CI run's litter self-identifying.
+  process.env.E2E_RUN_ID ||= crypto.randomUUID().slice(0, 8);
+  project.provide("runId", process.env.E2E_RUN_ID);
   // DEPLOYED-TARGET MODE — the proof that counts: `WORKER_BASE_URL=https://os.iterate2.com
   // ADMIN_API_SECRET=… pnpm e2e` runs the SAME suite against the deployed worker, no local boot.
   const deployedWorkerBaseUrl = process.env.WORKER_BASE_URL;
@@ -68,11 +98,23 @@ export default async function setup(project: TestProject): Promise<() => Promise
     );
     return async () => {};
   }
+  const { baseUrl } = await acquireLocalWorker();
+  project.provide("openaiApiKey", "");
+  project.provide("workerBaseUrl", baseUrl);
+  project.provide("adminApiSecret", E2E_ADMIN_API_SECRET);
+  // The local worker's project hosts hang under `localhost` (worker-config.ts) and it serves MCP at
+  // `/mcp` (no distinct MCP origin).
+  project.provide("projectHostnameBase", "localhost");
+  project.provide("mcpBaseUrl", new URL("/mcp", baseUrl).href);
+  return releaseLocalWorker;
+}
+
+/** Boot the one local workerd every file speaks to, schema and all. */
+async function bootLocalWorker(): Promise<LocalWorker> {
   const server = createTestHarness({
     root: PACKAGE_DIR,
     workers: [{ config: e2eWorkerConfig() }],
   });
-  project.provide("openaiApiKey", "");
   const { url } = await server.listen();
   await server.update({ root: PACKAGE_DIR, workers: [{ config: e2eWorkerConfig(url.origin) }] });
   // THE DIRECTORY SCHEMA into the local D1 the harness bound — applied through the worker's OWN binding
@@ -87,13 +129,5 @@ export default async function setup(project: TestProject): Promise<() => Promise
     .map((statement) => statement.replace(/\s+/g, " ").trim())
     .filter(Boolean);
   await DB.batch(statements.map((statement) => DB.prepare(statement)));
-  project.provide("workerBaseUrl", url.href);
-  project.provide("adminApiSecret", E2E_ADMIN_API_SECRET);
-  // The local worker's project hosts hang under `localhost` (worker-config.ts) and it serves MCP at
-  // `/mcp` (no distinct MCP origin).
-  project.provide("projectHostnameBase", "localhost");
-  project.provide("mcpBaseUrl", new URL("/mcp", url.href).href);
-  return async () => {
-    await server.close();
-  };
+  return { baseUrl: url.href, close: () => server.close() };
 }

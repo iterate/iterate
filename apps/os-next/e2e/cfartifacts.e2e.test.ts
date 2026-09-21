@@ -22,13 +22,15 @@
 import { expect } from "vitest";
 import { repoArtifactName } from "../src/context/repos.ts";
 import type { RepoLogEntry } from "../src/repo/git-wire.ts";
-import { freshCtx, openItx } from "./support/client.ts";
+import { freshCtx, openItx, runId, workerSlot } from "./support/client.ts";
 import { deployedOnly } from "./support/project-host.ts";
 
-/** A repo path unique to this run — one segment under `/e2e`, inside Artifacts' name grammar
- *  (`[a-zA-Z0-9._-]+`, never `--`). */
+/** A repo path unique to this run AND to the worker process that mints it — one segment under
+ *  `/e2e`, inside Artifacts' name grammar (`[a-zA-Z0-9._-]+`, never `--`). The namespace is the
+ *  account's: two runs at once must never name one repo, because the `finally` below deletes by path. */
+let repoCounter = 0;
 const freshRepoPath = (prefix: string): string =>
-  `/e2e/${prefix}-${Math.random().toString(36).slice(2, 8)}`;
+  `/e2e/${prefix}-${runId()}-${workerSlot()}-${repoCounter++}`;
 
 /** Every repo path this project can see, following the namespace-wide cursor to exhaustion — the
  *  binding pages, and `cfArtifacts.list` filters one page locally, so a project's repos can straddle

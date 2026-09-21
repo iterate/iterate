@@ -1,3 +1,5 @@
+// SERIAL LANE (vitest.config.ts): it deliberately saturates the shared /api edge and resets
+// Durable Objects — the one file that would break its SIBLINGS, not itself.
 // isolate-ceilings-deployed.e2e.test.ts — THE ISOLATE CEILINGS against a REAL Durable Object.
 // Local workerd enforces no memory limit (NullIsolateLimitEnforcer), so the proof that counts is the
 // DEPLOYED worker, where the 128 MiB isolate is real:

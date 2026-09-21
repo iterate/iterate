@@ -1,3 +1,5 @@
+// SERIAL LANE (vitest.config.ts): exact capnweb frame tallies for one round trip — a stalled
+// or retried hop changes the count.
 // session-wire-frames-one-round-trip.e2e.test.ts — WIRE-LEVEL: EXACT capnweb frames (counts +
 // direction) against the real worker. The client's WebSocket is OURS (instrumented send + message
 // listeners record every frame with direction and order) and is handed to `newWebSocketRpcSession(ws)`.

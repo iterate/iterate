@@ -88,9 +88,9 @@ onProjectHost(
     const asset = await fetchProjectHost(host, "/app.js");
     expect(asset.status, asset.text).toBe(200);
     expect(asset.text).toContain("document.title");
-    // a visitor's x-itx-* never reach the app (the lane's own header is set after the strip), and
+    // a visitor's x-itx-* never reach the app (the edge's own header is set after the strip), and
     // x-iterate-app is the label the host selected — a visitor's own is overwritten at the DO's fetch
-    // lane, from the expression
+    // path, from the expression
     const echo = await fetchProjectHost(host, "/echo", {
       "x-itx-expression": "itx.kv",
       "x-itx-visitor": "1",
@@ -104,7 +104,7 @@ onProjectHost(
     // the second app shape, `<app>.<project>.<base>`: the same row. LOCAL ONLY: a wildcard
     // certificate covers ONE label under the base (`*.project-worker.iterate.com`), and a wildcard
     // never matches two, so on the deployed worker this shape fails the TLS handshake until a
-    // certificate per project subdomain exists — a deploy-side fact, not the edge's (the workers lane
+    // certificate per project subdomain exists — a deploy-side fact, not the edge's (the workers test project
     // pins the parse; this pins the whole edge, where it can be reached).
     if (projectHostsAreLocal()) {
       const dotted = await fetchProjectHost(`site.${slug}.${base}`, "/w");
@@ -132,7 +132,7 @@ onProjectHost(
     });
     expect(apex.status, apex.text).toBe(200);
     expect((JSON.parse(apex.text) as { app: string | null }).app).toBe("site");
-    // a label no rule serves is the lane's 404 (NO_ITX_EXPRESSION_MATCH), never a 500
+    // a label no rule serves is the edge's 404 (NO_ITX_EXPRESSION_MATCH), never a 500
     const missing = await fetchProjectHost(`other--${slug}.${base}`, "/");
     expect(missing.status, missing.text).toBe(404);
   },
@@ -148,8 +148,11 @@ localOnly(
     const projectId = await registerProject("custom-apex-project"); // the slug worker-config.ts maps custom-apex.test to
     const itx = openItx(projectId);
     await itx.provide("itx.apps.site", siteRule());
-    // A custom hostname reaches its project, but needs an explicit ingress target.
-    const bare = await fetchProjectHost("custom-apex.test", "/");
+    // A custom hostname reaches its project, but needs an explicit ingress target — proved on the
+    // SECOND mapped hostname, whose project this row never configures, so a retry inside the same
+    // run (whose worker, and whose Durable Objects, outlive the attempt) sees the same 404.
+    await registerProject("custom-apex-bare-project");
+    const bare = await fetchProjectHost("custom-apex-bare.test", "/");
     expect(bare.status, bare.text).toBe(404);
     expect(bare.text).toContain("not configured");
     await itx.append({

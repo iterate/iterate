@@ -1,3 +1,5 @@
+// SERIAL LANE (vitest.config.ts): at-least-once delivery asserted EXACTLY once inside 5-8 s
+// budgets — a slow lane redelivers, and the redelivery is the failure.
 // cursor-delivery.e2e.test.ts — THE CURSOR LANE live. A subscription whose target cannot own its
 // progress — a Worker-Loader entrypoint's `processEventBatch(events, range)`, the stateless "project
 // worker" — is delivered at-least-once from a cursor THE STREAM keeps

@@ -13,7 +13,7 @@
 // secrets-connections.e2e.test.ts.
 
 import { expect, test } from "vitest";
-import { freshCtx, openItx, readAll, workerUrl } from "./support/client.ts";
+import { freshCtx, openItx, readAll, runId, workerUrl } from "./support/client.ts";
 import { petshopBaseUrl } from "./support/petshop.ts";
 import { oauthSession } from "./support/principal.ts";
 import {
@@ -233,7 +233,10 @@ deployedOnly(
     const login = await fetch(`${shop}/api/legacy-login`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email: "secret-ws@example.com", password: "correct-horse" }),
+      body: JSON.stringify({
+        email: `secret-ws-${runId()}@example.com`,
+        password: "correct-horse",
+      }),
     });
     expect(login.status).toBe(200);
     const { accessToken } = (await login.json()) as { accessToken: string };

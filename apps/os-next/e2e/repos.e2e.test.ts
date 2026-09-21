@@ -207,7 +207,9 @@ deployedOnly(
         "repos/create-requested",
         "repos/created",
       ]);
-      expect((await itx.cfArtifacts.list()).repos).toEqual([{ path: "/repos/config" }]);
+      // `cfArtifacts.list` filters ONE account-wide page down to this project's repos, so it answers
+      // MEMBERSHIP, never a whole set (cfartifacts.e2e.test.ts pages the binding to exhaustion).
+      expect((await itx.cfArtifacts.list()).repos).toContainEqual({ path: "/repos/config" });
       expect(await repo.tip()).toBeNull(); // unborn main
       const first = await repo.commitFiles({
         message: "first",

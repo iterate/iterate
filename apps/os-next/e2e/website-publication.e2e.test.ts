@@ -1,10 +1,15 @@
 import { expect } from "vitest";
 import { adminCredentials, session } from "./support/client.ts";
 import { FakeArtifacts } from "./support/fake-artifacts.ts";
-import { localOnly, fetchProjectHost, projectHostnameBase } from "./support/project-host.ts";
+import {
+  localOnly,
+  fetchProjectHost,
+  freshDnsSafeProjectSlug,
+  projectHostnameBase,
+} from "./support/project-host.ts";
 
 localOnly("website identity, pinned revisions, and explicit publication agree", async () => {
-  const slug = `website-${Date.now()}`;
+  const slug = freshDnsSafeProjectSlug("website");
   const root = session().authenticate(adminCredentials()).projects.create({ project: slug });
   const identity = await root.cd("/agents/website-test").whoami();
   expect(identity.projectSlug).toBe(slug);
