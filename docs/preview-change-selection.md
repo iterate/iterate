@@ -36,7 +36,9 @@ disable rename detection, so historical file contents are not downloaded.
 A product head can decide deployment immediately, without fetching main. A
 test head can also reuse its own verified deployment without inspecting main.
 
-Only a search for older evidence fetches main, once, at depth four. The reader
+In shallow CI checkouts, only a search for older evidence fetches main, once,
+at depth four. Complete local clones use their existing history without
+fetching or becoming shallow. The reader
 then deepens head and that pinned main SHA as needed to prove the merge-base:
 3, 9, 27, then up to three batches of 81 generations. Finding a merge-base is
 not enough if another shallow path could hide a newer or second one; every

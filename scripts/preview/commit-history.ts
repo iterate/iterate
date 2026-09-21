@@ -51,7 +51,7 @@ export class CommitHistory {
     return paths.split("\0").filter(Boolean);
   }
 
-  *throughMergeBase(): Generator<string> {
+  *throughMergeBase() {
     // Product heads and live deployments at head need no merge-base lookup.
     yield this.head;
     this.tail ||= this.readThroughMergeBase();
@@ -61,7 +61,11 @@ export class CommitHistory {
   private readThroughMergeBase() {
     // Checkout's baked origin/main can be stale, or absent in a depth-one fetch.
     // Pin main once, only when a decision actually needs older candidates.
-    if (this.main === "origin/main") {
+    // Complete local clones already have ancestry; don't make them shallow.
+    if (
+      this.main === "origin/main" &&
+      this.git("rev-parse", "--is-shallow-repository").trim() === "true"
+    ) {
       this.fetch("--depth=4", "+refs/heads/main:refs/remotes/origin/main");
     }
     const main = this.git("rev-parse", "--verify", `${this.main}^{commit}`).trim();

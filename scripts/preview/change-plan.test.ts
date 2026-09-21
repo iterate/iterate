@@ -46,6 +46,28 @@ test("a baked parent tree needs no fetch even when checkout marks head as shallo
   ).toMatchObject({ action: "deploy", changes: { Product: ["apps/os/index.ts"] } });
 });
 
+test("planning in a complete clone does not truncate its history or require a remote", async () => {
+  using repo = repository();
+  repo.commit({ "apps/os/index.ts": "product" });
+  for (let i = 0; i < 5; i++) repo.commit({ "README.md": `main docs ${i}` });
+  const base = repo.git("rev-parse", "HEAD");
+  repo.git("switch", "-c", "feature");
+  repo.commit({ "README.md": "feature docs" });
+  const checkout = repo.shallowCheckout();
+  checkout.git("fetch", "--unshallow", "origin", "+refs/heads/main:refs/remotes/origin/main");
+  checkout.git("remote", "set-url", "origin", join(repo.directory, "missing-remote"));
+  expect(
+    await planPreview(checkout.history, {
+      findPreviewResult: async (commit) =>
+        commit === base
+          ? { commit, conclusion: "success", url: "https://depot.dev/settled-preview" }
+          : null,
+      findPreviewDeployment: async () => null,
+    }),
+  ).toMatchObject({ action: "inherit", result: { commit: base } });
+  expect(checkout.git("rev-parse", "--is-shallow-repository")).toBe("false");
+});
+
 test("a shallow docs checkout fetches enough metadata to inherit through the merge-base", async () => {
   using repo = repository();
   repo.commit({ "apps/os/index.ts": "old product" });
