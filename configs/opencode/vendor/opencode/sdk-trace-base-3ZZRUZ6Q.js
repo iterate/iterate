@@ -1,0 +1,2 @@
+import { createRequire as __iterateCreateRequire } from "node:module"; const require = __iterateCreateRequire("/opencode-workerd.js");
+import{a}from"./chunk-MDSW4OPC.js";import"./chunk-4ZAXVOX6.js";export default a();

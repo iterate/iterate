@@ -1,0 +1,2 @@
+import { createRequire as __iterateCreateRequire } from "node:module"; const require = __iterateCreateRequire("/opencode-workerd.js");
+import{d as a,e}from"./chunk-EYOXN4KT.js";import{_ as t,ja as p}from"./chunk-KALCFO2T.js";import{d as r}from"./chunk-4ZAXVOX6.js";var o={};r(o,{OpenAICompatibleChat:()=>o,route:()=>i});var n="openai-compatible-chat",i=p.make({id:n,providerMetadataKey:"openai",protocol:a,endpoint:t.path("/chat/completions"),framing:e});export{o as a};

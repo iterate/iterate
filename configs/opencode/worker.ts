@@ -1,8 +1,7 @@
 // The project worker of the opencode template. It does three small things:
 //
-//   1. names the opencode Durable Object (a stateful dynamic worker ref — the
-//      platform builds `apps/opencode/opencode.ts` from this repo with the
-//      `workerd` bundle condition opencode's workerd profile requires);
+//   1. names the opencode Durable Object (a stateful dynamic worker ref the
+//      platform builds from this repo);
 //   2. exposes it on the capability tree as `itx.worker.opencode` (the getter
 //      below — `itx.worker.opencode.prompt({ text })` is one flattened RPC);
 //   3. forwards the `opencode` app host to the object's own `fetch`, behind
@@ -29,8 +28,11 @@ export const OPENCODE_WORKER: StatefulDynamicWorkerRef = {
   source: {
     createWorker: {
       entryPoint: "apps/opencode/opencode.ts",
-      conditions: ["workerd"],
-      minify: true,
+      // No bundling: the vendored opencode bundle is already a single
+      // workerd-conditioned, minified module, and the platform's bundler
+      // sidecar cannot afford to run esbuild over 13MB of it. In transform
+      // mode plain .js files are copied verbatim; only this .ts is compiled.
+      bundle: false,
       files: { type: "repo", repoPath: "/repos/config" },
     },
   },

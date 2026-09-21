@@ -20,12 +20,7 @@ export namespace OpenCodeWorkerd {
 
   /** Only the two message kinds the template reads; opencode has several more. */
   type SessionMessage =
-    | {
-        type: "user";
-        id: string;
-        time: { created: number };
-        content: Array<{ type: "text"; text: string } | { type: string; [key: string]: unknown }>;
-      }
+    | { type: "user"; id: string; time: { created: number }; text: string }
     | {
         type: "assistant";
         id: string;

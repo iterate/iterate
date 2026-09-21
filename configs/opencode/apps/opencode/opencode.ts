@@ -3,9 +3,14 @@
 // `OpenCodeWorkerd.create` boots the whole opencode server in-process: its
 // database lives in this object's SQLite, and the services that need a real
 // machine (filesystem, shell, pty) are replaced by inert stubs. Nothing here
-// is platform-privileged: the class is an ordinary stateful dynamic worker
-// (`IterateDurableObject`), so it gets its own storage, a scoped `env.ITX`,
-// and the project egress door as its global `fetch`.
+// is platform-privileged: the class is an ordinary stateful dynamic worker,
+// so it gets its own storage, a scoped `env.ITX`, and the project egress
+// door as its global `fetch`. It extends the raw `DurableObject` rather than
+// the SDK's `IterateDurableObject` because this worker is built in the
+// platform's transform lane (no bundling — see worker.ts), where any
+// `iterate/sdk` import pulls in `.mjs` dist files under names Worker Loader
+// refuses; the one platform hook the host dials, `__stashSelfRef`, is a
+// no-op here.
 //
 // That egress door is how the model call gets its credential: opencode is
 // configured with `getSecret("/secrets/openai-api-key")` as the OpenAI API
@@ -19,27 +24,47 @@
 //   - fetch lane: the `opencode` app host serves a small chat page + JSON API
 //     (the project worker forwards `x-iterate-app: opencode` here).
 
-import { IterateDurableObject, type Project } from "iterate/sdk";
-import { OpenCodeWorkerd } from "../../vendor/opencode-workerd.js";
+import { DurableObject } from "cloudflare:workers";
+import { OpenCodeWorkerd } from "../../vendor/opencode/entry.js";
+
+// The slice of the project's itx this file uses, declared locally: the
+// platform's transform lane resolves every import specifier in the source
+// (type-only ones included), and `iterate/sdk` resolves to `.mjs` dist files
+// Worker Loader refuses. worker.ts, which is bundled, imports the real types.
+type Project = {
+  secrets: {
+    get(path: string): { __describe(): Promise<{ hasMaterial: boolean }> };
+    collectFromUser(input: {
+      path: string;
+      egress: { urls: string[] };
+      description?: string;
+    }): Promise<{ url: string }>;
+  };
+  [Symbol.dispose]?: () => void;
+};
+type Env = { ITX: { get(): Promise<Project> } };
 
 const OPENAI_SECRET_PATH = "/secrets/openai-api-key";
 const OPENAI_ORIGIN = "https://api.openai.com";
 /** opencode sessions need a location; workerd has no filesystem behind it. */
 const LOCATION = { directory: "/workspace" };
 
-export class OpencodeAgent extends IterateDurableObject {
+export class OpencodeAgent extends DurableObject<Env> {
   readonly #opencode: Promise<OpenCodeWorkerd.Interface>;
 
-  constructor(ctx: DurableObjectState, env: IterateDurableObject["env"]) {
+  constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     // One host per object incarnation, booted before any event is let in —
-    // the shape opencode's own Cloudflare guide prescribes. The raw `ctx`
-    // (not the SDK's alarm-shimmed overlay) is what opencode's SQLite
-    // binding gets.
+    // the shape opencode's own Cloudflare guide prescribes.
     this.#opencode = ctx.blockConcurrencyWhile(() =>
       OpenCodeWorkerd.create({
         storage: ctx.storage,
         models: { fetch: false },
+        // Not optional on Cloudflare: opencode's default logger writes a log
+        // file through `node:fs`, which nodejs_compat backs with memory, and
+        // its debug-level output at boot alone blows the 128MB isolate limit
+        // ("Durable Object's isolate exceeded its memory limit").
+        log: { level: "error" },
         config: {
           model: "openai/gpt-5.4",
           providers: {
@@ -51,6 +76,11 @@ export class OpencodeAgent extends IterateDurableObject {
       }),
     );
   }
+
+  /** The hosting Durable Object delivers this worker's own ref before any
+   * other traffic; the SDK base class stores it for its alarm shim. This
+   * object arms no alarms, so there is nothing to keep. */
+  __stashSelfRef(_ref: unknown): void {}
 
   /** Send one user message and wait for the assistant's reply. */
   async prompt(input: { text: string; sessionID?: string }) {
@@ -192,7 +222,7 @@ function chatPage(): string {
     log.replaceChildren();
     for (const message of messages) {
       if (message.type === "user") {
-        add("user", message.content.filter((p) => p.type === "text").map((p) => p.text).join(""));
+        add("user", message.text);
       } else if (message.type === "assistant") {
         const body = message.content.filter((p) => p.type === "text").map((p) => p.text).join("");
         add("assistant", body || (message.error ? JSON.stringify(message.error, null, 2) : "…"),

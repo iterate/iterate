@@ -39,7 +39,7 @@
     "**/*ignoreme*",
     "apps/browser-extension/capnweb.js",
     "apps/os-next/public/capnweb.js",
-    "configs/opencode/vendor/opencode-workerd.js"
+    "configs/opencode/vendor/opencode/*.js"
   ],
   "jsPlugins": [
     "./lint/oxlint-plugin-iterate.ts",

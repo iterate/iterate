@@ -9,7 +9,7 @@ platform changes.
   `health` over RPC and a small chat page over HTTP.
 - `worker.ts` — names the object, mounts it as `itx.worker.opencode`, and
   routes the `opencode` app host to it (project members only).
-- `vendor/opencode-workerd.js` — `@opencode/sdk/workerd` prebundled with the
+- `vendor/opencode/` — `@opencode/sdk/workerd` prebundled with the
   `workerd` condition (see `vendor/README.md` for why and how).
 
 ## Use

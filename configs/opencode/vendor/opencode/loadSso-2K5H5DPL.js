@@ -1,0 +1,2 @@
+import { createRequire as __iterateCreateRequire } from "node:module"; const require = __iterateCreateRequire("/opencode-workerd.js");
+import{c as u,e as d}from"./chunk-4ZAXVOX6.js";var o=u((i,n)=>{var t=new Proxy(function(){},{get:(s,e)=>e==="then"||e==="__esModule"?void 0:t,apply:()=>t,construct:()=>t});n.exports=t});var r=d(o());var export_GetRoleCredentialsCommand=r.GetRoleCredentialsCommand;var export_SSOClient=r.SSOClient;export{export_GetRoleCredentialsCommand as GetRoleCredentialsCommand,export_SSOClient as SSOClient};

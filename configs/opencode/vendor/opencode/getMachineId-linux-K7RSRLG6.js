@@ -1,0 +1,2 @@
+import { createRequire as __iterateCreateRequire } from "node:module"; const require = __iterateCreateRequire("/opencode-workerd.js");
+import{a}from"./chunk-V6UXJ6KU.js";import{e as n}from"./chunk-4ZAXVOX6.js";var r=n(a());import{promises as o}from"fs";async function d(){let t=["/etc/machine-id","/var/lib/dbus/machine-id"];for(let i of t)try{return(await o.readFile(i,{encoding:"utf8"})).trim()}catch(e){r.diag.debug(`error reading machine id: ${e}`)}}export{d as getMachineId};

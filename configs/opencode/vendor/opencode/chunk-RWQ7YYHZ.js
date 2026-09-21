@@ -1,0 +1,2 @@
+import { createRequire as __iterateCreateRequire } from "node:module"; const require = __iterateCreateRequire("/opencode-workerd.js");
+import{M as a}from"./chunk-KALCFO2T.js";import{d as f}from"./chunk-4ZAXVOX6.js";var t={};f(t,{AuthOptions:()=>t,bearer:()=>h});var h=(r,e)=>"auth"in r&&r.auth?r.auth:(Array.isArray(e)?e:[e]).reduce((u,i)=>u.orElse(a.config(i)),a.optional("apiKey"in r?r.apiKey:void 0,"apiKey")).bearer();export{t as a};

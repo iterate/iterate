@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: needs-review
 size: medium
 tags: [os, dynamic-workers, config-templates, opencode, poc]
 branch: opencode-v2-poc
@@ -9,17 +9,23 @@ branch: opencode-v2-poc
 
 ## Status summary
 
-Working locally (2026-09-21). opencode v2 boots inside a userland Durable
-Object of a project born from the new `configs/opencode` template, answers
-`itx.worker.opencode.prompt({ text })` with GPT-5.4 replies, keeps session
-history across prompts, and gets its API key through the platform's secret
-cell with zero core changes. Remaining: preview deploy + browser demo of the
-app host (local dev has no app hostnames).
+Working locally and on preview-3 (2026-09-21). opencode v2 boots inside a
+userland Durable Object of a project running the new `configs/opencode`
+template, answers `itx.worker.opencode.prompt({ text })` with GPT-5.4
+replies, keeps session history across prompts, and gets its API key through
+the platform's secret cell with zero core changes.
 
-Core changes needed: none. Two userland workarounds were needed, both
-recorded in the log: the opencode dependency tree must be prebundled (the
-platform bundler cannot install/resolve it), and Worker Loader modules have
-no `import.meta.url`.
+Core changes needed to make it work: none. Core gaps found (all worked
+around in userland, all recorded in the log with evidence): the
+dynamic-worker bundler cannot install or resolve opencode's dependency tree;
+the bundler sidecar runs out of memory bundling a 13MB module; the OS
+Durable Object isolate that hands a dynamic worker's modules to Worker
+Loader is shared and memory-bound, so a 13MB artifact tips it over
+intermittently (8.6MB is fine); the transform lane (`bundle: false`)
+turns any `iterate/sdk` import into `.mjs` module names Worker Loader
+refuses; and the git-wire template copy caps a file at 2MB, so a project
+cannot be born from this template through the GitHub reference — the
+template has to be committed into the project repo after birth.
 
 ## Ask (verbatim gist)
 
@@ -106,7 +112,7 @@ no `import.meta.url`.
 - [x] ~~secret bootstrap on `project/created`~~; collect link on the app root page _(`collectFromUser` creates the secret itself on submit, so no bootstrap event handler; the app root page mints the link while `hasMaterial` is false)_
 - [x] local proof: project created from the template on `pnpm dev`, one prompt round-trips through opencode → egress → ~~anthropic~~ OpenAI _(switched provider: the platform has no Anthropic key in any Doppler config, only an invalid one in dev; OpenAI is what the platform itself uses)_
 - [x] bundling evidence: Plan A outcome recorded; Plan B applied _(see log)_
-- [ ] preview deploy on a manually leased slot; demo project; link + screenshot in the final commit message
+- [x] preview deploy on a manually leased slot; demo project; link + screenshot in the final commit message _(preview-3, demo project `oc-demo` born through the real sign-in flow: https://opencode--oc-demo.iterate-preview-3.app/ — sign in first via https://os.iterate-preview-3.com/api/iterate-auth/login?login_hint=oc%2Btest%40nustom.com, fixed OTP 424242. Two prompts answered by GPT-5.4 on the app host; verified in the browser)_
 - [x] lint/typecheck/knip green _(oxlint + oxfmt on the template, `typecheck:template`, `pnpm knip`; the vendored bundle is in both lint ignore lists)_
 - [x] README in the template + this task's implementation log: what core lacked, if anything _(nothing; two userland workarounds)_
 
@@ -174,6 +180,68 @@ same session recalled "teal". `sessions()` lists them.
 **Timing.** Warm `prompt` round trip from the CLI: 5–10s. The facet's
 `blockConcurrencyWhile` boot is inside that on a cold object.
 
+**Preview (slot 3, manual lease `manual-mmkal`, `os-preview-3` + `auth-preview-3`
+deployed from this branch; project `opencode-poc`,
+`prj_10ec56753424436fa9a1cf3d39d898c7`).** What local dev could not show,
+because local workerd enforces no memory limit and has no app hostnames:
+
+1. **Project birth from the GitHub template fails**: `Config repo creation
+   failed: pack object exceeds 2097152 bytes` (`domains/repos/git-wire.ts`
+   caps a pack object at 2MB; the bundle's `entry.js` is 5.4MB). The demo
+   project was born stock and the template committed in with
+   `repo.commitFiles` (13MB commit: 5s — the repo itself has no such cap).
+2. **`bundle: true` kills the bundler sidecar**: `wrangler tail
+   os-preview-3-worker-bundler` shows `outcome: exceededMemory` on the
+   build of the 13MB module. Fix: `bundle: false` — the transform lane
+   copies plain `.js` files verbatim and only compiles the `.ts` entry.
+3. **Transform lane + `iterate/sdk`**: `Module name must end with '.js' or
+   '.py' ... Got: node_modules/iterate/dist/sdk.mjs`. The lane resolves
+   every import specifier in the raw source (type-only ones included) and
+   emits the resolved files under their real names. Fix: the object file
+   imports nothing from `iterate/sdk`; it extends `cloudflare:workers`'
+   `DurableObject`, declares the itx slice it uses locally, and implements
+   `__stashSelfRef` as a no-op.
+4. **`Durable Object's isolate exceeded its memory limit and was reset`**,
+   intermittent, on loading the 13MB artifact. Bisected on preview with
+   throwaway facets: import-only probe fine, full boot with the OpenAI
+   config fine, an exact copy of the object file under a new name fine,
+   the real file failing 3s in — then passing right after a reset. The
+   `os-preview-3` tail shows unrelated `StreamDurableObject` /
+   `ItxEntrypoint` requests `canceled` at the same moment, i.e. the OS
+   worker's own DO isolate (which parses the artifact JSON and hands the
+   modules to Worker Loader) is what resets, and whether it does depends
+   on what else that shared isolate holds. Node measurements of the same
+   bundle: import +43MB heap, boot +4MB, a prompt turn peaks ~110MB used
+   under a 96MB old-space cap and survives — so the facet itself fits.
+   Fix: shrink the artifact. `vendor/build-opencode.mjs` stubs packages
+   opencode never reaches here (other providers' SDKs, npm-install
+   machinery, OpenTelemetry exporters, native-module shims) with a CJS
+   Proxy, and code-splits: 13MB/241 files → 8.6MB/210 files. After that,
+   six fresh boots in a row (16s cold with build, then 2.6–4.4s) and
+   prompts all succeeded; a two-turn session recalled "Teal".
+5. The default opencode logger is not the problem (tested); `log: { level:
+   "error" }` stays anyway to keep boot quiet.
+
+**Timing on preview.** Cold object (artifact cached): ~3–4s to boot; a
+prompt round trip via `itx.worker.opencode.prompt` from the CLI: ~5s.
+
+**Browser demo (app host, fetch lane).** `opencode--oc-demo.iterate-preview-3.app`
+behind project-member auth: sign-in via "Continue with iterate", then two
+prompts rendered with GPT-5.4's replies (it describes itself as running in
+an OpenCode harness on Linux in `/workspace` — the workerd profile's
+stand-in location). One `GET /` answered 500 right after the object's
+source changed (the serve envelope's "Something went wrong" page for a
+moment while the facet restarted); the reload was fine. Also seen: the
+page's own JS assumed user messages carry `content`; opencode's user
+messages carry `text` — fixed.
+
+**Lease.** `pnpm preview release --slot preview-3 --lease-id
+b5365aaf-1d48-4aa0-b65e-0b1e759f9f9a` when done (expires 2026-09-21T23:51Z).
+
 **Not done / follow-ups** (beyond the out-of-scope list above): the
 `worker-updated` warm-up calls `health()` on every config commit — cheap,
 but it means the object boots on deploy; drop it if that ever matters.
+The app host's project-member auth mints through the auth worker, so a
+forged `auth:mint` identity is refused there (`You do not have access to
+this project.`); the browser demo needs a project born through the real
+sign-in flow.
