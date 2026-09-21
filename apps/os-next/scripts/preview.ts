@@ -379,7 +379,7 @@ async function writePullRequestSection(prNumber: string, section: string): Promi
 
 // ── the D1 (not auto-provisioned: created here, deleted here) ──────────────────────────────────
 
-type D1Row = { uuid: string; name: string };
+type D1Row = { uuid: string; name: string; created_at?: string };
 
 /** Every D1 on the account (the list API's `name` filter matches by prefix — measured — so the exact
  *  match is made here, and the sweep filters by prefix here too). */
@@ -810,12 +810,19 @@ async function sweep(dryRun: boolean): Promise<void> {
   }
   // A D1 whose preview is gone (a cleanup that failed after `preview delete`, a hand-deleted preview).
   const live = new Set(previews.map((preview) => previewResourceName(preview.name, "db")));
-  const orphanDatabases = (await listDatabases()).filter(
-    (row) =>
-      /-db$/.test(row.name) &&
-      row.name.startsWith(`${PREVIEW_PARENT.workerName}-pr`) &&
-      !live.has(row.name),
-  );
+  // A D1 named for a preview that no longer exists — but only when its pull request is closed or
+  // missing, or the database is older than a day: a deploy in flight creates its D1 BEFORE the
+  // preview exists, and a sweep running at that moment must not take it.
+  const orphanDatabases: D1Row[] = [];
+  for (const row of await listDatabases()) {
+    const prefix = `${PREVIEW_PARENT.workerName}-`;
+    if (!row.name.startsWith(`${prefix}pr`) || !row.name.endsWith("-db") || live.has(row.name))
+      continue;
+    const number = previewPullRequestNumber(row.name.slice(prefix.length, -"-db".length));
+    const state = number === undefined ? "unknown" : await pullRequestState(number);
+    const ageDays = row.created_at ? (Date.now() - Date.parse(row.created_at)) / 86_400_000 : NaN;
+    if (state === "closed" || state === "missing" || ageDays > 1) orphanDatabases.push(row);
+  }
   const staleNames = new Set(stale.map(({ name }) => name));
   const liveNames = new Set(previews.map((preview) => preview.name));
   const staleAppPreviews = appPreviews.filter(
