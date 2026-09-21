@@ -54,6 +54,8 @@ import {
   ProjectSecretRefused,
   refreshSecretMaterial,
   substituteProjectSecrets,
+  verifySecretHmac,
+  type SecretHmacVerification,
   type SecretRecord,
 } from "../secrets.ts";
 import { SecretContract, type SecretState } from "./contract.ts";
@@ -158,6 +160,18 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
   async clear(): Promise<void> {
     await this.#bump();
     await this.ctx.storage.delete(["stored", "pending", "completed"]);
+  }
+  /** THE VERIFY LANE (apps/os's `verifyMaterialField`, for webhooks): is `signature` the HMAC-SHA256
+   *  of `payload` under this secret's material? The material is opened HERE and the answer is one
+   *  bit — nothing comes out, and no request goes anywhere, so the pin is not consulted. The
+   *  candidate arrives from an unauthenticated door (a webhook): a secret never set, or a material
+   *  with no key at the field, answers false rather than describing itself; the comparison is
+   *  constant-time. */
+  async verifyHmac(input: SecretHmacVerification): Promise<boolean> {
+    const stored = await this.ctx.storage.get<Stored>("stored");
+    if (!stored) return false;
+    const { material } = await this.#opened(stored);
+    return verifySecretHmac(material, input);
   }
 
   /** OAUTH, step one: keep the pending attempt, hand back the authorize URL. The `state` is a

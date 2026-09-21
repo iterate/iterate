@@ -290,6 +290,82 @@ export async function substituteProjectSecrets(
 
 /** A secret is sent to its pinned origins ONLY — a mis-typed URL cannot mail a credential to a
  *  stranger, and an app that forwards a visitor's headers cannot be made to mail it either. */
+/** What `itx.secrets.verifyHmac(path, …)` takes: the bytes a webhook signed (a string is its UTF-8),
+ *  the hex HMAC-SHA256 it sent, and which field of a JSON material is the key (the whole material
+ *  when omitted). Stripe signs `${t}.${body}`, GitHub the body (`sha256=<hex>`), Slack `v0:${t}:${body}`;
+ *  the caller assembles the signed bytes and strips the scheme prefix. */
+export type SecretHmacVerification = {
+  payload: string | Uint8Array;
+  signature: string;
+  field?: string;
+};
+
+/** The material as an HMAC key: the whole value when it is a string and no field is named, else the
+ *  string at `field` of a JSON material (an object, or a string that parses as one). Anything else —
+ *  an object with no field named, a field with no string at it — is null: no key, so nothing verifies. */
+export function secretMaterialStringOf(material: SecretMaterial, field?: string): string | null {
+  if (!field) return typeof material === "string" ? material : null;
+  let value: unknown = material;
+  if (typeof material === "string") {
+    try {
+      value = JSON.parse(material);
+    } catch {
+      return null;
+    }
+  }
+  for (const segment of field.split(".")) value = isRecord(value) ? value[segment] : undefined;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/** Hex HMAC-SHA256 of `payload` under `key` — the webhook-signature primitive (apps/os's
+ *  `computeHmacHex`). WebCrypto, present in every isolate. */
+export async function hmacSha256Hex(key: string, payload: string | Uint8Array): Promise<string> {
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(key),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const bytes = typeof payload === "string" ? new TextEncoder().encode(payload) : payload;
+  const signature = await crypto.subtle.sign("HMAC", cryptoKey, bytes as BufferSource);
+  return [...new Uint8Array(signature)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** Constant-time equality of two strings (apps/os's `constantTimeStringEquals`): HMAC both under one
+ *  throwaway key and compare the fixed-length digests with no early exit, so neither content nor
+ *  LENGTH shapes the timing — the candidate comes from an unauthenticated door. */
+export async function constantTimeEquals(expected: string, candidate: string): Promise<boolean> {
+  // a symmetric algorithm mints one key, not a pair — the union in the types is for RSA/EC
+  const key = (await crypto.subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, false, [
+    "sign",
+  ])) as CryptoKey;
+  const encoder = new TextEncoder();
+  const [a, b] = (
+    await Promise.all([
+      crypto.subtle.sign("HMAC", key, encoder.encode(expected)),
+      crypto.subtle.sign("HMAC", key, encoder.encode(candidate)),
+    ])
+  ).map((digest) => new Uint8Array(digest));
+  let difference = 0;
+  for (let i = 0; i < a!.length; i += 1) difference |= a![i]! ^ b![i]!;
+  return difference === 0;
+}
+
+/** THE VERIFY LANE, pure: does `signature` (hex, either case) equal the HMAC-SHA256 of `payload`
+ *  under the key `material` holds (at `field`)? One bit out; the key never leaves the caller. A
+ *  material with no key at the field verifies nothing. */
+export async function verifySecretHmac(
+  material: SecretMaterial,
+  input: SecretHmacVerification,
+): Promise<boolean> {
+  const key = secretMaterialStringOf(material, input.field);
+  if (!key) return false;
+  const signature = input.signature.trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(signature)) return false;
+  return constantTimeEquals(await hmacSha256Hex(key, input.payload), signature);
+}
+
 export function originPinned(url: string, urls: string[]): boolean {
   return urls.includes(new URL(url).origin);
 }

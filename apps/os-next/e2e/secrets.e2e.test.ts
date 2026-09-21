@@ -18,6 +18,7 @@
 // platform pin, inside workerd, is __workers-tests__/secret-facet-proxies-a-socket.test.ts). The
 // connection mechanisms that refresh a credential are secrets-connections.e2e.test.ts.
 
+import { createHmac } from "node:crypto";
 import { expect, test } from "vitest";
 import { freshCtx, openItx, processorNames, readAll, runId, workerUrl } from "./support/client.ts";
 import { petshopBaseUrl } from "./support/petshop.ts";
@@ -441,6 +442,70 @@ test("a set refused by a paused stream on the secret's path leaves no value behi
   );
   expect(res.status).toBe(502); // the refused set stored no value, so the secret's facet finds none for `ghost` and refuses before the terminal fetch — the request never leaves
   expect(await res.text()).toContain('no stored project secret for getSecret("/secrets/ghost")');
+});
+
+test("verifyHmac: a webhook's HMAC-SHA256 hex signature is checked inside the secret's facet — true for the right key and signed bytes (a string or bytes, hex in either case, the whole material or one field of a JSON value), false for a tampered payload, a wrong signature, a wrong field or a secret never set; the same from loaded code through its creator's link; no fact and no value leaves the facet", async () => {
+  const itx = openItx(freshCtx("secrets-verify"));
+  const urls = ["https://api.stripe.com"];
+  await itx.secrets.set("/secrets/hook", "whsec_test_key", { urls });
+  await itx.secrets.set("/secrets/hook-json", { signing: "whsec_json_key", n: 1 }, { urls });
+  const payload =
+    "1700000000." + JSON.stringify({ id: "evt_1", type: "checkout.session.completed" });
+  const sign = (key: string) => createHmac("sha256", key).update(payload).digest("hex");
+  const signature = sign("whsec_test_key");
+  expect(await itx.secrets.verifyHmac("/secrets/hook", { payload, signature })).toBe(true);
+  expect(
+    await itx.secrets.verifyHmac("/secrets/hook", {
+      payload: new TextEncoder().encode(payload),
+      signature: signature.toUpperCase(),
+    }),
+  ).toBe(true);
+  expect(await itx.secrets.verifyHmac("/secrets/hook", { payload: `${payload} `, signature })).toBe(
+    false,
+  );
+  expect(
+    await itx.secrets.verifyHmac("/secrets/hook", { payload, signature: "00".repeat(32) }),
+  ).toBe(false);
+  expect(
+    await itx.secrets.verifyHmac("/secrets/hook", { payload, signature: sign("whsec_json_key") }),
+  ).toBe(false);
+  expect(
+    await itx.secrets.verifyHmac("/secrets/hook-json", {
+      payload,
+      signature: sign("whsec_json_key"),
+      field: "signing",
+    }),
+  ).toBe(true);
+  expect(
+    await itx.secrets.verifyHmac("/secrets/hook-json", {
+      payload,
+      signature: sign("whsec_json_key"),
+    }),
+  ).toBe(false); // an object needs a field
+  expect(
+    await itx.secrets.verifyHmac("/secrets/hook-json", {
+      payload,
+      signature: sign("1"),
+      field: "n",
+    }),
+  ).toBe(false);
+  expect(await itx.secrets.verifyHmac("/secrets/never-set", { payload, signature })).toBe(false);
+  // loaded code: a script in a child context, through its creator's link, verifies the same way
+  const child = itx.cd("/agents/hook");
+  await child.provide("itx", "itx.builtins.cd('/')");
+  expect(
+    await child.run(
+      `async (itx) => itx.secrets.verifyHmac("/secrets/hook", ${JSON.stringify({ payload, signature })})`,
+    ),
+  ).toBe(true);
+  // the secret's log has the set and nothing of the verifications; the value is nowhere in it
+  const events = await readAll(itx.cd("/secrets/hook"));
+  expect(
+    events.filter((e) => e.type.startsWith("events.iterate.com/secret/")).map((e) => e.type),
+  ).toEqual([SET]);
+  expect(JSON.stringify(events)).not.toContain("whsec_test_key");
+  await itx.secrets.delete("/secrets/hook");
+  expect(await itx.secrets.verifyHmac("/secrets/hook", { payload, signature })).toBe(false); // deleted: no key
 });
 
 test("loaded code may write a secret: a script run in a child context (through its creator's link) sets, lists and deletes one — the platform's hops to the secret's context are its own, never the script's spelling; the fact speaks for the project (no principal)", async () => {

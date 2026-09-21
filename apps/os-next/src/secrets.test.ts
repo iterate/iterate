@@ -4,6 +4,7 @@
 // first-token flow's two halves (the signed state names the secret's CONTEXT), and the material at
 // rest (bound to the context, the pin and the revision).
 
+import { createHmac } from "node:crypto";
 import { expect, test } from "vitest";
 import {
   beginSecretOAuth,
@@ -13,12 +14,16 @@ import {
 } from "./secret-oauth.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "./secret-at-rest.ts";
 import {
+  constantTimeEquals,
+  hmacSha256Hex,
   normalizeSecretRecord,
   originPinned,
   ProjectSecretRefused,
   refreshSecretMaterial,
+  secretMaterialStringOf,
   secretPathsReferenced,
   substituteProjectSecrets,
+  verifySecretHmac,
   type SecretMaterial,
 } from "./secrets.ts";
 
@@ -205,6 +210,66 @@ test("secretPathsReferenced: the distinct secret PATHS a request's URL and heade
 });
 
 // ── the pin ── never empty: a secret goes to its origins and nowhere else.
+// ── the verify lane ── `verifySecretHmac(material, { payload, signature, field? })`: one bit out.
+test("hmacSha256Hex agrees with node's HMAC over a string and over bytes; constantTimeEquals compares whole strings", async () => {
+  const oracle = (key: string, payload: string | Uint8Array) =>
+    createHmac("sha256", key).update(payload).digest("hex");
+  expect(await hmacSha256Hex("whsec_k", "1700000000.{}")).toBe(oracle("whsec_k", "1700000000.{}"));
+  const bytes = new TextEncoder().encode("raw body ☃");
+  expect(await hmacSha256Hex("k", bytes)).toBe(oracle("k", bytes));
+  expect(await constantTimeEquals("abc", "abc")).toBe(true);
+  expect(await constantTimeEquals("abc", "abd")).toBe(false);
+  expect(await constantTimeEquals("abc", "ab")).toBe(false);
+  expect(await constantTimeEquals("", "")).toBe(true);
+});
+
+test("secretMaterialStringOf: the whole string, or one string field of a JSON value (object or JSON string); an object with no field, a non-string field, an empty string and unparseable JSON are no key", () => {
+  expect(secretMaterialStringOf("whsec_k")).toBe("whsec_k");
+  expect(secretMaterialStringOf({ signing: "s" })).toBeNull();
+  expect(secretMaterialStringOf({ signing: "s", n: 1 }, "signing")).toBe("s");
+  expect(secretMaterialStringOf({ a: { b: "deep" } }, "a.b")).toBe("deep");
+  expect(secretMaterialStringOf(JSON.stringify({ signing: "s" }), "signing")).toBe("s");
+  expect(secretMaterialStringOf({ n: 1 }, "n")).toBeNull();
+  expect(secretMaterialStringOf({ signing: "" }, "signing")).toBeNull();
+  expect(secretMaterialStringOf("not json", "signing")).toBeNull();
+  expect(secretMaterialStringOf({ signing: "s" }, "missing")).toBeNull();
+});
+
+test("verifySecretHmac: true for the right key, payload and hex (either case); false for a tampered payload, a wrong or malformed signature, a wrong field, or a material with no key", async () => {
+  const payload =
+    "1700000000." + JSON.stringify({ id: "evt_1", type: "checkout.session.completed" });
+  const signature = createHmac("sha256", "whsec_k").update(payload).digest("hex");
+  expect(await verifySecretHmac("whsec_k", { payload, signature })).toBe(true);
+  expect(
+    await verifySecretHmac("whsec_k", { payload, signature: ` ${signature.toUpperCase()} ` }),
+  ).toBe(true);
+  expect(
+    await verifySecretHmac("whsec_k", { payload: new TextEncoder().encode(payload), signature }),
+  ).toBe(true);
+  expect(
+    await verifySecretHmac(
+      { signing: "whsec_k", other: 1 },
+      { payload, signature, field: "signing" },
+    ),
+  ).toBe(true);
+  expect(await verifySecretHmac("whsec_k", { payload: payload + " ", signature })).toBe(false);
+  expect(await verifySecretHmac("whsec_other", { payload, signature })).toBe(false);
+  expect(await verifySecretHmac("whsec_k", { payload, signature: "00".repeat(32) })).toBe(false);
+  expect(await verifySecretHmac("whsec_k", { payload, signature: "sha256=" + signature })).toBe(
+    false,
+  ); // the scheme prefix is the caller's to strip
+  expect(await verifySecretHmac("whsec_k", { payload, signature: signature.slice(0, 63) })).toBe(
+    false,
+  );
+  expect(await verifySecretHmac({ signing: "whsec_k" }, { payload, signature })).toBe(false); // an object needs a field
+  expect(
+    await verifySecretHmac(
+      { signing: "whsec_k", other: 1 },
+      { payload, signature, field: "other" },
+    ),
+  ).toBe(false);
+});
+
 test("originPinned: only a pinned origin passes; an empty pin passes nothing", () => {
   expect(originPinned("https://api.example.com/v1/x", ["https://api.example.com"])).toBe(true);
   expect(originPinned("https://evil.example/", ["https://api.example.com"])).toBe(false);

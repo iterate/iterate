@@ -985,7 +985,11 @@ the facet's fetch channel, `delete` still clears first._
   gone. A secret IS its path, and the path is what the placeholder spells: `getSecret("/secrets/<name>")`.
 - **`itx.secrets` is path-keyed** (section 5): `set(path, material, { urls, refresh? })` → `{ path }`,
   `beginOAuth(path, options)` → `{ authorizationUrl }`, `completeOAuth(path, { code, nonce })` (the callback's),
-  `delete(path)` → `{ path }`, `list()` → `[{ path, urls, refresh?, createdAt }]`. Every writing verb runs ON THE
+  `delete(path)` → `{ path }`, `list()` → `[{ path, urls, refresh?, createdAt }]`, and the one READING verb that
+  reveals nothing: `verifyHmac(path, { payload, signature, field? })` → `boolean` — is the hex signature the
+  HMAC-SHA256 of the payload under the secret (or one field of a JSON value)? Computed in the facet, constant-time,
+  one bit out; a secret never set answers false (the candidate comes from an unauthenticated door, a webhook).
+  Every writing verb runs ON THE
   SECRET'S OWN CONTEXT, so the log's order is the value's: it enables the `secret` processor row there, appends the
   fact on that path attributed to the caller, cross-posts the same fact to the owner's root (the catalog) and puts
   the value in the facet (`write(record)`); `delete` is the facet's `clear()`, `secret/deleted` on both logs, then
