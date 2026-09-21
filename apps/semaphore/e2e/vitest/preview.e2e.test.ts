@@ -184,6 +184,44 @@ describe.sequential("preview semaphore E2E", () => {
     );
   }, 120_000);
 
+  test("release tags are consumed and adoption cannot take another holder's slot", async () => {
+    const type = uniqueType();
+    const resource = { type, slug: "rested", data: {} };
+    await semaphore.resources.add(resource);
+    createdResources.push(resource);
+    let lease = await semaphore.resources.acquire({ type, leaseMs: 60_000, holder: "first" });
+    leasedResources.push(lease);
+    expect(
+      await semaphore.resources.release({ ...lease, tags: { prepared: "yes" } }),
+    ).toMatchObject({ released: true });
+    lease = await semaphore.resources.acquire({ type, leaseMs: 60_000, holder: "next" });
+    leasedResources.push(lease);
+    expect(lease).toMatchObject({ tags: { prepared: "yes" }, holder: "next" });
+    expect(
+      await semaphore.resources.acquireSpecific({
+        type,
+        slug: resource.slug,
+        leaseMs: 60_000,
+        expectedHolder: "first",
+        holder: "first",
+      }),
+    ).toBeNull();
+    const adopted = await semaphore.resources.acquireSpecific({
+      type,
+      slug: resource.slug,
+      leaseMs: 60_000,
+      expectedHolder: "next",
+      holder: "next",
+    });
+    expect(adopted).toMatchObject({ tags: {}, holder: "next" });
+    leasedResources.push(adopted!);
+    expect(await semaphore.resources.release(lease)).toMatchObject({ released: false });
+    await semaphore.resources.release(adopted!);
+    lease = await semaphore.resources.acquire({ type, leaseMs: 60_000 });
+    leasedResources.push(lease);
+    expect(lease).toMatchObject({ tags: {} });
+  });
+
   test("supports the contract client against the live worker", async () => {
     const type = uniqueType();
     const created = await semaphore.resources.add({

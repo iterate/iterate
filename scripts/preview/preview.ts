@@ -41,6 +41,7 @@ import {
 } from "../../packages/shared/src/test-support/cloudflare-worker-version-overrides.ts";
 import { PREVIEW_APP_ROLLOUT_READY_AT_MS_ENV } from "../../packages/shared/src/test-support/preview-rollout-gate.ts";
 import { traceOperation } from "../ci/tracing/tracing.ts";
+import { preparedPreviewSlot, previewSlotRestMs } from "./slot-lifecycle.ts";
 import {
   parseWorkerSizeFromDeployOutput,
   parseWorkerSizeStatusDescription,
@@ -474,8 +475,22 @@ export async function ciPrepare(
     }
     if (options.reuseCommit && !state)
       logPreview("Selected preview is no longer usable; deploying the head instead.");
+    let preparedSlot = false;
+    // Keep publishing the old preview until the candidate has passed readiness.
+    const publishedReport = target.report;
     if (!state) {
-      ({ state } = await traceOperation("Provision and deploy preview", () =>
+      const previousSlot = publishedReport.state.environmentConfigLease?.slug;
+      if (previousSlot) {
+        await adoptLeaseHeldBySemaphore({
+          holder: run.holder,
+          leaseMs: defaultPreviewLeaseMs,
+          preferSlug: previousSlot,
+          allowedSlugs: [previousSlot],
+          semaphore: runtime.createPreviewSemaphoreResourceClient(),
+        });
+      }
+      target.report = new PreviewReport(publishedReport.state, async () => {});
+      ({ state, preparedSlot } = await traceOperation("Provision and deploy preview", () =>
         measurePreviewDeployRun(telemetry, () =>
           deployPreviewApps({ target, runtime, allApps: true, telemetry }),
         ),
@@ -493,6 +508,7 @@ export async function ciPrepare(
       holder: run.holder,
       branch: run.branch,
       state,
+      preparedSlot,
       preparedAt: new Date().toISOString(),
       playwrightTestCount: z
         .object({ testCount: z.number().int().positive() })
@@ -526,15 +542,102 @@ export async function ciPrepare(
           throw new Error(commandFailureMessage(result, "OS readiness failed"));
       });
     }
+    await publishedReport.update(() => state);
+    target.report = publishedReport;
     await mkdir(resolve(runtime.repositoryRoot, "test-results"), { recursive: true });
     await writeFile(
       resolve(runtime.repositoryRoot, "test-results/preview-ci-plan.json"),
       JSON.stringify(plan),
     );
     const output = z.string().min(1).parse(process.env.GITHUB_OUTPUT);
-    await appendFile(output, `playwright=${apps.some((app) => app.slug === "os")}\n`);
+    await appendFile(
+      output,
+      `playwright=${apps.some((app) => app.slug === "os")}\nslot=${plan.slot}\n`,
+    );
     return { headSha: plan.headSha, slot: plan.slot };
   });
+}
+
+/** Retire superseded or abandoned candidates while the current preview stays leased. */
+export async function ciRetire(options: PreviewCommandOptions & { keepSlot?: string } = {}) {
+  const { target, runtime } = await resolvePreviewCommandSetup({
+    ...options,
+    requireCleanCheckout: false,
+  });
+  const keepSlot = options.keepSlot || target.report.state.environmentConfigLease?.slug;
+  // A failed main preparation has no persistent published report. Preserve its
+  // previous preview; the next successful run (or expiry/GC) recovers these holds.
+  if (!keepSlot && target.run.pullRequestNumber === null)
+    return { retired: [], reason: "No published main slot to protect." };
+  const semaphore = runtime.createPreviewSemaphoreResourceClient();
+  return retirePreviewSlots({
+    semaphore,
+    holder: target.run.holder,
+    keepSlot: keepSlot || "",
+    eraseSlotData: makePreviewSlotDataEraser(runtime, "reset"),
+    rest: () => sleep(previewSlotRestMs, runtime.signal),
+  });
+}
+
+/** Cleanup owns each old slot through parking and rest; only successful cleanup earns tags. */
+async function retirePreviewSlots(input: {
+  semaphore: PreviewSemaphoreResourceClient;
+  holder: string;
+  keepSlot: string;
+  eraseSlotData: EraseSlotData;
+  rest: () => Promise<void>;
+}) {
+  const held = await listSlotsLeasedToHolder(input.semaphore, input.holder);
+  const retired: string[] = [];
+  for (const slot of held.filter((slot) => slot.slug !== input.keepSlot)) {
+    const lease = await input.semaphore.acquireSpecific({
+      type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+      allowedSlugs: previewEnvironmentSlugs,
+      slug: slot.slug,
+      leaseMs: 30 * 60_000,
+      expectedHolder: input.holder,
+      holder: input.holder,
+    });
+    if (!lease) continue;
+    let tags: Record<string, string> = {};
+    const errors: unknown[] = [];
+    try {
+      logPreview(`Retiring ${slot.slug}; keeping ${input.keepSlot} available for review.`);
+      await input.eraseSlotData({
+        slug: slot.slug,
+        dopplerConfig: parseEnvironmentConfigLeaseData(lease.data).dopplerConfig,
+      });
+      const parkedAt = Date.now();
+      await input.rest();
+      tags = {
+        "preview-policy": "parked-v1",
+        "preview-parked-at": String(parkedAt),
+        "preview-ready-at": String(Date.now()),
+      };
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      const result = await input.semaphore.release({
+        type: lease.type,
+        slug: lease.slug,
+        leaseId: lease.leaseId,
+        tags,
+      });
+      if (!result.released)
+        throw new Error(`Lost retirement lease for ${slot.slug}; preparation was not recorded.`);
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length)
+      throw new AggregateError(
+        errors,
+        `Retiring ${slot.slug} failed: ${errors.map(formatPreviewErrorMessage).join("; ")}`,
+      );
+    retired.push(slot.slug);
+    logPreview(`Released ${slot.slug} with completed parked-slot preparation.`);
+  }
+  return { retired };
 }
 
 /** Run other app suites or exactly one browser shard using the prepared deployment. */
@@ -919,7 +1022,7 @@ async function runPreviewCiCommand(
   const entry = plan.state.apps[slug];
   const remaining = resolvePreviewRolloutRemainingSeconds({
     appSlug: slug,
-    deployedAt: entry.deployedAt || entry.updatedAt,
+    deployedAt: plan.preparedSlot ? null : entry.deployedAt || entry.updatedAt,
   });
   if (app.previewTestRolloutGate === "before-suite" && remaining)
     await sleep(remaining * 1_000, runtime.signal);
@@ -936,7 +1039,7 @@ async function runPreviewCiCommand(
       "env",
       `${E2E_CLOUDFLARE_WORKERS_VERSION_OVERRIDES_ENV}=${plan.workerVersionOverrides}`,
       `${previewRolloutRemainingSecondsEnvironment}=${remaining}`,
-      `${PREVIEW_APP_ROLLOUT_READY_AT_MS_ENV}=${resolvePreviewRolloutReadyAtMs({ appSlug: slug, deployedAt: entry.deployedAt || entry.updatedAt })}`,
+      `${PREVIEW_APP_ROLLOUT_READY_AT_MS_ENV}=${resolvePreviewRolloutReadyAtMs({ appSlug: slug, deployedAt: plan.preparedSlot ? null : entry.deployedAt || entry.updatedAt })}`,
       ...baseUrlEnvironment,
       ...args,
     ],
@@ -1083,6 +1186,7 @@ async function deployPreviewApps({
     return {
       ok: true,
       skipped: true,
+      preparedSlot: false,
       state: current,
     };
   }
@@ -1112,24 +1216,18 @@ async function deployPreviewApps({
               wantedSlug: requestedEnvironment,
             })
           ).lease
-        : await claimEnvironmentConfigLease({
-            eraseSlotData: makePreviewSlotDataEraser(runtime, "reset"),
-            holder,
-            leaseMs: defaultPreviewLeaseMs,
-            // Surface the wait in the report as soon as every slot is busy.
-            onFirstWait: async (holderTable) => {
-              await report.update((state) => ({
-                ...state,
-                notice: [
-                  `All preview slots are leased — this run is waiting for one (since ${new Date().toISOString()}).`,
-                  holderTable,
-                ].join("\n"),
-              }));
-            },
-            recordedSlug,
-            semaphore,
-            waitTotalMs: resolveSlotWaitTotalMs(runtime.commandEnvironment),
-          }),
+        : toEnvironmentConfigLease(
+            await acquireAnyEnvironmentConfigLease({
+              excludeSlugs: current.environmentConfigLease
+                ? [current.environmentConfigLease.slug]
+                : [],
+              eraseSlotData: makePreviewSlotDataEraser(runtime, "reset"),
+              holder,
+              leaseMs: defaultPreviewLeaseMs,
+              semaphore,
+              waitTotalMs: resolveSlotWaitTotalMs(runtime.commandEnvironment),
+            }),
+          ),
     );
   } catch (error) {
     await report.update((state) => ({
@@ -1175,12 +1273,15 @@ async function deployPreviewApps({
   }
   // A successful claim clears exhaustion/takeover banners; a slot move
   // leaves its own so the change is impossible to miss.
-  const claimNotice = describePreviewSlotChange({
-    changedAt: new Date().toISOString(),
-    nextSlug: environmentConfigLease.slug,
-    previousSlug,
-    requestedEnvironment,
-  });
+  const claimNotice =
+    !requestedEnvironment && slotMoved
+      ? `Preview moved from ${previousSlug} to ${environmentConfigLease.slug}; the previous slot will be parked and rested before reuse.`
+      : describePreviewSlotChange({
+          changedAt: new Date().toISOString(),
+          nextSlug: environmentConfigLease.slug,
+          previousSlug,
+          requestedEnvironment,
+        });
   await report.update((state) => ({
     ...state,
     environmentConfigLease: toSlotDisplay(environmentConfigLease),
@@ -1296,6 +1397,7 @@ async function deployPreviewApps({
   const result = {
     ok,
     state: report.state,
+    preparedSlot: Boolean(preparedPreviewSlot(environmentConfigLease.tags, Date.now())),
   };
 
   if (!result.ok) {
@@ -1798,6 +1900,13 @@ export async function cleanup(options: PreviewCommandOptions = {}) {
     requireCleanCheckout: false,
   });
   const result = await cleanupPreviewApps({ target, runtime });
+  await retirePreviewSlots({
+    semaphore: runtime.createPreviewSemaphoreResourceClient(),
+    holder: target.run.holder,
+    keepSlot: "",
+    eraseSlotData: makePreviewSlotDataEraser(runtime, "reset"),
+    rest: () => sleep(previewSlotRestMs, runtime.signal),
+  });
 
   // Exit-code contract (the only consumer is the cleanup workflow's
   // red/green — nothing gates on it): exit non-zero ONLY when the lease
@@ -2004,6 +2113,9 @@ async function eraseHeldSlotAfterRun(input: {
     return { erased: false, reason: "superseded", slug: null };
   }
   const lease = await adoptLeaseHeldBySemaphore({
+    allowedSlugs: report.state.environmentConfigLease
+      ? [report.state.environmentConfigLease.slug]
+      : undefined,
     holder: run.holder,
     leaseMs: defaultPreviewLeaseMs,
     preferSlug: report.state.environmentConfigLease?.slug || null,
@@ -3449,6 +3561,7 @@ export type EnvironmentConfigLease = {
   leaseId: string;
   slug: string;
   type: string;
+  tags?: Record<string, string>;
 };
 
 /**
@@ -3466,6 +3579,7 @@ const PreviewCiPlan = PreviewCiIdentity.extend({
   branch: z.string().min(1),
   state: CloudflarePreviewState,
   preparedAt: z.iso.datetime(),
+  preparedSlot: z.boolean().default(false),
   playwrightTestCount: z.number().int().positive(),
   workerVersionOverrides: z.string().min(1),
 });
@@ -3576,6 +3690,7 @@ function describePreviewSlotChange(input: {
 }
 
 type PreviewSemaphoreLease = {
+  tags?: Record<string, string>;
   data: Record<string, unknown>;
   expiresAt: number;
   holder?: string | null;
@@ -3593,6 +3708,7 @@ export type PreviewSemaphoreResourceClient = {
     waitMs?: number;
   }) => Promise<PreviewSemaphoreLease>;
   acquireSpecific: (input: {
+    expectedHolder?: string;
     allowedSlugs: string[];
     force?: boolean;
     holder?: string;
@@ -3600,11 +3716,18 @@ export type PreviewSemaphoreResourceClient = {
     slug: string;
     type: string;
   }) => Promise<PreviewSemaphoreLease | null>;
-  release: (input: { force?: boolean; leaseId?: string; slug: string; type: string }) => Promise<{
+  release: (input: {
+    force?: boolean;
+    leaseId?: string;
+    slug: string;
+    type: string;
+    tags?: Record<string, string>;
+  }) => Promise<{
     released: boolean;
   }>;
   list: (input: { type: string }) => Promise<
     Array<{
+      tags?: Record<string, string>;
       data: Record<string, unknown>;
       holder?: string | null;
       lastAcquiredAt: number | null;
@@ -3699,10 +3822,8 @@ function createPreviewSemaphoreResourceClient(
   return {
     acquire: ({ allowedSlugs, holder, leaseMs, type, waitMs }) =>
       semaphore.resources.acquire({ allowedSlugs, holder, leaseMs, type, waitMs }),
-    acquireSpecific: ({ allowedSlugs, force, holder, leaseMs, slug, type }) =>
-      semaphore.resources.acquireSpecific({ allowedSlugs, force, holder, leaseMs, slug, type }),
-    release: ({ force, leaseId, slug, type }) =>
-      semaphore.resources.release({ force, leaseId, slug, type }),
+    acquireSpecific: (input) => semaphore.resources.acquireSpecific(input),
+    release: (input) => semaphore.resources.release(input),
     list: ({ type }) => semaphore.resources.list({ type }),
   };
 }
@@ -4906,7 +5027,25 @@ async function cleanupPreviewApps({
   // merged pr-1950; the old code bailed before releasing and pr-1988 waited
   // 360s for a slot that never came). So: always release; `ok: false` now
   // means the RELEASE itself failed — the lease truly leaked.
+  let tags: Record<string, string> = {};
+  if (ok) {
+    const parkedAt = Date.now();
+    try {
+      await sleep(previewSlotRestMs, runtime.signal);
+      tags = {
+        "preview-policy": "parked-v1",
+        "preview-parked-at": String(parkedAt),
+        "preview-ready-at": String(Date.now()),
+      };
+    } catch (error) {
+      logPreview(
+        `Slot rest interrupted: ${formatPreviewErrorMessage(error)}; releasing without preparation.`,
+      );
+      ok = false;
+    }
+  }
   const releaseResult = await releaseLeaseDespiteTeardownFailure({
+    tags,
     lease: environmentConfigLease,
     semaphore,
     teardownOk: ok,
@@ -4945,6 +5084,7 @@ async function cleanupPreviewApps({
  * acquire erases the slot on entry (eraseAcquiredSlotOrGiveItBack).
  */
 async function releaseLeaseDespiteTeardownFailure(input: {
+  tags?: Record<string, string>;
   lease: { type: string; slug: string; leaseId: string };
   semaphore: PreviewSemaphoreResourceClient;
   teardownOk: boolean;
@@ -4959,6 +5099,7 @@ async function releaseLeaseDespiteTeardownFailure(input: {
       type: input.lease.type,
       slug: input.lease.slug,
       leaseId: input.lease.leaseId,
+      tags: input.tags,
     });
     logPreview(
       released.released
@@ -5701,7 +5842,13 @@ function parsePullRequestHolder(holder: string | null | undefined) {
  */
 async function eraseAcquiredSlotOrGiveItBack(input: {
   eraseSlotData: EraseSlotData;
-  lease: { data: Record<string, unknown>; leaseId: string; slug: string; type: string };
+  lease: {
+    data: Record<string, unknown>;
+    leaseId: string;
+    slug: string;
+    type: string;
+    tags?: Record<string, string>;
+  };
   semaphore: PreviewSemaphoreResourceClient;
 }) {
   try {
@@ -5711,6 +5858,8 @@ async function eraseAcquiredSlotOrGiveItBack(input: {
         slug: input.lease.slug,
       }),
     );
+    // Erasing starts a new rollout, invalidating any preparation returned on acquisition.
+    delete input.lease.tags;
     return true;
   } catch (error) {
     logPreview(
@@ -5732,10 +5881,11 @@ async function eraseAcquiredSlotOrGiveItBack(input: {
  * are leased. Automation never force-acquires a held slot: a close-triggered
  * cleanup owns its lease until teardown finishes and releases it, which keeps
  * another PR from erasing or deploying into that slot concurrently. Every
- * handed-out slot is erased first (see eraseAcquiredSlotOrGiveItBack). Fails
+ * unknown slot is erased first; consumed preparation permits skipping that erase. Fails
  * with the full holder table and remediation steps once `waitTotalMs` elapses.
  */
 async function acquireAnyEnvironmentConfigLease(input: {
+  excludeSlugs?: string[];
   semaphore: PreviewSemaphoreResourceClient;
   /** Required so no acquire path can hand out a slot without wiping it. */
   eraseSlotData: EraseSlotData;
@@ -5744,6 +5894,9 @@ async function acquireAnyEnvironmentConfigLease(input: {
   onFirstWait?: (holderTable: string) => Promise<void>;
   waitTotalMs: number;
 }) {
+  const allowedSlugs = previewEnvironmentSlugs.filter(
+    (slug) => !input.excludeSlugs?.includes(slug),
+  );
   const deadline = Date.now() + input.waitTotalMs;
   let attempt = 0;
   // Slots whose erase already failed this run. A free-but-unerasable slot
@@ -5764,13 +5917,45 @@ async function acquireAnyEnvironmentConfigLease(input: {
     // any long-poll; later attempts queue on the semaphore in 5-minute polls.
     const waitMs = attempt === 1 ? 0 : Math.max(0, Math.min(slotWaitPerAttemptMs, remainingMs));
     try {
-      const acquired = await input.semaphore.acquire({
-        allowedSlugs: previewEnvironmentSlugs,
-        type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
-        leaseMs: input.leaseMs,
-        waitMs,
-        holder: input.holder,
-      });
+      // Prefer the oldest prepared free slot; acquisition consumes its tags atomically.
+      const prepared = (
+        await input.semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE })
+      )
+        .filter(
+          (resource) =>
+            allowedSlugs.includes(resource.slug) && preparedPreviewSlot(resource.tags, Date.now()),
+        )
+        .sort(
+          (left, right) =>
+            preparedPreviewSlot(left.tags, Date.now())!["preview-ready-at"] -
+            preparedPreviewSlot(right.tags, Date.now())!["preview-ready-at"],
+        );
+      let preferred: PreviewSemaphoreLease | null = null;
+      for (const resource of prepared) {
+        preferred = await input.semaphore.acquireSpecific({
+          allowedSlugs,
+          type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+          slug: resource.slug,
+          leaseMs: input.leaseMs,
+          holder: input.holder,
+        });
+        if (preferred) break;
+      }
+      const acquired =
+        preferred ||
+        (await input.semaphore.acquire({
+          allowedSlugs,
+          type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+          leaseMs: input.leaseMs,
+          waitMs,
+          holder: input.holder,
+        }));
+      if (preparedPreviewSlot(acquired.tags, Date.now())) {
+        logPreview(
+          `Acquired rested ${acquired.slug}: skipping entry erase and postdeploy age guard.`,
+        );
+        return acquired;
+      }
       if (
         await eraseAcquiredSlotOrGiveItBack({
           eraseSlotData: input.eraseSlotData,
@@ -5841,70 +6026,6 @@ async function acquireAnyEnvironmentConfigLease(input: {
 }
 
 /**
- * Claim a slot for a preview deploy: adopt-or-claim, with the semaphore as the
- * single source of lease truth.
- *
- * 1. Adopt and renew a slot already held by this run's holder, including one
- *    a cancelled run acquired before recording it. Erase before deploying.
- * 2. Re-take the recorded slot if its lease lapsed and nobody else holds it.
- * 3. Otherwise queue for any free slot.
- */
-async function claimEnvironmentConfigLease(input: {
-  eraseSlotData: EraseSlotData;
-  holder: string;
-  leaseMs: number;
-  onFirstWait?: (holderTable: string) => Promise<void>;
-  recordedSlug: string | null;
-  semaphore: PreviewSemaphoreResourceClient;
-  waitTotalMs: number;
-}) {
-  const adopted = await adoptLeaseHeldBySemaphore({
-    holder: input.holder,
-    leaseMs: input.leaseMs,
-    onAdopted: (lease) =>
-      eraseAcquiredSlotOrGiveItBack({
-        eraseSlotData: input.eraseSlotData,
-        lease,
-        semaphore: input.semaphore,
-      }),
-    preferSlug: input.recordedSlug,
-    semaphore: input.semaphore,
-  });
-  if (adopted) {
-    return adopted;
-  }
-
-  const retaken = await retakeRecordedSlotIfFree({
-    holder: input.holder,
-    leaseMs: input.leaseMs,
-    onRetaken: (lease) =>
-      eraseAcquiredSlotOrGiveItBack({
-        eraseSlotData: input.eraseSlotData,
-        lease,
-        semaphore: input.semaphore,
-      }),
-    recordedSlug: input.recordedSlug,
-    semaphore: input.semaphore,
-  });
-  if (retaken) {
-    return retaken;
-  }
-
-  const lease = await acquireAnyEnvironmentConfigLease({
-    semaphore: input.semaphore,
-    eraseSlotData: input.eraseSlotData,
-    holder: input.holder,
-    leaseMs: input.leaseMs,
-    onFirstWait: input.onFirstWait,
-    waitTotalMs: input.waitTotalMs,
-  });
-  logPreview(
-    `lease acquired: ${lease.slug} held by ${input.holder} until ${formatUntil(lease.expiresAt)}`,
-  );
-  return toEnvironmentConfigLease(lease);
-}
-
-/**
  * Core of `preview assign`: keep the slot the semaphore says this holder has
  * (re-issued, which renews it) when it satisfies the request, otherwise take
  * the wanted slot (or any free one) and release the previously-held lease so
@@ -5929,8 +6050,7 @@ async function assignEnvironmentConfigLease(input: {
     (await adoptLeaseHeldBySemaphore({
       holder: input.holder,
       leaseMs: input.leaseMs,
-      // Every adoption erases — a preview slot is fresh on every deploy (see
-      // claimEnvironmentConfigLease).
+      // Explicit assignment always resets the selected slot.
       onAdopted: (lease) =>
         eraseAcquiredSlotOrGiveItBack({
           eraseSlotData: input.eraseSlotData,
@@ -5985,10 +6105,8 @@ async function assignEnvironmentConfigLease(input: {
         slug: input.wantedSlug,
         type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         holder: input.holder,
-        // Semaphore intentionally rejects every active lease without force,
-        // including another lease held by this same holder. Re-issue that one
-        // exactly like adoption, then release the old recorded slot below.
-        force: input.force || resumeInterruptedMove,
+        force: input.force,
+        expectedHolder: !input.force && resumeInterruptedMove ? input.holder : undefined,
       });
       if (!acquired) {
         const currentHolder = await findEnvironmentConfigLeaseHolder(
@@ -6089,6 +6207,7 @@ async function assignEnvironmentConfigLease(input: {
 }
 
 function toEnvironmentConfigLease(lease: {
+  tags?: Record<string, string>;
   data: Record<string, unknown>;
   expiresAt: number;
   leaseId: string;
@@ -6102,6 +6221,7 @@ function toEnvironmentConfigLease(lease: {
     leaseId: lease.leaseId,
     slug: lease.slug,
     type: lease.type,
+    tags: lease.tags,
   } satisfies EnvironmentConfigLease;
 }
 
@@ -6114,18 +6234,9 @@ async function listSlotsLeasedToHolder(semaphore: PreviewSemaphoreResourceClient
 }
 
 /**
- * The semaphore-truth ownership primitive: find the slot(s) the semaphore
- * currently leases to this holder and re-issue the preferred one under a
- * fresh leaseId (safe force: the slot is already ours). The re-issue doubles
- * as the renewal, so callers never store or compare leaseIds — dual-truth
- * comparisons between a recorded lease and the semaphore's answer are what
- * produced the steal-then-skip bugs this replaced. This also heals the
- * acquire-then-cancelled gap where a lease exists server-side but was never
- * recorded in the PR body, so a holder never accumulates a second slot
- * (preferSlug wins; extra holds expire on their own).
- *
- * onAdopted is a per-lease ready check (deploy erases unknown-provenance
- * slots there); returning false moves on to the holder's next slot, if any.
+ * Renew a hold only if Semaphore still attributes it to this holder. The
+ * expected-holder check and token replacement happen atomically in Semaphore;
+ * a stale inventory snapshot can never evict a new owner.
  */
 async function adoptLeaseHeldBySemaphore(input: {
   /** Reuse must renew only the selected deployment's slot, never another hold. */
@@ -6149,7 +6260,7 @@ async function adoptLeaseHeldBySemaphore(input: {
       slug: resource.slug,
       leaseMs: input.leaseMs,
       holder: input.holder,
-      force: true,
+      expectedHolder: input.holder,
     });
     if (!reissued) {
       continue;
@@ -6948,12 +7059,13 @@ function resolvePreviewCompareBaseSha(params: {
 }
 
 export const previewInternals = {
+  eraseAcquiredSlotOrGiveItBack,
+  retirePreviewSlots,
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   acquireAnyEnvironmentConfigLease,
   announceRetryTelemetry,
   adoptLeaseHeldBySemaphore,
   assignEnvironmentConfigLease,
-  claimEnvironmentConfigLease,
   classifyEnvironmentConfigLeases,
   classifyLeaseForReclaim,
   describeEnvironmentConfigLeases,

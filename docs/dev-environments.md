@@ -372,37 +372,21 @@ Cloudflare account: `os.iterate-preview-N.com`, `auth.iterate-preview-N.com`,
 and `<proj-slug>.iterate-preview-N.app`. There are currently nineteen
 `preview-<n>` slots, leased via semaphore (`environment-config-lease`).
 
-### The lease model: one slot per PR, for the PR's whole life
+### The lease model: current preview plus a short-lived replacement
 
-A slot belongs to whoever holds its semaphore lease, and every lease records
-a **holder** (`pr-1234` for the PR flow, `manual-<user>` for humans). The
-invariants:
+A slot belongs to whoever holds its Semaphore lease. The holder is `pr-1234`
+for a PR, `main-preview` for main, or `manual-<user>` for an operator.
 
-- **A PR keeps its slot from first deploy until the PR closes.** Every
-  `preview deploy` / `preview test` run renews the lease for 3h; closing the
-  PR tears the apps down and releases it. Lease expiry is the safety valve for
-  abandoned PRs (no pushes for >3h) — kept short because a leased slot costs us
-  for its Cloudflare resources, and a deploy/e2e cycle is only minutes so an
-  active PR never lapses mid-run. A lapsed lease is reclaimed by the scheduled
-  GC sweep — see **[Preview resource GC](preview-resource-gc.md)** for how
-  teardown is decoupled from releasing the slot (and how disposable data
-  expires 3h after last use).
-- **A slot is only populated while a run is in progress.** `preview deploy`
-  resets the slot's active state (Durable Objects, D1 and KV) before every
-  deploy, not just when the slot changes hands, and CI runs `preview erase`
-  again after the e2e. These normal resets pass `--preserve-artifacts`:
-  repository sweeps wait until PR-close cleanup, explicit reclaim or expiry GC.
-  Each run otherwise leaves a
-  population of test projects whose Durable Objects keep waking until the
-  next push or the lease expiry (~$15–25/hour per slot; the 2026-09-01
-  runaway), and a push that cancels a running e2e SIGKILLs it, so in-test
-  cleanup can never be the guarantee — the before-deploy erase is. A
-  cancelled job runs none of its `always()` steps on Depot, so a cancelled
-  run's population waits for the next run's before-deploy erase; the
-  after-run erase also skips itself if it ever runs after the PR head moved
-  on (that push's run erases before it deploys). Consequence: manual QA state on a preview
-  does not survive a push or an e2e run — the login link in the PR body
-  mints a fresh test user and project on demand.
+- **A product-changing commit gets a different slot.** CI renews the old human
+  preview while deploying the candidate. Readiness publishes the new URL, then
+  background retirement parks, rests and releases the old slot. Closing the PR
+  cleans up all remaining holds. Each published preview keeps its normal 3h lease.
+- **Test data is erased after tests and the preview is restored for humans.**
+  Normal resets preserve artifacts; repository sweeps happen on PR close,
+  explicit reclaim or expiry GC. A cancelled Depot run may execute none of its
+  `always()` steps. The next run retires superseded or abandoned holds; expiry
+  remains the final safety valve. A slot without completed preparation is erased
+  before deployment, so interrupted cleanup cannot certify it as clean.
 - **The semaphore is the single source of lease truth.** The PR body's
   managed section only _displays_ the slot (and per-app results); it is never
   consulted for ownership and never a reason to skip. Before running tests or
@@ -415,11 +399,10 @@ invariants:
   `preview deploy` waits in line (logging who holds what every few minutes)
   for up to 6 minutes before failing with the full holder table and
   remediation steps. `PREVIEW_SLOT_WAIT_MS=0` makes it fail fast.
-- **Freed slots rest as long as possible.** Acquiring "any slot" hands out
-  the least-recently-released one (never-used slots first). A freed slot
-  often still carries its previous holder's deployment, so resting it
-  maximizes the chance a lapsed PR retakes its own slot instead of finding
-  someone else on it.
+- **Prefer the oldest prepared free slot.** Preparation records a successful park
+  and 150-second rest, held under one lease. Semaphore consumes the tags when
+  handing out the slot. If none is prepared, ordinary acquisition uses the oldest
+  release and performs entry erase plus the normal deployment-age guard.
 - **Everything is attributable and visible.** `pnpm preview status` shows
   each slot's holder, PR open/closed state, idle/orphaned verdict, open
   PRs without a slot, and reclaim commands when the fleet
@@ -466,10 +449,9 @@ operator capability, so use current `main` for manual preview deployments.
 Main runs the full preview fleet after each push through the same distributed
 `preview-run.yml` workflow as PRs. Its commands use `--commit <full-sha>`.
 It leases an ordinary slot with the
-holder `main-preview`. Each run renews that holder's existing lease when present,
-then erases test data after the tests without releasing the slot. The same 3h
-expiry applies as for PRs: after a quiet period, main may get a different slot.
-No slots are reserved and no Semaphore policy changes are needed.
+holder `main-preview`. Each deployment gets a separate slot; the previous slot is
+retired after readiness succeeds. After tests, CI erases test data and restores
+the tested deployment for humans, retaining its lease for 3h. No slots are reserved.
 
 The main workflow finishes its active deploy/test/erase before starting the
 newest queued commit. PR cancellation behavior is unchanged. Dispatch it with
@@ -492,7 +474,7 @@ retains the lease. These are job-local reports, not a cross-job deployment store
 The immutable `preview-ci-plan.json` carries the deployment between jobs;
 consumers validate its commit, attempt, holder and branch before using it.
 
-Both workflows call `preview erase` only after every test job has settled,
+Both workflows call `preview erase` only after successful preparation and every test job has settled,
 in parallel with report collection. Cleanup does not depend on downloading reports.
 It keeps the lease; `preview cleanup` erases and releases it. Main erase failures
 fail the finalizer job. Cleanup still runs if the build dirtied tracked files;
@@ -516,16 +498,44 @@ PR's apps (including OS Durable Objects, auth D1, project-directory KV and
 Artifacts repositories) and releases the slot — after verifying the PR still
 holds it.
 
-Slot cleanliness is an **invariant of entry**, not a promise about exits:
-every handover — a fresh acquire, an adopted lease, a reclaim, an
-`assign`ed slot — erases the slot's data before the new holder gets it. So
-even when an exit path skips the cleanup erase (failed cleanup followed by
-lease expiry, `release --force`, a run cancelled mid-claim), the next tenant
-starts with fresh application state. Orphaned Artifacts repositories remain
-until a full cleanup; new project IDs isolate subsequent tests, and tests of
-deployment-wide repos use unique paths. The one deliberate exception is manual
-`preview acquire` (Story 4): it parks a slot without wiping it, so you can
-lease a slot precisely to inspect what's on it.
+### Slot cycling
+
+Product-changing commits deploy into a different slot. The current PR URL stays
+published until the candidate passes shared readiness. Then the report switches
+to the new URL and `ci-retire` parks and erases the previous slot. It holds that
+lease for a further 150 seconds before releasing it with preparation tags.
+Retirement runs in a separate job, alongside tests, and does not gate the test
+verdict. The lifecycle lock still covers all jobs, so consecutive commits cannot
+race retirement or restoration.
+
+Acquisition prefers the oldest prepared free slot. Semaphore returns its tags
+and consumes them atomically; a subsequent release without fresh preparation
+cannot preserve the old proof. Only `parked-v1` preparation with a completed
+150-second rest skips entry erase and the 90-second postdeploy age guard.
+Unknown slots, expired leases and interrupted cleanup retain erase plus the
+normal guard. Exact-version readiness and agent smoke still run in either case.
+
+Failed candidates leave the published preview alone. Retirement also collects
+abandoned holds belonging to the same PR, while excluding the published slot.
+A killed retirement can temporarily leave a lease held; the next successful run
+collects it, or it expires and gets the guarded path on acquisition. A failed
+main preparation has no durable cross-run report identifying its last good slot,
+so it preserves existing holds until the next successful main run or expiry.
+Closing a PR cleans up its remaining holds. No Worker is deleted.
+
+Tests-only deployment reuse and docs-only result inheritance do not rotate slots.
+Post-test erase/restoration still happens on the new slot, which remains available
+for human testing for the normal lease period.
+
+Cleanup on release is an optimization, not an assumption: unprepared acquisition
+still wipes state. Manual `preview acquire` deliberately leaves state intact for
+inspection; it consumes any preparation tags just like every other acquisition.
+Orphaned Artifacts repositories remain until full cleanup; new project IDs isolate
+subsequent tests and deployment-wide repo tests use unique paths.
+
+Semaphore must support release tags and atomic expected-holder acquisition before
+these preview commands are deployed. Older clients continue to work; acquiring a
+slot through them consumes its tags, so they cannot accidentally preserve readiness.
 
 ### Story 2: run what CI runs, locally
 

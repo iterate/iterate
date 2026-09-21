@@ -9,6 +9,13 @@ export async function planPreview(
 ): Promise<PreviewDecision> {
   const changes = classifyChanges(history.changedFiles(history.head));
   const commits = history.throughMergeBase();
+  if (commits.length === 0) {
+    return {
+      action: "deploy",
+      changes,
+      reason: "Complete ancestry to a single merge-base is unavailable.",
+    };
+  }
 
   for (const commit of commits) {
     const result = commit === history.head ? null : await evidence.findPreviewResult(commit);

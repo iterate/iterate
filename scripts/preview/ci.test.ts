@@ -46,7 +46,16 @@ test("the lifecycle owner encloses every fixed shard and cleanup waits for their
   const caller = parse(readFileSync(resolve(root, ".depot/workflows/preview.yml"), "utf8"));
   const workflow = parse(readFileSync(resolve(root, ".depot/workflows/preview-run.yml"), "utf8"));
   expect(caller.on.pull_request.paths).toBeUndefined();
-  expect(workflow.jobs.plan.steps[0].with["fetch-depth"]).toBe(0);
+  expect(workflow.jobs.plan.steps[0].with["fetch-depth"]).toBe(10);
+  expect(workflow.jobs.retire).toMatchObject({
+    needs: ["plan", "prepare"],
+    if: "always() && needs.plan.outputs.tests != ''",
+  });
+  expect(workflow.jobs.finish.needs).not.toContain("retire");
+  expect(workflow.jobs.retire.steps.at(-1)).toMatchObject({
+    env: { KEEP_SLOT: "${{ needs.prepare.outputs.slot }}" },
+    run: expect.stringContaining("pnpm preview ci-retire"),
+  });
   expect(workflow.jobs.prepare.needs).toBeUndefined();
   expect(workflow.jobs.prepare.if).toBeUndefined();
   const prepareSteps = workflow.jobs.prepare.steps;
@@ -116,7 +125,7 @@ test("the lifecycle owner encloses every fixed shard and cleanup waits for their
     if: "success() && needs.prepare.result == 'success' && steps.consumers.outputs.succeeded == 'true' && steps.merge_reports.outcome == 'success'",
   });
   expect(steps[cleanup]).toMatchObject({
-    if: "always() && steps.consumers.outputs.settled == 'true'",
+    if: "always() && steps.consumers.outputs.settled == 'true' && needs.prepare.result == 'success'",
   });
   expect(steps[cleanup].run).toContain("--restore --prepared-ci-plan");
   const settled = steps.findIndex((step: any) => step.id === "settled");

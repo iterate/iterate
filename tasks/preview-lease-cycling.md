@@ -6,9 +6,9 @@ Product-changing commits get a separate candidate slot while the current human p
 
 Use normal workflow inputs and shared service contracts, without branch-name flags or a manual preparation step. Preparation records must be consumed on acquisition and cannot survive intervening use. Recovery must not steal leases or destroy the currently published preview. Keep the old preview if acquisition, deployment or readiness fails. Pool exhaustion waits or fails visibly while preserving that preview.
 
-- [ ] Cover lease preparation, consumption and ownership transfer through the real Semaphore API.
-- [ ] Implement candidate publication, safe failure handling and prepared-slot selection.
-- [ ] Wire bounded retirement and cancellation recovery into CI and cleanup.
+- [x] Cover lease preparation, consumption and ownership transfer through the real Semaphore API. *HTTP/Workerd tests exercise tags and atomic expected-holder adoption.*
+- [x] Implement candidate publication, safe failure handling and prepared-slot selection. *`ciPrepare` preserves the published report until readiness; acquisition validates consumed tags.*
+- [x] Wire bounded retirement and cancellation recovery into CI and cleanup. *The separate retirement job collects non-current holds; interrupted rest earns no tags.*
 - [ ] Preserve reuse, post-test restoration and exact settled-version evidence.
 - [ ] Validate local behavior and actual PR CI across consecutive commits; retain raw evidence ignored.
 - [ ] Address review feedback and document the resulting lifecycle.

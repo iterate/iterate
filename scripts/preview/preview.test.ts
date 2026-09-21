@@ -31,7 +31,6 @@ const {
   acquireAnyEnvironmentConfigLease,
   announceRetryTelemetry,
   adoptLeaseHeldBySemaphore,
-  claimEnvironmentConfigLease,
   describeForcePushCompareHazard,
   describeLostSlotOwnership,
   describePreviewSlotChange,
@@ -2165,7 +2164,7 @@ describe("eraseHeldSlotAfterRun", () => {
       });
       // Adopting re-issues (renews) the lease; the target still owns the slot.
       expect(semaphore.acquireSpecific).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ slug: "preview-2", holder, force: true }),
+        expect.objectContaining({ slug: "preview-2", holder, expectedHolder: holder }),
       );
       expect(semaphore.release).not.toHaveBeenCalled();
     },
@@ -2202,251 +2201,6 @@ describe("eraseHeldSlotAfterRun", () => {
 
     expect(result).toEqual({ erased: false, reason: "no-lease", slug: null });
     expect(eraseSlotData).not.toHaveBeenCalled();
-  });
-});
-
-describe("claimEnvironmentConfigLease", () => {
-  test.each(["pr-1600", "main-preview"])(
-    "%s renews its existing slot without a recorded state",
-    async (holder) => {
-      // Ownership survives between runs in Semaphore, even without PR body state.
-      const eraseSlotData = vi.fn(async () => {});
-      const semaphore = fakeSemaphore({
-        acquireSpecific: vi.fn(async () => fakeLease({ holder, expiresAt: 1_800_000_000_000 })),
-        list: vi.fn(async () => [leasedResource("preview-2", holder)]),
-      });
-
-      const lease = await claimEnvironmentConfigLease({
-        eraseSlotData,
-        holder,
-        leaseMs: 1000,
-        recordedSlug: null,
-        semaphore,
-        waitTotalMs: 0,
-      });
-
-      expect(lease.slug).toBe("preview-2");
-      expect(lease.leasedUntil).toBe(1_800_000_000_000);
-      expect(semaphore.acquireSpecific).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ slug: "preview-2", holder, force: true }),
-      );
-      expect(semaphore.acquire).not.toHaveBeenCalled();
-      expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
-        dopplerConfig: "preview_2",
-        slug: "preview-2",
-      });
-    },
-  );
-
-  test("a failed erase hands the slot back, and taking it back erases again — never a dirty deploy", async () => {
-    // The adopt's erase dies half-way, so the lease is released. The recorded
-    // slot is then free, and retaking it must not skip the erase (that is the
-    // half-wiped slot). Here the second erase succeeds, so the PR keeps its slot.
-    const eraseSlotData = vi
-      .fn(async () => {})
-      .mockRejectedValueOnce(new Error("D1 wipe failed half-way"));
-    const semaphore = fakeSemaphore({
-      acquireSpecific: vi.fn(async () => fakeLease()),
-      list: vi.fn(async () => [leasedResource("preview-2", "pr-1600")]),
-    });
-
-    const lease = await claimEnvironmentConfigLease({
-      eraseSlotData,
-      holder: "pr-1600",
-      leaseMs: 1000,
-      recordedSlug: "preview-2",
-      semaphore,
-      waitTotalMs: 0,
-    });
-
-    expect(lease.slug).toBe("preview-2");
-    expect(eraseSlotData).toHaveBeenCalledTimes(2);
-    expect(semaphore.release).toHaveBeenCalledTimes(1);
-    expect(semaphore.acquire).not.toHaveBeenCalled();
-  });
-
-  test("when the retake's erase fails too, the claim moves on to any free slot", async () => {
-    const eraseSlotData = vi
-      .fn(async () => {})
-      .mockRejectedValueOnce(new Error("D1 wipe failed half-way"))
-      .mockRejectedValueOnce(new Error("D1 wipe failed again"));
-    const semaphore = fakeSemaphore({
-      acquire: vi.fn(async () =>
-        fakeLease({ slug: "preview-3", data: { dopplerConfig: "preview_3" } }),
-      ),
-      acquireSpecific: vi.fn(async () => fakeLease()),
-      list: vi.fn(async () => [leasedResource("preview-2", "pr-1600")]),
-    });
-
-    const lease = await claimEnvironmentConfigLease({
-      eraseSlotData,
-      holder: "pr-1600",
-      leaseMs: 1000,
-      recordedSlug: "preview-2",
-      semaphore,
-      waitTotalMs: 0,
-    });
-
-    expect(lease.slug).toBe("preview-3");
-    expect(eraseSlotData).toHaveBeenCalledTimes(3);
-    expect(eraseSlotData).toHaveBeenLastCalledWith({
-      dopplerConfig: "preview_3",
-      slug: "preview-3",
-    });
-    expect(semaphore.release).toHaveBeenCalledTimes(2);
-  });
-
-  test("prefers the recorded slug when the semaphore attributes several slots to this holder", async () => {
-    const semaphore = fakeSemaphore({
-      acquireSpecific: vi.fn(async (input: { slug: string }) =>
-        fakeLease({ slug: input.slug, data: { dopplerConfig: input.slug.replaceAll("-", "_") } }),
-      ),
-      list: vi.fn(async () => [
-        leasedResource("preview-3", "pr-1600"),
-        leasedResource("preview-2", "pr-1600"),
-      ]),
-    });
-
-    const lease = await claimEnvironmentConfigLease({
-      eraseSlotData: noopEraseSlotData,
-      holder: "pr-1600",
-      leaseMs: 1000,
-      recordedSlug: "preview-2",
-      semaphore,
-      waitTotalMs: 0,
-    });
-
-    expect(lease.slug).toBe("preview-2");
-    expect(semaphore.acquireSpecific).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ slug: "preview-2" }),
-    );
-  });
-
-  test("re-takes the recorded slot when the lease lapsed but the slot is free", async () => {
-    const acquireSpecific = vi.fn(async (input: { force?: boolean }) =>
-      // Only the non-force affinity re-take can succeed: the semaphore lists
-      // nothing for this holder, so no adoption happens first.
-      input.force ? null : fakeLease({ leaseId: "1197a5b3-a705-4380-9958-6a0dbead16b7" }),
-    );
-    const semaphore = fakeSemaphore({ acquireSpecific });
-
-    const lease = await claimEnvironmentConfigLease({
-      eraseSlotData: noopEraseSlotData,
-      holder: "pr-1600",
-      leaseMs: 1000,
-      recordedSlug: "preview-2",
-      semaphore,
-      waitTotalMs: 0,
-    });
-
-    expect(lease.slug).toBe("preview-2");
-    expect(lease.leaseId).toBe("1197a5b3-a705-4380-9958-6a0dbead16b7");
-    expect(acquireSpecific).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ slug: "preview-2", holder: "pr-1600" }),
-    );
-    expect(acquireSpecific).toHaveBeenCalledWith(expect.not.objectContaining({ force: true }));
-    expect(semaphore.acquire).not.toHaveBeenCalled();
-  });
-
-  test("moves to a fresh slot when someone else now holds the recorded one", async () => {
-    const semaphore = fakeSemaphore({
-      acquire: vi.fn(async () =>
-        fakeLease({ slug: "preview-5", data: { dopplerConfig: "preview_5" } }),
-      ),
-      list: vi.fn(async () => [leasedResource("preview-2", "pr-1601")]),
-    });
-
-    const lease = await claimEnvironmentConfigLease({
-      eraseSlotData: noopEraseSlotData,
-      holder: "pr-1600",
-      leaseMs: 1000,
-      recordedSlug: "preview-2",
-      semaphore,
-      waitTotalMs: 0,
-    });
-
-    expect(lease.slug).toBe("preview-5");
-    expect(lease.dopplerConfig).toBe("preview_5");
-    expect(semaphore.acquire).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowedSlugs: environmentConfigLeaseInventory.map((resource) => resource.slug),
-        holder: "pr-1600",
-      }),
-    );
-  });
-
-  test("adopts a lease the semaphore already attributes to this holder instead of taking a second slot", async () => {
-    // A cancelled run acquired preview-3 but died before recording it in the
-    // PR body: the next run starts with no recorded slot, and must re-issue
-    // the existing hold rather than lease a second slot.
-    const semaphore = fakeSemaphore({
-      acquireSpecific: vi.fn(async () =>
-        fakeLease({ slug: "preview-3", data: { dopplerConfig: "preview_3" } }),
-      ),
-      list: vi.fn(async () => [leasedResource("preview-3", "pr-1600")]),
-    });
-
-    const lease = await claimEnvironmentConfigLease({
-      eraseSlotData: noopEraseSlotData,
-      holder: "pr-1600",
-      leaseMs: 1000,
-      recordedSlug: null,
-      semaphore,
-      waitTotalMs: 0,
-    });
-
-    expect(lease.slug).toBe("preview-3");
-    expect(semaphore.acquireSpecific).toHaveBeenCalledWith(
-      expect.objectContaining({ slug: "preview-3", holder: "pr-1600", force: true }),
-    );
-    expect(semaphore.acquire).not.toHaveBeenCalled();
-  });
-
-  test("erases an adopted slot that is not the PR body's recorded one", async () => {
-    // The adopted lease exists precisely because a previous run died before
-    // recording it — possibly mid-erase — so its provenance is unknown.
-    const eraseSlotData = vi.fn(async () => {});
-    const semaphore = fakeSemaphore({
-      acquireSpecific: vi.fn(async () =>
-        fakeLease({ slug: "preview-3", data: { dopplerConfig: "preview_three" } }),
-      ),
-      list: vi.fn(async () => [leasedResource("preview-3", "pr-1600", "preview_three")]),
-    });
-
-    const lease = await claimEnvironmentConfigLease({
-      eraseSlotData,
-      holder: "pr-1600",
-      leaseMs: 1000,
-      recordedSlug: null,
-      semaphore,
-      waitTotalMs: 0,
-    });
-
-    expect(lease.slug).toBe("preview-3");
-    expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
-      dopplerConfig: "preview_three",
-      slug: "preview-3",
-    });
-  });
-
-  test("propagates unexpected semaphore errors instead of silently switching slots", async () => {
-    const semaphore = fakeSemaphore({
-      list: vi.fn(async () => {
-        throw new Error("semaphore is down");
-      }),
-    });
-
-    await expect(
-      claimEnvironmentConfigLease({
-        eraseSlotData: noopEraseSlotData,
-        holder: "pr-1600",
-        leaseMs: 1000,
-        recordedSlug: "preview-2",
-        semaphore,
-        waitTotalMs: 0,
-      }),
-    ).rejects.toThrow("semaphore is down");
-    expect(semaphore.acquire).not.toHaveBeenCalled();
   });
 });
 
@@ -2560,8 +2314,8 @@ describe("adoptLeaseHeldBySemaphore", () => {
   });
 
   test("re-issues the holder's lease under a fresh leaseId — no stored leaseId is ever consulted", async () => {
-    const acquireSpecific = vi.fn(async (input: { force?: boolean }) =>
-      input.force ? fakeLease({ leaseId: "1197a5b3-a705-4380-9958-6a0dbead16b7" }) : null,
+    const acquireSpecific = vi.fn(async (input: { expectedHolder?: string }) =>
+      input.expectedHolder ? fakeLease({ leaseId: "1197a5b3-a705-4380-9958-6a0dbead16b7" }) : null,
     );
     const semaphore = fakeSemaphore({
       acquireSpecific,
@@ -2576,7 +2330,9 @@ describe("adoptLeaseHeldBySemaphore", () => {
     });
 
     expect(lease?.leaseId).toBe("1197a5b3-a705-4380-9958-6a0dbead16b7");
-    expect(acquireSpecific).toHaveBeenCalledWith(expect.objectContaining({ force: true }));
+    expect(acquireSpecific).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedHolder: "pr-1600" }),
+    );
   });
 
   test("returns null when the semaphore attributes nothing to the holder", async () => {
@@ -3042,7 +2798,7 @@ describe("assignEnvironmentConfigLease", () => {
     expect(result.outcome).toBe("kept");
     // Exactly the adoption re-issue — no second acquire for the wanted slug.
     expect(semaphore.acquireSpecific).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ slug: "preview-2", force: true }),
+      expect.objectContaining({ slug: "preview-2", expectedHolder: "pr-1600" }),
     );
   });
 
@@ -3113,14 +2869,14 @@ describe("assignEnvironmentConfigLease", () => {
 
   test("finishes an interrupted requested-slot move when the holder owns both slots", async () => {
     const release = vi.fn(async () => ({ released: true }));
-    const acquireSpecific = vi.fn(async (input: { force?: boolean; slug: string }) => {
+    const acquireSpecific = vi.fn(async (input: { expectedHolder?: string; slug: string }) => {
       if (input.slug === "preview-2") {
         return fakeLease({
           slug: "preview-2",
           leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
         });
       }
-      return input.force
+      return input.expectedHolder
         ? fakeLease({
             slug: "preview-17",
             data: { dopplerConfig: "preview_17" },
@@ -3153,7 +2909,7 @@ describe("assignEnvironmentConfigLease", () => {
       previousLeaseReleased: true,
     });
     expect(acquireSpecific).toHaveBeenCalledWith(
-      expect.objectContaining({ force: true, slug: "preview-17" }),
+      expect.objectContaining({ expectedHolder: "pr-1600", slug: "preview-17" }),
     );
     expect(release).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -3210,8 +2966,8 @@ describe("assignEnvironmentConfigLease", () => {
   test("releases an unrelated adopted lease when the requested slot is unavailable", async () => {
     const release = vi.fn(async () => ({ released: true }));
     const semaphore = fakeSemaphore({
-      acquireSpecific: vi.fn(async (input: { force?: boolean; slug: string }) =>
-        input.slug === "preview-2" && input.force
+      acquireSpecific: vi.fn(async (input: { expectedHolder?: string; slug: string }) =>
+        input.slug === "preview-2" && input.expectedHolder
           ? fakeLease({
               slug: "preview-2",
               leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
@@ -3245,8 +3001,8 @@ describe("assignEnvironmentConfigLease", () => {
   test("keeps the recorded current lease when the requested slot is unavailable", async () => {
     const release = vi.fn(async () => ({ released: true }));
     const semaphore = fakeSemaphore({
-      acquireSpecific: vi.fn(async (input: { force?: boolean; slug: string }) =>
-        input.slug === "preview-2" && input.force
+      acquireSpecific: vi.fn(async (input: { expectedHolder?: string; slug: string }) =>
+        input.slug === "preview-2" && input.expectedHolder
           ? fakeLease({
               slug: "preview-2",
               leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",

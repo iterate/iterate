@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 
 /** The candidate's first-parent history; merge commits include their merged changes. */
 export class CommitHistory {
@@ -23,7 +23,21 @@ export class CommitHistory {
   }
 
   throughMergeBase() {
-    const bases = this.git("merge-base", "--all", this.head, this.main).trim().split("\n");
+    const result = spawnSync("git", ["merge-base", "--all", this.head, this.main], {
+      cwd: this.directory,
+      encoding: "utf8",
+    });
+    // Shallow fetches may stop before the common ancestor, or omit main entirely.
+    if (result.status === 1) return [];
+    if (result.status !== 0) {
+      const main = spawnSync("git", ["rev-parse", "--verify", "--quiet", `${this.main}^{commit}`], {
+        cwd: this.directory,
+        encoding: "utf8",
+      });
+      if (main.status === 1) return [];
+      throw result.error || new Error(`Cannot inspect preview ancestry: ${result.stderr}`);
+    }
+    const bases = result.stdout.trim().split("\n");
     if (bases.length !== 1) return []; // Criss-cross merges have no single safe boundary.
     const base = bases[0];
     const descendants = new Set(

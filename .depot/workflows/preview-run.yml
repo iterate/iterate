@@ -49,7 +49,8 @@ jobs:
         with:
           clean: false
           ref: ${{ inputs.head-sha }}
-          fetch-depth: 0
+          # Missing ancestry makes the planner deploy instead of reusing an older result.
+          fetch-depth: 10
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Decide preview work from the head commit
@@ -80,6 +81,7 @@ jobs:
     timeout-minutes: 20
     outputs:
       playwright: ${{ steps.prepare.outputs.playwright }}
+      slot: ${{ steps.prepare.outputs.slot }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -167,6 +169,32 @@ jobs:
           path: test-results
           include-hidden-files: true
           if-no-files-found: error
+
+  retire:
+    name: Retire previous preview slots
+    needs: [plan, prepare]
+    if: always() && needs.plan.outputs.tests != ''
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ inputs.head-sha }}
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Park, rest and release superseded slots
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          KEEP_SLOT: ${{ needs.prepare.outputs.slot }}
+        run: |
+          args=()
+          if [ -n "$KEEP_SLOT" ]; then args+=(--keep-slot "$KEEP_SLOT"); fi
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- \
+            pnpm preview ci-retire $PREVIEW_TARGET_ARGS "${args[@]}"
 
   apps:
     needs: plan
@@ -404,12 +432,11 @@ jobs:
           retention-days: 30
       - name: Retire test data and restore the preview
         id: erase
-        if: always() && steps.consumers.outputs.settled == 'true'
+        if: always() && steps.consumers.outputs.settled == 'true' && needs.prepare.result == 'success'
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
-        # A failed preparation still gets ordinary retirement. Only a prepared
-        # deployment is restored, using this run's exact checkout.
+        # A failed candidate is retired separately; never park the old human preview.
         run: >-
           doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
           pnpm preview erase $PREVIEW_TARGET_ARGS
