@@ -1,6 +1,3 @@
-// SERIAL LANE (vitest.config.ts): it deliberately saturates the shared /api edge and resets
-// Durable Objects — the one file that would break its SIBLINGS, not itself.
-// isolate-ceilings-deployed.e2e.test.ts — THE ISOLATE CEILINGS against a REAL Durable Object.
 // Local workerd enforces no memory limit (NullIsolateLimitEnforcer), so the proof that counts is the
 // DEPLOYED worker, where the 128 MiB isolate is real:
 //
@@ -12,8 +9,8 @@
 // limited to 32MiB"; the node twin with a heap-capped child is src/stream/memory-budget.test.ts). The
 // CRASH HUNT is deployed-only, OPT-IN (`RUN_ISOLATE_CRASH_HUNT=1`), and DELIBERATELY RESETS DURABLE OBJECTS (and hammers the shared /api
 // edge): it must NEVER point at anything but the throwaway POC worker — every row uses a FRESH ctx =
-// its own DO, a reset clears only in-memory state (the durable log survives), and a laptop's network
-// flakes under parallel files, so run it ONE file at a time. ONE seeded context (24 × 6 MiB = 144 MiB,
+// its own DO, a reset clears only in-memory state (the durable log survives). It runs beside its
+// sibling files like every other: what it measures it measures on its own contexts. ONE seeded context (24 × 6 MiB = 144 MiB,
 // more than the isolate) serves every read-driven row; a DO reset between them is fine — the next call
 // re-materializes the context. Pins:
 //   • read: a client pages the 144 MiB log — every page fits the isolate and the RPC cap (the server

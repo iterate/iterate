@@ -9,7 +9,7 @@
     "deploy": "tsx scripts/deploy.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.scripts.json",
     "test": "vitest run --configLoader runner --project unit --project workers --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
-    "e2e": "vitest run --configLoader runner --project e2e --project e2e-serial",
+    "e2e": "vitest run --configLoader runner --project e2e",
     "spec": "playwright test",
     "bench": "vitest bench --configLoader runner --run --project bench",
     "db:schema:remote": "wrangler d1 execute control-plane-directory --remote --file src/control-plane.sql",

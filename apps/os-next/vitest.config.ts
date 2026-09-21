@@ -8,12 +8,9 @@
 //   • e2e     — ONE real worker booted once by e2e/support/global-setup.ts (local workerd by default;
 //               the DEPLOYED worker with `WORKER_BASE_URL=https://os.iterate2.com`,
 //               the proof that counts), every file a capnweb client at /api exactly like a production
-//               client, files in parallel, tests within a file sequential (the per-test session-dispose
-//               in support/setup.ts must not race a sibling)
-//   • e2e-serial — the SAME worker and the same setup, one file at a time and after `e2e`
-//               (`sequence.groupOrder`): the few files whose subject IS load — a latency or
-//               throughput budget, an exact frame tally, a wall-clock deadline, a deliberate
-//               saturation of the shared edge. Every OTHER file is in `e2e`; the split is one list
+//               client, ALL files in parallel — every test mints its own project, and what a test measures
+//               it measures on its own contexts; tests within a file sequential (the per-test
+//               session-dispose in support/setup.ts must not race a sibling)
 //   • bench   — vitest's benchmark runner (tinybench) over the same client + worker (`pnpm bench`),
 //               files one at a time so scenarios never share the wire; `BENCH_OUT=<file.json>` writes
 //               the raw samples
@@ -21,21 +18,7 @@
 // the worker imports. Browser E2E is Playwright (playwright.config.ts + specs/**).
 
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
-import { configDefaults, defineConfig } from "vitest/config";
-
-/** THE SERIAL E2E LANE — the only files that may not share the worker with a sibling, because what
- *  they measure IS the worker under load. Each one's first line says why in full; the tag here is the
- *  index. Everything not named runs in parallel: `e2e` excludes exactly this list, so a file is in one
- *  lane or the other and never in neither. */
-const E2E_SERIAL_FILES = [
-  "e2e/push-delivery.e2e.test.ts", // throughput + end-to-end latency budgets
-  "e2e/push-delivery-no-dropped-warns.e2e.test.ts", // reads a second worker's global console
-  "e2e/rewrite-rules.e2e.test.ts", // a 150 ms invoke median over 300 rules
-  "e2e/scheduled-appends.e2e.test.ts", // wall-clock deadlines
-  "e2e/cursor-delivery.e2e.test.ts", // at-least-once asserted exactly once, on a budget
-  "e2e/session-wire-frames-one-round-trip.e2e.test.ts", // exact frame tallies
-  "e2e/isolate-ceilings-deployed.e2e.test.ts", // deliberately saturates the shared edge
-];
+import { defineConfig } from "vitest/config";
 
 /** Teardown/async-transport noise only: disposing a capnweb session whose peer still delivers (a
  *  deliberate move in the reconnect/unsubscribe tests, and pager sockets still parked at teardown)
@@ -80,7 +63,6 @@ export default defineConfig({
           name: "e2e",
           environment: "node",
           include: ["e2e/**/*.e2e.test.ts"],
-          exclude: [...configDefaults.exclude, ...E2E_SERIAL_FILES],
           // Boots the one shared worker and provides its URL (support/setup.ts injects it per file).
           globalSetup: ["./e2e/support/global-setup.ts"],
           setupFiles: ["./e2e/support/setup.ts"],
@@ -95,24 +77,7 @@ export default defineConfig({
           // remote worker, not CPU, so the runner's cpus-1 default is the wrong shape on a CI box.
           maxWorkers: process.env.CI ? 8 : undefined,
           fileParallelism: true,
-          sequence: { concurrent: false, groupOrder: 0 },
-          onUnhandledError,
-        },
-      },
-      {
-        test: {
-          name: "e2e-serial",
-          environment: "node",
-          include: E2E_SERIAL_FILES,
-          globalSetup: ["./e2e/support/global-setup.ts"],
-          setupFiles: ["./e2e/support/setup.ts"],
-          testTimeout: 60_000,
-          hookTimeout: 120_000,
-          retry: process.env.CI ? 1 : 0,
-          // ONE file at a time, and only once `e2e` is done (a later groupOrder is a later group, and
-          // groups do not overlap) — these files measure the worker, so nothing else may be using it.
-          fileParallelism: false,
-          sequence: { concurrent: false, groupOrder: 1 },
+          sequence: { concurrent: false },
           onUnhandledError,
         },
       },

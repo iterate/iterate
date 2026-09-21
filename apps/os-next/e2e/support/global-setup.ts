@@ -38,7 +38,7 @@ declare module "vitest" {
   }
 }
 
-/** The local worker the two e2e projects (`e2e`, `e2e-serial`) SHARE. vitest runs a globalSetup once
+/** The local worker every e2e project run SHARES (`e2e`, and `bench` beside it). vitest runs a globalSetup once
  *  per project, in the one node process, so the boot is a process-global promise and the last
  *  project's teardown closes it — two workerd harnesses over one `.wrangler` state directory is not
  *  a thing, and the second boot would be pure waste even where it worked. */
