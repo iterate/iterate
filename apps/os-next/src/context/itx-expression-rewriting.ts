@@ -56,16 +56,21 @@
 //      own keys (the template wins: a pinned `model` cannot be talked out of) — two or more args, or
 //      none, where one is required is a refusal at rewrite time. The one reserved literal is the
 //      marker's array-half spelling, `{ "@": true }` (and the entry key `"...@"`).
-//   8. UN-SETTING: `target: null` deletes the row — kept as a MASK only where an implicit row lies
-//      beneath the match HERE (a row must exist to deny). A handle's undo and a dead stub's census
+//   8. UN-SETTING: `target: null` deletes the row — kept as a MASK only where something beneath the
+//      match HERE would answer it: an implicit row, or a stored SHORTER row with a target (the
+//      parent link, a granted root). A handle's undo and a dead stub's census
 //      send `null` WITH `ifTarget`: a compare-and-set DELETE, never a mask. There is no "restore"
 //      spelling: at a child the platform-equivalent target `itx.builtins.<x>` is a GRANT and is
 //      stored; at the owner root it equals the implicit row and deletes (core-processor.ts).
 //
-// THE PLATFORM NEVER SPELLS A SHORT NAME: every expression the platform itself writes — the proxy's
-// own append, a lent stub's rule (`match ⇒ itx.builtins.rpcStubs.get('<match>')`), a processor's
-// row (`itx.builtins.facets.get(name, spec).processEventBatch`) — is rooted at `itx.builtins`, so a
-// user's row at `itx.facets` or `itx.rpcStubs` redirects the user's calls and nothing else. A LENT RPC
+// THE PLATFORM'S OWN SPELLINGS ARE ROOTED AT `itx.builtins`: every target it writes — a lent stub's
+// rule (`match ⇒ itx.builtins.rpcStubs.get('<match>')`), a processor's row
+// (`itx.builtins.facets.get(name, spec).processEventBatch`), a parent link, the sandbox rows — and
+// its own log plumbing (the runner's request and wait, library.ts), so a user's row at `itx.facets`
+// or `itx.rpcStubs` redirects the user's calls and nothing else. A hosted processor's ENGINE speaks
+// the context roots (`append`, `readEvents`, `processors.claim` — implicit everywhere, sdk/index.ts):
+// a loaded processor may not spell the fixed point, and a row at a context root is the owner's
+// deliberate wall. A LENT RPC
 // STUB is no exception: `itx.provide(match, stub)` lends the stub to the `itx.builtins.rpcStubs`
 // registry (physical) under the key = the canonical match and configures that pure-data rule — the log
 // records the rule, never the socket. AT REST (`normalizeRewriteRuleConfigured`, below): the event stores
