@@ -1,24 +1,12 @@
 {
   "name": "@iterate-com/browser-extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
-    "dev": "vite build --watch",
-    "typecheck": "tsgo --noEmit"
-  },
-  "dependencies": {
-    "iterate": "workspace:*",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "zod": "4.5.4"
+    "vendor": "node --input-type=module -e \"import { copyFileSync } from 'node:fs'; copyFileSync(new URL(import.meta.resolve('capnweb')), 'capnweb.js')\""
   },
   "devDependencies": {
-    "@types/chrome": "^0.1.6",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "6.0.1",
-    "vite": "8.0.9"
+    "capnweb": "npm:@iterate-com/capnweb@0.12.2"
   }
 }

@@ -1,61 +1,46 @@
 # Iterate browser extension
 
-A deliberately small internal Chrome extension. It opens as a side panel,
-connects to one Iterate project, shows that project's live processor state, and
-provides the project with a capability for opening an HTTP(S) page in Chrome.
+A small Chrome side panel — the [static SPA archetype](../spa/README.md) as an extension: finished
+files, no build. It signs in at an iterate platform (os-next; `https://os.iterate2.com` by default),
+opens one WebSocket to the platform's `/api` bare with the access token presented IN the
+`authenticate` call, and lends this Chrome to the chosen project as `itx.chrome`: a live capnweb
+`RpcTarget` with one method, `openPage({ url })`, which opens an http(s) page in a new active tab.
+The lend is a rewrite rule of the project's root context, `/`: anything that calls
+`itx.chrome.openPage(...)` there — the config worker, another client — runs it here, for as long as
+the panel is open; from another context of the project (an agent's script runs in its own) the
+spelling is `itx.cd('/').chrome.openPage(...)`.
 
-This extension is not published in the Chrome Web Store. Install its unpacked
-build from this repository.
+`oauth.js` is `apps/spa/public/oauth.js` with Chrome's identity window in place of a page redirect
+and `chrome.storage.local` in place of `sessionStorage`; `panel.js` is its `app.js`. The one
+difference from the SPA: Chrome loads no remote code from an extension, so capnweb cannot come from
+a CDN — `capnweb.js` is the package's own browser bundle, copied verbatim by `pnpm vendor`
+(`devDependencies` pins the version). Nothing else is generated.
 
 ## Install
 
-Chrome 114 or newer and Node.js 22.15 or newer are required.
+Chrome 114 or newer.
 
-1. From the repository root, install dependencies and build the extension:
+1. Open `chrome://extensions`, enable **Developer mode**, click **Load unpacked** and select this
+   folder, `apps/browser-extension`.
+2. Click the **Iterate** toolbar action: the side panel opens beside the current page.
+3. Sign in (the platform's own login and consent pages open in a Chrome identity window; tick the
+   project), then enter the project's slug or `prj_…` id.
+4. Click **Open a page through the project**: the panel calls `itx.chrome.openPage` through the
+   platform, which calls back into the panel, which opens the tab. The same call from an agent does
+   the same thing — the panel shows a prompt to paste.
 
-   ```bash
-   pnpm install
-   pnpm --dir apps/browser-extension build
-   ```
+After editing a file, click **Reload** on the extension's `chrome://extensions` card. Against a
+local os-next (`pnpm --dir apps/os-next dev -- --port 8797`), enter `http://localhost:8797` as the
+platform before signing in.
 
-2. Open `chrome://extensions` in Chrome.
-3. Enable **Developer mode**.
-4. Click **Load unpacked** and select `apps/browser-extension/dist` from this
-   checkout. Select `dist`, not `apps/browser-extension`.
-5. Open **Iterate** from Chrome's Extensions menu. Its toolbar action opens the
-   side panel beside the current page.
-6. Sign in, approve project access, and enter the project slug (for example,
-   `voice-test`).
+## How it authenticates
 
-After rebuilding, click **Reload** on the extension's `chrome://extensions`
-card. During development, `pnpm --dir apps/browser-extension dev` rebuilds on
-file changes; Chrome still needs that reload to pick up each build.
-
-## What it does
-
-- Authenticates with `auth.iterate.com` using authorization code + PKCE and the
-  WebExtension Identity API. The service worker owns the interactive flow so it
-  can finish independently of the panel UI.
-- Uses `configureIterateSession`, `useItx`, and `useLiveState` from the published
-  `iterate` SDK to connect to `os.iterate.com` with the resulting bearer token.
-- Mounts `itx.chrome.openPage({ url })` at the selected project's root and shows
-  a ready-to-post agent prompt that exercises it.
-- Renders `itx.liveState.reduced` in a read-only text area.
-
-The manifest asks only for `identity`, `sidePanel`, and `storage`. Opening a new
-tab through `chrome.tabs.create()` does not require the broad `tabs` permission.
-All executable code is bundled into the extension; no code is loaded remotely.
-
-## Stable production identity
-
-The production OAuth client is public: there is intentionally no client secret
-inside a browser extension. It is registered with `auth.iterate.com` for the
-callback returned by `chrome.identity.getRedirectURL()`:
-
-- extension ID: `miplldbnkopaghnkiebdkefnmokobeco`
-- OAuth client ID: `kOlPgrOieTduTzepGDCODpHDeLIZJDyo`
-- callback: `https://miplldbnkopaghnkiebdkefnmokobeco.chromiumapp.org/`
-
-The manifest's public `key` preserves the legacy extension ID. Changing that
-key changes both the extension origin and OAuth callback, so the auth origin
-allowlist and OAuth client registration must be updated in the same release.
+The extension is a public OAuth client of the platform, registered dynamically (RFC 7591) once
+per platform and cached; its redirect URI is `chrome.identity.getRedirectURL()`
+(`https://<extension id>.chromiumapp.org/`), which the manifest's `key` keeps the same on every
+install. Authorization code with PKCE (S256), scope `iterate`, `resource` the platform's `/api`.
+The platform renews an interactive grant's access token hourly through the rotating refresh
+token and closes the socket when a token expires or the grant ends; the panel then connects again
+with a fresh token and lends `itx.chrome` again. The manifest asks only for `identity`, `sidePanel`
+and `storage` (`chrome.tabs.create` needs no permission); there are no host permissions — the
+platform answers CORS for the token endpoint, and WebSockets need none.

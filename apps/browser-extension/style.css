@@ -2,6 +2,7 @@
   color: #18212a;
   background: #f6f4ef;
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 13px;
 }
 
 * {
@@ -17,6 +18,7 @@ main {
   display: grid;
   gap: 12px;
   padding: 16px;
+  align-content: start;
 }
 
 header,
@@ -40,6 +42,12 @@ label,
 section {
   display: grid;
   gap: 8px;
+}
+
+label,
+.status {
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .capability {
@@ -71,34 +79,16 @@ code {
   font-size: 11px;
 }
 
-label,
-.status {
-  font-size: 12px;
-  font-weight: 600;
-}
-
 input,
-textarea,
 button {
   border: 1px solid #c9c5bc;
   border-radius: 8px;
   font: inherit;
 }
 
-input,
-textarea {
+input {
   background: white;
   padding: 10px;
-}
-
-textarea {
-  width: 100%;
-  min-height: 360px;
-  height: calc(100vh - 260px);
-  resize: vertical;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-  line-height: 1.45;
 }
 
 button {
@@ -113,9 +103,8 @@ button.secondary {
   background: transparent;
 }
 
-button:disabled {
-  cursor: wait;
-  opacity: 0.6;
+.muted {
+  color: #5b6570;
 }
 
 .error {

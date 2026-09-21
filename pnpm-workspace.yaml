@@ -96,6 +96,8 @@ overrides:
   # dummy-petshop's /capnweb door is the pet shop the clean-room's `itx.connectToCapnweb` connector is
   # proved against, so its server speaks the same 0.12 wire as that client.
   '@iterate-com/dummy-petshop>capnweb': npm:@iterate-com/capnweb@0.12.2
+  # The Chrome side panel is a bare capnweb client of os-next's /api (apps/spa's archetype, bundled).
+  '@iterate-com/browser-extension>capnweb': npm:@iterate-com/capnweb@0.12.2
   quicktype-core>readable-stream: npm:vite-compatible-readable-stream@3.6.1
   srvx: 0.11.12
   wrangler: 4.107.0

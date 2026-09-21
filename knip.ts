@@ -128,8 +128,12 @@ function makeDocsWorkspace(): WorkspaceConfig {
 
 function makeBrowserExtensionWorkspace(): WorkspaceConfig {
   return {
-    entry: ["vite.config.ts", "src/background.ts", "src/main.tsx"],
-    project: ["src/**/*.{ts,tsx}", "vite.config.ts"],
+    entry: ["background.js", "panel.js"],
+    project: ["*.js"],
+    // capnweb.js is the package's browser bundle, copied verbatim by `pnpm vendor` (the
+    // devDependency pins the version); nothing imports the package itself.
+    ignore: ["capnweb.js"],
+    ignoreDependencies: ["capnweb"],
     vite: false,
   };
 }
