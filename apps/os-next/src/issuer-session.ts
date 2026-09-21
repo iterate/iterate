@@ -10,12 +10,14 @@ import { oauthAddresses, oauthHelpers, parseAuthorization, type GrantProps } fro
  * identity provider's picture of the person, when it gave one (Google does). */
 export async function startIssuerSession(
   env: Env,
+  /** the sign-in request — its origin is the issuer on a deployment that named no `urls.os` */
+  request: Request,
   user: User,
   next: string,
   /** what the identity provider said about the person (Google's profile); an email sign-in has none */
   profile: { picture?: string; name?: string } = {},
 ) {
-  const { issuer, api } = oauthAddresses(env);
+  const { issuer, api } = oauthAddresses(env, request);
   // The issuer's own session holds every scope: it is the person at the issuer, and the consent
   // page creates organizations and projects through it.
   const flow = await startAppSession(
@@ -29,11 +31,11 @@ export async function startIssuerSession(
     sameOriginPath(next, issuer),
   );
   const helpers = oauthHelpers(env);
-  const request = await parseAuthorization(env, new Request(flow.location));
+  const authorization = await parseAuthorization(env, new Request(flow.location));
   const approved = await helpers.completeAuthorization({
-    request,
+    request: authorization,
     userId: user.id,
-    scope: request.scope,
+    scope: authorization.scope,
     metadata: { clientName: "iterate" },
     revokeExistingGrants: false,
     props: {

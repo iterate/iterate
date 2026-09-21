@@ -7,7 +7,9 @@
 // dotted spelling (`itx.repos.get(path).readFile(file)`) onto it; the roots declared below are the
 // ones the SDK and the first-party facets spell, with the platform's own signatures (context/built-ins.ts).
 import type { FacetHandle, InvokeHandle, ItxExpressionInput } from "./expression.ts";
+import type { ConsentScope } from "./oauth-scopes.ts";
 import type { Principal } from "./principal.ts";
+import type { IngressRouting } from "./project-ingress.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
 
 /** What `authenticate` accepts: the browser (its login cookie rode the upgrade), a device or script
@@ -27,8 +29,12 @@ export interface StreamPage {
   atHead: boolean;
 }
 
-/** `waitForEvent`'s filter: an event type, a floor, a timeout. */
-export type WaitForEventFilter = { type?: string; afterOffset?: number; timeoutMs?: number };
+/** `waitForEvent`'s filter: an event type (or one of a list), a floor, a timeout. */
+export type WaitForEventFilter = {
+  type?: string | string[];
+  afterOffset?: number;
+  timeoutMs?: number;
+};
 
 /** One row of `rewriteRules.list()`: a context row (`target` a string, or `null` for a mask) or a
  *  platform row. */
@@ -45,7 +51,10 @@ export type SubscriptionListEntry = {
   consumes?: string[];
   configuredAtOffset: number;
   afterOffset?: number;
-  hostedFacet?: { name: string; className: string; cacheKey?: string };
+  /** Set when this row hosts a facet (a processor). `restarts`: how many times the platform failed
+   *  the facet at its start and the context restarted it under a fresh loaded identity (a platform
+   *  defect the context works around; the count is the cheap way to ask "how often, here"). */
+  hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };
 };
 
 /** A loaded worker's source: its modules, literally, or an itx expression that produces them (then
@@ -87,8 +96,13 @@ export interface IterateContextApi {
     /** A hosted processor's claim on this context's alarm: "revive me by `at`" (a facet with a
      *  `runInBackground` attempt in flight), or `null` to release it. */
     processors: { claim(name: string, at: number | null): Promise<void> };
+    /** Another context of the project, physically — its handle (`invoke` takes steps relative to
+     *  `itx`): where a processor's `appendTo` lands. */
+    cd(path: string): InvokeHandle;
   };
-  whoami(): { projectId: string; path: string };
+  whoami():
+    | { projectId: string; path: string; projectSlug?: string; projectUrl?: string }
+    | Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   readEvents(
     afterOffset?: number,
@@ -142,16 +156,33 @@ export interface IterateContextApi {
     match: ItxExpressionInput,
     target: ItxExpressionInput | null,
   ): Promise<{ [Symbol.dispose](): void }>;
-  /** A script — the text of `async (itx) => { … }` — run once in a confined isolate. */
+  /** A script — the text of `async (itx) => { … }` — run once against this context, on its log:
+   *  `context/run-requested` under the caller, the context's runner, `run-settled` (JSON in, JSON
+   *  out); resolves with the result or rejects with the settlement's error. Never re-run. */
   run(script: string): Promise<unknown>;
-  /** The project's repos and workspaces as domain objects: a facet on the context at `path`. */
+  /** The project's repos, workspaces and agents as domain objects — one shape each: `get(path)` is
+   *  the entity's facet on the context at `path` (its verbs, plus the typed `append` on that
+   *  context), `list()` the project catalog, `create(path)` the creation saga on that path
+   *  (the processor row, the request, the terminal fact — created, or create-failed thrown). */
   repos: {
     get(path: string): InvokeHandle;
     list(): Promise<{ path: string; createdAt: string }[]>;
+    create(path: string): Promise<{ path: string }>;
   };
   workspaces: {
     get(path: string): InvokeHandle;
     list(): Promise<{ path: string; createdAt: string }[]>;
+    create(path: string): Promise<{ path: string }>;
+  };
+  agents: {
+    get(path: string): InvokeHandle;
+    list(): Promise<{ path: string; createdAt: string }[]>;
+    create(path: string): Promise<{ path: string }>;
+  };
+  /** The MCP connections born under the project, by grant: each connection's context path
+   *  (`/mcp/inbound/<grantId>`, its transcript) and when it was born (the grant's first run). */
+  mcpConnections: {
+    list(): Promise<{ grantId: string; path: string; createdAt: string }[]>;
   };
 }
 
@@ -179,9 +210,11 @@ export type ConsentAnswer =
       projects: ProjectRecord[];
       orgs: OrgRecord[];
       projectBound: boolean;
-      scopes: string[];
+      /** the scopes the request asked for, each with the page's copy (oauth-scopes.ts) */
+      scopes: ConsentScope[];
       denyLocation: string;
-      projectHostnameBase: string;
+      /** how projects are reached over HTTP (project-ingress.ts) — the page composes a project's URL */
+      ingressRouting: IngressRouting;
       /** the onboarding step's first draft of an organization name, from the person's name or email */
       suggestedOrganizationName: string;
     }
@@ -214,7 +247,8 @@ export interface IterateSessionApi {
     principal: Principal;
     scopes: string[];
     platformOrigin: string;
-    projectHostnameBase: string;
+    /** how projects are reached over HTTP (project-ingress.ts `projectUrlOf`); null ⇒ no ingress */
+    ingressRouting: IngressRouting;
     /** the MCP server's origin (the dash's connect page) — "" when this deployment serves none */
     mcpOrigin: string;
   };

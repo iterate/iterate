@@ -197,9 +197,9 @@ test("client-visible validation and capacity refusals commit nothing; a past dea
   expect(await itx.schedules.list()).toEqual([]);
 });
 
-// Crosses the real 60-second facet quiesce deadline without a client or waitForEvent keeping it
+// Crosses the real pins' release deadline without a client or waitForEvent keeping it
 // active; 100 seconds bounds the 75-second deadline plus reconnect and assertions.
-test("a disconnected userspace facet's deadline fires after idle quiesce without another request", async () => {
+test("a disconnected userspace facet's deadline fires after the pins' release without another request", async () => {
   const ctx = freshCtx("schedule_dormant");
   const itx = openItx(ctx);
   await itx.processors.enable("deadlines", {

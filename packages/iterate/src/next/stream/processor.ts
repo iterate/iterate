@@ -68,6 +68,9 @@ export type ProcessorContract<State = unknown> = {
  *  says whether the page was cut; its length says nothing (a budget cut is short of `limit`). */
 export type ProcessorStream = {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]> | StreamEvent[];
+  /** Append onto ANOTHER context of the same project, by path — how an entity's processor lands its
+   *  birth certificate on `/` for the project catalog. A stand-in with one path may omit it. */
+  appendTo?(path: string, ...events: StreamEventInput[]): Promise<StreamEvent[]> | StreamEvent[];
   read(
     afterOffset?: number,
     limit?: number,
@@ -95,6 +98,8 @@ export type ProcessEventArgs<State, Event = StreamEvent> = {
   previousState: State;
   /** Emit (validated against `emits`, provenance-stamped) onto this processor's own stream. */
   append: (...events: StreamEventInput[]) => Promise<StreamEvent[]>;
+  /** The same, onto the context at `path` (apps/os's `appendTo`): a certificate cross-posted to `/`. */
+  appendTo: (path: string, ...events: StreamEventInput[]) => Promise<StreamEvent[]>;
   /** Hold the cursor until `work` settles; FIFO with other blockers of the SAME event. */
   blockProcessorWhile: (work: () => Promise<unknown>) => void;
   /** Fire-and-forget attempt; may overtake later events; outcome must be state-recoverable. */
@@ -579,26 +584,33 @@ export class ProcessorEngine<State> {
     }
     // FIFO blocker chain for THIS event (rule 2); background work escapes it (rule 3).
     let blockers: Promise<unknown> = Promise.resolve();
+    // Validated against the declared `emits` and stamped with provenance — here, or on another
+    // context of the project (`appendTo`), the same way.
+    const stamped = (emittedEvents: StreamEventInput[]): StreamEventInput[] => {
+      for (const emitted of emittedEvents) {
+        if (!emits.includes(emitted.type))
+          throw new Error(
+            `processor "${slug}" emits ${JSON.stringify(emitted.type)} without declaring it`,
+          );
+        emitted.source = {
+          processor: {
+            slug,
+            version,
+            ...(event && { whileProcessing: { offset: event.offset, type: event.type } }),
+          },
+        };
+      }
+      return emittedEvents;
+    };
     this.processor.processEvent({
       event,
       state,
       previousState,
-      // Validated against the declared `emits` and stamped with provenance.
-      append: async (...emittedEvents) => {
-        for (const emitted of emittedEvents) {
-          if (!emits.includes(emitted.type))
-            throw new Error(
-              `processor "${slug}" emits ${JSON.stringify(emitted.type)} without declaring it`,
-            );
-          emitted.source = {
-            processor: {
-              slug,
-              version,
-              ...(event && { whileProcessing: { offset: event.offset, type: event.type } }),
-            },
-          };
-        }
-        return await this.#stream.append(...emittedEvents);
+      append: async (...emittedEvents) => await this.#stream.append(...stamped(emittedEvents)),
+      appendTo: async (path, ...emittedEvents) => {
+        if (!this.#stream.appendTo)
+          throw new Error(`processor "${slug}": this host reaches no other context (appendTo)`);
+        return await this.#stream.appendTo(path, ...stamped(emittedEvents));
       },
       blockProcessorWhile: (work) => {
         blockers = blockers.then(() => work());
@@ -673,6 +685,10 @@ export type StreamEventInput = {
       whileProcessing?: { offset: number; type: string };
     };
     principal?: { actor: string; email?: string };
+    /** THE CONNECTION the principal acted through: the OAuth grant's id (`grant_…`) — one per
+     *  connected client (a Claude Code install, a dash sign-in, a personal token). Stamped beside
+     *  `principal` by the DO's append root (src/principal.ts); absent for the admin secret and the kernel. */
+    grant?: string;
   };
   /** Same key + same body = dedupe (the existing event is returned); different body = loud error. */
   idempotencyKey?: string;
@@ -1023,6 +1039,21 @@ export type ConsumedEvent<Contract> = Contract extends {
   consumes: infer Consumes extends readonly string[];
 }
   ? EventForTypes<Events, DepsOf<Contract>, Consumes>
+  : never;
+
+/** What a caller APPENDS for one of a contract's OWNED events — the typed write on an entity
+ *  (`itx.agents.get(path).append(…)`, library.ts): the type string, the payload as its schema takes
+ *  it (`z.input`), a key and metadata; `ephemeral` only where the definition says so. Derived from
+ *  the catalog, so a payload field renamed in the contract is a type error at every call site. */
+export type EventInput<Contract> = Contract extends { events: infer Events extends EventCatalog }
+  ? {
+      [Type in keyof Events & string]: {
+        type: Type;
+        payload: z.input<Events[Type]["payloadSchema"]>;
+        idempotencyKey?: string;
+        metadata?: Record<string, unknown>;
+      } & (Events[Type] extends { ephemeral: true } ? { ephemeral: true } : { ephemeral?: never });
+    }[keyof Events & string]
   : never;
 
 /** What `defineProcessorContract` returns: the base the engine reads, plus the events catalog and the

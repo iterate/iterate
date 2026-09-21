@@ -1,4 +1,34 @@
 import { codedError } from "iterate/next/lib";
+import schema from "./control-plane.sql";
+
+const schemaApplied = new WeakMap<D1Database, Promise<void>>();
+
+/** THE DIRECTORY SCHEMA, applied at boot: control-plane.sql (IF NOT EXISTS throughout, so every run
+ *  after the first is a no-op), once per isolate per database — the first request awaits it, the
+ *  rest share the promise; a failure forgets it so the next request tries again. A deployment has no
+ *  migration step: `wrangler deploy`, and the first request sets the tables up. The `--` comment
+ *  lines are dropped and the file split on `;` into one batch. */
+export function ensureDirectorySchema(db: D1Database): Promise<void> {
+  let applied = schemaApplied.get(db);
+  if (!applied) {
+    // one statement per `;` (the `--` comment lines dropped), all in one batch: D1's `exec` is
+    // line-oriented and chokes on a statement that spans lines
+    const statements = schema
+      .replace(/^\s*--.*$/gm, "")
+      .split(";")
+      .map((statement) => statement.trim())
+      .filter(Boolean);
+    applied = db.batch(statements.map((statement) => db.prepare(statement))).then(
+      () => undefined,
+      (error: unknown) => {
+        schemaApplied.delete(db);
+        throw error;
+      },
+    );
+    schemaApplied.set(db, applied);
+  }
+  return applied;
+}
 
 // ── directory ── the control plane IS the directory. One D1 store, strongly consistent (no KV
 // list() lag), relational and org-centric: users → orgs (via org_members) → projects. A project is

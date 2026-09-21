@@ -3,9 +3,10 @@ import { z } from "zod";
 import { errorCode, sameOriginPath } from "iterate/next/lib";
 import { cookieValueOf, signClaims, verifyClaims } from "iterate/next/principal";
 import type { Env } from "./control-plane.ts";
-import { appConfigOf } from "./app-config.ts";
+import { appConfigOf, sessionSigningSecretOf } from "./app-config.ts";
 import { startIssuerSession } from "./issuer-session.ts";
 import { directory } from "./directory.ts";
+import { oauthAddresses } from "./oauth.ts";
 
 const issuer = new URL("https://accounts.google.com");
 const cookie = "__Host-itx-identity-flow";
@@ -34,13 +35,15 @@ export async function identityDoor(request: Request, env: Env) {
   if (!["/.auth/identity", "/.auth/identity/callback"].includes(url.pathname)) return null;
   if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
   const config = appConfigOf(env);
-  if (!config.googleClientId || !config.googleClientSecret.exposeSecret())
-    return new Response("Google sign-in is not configured", { status: 503 });
+  const google = config.login.google;
+  if (!google) return new Response("Google sign-in is not configured", { status: 503 });
   const as = await oauth
     .discoveryRequest(issuer)
     .then((response) => oauth.processDiscoveryResponse(issuer, response));
-  const client = { client_id: config.googleClientId };
-  const redirectUri = `${config.platformOrigin}/.auth/identity/callback`;
+  const client = { client_id: google.clientId };
+  const { issuer: platformOrigin } = oauthAddresses(env, request);
+  const redirectUri = `${platformOrigin}/.auth/identity/callback`;
+  const signingSecret = await sessionSigningSecretOf(config);
   const headers = new Headers({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
   if (url.pathname === "/.auth/identity") {
     const flow = {
@@ -48,7 +51,7 @@ export async function identityDoor(request: Request, env: Env) {
       state: oauth.generateRandomState(),
       nonce: oauth.generateRandomNonce(),
       verifier: oauth.generateRandomCodeVerifier(),
-      next: sameOriginPath(url.searchParams.get("next") || "/", config.platformOrigin),
+      next: sameOriginPath(url.searchParams.get("next") || "/", platformOrigin),
       expiresAt: Date.now() + 600_000,
     };
     const authorization = new URL(as.authorization_endpoint!);
@@ -62,7 +65,7 @@ export async function identityDoor(request: Request, env: Env) {
       code_challenge: await oauth.calculatePKCECodeChallenge(flow.verifier),
       code_challenge_method: "S256",
     }).toString();
-    const flowCookie = `${cookie}=${await signClaims(flow, config.sessionSecret.exposeSecret())}; ${cookieAttributes}; Max-Age=600`;
+    const flowCookie = `${cookie}=${await signClaims(flow, signingSecret)}; ${cookieAttributes}; Max-Age=600`;
     if (new TextEncoder().encode(flowCookie).length > 4096)
       return new Response("The sign-in request exceeds the browser cookie limit.", { status: 400 });
     headers.set("Set-Cookie", flowCookie);
@@ -71,9 +74,7 @@ export async function identityDoor(request: Request, env: Env) {
   }
   headers.append("Set-Cookie", `${cookie}=; ${cookieAttributes}; Max-Age=0`);
   const signed = cookieValueOf(request.headers.get("cookie"), cookie);
-  const flow = Flow.safeParse(
-    signed && (await verifyClaims(signed, config.sessionSecret.exposeSecret())),
-  );
+  const flow = Flow.safeParse(signed && (await verifyClaims(signed, signingSecret)));
   if (!flow.success || flow.data.expiresAt <= Date.now())
     return new Response("Sign-in expired. Please start again.", { status: 400, headers });
   try {
@@ -81,7 +82,7 @@ export async function identityDoor(request: Request, env: Env) {
     const response = await oauth.authorizationCodeGrantRequest(
       as,
       client,
-      oauth.ClientSecretPost(config.googleClientSecret.exposeSecret()),
+      oauth.ClientSecretPost(google.clientSecret.exposeSecret()),
       parameters,
       redirectUri,
       flow.data.verifier,
@@ -99,7 +100,7 @@ export async function identityDoor(request: Request, env: Env) {
       });
     // Google's stable subject owns the account; an email change cannot change its actor.
     const user = await directory(env.DB).upsertGoogleUser(identity.data.sub, identity.data.email);
-    const session = await startIssuerSession(env, user, flow.data.next, {
+    const session = await startIssuerSession(env, request, user, flow.data.next, {
       picture: identity.data.picture,
       name: identity.data.name,
     });

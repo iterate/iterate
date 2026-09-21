@@ -1,11 +1,13 @@
-// Public /api starts with an authorized Session. Only /internal/rpc exposes the
-// administrator gate. Sessions vend project contexts and own their teardown.
+// Public /api starts with a session: the OAuth gate's, resolved on the upgrade, or one a bare
+// socket authenticates IN-BAND — a bearer token, or the operator's admin secret. Sessions vend
+// project contexts and own their teardown.
 
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
 import type { IterateApi } from "iterate/next/api";
 import { codedError } from "iterate/next/lib";
-import { verifyAdminSecret, type Principal } from "iterate/next/principal";
+import { verifyAdminSecret, type Caller, type Principal } from "iterate/next/principal";
+import type { StreamEventInput } from "iterate/next/stream/processor";
 import type { Consent } from "./consent.ts";
 import type { Grants } from "./grants.ts";
 import {
@@ -18,6 +20,7 @@ import {
 import { describeReach, type Directory, type Project, type Reach } from "./directory.ts";
 import type { AppConfig } from "./app-config.ts";
 import type { AuthenticationFact } from "./account/contract.ts";
+import type { ProjectState } from "./project/contract.ts";
 
 /** A project as a caller names it: its minted id (`prj_<hex>`) or its slug (a URL's
  *  `/projects/<slug>`, a hostname's label) — the directory resolves either (`projectIdOf`), and the
@@ -29,7 +32,8 @@ export type ProjectRef = string;
  *  the request, so either only says "hand me that session". `bearer` WITH a `token` is the in-band
  *  form (capnweb's own pattern): a client that opened the socket bare — a static page on another
  *  origin, whose browser cannot put a header on a WebSocket (api.ts) — presents its token here, and
- *  it goes through the same gate. `admin-secret` is the operator/CLI credential, verified in-band. */
+ *  it goes through the same gate. `admin-secret` is the operator/CLI credential, verified in-band on
+ *  any transport — a bare socket, or one the gate already resolved. */
 const SessionCredentials = z.discriminatedUnion("type", [
   z.object({ type: z.literal("from-server-cookie") }),
   z.object({ type: z.literal("bearer"), token: z.string().min(1).optional() }),
@@ -51,6 +55,9 @@ export interface SessionInput {
   directory: Directory;
   /** Configuration for operator authentication and context capabilities. */
   appConfig: AppConfig;
+  /** THE PLATFORM ORIGIN this session was reached on (platform-origin.ts) — what every context it
+   *  vends composes public URLs with (a DO isolate cannot know it: the caller carries it). */
+  platformOrigin: string;
   /** A live transport tracks projects whose capabilities it has handed out. */
   onProjectAccess?: (projectId: string) => void;
   /** The in-band bearer (rpc.ts): verify a token a bare socket presents and bind the transport to
@@ -60,15 +67,16 @@ export interface SessionInput {
 
 /** THE `/api` ROOT — the one thing a fresh capnweb connection holds. `authenticate(credentials)` is
  *  its only real verb: it returns the `SessionRpcTarget` you reach `.user`/`.projects`/… through.
- *  On the public transport the OAuth gate has already resolved the caller, so `authenticate({ type:
- *  "from-server-cookie" })` hands back that session; the operator door carries no resolved session,
- *  so `authenticate({ type: "admin-secret", secret })` verifies the deployment admin secret in-band.
+ *  On a transport the OAuth gate resolved, `authenticate({ type: "from-server-cookie" })` hands back
+ *  that session; a bare socket (api.ts) carries none, so it authenticates in-band —
+ *  `authenticate({ type: "bearer", token })`, or `authenticate({ type: "admin-secret", secret })`,
+ *  the deployment admin secret verified here.
  *  Its teardown owns every context the session it vends hands out. */
 export class IterateRpcTarget extends RpcTarget {
   readonly #input: SessionInput;
   readonly #sessionTeardown: SessionTeardown;
-  /** The authority the transport already resolved (public `/api`), or null (the operator door, which
-   *  authenticates in-band with the admin secret). */
+  /** The authority the transport already resolved (a credential on the upgrade), or null (a bare
+   *  socket, which authenticates in-band). */
   readonly #resolved: SessionAuthority | null;
 
   constructor(
@@ -112,7 +120,7 @@ export class IterateRpcTarget extends RpcTarget {
     }
     const admin = await verifyAdminSecret(
       credentials.data.secret,
-      this.#input.appConfig.adminApiSecret.exposeSecret(),
+      this.#input.appConfig.secrets.adminBearer.exposeSecret(),
     );
     if (!admin) throw codedError("INVALID_CREDENTIALS", "The admin secret did not match.");
     // Test/operator fixture only; product impersonation must retain operator attribution.
@@ -140,33 +148,58 @@ export class IterateRpcTarget extends RpcTarget {
     credential: "from-server-cookie" | "admin-secret",
   ): void {
     if (!principal.email) return;
-    const name = DurableObjectNameCodec.stringify({
-      projectId: GLOBAL_PROJECT_ID,
-      path: `/users/${principal.actor}`,
-    });
     const operationId = crypto.randomUUID();
-    const fact = {
-      type: "events.iterate.com/account/authenticated",
-      payload: { credential, at: Date.now(), operationId } satisfies AuthenticationFact,
-      idempotencyKey: `authenticated/${operationId}`,
-    };
-    this.#input.waitUntil(
-      (
-        this.#input.contextNamespace
-          .getByName(name)
-          .invoke(["itx", ["append", fact]], [], { principal }) as Promise<unknown>
-      ).then(
+    publishGlobalFact(
+      this.#input,
+      `/users/${principal.actor}`,
+      "account",
+      {
+        type: "events.iterate.com/account/authenticated",
+        payload: { credential, at: Date.now(), operationId } satisfies AuthenticationFact,
+        idempotencyKey: `authenticated/${operationId}`,
+      },
+      { principal },
+    );
+  }
+}
+
+/** A CONTROL-PLANE FACT, appended to the global context of the entity it happened to — the
+ *  organization (`/organizations/<id>`: created, renamed, deleted, a project created in it), the
+ *  person (`/users/<id>`: authenticated; grants.ts and consent.ts add a token minted, a grant
+ *  ended, a consent approved) — stamped with the caller, principal and grant: the audit lives where
+ *  it happened, attributed to who did it and through which connection. Best-effort and ASYNC
+ *  (waitUntil), off the verb's own path: the directory stays the truth for the state, this is the
+ *  record of it — a fact lost to an eviction is a gap in the record, never a failed action. */
+function publishGlobalFact(
+  input: SessionInput,
+  path: string,
+  /** The first-party processor that folds the fact (first-party-facets.ts): its row on the context
+   *  is enabled first — idempotent at the door, so every fact re-asks and only the first appends. */
+  processor: "account" | "organization",
+  fact: StreamEventInput,
+  caller: Caller,
+): void {
+  const name = DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path });
+  const context = input.contextNamespace.getByName(name);
+  input.waitUntil(
+    // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; neither answer is
+    // read, so `unknown` is all the promises need to be.
+    (context.invoke(["itx", "processors", ["enable", processor]], [], caller) as Promise<unknown>)
+      .then(() => context.invoke(["itx", ["append", fact]], [], caller) as Promise<unknown>)
+      .then(
         () => undefined,
         () => undefined,
       ),
-    );
-  }
+  );
 }
 
 /** What you authenticate into: a catalog that vends contexts. A session is NOT a context — it is
  *  the directory you reach one through (apps/os: "a session is what authenticate() returns"). */
 export type SessionAuthority = {
   principal: SessionPrincipal;
+  /** The OAuth grant this session IS — the connection, stamped beside the principal on every event
+   *  (`source.grant`); absent for the admin secret and the in-band cookie/admin authenticate. */
+  grant?: string;
   reach: Reach;
   grants?: Grants;
   consent?: Consent;
@@ -188,7 +221,11 @@ export class SessionRpcTarget extends RpcTarget {
     this.#projects = new ProjectCollection(
       input,
       sessionTeardown,
-      authority.principal,
+      {
+        principal: authority.principal,
+        grant: authority.grant,
+        platformOrigin: input.platformOrigin,
+      },
       authority.reach,
     );
     this.#organizations = new OrganizationCollection(
@@ -219,9 +256,9 @@ export class SessionRpcTarget extends RpcTarget {
     return {
       principal: this.#authority.principal,
       scopes: this.#authority.scopes ?? [],
-      platformOrigin: this.#input.appConfig.platformOrigin,
-      projectHostnameBase: this.#input.appConfig.projectHostnameBase,
-      mcpOrigin: this.#input.appConfig.mcpOrigin,
+      platformOrigin: this.#input.platformOrigin,
+      ingressRouting: this.#input.appConfig.urls.ingressRouting,
+      mcpOrigin: this.#input.appConfig.urls.mcp,
     };
   }
 
@@ -254,23 +291,70 @@ export class SessionRpcTarget extends RpcTarget {
     return reach;
   }
 
-  /** A new organization named `name`, the person its owner. */
-  createOrg(name: string) {
+  /** WHO this session is, as an event's stamp: the principal and the grant it acts through. */
+  get #caller(): Caller {
+    return {
+      principal: this.#authority.principal,
+      grant: this.#authority.grant,
+      platformOrigin: this.#input.platformOrigin,
+    };
+  }
+
+  /** A new organization named `name`, the person its owner — and the fact of it on the
+   *  organization's own context (src/organization/). */
+  async createOrg(name: string) {
     const { userId } = this.#organizationsWriter("create");
-    return this.#input.directory.createOrg(userId, z.string().trim().min(1).parse(name));
+    const org = await this.#input.directory.createOrg(userId, z.string().trim().min(1).parse(name));
+    publishGlobalFact(
+      this.#input,
+      `/organizations/${org.id}`,
+      "organization",
+      {
+        type: "events.iterate.com/organization/created",
+        idempotencyKey: "organization/created",
+        payload: { name: org.name },
+      },
+      this.#caller,
+    );
+    return org;
   }
 
   /** Rename an organization the person owns. */
-  updateOrg(orgId: string, input: { name: string }) {
+  async updateOrg(orgId: string, input: { name: string }) {
     const { userId } = this.#organizationsWriter("rename");
     const data = z.object({ name: z.string().trim().min(1) }).parse(input);
-    return this.#input.directory.renameOrg(userId, z.string().min(1).parse(orgId), data.name);
+    const org = await this.#input.directory.renameOrg(
+      userId,
+      z.string().min(1).parse(orgId),
+      data.name,
+    );
+    publishGlobalFact(
+      this.#input,
+      `/organizations/${org.id}`,
+      "organization",
+      { type: "events.iterate.com/organization/renamed", payload: { name: org.name } },
+      this.#caller,
+    );
+    return org;
   }
 
-  /** Delete an organization the person owns, while it holds no project. */
-  deleteOrg(orgId: string) {
+  /** Delete an organization the person owns, while it holds no project. The fact lands on the
+   *  organization's context, which outlives the directory row as its record. */
+  async deleteOrg(orgId: string) {
     const { userId } = this.#organizationsWriter("delete");
-    return this.#input.directory.deleteOrg(userId, z.string().min(1).parse(orgId));
+    const id = z.string().min(1).parse(orgId);
+    await this.#input.directory.deleteOrg(userId, id);
+    publishGlobalFact(
+      this.#input,
+      `/organizations/${id}`,
+      "organization",
+      {
+        type: "events.iterate.com/organization/deleted",
+        idempotencyKey: "organization/deleted",
+        payload: {},
+      },
+      this.#caller,
+    );
   }
 
   get consent() {
@@ -334,7 +418,7 @@ export class SessionRpcTarget extends RpcTarget {
       DurableObjectNameCodec.address({ projectId: GLOBAL_PROJECT_ID, path }),
       this.#sessionTeardown,
       this.#input.waitUntil,
-      this.#authority.principal,
+      this.#caller,
     );
   }
 }
@@ -381,20 +465,15 @@ class ProjectCollection extends RpcTarget {
   readonly #input: SessionInput;
   readonly #sessionTeardown: SessionTeardown;
   readonly #reach: Reach;
-  /** The verified principal stamped on context events. */
-  readonly #contextPrincipal: Principal;
+  /** The verified caller — principal and grant — stamped on context events. */
+  readonly #caller: Caller;
 
-  constructor(
-    input: SessionInput,
-    sessionTeardown: SessionTeardown,
-    principal: SessionPrincipal,
-    reach: Reach,
-  ) {
+  constructor(input: SessionInput, sessionTeardown: SessionTeardown, caller: Caller, reach: Reach) {
     super();
     this.#input = input;
     this.#sessionTeardown = sessionTeardown;
     this.#reach = reach;
-    this.#contextPrincipal = principal;
+    this.#caller = caller;
   }
 
   /** The projects this session reaches, as directory rows: the projects of the orgs the user
@@ -417,7 +496,49 @@ class ProjectCollection extends RpcTarget {
       data.project,
       data.orgId,
     );
-    return this.#context(project.id);
+    // The fact of it, on the organization it was created in (idempotent on the project: the same
+    // org's same slug again is the same project).
+    publishGlobalFact(
+      this.#input,
+      `/organizations/${project.orgId}`,
+      "organization",
+      {
+        type: "events.iterate.com/organization/project-created",
+        idempotencyKey: `organization/project-created/${project.id}`,
+        payload: { projectId: project.id, slug: project.slug },
+      },
+      this.#caller,
+    );
+    // THE SAGA — the rule every entity collection follows: the `project` facet's state is read first;
+    // a project already created, or one whose creation is open, gets its context back and nothing
+    // appended; otherwise (never requested, or the last attempt failed) the `project` processor row
+    // is enabled on `/` and a NEW `project/create-requested` appended there — the row's facts, under
+    // this caller. The context is returned AT ONCE (apps/os's `waitUntilCreated: false`): the
+    // project processor (src/project/processor.ts) lands `project/created` or `project/create-failed`
+    // from state at head, and the dash watches the facet's live state.
+    const context = this.#context(project.id);
+    // The facet is the platform's own ProjectDurableObject and `snapshot()` the engine's
+    // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.
+    const { state } = (await context.invoke([
+      "itx",
+      "facets",
+      ["get", "project"],
+      ["snapshot"],
+    ])) as { state: ProjectState };
+    if (state.creation?.status === "created" || state.creation?.status === "requested")
+      return context;
+    await context.invoke(["itx", "processors", ["enable", "project"]]);
+    await context.invoke([
+      "itx",
+      [
+        "append",
+        {
+          type: "events.iterate.com/project/create-requested",
+          payload: { slug: project.slug, orgId: project.orgId },
+        },
+      ],
+    ]);
+    return context;
   }
 
   /** The project's root context ("/"), by its slug or its id. A project only — a context name
@@ -451,7 +572,7 @@ class ProjectCollection extends RpcTarget {
       DurableObjectNameCodec.parse(projectId),
       this.#sessionTeardown,
       this.#input.waitUntil,
-      this.#contextPrincipal,
+      this.#caller,
     );
   }
 }

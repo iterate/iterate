@@ -277,7 +277,7 @@ COMMAND that builds the first event (`subscriptionConfiguredEvent({ name, target
 // reduced state
 subscriptions: Record<string, {
   target: ItxExpression; consumes?: string[]; configuredAtOffset: number; afterOffset?: number;
-  hostedFacet?: { name: string; className: string; cacheKey?: string };  // the row HOSTS a facet (the source stays in the log + the facet's kv memo)
+  hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };  // the row HOSTS a facet (the source stays in the log + the facet's kv memo); `restarts` counts the platform-failure restarts
   halted?: { afterOffset: number; attempts: number; error?: string };
   resumed?: { afterOffset?: number; atOffset: number };            // level-triggered onto the cursor row
 }>;
@@ -294,7 +294,7 @@ type SubscriptionListEntry = {
   name: string; target: string; consumes?: string[]; configuredAtOffset: number;
   /** Where the cursor lane started (0 = the whole log); absent = at the configure. */
   afterOffset?: number;
-  hostedFacet?: { name: string; className: string; cacheKey?: string };
+  hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };
   /** Present only when the STREAM keeps the cursor (a target that cannot own its progress). */
   cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
   halted?: { afterOffset: number; attempts: number; error?: string };
@@ -508,12 +508,10 @@ export default class extends WorkerEntrypoint {
 
 ```ts
 const workerSource = { "cap.js": WORKER_SRC };
-using worker = await itx.provide("itx.worker", [
-  "itx",
-  "workers",
-  ["get", { source: workerSource }],
-]);
-using sub = await itx.subscribe({ name: "project-worker", target: "itx.worker.processEventBatch" });
+using sub = await itx.subscribe({
+  name: "project-worker",
+  target: ["itx", "workers", ["get", { source: workerSource }], "processEventBatch"],
+});
 (await itx.subscriptions.get("project-worker")).cursor; // { confirmedOffset, attempt, nextAttemptAtMs? }
 await itx.append({
   type: "events.iterate.com/stream/subscription-delivery-resumed",
@@ -715,7 +713,7 @@ consumes + client key filter), `facet1`/`userfacet`/`facetaddr`/`load`/`dw2dw`/`
 `edge` (tally from a seeded source, bare facet names, `.fetch` dotted), every e2e via
 `support/client.ts` (`.projects.get(ctx)`, `subscriberMounts` → `itx.subscriptions.list()`). Unit:
 `processor.test.ts` onto the engine; `capability-table-processor.test.ts` loses lane/policy
-cases; `do-doors`/`alarm-quiesce` re-spelled (cursor pump in `alarm()`). `ephemeralflood` is
+cases; `do-doors`/`alarm-and-pins` re-spelled (cursor pump in `alarm()`). `ephemeralflood` is
 re-measured, not just re-spelled: the push path for tabs is unchanged, so its numbers should hold.
 
 ## 10. Open risks, ranked

@@ -56,7 +56,7 @@ test("first consent creates organization and project through the ordinary sessio
   const next = flow.url.pathname + flow.url.search;
   // the picture Google's sign-in brings rides the issuer grant to the consent page's "signed in as"
   const picture = "https://lh3.googleusercontent.com/a/bootstrap=s96-c";
-  const login = await startIssuerSession(bindings, user, next, { picture });
+  const login = await startIssuerSession(bindings, new Request(origin), user, next, { picture });
   expect(login.location).toBe(next);
   expect(login.setCookie).toMatch(/^__Host-itx-session=[\da-f-]+; HttpOnly; Secure;/);
   const headers = { Cookie: login.setCookie.split(";")[0]!, Origin: origin };
@@ -86,7 +86,8 @@ test("first consent creates organization and project through the ordinary sessio
     kind: "consent",
     query: flow.url.search,
     email: user.email,
-    scopes: ["iterate"],
+    // each requested scope with the page's copy (oauth-scopes.ts); `iterate` cannot be unticked
+    scopes: [{ name: "iterate", required: true, note: "Required — what the app is for." }],
   });
   // the page lists a project by its slug; what a ticked box submits is its id
   if (view.kind !== "consent") throw new Error(`expected consent, got ${JSON.stringify(view)}`);
@@ -163,7 +164,7 @@ test("first consent creates organization and project through the ordinary sessio
 
 test("copied issuer client metadata and every scope confer app permissions but never consent authority", async () => {
   const user = await directory(bindings.DB).upsertUser("copied-client@example.com");
-  const login = await startIssuerSession(bindings, user, "/");
+  const login = await startIssuerSession(bindings, new Request(origin), user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
   const flow = await authorizationCodeRequest({
     issuer: origin,
@@ -237,42 +238,31 @@ test("an issuer session minted before a scope existed still holds every scope �
   expect((await old.orgs()).map((candidate) => candidate.id)).toContain(org.id);
 });
 
-test("the consent page's client picture: a shipped mark for a client we know by name, never a client's own SVG, a 404 for a client the provider does not know", async () => {
-  const helpers = oauthHelpers(bindings);
-  const registration = {
-    redirectUris: ["http://127.0.0.1/callback"],
-    tokenEndpointAuthMethod: "none",
-    grantTypes: ["authorization_code"],
-    responseTypes: ["code"],
-  };
-  // "Claude …" → the Claude mark we ship, whatever its metadata says about pictures
-  const claude = await helpers.createClient({ ...registration, clientName: "Claude fixture" });
-  const mark = await SELF.fetch(`${origin}/client-icon?client_id=${claude.clientId}`);
-  expect(mark.status).toBe(200);
-  expect(mark.headers.get("content-type")).toContain("image/svg+xml");
-  expect(await mark.text()).toContain("<title>Claude</title>");
-  // a client's own logo_uri is fetched by the worker (fetch reaches SELF here) — and refused when
-  // it is not a raster image: an SVG on the issuer's origin could carry script
-  const svgLogo = await helpers.createClient({
-    ...registration,
-    clientName: "Nobody in particular",
-    logoUri: `${origin}/iterate-logo.svg`,
-  });
-  expect((await SELF.fetch(`${origin}/client-icon?client_id=${svgLogo.clientId}`)).status).toBe(
-    404,
-  );
-  expect((await SELF.fetch(`${origin}/client-icon?client_id=nobody-registered-this`)).status).toBe(
-    404,
-  );
-});
-
 test("a browser landing on the platform origin is told it is headless and where the dash is", async () => {
+  // rendered from the configuration (wrangler.test.jsonc), never a file's hostnames
   const page = await SELF.fetch(`${origin}/`);
   expect(page.status).toBe(200);
   expect(page.headers.get("content-type")).toContain("text/html");
+  expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
   const html = await page.text();
-  expect(html).toContain("deliberately headless");
-  expect(html).toContain("https://dash.iterate2.com/");
+  expect(html).toContain("<strong>control.test</strong> is deliberately headless");
+  // the dash's CONNECT page, naming this issuer — a click there is what binds the browser to it
+  expect(html).toContain(
+    'href="https://dash.test/.auth/connect?issuer=https%3A%2F%2Fcontrol.test"',
+  );
+  expect(html).toContain('href="/login"');
+});
+
+test("the setup prompt an agent follows is served beside the pages, and the landing page points at it", async () => {
+  const prompt = await SELF.fetch(`${origin}/setup-prompt.md`);
+  expect(prompt.status).toBe(200);
+  expect(prompt.headers.get("content-type")).toMatch(/^text\/(markdown|plain)/);
+  const text = await prompt.text();
+  expect(text).toContain("wrangler deploy --config apps/os-next/wrangler.self-host.jsonc");
+  expect(text).toContain("/mcp");
+  expect(text).toContain("dash.iterate2.com/.auth/connect?issuer=");
+  const page = await (await SELF.fetch(`${origin}/`)).text();
+  expect(page).toContain('href="/setup-prompt.md"');
 });
 
 test("a client on a project's custom apex is bound to that project at consent, like one under the hostname base", async () => {
@@ -282,7 +272,7 @@ test("a client on a project's custom apex is bound to that project at consent, l
     "custom-apex-project",
   );
   await directory(bindings.DB).createProject({ userId: user.id }, "custom-apex-other");
-  const login = await startIssuerSession(bindings, user, "/");
+  const login = await startIssuerSession(bindings, new Request(origin), user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
   const flow = await authorizationCodeRequest({
     issuer: origin,
@@ -301,7 +291,7 @@ test("a client on a project's custom apex is bound to that project at consent, l
 
 test("consent grants only the scopes left ticked; organizations:write, not project reach, is what creates an organization", async () => {
   const user = await directory(bindings.DB).upsertUser("ticked-scopes@example.com");
-  const login = await startIssuerSession(bindings, user, "/");
+  const login = await startIssuerSession(bindings, new Request(origin), user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
   const org = await issuer.createOrg("Ticked scopes organization");
   using project = await issuer.projects.create({ project: "ticked-scopes-project", orgId: org.id });
@@ -358,7 +348,7 @@ test("consent grants only the scopes left ticked; organizations:write, not proje
 
 test("consent requires PKCE, defaults empty scopes, rejects empty reach and returns a cancellable request", async () => {
   const user = await directory(bindings.DB).upsertUser("consent-checks@example.com");
-  const login = await startIssuerSession(bindings, user, "/");
+  const login = await startIssuerSession(bindings, new Request(origin), user, "/");
   const headers = { Cookie: login.setCookie.split(";")[0]!, Origin: origin };
   const api = await connect(headers);
   const flow = await authorizationCodeRequest({
@@ -371,7 +361,8 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
   const view = await api.consent.describe(flow.url.search);
   expect(view.kind).toBe("consent");
   if (view.kind !== "consent") throw new Error("Expected consent");
-  expect(view.scopes).toEqual(["iterate"]);
+  expect(view.scopes.map((scope) => scope.name)).toEqual(["iterate"]);
+  expect(view.scopes[0]!.required).toBe(true);
   const cancel = new URL(view.denyLocation);
   expect(cancel.searchParams.get("error")).toBe("access_denied");
   expect(cancel.searchParams.get("state")).toBe(flow.state);
@@ -389,6 +380,17 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
   const page = await SELF.fetch(`${origin}/authorize`);
   expect(page.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
   expect(page.headers.get("X-Frame-Options")).toBe("DENY");
+  // The page is a capnweb client of /api: its bundle is a file beside it, open to anyone; there is
+  // no JSON sibling (an anonymous browser at a non-page path is sent to sign in) and nothing to
+  // post to /authorize.
+  expect((await SELF.fetch(`${origin}/capnweb.js`)).status).toBe(200);
+  const sibling = await SELF.fetch(`${origin}/authorize.json`, { redirect: "manual" });
+  expect(sibling.status).toBe(302);
+  expect(sibling.headers.get("location")).toMatch(/^\/\.auth\/login\?/);
+  expect(
+    (await SELF.fetch(`${origin}/authorize`, { method: "POST", headers: { Origin: origin } }))
+      .status,
+  ).toBe(404);
   // Force the client to refresh through the real public token endpoint.
   const session = appSession(bindings.BROWSER_SESSION, new Request(origin, { headers }))!;
   const before = await session.bearer();

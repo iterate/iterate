@@ -10,11 +10,10 @@
 // Dynamic code has two doors, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
-import { stampPrincipal, type Caller } from "iterate/next/principal";
+import { stampCaller, type Caller } from "iterate/next/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
-import { codedError } from "iterate/next/lib";
+import { codedError, jsonEqual } from "iterate/next/lib";
 import {
-  itxExpressionStepName,
   print,
   type ItxExpression,
   type ItxExpressionInput,
@@ -23,6 +22,7 @@ import {
   InvokeHandle,
   RpcStubHandle,
 } from "iterate/next/expression";
+import { projectUrlOf, type IngressRouting } from "iterate/next/project-ingress";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
   ScheduleKey,
@@ -77,7 +77,7 @@ export type SubscriptionListEntry = {
   afterOffset?: number;
   /** Set when this row HOSTS a facet (a processor): the facet's name, class and cacheKey (the source
    *  lives in the log + the facet's kv memo, never here — M1). Address-only rows have none. */
-  hostedFacet?: { name: string; className: string; cacheKey?: string };
+  hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };
   /** Present only when the STREAM keeps the cursor (a target that cannot own its progress). */
   cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
   halted?: { afterOffset: number; attempts: number; error?: string };
@@ -110,7 +110,16 @@ export interface BuiltInScope extends LibraryRoots {
    *  can spell `itx.builtins.append(…)`. */
   builtins: Omit<BuiltInScope, "builtins">;
   /** Identify this context. */
-  whoami(): { projectId: string; path: string };
+  whoami():
+    | { projectId: string; path: string; projectSlug?: string; projectUrl?: string }
+    | Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
+  /** THE PUBLIC URL of this project over HTTP — the apex (the config worker's `fetch`) or `app`'s
+   *  (`itx.apps.<app>`), at `path` (default "/") — composed from the deployment's ingress routing
+   *  (iterate/next/project-ingress: `<app>--<slug>.<hostname>/…` under subdomains,
+   *  `<origin>/<slug>/<app>/…` under paths). Refused on a deployment with no project ingress, and on
+   *  a call carrying no platform origin (a processor's own turn, a loaded worker: hold the URL a
+   *  session handed you instead). Only a project's context has one. */
+  url(target?: { app?: string; path?: string }): Promise<string>;
   /** Durable key/value prefixed with the RESOURCE OWNER's id (iterate-context.ts `resourceScope`:
    *  a project's id, or a global user's/organization's subtree) — the `${owner.id}:` prefix IS the
    *  isolation. */
@@ -360,6 +369,7 @@ function r2ObjectRecord(object: R2Object, prefix: string): R2ObjectRecord {
 
 /** What the CONTEXT (the DO) injects: identity, the bindings, and the seams only it can serve. */
 interface BuildBuiltInsDeps {
+  projectInfo?: () => Promise<{ projectSlug?: string; projectUrl?: string }>;
   projectId: string;
   path: string;
   /** The codec name of the context these roots belong to (loader cache keys). */
@@ -380,9 +390,12 @@ interface BuildBuiltInsDeps {
   };
   /** The deploy identity every loader cacheKey folds in (worker.ts `AppConfig`). */
   deployId: string;
-  /** The Artifacts account + namespace `itx.cfArtifacts` names git remotes with (worker.ts `AppConfig`). */
-  artifactsAccountId: string;
-  artifactsNamespace: string;
+  /** How projects are reached over HTTP (app-config.ts `urls.ingressRouting`) — `itx.url`. */
+  ingressRouting: IngressRouting;
+  /** THE PLATFORM ORIGIN the current call's caller reached the platform on (the DO's caller record)
+   *  — null when the call carries none: a processor's own turn, a loaded worker's `env.ITX`, the
+   *  delivery loop, an alarm. */
+  platformOrigin: () => string | null;
   /** A signed file URL on the project host (file-urls.ts `signedFileUrl`, closed over the app
    *  config's secret and hosts) — `itx.r2.presign`. */
   signFileUrl: (input: {
@@ -404,8 +417,7 @@ interface BuildBuiltInsDeps {
   egress: (request: Request) => Promise<Response>;
   /** WHO is calling right now — the `Caller` the DO runs this call under (the fetch lane's header,
    *  or the edge's stamp), `{ principal: null }` for an anonymous session, a processor, a loaded
-   *  worker and the KERNEL's own delivery loop. Carried across sibling `cd` hops; in the global
-   *  namespace `cd` reads it to tell the kernel's config funnel from a person's path. */
+   *  worker and the KERNEL's own delivery loop. Carried across permitted sibling `cd` hops. */
   caller: () => Caller;
   /** The rpcStubs view — closures over the DO's transport table (the pager sockets can never move). */
   rpcStubs: BuiltInScope["rpcStubs"];
@@ -451,7 +463,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   /** THE append: every event appended through this scope carries WHO appended it — the DO's own
    *  stamp, never a client's (src/principal.ts): the session's verified principal, or none. */
   const append = (...events: StreamEventInput[]) =>
-    ownContext().append(...events.map((event) => stampPrincipal(event, deps.caller().principal)));
+    ownContext().append(...events.map((event) => stampCaller(event, deps.caller())));
   /** Secrets are the RESOURCE OWNER's: the value's key is owner-scoped, so the catalog lives in ONE
    *  log — the owner's root context (`owner.rootPath`: a project's `/`, a user's `/users/<id>`).
    *  Each `secrets` verb runs `here` on that root, and on a context below it runs as the same call
@@ -490,7 +502,34 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   // Each root implements one member of `BuiltInScope` above (the canonical doc of the surface); the
   // comments here add only the WHY of a code branch.
   return {
-    whoami: () => ({ projectId, path }),
+    whoami: () =>
+      deps.projectInfo
+        ? deps.projectInfo().then((project) => ({ projectId, path, ...project }))
+        : { projectId, path },
+    url: async (target: { app?: string; path?: string } = {}) => {
+      const platformOrigin = deps.platformOrigin();
+      if (!platformOrigin)
+        throw codedError(
+          "INVALID_INPUT",
+          "itx.url: this call carries no platform origin to compose a URL with — call it from a session, or hold the URL a session handed you",
+        );
+      const slug = (await deps.projectInfo?.())?.projectSlug;
+      if (!slug)
+        throw codedError("INVALID_INPUT", "itx.url: only a project's context has a public URL");
+      const url = projectUrlOf(deps.ingressRouting, platformOrigin, {
+        project: slug,
+        app: target.app || null,
+        path: target.path,
+      });
+      if (!url)
+        throw codedError(
+          "INVALID_INPUT",
+          deps.ingressRouting
+            ? `itx.url: ${JSON.stringify(target)} is not an address in this project (an app label is [a-z][a-z0-9-]*; a path starts with "/")`
+            : "itx.url: this deployment has no project ingress (APP_CONFIG urls.ingressRouting is unset) — nothing serves a project over HTTP",
+        );
+      return url.href;
+    },
     kv: {
       get: (k: string) => env.ITX_KV.get(kvPrefix + k),
       put: async (k: string, v: string) => {
@@ -580,9 +619,20 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // No append here: the catalog learns of the secret when the exchange succeeds, so an
       // abandoned attempt leaves no row that advertises a pin and a strategy the object does not hold.
       beginOAuth: (name, options) =>
-        onRootContext(["beginOAuth", name, options], () =>
-          secretStore(name).beginOAuth(normalizeSecretOAuth(options), secretsCatalog),
-        ),
+        onRootContext(["beginOAuth", name, options], () => {
+          // the provider's callback hangs under the platform origin — the caller's, not a DO's
+          const platformOrigin = deps.platformOrigin();
+          if (!platformOrigin)
+            throw codedError(
+              "INVALID_INPUT",
+              "itx.secrets.beginOAuth: this call carries no platform origin for the callback URL — call it from a session",
+            );
+          return secretStore(name).beginOAuth(
+            normalizeSecretOAuth(options),
+            secretsCatalog,
+            platformOrigin,
+          );
+        }),
       // The object FIRST here (the exchange most often fails on the provider's side — a junk code,
       // a stale attempt — and must leave no row), then the fact. A refused append undoes the write
       // THIS call made (`exchanged`), so what `list()` says and what egress finds never disagree; a
@@ -628,12 +678,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     },
     ai: env.AI, // the binding object itself — dispatch walks its methods
     browser: cfBrowser(env.BROWSER),
-    cfArtifacts: projectScopedArtifacts({
-      namespace: env.ARTIFACTS,
-      projectId: owner.id,
-      accountId: deps.artifactsAccountId,
-      namespaceName: deps.artifactsNamespace,
-    }),
+    cfArtifacts: projectScopedArtifacts({ namespace: env.ARTIFACTS, projectId: owner.id }),
     append,
     schedules: {
       ...deps.schedules,
@@ -667,21 +712,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     cd: (contextPath: string) =>
       new InvokeHandle((itxExpressionSteps) => {
         const siblingPath = resolveContextPath(path, contextPath);
-        // THE GLOBAL NAMESPACE IS NOT NAVIGABLE (iterate-context.ts `cd`): a person's expression —
-        // a rule or subscription written into their own context, run under their principal — may
-        // not name another global path. The ONE hop that exists here is the kernel's config funnel,
-        // `itx.cd('/').worker…` (the birth row every context carries), which the delivery loop runs
-        // under NO principal — so a user's row that spells the same hop can only feed the funnel.
-        // Stamped `retryable: false`: a subscription row naming another path can only repeat this
-        // refusal, so the delivery loop halts it at once instead of climbing its ladder.
-        if (
-          projectId === GLOBAL_PROJECT_ID &&
-          !(
-            deps.caller().principal === null &&
-            siblingPath === "/" &&
-            itxExpressionStepName(itxExpressionSteps[0]) === "worker"
-          )
-        )
+        // Global contexts are addressed by identity, never navigated through cd.
+        if (projectId === GLOBAL_PROJECT_ID)
           throw Object.assign(
             codedError(
               "FORBIDDEN",
@@ -718,6 +750,18 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             );
           assertFacetSourceWithinCeiling(loaded, `processors.enable("${name}")`);
         }
+        // IDEMPOTENT AT THE DOOR (the rule `provide` follows): a row already hosting this facet under
+        // the same spec appends nothing — every entity's `create()` enables its row on every call.
+        const existing = deps.subscriptions.get(name)?.hostedFacet;
+        if (
+          existing &&
+          existing.name === name &&
+          (firstPartyClassName
+            ? existing.className === firstPartyClassName
+            : existing.className === loaded!.className && existing.cacheKey === loaded!.cacheKey) &&
+          jsonEqual(deps.subscriptions.get(name)?.consumes ?? null, spec?.consumes ?? null)
+        )
+          return { name };
         await append({
           type: "events.iterate.com/stream/subscription-configured",
           payload: {

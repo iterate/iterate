@@ -1,12 +1,14 @@
 // public/login.js — the sign-in page's script. /login.json (control-plane.ts) says who is signed in,
 // whether a code is on its way (and to whom), what went wrong with the last post, and which
 // sign-ins this deployment offers; this renders that. Signing in itself is plain form posts to
-// /login — the email, then the code — or the link to /.auth/identity (Google); no script in the loop.
+// /login — the email and the password; or the email, then the mailed code — or the link to
+// /.auth/identity (Google); no script in the loop.
 (async () => {
   const root = document.getElementById("login");
   const el = (tag, props, ...children) => {
     const node = document.createElement(tag);
     for (const [key, value] of Object.entries(props || {})) {
+      if (value === undefined) continue;
       if (key === "class") node.className = value;
       else if (key === "text") node.textContent = value;
       else node.setAttribute(key, value);
@@ -26,12 +28,17 @@
   }
   const alert = state.error ? el("p", { role: "alert", text: state.error }) : null;
   if (state.signedInAs) {
+    // where to go: on to `next`, or — this page being its own destination — to the dash, where a
+    // person's projects, organizations and sessions are (a deployment without one offers nothing)
+    const onward =
+      state.next !== "/login"
+        ? el("a", { class: "button primary", href: state.next, text: "Continue" })
+        : state.dash
+          ? el("a", { class: "button primary", href: state.dash, text: "Go to the dash" })
+          : null;
     show(
       el("p", {}, "Signed in as ", el("strong", { text: state.signedInAs }), "."),
-      // nowhere to continue to when this page is its own destination
-      state.next === "/login"
-        ? null
-        : el("p", {}, el("a", { class: "button primary", href: state.next, text: "Continue" })),
+      onward && el("p", {}, onward),
       el(
         "form",
         { method: "post", action: state.switchAccount },
@@ -77,32 +84,68 @@
     return;
   }
   const options = [alert];
-  if (state.emailSignIn)
+  const emailField = () =>
+    el(
+      "label",
+      {},
+      "Email ",
+      el("input", {
+        type: "email",
+        name: "email",
+        value: state.email || "",
+        autocomplete: "email",
+        required: "",
+        autofocus: options.length === 1 ? "" : undefined,
+      }),
+    );
+  // ONE form for the email sign-ins: the email; the password beside it when this deployment has one
+  // ("Sign in"); "Email me a code instead" when a code is offered too — a second submit of the SAME
+  // form that drops the password field before it posts, so the server reads an email alone (a code
+  // request), never a blank password (a wrong attempt). A code-only deployment shows the email and
+  // Continue; a password-only one the email, the password and Sign in.
+  if (state.password || state.emailSignIn) {
+    const password = state.password
+      ? el("input", {
+          type: "password",
+          name: "password",
+          autocomplete: "current-password",
+          required: "",
+        })
+      : null;
+    const codeButton =
+      state.emailSignIn && state.password
+        ? el("button", {
+            class: "quiet",
+            type: "submit",
+            formnovalidate: "",
+            text: "Email me a code instead",
+          })
+        : null;
+    if (codeButton && password)
+      codeButton.addEventListener("click", () => {
+        password.disabled = true; // a disabled field is not posted: this submit asks for a code
+      });
     options.push(
       el(
         "form",
         { method: "post", action: "/login" },
         next(),
-        el(
-          "label",
-          {},
-          "Email ",
-          el("input", {
-            type: "email",
-            name: "email",
-            autocomplete: "email",
-            required: "",
-            autofocus: "",
-          }),
-        ),
-        el("button", { class: "primary", type: "submit", text: "Continue" }),
+        emailField(),
+        password && el("label", {}, "Password ", password),
+        el("button", {
+          class: "primary",
+          type: "submit",
+          text: state.password ? "Sign in" : "Continue",
+        }),
+        codeButton,
       ),
     );
+  }
   if (state.google)
     options.push(
       el("p", {}, el("a", { class: "button", href: state.google, text: "Continue with Google" })),
     );
-  if (!state.emailSignIn && !state.google)
+  if (!state.password && !state.emailSignIn && !state.google)
     options.push(el("p", { text: "Sign-in is not configured for this deployment." }));
   show(...options);
 })();

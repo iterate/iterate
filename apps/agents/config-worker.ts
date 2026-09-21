@@ -1,5 +1,5 @@
-// Install this source as the project's itx.worker, and point app labels at it, e.g.
-//   itx.provide("itx.apps.agents", "itx.worker")
+// Mount this source with an explicit worker spec, e.g.
+//   itx.provide("itx.apps.agents", ["itx", "workers", ["get", { source, cacheKey }]])
 // so a request to agents--<project>.<base> reaches this worker with the app slug in the
 // `x-iterate-app` header (the edge derives it from the itx.apps.<label> expression — apps/os's
 // header). The platform supplies processor.js.

@@ -18,7 +18,7 @@ direction. **All six increments landed as SHAPE** (typecheck + full workers lane
 1. **Context hierarchy** — `Session`→`SessionRpcTarget`, `IterateContext`→`IterateContextRpcTarget`;
    `GLOBAL_PROJECT_ID`; `session.user` vends a global context (same surface as a project's).
 2. **`IterateRpcTarget`** — the one `/api` root with `authenticate({ from-server-cookie | admin-secret })`,
-   served at `/api` and `/internal/rpc`; `UnauthenticatedSession` deleted.
+   served at `/api`; `UnauthenticatedSession` deleted.
 3. **Single `invoke(call, args, caller)` door** — `invoke`/`invokeAs` collapsed; the `Caller` is
    CARRIED through every dispatch and sibling hop, but NOT enforced (nothing reads it to refuse yet).
 4. **`session.organizations.get(id)`** — the org context catalog.
@@ -34,10 +34,8 @@ Deferred — the ENFORCEMENT and heavy plumbing (by direction; the expected-fail
   the global namespace is NOT NAVIGABLE. A session holds a global context by identity only
   (`session.user`; `session.organizations.get` by membership — `SessionRpcTarget.#reachesOrg`), a
   global edge handle's `cd` is refused for everyone, the admin included
-  (`IterateContextRpcTarget.cd`), and inside a global DO the built-in `cd` admits exactly one hop —
-  the kernel's config funnel `itx.cd('/').worker…` under `{ principal: null }` (context/built-ins.ts;
-  the DO runs its delivery loop under that null explicitly, `onCommit`, because the committing call's
-  async-local caller would otherwise ride every continuation). `global` is a reserved project name
+  (`IterateContextRpcTarget.cd`), and inside a global DO the built-in `cd` also refuses navigation.
+  There is no implicit config subscription requiring a kernel-only exception. `global` is a reserved project name
   (`projects.create` / `projects.get`). No policy table: nobody can NAME another user's path. Four of
   the five expected-fails flipped to passing pins; the pager attach needs no floor (the pager is
   minted from the handle a session already holds). Still open: the append type-gate (the remaining
@@ -46,7 +44,6 @@ Deferred — the ENFORCEMENT and heavy plumbing (by direction; the expected-fail
   every global context sees alike; those are the next gap, not a path.
 - **Privileged `ctx.exports` account facet + D1/OAuth** — for the token-workflow effects (Phase 2);
   the foundation processor needs none.
-- **Full `/internal/rpc` deletion** — needs the OAuth-gate admission rework (admin via `/api`).
 
 ## Headline from the review
 

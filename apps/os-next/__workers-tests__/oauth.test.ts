@@ -9,10 +9,11 @@ import { oauthHelpers } from "../src/oauth.ts";
 import type { Env } from "../src/control-plane.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import definitions from "../src/control-plane.sql?raw";
+import { loginPassword } from "./support.ts";
 
 const bindings = env as unknown as Env;
 const ORIGIN = "https://control.test";
-const adminSecret = bindings.APP_CONFIG_ADMIN_API_SECRET!;
+const adminSecret = bindings.APP_CONFIG_SECRETS__ADMIN_BEARER!;
 const sessions: Disposable[] = [];
 const call = (path: string, init?: RequestInit) => {
   const headers = new Headers(init?.headers);
@@ -97,7 +98,11 @@ async function tool(token: string, name: string, args: object = {}) {
 async function grant(resources: string[], projects: string[] = ["oauth-a"]) {
   const login = await call("/login", {
     method: "POST",
-    body: new URLSearchParams({ email: "oauth-new@example.com", next: "/" }),
+    body: new URLSearchParams({
+      email: "oauth-new@example.com",
+      password: loginPassword(),
+      next: "/",
+    }),
   });
   const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
   const user = await directory(bindings.DB).upsertUser("oauth-new@example.com");
@@ -218,7 +223,7 @@ test("the configured header bearer is the same administrator at both protocols",
         })
       ).body.result.content[0].text,
     ),
-  ).toEqual({ projectId: "admin-probe", path: "/" });
+  ).toEqual({ projectId: "admin-probe", path: "/mcp/inbound/admin" }); // the admin secret's shared connection context (mcp.ts)
   expect((await call("/api", { headers: { Authorization: "Bearer wrong" } })).status).toBe(401);
   expect((await tool("wrong", "run", { project: "x", script: "async () => 1" })).status).toBe(401);
 });
@@ -413,7 +418,11 @@ test("console and project browsers use the same CIMD flow and independent grants
   });
   const issuerLogin = await call("/login", {
     method: "POST",
-    body: new URLSearchParams({ email: "browser@example.com", next: "/" }),
+    body: new URLSearchParams({
+      email: "browser@example.com",
+      password: loginPassword(),
+      next: "/",
+    }),
   });
   const issuerCookie = issuerLogin.headers.get("set-cookie")!.split(";")[0]!;
   const user = await directory(bindings.DB).upsertUser("browser@example.com");
@@ -517,7 +526,12 @@ test("console and project browsers use the same CIMD flow and independent grants
         (await tool(personal.token, "run", { script: "async (itx) => itx.whoami()" })).body.result
           .content[0].text,
       ),
-    ).toEqual({ projectId: browserA.id, path: "/" });
+    ).toEqual({
+      projectId: browserA.id,
+      path: expect.stringMatching(/^\/mcp\/inbound\/grant_/), // the token's own connection context, named by its grant (mcp.ts)
+      projectSlug: "browser-a",
+      projectUrl: "https://browser-a.projects.test/",
+    });
     const { root: personalApi } = await rpc(personal.token);
     expect((await personalApi.projects.list()).map((p: { id: string }) => p.id)).toEqual([
       browserA.id,

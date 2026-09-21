@@ -222,6 +222,7 @@ export default defineConfig([
       "next/principal": "src/next/principal.ts",
       "next/stream/processor": "src/next/stream/processor.ts",
       "next/oauth-scopes": "src/next/oauth-scopes.ts",
+      "next/project-ingress": "src/next/project-ingress.ts",
       "next/oauth": "src/next/client/oauth.ts",
     },
     format: "esm",

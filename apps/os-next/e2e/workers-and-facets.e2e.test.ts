@@ -14,7 +14,7 @@
 //     from the SDK (`./processor.js`), reads the remote's url from Cloudflare's own `ctx.props`, and
 //     dials ONE one-shot HTTP batch per chain through egress (no built-in, no persistent socket, so the
 //     remote never pins the context DO) — behind a rewrite rule by name; the remote is THIS worker's own
-//     /internal/rpc operator door (another project), so the proof runs identically locally and deployed
+//     /api (another project; the admin bearer on the POST), so the proof runs identically locally and deployed
 //   • DYNAMIC WORKER → DYNAMIC WORKER mid-chain pipelining: `facets.get(name, spec).demo.timer
 //     .callLater(ms, cb)` — every mid-path handle is a branded RpcTarget (context/expression.ts),
 //     never a bare Proxy (NonPipelinable over Workers RPC, workerd#6873) — and the callback fires back
@@ -236,7 +236,7 @@ const SRC_REMOTE = {
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { newHttpBatchRpcSession } from "./processor.js";
 export class Remote extends WorkerEntrypoint {
-  #api() { return newHttpBatchRpcSession(this.ctx.props.url); }
+  #api() { return newHttpBatchRpcSession(new Request(this.ctx.props.url, { headers: { authorization: "Bearer " + this.ctx.props.credentials.secret } })); }
   whoami() { return this.#api().authenticate(this.ctx.props.credentials).projects.get(this.ctx.props.projectId).whoami(); }
 }
 `,
@@ -254,7 +254,7 @@ test("a userspace worker dials a remote capnweb API with the url in ctx.props, b
         source: SRC_REMOTE,
         className: "Remote",
         props: {
-          url: workerUrl("/internal/rpc"),
+          url: workerUrl("/api"),
           projectId: other,
           credentials: adminCredentials(),
         },

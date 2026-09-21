@@ -25,7 +25,7 @@ Every snippet assumes this preamble — exactly how the lane opens a session. Th
 ```ts
 import { newWebSocketRpcSession } from "capnweb";
 
-const wsApi = new URL("/internal/rpc", WORKER_BASE_URL); // the operator door of the one worker under test (a local boot, or the deployed one); the public door is /api, behind the OAuth gate
+const wsApi = new URL("/api", WORKER_BASE_URL); // the one door of the worker under test (a local boot, or the deployed one) — opened bare, the socket authenticates in-band
 wsApi.protocol = "ws:";
 
 /** A fresh session — an IterateRpcTarget stub. Hold it with `using`: a capnweb stub is
@@ -80,7 +80,7 @@ DO and reaches it only over Workers RPC. Everything you hold is minted at the ed
 
 ### A client is a capnweb peer, and the door is `authenticate(credentials)`
 
-`/api` — and the operator door `/internal/rpc`, the e2e lane's — serves an `IterateRpcTarget` whose
+`/api` serves an `IterateRpcTarget` whose
 only door is `authenticate(credentials)`. It answers a `SessionRpcTarget`: a catalog that vends
 contexts, never a context itself. `session.projects.get(project)` and
 `session.projects.create({ project })` vend a project's ROOT context — the `IterateContext` you
@@ -527,7 +527,7 @@ Every rule below is a row in its table test.
 The resolver (`resolveItxExpression` in the same file) is rule 5 as a loop: while the call is not
 rooted at `itx.builtins`, pick the most specific context row and rewrite (a `null` target throws
 `NO_ITX_EXPRESSION_MATCH` "is masked"); with no row, a built-in root becomes `itx.builtins.<root>` and
-the loop ends; one more platform row, `itx.worker`, is chapter 7's; anything else is
+the loop ends; anything else is
 `NO_ITX_EXPRESSION_MATCH` "no rewrite rule matches … (default-deny; configure a rule first)".
 
 ### The implicit platform rows, and `itx.builtins`
@@ -541,11 +541,6 @@ table, your rows plus the platform rows, each with its origin:
 ```ts
 const before = await itx.rewriteRules.list();
 expect(before).toContainEqual({ match: "itx.kv", target: "itx.builtins.kv", origin: "platform" });
-expect(before).toContainEqual({
-  match: "itx.worker",
-  target: expect.stringMatching(/^itx\.workers\.get\(/),
-  origin: "platform",
-}); // the config worker's default (chapter 7)
 await itx.provide("itx.kv", "itx.builtins.whoami");
 const after = await itx.rewriteRules.list();
 expect(after.filter((row) => row.match === "itx.kv")).toEqual([
@@ -832,16 +827,14 @@ The DO's constructor appends the platform's own records before any door opens, s
 materializes a context — a bare read included. The first incarnation writes `stream/created {
 projectId, path }` at offset 1 and `stream/woken { incarnation, reason: "request" }` at 2 (a later
 incarnation's wake record is appended by the first door that opens on it — `"alarm"` when that door
-is the alarm handler); the config-worker funnel
-(chapter 7) subscribes `config` at 4; offsets 3 and 5 are ephemeral live-state deltas; the first user
-append lands at 6:
+is the alarm handler). Offset 3 is the ephemeral live-state delta; no subscription
+is installed automatically, and the first user append lands at 4:
 
 ```ts
 const page = await itx.invoke("itx.readEvents(0)");
 expect(page.events.map((e) => [e.type, e.offset])).toEqual([
   ["events.iterate.com/stream/created", 1],
   ["events.iterate.com/stream/woken", 2],
-  ["events.iterate.com/stream/subscription-configured", 4],
 ]);
 expect((await itx.invoke(`itx.append({ type: 'hello' })`))[0].offset).toBe(6);
 // e2e/stream.e2e.test.ts
@@ -946,14 +939,14 @@ REPLACES — one row, one more event (`e2e/rpc-stubs-reconnect-and-attach.e2e.te
 
 ### The rows are a slice of core
 
-`itx.subscriptions.list()` is the read door, the table joined with the stream-kept cursors. Every
-context is born holding one row — the config-worker funnel of chapter 7 — so "nothing here" is `["config"]`:
+`itx.subscriptions.list()` joins explicitly configured rows with their delivery cursors.
+A new context has no subscriptions:
 
 ```ts
-expect((await itx.subscriptions.list()).map((r) => r.name)).toEqual(["config"]);
+expect((await itx.subscriptions.list()).map((r) => r.name)).toEqual([]);
 const subscription = await itx.subscribe({ target: () => undefined });
 const name = await subscription.name;
-expect((await itx.subscriptions.list()).map((r) => r.name)).toEqual(["config", name]);
+expect((await itx.subscriptions.list()).map((r) => r.name)).toEqual([name]);
 expect(await itx.rpcStubs.list()).toContain(`subscription:${name}`); // presence: the lent callback
 await itx.subscribe({ name, target: null }); // the row goes, the callback is recalled
 // e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts
@@ -1154,7 +1147,7 @@ const s1 = await itx.invoke("itx.facets.get('tally').snapshot()"); // { offset, 
 expect(s1.state.counts["events.iterate.com/itx/rewrite-rule-configured"]).toBe(1);
 const row = (await itx.subscriptions.list()).find((r) => r.name === "tally");
 expect(row.target).toBe("itx.builtins.facets.get('tally').processEventBatch"); // the platform's spelling, source elided
-expect(row.hostedFacet).toEqual({ name: "tally", className: "TallyDurableObject" });
+expect(row.hostedFacet).toEqual({ name: "tally", className: "TallyDurableObject", restarts: 0 });
 expect(row.cursor).toBeUndefined(); // a facet owns its checkpoint
 // e2e/processor-facets.e2e.test.ts
 ```
@@ -1407,98 +1400,39 @@ The same for a facet: hosted from a producer, its state persists, the producer r
 memo keeps the key so a bare `facets.get(name)` re-materializes it. A producer that THREW does not
 poison its key: the next attempt re-runs the producer and loads under the id's next generation.
 
-### The config worker convention
+### Explicit config-worker targets
 
-A project has ONE event handler, and every context subscribes it at birth. Three things:
-
-1. **`itx.worker` is a platform row** — `itx.worker ⇒ itx.workers.get({ source: <the bundled
-no-op ConfigWorker>, cacheKey: 'config:default' })`, shown by `itx.rewriteRules.list()`. A project
-   OVERRIDES it with its own rule; a `null` at it MASKS (default-deny), never the no-op.
-2. **Every context subscribes `config` in its constructor**, cross-context, at-least-once:
+A `ConfigWorker` is a stateless worker loaded through `itx.workers.get({ source,
+cacheKey })`. It receives events only through explicit subscriptions. A fresh
+context has no config subscription, and loading a worker does not publish it.
 
 ```ts
-// iterate-context-durable-object.ts — the constructor, abridged
-this.ctx.blockConcurrencyWhile(async () => {
-  this.#alarms.restore(await this.ctx.storage.getAlarm()); // the dedupe seed only — null while an alarm is firing
-  this.#stream.appendBirthRecord(); // created + woken on a fresh store; a store with rows records its wake at its first door
-  this.#stream.append(
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: { name: "config", target: "itx.cd('/').worker.processEventBatch", consumes: ["*"] },
-      idempotencyKey: "config-subscription", // one row per context whatever the incarnation
-    }),
-  );
-});
-```
-
-3. **The author extends `ConfigWorker`** from the SDK and overrides `processEvent`; the platform calls
-   `processEventBatch`. Stateless by design — the SUBSCRIBING context keeps the cursor — so
-   `processEvent` must be idempotent. The same class answers the project's hosts through `fetch`
-   (chapter 8):
-
-```ts
-// sdk/index.ts — abridged
-export abstract class ConfigWorker<Env> extends WorkerEntrypoint<Env> {
-  async processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
-    const itx = this.env.ITX.get();
-    try {
-      for (const event of events) await this.processEvent({ event, range, itx });
-    } finally {
-      (itx as unknown as Disposable)[Symbol.dispose]?.();
-    }
-  }
-  processEvent(_args: ConfigEventArgs): void | Promise<void> {}
-}
-```
-
-The whole convention on one context, source in KV as the repo stand-in:
-
-```ts
-const CONFIG_WORKER_SRC = `import { ConfigWorker } from "./processor.js";
-export default class Config extends ConfigWorker {
-  async processEvent({ event, itx }) {
-    if (event.type === "events.iterate.com/config-ping")
-      await itx.builtins.append({
-        type: "events.iterate.com/config-pong",
-        payload: { pinged: event.offset },
-        idempotencyKey: "config-pong@" + event.offset, // an at-least-once redelivery is a no-op
-      });
-  }
-}`;
-await itx.kv.put("/repos/config/worker.ts", CONFIG_WORKER_SRC);
-await itx.provide("itx.worker", [
+const target = [
   "itx",
   "workers",
-  ["get", { source: `itx.kv.get('/repos/config/worker.ts')`, cacheKey: "config:v1" }],
-]);
+  [
+    "get",
+    {
+      source: "itx.kv.get('config.js')",
+      cacheKey: "config:v1",
+    },
+  ],
+];
 await itx.subscribe({
   name: "config",
-  target: "itx.worker.processEventBatch",
-  consumes: ["events.iterate.com/config-ping"],
+  target: [...target, "processEventBatch"],
+  consumes: ["ping"],
 });
-const [ping] = await itx.append({ type: "events.iterate.com/config-ping" });
-await until(async () =>
-  (await readAll(itx)).some(
-    (e) => e.type === "events.iterate.com/config-pong" && e.payload?.pinged === ping.offset,
-  ),
-);
-// e2e/config-worker.e2e.test.ts
+await itx.append({
+  type: "events.iterate.com/project/ingress-configured",
+  payload: { target },
+});
 ```
 
-And the FUNNEL: set the override at the root, and a fresh child context's ping reaches the root's
-config worker with no manual subscribe — the child's birth row did it:
-
-```ts
-const root = openItx(project); // the KV source and the `itx.worker` override as above, at the root
-const child = root.cd("/child"); // auto-subscribes itx.cd('/').worker.processEventBatch at birth
-const [ping] = await child.append({ type: "events.iterate.com/funnel-ping" });
-await until(async () =>
-  (await readAll(root)).some(
-    (e) => e.type === "events.iterate.com/funnel-pong" && e.payload?.at === ping.offset,
-  ),
-);
-// e2e/config-worker.e2e.test.ts
-```
+Apex ingress invokes the configured target's `fetch(request)`; without a target
+it returns 404. Changes are explicit configuration events. The planned project
+creation saga will own publication after verifying a candidate revision; see
+[project creation](project-creation.md). The SDK does not change routing on commits.
 
 ### `itx.repos` and `itx.cfArtifacts`: where code lives
 
@@ -1516,8 +1450,8 @@ repo's context whose `remote()` points at an in-memory git remote (`e2e/support/
 — the real wire codec runs in both lanes; only the binding is deployed-only.
 
 ```ts
-const repo = itx.repos.get("/repos/config");
-await repo.create(); // repos/create-requested, then repos/created on its path and on /
+await itx.repos.create("/repos/config"); // the repo processor's row, repo/create-requested, then repo/created on / and on its path
+const repo = itx.repos.get("/repos/config"); // the handle: the facet's verbs, plus the typed append
 expect(await repo.readFile("worker.ts")).toBeNull(); // an unborn repo reads as null
 const first = await repo.writeFile("worker.ts", source); // one commit on main
 expect(first.commitOid).toMatch(/^[0-9a-f]{40}$/);
@@ -1528,22 +1462,20 @@ const tok = await a.cfArtifacts.get(path).createToken("read", 300); // pipelined
 // e2e/cfartifacts.e2e.test.ts (deployed only)
 ```
 
-The payoff is the config worker with its source moved out of KV and into a real repo, nothing else
-changed — the `itx.worker` rewrite is what points at it, and a commit to that repo re-points it
-(the base `ConfigWorker` follows `repo/commit-completed` with a new `cacheKey`):
+To load code from the repository, pass the source producer and its revision explicitly:
 
 ```ts
-await itx.repos.get("/repos/config").writeFile("worker.ts", CONFIG_WORKER_SRC);
-await itx.provide("itx.worker", [
-  "itx",
-  "workers",
-  [
-    "get",
-    { source: `itx.repos.get('/repos/config').readFile('worker.ts')`, cacheKey: "config:repo:v1" },
-  ],
-]);
-// e2e/config-worker.e2e.test.ts
+const { commitOid } = await itx.repos
+  .get("/repos/config")
+  .writeFile("worker.ts", CONFIG_WORKER_SRC);
+const worker = itx.workers.get({
+  source: "itx.repos.get('/repos/config').readFile('worker.ts')",
+  cacheKey: commitOid,
+});
 ```
+
+Publication requires configuring the ingress target and desired subscriptions.
+A commit does not implicitly update either.
 
 **What this brick leaves on the table:** everything so far spoke capnweb or Workers RPC. The web
 speaks HTTP: a browser tab, a webhook, `curl`, a third-party API that wants a bearer token you must
@@ -1632,9 +1564,8 @@ host-scoped cookies and WebSocket upgrades survive. There, at the DO's fetch lan
 for any other — so neither a visitor nor loaded code can pick an app the expression did not.
 
 An app host lands on `itx.apps.<app>.fetch(request)`: an app is one rule row and the log never names
-a hostname. A host naming no app lands on the project's config worker (chapter 7),
-`itx.worker.fetch(request)`: the bundled default answers 404, and a project that wants its own
-routing overrides `fetch` — the apex today, a custom hostname once the directory knows one:
+a hostname. A host naming no app invokes the explicit ingress target
+(chapter 7). Without a target it returns 404. A configured worker implements `fetch` — the apex today, a custom hostname once the directory knows one:
 
 ```ts
 // the config repo's worker.ts — routing by hostname, in the author's own `fetch`
@@ -1661,12 +1592,13 @@ expect(page.text).toContain(`<p>site--${projectId}.${base}/w?repo=x</p>`); // th
 expect((await fetchProjectHost(`site.${projectId}.${base}`, "/w")).status).toBe(200); // the second shape, the same row — locally: deployed, the wildcard certificate covers one label
 const seen = JSON.parse((await fetchProjectHost(host, "/echo", { "x-iterate-app": "other" })).text);
 expect(seen.app).toBe("site"); // what the app saw in x-iterate-app, whatever the visitor sent
-expect((await fetchProjectHost(`${projectId}.${base}`, "/")).status).toBe(404); // the apex: the bundled config worker's fetch
-await itx.provide("itx.worker", [
-  "itx",
-  "workers",
-  ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:ingress" }],
-]);
+expect((await fetchProjectHost(`${projectId}.${base}`, "/")).status).toBe(404); // no ingress target yet
+await itx.append({
+  type: "events.iterate.com/project/ingress-configured",
+  payload: {
+    target: ["itx", "workers", ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:ingress" }]],
+  },
+});
 expect((await fetchProjectHost(`${projectId}.${base}`, "/echo")).status).toBe(200); // the project's own fetch routes it to the site
 expect((await fetchProjectHost(`other--${projectId}.${base}`, "/")).status).toBe(404); // a label with no row: 404
 expect((await fetchProjectHost(`site--${unknown}.${base}`, "/")).status).toBe(421); // a project the directory does not know
@@ -1815,7 +1747,7 @@ side by side, and nothing in the spelling says which is which. The alternative i
 The trade: one root is one spelling and no level to learn; two make the litmus test visible in the
 name, and let the library move to userspace without a rename. Not decided.
 
-### Memoized per context, released at the quiesce
+### Memoized per context, released by the pins' timer
 
 A connector reached THROUGH a rule is a connect per call as an expression — a fresh MCP session, an
 open WebSocket that no intermediate holder disposes. So the library keeps every connection it opened,
@@ -1850,7 +1782,7 @@ secret that proves it — and every door reads the same two kinds:
   Google, or an assumed email where `APP_CONFIG_TEST_EMAIL_LOGIN` is on). `projects.get` admits
   members of the owning org only.
 - `admin-secret`: the deployment's `APP_CONFIG_ADMIN_API_SECRET` (a wrangler secret), verified
-  in-band on the operator door `/internal/rpc` — `{ actor: "admin" }`, every project, `list()` is
+  in-band on a bare `/api` socket (or a bearer on the upgrade) — `{ actor: "admin" }`, every project, `list()` is
   the whole directory, `create()` lands in `org_admin`. With `as: { email }` it is that user's
   session without a login (the row upserted like `/login` does), which is how a confinement test
   signs in. The e2e lane runs on it. On `/api`, `/mcp` and a project host the same secret is a
@@ -1935,7 +1867,7 @@ const revoked = await fetch(workerUrl("/api"), {
   headers: { Authorization: `Bearer ${token}` },
 });
 expect(revoked.status).toBe(401);
-using operator = session(); // the operator door, /internal/rpc
+using operator = session(); // a bare /api socket; the admin secret authenticates it in-band
 const admin = operator.authenticate(adminCredentials()); // { type: "admin-secret", secret }
 expect(await admin.whoami()).toEqual({ actor: "admin" });
 const ada = operator.authenticate(adminCredentials({ email: "ada@example.com" }));
@@ -2095,8 +2027,8 @@ durable obligations:
 ```ts
 // iterate-context-durable-object.ts — alarm(), abridged: one pass under the coordinator's hold
 async alarm(): Promise<void> {
-  const { armedAt: fired } = this.#alarms.snapshot();
-  await this.#alarms.pass(async () => {
+  const { armedAt: fired } = this.#alarmCoordinator.snapshot();
+  await this.#alarmCoordinator.pass(async () => {
     this.#stream.appendWakeRecord("alarm"); // 0. an alarm-woken incarnation names its wake here
     /* 1. the due schedules: up to 32, each appended with its append-schedule-completed in ONE commit */
     await this.#subscriptionDelivery.deliverEveryCursorSubscription(); // 2. every cursor row's owed delivery — AWAITED
@@ -2115,7 +2047,7 @@ A facet is never released at all: on the edge it is not a pin and dies with the 
 may be mid-attempt (an LLM call in its background). A facet the watchdog or a source change aborted
 re-materializes from its durable startup memo on the next call, its storage having
 survived. A facet's answer arrives as a Workers-RPC result carrying a disposer that holds a reference
-on the facet until disposed or GC'd — GC is too late for the quiesce — so the DO copies the data out
+on the facet until disposed or GC'd — GC is too late for the release — so the DO copies the data out
 and disposes the result at once; the SDK host releases its `env.ITX.get()` capability after every
 append and read for the same reason.
 
@@ -2136,9 +2068,9 @@ makes no loop because delivering it creates no reason to wake again.
 
 ### The watchdog on facet calls
 
-A facet call that never answers would hold the in-flight count, and with it the quiesce, and with
+A facet call that never answers would hold the in-flight count, and with it the pins' release, and with
 that the actor, forever. So `#invokeFacet` counts the call in (`#facetWorkInFlight++`, so a
-concurrent alarm's quiesce never aborts a facet mid-call), loads the class from the facet's startup
+release never aborts a facet mid-call), loads the class from the facet's startup
 memo (aborting a running facet whose loaded identity changed, so a new source restarts it in place
 with its storage surviving), runs the call under `withTimeout(call, FACET_CALL_WATCHDOG_MS = 60_000,
 …)`, and on `TIMEOUT` aborts the facet — the pending call rejects, the counter drains, the next call
@@ -2162,7 +2094,7 @@ has the model.
 The hibernation property at scale — hundreds of clients providing into one context, the DO evicted,
 every value still callable on wake — is deterministic inside workerd
 (`__workers-tests__/hibernation-at-scale.test.ts`); the alarm pass — the wake record, the cursor pump,
-the quiesce, and that a wake makes no loop — is `__workers-tests__/alarm-quiesce.test.ts`, its
+the pins' release, and that a wake makes no loop — is `__workers-tests__/alarm-and-pins.test.ts`, its
 schedules half `__workers-tests__/scheduled-appends.test.ts`. Both use `cloudflare:test`'s eviction,
 which times out on a warm DO exactly as production refuses to evict a pinned one. Isolate limits are
 measured deployed only, in `e2e/isolate-ceilings-deployed.e2e.test.ts`.
@@ -2186,7 +2118,7 @@ measured deployed only, in `e2e/isolate-ceilings-deployed.e2e.test.ts`.
 | 8       | fetch in the context of this project (secrets), project hosts, the upgrade leg | `src/iterate-context-durable-object.ts`, `src/context/rpc-stubs.ts`, `src/worker.ts`                                               |
 | 9       | the library                                                                    | `src/library.ts`                                                                                                                   |
 | 10      | identity, OAuth grants, personal access tokens, the control plane              | `src/principal.ts`, `src/session.ts`, `src/oauth.ts`, `src/grants.ts`, `src/control-plane.ts`                                      |
-| 11      | pagers, the quiesce, the one alarm, the watchdog                               | `src/iterate-context-durable-object.ts`, `src/alarm-coordinator.ts`, `src/stream/subscription-delivery.ts`, `src/stream/stream.ts` |
+| 11      | pagers, the pins' release, the one alarm, the watchdog                         | `src/iterate-context-durable-object.ts`, `src/alarm-coordinator.ts`, `src/stream/subscription-delivery.ts`, `src/stream/stream.ts` |
 
 The invariants a reader should now be able to state:
 
@@ -2213,7 +2145,7 @@ The invariants a reader should now be able to state:
   host, answered by the config worker's `fetch`.
 - **Identity is attribution.** The DO stamps `source.principal`; the session's reach is its grant's;
   membership is the directory's; loaded code speaks for the project.
-- **The DO holds nothing across idle.** Pagers, the quiesce, an alarm only while something is owed
+- **The DO holds nothing across idle.** Pagers, the pins' release, an alarm only while something is owed
   (derived, never requested), a watchdog on every facet call.
 
 ---
@@ -2237,7 +2169,7 @@ Every client snippet above is lifted from, or composed of calls made by, these f
 | 8        | `e2e/secrets.e2e.test.ts`, `e2e/fetch-door.e2e.test.ts`, `e2e/session.e2e.test.ts`, `e2e/ingress-project-host.e2e.test.ts`                                                                                                                                     |
 | 9        | `e2e/library-connectors.e2e.test.ts` (against the deployed pet shop; the WebSocket transports deployed only)                                                                                                                                                   |
 | 10       | `e2e/session.e2e.test.ts`, `e2e/support/principal.ts` (the OAuth login fixture), `e2e/secrets.e2e.test.ts`, `e2e/ingress-project-host.e2e.test.ts`, `__workers-tests__/control-plane.test.ts` (the `/mcp` rows)                                                |
-| 11       | `e2e/stream.e2e.test.ts` (opt-in, deployed only), `__workers-tests__/hibernation-at-scale.test.ts`, `__workers-tests__/alarm-quiesce.test.ts`                                                                                                                  |
+| 11       | `e2e/stream.e2e.test.ts` (opt-in, deployed only), `__workers-tests__/hibernation-at-scale.test.ts`, `__workers-tests__/alarm-and-pins.test.ts`                                                                                                                 |
 
 The server snippets are abridged from the files named in each code block's first comment. The rule
 table of chapter 3 was checked by running `src/context/itx-expression-rewriting.test.ts` and

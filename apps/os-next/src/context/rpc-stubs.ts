@@ -189,7 +189,7 @@ export class RpcStubDirectory {
     return this.#borrowedRpcStubs.size > 0;
   }
 
-  /** THE IDLE RETURN (call from the DO's quiesce alarm): give every borrowed stub back so the DO
+  /** THE IDLE RETURN (the DO's pins' release, on its timer): give every borrowed stub back so the DO
    *  can hibernate. Losing them costs exactly one page on the next call — that is the deal. */
   returnBorrowedRpcStubs(): void {
     for (const [rpcStubKey, borrowed] of this.#borrowedRpcStubs) {
@@ -702,7 +702,7 @@ export async function lendRpcStubOverPager(
 
 // ── THE ITX-EXPRESSION FETCH LANE (the `x-itx-expression` door) ──
 // A fetch-shaped capability is reached over HTTP by naming an itx expression in this header — the
-// edge sets it for a project host (`itx.apps.<app>`, `itx.worker`), a session's terminal fetch and a
+// edge sets it for a project host (`itx.apps.<app>` or the configured ingress target), a session's terminal fetch and a
 // loaded worker's `env.ITX.fetch` set it themselves. The DO rewrites the expression through its
 // rules and the provider's Response — 101s included — flows back out natively.
 

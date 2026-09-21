@@ -58,7 +58,7 @@ flowchart LR
   subgraph edge["project-worker, ONE stateless worker (src/worker.ts)"]
     api["/api → IterateRpcTarget → SessionRpcTarget → ProjectCollection → IterateContext<br/>src/session.ts, src/iterate-context.ts"]
     relay["pager relay + SessionTeardown<br/>the session's lent rpc stubs"]
-    host["project-host ingress: app--project.base | app.project.base → itx.apps.app, project.base → itx.worker<br/>src/worker.ts · x-iterate-app · /.auth/* · Bearer access token | admin secret"]
+    host["project-host ingress: app--project.base | app.project.base → itx.apps.app, project.base → configured ingress target<br/>src/worker.ts · x-iterate-app · /.auth/* · Bearer access token | admin secret"]
     cp["the control plane, in-process (the catch-all)<br/>OAuth AS · D1 directory · /mcp · console<br/>src/control-plane.ts"]
   end
   subgraph do["IterateContextDurableObject, one per {projectId, path}"]
@@ -76,7 +76,7 @@ flowchart LR
   api -- "directory: membership, create" --> cp
   host -- "directory.getProject: admission (421)" --> cp
   api -- "Workers RPC: invoke(expression)" --> do
-  host -- "x-itx-expression: itx.apps.app | itx.worker, Request verbatim" --> do
+  host -- "x-itx-expression: itx.apps.app | configured ingress target, Request verbatim" --> do
   transport -. "{type:'page'} over the pager WS" .-> relay
   relay -- "lendRpcStub: a fresh Workers-RPC stub" --> transport
   stream -- "onCommit" --> delivery
@@ -248,8 +248,8 @@ kinds (`SessionCredentials`): `from-server-cookie` — the OAuth grant the trans
 resolved, the browser's cookie on a same-origin request or an `Authorization: Bearer` access
 token (a transport carrying none ⇒ `UNAUTHENTICATED`); `admin-secret` — the deployment's
 `APP_CONFIG_ADMIN_API_SECRET`, `{ actor: "admin" }` on every project (with `as: { email }`
-that user's session, no login), verified in-band on the operator door `/internal/rpc` (on
-`/api` the admin secret is a bearer like any other). OAuth grants are the one credential for
+that user's session, no login), verified in-band on a bare `/api` socket (on the upgrade the
+admin secret is a bearer like any other). OAuth grants are the one credential for
 everyone else: a PERSONAL ACCESS TOKEN is `session.grants.mint({ name, projects })` — one
 finite grant, 30 days, scoped to the projects named, its bearer answered once, listed and
 ended by `session.grants.list()` / `end` like any grant; `get` outside the grant's projects is
@@ -700,7 +700,7 @@ type SubscriptionListEntry = {
   /** Where the cursor lane started (0 = the whole log); absent = at the configure. */
   afterOffset?: number;
   /** Set when this row HOSTS a facet (a processor): its name, class and cacheKey — never the source. */
-  hostedFacet?: { name: string; className: string; cacheKey?: string };
+  hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };
   /** Present ONLY when the stream keeps the cursor (a target that cannot own its progress). */
   cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
   halted?: { afterOffset: number; attempts: number; error?: string };
@@ -777,7 +777,7 @@ type CoreState = {
       consumes?: string[];
       configuredAtOffset: number;
       afterOffset?: number; // where the cursor lane starts (0 = the whole log); absent = configuredAtOffset
-      hostedFacet?: { name: string; className: string; cacheKey?: string }; // the row hosts a facet (source elided)
+      hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number }; // the row hosts a facet (source elided); restarts = platform-failure restarts
       halted?: { afterOffset: number; attempts: number; error?: string };
       resumed?: { afterOffset?: number; atOffset: number };
     }
@@ -1257,7 +1257,7 @@ await itx.append({ type: "events.iterate.com/stream/resumed" });
 | `events.iterate.com/stream/woken`                                                             | `{ incarnation, reason }`                           | the first door of every incarnation (`Stream.appendWakeRecord`; the alarm handler says `"alarm"`)                                             |
 | `events.iterate.com/stream/paused` / `resumed`                                                | `{ reason }` / `{}`                                 | you, or a policy facet such as `BreakerProcessor`                                                                                             |
 | `events.iterate.com/stream/append-scheduled` · `append-schedule-{cancelled,completed,failed}` | docs/scheduled-appends.md                           | `itx.schedules` / the alarm pass                                                                                                              |
-| `events.iterate.com/stream/trace/alarm` (ephemeral)                                           | `AlarmTrace`                                        | the DO's alarm pass — `alarm-fired` / `quiesce` / `alarm-pass` / `alarm-abandoned`; never subscription input                                  |
+| `events.iterate.com/stream/trace/alarm` (ephemeral)                                           | `AlarmTrace`                                        | the DO's alarm pass — `alarm-fired` / `alarm-pass` / `alarm-abandoned`; never subscription input                                              |
 
 Refusals surface as coded errors (`src/lib.ts`): `STREAM_PAUSED`,
 `IDEMPOTENCY_CONFLICT`, `OFFSET_CONFLICT`, `NO_ITX_EXPRESSION_MATCH`, `NO_FACET`,
@@ -1284,7 +1284,7 @@ stream's post-commit hook. For every subscription it filters the batch by
   `(events, { after, through })`, serialized per subscription: fire-and-forget
   for a lent stub (a stalled tab never blocks the chain; `RPC_STUB_OFFLINE`
   is swallowed), awaited for a facet (its batches stay in order and the idle
-  quiesce never aborts it mid-reduce). No cursor row either way.
+  no release aborts it mid-reduce). No cursor row either way.
 - Anything else (a Worker-Loader entrypoint, a sibling context via `cd`, a
   rewrite rule whose target is one of those) cannot own progress, so **the stream keeps a cursor**:
   at-least-once, the awaited call is the ack, one bounded retry ladder
@@ -1450,11 +1450,11 @@ interface Context {
 
 ## 8. Worker entrypoints, DO classes, bindings
 
-| Export (from `src/worker.ts`) | Kind                                                                                          | Surface                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ----------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `default`                     | module worker `fetch`                                                                         | a PROJECT HOST — `<app>--<project>.<base>`, `<app>.<project>.<base>` (the app `itx.apps.<app>`), the apex `<project>.<base>` (the config worker, `itx.worker`) — admitted by `directory.getProject`, 421 for the unknown; an OAuth bearer or the app's `/.auth/*` browser session stamps the principal; `x-iterate-app` always overwritten; the Request rides verbatim into the DO's fetch lane; on the worker's hostname `/api` (capnweb: WS or one-shot HTTP batch, behind the OAuth gate → `IterateRpcTarget`), `/internal/rpc` (the operator door: the same root, `admin-secret` in-band), `/version`, `/demo` (a static asset); everything else the in-process CONTROL PLANE |
-| `IterateContextDurableObject` | Durable Object (binding `ITERATE_CONTEXT`)                                                    | section 7                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `ItxEntrypoint`               | `WorkerEntrypoint`, minted via `ctx.exports.ItxEntrypoint({ props: { iterateContextName } })` | `get()` → the real `IterateContext` scope (every stream verb rides it: `env.ITX.get().append(…)`); `fetch` (egress). Nothing else.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Export (from `src/worker.ts`) | Kind                                                                                          | Surface                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `default`                     | module worker `fetch`                                                                         | a PROJECT HOST — `<app>--<project>.<base>`, `<app>.<project>.<base>` (the app `itx.apps.<app>`), the apex `<project>.<base>` (the config worker, `configured ingress target`) — admitted by `directory.getProject`, 421 for the unknown; an OAuth bearer or the app's `/.auth/*` browser session stamps the principal; `x-iterate-app` always overwritten; the Request rides verbatim into the DO's fetch lane; on the worker's hostname `/api` (capnweb: WS or one-shot HTTP batch, behind the OAuth gate → `IterateRpcTarget`; a bare WebSocket authenticates in-band — a bearer token or the admin secret), `/version`, `/demo` (a static asset); everything else the in-process CONTROL PLANE |
+| `IterateContextDurableObject` | Durable Object (binding `ITERATE_CONTEXT`)                                                    | section 7                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `ItxEntrypoint`               | `WorkerEntrypoint`, minted via `ctx.exports.ItxEntrypoint({ props: { iterateContextName } })` | `get()` → the real `IterateContext` scope (every stream verb rides it: `env.ITX.get().append(…)`); `fetch` (egress). Nothing else.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 Injected into loaded isolates, never deployed as a class:
 
@@ -1469,9 +1469,9 @@ origin — the provider wants its one resource as an absolute URL) owning `/oaut
 check on `/mcp` (its ONLY protected route, and its ONE resource: `<origin>/mcp`, this origin the
 authorization server — every token is bound to it, a foreign one refused); everything else falls
 through to THE ISSUER'S PAGES — `/login` and `/authorize`, files in public/ the assets binding serves;
-the consent page's script asks `/authorize.json` what to show and posts approve / create an
-organization / create a project to `/authorize`, answered by a session built the way `/api` builds one (`consentDoor`); the one
-machine endpoint beside them (`loginFormPost`) is the sign-in form's plain POST — `POST /login`,
+the consent page's script is a capnweb client of `/api` (`consent.describe`, `createOrg`,
+`projects.create`, `consent.approve` — the session cookie rides the handshake; the worker only gates
+the page); the one machine endpoint beside them (`loginFormPost`) is the sign-in form's plain POST — `POST /login`,
 `/logout` (the session is the signed `__Host-itx-control-plane-session` cookie, `signClaims` under
 `APP_CONFIG_SESSION_SECRET`), `POST /projects` (a program creates projects over `/api`,
 `projects.create`), `POST /authorize`. The `/authorize` consent is THE PROJECT SELECTION: the user's

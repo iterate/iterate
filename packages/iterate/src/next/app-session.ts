@@ -130,6 +130,14 @@ export class BrowserSession extends DurableObject {
   bearer() {
     return this.#serial(() => this.#bearer());
   }
+  /** THE ISSUER THIS SESSION IS BOUND TO and the resource its tokens are for — written once at
+   *  `begin`, never steered by a request: the app's `/api` proxy, its login probe and its logout read
+   *  them from here, so a browser connected to one issuer can only ever spend its credential there.
+   *  Null when no session was begun. */
+  async host(): Promise<{ issuer: string; resource: string } | null> {
+    const data = await this.ctx.storage.get<StoredSession>("session");
+    return data ? { issuer: data.issuer, resource: data.resource } : null;
+  }
   async scopes() {
     const data = await this.ctx.storage.get<StoredSession>("session");
     return data?.phase === "active" ? data.scopes : [];
@@ -214,13 +222,15 @@ export class BrowserSession extends DurableObject {
   }
 
   /** The token request's shared options: the audience (RFC 8707 resource), a bounded timeout, and —
-   *  only for a local http issuer — oauth4webapi's opt-out of its HTTPS-only default. */
+   *  only for a LOCAL APP (`begin` already admits http there) — oauth4webapi's opt-out of its
+   *  HTTPS-only default. Keyed on the app's origin, never the issuer's: an issuer a person typed can
+   *  not talk a deployed app into sending its codes in the clear. */
   #tokenOptions(data: StoredSession): oauth.TokenEndpointRequestOptions {
     const options: oauth.TokenEndpointRequestOptions = {
       additionalParameters: { resource: data.resource },
       signal: AbortSignal.timeout(10_000),
     };
-    if (isLocalOrigin(data.issuer)) options[oauth.allowInsecureRequests] = true;
+    if (isLocalOrigin(data.origin)) options[oauth.allowInsecureRequests] = true;
     return options;
   }
 

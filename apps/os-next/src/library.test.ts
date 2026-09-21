@@ -4,6 +4,9 @@
 import { readFileSync } from "node:fs";
 import { RpcTarget, newHttpBatchRpcResponse } from "capnweb";
 import { describe, expect, test } from "vitest";
+import { codedError } from "iterate/next/lib";
+import type { WaitForEventFilter } from "iterate/next/api";
+import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
 import {
   buildLibrary,
   type LibraryItx,
@@ -13,6 +16,7 @@ import {
   connectToMcp,
   type McpConnection,
   connectToOpenApi,
+  executeScript,
   runScript,
   runScriptModule,
 } from "./library.ts";
@@ -286,17 +290,46 @@ describe("the library", () => {
 // handle's dotted sugar, an explicit invoke, and a pipelined chain in one batch. The WebSocket
 // transport needs workerd's WebSocketPair and is proved in e2e.
 
-// ── run ── `itx.run(script)` over a fake `itx.workers.get`: the module the loader would get (the
-// script spliced verbatim, the smallest WorkerEntrypoint around it), run with NO arguments (a script
-// bakes its own values in), the same text ⇒ the same module (the loader's content hash reuses the
-// isolate), a blank script refused.
+// ── run ── `itx.run(script)` over a fake itx: `run` is a REQUEST on the log (`itx.append`) and a
+// wait for ITS settlement (`itx.waitForEvent`), the execution being the context's runner's
+// (`executeScript`, over `itx.workers.get`): the module the loader would get (the script spliced
+// verbatim, the smallest WorkerEntrypoint around it), run with NO arguments (a script bakes its own
+// values in), the same text ⇒ the same module (the loader's content hash reuses the isolate), a
+// blank script refused.
 
 describe("run", () => {
-  function host(): { itx: LibraryItx; loaded: unknown[]; runs: () => number } {
+  /** A fake itx: `append` lands at offsets from 10, `waitForEvent` answers `settlements` in order
+   *  (an event, or "timeout" = a WAIT_TIMEOUT rejection). */
+  function host(settlements: (StreamEvent | "timeout")[] = []): {
+    itx: LibraryItx;
+    loaded: unknown[];
+    appended: StreamEventInput[];
+    waits: WaitForEventFilter[];
+    runs: () => number;
+  } {
     const loaded: unknown[] = [];
+    const appended: StreamEventInput[] = [];
+    const waits: WaitForEventFilter[] = [];
     let ran = 0;
     const itx = {
       fetch: async () => new Response(null),
+      append: async (...events: StreamEventInput[]) => {
+        appended.push(...events);
+        const firstOffset = 10 + appended.length - events.length;
+        return events.map((event, i) => ({
+          ...event,
+          offset: firstOffset + i,
+          createdAt: "t",
+          path: "/",
+        }));
+      },
+      waitForEvent: async (filter: WaitForEventFilter) => {
+        waits.push(filter);
+        const next = settlements.shift();
+        if (next === "timeout") throw codedError("WAIT_TIMEOUT", "no event");
+        if (!next) throw new Error("the test scripted no more settlements");
+        return next;
+      },
       workers: {
         get: (spec: unknown) => {
           loaded.push(spec);
@@ -309,8 +342,15 @@ describe("run", () => {
         },
       },
     } as unknown as LibraryItx;
-    return { itx, loaded, runs: () => ran };
+    return { itx, loaded, appended, waits, runs: () => ran };
   }
+  const settledAt = (offset: number, requestOffset: number, settlement: unknown): StreamEvent => ({
+    type: "events.iterate.com/context/run-settled",
+    payload: { requestOffset, settlement },
+    offset,
+    createdAt: "t",
+    path: "/",
+  });
 
   test("the module: the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it env.ITX.get() and disposes it", () => {
     const module = runScriptModule("async (itx) => (await itx.whoami()).path");
@@ -325,23 +365,53 @@ describe("run", () => {
     expect(module["cap.js"]).toContain("itx[Symbol.dispose]?.();");
   });
 
-  test("run(script) loads that module through itx.workers.get and calls run() with no arguments", async () => {
+  test("executeScript (the runner's call) loads that module through itx.workers.get and calls run() with no arguments", async () => {
     const { itx, loaded, runs } = host();
-    const { roots } = buildLibrary(itx);
-    await expect(roots.run("async (itx) => 1")).resolves.toEqual({ calledWith: 0 });
+    await expect(executeScript(itx, "async (itx) => 1")).resolves.toEqual({ calledWith: 0 });
     expect(loaded).toEqual([{ source: runScriptModule("async (itx) => 1") }]);
     expect(runs()).toBe(1);
   });
 
-  test("the same text is the same module (byte-equal: the loader's content hash keys ONE isolate); a blank script is refused before any load", async () => {
+  test("run(script) appends run-requested { code } — the request's offset IS the run — and waits for ITS run-settled after it: another run's settlement is skipped, a WAIT_TIMEOUT re-arms from the last event seen; resolves with the result; it loads nothing itself", async () => {
+    const script = "async (itx) => 1";
+    const { itx, loaded, appended, waits, runs } = host([
+      settledAt(11, 9, { status: "succeeded", result: 0 }), // another run's (its request at 9)
+      "timeout",
+      settledAt(13, 10, { status: "succeeded", result: { n: 1 } }), // ours: the request landed at 10
+    ]);
+    await expect(buildLibrary(itx).roots.run(script)).resolves.toEqual({ n: 1 });
+    expect(appended).toEqual([
+      { type: "events.iterate.com/context/run-requested", payload: { code: script } },
+    ]);
+    expect(waits.map((w) => [w.type, w.afterOffset])).toEqual([
+      ["events.iterate.com/context/run-settled", 10], // after the request (offset 10)
+      ["events.iterate.com/context/run-settled", 11], // the other run's was the last seen
+      ["events.iterate.com/context/run-settled", 11], // a timeout re-arms from the same place
+    ]);
+    expect(loaded).toEqual([]); // the execution is the runner's, never the caller's
+    expect(runs()).toBe(0);
+  });
+
+  test("a failed settlement rejects with its error, the failure kind on the rejection", async () => {
+    const { itx } = host([
+      settledAt(11, 10, { status: "failed", error: "boom", failureKind: "interrupted" }),
+    ]);
+    await expect(buildLibrary(itx).roots.run("async () => 1")).rejects.toMatchObject({
+      message: "boom",
+      failureKind: "interrupted",
+    });
+  });
+
+  test("the same text is the same module (byte-equal: the loader's content hash keys ONE isolate); a blank script is refused before any request", async () => {
     expect(runScriptModule("async (itx) => 1")).toEqual(runScriptModule("async (itx) => 1"));
-    const { itx, loaded } = host();
+    const { itx, loaded, appended } = host();
     expect(() => runScript(itx, "   ")).toThrow(/itx\.run\(script/);
     // wire-fed: a non-string (the array-form expression carries no argument validation) is refused
     // with the same usage error, never a TypeError from `.trim`
     expect(() => runScript(itx, 42)).toThrow(/itx\.run\(script/);
     expect(() => runScript(itx, undefined)).toThrow(/itx\.run\(script/);
     expect(loaded).toEqual([]);
+    expect(appended).toEqual([]);
   });
 });
 
@@ -1078,6 +1148,13 @@ const ALLOWED_RUNTIME_IMPORTS = new Set([
   "cloudflare:workers",
   "zod", // an npm package a userspace worker could bundle too — used to PARSE untrusted MCP responses
   "iterate/next/expression", // the codec — the package's, as a userspace worker would import it
+  "iterate/next/lib", // the error codes — in the SDK bundle every userspace worker gets
+  // The entities' CONTRACTS — pure zod over `defineProcessorContract` (the SDK's), no stream, DO or
+  // context runtime: the vocabulary a handle's typed `append` validates against, which a userspace
+  // worker would import from the SDK just the same.
+  "./agent/contract.ts",
+  "./repo/contract.ts",
+  "./workspace/contract.ts",
 ]);
 
 describe("the library boundary", () => {

@@ -3,11 +3,20 @@ import { RpcTarget } from "capnweb";
 import { z } from "zod";
 import { suggestOrganizationName } from "@iterate-com/shared/name-suggestions";
 import { codedError } from "iterate/next/lib";
-import { OAuthScope, OAuthScopes } from "iterate/next/oauth-scopes";
+import {
+  OAuthScope,
+  OAuthScopeDescriptions,
+  OAuthScopes,
+  type ConsentScope,
+} from "iterate/next/oauth-scopes";
+import { projectAddressOf, type IngressRouting } from "iterate/next/project-ingress";
+import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./iterate-context.ts";
+import { type ConsentApproved } from "./account/contract.ts";
 import type { Env } from "./control-plane.ts";
 import { directory, type Org, type Project } from "./directory.ts";
-import { customProjectHostOf, projectHostOf } from "./hosts.ts";
+import { customProjectHostOf } from "./hosts.ts";
 import { appConfigOf } from "./app-config.ts";
+import { platformOriginOf } from "./platform-origin.ts";
 import {
   authorizationOf,
   oauthAddresses,
@@ -30,11 +39,13 @@ export type ConsentView =
       projects: Project[];
       orgs: Org[];
       projectBound: boolean;
-      scopes: string[];
+      /** the scopes the request asked for, each with the page's copy (oauth-scopes.ts) */
+      scopes: ConsentScope[];
       denyLocation: string;
-      /** where a project's own site lives — `<slug>.<base>` — for the New project form's hint;
-       *  blank when the deployment serves no project hosts */
-      projectHostnameBase: string;
+      /** how projects are reached over HTTP (project-ingress.ts) — the New project form's hint
+       *  composes `<slug>.<hostname>` or `<origin>/<slug>/` from it; null when this deployment
+       *  serves no project ingress */
+      ingressRouting: IngressRouting;
       /** the onboarding step's first draft of an organization name (apps/auth's heuristic): from
        *  the person's display name, else their email's company domain or local part */
       suggestedOrganizationName: string;
@@ -51,8 +62,8 @@ async function projectsForClient(env: Env, clientId: string, userId: string) {
   const config = appConfigOf(env);
   const host =
     url?.pathname === "/.auth/client.json"
-      ? (projectHostOf(url.hostname, config.projectHostnameBase) ??
-        customProjectHostOf(url.hostname, config.projectCustomHostnames))
+      ? (projectAddressOf(config.urls.ingressRouting, url, platformOriginOf(env)) ??
+        customProjectHostOf(url.hostname, config.urls.temporaryCustomHostnames))
       : null;
   if (!host) return { projects, projectBound: false };
   const project = await directory(env.DB).getProject(host.project);
@@ -82,12 +93,14 @@ function authorizationFailure(
  * Account scope and a copied issuer client ID never confer approval authority. */
 export class Consent extends RpcTarget {
   readonly #env: Env;
+  readonly #ctx: ExecutionContext;
   readonly #grant: AccessGrant;
-  constructor(env: Env, grant: AccessGrant) {
+  constructor(env: Env, ctx: ExecutionContext, grant: AccessGrant) {
     super();
     if (grant.kind !== "issuer")
       throw codedError("FORBIDDEN", "Sign in to iterate to approve access.");
     this.#env = env;
+    this.#ctx = ctx;
     this.#grant = grant;
   }
   async #request(query: unknown) {
@@ -118,9 +131,13 @@ export class Consent extends RpcTarget {
         clientId: request.clientId,
         email: this.#grant.email,
         picture: this.#grant.picture,
-        scopes: request.scope,
+        // parseAuthorization admitted only known scopes
+        scopes: request.scope.map((scope) => {
+          const name = OAuthScope.parse(scope);
+          return { name, ...OAuthScopeDescriptions[name] };
+        }),
         orgs: await directory(env.DB).listOrgs(this.#grant.userId),
-        projectHostnameBase: appConfigOf(env).projectHostnameBase,
+        ingressRouting: appConfigOf(env).urls.ingressRouting,
         suggestedOrganizationName: suggestOrganizationName({
           name: this.#grant.name,
           email: this.#grant.email,
@@ -167,10 +184,11 @@ export class Consent extends RpcTarget {
             request.scope.includes(candidate) && OAuthScope.safeParse(candidate).success,
         ),
       );
-      return await oauthHelpers(env).completeAuthorization({
+      const clientName = client?.clientName ?? request.clientId;
+      const approved = await oauthHelpers(env).completeAuthorization({
         request,
         userId: this.#grant.userId,
-        metadata: { clientName: client?.clientName ?? request.clientId },
+        metadata: { clientName },
         scope,
         revokeExistingGrants: false,
         props: {
@@ -182,6 +200,40 @@ export class Consent extends RpcTarget {
           deadline: Date.now() + 30 * 24 * 3600_000,
         } satisfies GrantProps,
       });
+      // The fact of the approval, on the person's account context, stamped with them and the
+      // issuer grant they approved through (session.ts `publishGlobalFact` says why best-effort).
+      const account = DurableObjectNameCodec.stringify({
+        projectId: GLOBAL_PROJECT_ID,
+        path: `/users/${this.#grant.userId}`,
+      });
+      const fact = {
+        type: "events.iterate.com/account/consent-approved",
+        payload: {
+          clientId: request.clientId,
+          clientName,
+          projects: allProjects ? null : granted,
+          scopes: scope,
+        } satisfies ConsentApproved,
+      };
+      const caller = {
+        principal: { actor: this.#grant.userId, email: this.#grant.email },
+        grant: this.#grant.grantId,
+      };
+      this.#ctx.waitUntil(
+        // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the append's
+        // answer is not read.
+        (
+          env.ITERATE_CONTEXT.getByName(account).invoke(
+            ["itx", ["append", fact]],
+            [],
+            caller,
+          ) as Promise<unknown>
+        ).then(
+          () => undefined,
+          () => undefined,
+        ),
+      );
+      return approved;
     } catch (error) {
       const failure = authorizationFailure(error);
       return failure.kind === "redirect"

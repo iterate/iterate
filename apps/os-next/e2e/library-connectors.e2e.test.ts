@@ -21,7 +21,7 @@
 //   • connectToCapnweb: a WebSocket session THROUGH EGRESS (deployed — the bearer rides the upgrade, a
 //     chain pipelines, held, disposed on close; refused 401 without it) and the batch transport (one
 //     POST per chain, the bearer on the POST, the shop's 401 as the batch's failure)
-//   • self-dial: a context calls ANOTHER project through this worker's own /internal/rpc operator door — batch everywhere,
+//   • self-dial: a context calls ANOTHER project through this worker's own /api — batch everywhere (the admin bearer on the POST),
 //     WebSocket on the deployed egress
 
 import { beforeAll, describe, expect, test } from "vitest";
@@ -29,7 +29,7 @@ import { adminCredentials, freshCtx, openItx, workerUrl } from "./support/client
 import {
   deployedOnly,
   freshDnsSafeProjectSlug,
-  projectHostnameBase,
+  projectUrl,
   registerProject,
 } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
@@ -46,7 +46,7 @@ deployedOnly(
     ]);
     // the context dials its own project's host from inside — no credential: the app is public
     const connection = await itx.connectToCapnweb(
-      `https://rpc--${slug}.${projectHostnameBase()}/rpc/v1`,
+      projectUrl({ project: slug, app: "rpc", path: "/rpc/v1" }).href,
       { transport: "batch" },
     );
     expect(await connection.hello("host")).toBe("hello host");
@@ -235,7 +235,7 @@ describe("against the deployed pet shop", () => {
     const other = freshCtx("lib-other");
     const itx = openItx(freshCtx("lib-self-dial"));
     const whoami = await itx.invoke(
-      `itx.connectToCapnweb(${JSON.stringify(workerUrl("/internal/rpc"))}, { transport: 'batch' }).authenticate(${JSON.stringify(adminCredentials())}).projects.get(${JSON.stringify(other)}).whoami()`,
+      `itx.connectToCapnweb(${JSON.stringify(workerUrl("/api"))}, { transport: 'batch', headers: { authorization: ${JSON.stringify(`Bearer ${adminCredentials().secret}`)} } }).authenticate(${JSON.stringify(adminCredentials())}).projects.get(${JSON.stringify(other)}).whoami()`,
     );
     expect(whoami).toEqual({ projectId: other, path: "/" });
   });
@@ -245,7 +245,7 @@ describe("against the deployed pet shop", () => {
     async () => {
       const other = freshCtx("lib-other-ws");
       const itx = openItx(freshCtx("lib-self-dial-ws"));
-      const api = workerUrl("/internal/rpc").replace(/^http/, "ws");
+      const api = workerUrl("/api").replace(/^http/, "ws");
       const whoami = await itx.invoke(
         `itx.connectToCapnweb(${JSON.stringify(api)}).authenticate(${JSON.stringify(adminCredentials())}).projects.get(${JSON.stringify(other)}).whoami()`,
       );

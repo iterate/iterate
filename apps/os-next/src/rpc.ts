@@ -16,6 +16,7 @@ import {
   type SessionInput,
 } from "./session.ts";
 import { appConfigOf } from "./app-config.ts";
+import { platformOriginOf } from "./platform-origin.ts";
 
 /** Cap’n Web always terminates at /api in the stateless edge. Its root is an
  * already-authorized session — or, on a socket opened BARE (api.ts: no credential on the upgrade),
@@ -32,11 +33,12 @@ export async function rpcResponse(
   const teardown = new SessionTeardown();
   const authorityOf = (authorization: Authorization): SessionAuthority => ({
     principal: authorization.principal,
+    grant: authorization.grant?.grantId,
     reach: authorization.reach,
     grants: new Grants(env, ctx, authorization),
     scopes: authorization.grant?.scope,
     ...(authorization.grant?.kind === "issuer" && {
-      consent: new Consent(env, authorization.grant),
+      consent: new Consent(env, ctx, authorization.grant),
     }),
   });
   // THE GRANT THIS TRANSPORT CARRIES: the upgrade's (resolved by the gate before this call), or the
@@ -50,6 +52,7 @@ export async function rpcResponse(
     waitUntil: (promise) => ctx.waitUntil(promise),
     directory: directory(env.DB),
     appConfig: appConfigOf(env),
+    platformOrigin: platformOriginOf(env, new URL(request.url).origin),
     onProjectAccess: (projectId) => projects.add(projectId),
     resolveBearer: async (token) => {
       // Claimed BEFORE the gate is awaited: two tokens racing on one socket cannot both bind.

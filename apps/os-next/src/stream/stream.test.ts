@@ -345,6 +345,65 @@ test('the wake record says WHY, from the door that opened: a birth is a request\
   ]);
 });
 
+test("the wake record settles what the last incarnation left open: every core `scriptRuns` row becomes a run-settled { interrupted } in the SAME batch as woken — never re-run; a paused stream still takes the settlement", () => {
+  const storage = nodeSqliteDurableObjectStorage();
+  const first = bareStream({ storage });
+  first.appendBirthRecord();
+  first.append(
+    {
+      type: "events.iterate.com/context/run-requested",
+      payload: { code: "async (itx) => 1" }, // lands at 4
+    },
+    {
+      type: "events.iterate.com/context/run-requested",
+      payload: { code: "async (itx) => 2" }, // lands at 5
+    },
+    {
+      type: "events.iterate.com/context/run-settled",
+      payload: { requestOffset: 4, settlement: { status: "succeeded", result: 1 } },
+    },
+    { type: "events.iterate.com/stream/paused", payload: { reason: "a breaker" } },
+  );
+  expect(Object.keys(first.coreReducedState.scriptRuns)).toEqual(["5"]);
+  // the incarnation dies with the request at 5 open (its executor with it); the next one's first request records the wake
+  const second = bareStream({ storage });
+  expect(Object.keys(second.coreReducedState.scriptRuns)).toEqual(["5"]); // rebuilt from the checkpoint: still open
+  const headBeforeWake = second.highestAssignedOffset();
+  second.appendWakeRecord("request");
+  second.appendWakeRecord("alarm"); // once per incarnation: nothing more
+  const tail = second
+    .read(headBeforeWake)
+    .events.filter((e) => e.type !== "events.iterate.com/live-state/changed") // core's own delta
+    .map((e) => [e.offset - headBeforeWake, e.type.replace("events.iterate.com/", ""), e.payload]);
+  expect(tail).toEqual([
+    [1, "stream/woken", { incarnation: 2, reason: "request" }],
+    [
+      2, // the SAME batch: right behind the wake record
+      "context/run-settled",
+      {
+        requestOffset: 5,
+        settlement: {
+          status: "failed",
+          error: "the context restarted before the script finished; it is not run again",
+          failureKind: "interrupted",
+        },
+      },
+    ],
+  ]);
+  expect(second.coreReducedState.scriptRuns).toEqual({});
+  expect(second.coreReducedState.paused).toEqual({ reason: "a breaker" }); // the pause held; the settlement was exempt
+  // a third incarnation finds nothing open: the wake record alone
+  const third = bareStream({ storage });
+  const headBeforeThird = third.highestAssignedOffset();
+  third.appendWakeRecord("request");
+  expect(
+    third
+      .read(headBeforeThird)
+      .events.filter((e) => e.type !== "events.iterate.com/live-state/changed")
+      .map((e) => e.type),
+  ).toEqual(["events.iterate.com/stream/woken"]);
+});
+
 test("appendBirthRecord(): a fresh store gets created@1 + woken@2 in ONE fanned-out batch (core's delta takes 3); the first append lands at 4; a later incarnation over the same store gets woken only, from its first door (appendWakeRecord)", () => {
   const storage = nodeSqliteDurableObjectStorage();
   const batches: StreamEvent[][] = [];
@@ -657,14 +716,18 @@ test("expected offset: an input carrying `offset` lands exactly there or the who
   ).toBe(5);
 });
 
-test("a paused stream ADMITS the replay of an event already in the log (the DO constructor's birth `config` row rides an idempotency key on every incarnation) — checked before the dedupe, a paused context could never be rebuilt after an eviction, so never resumed", () => {
+test("a paused stream admits an idempotent replay of an explicitly configured subscription", () => {
   const storage = nodeSqliteDurableObjectStorage();
   const first = bareStream({ storage });
   first.appendBirthRecord();
   first.appendWakeRecord("request");
   const birthRow = {
     type: "events.iterate.com/stream/subscription-configured",
-    payload: { name: "config", target: "itx.cd('/').worker.processEventBatch", consumes: ["*"] },
+    payload: {
+      name: "config",
+      target: "itx.workers.get({ source: { 'cap.js': 'test-source' } }).processEventBatch",
+      consumes: ["*"],
+    },
     idempotencyKey: "config-subscription",
   };
   const [configured] = first.append(birthRow);

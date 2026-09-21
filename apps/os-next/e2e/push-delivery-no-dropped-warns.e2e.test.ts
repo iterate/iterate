@@ -48,16 +48,6 @@ const durableCountsByType = (events: any[]): Record<string, number> => {
   for (const e of events) counts[e.type] = (counts[e.type] ?? 0) + 1;
   return counts;
 };
-/** The config-worker funnel auto-subscribes `config` in the DO constructor, so EVERY context is born
- *  holding exactly this subscription row (`configuredAtOffset` 4). Its `cursor.confirmedOffset` floats
- *  with live delivery, so it is not pinned; an "only the birth row is left" table holds this, not []. */
-const BIRTH_CONFIG_SUBSCRIPTION = {
-  name: "config",
-  target: "itx.cd('/').worker.processEventBatch",
-  consumes: ["*"],
-  configuredAtOffset: 4,
-  cursor: expect.objectContaining({ attempt: 0 }),
-};
 
 test("enabling a processor on a quiet stream is clean — zero delivery errors, its first delivered batch is its own enablement commit", async () => {
   // Identity is `ctx.props`, minted at materialization — there is no configure window in which the
@@ -71,9 +61,8 @@ test("enabling a processor on a quiet stream is clean — zero delivery errors, 
     const s: any = await tallySnapshot(itx);
     return s.offset >= head && s;
   });
-  // two subscription-configured events were reduced (tally consumes "*"): the birth `config` funnel
-  // (auto-subscribed in the DO constructor) and tally's own enablement commit
-  expect(snap.state.counts["events.iterate.com/stream/subscription-configured"]).toBe(2);
+  // Only the explicitly enabled tally is subscribed.
+  expect(snap.state.counts["events.iterate.com/stream/subscription-configured"]).toBe(1);
   await sleep(400);
   expect(deliveryErrors() - before).toBe(0);
 });
@@ -153,7 +142,7 @@ test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT cl
   const itx = await worker.itx(ctx); // connection A: setup, the flood, and observation
   // Connection B — THE VICTIM: its own client socket, because the callback stub it lent lives in
   // that socket's relay session; the socket's death must become the stub's death.
-  const wsB = stallableWebSocket(`ws://${worker.url.host}/internal/rpc`);
+  const wsB = stallableWebSocket(`ws://${worker.url.host}/api`);
   const sessionB: any = newWebSocketRpcSession(wsB as any);
   const victim = sessionB
     .authenticate({ type: "admin-secret", secret: E2E_ADMIN_API_SECRET })
@@ -244,5 +233,5 @@ test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT cl
   await append(itx, { type: "flood", ephemeral: true, payload: { afterKill: true } });
   await sleep(300);
   expect(droppedWarns()).toBe(droppedAfterFlood); // nothing new: no push to a dead stub, no warn
-  expect(await subscriptions(itx)).toEqual([BIRTH_CONFIG_SUBSCRIPTION]); // only the birth config remains
+  expect(await subscriptions(itx)).toEqual([]);
 }, 55_000);

@@ -13,17 +13,17 @@
 // REFUSE a get. The bundle this project runs cannot be `vi.mock`ed; this can.
 //
 //   • RPC path: hosting a facet is ONE `LOADER.get` + ONE `getDurableObjectClass`; 20 warm calls add
-//     NONE. The test's direct release (support.ts `quiesce`) aborts it; the next call re-materializes it — one more of
+//     NONE. The test's direct release (support.ts `releasePins`) aborts it; the next call re-materializes it — one more of
 //     each, the isolate still warm — and warm calls after that again add none.
 //   • push path: 20 durable events delivered to a hosted facet's `processEventBatch` add NO
 //     `LOADER.get` beyond the enable's catch-up.
 //   • availability: a loader that REFUSES every get after the first never touches calls to the
-//     running facet; only the re-materialization after a quiesce needs it — and fails, coded by the
+//     running facet; only the re-materialization after a release needs it — and fails, coded by the
 //     loader, until it is healthy again.
 
 import { runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
-import { quiesce, stub, until } from "./support.ts";
+import { releasePins, stub, until } from "./support.ts";
 
 /** A facet with in-memory state only: a call counter and a per-instance id. A restart shows as
  *  `calls` back to 1 and a new `instance`. */
@@ -120,7 +120,7 @@ async function untilLoaderQuiet(tap: LoaderTap, quietMs = 400, timeoutMs = 8_000
   );
 }
 
-test("hosting a facet is one LOADER.get + one getDurableObjectClass; 20 warm calls add none; a quiesce costs the next call exactly one more of each", async () => {
+test("hosting a facet is one LOADER.get + one getDurableObjectClass; 20 warm calls add none; a release costs the next call exactly one more of each", async () => {
   const ctx = "prj_facet_door_warm";
   const tap = await tapLoader(ctx);
   const first = await hostHello(ctx);
@@ -136,10 +136,10 @@ test("hosting a facet is one LOADER.get + one getDurableObjectClass; 20 warm cal
   expect(last).toEqual({ calls: 21, instance: first.instance }); // running the whole time
   expect({ gets: tap.gets.length, classGets: tap.classGets }).toEqual({ gets: 1, classGets: 1 });
 
-  // The test's direct release (support.ts `quiesce`) aborts the live facet (support.ts runs production's release directly). The next call
+  // The test's direct release (support.ts `releasePins`) aborts the live facet (support.ts runs production's release directly). The next call
   // re-materializes it: a fresh instance, one more LOADER.get + class mint — the isolate itself is
   // the loader's to keep (no cold build) — and the calls after that are warm again.
-  await quiesce(ctx);
+  await releasePins(ctx);
   const again = await warmHello(ctx);
   expect(again.calls).toBe(1);
   expect(again.instance).not.toBe(first.instance);
@@ -156,7 +156,7 @@ test("20 durable events pushed to a hosted facet's processEventBatch add no LOAD
   const ctx = "prj_facet_door_push";
   const tap = await tapLoader(ctx);
   // Enable the tally target the way `itx.processors.enable` spells it: ONE subscription-configured
-  // whose target is the facet's `processEventBatch` through the load chain (alarm-quiesce.test.ts).
+  // whose target is the facet's `processEventBatch` through the load chain (alarm-and-pins.test.ts).
   await stub(ctx).append({
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
@@ -188,7 +188,7 @@ test("20 durable events pushed to a hosted facet's processEventBatch add no LOAD
   );
 });
 
-test("a RUNNING facet is not coupled to loader availability: with the loader refusing every get, warm calls are answered; only the re-materialization after a quiesce needs it", async () => {
+test("a RUNNING facet is not coupled to loader availability: with the loader refusing every get, warm calls are answered; only the re-materialization after a release needs it", async () => {
   const ctx = "prj_facet_door_loader_down";
   const tap = await tapLoader(ctx);
   const first = await hostHello(ctx);
@@ -199,10 +199,10 @@ test("a RUNNING facet is not coupled to loader availability: with the loader ref
   expect(last).toEqual({ calls: 11, instance: first.instance });
   expect(tap.gets.length).toBe(1); // never asked
 
-  // After the quiesce the facet must start again — THAT needs the loader, and gets its refusal,
+  // After the release the facet must start again — THAT needs the loader, and gets its refusal,
   // on this call and the next: a startup callback that threw is aborted by `#invokeFacet`, so every
   // attempt asks the loader again instead of replaying the first failure from a broken container.
-  await quiesce(ctx);
+  await releasePins(ctx);
   // A rejected RPC promise consumed through `expect(…).rejects` is reported UNHANDLED by the workers
   // vitest project
   // (the handler attaches a tick late); a plain rejection handler is not.

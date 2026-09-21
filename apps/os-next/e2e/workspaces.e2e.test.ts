@@ -1,11 +1,16 @@
-// workspaces.e2e.test.ts — `itx.workspaces.get(path)`: THE WORKSPACE of any context, at most one per
-// path, nothing appended to get it — the `workspace` facet (src/workspace/durable-object.ts) hosted
-// on `itx.cd(path)` by the library root (src/library.ts). ONE private overlay over the mount table —
-// every repo in the project catalog at its own path (`itx.repos.list()`); reads fall through to a
-// mount's repo facet at its tip; a write shadows until `gitCommit` lands ONE mount's changes on its
-// repo's `main`; a delete is a whiteout until then; `/workspace/…` is scratch — never committed.
-// `create()` lands the creation facts: the certificate on its path, cross-posted to `/`, so
-// `itx.workspaces.list()` knows it. Locally the physical tier is a fake git REMOTE
+// workspaces.e2e.test.ts — THE WORKSPACE of any context, at most one per path: the `workspace` facet
+// (src/workspace/durable-object.ts) on `itx.cd(path)`, addressed as `itx.workspaces.get(path)`
+// (src/library.ts, nothing appended to get it) and born through the collection,
+// `itx.workspaces.create(path)` (src/workspace/collection.ts): it enables the `workspace` processor
+// row on that path (a `stream/subscription-configured` fact), lands `workspace/create-requested` there
+// and waits for the terminal fact. The processor (src/workspace/processor.ts) runs the saga from state
+// at head — nothing to provision, so it lands `workspace/created`, the birth certificate, on `/` (the
+// catalog `itx.workspaces.list()` reads) and on the path; a create on a created workspace answers at
+// once, appending nothing, and every other method refuses until the certificate. The facet is ONE
+// private overlay over the mount table — every repo in the project catalog at its own path
+// (`itx.repos.list()`); reads fall through to a mount's repo facet at its tip; a write shadows until
+// `gitCommit` lands ONE mount's changes on its repo's `main`; a delete is a whiteout until then;
+// `/workspace/…` is scratch — never committed. Locally the physical tier is a fake git REMOTE
 // (support/fake-git-server.ts) behind a FAKE `itx.cfArtifacts` proxy lent to each repo's context
 // (support/fake-artifacts.ts), keyed by the repo's PATH as the real one is — the repo facet speaks
 // the real wire codec to it. Those rows are `localOnly` — the fake remote listens on THIS machine's
@@ -18,7 +23,8 @@ import { freshCtx, openItx, readAll, rejection } from "./support/client.ts";
 import { FakeArtifacts, type FakeCommit } from "./support/fake-artifacts.ts";
 import { deployedOnly, localOnly } from "./support/project-host.ts";
 
-/** A log as its repo facts' short type names, in order. */
+/** A log as its repo facts' short type names, in order (the processor row, a `stream/…` fact, is
+ *  not one). */
 const types = (log: { type: string }[]) =>
   log
     .filter((e) => e.type.startsWith("events.iterate.com/repo"))
@@ -36,10 +42,10 @@ async function workspaceOverFakeArtifacts(
   const artifacts = await FakeArtifacts.start(seed);
   for (const path of Object.keys(seed)) {
     await itx.cd(path).provide("itx.cfArtifacts", artifacts);
-    await itx.repos.get(path).create();
+    await itx.repos.create(path);
   }
+  await itx.workspaces.create(`/workspaces/${name}`);
   const workspace = itx.workspaces.get(`/workspaces/${name}`);
-  await workspace.create();
   return { itx, artifacts, workspace };
 }
 
@@ -133,7 +139,7 @@ localOnly(
   },
 );
 
-test("create() lands the request and ONE certificate on its path, the same certificate on /, and the catalog lists it; a workspace not created refuses before it stores anything", async () => {
+test("itx.workspaces.create(path) lands the request and ONE certificate on its path, the same certificate on /, and the catalog lists it; a workspace not created refuses before it stores anything", async () => {
   const { itx } = await workspaceOverFakeArtifacts("four");
   const events = await readAll(itx.cd("/workspaces/four"));
   const born = (log: { type: string; payload?: unknown }[]) =>
@@ -142,17 +148,33 @@ test("create() lands the request and ONE certificate on its path, the same certi
   expect(
     events.filter((e) => e.type === "events.iterate.com/workspace/create-requested"),
   ).toHaveLength(1);
+  // The processor row `create` enabled, on the path, named after the facet.
+  expect(
+    events
+      .filter((e) => e.type === "events.iterate.com/stream/subscription-configured")
+      .map((e) => e.payload?.name),
+  ).toEqual(["workspace"]);
+  // The state references the certificate by OFFSET, never by copied payload.
+  expect(await itx.cd("/workspaces/four").facets.get("workspace").snapshot()).toMatchObject({
+    state: {
+      creation: {
+        status: "created",
+        offset: events.find((e) => e.type === "events.iterate.com/workspace/created").offset,
+      },
+    },
+  });
   expect(born(await readAll(itx))).toEqual([{ path: "/workspaces/four" }]);
   expect(await itx.workspaces.list()).toEqual([
     { path: "/workspaces/four", createdAt: expect.any(String) },
   ]);
   expect((await itx.repos.list()).map((r: { path: string }) => r.path)).toEqual(["/repos/config"]);
-  await itx.workspaces.get("/workspaces/four").create(); // created once: answers at once, appends nothing
+  // Created once: a second create answers at once, appends nothing.
+  expect(await itx.workspaces.create("/workspaces/four")).toEqual({ path: "/workspaces/four" });
   expect(await readAll(itx.cd("/workspaces/four"))).toHaveLength(events.length);
 
   const never = itx.workspaces.get("/workspaces/never");
   expect((await rejection(never.readFile("/x"))).message).toMatch(
-    /not created — call create\(\) first/,
+    /not created — itx\.workspaces\.create\("\/workspaces\/never"\) first/,
   );
   expect((await rejection(never.writeFile("/x", "x"))).message).toMatch(/not created/);
   expect((await rejection(never.gitStatus())).message).toMatch(/not created/);
@@ -233,8 +255,8 @@ localOnly(
     const FILE = `${REPO}/notes/log.md`;
     // The loader, on every page load — a created repo and workspace answer at once.
     const load = async () => {
-      await itx.invoke(["itx", "repos", ["get", REPO], ["create"]]);
-      await itx.invoke(["itx", "workspaces", ["get", WORKSPACE], ["create"]]);
+      await itx.invoke(["itx", "repos", ["create", REPO]]);
+      await itx.invoke(["itx", "workspaces", ["create", WORKSPACE]]);
       return {
         note: await itx.invoke(["itx", "workspaces", ["get", WORKSPACE], ["readFile", FILE]]),
         tip: await itx.invoke(["itx", "repos", ["get", REPO], ["tip"]]),
@@ -260,8 +282,8 @@ localOnly(
     // The next load reads the committed file at the new tip; nothing more was appended by the loads.
     expect(await load()).toEqual({ note: "# log\n- one\n", tip: committed.commitOid });
     expect(types(await readAll(itx.cd(REPO)))).toEqual([
-      "repos/create-requested",
-      "repos/created",
+      "repo/create-requested",
+      "repo/created",
       "repo/commit-completed",
     ]);
     // Saving the same text again commits nothing.
@@ -292,11 +314,11 @@ deployedOnly(
   async () => {
     const itx = openItx(freshCtx("wsrepo"));
     try {
+      await itx.repos.create("/repos/config");
       const repo = itx.repos.get("/repos/config");
-      await repo.create();
       await repo.writeFile("worker.ts", "export default 1;\n");
+      await itx.workspaces.create("/workspaces/deployed");
       const workspace = itx.workspaces.get("/workspaces/deployed");
-      await workspace.create();
       expect(await workspace.readFile("/repos/config/worker.ts")).toBe("export default 1;\n");
       await workspace.writeFile("/repos/config/notes/log.md", "# log\n");
       await workspace.writeFile("/repos/config/worker.ts", "export default 2;\n");

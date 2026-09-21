@@ -50,7 +50,14 @@ export function writeWranglerConfig(app: StartApp) {
     compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
     durable_objects: { bindings: [{ name: "BROWSER_SESSION", class_name: "BrowserSession" }] },
     exports: { BrowserSession: { type: "durable-object", storage: "sqlite" } },
-    vars: { ITERATE_ORIGIN: "https://os.iterate2.com" },
+    vars: {
+      ITERATE_ORIGIN: "https://os.iterate2.com",
+      // our own zones: project hosts and custom apexes are userspace and could serve a look-alike
+      // issuer, so the browser-auth gate refuses to CONNECT to an issuer under them (the default
+      // issuer is exempt) — envs.ts osNextEnvs.prd names the same hostnames
+      ITERATE_DENY_ZONES:
+        "iterate2.app,project-worker.iterate.com,iterate2.com,iterate.com,iterate.workers.dev,iterate-dev-preview.workers.dev,garple.com,lispwoso.com,templestein.com",
+    },
     observability: OBSERVABILITY,
     assets: { binding: "ASSETS", not_found_handling: "none", run_worker_first: true },
   };

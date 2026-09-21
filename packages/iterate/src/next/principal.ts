@@ -7,22 +7,39 @@ export type Principal = { actor: string; email?: string };
  *  dispatch and every sibling hop (`invoke(call, args, caller)`). Set ONLY by trusted code — the edge
  *  after admission, the kernel — never by a client: the DO's `invoke` is a Workers-RPC verb, never
  *  capnweb-exposed, so a client cannot supply its own `Caller`. Authority is inferred FROM the
- *  principal (no separate scopes/trust field): in the global namespace a null principal IS the
- *  kernel — its delivery loop's config funnel is the one path hop `cd` lets through there
- *  (context/built-ins.ts); a person's is refused. */
-export type Caller = { principal: Principal | null };
+ *  principal (no separate scopes/trust field). Global contexts remain non-navigable through
+ *  `cd`, including calls without a principal. */
+export type Caller = {
+  principal: Principal | null;
+  /** THE CONNECTION the principal acts through: the OAuth grant's id (`grant_…`) — one per connected
+   *  client (a Claude Code install, a dash sign-in, a personal token), the same across every call it
+   *  makes. Absent for the admin secret and the kernel. */
+  grant?: string;
+  /** THE PLATFORM ORIGIN the caller reached the platform on (os-next platform-origin.ts) — what a
+   *  public URL is composed from (`itx.url`, a signed file URL). Absent for a caller with none (a
+   *  loaded worker's `env.ITX`, the kernel); the context then uses the last one it was reached on. */
+  platformOrigin?: string | null;
+};
 /** The header the edge sets on a Request it forwards on a principal's behalf — the ingress after
  *  the cookie check, a session's terminal `fetch` — and strips from every inbound Request. */
 export const ITX_PRINCIPAL_HEADER = "x-itx-principal";
+/** The grant's header beside it (the caller's `grant`), set and stripped exactly where the
+ *  principal's is. */
+export const ITX_GRANT_HEADER = "x-itx-grant";
 
-/** The event as the log stores it: `source.principal` is the platform's — set from the session's
- *  verified principal, a client-supplied one dropped (an anonymous session's event carries none). */
-export function stampPrincipal<E extends { source?: Record<string, unknown> }>(
+/** The event as the log stores it: `source.principal` and `source.grant` are the platform's — set
+ *  from the admitted caller, client-supplied ones dropped (an anonymous session's event carries
+ *  neither, the kernel's none). */
+export function stampCaller<E extends { source?: Record<string, unknown> }>(
   event: E,
-  principal: Principal | null,
+  caller: Caller,
 ): E {
-  const { principal: _clientSupplied, ...source } = event.source || {};
-  if (principal) return { ...event, source: { ...source, principal } };
+  const { principal: _clientPrincipal, grant: _clientGrant, ...source } = event.source || {};
+  if (caller.principal) {
+    const stamped: Record<string, unknown> = { ...source, principal: caller.principal };
+    if (caller.grant) stamped.grant = caller.grant;
+    return { ...event, source: stamped };
+  }
   return Object.keys(source).length > 0
     ? { ...event, source }
     : (({ source: _dropped, ...rest }) => rest as E)(event);

@@ -91,6 +91,7 @@
     // DO class (wrangler requires the storage line); their state lives in the facet's own SQLite.
     "AccountDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "AgentDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    "OrganizationDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "ProjectDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "RepoDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "WorkspaceDurableObject": { "type": "durable-object", "storage": "sqlite" },
@@ -113,20 +114,18 @@
     { "binding": "OAUTH_KV", "id": "b8efbdc3253840fa95331a80efbeb03d" },
   ],
 
-  // Configuration (src/worker.ts `parseAppConfig`): `APP_CONFIG_*` vars — the ONE door, parsed once per isolate,
-  // loud on a bad or unknown one. Bindings are declared above; a var is what differs between
-  // deployments of the same code. The three secrets — APP_CONFIG_SESSION_SECRET (the login flow's
-  // cookie), APP_CONFIG_ADMIN_API_SECRET (the admin secret: `authenticate({ type: "admin-secret" })`,
-  // the test configs' admin bearer) and APP_CONFIG_SECRETS_KEY (project secrets' material at rest,
-  // secret-at-rest.ts) — are wrangler secrets, never committed vars; all three are required.
+  // The directory schema (src/control-plane.sql) is imported as text and applied at boot
+  // (src/worker.ts) — idempotent, so every deployment, local or not, brings its own D1 up to date.
+  "rules": [{ "type": "Text", "globs": ["**/*.sql"] }],
+  // CONFIGURATION (src/app-config.ts): ONE JSON object, the `APP_CONFIG` Worker secret —
+  // `{ urls, login, secrets }` — plus `APP_CONFIG_SECRETS__KEY` standing alone so it can rotate with
+  // `previousKey` beside it. Any key can be set alone as `APP_CONFIG_<PATH>__<KEY>`; the generator
+  // writes a deployment's `urls` that way from envs.ts (scripts/generate-wrangler-config.ts), so the
+  // vars below are only the local-dev defaults. (No wrangler `secrets.required` here: it is a types
+  // and local-dev aid, not a deploy guard, and it collides with a harness that passes the same names
+  // as vars — the e2e lane's.)
   "vars": {
-    "APP_CONFIG_ENVIRONMENT_NAME": "poc",
-    "APP_CONFIG_PLATFORM_ORIGIN": "https://os.iterate2.com",
-    "APP_CONFIG_MCP_ORIGIN": "https://mcp.iterate2.com",
-    "APP_CONFIG_PROJECT_HOSTNAME_BASE": "project-worker.iterate.com",
-    // The Artifacts git remote is `https://<ACCOUNT_ID>.artifacts.cloudflare.net/git/<NAMESPACE>/<repo>.git`
-    // — the `itx.git` layer builds it from these when it does git over HTTPS.
-    "APP_CONFIG_ARTIFACTS_ACCOUNT_ID": "04b3b57291ef2626c6a8daa9d47065a7",
-    "APP_CONFIG_ARTIFACTS_NAMESPACE": "project-worker-repos",
+    "APP_CONFIG_URLS__OS": "http://localhost:8788",
+    "APP_CONFIG_URLS__INGRESS_ROUTING": "{\"type\":\"subdomains\",\"hostname\":\"localhost\"}",
   },
 }

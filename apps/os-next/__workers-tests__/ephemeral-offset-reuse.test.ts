@@ -2,14 +2,14 @@
 // ephemeral's offset is unique WITHIN an incarnation and a later incarnation may hand it to a
 // durable, so NOTHING a reader persists (a facet's checkpoint, a stream-kept cursor) may name an
 // offset beyond the durable mark — `read()`'s short-page proof stops there. Each test drives
-// ephemerals to the head, quiesces, evicts, re-mints durables at those offsets, and proves they
+// ephemerals to the head, releases the pins, evicts, re-mints durables at those offsets, and proves they
 // are reduced / delivered exactly as at-least-once promises. (Found by the r1 correctness review;
-// the same hunt found that an undisposed facet RPC RESULT pinned the parent after a quiesce — the
-// read-verb cases below are also the pin for that fix: they evict at once after ONE quiesce.)
+// the same hunt found that an undisposed facet RPC RESULT pinned the parent after a release — the
+// read-verb cases below are also the pin for that fix: they evict at once after ONE release.)
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import type { ItxExpression } from "iterate/next/expression";
-import { quiesce, stub } from "./support.ts";
+import { releasePins, stub } from "./support.ts";
 
 const COUNTER_SRC = /* js */ `
 import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
@@ -50,7 +50,7 @@ const hostedFacet = (source: Record<string, string>, cls: string, name: string):
 const COUNTER_MODULES = { "cap.js": COUNTER_SRC };
 const DIGEST_MODULES = { "cap.js": DIGEST_SRC };
 
-test("stream-kept cursor: an alarm pump with ephemerals at head leaves the cursor on the durable mark; after quiesce + evict the durables re-minted at those offsets are delivered", async () => {
+test("stream-kept cursor: an alarm pump with ephemerals at head leaves the cursor on the durable mark; after the release + evict the durables re-minted at those offsets are delivered", async () => {
   const ctx = "prj_rev_cursorskip";
   const s = stub(ctx);
   await s.append({
@@ -83,7 +83,7 @@ test("stream-kept cursor: an alarm pump with ephemerals at head leaves the curso
   };
   expect(row1.cursor!.confirmedOffset).toBe(highestDurableOffset); // the cursor never leaves durable ground
 
-  await quiesce(ctx);
+  await releasePins(ctx);
   await evictDurableObject(s);
   const rowKv = (await s.invoke("itx.subscriptions.get('dig')")) as {
     cursor?: { confirmedOffset: number };
@@ -121,7 +121,7 @@ test("enable with a consumes filter: itx.facets.get(name) answers before the fir
   expect(snap.state.n).toBeGreaterThanOrEqual(0);
 });
 
-test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals at head checkpoints the durable mark; after quiesce + evict the durable re-minted at an ephemeral's offset is reduced exactly once", async () => {
+test("processor: a read-driven catch-up (snapshot after the release) with ephemerals at head checkpoints the durable mark; after the release + evict the durable re-minted at an ephemeral's offset is reduced exactly once", async () => {
   const ctx = "prj_rev_procskip_b";
   const s = stub(ctx);
   await s.append({
@@ -144,20 +144,19 @@ test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals
   const highestDurableOffset = p0.events.at(-1)!.offset;
   expect(p0.events.at(-1)!.type).toBe("note");
   await sleep(300);
-  await quiesce(ctx); // abort the idle facet (checkpoint = tick offset, durable)
+  await releasePins(ctx); // abort the idle facet (checkpoint = tick offset, durable)
   // the repo's own snapCounter shape: re-materialize by name → #pushedThroughOffset undefined → catchUpFromLog() → read(cursor) → [note], scannedThroughOffset = head
   const mid = (await s.invoke(["itx", "facets", ["get", "counter"], ["snapshot"]])) as {
     offset: number;
     state: { n: number };
   };
-  // n = created + woken + config-subscription + configured + tick + note: the configured push's gap
-  // repair read the log from 0 (so the filter's unsent created@1, the first incarnation's woken and
-  // the config subscription were reduced too), the push reduced tick, this wake read note.
-  expect(mid.state.n).toBe(6);
+  // n = created + woken + configured + tick + note: gap repair reads the unsent
+  // birth records, the push reduces tick, and this wake reads note.
+  expect(mid.state.n).toBe(5);
   expect(p0.scannedThroughOffset).toBe(highestDurableOffset); // read() proves the durable log only
   expect(mid.offset).toBe(highestDurableOffset); // so the checkpoint the wake persisted is the mark, not the head
   await sleep(400);
-  await quiesce(ctx);
+  await releasePins(ctx);
   await evictDurableObject(s);
   await s.append({ type: "tick" }); // woken@mark+1 (the constructor's; its core delta took mark+2), tick@mark+3 — durable, at the dead ephemerals' offsets
   await sleep(500);

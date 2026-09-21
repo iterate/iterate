@@ -1,5 +1,6 @@
-// Browser acceptance for the current OAuth contract. Google identity proof is
-// covered separately; TEST_EMAIL_LOGIN=true exercises the visible test sign-in form.
+// Browser acceptance for the current OAuth contract. Google identity proof is covered separately;
+// the sign-in page's password step (`login.password`, src/app-config.ts — the local worker's is
+// scripts/dev.ts's, a deployment's is handed to the run as LOGIN_PASSWORD) is how these sign in.
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -16,28 +17,25 @@ const stamp = () => `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6
 const isLocal = (origin: string) => new URL(origin).hostname === "localhost";
 const adminSecret = (origin: string) => {
   const secret = process.env.ADMIN_API_SECRET || (isLocal(origin) && "dev-admin-api-secret");
-  if (!secret) throw new Error("ADMIN_API_SECRET is required for the deployed identity fixture");
+  if (!secret) throw new Error("ADMIN_API_SECRET is required for the deployed operator fixture");
   return secret;
 };
+/** The deployment's sign-in password: the local worker's (scripts/dev.ts), else the run's. */
+const loginPassword = (origin: string) => {
+  const password = process.env.LOGIN_PASSWORD || (isLocal(origin) && "dev");
+  if (!password) throw new Error("LOGIN_PASSWORD is required to sign in to a deployed worker");
+  return password;
+};
 
-async function signIn(page: Page, origin: string, email: string, next = "/") {
-  if (isLocal(origin) || process.env.TEST_EMAIL_LOGIN === "true") {
-    await page.getByRole("textbox", { name: "Email", exact: true }).fill(email);
+/** Sign in on the page the way a person does: the email, the password, Sign in — the password
+ *  field is on the first step where the page shows it at once, else behind Continue. */
+async function signIn(page: Page, origin: string, email: string, _next = "/") {
+  await page.getByRole("textbox", { name: "Email", exact: true }).fill(email);
+  const password = page.getByRole("textbox", { name: "Password", exact: true });
+  if (!(await password.isVisible()))
     await page.getByRole("button", { name: "Continue", exact: true }).click();
-    // the code step: a test deployment accepts 424242 beside the code it mailed
-    await page.getByRole("textbox", { name: "Code", exact: true }).fill("424242");
-    await page.getByRole("button", { name: "Continue", exact: true }).click();
-    return;
-  }
-  await page.getByRole("link", { name: "Continue with Google", exact: true }).waitFor();
-  const response = await page.request.post(`${origin}/login`, {
-    headers: { Authorization: `Bearer ${adminSecret(origin)}` },
-    form: { email, next },
-    maxRedirects: 0,
-  });
-  expect(response.status(), await response.text()).toBe(302);
-  await response.dispose();
-  await page.goto(new URL(next, origin).href);
+  await password.fill(loginPassword(origin));
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
 }
 
 async function cookieHeaders(context: BrowserContext, origin: string) {
@@ -115,7 +113,9 @@ test("first Claude consent creates the organization and project on the consent p
   // a slug the deployment's own organization holds — the onboarding step's refused first try below
   const takenSlug = `taken-${stamp()}`;
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
-  using operator = newHttpBatchRpcSession<IterateRpcTarget>(`${origin}/internal/rpc`);
+  using operator = newHttpBatchRpcSession<IterateRpcTarget>(
+    new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminSecret(origin)}` } }),
+  );
   using _taken = await operator
     .authenticate({ type: "admin-secret", secret: adminSecret(origin) })
     .projects.create({ project: takenSlug });
@@ -147,7 +147,10 @@ test("first Claude consent creates the organization and project on the consent p
     expect(await projectField.inputValue()).toBe("first-consent-studio");
     await projectField.fill(`Consent Studio ${project}`);
     expect(await projectField.inputValue()).toBe(`consent-studio-${project}`);
-    await page.getByText(`Your project will be hosted at consent-studio-${project}.`).waitFor();
+    // where the project will live — only where the deployment serves project hosts (a local worker
+    // does; a deployed target says so with PROJECT_INGRESS_ROUTING, as the e2e lane does)
+    if (isLocal(origin) || process.env.PROJECT_INGRESS_ROUTING)
+      await page.getByText(`Your project will be hosted at consent-studio-${project}.`).waitFor();
     // A refused first try — a slug another organization holds, refused after the organization is
     // made — answers with that organization: the retry offers it, chosen, rather than naming a
     // second one (the inventory at the end counts one).
@@ -254,8 +257,9 @@ test("first Claude consent creates the organization and project on the consent p
       .waitFor();
     expect(new URL(page.url()).search).toBe(flow.url.search);
     expect(await accountAccess.isChecked()).toBe(false);
-    // The consent page opens no socket — it posts JSON, and its session is built in the worker.
-    expect(sockets.filter((url) => new URL(url).pathname === "/api")).toHaveLength(0);
+    // The consent page is a capnweb client of /api like any app: ONE socket for the whole flow,
+    // the session cookie riding its handshake — no JSON sibling, no form post.
+    expect(sockets.filter((url) => new URL(url).pathname === "/api")).toHaveLength(1);
     await page.screenshot({ path: test.info().outputPath("first-consent.png"), fullPage: true });
     await approve.click();
     await page
@@ -351,7 +355,9 @@ test("the Notes app works on its own origin and through a project config worker"
   ).code;
   // Install the repository's actual config-worker source, preserving its auth.require gate.
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- One operator fixture installs the proxy; all app interactions are real browser RPC.
-  using operator = newHttpBatchRpcSession<IterateRpcTarget>(`${origin}/internal/rpc`);
+  using operator = newHttpBatchRpcSession<IterateRpcTarget>(
+    new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminSecret(origin)}` } }),
+  );
   const projectContext = operator
     .authenticate({ type: "admin-secret", secret: adminSecret(origin) })
     .projects.get(project);
@@ -359,12 +365,15 @@ test("the Notes app works on its own origin and through a project config worker"
   // the `notes` app label at it — so notes--<project>.<base> reaches the config worker with the app
   // slug in x-iterate-app (the apps/os header), and it fetches through to the Notes worker.
   await Promise.all([
-    projectContext.provide("itx.worker", [
+    projectContext.append({
+      type: "events.iterate.com/project/ingress-configured",
+      payload: { target: ["itx", "workers", ["get", { source: { "cap.js": source } }]] },
+    }),
+    projectContext.provide("itx.apps.notes", [
       "itx",
       "workers",
       ["get", { source: { "cap.js": source } }],
     ]),
-    projectContext.provide("itx.apps.notes", ["itx", "worker"]),
   ]);
   await page.goto(notesOrigin);
   await page.getByRole("link", { name: "Log in with iterate", exact: true }).click();

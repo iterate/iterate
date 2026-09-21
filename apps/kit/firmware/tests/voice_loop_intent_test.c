@@ -1355,6 +1355,10 @@ static void answered_probes_are_liveness_without_any_pong(void) {
 
 int main(void) {
   boot();
+  pump();
+  assert(board.last_view.api_ready);
+  assert(board.last_view.screen == ITERATE_KIT_VOICE_SCREEN_IDLE);
+  assert(!board.last_view.wants_call);
   conversation_start_raises_wants_call_with_no_button();
   conversation_control_opens_and_ends_a_call();
   nothing_physical_was_involved();

@@ -1,0 +1,22 @@
+diff --git a/dist/oauth-provider.js b/dist/oauth-provider.js
+index c15348c226f1064f6c277f45f10740b9266219e9..090deb66191fadb4864998ae0b0313c4e71ad8e3 100644
+--- a/dist/oauth-provider.js
++++ b/dist/oauth-provider.js
+@@ -2423,7 +2423,7 @@ var OAuthProviderImpl = class {
+ 	*/
+ 	async issueEmaAccessToken(args) {
+ 		const tokenScopes = args.assertionScopes.length > 0 ? this.downscope(args.mapperScope, args.assertionScopes) : args.mapperScope;
+-		const grantId = generateRandomString(16);
++		const grantId = `grant_${generateRandomString(16)}`;
+ 		const { encryptedData, key: encryptionKey } = await encryptProps(args.mapperProps);
+ 		const grant = {
+ 			id: grantId,
+@@ -3584,7 +3584,7 @@ var OAuthHelpersImpl = class {
+ 				cursor = page.cursor;
+ 			} while (cursor);
+ 		}
+-		const grantId = generateRandomString(16);
++		const grantId = `grant_${generateRandomString(16)}`;
+ 		const { encryptedData, key: encryptionKey } = await encryptProps(options.props);
+ 		const now = Math.floor(Date.now() / 1e3);
+ 		if (options.request.responseType === "token") {
