@@ -18,6 +18,7 @@ export function writeWranglerConfig() {
       ...template.vars,
       APP_CONFIG_PLATFORM_ORIGIN: "http://localhost:8788",
       APP_CONFIG_MCP_ORIGIN: "",
+      APP_CONFIG_DASH_ORIGIN: "",
       APP_CONFIG_PROJECT_HOSTNAME_BASE: "localhost",
     },
     env: Object.fromEntries(
@@ -69,6 +70,7 @@ export function writeWranglerConfig() {
             APP_CONFIG_LOGIN_EMAIL_FROM: env.loginEmailFrom || "",
             APP_CONFIG_MCP_ORIGIN:
               new URL(env.mcpBaseUrl).origin === new URL(env.baseUrl).origin ? "" : env.mcpBaseUrl,
+            APP_CONFIG_DASH_ORIGIN: env.dashBaseUrl || "",
             APP_CONFIG_PROJECT_HOSTNAME_BASE: env.projectHostnameBase,
             APP_CONFIG_PROJECT_CUSTOM_HOSTNAMES: Object.entries(env.projectCustomHostnames || {})
               .map(([hostname, project]) => `${hostname}=${project}`)

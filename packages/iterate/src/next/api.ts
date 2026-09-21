@@ -7,6 +7,7 @@
 // dotted spelling (`itx.repos.get(path).readFile(file)`) onto it; the roots declared below are the
 // ones the SDK and the first-party facets spell, with the platform's own signatures (context/built-ins.ts).
 import type { FacetHandle, InvokeHandle, ItxExpressionInput } from "./expression.ts";
+import type { ConsentScope } from "./oauth-scopes.ts";
 import type { Principal } from "./principal.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
 
@@ -186,7 +187,8 @@ export type ConsentAnswer =
       projects: ProjectRecord[];
       orgs: OrgRecord[];
       projectBound: boolean;
-      scopes: string[];
+      /** the scopes the request asked for, each with the page's copy (oauth-scopes.ts) */
+      scopes: ConsentScope[];
       denyLocation: string;
       projectHostnameBase: string;
       /** the onboarding step's first draft of an organization name, from the person's name or email */

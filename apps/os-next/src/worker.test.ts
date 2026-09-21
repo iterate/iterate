@@ -37,6 +37,7 @@ const MINIMAL_CONFIG = {
   loginEmailFrom: "",
   testEmailLogin: false,
   mcpOrigin: "",
+  dashOrigin: "",
   environmentName: "poc",
   projectHostnameBase: "",
   projectCustomHostnames: {},
