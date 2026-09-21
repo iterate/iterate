@@ -16,7 +16,10 @@ export default defineConfig({
   testMatch: "**/*.spec.ts",
   timeout: 90_000,
   expect: { timeout: 30_000 },
-  fullyParallel: false,
+  // Every spec stamps its own identities (`stamp()`), so files and tests run side by side; a laptop
+  // keeps Playwright's default worker count, CI runs against a deployed preview and can fan out.
+  fullyParallel: true,
+  workers: process.env.CI ? 6 : undefined,
   retries: process.env.CI ? 1 : 0,
   reporter: "list",
   use: { baseURL, trace: "on-first-retry" },

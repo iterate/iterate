@@ -1,0 +1,218 @@
+# ONE PREVIEW PER PULL REQUEST of apps/os-next, on Cloudflare Worker Previews — the shape of
+# cloudflare/cloudflare-os's .github/workflows/preview.yml, cut down to one worker and run on Depot.
+# The script is apps/os-next/scripts/preview.ts; it deploys a preview named `pr<n>-<branch slug>`
+# of the parent worker os-next-preview, runs the e2e suite against it, writes the URL and the
+# operations into the PR body, deletes it when the PR closes, and sweeps nightly.
+#
+# This workflow runs INSTEAD of the apps/os preview fleet for a PR confined to os-next
+# (scripts/preview/change-types.ts classes those paths so the planner neither deploys nor tests
+# the fleet). The paths below are the union of what deploy-os-next.yml and the four app deploy
+# workflows (dash, agents, notes, voice) deploy prd for: the apps on top are previewed alongside,
+# each only when its own paths changed since the merge-base (scripts/preview.ts `changedApps`).
+#
+# Depot registers automatic triggers when this file is on the default branch. Test a branch with:
+#   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
+#     --workflow preview-os-next.yml --ref <branch> \
+#     --input pull-request-number=<pr> --input action=deploy
+# Every operation the PR body lists is a dispatch: action = deploy | reset | e2e | delete | sweep,
+# apps = auto | all | none (the apps on top: dash, agents, notes, voice).
+#
+# Concurrency per PR, never cancelled: a half-applied preview is worse than a slow one (their words).
+# The only Depot secret is DOPPLER_TOKEN; Doppler project-worker/preview supplies the Cloudflare
+# credentials and the three APP_CONFIG secrets the preview inherits.
+
+name: Preview OS-Next
+
+permissions:
+  contents: read
+  pull-requests: write
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - closed
+    paths:
+      - .depot/workflows/preview-os-next.yml
+      - apps/os-next/**
+      - apps/dash/**
+      - apps/agents/**
+      - apps/notes/**
+      - apps/voice/**
+      - packages/iterate/**
+      - packages/shared/**
+      - packages/ui/**
+      - envs.ts
+      - scripts/lib/**
+  schedule:
+    # Nightly, off the hour: what stops a force-closed PR, or a failed cleanup, from leaking a
+    # preview and its D1 (cloudflare-os runs theirs at 04:37 too).
+    - cron: "37 4 * * *"
+  workflow_dispatch:
+    inputs:
+      pull-request-number:
+        description: PR number (every action but sweep)
+        required: false
+        type: string
+        default: ""
+      action:
+        description: deploy | reset | e2e | delete | sweep
+        required: false
+        type: string
+        default: deploy
+      apps:
+        description: "The apps on top (dash, agents, notes, voice): auto = the ones whose paths changed since the merge-base, all = every one, none"
+        required: false
+        type: string
+        default: auto
+
+concurrency:
+  group: preview-os-next-${{ github.event.pull_request.number || inputs.pull-request-number || 'sweep' }}
+  cancel-in-progress: false
+
+env:
+  PR_NUMBER: ${{ github.event.pull_request.number || inputs.pull-request-number }}
+  ACTION: ${{ inputs.action || 'deploy' }}
+
+jobs:
+  deploy:
+    name: Preview OS-Next / deploy
+    if: >-
+      (github.event_name == 'pull_request' && github.event.action != 'closed') ||
+      (github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '' && (inputs.action == 'deploy' || inputs.action == 'reset'))
+    runs-on:
+      size: 4x16
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 40
+    steps:
+      - name: Checkout the PR head
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config preview --project project-worker
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      # `deploy` redeploys in place; `reset` deletes the preview and its D1 first. Either way the
+      # script ends by writing the URL and the operations into the PR body (GITHUB_TOKEN).
+      - name: Deploy (or reset) the preview
+        working-directory: apps/os-next
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PREVIEW_NAME: ${{ github.head_ref }}
+          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
+          PREVIEW_APPS: ${{ inputs.apps || 'auto' }}
+        run: doppler run -- pnpm preview "$ACTION"
+      # THE PROOF THAT COUNTS (docs/testing.md): the same e2e suite deploy-os-next.yml runs against
+      # prd after every merge, against this PR's preview — in this job, on this checkout, so the
+      # suite starts the second the preview answers.
+      - name: Run the e2e suite against the preview
+        working-directory: apps/os-next
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PREVIEW_NAME: ${{ github.head_ref }}
+          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
+          E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: doppler run -- pnpm preview e2e
+
+  # The suite alone, against the live preview: dispatch with action=e2e.
+  e2e:
+    name: Preview OS-Next / e2e
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '' && inputs.action == 'e2e'
+    runs-on:
+      size: 4x16
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 30
+    steps:
+      - name: Checkout the PR head
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config preview --project project-worker
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Run the e2e suite against the preview
+        working-directory: apps/os-next
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PREVIEW_NAME: ${{ github.head_ref }}
+          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
+          E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: doppler run -- pnpm preview e2e
+
+  cleanup:
+    name: Preview OS-Next / delete
+    if: >-
+      (github.event_name == 'pull_request' && github.event.action == 'closed') ||
+      (github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '' && inputs.action == 'delete')
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 15
+    steps:
+      # The PR's own head, not the default branch: the teardown reads the config that created the
+      # preview (cloudflare-os does the same).
+      - name: Checkout the PR head
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config preview --project project-worker
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Delete the preview and its D1
+        working-directory: apps/os-next
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PREVIEW_NAME: ${{ github.head_ref }}
+          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
+        run: doppler run -- pnpm preview delete
+
+  sweep:
+    name: Preview OS-Next / sweep
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.action == 'sweep')
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config preview --project project-worker
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Sweep previews whose PR is closed, or older than 7 days
+        working-directory: apps/os-next
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: doppler run -- pnpm preview sweep

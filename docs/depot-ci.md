@@ -382,6 +382,15 @@ run named "autofix.ci"`, the real signal is that autofix found a diff to apply
 the Depot run with a GitHub Actions run. Look at the `git diff` output in the
 job logs, apply the same fix locally (usually `pnpm format`), and push.
 
+## os-next skips the apps/os preview
+
+A PR whose whole diff against the merge-base is `apps/os-next/**` or
+`.depot/workflows/preview-os-next.yml` plans `action=skip`: no slot is leased,
+the six-app fleet is not deployed, the Playwright shards do not run, and the
+finalizer never publishes `preview-settled`. os-next has its own per-PR Worker
+Previews workflow, `.depot/workflows/preview-os-next.yml` (cribbed from
+cloudflare-os). See [Preview change selection](preview-change-selection.md).
+
 ## Preview overlap experiment
 
 PR #2659 starts preparation, app tests and six Playwright shards together. Test

@@ -1,5 +1,5 @@
 // THE vitest config — the ONE way to run everything (`pnpm test`); pick a lane with `--project`.
-// Four PROJECTS (vitest's own word), each a genuinely different execution context:
+// Five PROJECTS (vitest's own word), each a genuinely different execution context:
 //   • unit    — in-process node, the fast lane (src/**/*.test.ts)
 //   • workers — INSIDE workerd next to the worker via @cloudflare/vitest-plugin, for the hibernation
 //               cases that genuinely need cloudflare:test controls (__workers-tests__/**). The worker
@@ -8,8 +8,9 @@
 //   • e2e     — ONE real worker booted once by e2e/support/global-setup.ts (local workerd by default;
 //               the DEPLOYED worker with `WORKER_BASE_URL=https://os.iterate2.com`,
 //               the proof that counts), every file a capnweb client at /api exactly like a production
-//               client, files in parallel, tests within a file sequential (the per-test session-dispose
-//               in support/setup.ts must not race a sibling)
+//               client, ALL files in parallel — every test mints its own project, and what a test measures
+//               it measures on its own contexts; tests within a file sequential (the per-test
+//               session-dispose in support/setup.ts must not race a sibling)
 //   • bench   — vitest's benchmark runner (tinybench) over the same client + worker (`pnpm bench`),
 //               files one at a time so scenarios never share the wire; `BENCH_OUT=<file.json>` writes
 //               the raw samples
@@ -45,7 +46,7 @@ export default defineConfig({
         plugins: [sqlAsText],
         test: {
           name: "unit",
-          include: ["src/**/*.test.ts", "examples/**/*.test.ts"],
+          include: ["src/**/*.test.ts", "examples/**/*.test.ts", "scripts/*.test.ts"],
           // The edge and DO modules reach the control plane, whose OAuth provider imports
           // cloudflare:workers; inlined so the unit tests' `vi.mock("cloudflare:workers")` covers it.
           server: { deps: { inline: ["@cloudflare/workers-oauth-provider"] } },
@@ -82,6 +83,11 @@ export default defineConfig({
           // One retry in CI only (docs/testing.md: retries are measured, never silent — a local flake
           // should be SEEN, not absorbed). Each test is self-contained (fresh ctx).
           retry: process.env.CI ? 1 : 0,
+          // FILES IN PARALLEL: every test mints its own project (client.ts `freshCtx` carries the run's
+          // id and the worker process's slot), so nothing two files touch is shared but the worker
+          // itself — which is the thing under test. The cap is an I/O one: these are round trips to a
+          // remote worker, not CPU, so the runner's cpus-1 default is the wrong shape on a CI box.
+          maxWorkers: process.env.CI ? 8 : undefined,
           fileParallelism: true,
           sequence: { concurrent: false },
           onUnhandledError,

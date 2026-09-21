@@ -637,19 +637,25 @@ export interface OsNextEnv {
   resources: { directoryDbId: string; oauthKvId: string; itxKvId: string };
 }
 export const osNextEnvs: Record<string, OsNextEnv> = {
-  // Isolated API preview; workers.dev only (no project-host routing).
-  preview_2: {
+  // THE PARENT OF EVERY PER-PR PREVIEW (apps/os-next/scripts/preview.ts, the cloudflare-os recipe): a
+  // Worker Preview is a branch of an existing worker, and this is that worker on the dev/preview
+  // account — `pr<n>-<branch>-os-next-preview.<subdomain>.workers.dev`. Each preview has resources of
+  // its own; nothing reads this worker's data, and nobody browses to it. workers.dev only.
+  preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
-    dopplerConfig: "preview_2",
-    workerName: "os-next-preview-2",
-    baseUrl: "https://os-next-preview-2.iterate-dev-preview.workers.dev",
-    mcpBaseUrl: "https://os-next-preview-2.iterate-dev-preview.workers.dev/mcp",
-    artifactsNamespace: "os-next-preview-2-repos",
-    resourceNamePrefix: "os-next-preview-2",
+    dopplerConfig: "preview",
+    workerName: "os-next-preview",
+    baseUrl: "https://os-next-preview.iterate-dev-preview.workers.dev",
+    mcpBaseUrl: "https://os-next-preview.iterate-dev-preview.workers.dev/mcp",
+    // Projects as paths on the one origin (`/projects/<slug>/<app>/…`): workers.dev has no wildcard
+    // subdomains, and every preview inherits this.
+    ingressRouting: { type: "paths" },
+    artifactsNamespace: "os-next-preview-repos",
+    resourceNamePrefix: "os-next-preview",
     resources: {
-      directoryDbId: "8b094736-c4cc-4b2b-bb62-8c50a0b345e9",
-      oauthKvId: "5faf2d083c04499fbeeedceb2ed9dde7",
-      itxKvId: "40904582e6fe4efdb580138ff34ba913",
+      directoryDbId: "3c78dee6-80e5-49ed-a157-003278405ad0",
+      oauthKvId: "f032a76654144557b48de0f86563a1db",
+      itxKvId: "82406b38cf9949048097dde599a0087c",
     },
   },
   prd: {
@@ -684,6 +690,14 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
  *  fat first-party TanStack Start app (README there), an ordinary OAuth client of the headless
  *  platform at os.iterate2.com, on the one custom domain among the apps. */
 export const dashEnvs = {
+  // THE PARENT of dash's per-PR Worker Previews (apps/os-next/scripts/preview.ts): each preview is a
+  // branch of this worker, bound to the same PR's os-next preview as its issuer. Nothing reads its data.
+  preview: {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: "preview",
+    workerName: "dash-preview",
+    baseUrl: "https://dash-preview.iterate-dev-preview.workers.dev",
+  },
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
@@ -694,6 +708,14 @@ export const dashEnvs = {
 
 /** apps/agents — the agents page (README there); the notes app's shape: its own workers.dev origin. */
 export const agentsEnvs = {
+  // THE PARENT of agents's per-PR Worker Previews (apps/os-next/scripts/preview.ts): each preview is a
+  // branch of this worker, bound to the same PR's os-next preview as its issuer. Nothing reads its data.
+  preview: {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: "preview",
+    workerName: "agents-preview",
+    baseUrl: "https://agents-preview.iterate-dev-preview.workers.dev",
+  },
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
@@ -703,6 +725,14 @@ export const agentsEnvs = {
 };
 
 export const notesEnvs = {
+  // THE PARENT of notes's per-PR Worker Previews (apps/os-next/scripts/preview.ts): each preview is a
+  // branch of this worker, bound to the same PR's os-next preview as its issuer. Nothing reads its data.
+  preview: {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: "preview",
+    workerName: "notes-preview",
+    baseUrl: "https://notes-preview.iterate-dev-preview.workers.dev",
+  },
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
@@ -714,6 +744,14 @@ export const notesEnvs = {
 };
 
 export const voiceEnvs = {
+  // THE PARENT of voice's per-PR Worker Previews (apps/os-next/scripts/preview.ts): each preview is a
+  // branch of this worker, bound to the same PR's os-next preview as its issuer. Nothing reads its data.
+  preview: {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: "preview",
+    workerName: "voice-preview",
+    baseUrl: "https://voice-preview.iterate-dev-preview.workers.dev",
+  },
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",

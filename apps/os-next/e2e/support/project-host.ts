@@ -8,7 +8,7 @@ import { Agent, buildConnector, fetch as undiciFetch, WebSocket as UndiciWebSock
 import { test } from "vitest";
 import { projectUrlOf } from "iterate/next/project-ingress";
 import type { IngressRouting } from "../../src/app-config.ts";
-import { adminCredentials, session, workerUrl } from "./client.ts";
+import { adminCredentials, runId, session, workerSlot, workerUrl } from "./client.ts";
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);
 const worker = (): URL => new URL(workerUrl("/"));
@@ -25,6 +25,13 @@ export const deployedOnly = test.skipIf(projectHostsAreLocal());
  *  the fake proxy is called back over the WebSocket; the real binding's rows run in every lane, the
  *  local worker binding Artifacts too. */
 export const localOnly = test.skipIf(!projectHostsAreLocal());
+
+/** `deployedOnly` AND `subdomainsOnly`: a row only a real deployment can prove, on a host only a
+ *  deployment routing by subdomain owns. A per-PR preview routes by paths on its workers.dev origin,
+ *  so such a row has nowhere to dial there and skips. */
+export const deployedSubdomainsOnly = test.skipIf(
+  projectHostsAreLocal() || ingressRouting()?.type !== "subdomains",
+);
 
 /** How the worker under test reaches projects (src/app-config.ts `urls.ingressRouting`): subdomains
  *  under `localhost` for the local worker (worker-config.ts), the deployed worker's routing
@@ -112,8 +119,13 @@ export async function registerProject(slug: string, as?: { email: string }): Pro
 /** A fresh project slug — a DNS label, the one the project's hosts carry (`freshCtx` names carry
  *  `_`, which no hostname may). `registerProject(slug)` turns it into a project and hands back the id. */
 let counter = 0;
-export const freshDnsSafeProjectSlug = (prefix: string): string =>
-  `prj-${prefix}-${Date.now().toString(36)}-${counter++}`;
+/** `prj-<prefix>-<run>-<worker>-<n>`: the run's id and the worker process's slot (client.ts) keep two
+ *  processes' restarted counters, and two runs, apart — a DNS label, lowercase, at most 63 chars. */
+export const freshDnsSafeProjectSlug = (prefix: string): string => {
+  const slug = `prj-${prefix}-${runId()}-${workerSlot()}-${counter++}`.toLowerCase();
+  if (slug.length > 63) throw new Error(`project slug ${slug} exceeds a DNS label (63)`);
+  return slug;
+};
 
 /** `url` — a project address from `projectUrl`, a signed file URL — a GET, or `init`'s method and
  *  body, through `projectHostDispatcher`. */

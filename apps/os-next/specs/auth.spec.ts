@@ -147,10 +147,23 @@ test("first Claude consent creates the organization and project on the consent p
     expect(await projectField.inputValue()).toBe("first-consent-studio");
     await projectField.fill(`Consent Studio ${project}`);
     expect(await projectField.inputValue()).toBe(`consent-studio-${project}`);
-    // where the project will live — only where the deployment serves project hosts (a local worker
-    // does; a deployed target says so with PROJECT_INGRESS_ROUTING, as the e2e lane does)
-    if (isLocal(origin) || process.env.PROJECT_INGRESS_ROUTING)
-      await page.getByText(`Your project will be hosted at consent-studio-${project}.`).waitFor();
+    // where the project will live, in the deployment's own routing (public/authorize.js): a subdomain
+    // under the hostname, or a path on this origin — a local worker routes by subdomain under
+    // localhost; a deployed target says so with PROJECT_INGRESS_ROUTING, as the e2e lane does
+    const routing = isLocal(origin)
+      ? { type: "subdomains", hostname: "localhost" }
+      : (JSON.parse(process.env.PROJECT_INGRESS_ROUTING || "null") as {
+          type: string;
+          hostname?: string;
+        } | null);
+    if (routing?.type === "subdomains")
+      await page
+        .getByText(`Your project will be hosted at consent-studio-${project}.${routing.hostname}`)
+        .waitFor();
+    else if (routing?.type === "paths")
+      await page
+        .getByText(`Your project will be hosted at ${origin}/projects/consent-studio-${project}/`)
+        .waitFor();
     // A refused first try — a slug another organization holds, refused after the organization is
     // made — answers with that organization: the retry offers it, chosen, rather than naming a
     // second one (the inventory at the end counts one).

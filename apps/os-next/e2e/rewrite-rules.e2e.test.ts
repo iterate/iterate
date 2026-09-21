@@ -1,4 +1,3 @@
-// rewrite-rules.e2e.test.ts — the REWRITE-RULE TABLE end to end (context/itx-expression-rewriting.ts
 // through the real DO). `itx.builtins.<root>` is the physical scope and the fixed point of rewriting;
 // every short name `itx.<root>` is the implicit platform row `itx.<root> ⇒ itx.builtins.<root>`,
 // consulted only after the context's own rows. (The resolver's own rows — the depth budget, longest

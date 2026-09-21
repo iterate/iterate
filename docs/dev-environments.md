@@ -511,6 +511,13 @@ Diff selection may reuse an unchanged app's exact recorded Worker deployment,
 but never its test result: every triggered PR head reruns every recorded app's
 e2e suite, and a run with no runnable deployment fails instead of reporting a
 green `deploy + e2e` check.
+
+A PR confined to `apps/os-next/**` or `.depot/workflows/preview-os-next.yml` is
+not preview-relevant: the planner returns `skip`, so no slot is leased, the
+fleet is never deployed and no e2e shards run. os-next gets its own per-PR
+Worker Previews workflow instead, `.depot/workflows/preview-os-next.yml`,
+modeled on cloudflare-os.
+
 Closing or merging the PR runs `pnpm preview cleanup`, which destroys the
 PR's apps (including OS Durable Objects, auth D1, project-directory KV and
 Artifacts repositories) and releases the slot — after verifying the PR still

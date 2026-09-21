@@ -15,7 +15,8 @@
  *   generate-route-tree        regenerate src/routeTree.gen.ts outside `vite dev`/`vite build`; `--check`
  *                              fails (and restores the file) when the checked-in tree is stale
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Generator, getConfig } from "@tanstack/router-generator";
@@ -245,6 +246,69 @@ async function generateRouteTree(app: StartApp, options: { check?: boolean }) {
   } else {
     console.log("routeTree.gen.ts regenerated");
   }
+}
+
+/** `vite build` for one env: the cloudflare plugin snapshots that env's flattened wrangler config
+ *  into dist/server/wrangler.json, which is what a preview deploy of the app starts from. */
+export function buildStartApp(app: StartApp, env: string): Promise<void> {
+  const root = fileURLToPath(app.root);
+  rmSync(path.join(root, "dist"), { recursive: true, force: true });
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn("pnpm", ["exec", "vite", "build"], {
+      cwd: root,
+      env: { ...process.env, CLOUDFLARE_ENV: env },
+      stdio: "inherit",
+    });
+    child.once("error", reject);
+    child.once("close", (code) =>
+      code === 0 ? resolve() : reject(new Error(`apps/${app.name}: vite build exited ${code}`)),
+    );
+  });
+}
+
+/** The config `wrangler preview` reads for one per-PR preview of a start app, as a pure function
+ *  of the built config (dist/server/wrangler.json, the `preview` env flattened) — the shape of
+ *  cloudflare-os's `buildPreviewConfigs`. An app on top of the platform is an OAuth client and
+ *  nothing else: no secrets, no data of its own, one Durable Object class for the browser session,
+ *  and its vars with the issuer swapped for the same PR's os-next preview. The top level is
+ *  the parent worker (what `wrangler preview` branches from; deployed from this same config the
+ *  first time it is missing) with the class as a legacy `migrations` entry, because the pkg.pr.new
+ *  wrangler build that provisions previews predates `exports`; the `previews` block is the one
+ *  preview's own — assets are not a `previews` key and are inherited from the top level. */
+export function startAppPreviewConfig(
+  built: Record<string, any>,
+  input: { issuer: string },
+): Record<string, unknown> {
+  const {
+    exports,
+    configPath,
+    userConfigPath,
+    topLevelName,
+    definedEnvironments,
+    targetEnvironment,
+    ...config
+  } = built;
+  return {
+    ...config,
+    preview_urls: true,
+    migrations: [{ tag: "v1", new_sqlite_classes: Object.keys(exports) }],
+    previews: {
+      observability: config.observability,
+      durable_objects: config.durable_objects,
+      // Every var the built worker carries (ITERATE_DENY_ZONES among them), the issuer swapped for this
+      // PR's os-next preview.
+      vars: { ...config.vars, ITERATE_ORIGIN: input.issuer },
+    },
+  };
+}
+
+/** Write dist/server/wrangler.preview.json from the build and return its path. */
+export function writeStartAppPreviewConfig(app: StartApp, input: { issuer: string }): string {
+  const dir = path.join(fileURLToPath(app.root), "dist/server");
+  const built = JSON.parse(readFileSync(path.join(dir, "wrangler.json"), "utf8"));
+  const file = path.join(dir, "wrangler.preview.json");
+  writeFileSync(file, `${JSON.stringify(startAppPreviewConfig(built, input), null, 2)}\n`);
+  return file;
 }
 
 /**
