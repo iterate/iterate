@@ -323,7 +323,7 @@ export default class FilterCamera extends Component<Props, State> {
     this.forceUpdate();
     const urls: string[] = [];
     try {
-      if (typeof DecompressionStream === "undefined") {
+      if (!globalThis.DecompressionStream) {
         throw new Error("DecompressionStream unavailable (needs iOS 16.4+)");
       }
       const [loaderJs, wasmBinary, model] = await Promise.all([

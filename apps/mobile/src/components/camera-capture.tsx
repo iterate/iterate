@@ -112,7 +112,7 @@ export function CameraCaptureModal(props: {
       const now = Date.now();
       const abort = new AbortController();
       captureAbort.current = abort;
-      if (filterId !== null) {
+      if (filterId) {
         const photo = await new Promise<{ base64: string; width: number; height: number }>(
           (resolve, reject) => {
             pendingFilterPhoto.current = { resolve, reject };
@@ -159,7 +159,7 @@ export function CameraCaptureModal(props: {
       const abort = new AbortController();
       captureAbort.current = abort;
       setRecording({ startedAt: filterId ? null : Date.now(), stopping: false });
-      if (filterId !== null) {
+      if (filterId) {
         const video = await new Promise<FilterVideo>((resolve, reject) => {
           pendingFilterVideo.current = { resolve, reject };
           sendFilterCommand("start-recording");
@@ -200,7 +200,7 @@ export function CameraCaptureModal(props: {
   const stopRecording = () => {
     if (saving) return;
     setRecording((current) => current && { ...current, stopping: true });
-    if (filterId !== null) {
+    if (filterId) {
       sendFilterCommand("stop-recording");
     } else {
       ref.current!.stopRecording();
@@ -215,7 +215,7 @@ export function CameraCaptureModal(props: {
     pendingFilterPhoto.current?.reject(new Error("Photo capture canceled"));
     pendingFilterPhoto.current = null;
     if (record.isPending) {
-      if (filterId !== null) {
+      if (filterId) {
         // Settle the parked promise so the mutation ends; cancellation above
         // stops the clip from attaching.
         pendingFilterVideo.current?.resolve({
@@ -253,7 +253,7 @@ export function CameraCaptureModal(props: {
       visible={props.visible}
     >
       <View style={styles.screen}>
-        {filterId === null ? (
+        {!filterId ? (
           <CameraView facing={facing} mode="video" ref={ref} style={StyleSheet.absoluteFill} />
         ) : (
           <View style={StyleSheet.absoluteFill}>
