@@ -49,8 +49,8 @@ test("KILLED MID-CALL, THE REQUEST CONTINUES: the context dies with the model ca
   const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(PROJECT);
   const support = itx.cd("/agents/support");
   await support.provide("itx.ai", model);
+  await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.create({ systemPrompt: "Be terse." });
   await support.append({
     type: "events.iterate.com/agent/configured",
     payload: { config: { llm: { model: "@cf/meta/llama-4-scout-17b-16e-instruct" } } },

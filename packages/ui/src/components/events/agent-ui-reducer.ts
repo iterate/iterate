@@ -756,7 +756,6 @@ function emitItem(state: AgentUiState, items: AgentUiItem[], item: AgentUiItem):
 
 const AGENT_LLM_REQUEST_REQUESTED = "events.iterate.com/agent/llm-request-requested";
 const AGENT_LLM_REQUEST_SETTLED = "events.iterate.com/agent/llm-request-settled";
-const AGENT_CONTEXT_ADDED = "events.iterate.com/agents/context-added";
 const AGENT_TOKEN_USAGE_REPORTED = "events.iterate.com/agent/token-usage-reported";
 const AGENT_LLM_RESPONSE_CHUNKS = "events.iterate.com/agent/llm-response-chunks";
 const SCRIPT_EXECUTION_REQUESTED = "events.iterate.com/capability-host/script-run-requested";
@@ -801,7 +800,9 @@ function reduceAgentUiEvent(
     // bubble; assistant context replaces the streamed LLM text; developer
     // context from another human-facing integration renders with its source.
     // Script-produced developer context is model input, not another bubble.
-    case AGENT_CONTEXT_ADDED: {
+    // ONE reducer renders two products' feeds: apps/os spells these two `agents/…`, os-next `agent/…`.
+    case "events.iterate.com/agents/context-added":
+    case "events.iterate.com/agent/context-added": {
       const role = readString(event, "role");
       const text = readString(event, "content");
       if (text == null) return state;
@@ -896,7 +897,8 @@ function reduceAgentUiEvent(
       return contextState;
     }
 
-    case "events.iterate.com/agents/web-message-sent": {
+    case "events.iterate.com/agents/web-message-sent":
+    case "events.iterate.com/agent/web-message-sent": {
       const text = readString(event, "message");
       if (text == null) return state;
       // An llmRequestOffset marks the message as EXTRACTED from that request's

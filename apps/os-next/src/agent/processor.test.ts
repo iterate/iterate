@@ -1,32 +1,38 @@
 // src/agent/processor.test.ts — the AgentProcessor's executable spec: the reduce as declarative
-// `{ events → view }` rows on the shared harness (stream/test-support.ts `reduceProcessor`), and the
-// assistant-output parser's rows. The effects — the model call, the script run, the breakers as
-// appends — are proven end to end on the worker (e2e/agents.e2e.test.ts, a fake `itx.ai` lent by rule).
+// `{ events → state }` rows on the shared harness (stream/test-support.ts `reduceProcessor`), and the
+// assistant-output parser's rows. The effects — the birth saga, the model call, the script run, the
+// breakers as appends — are proven end to end on the worker (e2e/agents.e2e.test.ts, a fake `itx.ai`
+// lent by rule).
 
 import { describe, expect, test } from "vitest";
 import { reduceProcessor } from "../stream/test-support.ts";
-import { type AgentView } from "./contract.ts";
+import { type AgentState } from "./contract.ts";
 import { AgentProcessor, buildChatMessages, renderScriptSettlement } from "./processor.ts";
 import { parseCodemodeResponse } from "./codemode-format.ts";
 
+/** The reduce never reaches the context; the saga and the model call are the e2e's. */
 const processor = () =>
   new AgentProcessor({
-    stream: () => Promise.reject(new Error("the reduce never calls the model")),
-    readFile: () => Promise.reject(new Error("the reduce never reads a file")),
+    withItx: () => Promise.reject(new Error("the reduce reaches no itx")),
+    env: {} as never, // the reduce never calls the model, so no binding and no config are read
     now: () => 0,
     sleep: () => Promise.resolve(),
   });
 
-const born = { type: "events.iterate.com/agent/created", payload: { path: "/agents/support" } };
+const requested = { type: "events.iterate.com/agent/create-requested", payload: {} };
+const created = { type: "events.iterate.com/agent/created", payload: { path: "/agents/support" } };
+const failed = { type: "events.iterate.com/agent/create-failed", payload: { error: "boom" } };
+/** Born: the request, then the certificate (offsets 1 and 2 of every row below). */
+const born = [requested, created];
 const system = {
-  type: "events.iterate.com/agents/context-added",
+  type: "events.iterate.com/agent/context-added",
   payload: { role: "system", content: "Be terse." },
 };
 const user = (content: string) => ({
-  type: "events.iterate.com/agents/context-added",
+  type: "events.iterate.com/agent/context-added",
   payload: { role: "user", content, actor: { type: "user" } },
 });
-const requested = (triggerOffset: number) => ({
+const llmRequested = (triggerOffset: number) => ({
   type: "events.iterate.com/agent/llm-request-requested",
   payload: { model: "m", expiresAt: 999_999, triggerOffset },
 });
@@ -35,11 +41,11 @@ const settled = (requestOffset: number, result: unknown) => ({
   payload: { requestOffset, result },
 });
 const assistant = (content: string, llmRequestOffset: number) => ({
-  type: "events.iterate.com/agents/context-added",
+  type: "events.iterate.com/agent/context-added",
   payload: { role: "assistant", content, llmRequestOffset },
 });
 const scriptResult = (requestOffset: number) => ({
-  type: "events.iterate.com/agents/context-added",
+  type: "events.iterate.com/agent/context-added",
   payload: {
     role: "developer",
     content: "Your script returned: 1",
@@ -51,24 +57,50 @@ describe("AgentProcessor — the reduce", () => {
   const rows: {
     name: string;
     events: { type: string; payload?: unknown }[];
-    view: Partial<AgentView>;
+    state: Partial<AgentState>;
   }[] = [
+    { name: "the empty state", events: [], state: { creation: null, contextItems: [] } },
     {
-      name: "born with its prompt: the path is set, the system item is in the context, nothing is triggered",
-      events: [born, system],
-      view: {
-        path: "/agents/support",
-        contextItems: [{ offset: 2, role: "system", content: "Be terse." }],
+      name: "a request opens the creation, at its offset",
+      events: [requested],
+      state: { creation: { status: "requested", offset: 1 } },
+    },
+    {
+      name: "a failure closes the attempt at its offset (the error is on that event, not in state)",
+      events: [requested, failed],
+      state: { creation: { status: "failed", offset: 2 } },
+    },
+    {
+      name: "a request after a failure is a new attempt",
+      events: [requested, failed, requested],
+      state: { creation: { status: "requested", offset: 3 } },
+    },
+    {
+      name: "born once: a request after the certificate is a harmless fact",
+      events: [...born, requested],
+      state: { creation: { status: "created", offset: 2 } },
+    },
+    {
+      name: "a failure after the certificate is a harmless fact too: the entity stays created",
+      events: [requested, created, failed],
+      state: { creation: { status: "created", offset: 2 } },
+    },
+    {
+      name: "born with its prompt: the creation is complete, the system item is in the context, nothing is triggered",
+      events: [...born, system],
+      state: {
+        creation: { status: "created", offset: 2 },
+        contextItems: [{ offset: 3, role: "system", content: "Be terse." }],
         pendingLlmRequestTrigger: null,
       },
     },
     {
       name: "a person's words raise an external trigger; the request records against it and clears it",
-      events: [born, system, user("hi"), requested(3)],
-      view: {
+      events: [...born, system, user("hi"), llmRequested(4)],
+      state: {
         pendingLlmRequestTrigger: null,
         openRequest: {
-          requestedAtOffset: 4,
+          requestedAtOffset: 5,
           expiresAt: 999_999,
           model: "m",
           triggerSource: "external",
@@ -78,10 +110,10 @@ describe("AgentProcessor — the reduce", () => {
     },
     {
       name: "a late intent — no trigger pending — is a harmless fact; so is one while a request is open",
-      events: [born, system, user("hi"), requested(3), requested(3)],
-      view: {
+      events: [...born, system, user("hi"), llmRequested(4), llmRequested(4)],
+      state: {
         openRequest: {
-          requestedAtOffset: 4,
+          requestedAtOffset: 5,
           expiresAt: 999_999,
           model: "m",
           triggerSource: "external",
@@ -91,62 +123,62 @@ describe("AgentProcessor — the reduce", () => {
     {
       name: "success settles the request and lands the assistant's words, which trigger nothing",
       events: [
-        born,
+        ...born,
         system,
         user("hi"),
-        requested(3),
-        settled(4, { status: "succeeded", text: "ok" }),
-        assistant("ok", 4),
+        llmRequested(4),
+        settled(5, { status: "succeeded", text: "ok" }),
+        assistant("ok", 5),
       ],
-      view: {
+      state: {
         openRequest: null,
         pendingLlmRequestTrigger: null,
         consecutiveLlmFailures: 0,
         contextItems: [
-          { offset: 2, role: "system", content: "Be terse." },
-          { offset: 3, role: "user", content: "hi", actor: { type: "user" } },
-          { offset: 6, role: "assistant", content: "ok", llmRequestOffset: 4 },
+          { offset: 3, role: "system", content: "Be terse." },
+          { offset: 4, role: "user", content: "hi", actor: { type: "user" } },
+          { offset: 7, role: "assistant", content: "ok", llmRequestOffset: 5 },
         ],
       },
     },
     {
       name: "a failure counts and hands the trigger back with the request's source, for the retry",
       events: [
-        born,
+        ...born,
         system,
         user("hi"),
-        requested(3),
-        settled(4, { status: "failed", errorMessage: "boom" }),
+        llmRequested(4),
+        settled(5, { status: "failed", errorMessage: "boom" }),
       ],
-      view: {
+      state: {
         openRequest: null,
         consecutiveLlmFailures: 1,
-        pendingLlmRequestTrigger: { offset: 4, atMs: 5_000, source: "external" },
+        pendingLlmRequestTrigger: { offset: 5, atMs: 6_000, source: "external" },
       },
     },
     {
       name: "expiry drops the turn: no request, no trigger",
       events: [
-        born,
+        ...born,
         system,
         user("hi"),
-        requested(3),
-        settled(4, { status: "cancelled", reason: "expired" }),
+        llmRequested(4),
+        settled(5, { status: "cancelled", reason: "expired" }),
       ],
-      view: { openRequest: null, pendingLlmRequestTrigger: null, consecutiveLlmFailures: 0 },
+      state: { openRequest: null, pendingLlmRequestTrigger: null, consecutiveLlmFailures: 0 },
     },
     {
       name: "a settlement naming another request is ignored",
       events: [
-        born,
+        ...born,
         system,
         user("hi"),
-        requested(3),
+        llmRequested(4),
         settled(99, { status: "succeeded", text: "?" }),
       ],
-      view: {
+      state: {
         openRequest: {
-          requestedAtOffset: 4,
+          requestedAtOffset: 5,
           expiresAt: 999_999,
           model: "m",
           triggerSource: "external",
@@ -156,10 +188,10 @@ describe("AgentProcessor — the reduce", () => {
     {
       name: "a script is an obligation until settled; its result is agent-loop input that counts an autonomous turn",
       events: [
-        born,
+        ...born,
         system,
         user("hi"),
-        requested(3),
+        llmRequested(4),
         {
           type: "events.iterate.com/context/run-requested",
           payload: { code: "async (itx) => 1" },
@@ -167,18 +199,18 @@ describe("AgentProcessor — the reduce", () => {
         {
           type: "events.iterate.com/context/run-settled",
           payload: {
-            requestOffset: 5,
+            requestOffset: 6,
             settlement: { status: "succeeded", result: 1 },
           },
         },
-        settled(4, { status: "succeeded", text: "```ts\nasync (itx) => 1\n```" }),
-        scriptResult(5),
-        requested(8),
+        settled(5, { status: "succeeded", text: "```ts\nasync (itx) => 1\n```" }),
+        scriptResult(6),
+        llmRequested(9),
       ],
-      view: {
+      state: {
         pendingLlmRequestTrigger: null,
         openRequest: {
-          requestedAtOffset: 9,
+          requestedAtOffset: 10,
           expiresAt: 999_999,
           model: "m",
           triggerSource: "agent-loop",
@@ -189,44 +221,44 @@ describe("AgentProcessor — the reduce", () => {
     {
       name: "a pause drops the parked trigger — the retry that tripped the breaker cannot resume it",
       events: [
-        born,
+        ...born,
         system,
         user("hi"),
-        requested(3),
-        settled(4, { status: "failed", errorMessage: "boom" }),
+        llmRequested(4),
+        settled(5, { status: "failed", errorMessage: "boom" }),
         { type: "events.iterate.com/agent/paused", payload: { reason: "enough" } },
       ],
-      view: { paused: { reason: "enough", atOffset: 6 }, pendingLlmRequestTrigger: null },
+      state: { paused: { reason: "enough", atOffset: 7 }, pendingLlmRequestTrigger: null },
     },
     {
       name: "a person's next words reset the autonomous count; paused parks, resumed clears both counts",
       events: [
-        born,
+        ...born,
         system,
         scriptResult(1), // a script result as the trigger: agent-loop input
-        requested(3),
-        settled(4, { status: "failed", errorMessage: "boom" }),
+        llmRequested(4),
+        settled(5, { status: "failed", errorMessage: "boom" }),
         { type: "events.iterate.com/agent/paused", payload: { reason: "enough" } },
         user("again"),
         { type: "events.iterate.com/agent/resumed", payload: {} },
       ],
-      view: {
+      state: {
         paused: null,
         autonomousTurnCount: 0,
         consecutiveLlmFailures: 0,
-        pendingLlmRequestTrigger: { offset: 7, atMs: 7_000, source: "external" },
+        pendingLlmRequestTrigger: { offset: 8, atMs: 8_000, source: "external" },
       },
     },
     {
       name: "configured merges: a model change keeps every other knob",
       events: [
-        born,
+        ...born,
         {
           type: "events.iterate.com/agent/configured",
           payload: { config: { llm: { model: "@cf/x" }, maxAutonomousTurns: 2 } },
         },
       ],
-      view: {
+      state: {
         config: {
           llm: { model: "@cf/x" },
           maxAutonomousTurns: 2,
@@ -240,9 +272,9 @@ describe("AgentProcessor — the reduce", () => {
     {
       name: "words with dont-trigger-request are seen, never answered; a malformed item is skipped",
       events: [
-        born,
+        ...born,
         {
-          type: "events.iterate.com/agents/context-added",
+          type: "events.iterate.com/agent/context-added",
           payload: {
             role: "developer",
             content: "fyi",
@@ -250,18 +282,18 @@ describe("AgentProcessor — the reduce", () => {
           },
         },
         {
-          type: "events.iterate.com/agents/context-added",
+          type: "events.iterate.com/agent/context-added",
           payload: { role: "nope", content: "x" },
         },
       ],
-      view: {
-        contextItems: [{ offset: 2, role: "developer", content: "fyi" }],
+      state: {
+        contextItems: [{ offset: 3, role: "developer", content: "fyi" }],
         pendingLlmRequestTrigger: null,
       },
     },
   ];
-  for (const { name, events, view } of rows)
-    test(name, () => expect(reduceProcessor(processor(), events)).toMatchObject(view));
+  for (const { name, events, state } of rows)
+    test(name, () => expect(reduceProcessor(processor(), events)).toMatchObject(state));
 });
 
 describe("the conversation as the model reads it (buildChatMessages)", () => {

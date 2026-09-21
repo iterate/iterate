@@ -17,8 +17,8 @@ localOnly("website identity, pinned revisions, and explicit publication agree", 
   const artifacts = await FakeArtifacts.start();
   try {
     await root.cd("/repos/config").provide("itx.cfArtifacts", artifacts);
+    await root.repos.create("/repos/config"); // born through the collection; the handle addresses it
     const repo = root.repos.get("/repos/config");
-    await repo.create();
     const source = (joke: string) =>
       `import { WorkerEntrypoint } from 'cloudflare:workers'; export default class extends WorkerEntrypoint { fetch() { return new Response(${JSON.stringify(joke)}); } }`;
     const first = await repo.writeFile("worker.ts", source("Elephants fear the mouse."));

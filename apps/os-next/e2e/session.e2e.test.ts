@@ -10,6 +10,7 @@ import {
   freshCtx,
   publicSession,
   openItx,
+  processorNames,
   readAll,
   rejection,
   session,
@@ -160,6 +161,44 @@ test("revoking a grant closes its live public socket and held capability within 
     socket.close();
   }
 }, 75_000);
+
+test("projects.create({ project }) is a saga on /: the directory row, the `project` processor row, `project/create-requested` under the caller, then `project/created` from the processor — the facet's live state says so; the same slug again appends nothing new", async () => {
+  const slug = freshDnsSafeProjectSlug("create-saga");
+  const api = session().authenticate(adminCredentials());
+  // returns AT ONCE — the request is on the log, the certificate is the processor's to land
+  using itx = await api.projects.create({ project: slug });
+  const { projectId, projectSlug } = await itx.whoami();
+  expect(projectSlug).toBe(slug);
+  const projectFacts = async () =>
+    (await readAll(itx)).filter((e) => e.type.startsWith("events.iterate.com/project/"));
+  const created = await until("project/created on /", async () =>
+    (await projectFacts()).find((e) => e.type === "events.iterate.com/project/created"),
+  );
+  const [requested, ...rest] = await projectFacts();
+  expect([requested, ...rest].map((e) => e.type)).toEqual([
+    "events.iterate.com/project/create-requested",
+    "events.iterate.com/project/created",
+  ]);
+  expect(requested.payload).toEqual({ slug, orgId: expect.any(String) }); // the directory row's facts
+  expect(requested.source?.principal).toEqual({ actor: "admin" }); // the caller's, not the platform's
+  expect(created.payload).toEqual({}); // existence only
+  expect(await processorNames(itx)).toContain("project");
+  // the facet reduces its own certificate: the state the dash renders
+  expect(await itx.facets.get("project").liveSnapshot()).toMatchObject({
+    state: { creation: { status: "created", offset: created.offset } },
+  });
+  // the same slug again: the directory row is the same project, the processor row is already
+  // there (idempotent at the door), the request is keyed — nothing new lands on / (the wake record
+  // and the alarm trace are the platform's own, not the create's, so they are left out)
+  const rows = async () =>
+    (await readAll(itx))
+      .filter((e) => !/\/stream\/(woken|trace\/)/.test(e.type))
+      .map((e) => `${e.offset} ${e.type}`);
+  const before = await rows();
+  using again = await api.projects.create({ project: slug });
+  expect((await again.whoami()).projectId).toBe(projectId);
+  expect(await rows()).toEqual(before);
+});
 
 test("the built-in cd carries the OAuth principal to a sibling context", async () => {
   const slug = freshDnsSafeProjectSlug("cd-who");

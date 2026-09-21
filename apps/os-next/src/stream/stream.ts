@@ -68,17 +68,23 @@ const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
  *  `AlarmTrace`); pause-exempt, so a paused context's passes stay observable. */
 export const STREAM_ALARM_TRACE_EVENT = "events.iterate.com/stream/trace/alarm" as const;
 
-/** The waitForEvent selector: `type` is an exact event-type match (absent = any type); only events
- *  with offset strictly greater than `afterOffset` match (default = the head at call time — "the
- *  next occurrence"; history-inclusive waits pass an explicit afterOffset); `timeoutMs` defaults to
- *  30s, capped at 120s, and expiry rejects with codedError("WAIT_TIMEOUT", …). */
-export type WaitForEventFilter = { type?: string; afterOffset?: number; timeoutMs?: number };
+/** The waitForEvent selector: `type` is an exact event-type match, or ONE OF a list — a creation's
+ *  two terminals, `created` or `create-failed` (absent = any type); only events with offset strictly
+ *  greater than `afterOffset` match (default = the head at call time — "the next occurrence";
+ *  history-inclusive waits pass an explicit afterOffset); `timeoutMs` defaults to 30s, capped at
+ *  120s, and expiry rejects with codedError("WAIT_TIMEOUT", …). */
+export type WaitForEventFilter = {
+  type?: string | string[];
+  afterOffset?: number;
+  timeoutMs?: number;
+};
 
 /** One waiting waitForEvent caller. In-memory only — an eviction drops waiters, and that is FINE:
  *  the caller's own open RPC call keeps the DO awake for the wait's duration anyway, and a dropped
  *  waiter surfaces as the transport error the caller already handles. */
 type WaitForEventWaiter = {
-  type: string | undefined;
+  /** The types that resolve it; empty = any. */
+  types: string[];
   afterOffset: number;
   resolve: (event: StreamEvent) => void;
   reject: (error: Error) => void;
@@ -567,20 +573,20 @@ export class Stream {
    *  → spurious WAIT_TIMEOUT). Waiters are fed from `freshEvents` in append's tail, so EPHEMERAL
    *  events resolve waits too — but only while a waiter is registered, since they never hit the log. */
   waitForEvent(filter: WaitForEventFilter = {}): Promise<StreamEvent> {
-    const type = filter.type;
+    const types = filter.type ? [filter.type].flat() : [];
     const afterOffset = filter.afterOffset ?? this.highestAssignedOffset();
     const timeoutMs = Math.min(filter.timeoutMs ?? 30_000, 120_000);
     let cursor = afterOffset;
     for (;;) {
       const page = this.read(cursor, 500);
       for (const event of page.events)
-        if (!type || event.type === type) return Promise.resolve(event);
+        if (types.length === 0 || types.includes(event.type)) return Promise.resolve(event);
       if (page.atHead) break;
       cursor = page.scannedThroughOffset; // cut by `limit` or the byte budget: read on
     }
     return new Promise<StreamEvent>((resolve, reject) => {
       const waiter: WaitForEventWaiter = {
-        type,
+        types,
         afterOffset,
         resolve,
         reject,
@@ -590,7 +596,7 @@ export class Stream {
           reject(
             codedError(
               "WAIT_TIMEOUT",
-              `waitForEvent: no ${!type ? "" : `"${type}" `}event after offset ${afterOffset} within ${timeoutMs}ms`,
+              `waitForEvent: no ${types.length === 0 ? "" : `${types.map((type) => `"${type}"`).join(" | ")} `}event after offset ${afterOffset} within ${timeoutMs}ms`,
             ),
           );
         }, timeoutMs),
@@ -608,7 +614,7 @@ export class Stream {
     for (const event of freshEvents) {
       if (this.#waitForEventWaiters.length === 0) return;
       for (const w of [...this.#waitForEventWaiters]) {
-        if (w.type && event.type !== w.type) continue;
+        if (w.types.length > 0 && !w.types.includes(event.type)) continue;
         if (event.offset <= w.afterOffset) continue;
         this.#waitForEventWaiters.splice(this.#waitForEventWaiters.indexOf(w), 1);
         clearTimeout(w.timer);
