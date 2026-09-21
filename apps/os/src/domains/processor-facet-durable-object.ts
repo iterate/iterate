@@ -545,6 +545,23 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       path,
       projectId,
       ai: this.env.AI,
+      prepareContext: async (input: {
+        workerMethod: string[];
+        agentPath: string;
+        messages: { role: string; content: string }[];
+      }) => {
+        const itx = itxForScope({
+          ctx: this.ctx,
+          projectId,
+          path,
+          streamContext: { kind: "scope", scopePath: path },
+          auth: trustedInternalAuthContext(),
+        });
+        return await itx.worker.invokeCapability({
+          path: input.workerMethod,
+          args: [{ agentPath: input.agentPath, messages: input.messages }],
+        });
+      },
       // intercepted/* model turns are served by the project's live AI interceptor
       // (itx.ai.intercept); the slot lives on the Project DO so both egress
       // paths share one handler, and this hop only happens for intercepted/* models.

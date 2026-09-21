@@ -40,7 +40,7 @@ export type AgentLlmCompletion = { text: string; usage?: AgentLlmUsage; rawRespo
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "7.1.0",
+  version: "7.2.0",
   description:
     "Maintains model-visible history, schedules debounced offset-identified LLM turns, runs " +
     "them through the Workers AI transport, and executes scripts through the capability host. " +
@@ -83,6 +83,17 @@ export const AgentProcessorContract = defineProcessorContract({
           })
           .default({ model: "openai/gpt-5.6-terra" })
           .meta({ description: "LLM transport selection." }),
+        contextPreparation: z
+          .object({
+            workerMethod: z.array(z.string().min(1)).min(1),
+            timeoutMs: z.number().int().positive().max(30_000),
+          })
+          .nullable()
+          .default(null)
+          .meta({
+            description:
+              "Optional project-worker method that returns { content, metadata } before the first request for new messages. Failures and timeouts are recorded; the turn proceeds without extra context.",
+          }),
         llmRequestDebounceMs: z
           .number()
           .int()
@@ -506,6 +517,13 @@ export const AgentProcessorContract = defineProcessorContract({
         config: z
           .object({
             llm: z.object({ model: z.string().min(1).optional() }).optional(),
+            contextPreparation: z
+              .object({
+                workerMethod: z.array(z.string().min(1)).min(1),
+                timeoutMs: z.number().int().positive().max(30_000),
+              })
+              .nullable()
+              .optional(),
             llmRequestDebounceMs: z.number().int().nonnegative().optional(),
             llmRequestExpiryMs: z.number().int().positive().optional(),
             llmRequestRetryPolicy: z
@@ -551,12 +569,24 @@ export const AgentProcessorContract = defineProcessorContract({
           }),
       }),
     },
+    "events.iterate.com/agent/context-prepared": {
+      description:
+        "Additional project context, committed atomically before its request; stale trigger results are ignored.",
+      payloadSchema: z.object({
+        triggerOffset: z.number().int().positive(),
+        status: z.enum(["succeeded", "failed", "timed-out"]),
+        content: z.string().max(24_000),
+        metadata: z.record(z.string(), z.unknown()),
+        durationMs: z.number().nonnegative(),
+      }),
+    },
     "events.iterate.com/agent/llm-request-requested": {
       description:
         "The recorded INTENT to run one LLM turn. Carries no id: the request's identity is the " +
         "offset this event gets on commit. The reduce ignores it when no trigger is pending or a " +
         "request already is open — a late debounced intent is a harmless stream fact.",
       payloadSchema: z.object({
+        triggerOffset: z.number().int().positive().optional(),
         model: z.string().meta({ description: "Model pinned for this turn." }),
         contractVersion: z
           .string()
@@ -753,6 +783,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agents/context-added",
     "events.iterate.com/agents/context-rewritten",
     "events.iterate.com/agents/web-message-sent",
+    "events.iterate.com/agent/context-prepared",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-settled",
     "events.iterate.com/agent/token-usage-reported",
@@ -778,6 +809,7 @@ export const AgentProcessorContract = defineProcessorContract({
     // platform components never emit it themselves today); listed so variant
     // hosts and tests can validate the full loop's appends in one place.
     "events.iterate.com/agents/web-message-sent",
+    "events.iterate.com/agent/context-prepared",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-settled",
     "events.iterate.com/agent/llm-response-chunks",

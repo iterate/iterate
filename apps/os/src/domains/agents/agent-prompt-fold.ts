@@ -225,6 +225,32 @@ function reduceAgentEventCore(input: {
         }),
       };
     }
+    case "events.iterate.com/agent/context-prepared": {
+      if (
+        state.pendingLlmRequestTrigger?.offset !== event.payload.triggerOffset ||
+        state.openRequest ||
+        state.paused
+      )
+        return state;
+      return {
+        ...state,
+        contextItems: projectContextAdded({
+          contextItems: state.contextItems,
+          lastLlmRequestOffset: state.lastLlmRequestOffset,
+          item: {
+            offset: event.offset,
+            payload: {
+              role: "developer",
+              key: "agent/prepared-context",
+              content:
+                event.payload.content ||
+                "No additional documentation was selected for this message.",
+              llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            },
+          },
+        }),
+      };
+    }
     case "events.iterate.com/agents/context-rewritten":
       return { ...state, contextItems: applyContextRewritten({ state, event }) };
     case "events.iterate.com/agent/llm-request-requested": {
@@ -233,9 +259,11 @@ function reduceAgentEventCore(input: {
       // to nothing, a harmless stream fact. THIS is what makes the delayed
       // append safe without any timer bookkeeping or cancellation.
       if (
-        state.pendingLlmRequestTrigger === null ||
-        state.openRequest !== null ||
-        state.paused !== null
+        !state.pendingLlmRequestTrigger ||
+        state.openRequest ||
+        state.paused ||
+        (event.payload.triggerOffset &&
+          event.payload.triggerOffset !== state.pendingLlmRequestTrigger.offset)
       ) {
         return state;
       }

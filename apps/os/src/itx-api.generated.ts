@@ -2742,6 +2742,7 @@ export type AgentProcessorState = {
   birthCertificate: { createdAtOffset: number } | null;
   config: {
     llm: { model: string };
+    contextPreparation: { workerMethod: string[]; timeoutMs: number } | null;
     llmRequestDebounceMs: number;
     llmRequestExpiryMs: number;
     llmRequestRetryPolicy: { maxAttempts: number; backoffBaseMs: number; backoffMaxMs: number };
@@ -2933,6 +2934,7 @@ export type AgentEventInput =
       {
         config: {
           llm?: { model?: string | undefined } | undefined;
+          contextPreparation?: { workerMethod: string[]; timeoutMs: number } | null | undefined;
           llmRequestDebounceMs?: number | undefined;
           llmRequestExpiryMs?: number | undefined;
           llmRequestRetryPolicy?:
@@ -2949,10 +2951,25 @@ export type AgentEventInput =
         };
       }
     >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/context-prepared",
+      {
+        triggerOffset: number;
+        status: "failed" | "succeeded" | "timed-out";
+        content: string;
+        metadata: Record<string, unknown>;
+        durationMs: number;
+      }
+    >
   | TypedConsumedEventInput<"events.iterate.com/agent/created", { [x: string]: unknown }>
   | TypedConsumedEventInput<
       "events.iterate.com/agent/llm-request-requested",
-      { model: string; contractVersion?: string | undefined; expiresAt: number }
+      {
+        triggerOffset?: number | undefined;
+        model: string;
+        contractVersion?: string | undefined;
+        expiresAt: number;
+      }
     >
   | TypedConsumedEventInput<
       "events.iterate.com/agent/llm-request-settled",

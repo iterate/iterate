@@ -66,6 +66,11 @@ export type AgentLlmTransport = (args: {
  *   production.
  */
 export type AgentProcessorDeps = {
+  prepareContext?: (input: {
+    workerMethod: string[];
+    agentPath: string;
+    messages: { role: string; content: string }[];
+  }) => Promise<unknown>;
   ai?: WorkersAiBinding;
   getAiGatewayOptions?: (eventOffset: number) => AiGatewayOptions;
   consultAiInterceptor?: (input: ProjectAiInterceptor.Input) => Promise<unknown>;

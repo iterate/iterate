@@ -13,11 +13,13 @@ import { appendUnlessLostIdempotencyRace, type AgentHost } from "./agent-host.ts
 import { AgentProcessorContract, type AgentProcessorState } from "./agent-processor-contract.ts";
 import { contextClearsWaitingFor } from "./agent-prompt-fold.ts";
 import type { AgentLlmRequest } from "./agent-llm-request.ts";
+import { prepareProjectContext } from "./agent-context-preparation.ts";
 import { resolveSlashCommand } from "./slash-commands.ts";
 
 export class AgentTurnLoop {
   readonly #host: AgentHost;
   readonly #llm: AgentLlmRequest;
+  #preparations = new Map<number, Promise<EmittedInput<AgentProcessorContract>>>();
 
   constructor(host: AgentHost, llm: AgentLlmRequest) {
     this.#host = host;
@@ -261,6 +263,7 @@ export class AgentTurnLoop {
         type: "events.iterate.com/agent/llm-request-requested",
         payload: {
           model: state.config.llm.model,
+          triggerOffset: trigger.offset,
           // The fold version that will (re)build this request's prompt. A
           // later fold replaying it is a reconstruction, not byte-exact —
           // the request inspector reads this stamp to say so.
@@ -273,7 +276,39 @@ export class AgentTurnLoop {
       };
       runInBackground(async () => {
         if (windowClosesInMs > 0) await this.#host.sleep(windowClosesInMs);
-        await appendUnlessLostIdempotencyRace(append, [intent]);
+        const preparation = state.config.contextPreparation;
+        if (!preparation) {
+          await appendUnlessLostIdempotencyRace(append, [intent]);
+          return;
+        }
+        const messages = state.contextItems.flatMap((item) =>
+          item.kind === "message" &&
+          item.offset > state.lastLlmRequestOffset &&
+          (item.payload.role === "user" || item.payload.actor?.type === "agent")
+            ? [{ role: item.payload.role, content: item.payload.content }]
+            : [],
+        );
+        if (messages.length === 0) {
+          await appendUnlessLostIdempotencyRace(append, [intent]);
+          return;
+        }
+        // Several at-head deliveries can schedule the same trigger. Share its
+        // read-only preparation; the atomic stream append decides the winner.
+        let pending = this.#preparations.get(trigger.offset);
+        if (!pending) {
+          pending = prepareProjectContext({
+            host: this.#host,
+            preparation,
+            messages,
+            triggerOffset: trigger.offset,
+          });
+          this.#preparations.set(trigger.offset, pending);
+        }
+        try {
+          await appendUnlessLostIdempotencyRace(append, [await pending, intent]);
+        } finally {
+          this.#preparations.delete(trigger.offset);
+        }
       });
       return;
     }
