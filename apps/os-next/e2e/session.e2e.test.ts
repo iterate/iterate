@@ -267,7 +267,10 @@ test("a personal access token — one OAuth grant the account mints — is the u
   expect(runPair[0].source).toEqual({ principal, grant: grant!.id });
   expect(runPair[1].payload).toEqual({
     requestOffset: runPair[0].offset,
-    settlement: { status: "succeeded", result: { projectId, path: connectionPath } },
+    settlement: {
+      status: "succeeded",
+      result: expect.objectContaining({ projectId, path: connectionPath }), // whoami: the slug and url ride along
+    },
   });
   expect(
     (await readAll(api.projects.get(projectId))).find(

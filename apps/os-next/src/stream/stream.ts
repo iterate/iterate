@@ -344,9 +344,7 @@ export class Stream {
       }
     }
     // 2. offsets — decided in memory, nothing written yet. THE PAUSE is checked per event AFTER the
-    //    idempotency lookup: the DO constructor replays its birth `config` row on every incarnation,
-    //    and checked before the dedupe a paused context could never be rebuilt after an eviction, so
-    //    never resumed. A FRESH event on a paused stream is refused, except the platform's own
+    //    idempotency lookup: replaying an already committed event is safe even while paused. A FRESH event on a paused stream is refused, except the platform's own
     //    records and the pause/resume pair itself (it must always accept its own resume).
     const paused = this.#coreReducedState.paused;
     const pauseExempt = [

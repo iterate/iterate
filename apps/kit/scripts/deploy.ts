@@ -2,9 +2,10 @@ import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { kitEnvs } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
-import { DEFAULT_DEVICE_ID, DEFAULT_FIRMWARE_VERSION } from "../src/firmware/catalog.ts";
+import { firmwareCatalog } from "../src/firmware/catalog.ts";
 import { writeWranglerConfig } from "./generate-wrangler-config.ts";
 import { syncFirmwareAssets } from "./sync-firmware-assets.ts";
+import { verifyFirmwareAssets } from "./verify-firmware-assets.ts";
 
 export default async function deploy(options: { env?: string } = {}) {
   await deployApp({
@@ -19,13 +20,15 @@ export default async function deploy(options: { env?: string } = {}) {
       writeWranglerConfig();
       await syncFirmwareAssets();
     },
-    smokes: (env) => [
-      {
-        url: `${env.baseUrl}/devices/${DEFAULT_DEVICE_ID}/firmware/${DEFAULT_FIRMWARE_VERSION}`,
-        ok: (status) => status === 200,
-        label: "installer",
-      },
-    ],
+    smokes: (env) =>
+      firmwareCatalog.flatMap((device) =>
+        device.releases.map((release) => ({
+          url: `${env.baseUrl}/devices/${device.id}/firmware/${release.version}`,
+          ok: (status: number) => status === 200,
+          label: `${device.id}/${release.version} installer`,
+        })),
+      ),
+    afterDeploy: (ctx) => verifyFirmwareAssets(ctx.env.baseUrl),
   });
 }
 

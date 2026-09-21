@@ -32,13 +32,14 @@ const reduceAll = (events: StreamEvent[], initial = CoreContract.initialState())
   events.reduce((s, e) => reduceCoreEvent({ event: e, state: s }) ?? s, initial);
 
 describe("the contract", () => {
-  test("slug `core` v11.0.0; the every-field-defaulted initial state", () => {
+  test("slug `core` v12.0.0; the every-field-defaulted initial state", () => {
     expect(CoreContract.slug).toBe("core");
-    expect(CoreContract.version).toBe("11.0.0");
+    expect(CoreContract.version).toBe("12.0.0");
     expect(CoreContract.initialState()).toEqual({
       paused: null,
       itxExpressionRewriteRules: {},
       subscriptions: {},
+      ingressTarget: null,
       schedules: {},
       scriptRuns: {},
       secrets: {},
@@ -875,17 +876,6 @@ describe("the secrets catalog — by name, the origin only, never a value", () =
 describe("the platform rows a null MASKS (kept) vs a plain delete", () => {
   const configured = (offset: number, match: string, target: string | null) =>
     at(offset, "events.iterate.com/itx/rewrite-rule-configured", { match, target });
-  test("`itx.worker ⇒ null` is KEPT as a mask — the resolver's default config worker is a platform row, so a project that says no must not fall back to the no-op silently", () => {
-    const s = reduceAll([configured(1, "itx.worker", "itx.kv"), configured(2, "itx.worker", null)]);
-    expect(s.itxExpressionRewriteRules["itx.worker"]).toEqual({
-      match: ["itx", "worker"],
-      target: null,
-    });
-    // a name with no platform row beneath is simply deleted
-    const gone = reduceAll([configured(1, "itx.mine", "itx.kv"), configured(2, "itx.mine", null)]);
-    expect(gone.itxExpressionRewriteRules).toEqual({});
-  });
-
   // RED (`test.fails` — a known defect, too costly to fix now): the platform-equivalent target
   // `itx.<x…> ⇒ itx.builtins.<x…>` is DELETED whatever lies above it, so under a broader mask
   // (`itx ⇒ null`, `itx.kv ⇒ null`) one prefix can never be re-opened — yet longest-match promises

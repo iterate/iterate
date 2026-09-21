@@ -716,14 +716,18 @@ test("expected offset: an input carrying `offset` lands exactly there or the who
   ).toBe(5);
 });
 
-test("a paused stream ADMITS the replay of an event already in the log (the DO constructor's birth `config` row rides an idempotency key on every incarnation) — checked before the dedupe, a paused context could never be rebuilt after an eviction, so never resumed", () => {
+test("a paused stream admits an idempotent replay of an explicitly configured subscription", () => {
   const storage = nodeSqliteDurableObjectStorage();
   const first = bareStream({ storage });
   first.appendBirthRecord();
   first.appendWakeRecord("request");
   const birthRow = {
     type: "events.iterate.com/stream/subscription-configured",
-    payload: { name: "config", target: "itx.cd('/').worker.processEventBatch", consumes: ["*"] },
+    payload: {
+      name: "config",
+      target: "itx.workers.get({ source: { 'cap.js': 'test-source' } }).processEventBatch",
+      consumes: ["*"],
+    },
     idempotencyKey: "config-subscription",
   };
   const [configured] = first.append(birthRow);

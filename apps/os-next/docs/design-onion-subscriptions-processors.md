@@ -508,12 +508,10 @@ export default class extends WorkerEntrypoint {
 
 ```ts
 const workerSource = { "cap.js": WORKER_SRC };
-using worker = await itx.provide("itx.worker", [
-  "itx",
-  "workers",
-  ["get", { source: workerSource }],
-]);
-using sub = await itx.subscribe({ name: "project-worker", target: "itx.worker.processEventBatch" });
+using sub = await itx.subscribe({
+  name: "project-worker",
+  target: ["itx", "workers", ["get", { source: workerSource }], "processEventBatch"],
+});
 (await itx.subscriptions.get("project-worker")).cursor; // { confirmedOffset, attempt, nextAttemptAtMs? }
 await itx.append({
   type: "events.iterate.com/stream/subscription-delivery-resumed",

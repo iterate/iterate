@@ -67,13 +67,16 @@ test("create() births the agent — the processor row, the certificate on / and 
   expect(systemItem.role).toBe("system");
   expect(systemItem.content).toMatch(/^You are an agent on the iterate platform/);
   expect(systemItem.content).toMatch(/<codemode/);
-  expect(systemItem.content).toMatch(/INSTRUCTIONS FROM THE OPERATOR[^\n]*\nBe terse\.$/);
-  // ONE processor row for the agent (the other row on any context is the project's config funnel).
+  expect(systemItem.content).toMatch(
+    /INSTRUCTIONS FROM THE OPERATOR[^\n]*\nBe terse\.\nCURRENT PROJECT:/,
+  );
+  expect(systemItem.content).toContain(JSON.stringify(await itx.cd("/agents/support").whoami()));
+  // One explicit processor row for the agent; no automatic config subscription.
   expect(
     own
       .filter((e) => e.type === "events.iterate.com/stream/subscription-configured")
       .map((e) => e.payload.name),
-  ).toEqual(["config", "agent"]);
+  ).toEqual(["agent"]);
   expect(short(await readAll(itx))).toEqual(["agent/created"]); // only the certificate crosses to /
   expect(await itx.agents.list()).toEqual([
     { path: "/agents/support", createdAt: expect.any(String) },

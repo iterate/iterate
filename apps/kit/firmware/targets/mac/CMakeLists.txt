@@ -1,7 +1,9 @@
 # The Mac as a board: the shared voice loop (components/voice), compiled against
-# the darwin platform's seams, with CoreAudio behind the codec seam and the
+# the darwin platform, with CoreAudio providing audio and the
 # keyboard as the button. `iterate-kit-mac --config <image>` is a device.
-add_executable(iterate-kit-mac main.c keyboard.c)
+add_executable(iterate-kit-mac
+  ../../devices/mac/mac_device.c
+  ../../devices/mac/keyboard.c)
 target_compile_features(iterate-kit-mac PRIVATE c_std_11)
 target_compile_options(iterate-kit-mac PRIVATE
   -Wall -Wextra -Werror -Wpedantic -Wconversion -Wshadow)

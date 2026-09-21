@@ -1,3 +1,4 @@
+import { z } from "zod";
 // src/repo/durable-object.ts — THE REPO: the facet a context at ANY path hosts under the name `repo`
 // (`itx.repos.get(path)`, library.ts; `/repos/<name>` is the convention, not a rule). A repo's files
 // live in git, in Cloudflare Artifacts, and THIS facet is the only thing that speaks git (git-wire.ts):
@@ -116,9 +117,9 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
   /** The tip's files under the tip they were read at — dropped by a commit through this facet,
    *  re-fetched when the remote's tip is not the memo's. */
   #snapshotMemo: { tip: string | null; files: Record<string, string> } | null = null;
-  async #fresh(): Promise<{ tip: string | null; files: Record<string, string> }> {
+  async #fresh(commitOid?: string): Promise<{ tip: string | null; files: Record<string, string> }> {
     const transport = await this.#transport("read");
-    const tip = (await transport.tipOf(REF)) || null;
+    const tip = commitOid || (await transport.tipOf(REF)) || null;
     if (this.#snapshotMemo && this.#snapshotMemo.tip === tip) return this.#snapshotMemo;
     const files: Record<string, string> = {};
     if (tip) {
@@ -188,9 +189,13 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     return (await this.#fresh()).tip;
   }
 
-  async readFile(path: string): Promise<string | null> {
+  async readFile(path: string, options?: { commitOid: string }): Promise<string | null> {
     await this.#created();
-    const { files } = await this.#fresh();
+    const revision = z
+      .object({ commitOid: z.string().regex(/^[a-f0-9]{40}$/) })
+      .optional()
+      .parse(options);
+    const { files } = await this.#fresh(revision?.commitOid);
     return Object.hasOwn(files, path) ? files[path]! : null;
   }
 

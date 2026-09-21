@@ -45,7 +45,10 @@ export type SubscriptionListEntry = {
   consumes?: string[];
   configuredAtOffset: number;
   afterOffset?: number;
-  hostedFacet?: { name: string; className: string; cacheKey?: string };
+  /** Set when this row hosts a facet (a processor). `restarts`: how many times the platform failed
+   *  the facet at its start and the context restarted it under a fresh loaded identity (a platform
+   *  defect the context works around; the count is the cheap way to ask "how often, here"). */
+  hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };
 };
 
 /** A loaded worker's source: its modules, literally, or an itx expression that produces them (then
@@ -88,7 +91,9 @@ export interface IterateContextApi {
      *  `runInBackground` attempt in flight), or `null` to release it. */
     processors: { claim(name: string, at: number | null): Promise<void> };
   };
-  whoami(): { projectId: string; path: string };
+  whoami():
+    | { projectId: string; path: string; projectSlug?: string; projectUrl?: string }
+    | Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   readEvents(
     afterOffset?: number,

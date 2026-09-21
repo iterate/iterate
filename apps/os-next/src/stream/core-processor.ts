@@ -6,6 +6,7 @@
 //   who this context is       stream/created { projectId, path }            → projectId · path · createdAt
 //   which incarnation runs    stream/woken { incarnation }                  → incarnation
 //   may appends land          stream/paused { reason } · stream/resumed     → paused        (one `if` in Stream.append)
+//   where the project apex goes project/ingress-configured { target|null } → ingressTarget
 //   how calls rewrite         itx/rewrite-rule-configured { match, target|null, ifTarget? } → itxExpressionRewriteRules (every invoke)
 //   who is sent each commit   stream/subscription-configured { name, target|null, ifConfiguredAtOffset? }|
 //                             -delivery-halted|-delivery-resumed            → subscriptions (the delivery loop)
@@ -35,6 +36,7 @@ import {
 import { jsonEqual } from "iterate/next/lib";
 import { z } from "zod";
 import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/next/stream/processor";
+import { normalizeIngressConfigured } from "../context/ingress.ts";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
 import { isRefreshKind, type SecretCatalogEntry } from "../secrets.ts";
 import {
@@ -234,9 +236,7 @@ function withHostedFacetMarkersFollowingRules(
 function matchShadowsAPlatformRow(match: ItxExpressionPrefix): boolean {
   if (match.length === 1) return true;
   const name = itxExpressionStepName(match[1]);
-  // `itx.worker` is a platform row too — the resolver's default config worker (itx-expression-
-  // rewriting.ts); a `null` there MASKS it, else the project falls back to the no-op silently.
-  return isBuiltInRoot(name) || name === "worker";
+  return isBuiltInRoot(name);
 }
 
 /** One subscription row (by name; a same-named configure REPLACES). */
@@ -279,6 +279,8 @@ export type CoreState = {
   itxExpressionRewriteRules: Record<string, ItxExpressionRewriteRule>;
   /** THE SUBSCRIPTIONS TABLE, by name. */
   subscriptions: Record<string, Subscription>;
+  /** Explicit fetch target for the project apex; null until configured. */
+  ingressTarget: ItxExpression | null;
   schedules: Record<string, ScheduledAppend>;
   /** THE OPEN SCRIPT RUNS, by the request's offset: a script requested (`context/run-requested`)
    *  and not yet settled — what is running right now, or what a restart left open (never re-run:
@@ -336,8 +338,8 @@ function parseSubscriptionName(name: string): string {
  *  state. The reduce below is the one list of the types it consumes. */
 export const CoreContract = {
   slug: "core",
-  // 11: the scriptRuns table (`context/run-requested` / `run-settled`).
-  version: "11.0.0",
+  // 11: the ingress target; 12: the scriptRuns table (`context/run-requested` / `run-settled`).
+  version: "12.0.0",
   /** THE EVENTS THIS CONTRACT OWNS beyond its control events (the run events section above). */
   events: {
     "events.iterate.com/context/run-requested": {
@@ -355,6 +357,7 @@ export const CoreContract = {
     paused: null,
     itxExpressionRewriteRules: {},
     subscriptions: {},
+    ingressTarget: null,
     schedules: {},
     scriptRuns: {},
     secrets: {},
@@ -399,6 +402,12 @@ export function reduceCoreEvent(
     return { ...state, subscriptions };
   };
   switch (event.type) {
+    case "events.iterate.com/project/ingress-configured": {
+      const { target } = normalizeIngressConfigured(event.payload);
+      return jsonEqual(state.ingressTarget, target)
+        ? undefined
+        : { ...state, ingressTarget: target };
+    }
     case "events.iterate.com/stream/append-scheduled":
     case "events.iterate.com/stream/append-schedule-cancelled":
     case "events.iterate.com/stream/append-schedule-completed":
@@ -612,6 +621,10 @@ function normalizeSubscriptionConfigured(input: {
  *  committing a durable no-op. Every other event passes through untouched. The DO runs this on every
  *  append (iterate-context-durable-object.ts). */
 export function normalizeControlEvent(event: StreamEventInput): StreamEventInput {
+  if (event.type === "events.iterate.com/project/ingress-configured") {
+    if (event.ephemeral) throw new Error("ingress configuration must be durable");
+    return { ...event, payload: normalizeIngressConfigured(event.payload) };
+  }
   // `String(…)`: a non-string type (a client's `{ type: 12345 }`) is Stream.append's to refuse, with
   // its own message — this prefix check runs first and must not throw a TypeError of its own.
   if (String(event.type).startsWith("events.iterate.com/stream/append-schedule")) {

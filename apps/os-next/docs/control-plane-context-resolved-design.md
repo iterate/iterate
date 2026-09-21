@@ -34,10 +34,8 @@ Deferred — the ENFORCEMENT and heavy plumbing (by direction; the expected-fail
   the global namespace is NOT NAVIGABLE. A session holds a global context by identity only
   (`session.user`; `session.organizations.get` by membership — `SessionRpcTarget.#reachesOrg`), a
   global edge handle's `cd` is refused for everyone, the admin included
-  (`IterateContextRpcTarget.cd`), and inside a global DO the built-in `cd` admits exactly one hop —
-  the kernel's config funnel `itx.cd('/').worker…` under `{ principal: null }` (context/built-ins.ts;
-  the DO runs its delivery loop under that null explicitly, `onCommit`, because the committing call's
-  async-local caller would otherwise ride every continuation). `global` is a reserved project name
+  (`IterateContextRpcTarget.cd`), and inside a global DO the built-in `cd` also refuses navigation.
+  There is no implicit config subscription requiring a kernel-only exception. `global` is a reserved project name
   (`projects.create` / `projects.get`). No policy table: nobody can NAME another user's path. Four of
   the five expected-fails flipped to passing pins; the pager attach needs no floor (the pager is
   minted from the handle a session already holds). Still open: the append type-gate (the remaining

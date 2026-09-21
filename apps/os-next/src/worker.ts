@@ -50,13 +50,13 @@ type ProjectHostIdentity = { principal: Principal | null; grant?: string; platfo
  *  header replaced by `appCookies` (null ⇒ none — what the capability may see), a platform bearer
  *  (an OAuth access token, the admin secret) removed (an app's own bearer scheme passes through
  *  untouched), then the expression the host names — `itx.apps.<app>`, or the
- *  config worker `itx.worker` for a host with no app label (its `fetch` routes by hostname,
- *  sdk/index.ts `ConfigWorker`) — the hop count and the principal's stamp. The app label the app
+ *  configured explicit ingress target for a host with no app label (an empty expression
+ *  header selects the target stored on the root context) — the hop count and the principal's stamp. The app label the app
  *  sees (`x-iterate-app`) is not written here: the DO's fetch lane derives it from the expression,
  *  the one door every fetch-lane Request passes (iterate-context-durable-object.ts). */
 function projectHostRequestTo(
   request: Request,
-  lane: {
+  routing: {
     app: string | null;
     hops: number;
     appCookies: string | null;
@@ -65,14 +65,14 @@ function projectHostRequestTo(
 ): Request {
   const headers = new Headers(request.headers);
   for (const name of [...headers.keys()]) if (name.startsWith("x-itx-")) headers.delete(name);
-  if (lane.appCookies) headers.set("cookie", lane.appCookies);
+  if (routing.appCookies) headers.set("cookie", routing.appCookies);
   else headers.delete("cookie");
-  if (lane.identity.platformBearer) headers.delete("authorization");
-  headers.set(ITX_EXPRESSION_FETCH_HEADER, lane.app ? `itx.apps.${lane.app}` : "itx.worker");
-  headers.set(PROJECT_HOST_HOPS_HEADER, String(lane.hops));
-  if (lane.identity.principal)
-    headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(lane.identity.principal));
-  if (lane.identity.grant) headers.set(ITX_GRANT_HEADER, lane.identity.grant);
+  if (routing.identity.platformBearer) headers.delete("authorization");
+  headers.set(ITX_EXPRESSION_FETCH_HEADER, routing.app ? `itx.apps.${routing.app}` : "");
+  headers.set(PROJECT_HOST_HOPS_HEADER, String(routing.hops));
+  if (routing.identity.principal)
+    headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(routing.identity.principal));
+  if (routing.identity.grant) headers.set(ITX_GRANT_HEADER, routing.identity.grant);
   return new Request(request, { headers });
 }
 

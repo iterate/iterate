@@ -31,6 +31,7 @@ static bool iterate_kit_tas2780_set_power_mode(
   for (size_t i = 0; i < 3; ++i) {
     if (!iterate_kit_tas2780_write(amp, writes[i].address, writes[i].value)) return false;
   }
+  if (!iterate_kit_tas2780_set_output_level(amp, amp->output_level)) return false;
   amp->power_mode = mode;
   return true;
 }
@@ -38,7 +39,8 @@ static bool iterate_kit_tas2780_set_power_mode(
 bool iterate_kit_tas2780_init(struct iterate_kit_tas2780 *amp, i2c_master_dev_handle_t device) {
   if (amp == NULL) return false;
   *amp = (struct iterate_kit_tas2780){
-      .device = device, .power_mode = ITERATE_KIT_TAS2780_POWER_MODE_NONE, .volume = 100};
+      .device = device, .power_mode = ITERATE_KIT_TAS2780_POWER_MODE_NONE,
+      .volume = 100, .output_level = 8};
   if (device == NULL) return false;
   size_t count;
   const struct iterate_kit_register_write *writes = iterate_kit_tas2780_base_script(&count);
@@ -54,6 +56,7 @@ bool iterate_kit_tas2780_init(struct iterate_kit_tas2780 *amp, i2c_master_dev_ha
 bool iterate_kit_tas2780_activate(struct iterate_kit_tas2780 *amp) {
   if (amp == NULL || !amp->initialized) return false;
   if (!iterate_kit_tas2780_write(amp, 0x00, 0x00) ||
+      !iterate_kit_tas2780_write(amp, 0x02, 0x82) ||
       !iterate_kit_tas2780_set_power_mode(amp, ITERATE_KIT_TAS2780_POWER_MODE_0) ||
       !iterate_kit_tas2780_write(amp, 0x5C, 0x1D) ||
       !iterate_kit_tas2780_write(amp, 0x02, 0x81)) goto failed;
@@ -103,6 +106,16 @@ bool iterate_kit_tas2780_shutdown(struct iterate_kit_tas2780 *amp) {
       iterate_kit_tas2780_write(amp, 0x02, 0x82);
 }
 
+bool iterate_kit_tas2780_set_output_level(struct iterate_kit_tas2780 *amp, uint8_t index) {
+  uint8_t value;
+  if (amp == NULL || !amp->initialized || index > 20) return false;
+  if (!iterate_kit_tas2780_write(amp, 0x00, 0x00) ||
+      !iterate_kit_tas2780_read(amp, 0x03, &value) ||
+      !iterate_kit_tas2780_write(amp, 0x03, (uint8_t)((value & 0xC1U) | (index << 1)))) return false;
+  amp->output_level = index;
+  return true;
+}
+
 bool iterate_kit_tas2780_read_faults(struct iterate_kit_tas2780 *amp, uint32_t *faults) {
   if (amp == NULL || !amp->initialized || faults == NULL) return false;
   static const uint8_t addresses[] = {0x49, 0x4A, 0x4B, 0x4F};
@@ -126,6 +139,7 @@ size_t iterate_kit_tas2780_health(const struct iterate_kit_tas2780 *amp, char *o
     {"ampVbat1sCentiVolts", amp->vbat1s_centivolts},
     {"ampFaults", amp->faults},
     {"ampI2cFailures", amp->i2c_failures},
+    {"ampOutputLevel", amp->output_level},
   };
   return iterate_kit_health_append_fields(out, capacity, fields, sizeof(fields) / sizeof(fields[0]));
 }

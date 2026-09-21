@@ -10,14 +10,16 @@
 #include "iterate/kit/button.h"
 #include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/platforms/board.h"
+#include "iterate/kit/platforms/fusb302_esp.h"
 #include "iterate/kit/platforms/pcm5122.h"
 #include "iterate/kit/platforms/tas2780.h"
 #include "iterate/kit/platforms/xmos_spi.h"
+#include "satellite1_power_policy.h"
 
 #include <sounds_generated.inc>
 
-/* Startup, poll, volume RPC and health all run serially on the app task.
- * No hardware task accesses either control bus or these chip states. */
+/* Startup, poll, volume RPC and health serialize codec/XMOS state on the app
+ * task. USB-PD owns a separate I2C device and publishes copied status. */
 static struct iterate_kit_xmos_spi xmos;
 static struct iterate_kit_xmos_version xmos_version;
 static struct iterate_kit_tas2780 amp;
@@ -25,10 +27,44 @@ static i2c_master_dev_handle_t line_out;
 static struct iterate_kit_button volume_up, volume_down;
 static bool microphone_muted;
 static uint32_t side_button_read_failures;
+static struct iterate_kit_fusb302_esp usb_pd = {.lock = portMUX_INITIALIZER_UNLOCKED};
+static struct iterate_kit_pd_status power_status;
+static bool amplifier_active;
+static uint32_t amplifier_power_failures;
 
-/* DVC 80 (-40 dB): the measured full-duplex ceiling for the onboard speaker.
- * Apply the same calibrated level at startup and through volume controls. */
-enum { ITERATE_KIT_SATELLITE1_SPEAKER_CEILING = 60 };
+/* The former -40 dB echo-test level is not the speaker's physical ceiling.
+ * DVC remains user-adjustable; power negotiation never turns the volume up. */
+enum { SATELLITE1_START_VOLUME = 80, SATELLITE1_SPEAKER_CEILING = 100 };
+
+static bool satellite1_activate_amplifier(void) {
+  /* Start at the manufacturer's 15 dBV gain and measure the actual rail.
+   * 20 dBV permits 25 W into 4 ohms; require >=18 V and a >=30 W contract.
+   * The gain choice is a fact about this speaker, not a USB-PD policy. */
+  if (!iterate_kit_tas2780_shutdown(&amp) ||
+      !iterate_kit_tas2780_set_output_level(&amp, 8) ||
+      !iterate_kit_tas2780_activate(&amp)) return false;
+  const bool pd_ready = power_status.state == ITERATE_KIT_PD_READY;
+  if (iterate_kit_satellite1_pd_rail_is_low(
+          pd_ready, power_status.millivolts, amp.pvdd_centivolts)) {
+    ESP_LOGW("satellite1", "amplifier rail below PD contract: %ucV, requested %umV; keeping 15 dBV",
+        amp.pvdd_centivolts, power_status.millivolts);
+  }
+  if (iterate_kit_satellite1_output_level_for_power(
+          pd_ready, power_status.millivolts, power_status.milliamps,
+          amp.pvdd_centivolts) == ITERATE_KIT_SATELLITE1_HIGH_POWER_OUTPUT_LEVEL) {
+    if (!iterate_kit_tas2780_shutdown(&amp) ||
+        !iterate_kit_tas2780_set_output_level(&amp, 18) ||
+        !iterate_kit_tas2780_activate(&amp)) return false;
+  }
+  ESP_LOGI("satellite1", "speaker PVDD=%ucV mode=%u output=%u volume=%u",
+      amp.pvdd_centivolts, (unsigned)amp.power_mode, amp.output_level, amp.volume);
+  return true;
+}
+
+static uint8_t satellite1_volume(void *context) {
+  (void)context;
+  return amp.volume;
+}
 
 /** Gate XMOS before hardware tasks can block on its slave clocks, then bring
  * up both chips. board.c has already enabled I2S with TX silence preloaded;
@@ -36,6 +72,7 @@ enum { ITERATE_KIT_SATELLITE1_SPEAKER_CEILING = 60 };
  */
 static bool iterate_kit_satellite1_open_codec(void) {
   i2c_master_dev_handle_t amp_device = NULL;
+  i2c_master_dev_handle_t pd_device = NULL;
   uint8_t applied;
   const char *stage = iterate_kit_xmos_spi_open(
       &xmos, 11, 13, 12, GPIO_NUM_10, &xmos_version, 6, 250);
@@ -44,21 +81,37 @@ static bool iterate_kit_satellite1_open_codec(void) {
       xmos_version.minor, xmos_version.patch);
   stage = "I2C devices";
   if (iterate_kit_board_i2c_device(0x3F, &amp_device) != ESP_OK ||
-      iterate_kit_board_i2c_device(0x4D, &line_out) != ESP_OK) goto failed;
+      iterate_kit_board_i2c_device(0x4D, &line_out) != ESP_OK ||
+      iterate_kit_board_i2c_device(0x22, &pd_device) != ESP_OK) goto failed;
   stage = "TAS2780 init";
   if (!iterate_kit_tas2780_init(&amp, amp_device)) goto failed;
   stage = "TAS2780 volume";
   if (!iterate_kit_tas2780_set_volume(
-      &amp, ITERATE_KIT_SATELLITE1_SPEAKER_CEILING, &applied)) goto failed;
+      &amp, SATELLITE1_START_VOLUME, &applied)) goto failed;
+  stage = "USB-PD start";
+  if (!iterate_kit_fusb302_esp_start(&usb_pd, pd_device,
+      (struct iterate_kit_pd_limits){.millivolts = 20000, .milliamps = 3000, .milliwatts = 30000})) goto failed;
+  /* Keep the amplifier shut down throughout initial negotiation. */
+  stage = "USB-PD settle";
+  const int64_t deadline = esp_timer_get_time() + 3000000;
+  do {
+    power_status = iterate_kit_fusb302_esp_status(&usb_pd);
+    if (power_status.state == ITERATE_KIT_PD_READY || power_status.state == ITERATE_KIT_PD_USB_ONLY) break;
+    if (power_status.state == ITERATE_KIT_PD_FAILED) goto failed;
+    vTaskDelay(pdMS_TO_TICKS(10));
+  } while (esp_timer_get_time() < deadline);
+  if (power_status.state != ITERATE_KIT_PD_READY && power_status.state != ITERATE_KIT_PD_USB_ONLY) goto failed;
   stage = "PCM5122 init";
   if (!iterate_kit_pcm5122_init(line_out)) goto failed;
   stage = "TAS2780 activate";
-  if (!iterate_kit_tas2780_activate(&amp)) goto failed;
+  if (!satellite1_activate_amplifier()) goto failed;
+  amplifier_active = true;
   stage = "PCM5122 unmute";
   if (!iterate_kit_pcm5122_mute(line_out, false)) goto failed;
   return true;
 
 failed:
+  amplifier_active = false;
   ESP_LOGE("satellite1", "%s failed; codec startup refused", stage);
   if (amp.device != NULL && !iterate_kit_tas2780_shutdown(&amp))
     ESP_LOGE("satellite1", "TAS2780 shutdown failed");
@@ -80,6 +133,20 @@ static enum iterate_kit_status iterate_kit_satellite1_set_volume(
  */
 static void iterate_kit_satellite1_poll(void *context, struct iterate_kit_voice_intent *out) {
   (void)context;
+  const struct iterate_kit_pd_status current_power = iterate_kit_fusb302_esp_status(&usb_pd);
+  if (current_power.state != power_status.state || current_power.contracts != power_status.contracts) {
+    power_status = current_power;
+    /* Reconfigure once per transition, as the vendor's refresh_audio_output
+     * does. A failed reconfiguration is visible and is not retried forever. */
+    const bool ready = power_status.state == ITERATE_KIT_PD_READY || power_status.state == ITERATE_KIT_PD_USB_ONLY;
+    const bool changed = ready ? satellite1_activate_amplifier() : iterate_kit_tas2780_shutdown(&amp);
+    amplifier_active = ready && changed;
+    if (!changed) {
+      if (amplifier_power_failures != UINT32_MAX) ++amplifier_power_failures;
+      ESP_LOGE("satellite1", "amplifier power transition failed");
+      if (!iterate_kit_tas2780_shutdown(&amp)) ESP_LOGE("satellite1", "amplifier shutdown failed");
+    }
+  }
   uint8_t status[4];
   if (!iterate_kit_xmos_spi_read_status(&xmos, status)) {
     if (side_button_read_failures < UINT32_MAX) ++side_button_read_failures;
@@ -113,10 +180,17 @@ static size_t iterate_kit_satellite1_health(void *context, char *out, size_t cap
   (void)iterate_kit_tas2780_read_faults(&amp, &faults); /* failures counted by chip */
   const size_t used = iterate_kit_tas2780_health(&amp, out, capacity);
   if (used == 0U) return 0U;
+  const struct iterate_kit_pd_status pd = iterate_kit_fusb302_esp_status(&usb_pd);
   const struct iterate_kit_health_field fields[] = {
     {"xmosMajor", xmos_version.major}, {"xmosMinor", xmos_version.minor},
     {"xmosPatch", xmos_version.patch}, {"micMuted", microphone_muted},
     {"sideButtonReadFailures", side_button_read_failures},
+    {"pdState", pd.state}, {"pdFailure", pd.failure},
+    {"pdMilliVolts", pd.millivolts}, {"pdMilliAmps", pd.milliamps},
+    {"pdContracts", pd.contracts}, {"pdHardResets", pd.hard_resets},
+    {"pdSoftResets", pd.soft_resets}, {"pdI2cFailures", pd.i2c_failures},
+    {"pdMessages", pd.messages}, {"pdCc", pd.cc},
+    {"ampActive", amplifier_active}, {"ampPowerFailures", amplifier_power_failures},
   };
   const size_t added = iterate_kit_health_append_fields(
       out + used, capacity - used, fields, sizeof(fields) / sizeof(fields[0]));
@@ -157,7 +231,7 @@ static const struct iterate_kit_i2s_codec_facts audio = {
 static const struct iterate_kit_board board = {
   .facts = {
     .device_name = "satellite1",
-    .speaker = {.ceiling = ITERATE_KIT_SATELLITE1_SPEAKER_CEILING},
+    .speaker = {.ceiling = SATELLITE1_SPEAKER_CEILING, .volume = satellite1_volume},
   },
   .i2c = {.sda = 5, .scl = 6, .hz = 400000},
   .boot = boot, .boot_count = 1,

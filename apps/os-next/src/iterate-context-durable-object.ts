@@ -12,15 +12,15 @@
 // row rides its pager upgrade and is appended as the pager is accepted) — there are no
 // configuration verbs here. The events this class appends on its own initiative: the birth and wake
 // records (Stream.appendBirthRecord / appendWakeRecord — the wake record also settles, `interrupted`,
-// every run the last incarnation left open), the birth `config` subscription (the constructor), a
-// due schedule's batch (`alarm`), a requested run's settlement (`#executeRun` — the runner section)
-// and the un-set of whatever named an rpc stub whose last pager closed (onPresence); alarm
-// diagnostics are ephemeral traces. The two effects it runs off a committed
+// every run the last incarnation left open), a due schedule's batch (`alarm`), a requested run's
+// settlement (`#executeRun` — the runner section) and the un-set of whatever named an rpc stub whose
+// last pager closed (onPresence); alarm diagnostics are ephemeral traces. The two effects it runs off a committed
 // event: deleting the facet a removed subscription hosted, and refreshing the startup memo of the
 // facet a hosting subscription configures.
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { DurableObject } from "cloudflare:workers";
+import { z } from "zod";
 import { codedError, errorCode, reportIssue, withTimeout } from "iterate/next/lib";
 import {
   REVIVE_AFTER_MAX_MS,
@@ -86,7 +86,6 @@ import { secretNamesReferenced } from "./secrets.ts";
 import type { SecretDurableObject } from "./secret-durable-object.ts";
 import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
 import {
-  CONFIG_WORKER_PLATFORM_ROW,
   ItxExpressionResolver,
   restoreRuleTarget,
   rowsNamingRpcStub,
@@ -117,14 +116,20 @@ function parseIterateContextDurableObjectName(name: string | undefined) {
  *  and dies in memory, so its release needs no durable alarm: the timer dies with the actor, and so
  *  do the pins. */
 const IDLE_QUIESCE_AFTER_MS = 30_000;
-/** WORKAROUND — on prd (never in local workerd), a Workers-RPC call into a LOADED facet can reject
- *  with V8's clone-version error: seen on alarm-woken incarnations since 2026-09-15, with identical
- *  worker code either side, in bursts. The facet container is then unusable for the incarnation (a
- *  live facet never re-runs its startup) and the cached isolate may be too — so the recovery is a
- *  restart of both and ONE more attempt (`#invokeFacet`). apps/os carries the same recovery for its
- *  dynamic workers (issue #2288). Remove when the platform is fixed. */
-const isClonedDataVersionFailure = (error: unknown) =>
-  error instanceof Error && error.message.includes("Unable to deserialize cloned data");
+/** WORKAROUND for a platform defect — https://github.com/iterate/alarm-loader-facet-repro (the
+ *  reproduction, what was measured, what was ruled out). On prd (never in local workerd) a call into
+ *  a LOADED facet started inside an alarm-woken incarnation can reject at facet start, in windows
+ *  that hit every such facet on a machine for a second to a few minutes: V8's clone-version text
+ *  when the loaded worker's env carries a stub (every facet here does), a bare "internal error;
+ *  reference = …" when it does not. The facet container is then unusable for the incarnation (a
+ *  live facet never re-runs its startup) and the loader's cached entry is too (a fresh loader id
+ *  heals at once) — so the recovery is a restart of both and ONE more attempt (`#invokeFacet`),
+ *  counted per facet (`facet:<name>:restarts`, shown on `processors.list()`). apps/os carries the
+ *  same recovery for its dynamic workers (issue #2288). Remove when the platform is fixed. */
+const isFacetStartPlatformFailure = (error: unknown): error is Error =>
+  error instanceof Error &&
+  (error.message.includes("Unable to deserialize cloned data") ||
+    error.message.startsWith("internal error; reference = "));
 /** How long one facet call may take before the facet is aborted (a call that never answers would
  *  hold the quiesce, and with it this actor, forever). */
 const FACET_CALL_WATCHDOG_MS = 60_000;
@@ -311,20 +316,20 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // Same for the revive-failure ladder (`#facetReviveFailed` wrote it as a number).
       for (const [key, n] of this.ctx.storage.kv.list({ prefix: "facet-claim-failures:" }))
         this.#facetReviveFailures.set(key.slice("facet-claim-failures:".length), n as number);
-      // Initialize the log before accepting requests. The root config worker subscribes once; its
-      // idempotency key preserves that subscription across incarnations.
       this.#stream.appendBirthRecord();
-      this.#stream.append(
-        normalizeControlEvent({
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: {
-            name: "config",
-            target: "itx.cd('/').worker.processEventBatch",
-            consumes: ["*"],
-          },
-          idempotencyKey: "config-subscription",
-        }),
-      );
+      // Retire only the subscription installed by older runtime versions. This durable
+      // removal runs once per existing context; explicit user subscriptions are preserved.
+      const config = this.#stream.coreReducedState.subscriptions.config;
+      const retiredTarget = ["itx", ["cd", "/"], "worker", "processEventBatch"];
+      if (config && JSON.stringify(config.target) === JSON.stringify(retiredTarget)) {
+        this.#stream.append(
+          normalizeControlEvent({
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: { name: "config", target: null },
+            idempotencyKey: "migration:explicit-ingress:remove-default-subscription",
+          }),
+        );
+      }
     });
   }
 
@@ -332,9 +337,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  `onCommit`, is the post-commit fan-out — the delivery loop, run as THE KERNEL: under
    *  `{ principal: null }` explicitly, whatever the committing call's caller was. The commit lands
    *  inside that call's `#callerStorage.run`, and the async store would otherwise ride every
-   *  continuation the loop schedules — so a user's append would deliver their config funnel under
-   *  THEIR principal, which the global namespace's `cd` (built-ins.ts) rightly refuses. The kernel
-   *  hop is told from a person's by exactly this null. Then the alarm: a commit may have changed the
+   *  continuation the loop schedules. Delivery must not inherit the initiating caller's identity. Then the alarm: a commit may have changed the
    *  schedules or queued a delivery. */
   readonly #stream = new Stream({
     storage: this.ctx.storage,
@@ -446,7 +449,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** THE EFFECTIVE rule table, read: the context's own rows (masks as `target: null`, a template's
    *  `@` spelled) plus the implicit platform rows the context has not re-set — one per built-in root
-   *  and the config worker's (`itx.worker`, itx-expression-rewriting.ts) — none at all under a bare
+   *  — none at all under a bare
    *  `itx` row, which claims every call before a platform row could. */
   #rewriteRuleList(): RewriteRuleListEntry[] {
     const contextRows = Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules).map(
@@ -466,7 +469,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           origin: "platform",
         }),
       ),
-      CONFIG_WORKER_PLATFORM_ROW,
     ].filter((row) => !reset.has(row.match));
     return [...contextRows, ...platformRows];
   }
@@ -578,6 +580,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** `itx.builtins` — the physical scope this context resolves against (context/built-ins.ts). */
   readonly #builtIns: Record<string, unknown> = buildBuiltIns({
+    projectInfo: async () => {
+      if (this.#durableObjectAddress.projectId === "global") return {};
+      const row = await this.env.DB.prepare("SELECT * FROM projects WHERE id = ?")
+        .bind(this.#durableObjectAddress.projectId)
+        .first();
+      if (!row) return {};
+      const project = z.object({ id: z.string(), slug: z.string().optional() }).parse(row);
+      const projectSlug = project.slug || project.id;
+      const base = this.#appConfig.projectHostnameBase;
+      return { projectSlug, ...(base && { projectUrl: `https://${projectSlug}.${base}` }) };
+    },
     projectId: this.#durableObjectAddress.projectId,
     path: this.#durableObjectAddress.path,
     iterateContextName: this.#durableObjectAddress.name,
@@ -720,6 +733,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.ctx.storage.kv.delete(`facet-claim-failures:${name}`);
   }
   #claimFacetAlarm(name: string, at: number | null): void {
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- null releases a claim; epoch 0 is a valid due alarm
     if (at === null) {
       this.#facetClaims.delete(name);
       this.ctx.storage.kv.delete(`facet-claim:${name}`);
@@ -775,7 +789,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // oxlint-disable-next-line iterate/simple-truthiness-check -- the `itx.subscriptions` wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
         ...(s.afterOffset !== undefined && { afterOffset: s.afterOffset }),
         // oxlint-disable-next-line iterate/simple-truthiness-check -- the `itx.subscriptions` wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
-        ...(s.hostedFacet && { hostedFacet: s.hostedFacet }),
+        ...(s.hostedFacet && {
+          hostedFacet: { ...s.hostedFacet, restarts: this.#facetRestarts(s.hostedFacet.name) },
+        }),
         ...(cursor && {
           cursor: {
             confirmedOffset: cursor.confirmedOffset,
@@ -985,7 +1001,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     name: string,
     spec: FacetSpec | undefined,
     itxExpressionSteps: ItxExpression,
-    retriedAfterCloneFailure = false,
+    retriedAfterPlatformFailure = false,
   ): Promise<unknown> {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- name arrives as a client-authored itx expression argument; the static string type is the API contract, not a runtime guarantee, so a non-string is rejected with a usage error
     if (typeof name !== "string")
@@ -1137,17 +1153,25 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         } else if (startupFailed) {
           this.#abortFacetIfRunning(name, "startup failed");
           this.#liveFacetNames.delete(name);
-        } else if (isClonedDataVersionFailure(error) && !retriedAfterCloneFailure) {
-          // The clone-version failure (the constant's doc): restart the facet AND retire its loaded
-          // identity (a cached isolate is suspect too), then the call once more, cold. One extra
-          // attempt, never a loop — a second failure is the caller's. The retry re-delivers a
+        } else if (isFacetStartPlatformFailure(error) && !retriedAfterPlatformFailure) {
+          // The platform failure (the predicate's doc): restart the facet AND retire its loaded
+          // identity (the cached entry is what stays broken), then the call once more, cold. One
+          // extra attempt, never a loop — a second failure is the caller's. The retry re-delivers a
           // pushed batch: durables are offset-guarded by the engine, ephemerals are not (a duplicate
-          // beats a lost batch; at-least-once is the facet contract). Logged, never swallowed, so the
-          // platform condition stays queryable.
-          this.#abortFacetIfRunning(name, "clone-version failure — restarting");
+          // beats a lost batch; at-least-once is the facet contract). Counted on the facet's row and
+          // logged, never swallowed, so the platform condition stays queryable without a log grep.
+          this.#abortFacetIfRunning(name, "platform failure at facet start — restarting");
           this.#liveFacetNames.delete(name);
           retireLoadedIdentity?.();
-          console.warn({ event: "facet.clone-version-retry", namespace: "iterate-context", name });
+          const restarts = this.#facetRestarts(name) + 1;
+          this.ctx.storage.kv.put(`facet:${name}:restarts`, restarts);
+          console.warn({
+            event: "facet.platform-failure-retry",
+            namespace: "iterate-context",
+            name,
+            restarts,
+            message: error.message,
+          });
           return await this.#invokeFacet(name, spec, itxExpressionSteps, true);
         }
         throw error;
@@ -1237,6 +1261,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** Delete a facet, storage included (there is no delete verb: a removed hosting row ends here). A
    *  re-load into the same name is a clean rebuild, never a resume from orphaned state. */
+  /** How many times this facet was restarted after a platform failure at its start (the predicate
+   *  `isFacetStartPlatformFailure`), over the facet's whole life on this context. */
+  #facetRestarts(name: string) {
+    // The row's value is the count this DO wrote in `#invokeFacet` (kv types it `unknown`); absent
+    // until the first restart.
+    return (this.ctx.storage.kv.get(`facet:${name}:restarts`) as number | undefined) ?? 0;
+  }
+
   #deleteFacet(name: string): void {
     if (name === CoreContract.slug)
       throw new Error(`"${name}" is the core reduce — always on, never a facet`);
@@ -1245,6 +1277,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#facetRevived(name);
     this.ctx.storage.kv.delete(`facet:${name}`);
     this.ctx.storage.kv.delete(`facet:${name}:loader-id`);
+    this.ctx.storage.kv.delete(`facet:${name}:restarts`);
     this.#facetStartupMemoByName.delete(name);
     this.#liveFacetNames.delete(name);
   }
@@ -1277,7 +1310,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#stream.appendWakeRecord("request");
     // The doors, in order — each answers or declines: the rpc-stub pager and the rpc-stub fetch
     // upgrade leg; THE FETCH LANE (`x-itx-expression` names an itx expression — JSON from a session's
-    // terminal `fetch(request)`, dotted text from a project host (`itx.apps.<app>`, `itx.worker`) or
+    // terminal `fetch(request)`, dotted text from a project host (`itx.apps.<app>` or an explicit worker expression) or
     // a loaded worker's own `env.ITX.fetch` — resolved as a terminal-fetch call with the live Request
     // as its one runtime arg; the routing header is stripped so it never reaches the capability or
     // egress); everything else is EGRESS.
@@ -1291,9 +1324,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       try {
         // The JSON form is an edge-set (worker.ts) or self-addressed (env.ITX.fetch) expression; the
         // resolver below canonicalizes it and rejects a malformed shape, so this parse trusts the JSON.
-        const itxExpression = itxExpressionHeader.trimStart().startsWith("[")
-          ? (JSON.parse(itxExpressionHeader) as ItxExpression)
-          : parse(itxExpressionHeader);
+        if (itxExpressionHeader === "" && !this.#stream.coreReducedState.ingressTarget)
+          return new Response("Project ingress is not configured\n", { status: 404 });
+        const itxExpression =
+          itxExpressionHeader === ""
+            ? this.#stream.coreReducedState.ingressTarget!
+            : itxExpressionHeader.trimStart().startsWith("[")
+              ? (JSON.parse(itxExpressionHeader) as ItxExpression)
+              : parse(itxExpressionHeader);
         const headers = new Headers(request.headers);
         headers.delete(ITX_EXPRESSION_FETCH_HEADER);
         // THE APP LABEL the app sees (`x-iterate-app`, apps/os's header) is derived HERE, from the
