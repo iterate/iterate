@@ -287,36 +287,40 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
   /** Bring the agent into being: the certificate on `/` (the catalog) first, then on this path with
    *  the system prompt beside it (nothing to provision, so nothing fails). A caller's `systemPrompt`
    *  is ADDED to the platform's rules (the codemode format, the itx surface), never a replacement:
-   *  an agent told only "be terse" must still know how to act. Idempotent: a created agent answers
-   *  at once. `message()` refuses until this has run. */
+   *  an agent told only "be terse" must still know how to act. Idempotent: a created agent keeps its
+   *  certificate and prompt, and its sandbox rows are (re)asserted — so an agent born before the
+   *  sandbox existed gets them on its next `create()`, and `#created()` runs this once per
+   *  incarnation before the first message for the same reason. `message()` refuses until this has run. */
   async create(input: { systemPrompt?: string } = {}): Promise<{ path: string }> {
     const path = await this.#path();
-    if ((await this.snapshot()).state.path !== null) return { path };
-    const projectContext = `\nCURRENT PROJECT: ${JSON.stringify(await this.withItx((itx) => itx.whoami()))}`;
-    const certificate = {
-      type: "events.iterate.com/agent/created",
-      payload: { path },
-      idempotencyKey: `agent/created:${path}`,
-    };
-    await this.withItx((itx) => itx.cd("/").append(certificate));
-    await this.withItx((itx) =>
-      itx.append(certificate, {
-        type: "events.iterate.com/agents/context-added",
-        idempotencyKey: `agent/system-prompt:${path}`,
-        payload: {
-          role: "system",
-          content: input.systemPrompt
-            ? `${DEFAULT_AGENT_SYSTEM_PROMPT}\n\nINSTRUCTIONS FROM THE OPERATOR (they add to the rules above, never replace them):\n${input.systemPrompt}${projectContext}`
-            : DEFAULT_AGENT_SYSTEM_PROMPT + projectContext,
-        },
-      }),
-    );
+    if ((await this.snapshot()).state.path === null) {
+      const projectContext = `\nCURRENT PROJECT: ${JSON.stringify(await this.withItx((itx) => itx.whoami()))}`;
+      const certificate = {
+        type: "events.iterate.com/agent/created",
+        payload: { path },
+        idempotencyKey: `agent/created:${path}`,
+      };
+      await this.withItx((itx) => itx.cd("/").append(certificate));
+      await this.withItx((itx) =>
+        itx.append(certificate, {
+          type: "events.iterate.com/agents/context-added",
+          idempotencyKey: `agent/system-prompt:${path}`,
+          payload: {
+            role: "system",
+            content: input.systemPrompt
+              ? `${DEFAULT_AGENT_SYSTEM_PROMPT}\n\nINSTRUCTIONS FROM THE OPERATOR (they add to the rules above, never replace them):\n${input.systemPrompt}${projectContext}`
+              : DEFAULT_AGENT_SYSTEM_PROMPT + projectContext,
+          },
+        }),
+      );
+    }
     // THE SANDBOX: this agent's scripts run on `<agent>/sandbox`, a child of their own — the row on
     // THIS context redirects every requested run there (the context's runner honours it,
     // iterate-context-durable-object.ts `#executeRun`), so the facet's own calls and the scripts'
     // never share a table. The sandbox's one row: everything a script does not claim, this agent
     // answers (its own chain up to the root). A jail is the owner replacing THAT row with `null` —
-    // before or with the first message — and appending its grants beside it.
+    // before or with the first message — and appending its grants beside it. Both rows are
+    // idempotent on their keys, so asserting them again writes nothing (a jail's replacement stands).
     await this.withItx((itx) =>
       itx.builtins.append({
         type: "events.iterate.com/itx/rewrite-rule-configured",
@@ -394,13 +398,15 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
     return (appended as unknown as StreamEvent[])[0]!;
   }
 
-  /** Every door past `create()` starts here: an agent not yet created refuses. Creation is terminal,
-   *  so the answer is memoized once seen. */
+  /** Everything past `create()` starts here: an agent not yet created refuses. Creation is terminal,
+   *  so the answer is memoized once seen — and that first confirmation of an incarnation runs
+   *  `create()` once more, which asserts the sandbox rows (idempotent), so an agent born before the
+   *  sandbox has them before its scripts run. */
   #confirmedCreated = false;
   async #created(): Promise<void> {
     if (this.#confirmedCreated) return;
     if ((await this.snapshot()).state.path === null)
       throw new Error(`agent ${await this.#path()}: not created — call create() first`);
-    this.#confirmedCreated = true;
+    await this.create();
   }
 }

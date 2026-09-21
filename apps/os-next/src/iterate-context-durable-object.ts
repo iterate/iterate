@@ -476,7 +476,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       (rule): RewriteRuleListEntry => ({
         match: print(rule.match),
         target: rule.target && print(rule.target, { holes: true }),
-        ...(rule.description && { description: rule.description }),
+        description: rule.description,
         context: ownPath,
       }),
     );

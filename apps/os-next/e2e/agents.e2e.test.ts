@@ -728,3 +728,57 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
     },
   ]);
 });
+
+test("an agent born BEFORE the sandbox — a certificate and a prompt, no rows — gets its sandbox rows on its first message of an incarnation (create() re-asserted) and its parent link on the next create(): the tree the model sees grows from its own roots to the root's", async () => {
+  const itx = openItx(freshCtx("agent-old"));
+  const path = "/agents/old";
+  const old = itx.cd(path);
+  // How an agent was born before the sandbox: the processor row, the certificate on / and on its
+  // path with the prompt — and not one rewrite row anywhere.
+  await old.processors.enable("agent");
+  const certificate = {
+    type: "events.iterate.com/agent/created",
+    payload: { path },
+    idempotencyKey: `agent/created:${path}`,
+  };
+  await itx.append(certificate);
+  await old.append(certificate, {
+    type: "events.iterate.com/agents/context-added",
+    idempotencyKey: `agent/system-prompt:${path}`,
+    payload: { role: "system", content: "You are an agent on the iterate platform. Prose only." },
+  });
+  const ai = new ScriptedAi(["Nothing to do.", "Still nothing."]);
+  await old.provide("itx.ai", ai);
+  await onWorkersAi(old);
+  expect(await old.builtins.rewriteRules.get("itx.run")).toMatchObject({
+    target: "itx.builtins.run",
+  }); // the implicit row: scripts would run here
+  // The first message of the incarnation confirms creation, which asserts the sandbox rows.
+  await itx.agents.get(path).message("hello");
+  await until("the model was asked", () => (ai.calls.length >= 1 ? true : undefined));
+  expect(await old.builtins.rewriteRules.get("itx.run")).toMatchObject({
+    target: "itx.builtins.cd('/agents/old/sandbox').builtins.run",
+    context: path,
+  });
+  expect(await itx.cd(`${path}/sandbox`).builtins.rewriteRules.get("itx")).toMatchObject({
+    target: "itx.builtins.cd('/agents/old')",
+  });
+  const treeOf = (call: { messages: { role: string; content: string }[] }) =>
+    call.messages.find((m) => m.role === "system" && m.content.includes("CAPABILITY TREE"))!
+      .content;
+  // …but no parent link: the tree reaches the agent's own roots and stops (nothing from /)
+  expect(treeOf(ai.calls[0]!)).toContain(`from ${path}/sandbox:`);
+  expect(treeOf(ai.calls[0]!)).not.toContain("from /:");
+  await until("the first turn answered", async () =>
+    assistantWords(await readAll(old)).length >= 1 ? true : undefined,
+  );
+  // The migration: `agents.get(path).create()` once more writes the parent link (idempotent).
+  await itx.agents.get(path).create();
+  expect(await old.builtins.rewriteRules.get("itx")).toMatchObject({
+    target: "itx.builtins.cd('/')",
+  });
+  await itx.agents.get(path).message("and now?");
+  await until("the model was asked again", () => (ai.calls.length >= 2 ? true : undefined));
+  expect(treeOf(ai.calls[1]!)).toContain("from /:");
+  expect(treeOf(ai.calls[1]!)).toContain("itx.kv — ");
+});
