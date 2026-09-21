@@ -28,7 +28,12 @@ import { EventsList, InspectorSheet, type Inspected } from "../../components/age
 import { AgentsNav } from "../../components/agents-nav.tsx";
 import { AgentComposer, type StreamInterrupt } from "../../components/composer.tsx";
 import { QueuedMessagesPanel } from "../../components/queued-messages.tsx";
-import { reduceAgentFeed, toAgentEvent, traceOffsetByMessage } from "../../lib/agent-events.ts";
+import {
+  adaptContextRuns,
+  reduceAgentFeed,
+  toAgentEvent,
+  traceOffsetByMessage,
+} from "../../lib/agent-events.ts";
 import { newWebAgentPath } from "../../lib/web-agent.ts";
 
 // An agent is a conversation on its own path (`/agents/...`); everything it does is an event
@@ -191,7 +196,11 @@ function useAgentLog(api: AuthenticatedApp["api"], project: string, path: string
       release();
     };
   }, [api, project, path]);
-  const sorted = useMemo(() => [...events.values()].sort((a, b) => a.offset - b.offset), [events]);
+  // In offset order, the context's script runs in the reducer's vocabulary (agent-events.ts).
+  const sorted = useMemo(
+    () => adaptContextRuns([...events.values()].sort((a, b) => a.offset - b.offset)),
+    [events],
+  );
   return { context, events: sorted, caughtUp, error };
 }
 

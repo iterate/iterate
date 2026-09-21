@@ -1,8 +1,11 @@
 // The agent's log as the shared agent-UI reducer (packages/ui) reads it. os-next's agent speaks
-// apps/os's event vocabulary, so the feed model IS apps/os's: `reduceAgentUi` folds every committed
-// event into messages and activities (an LLM step that wrote a script, the code step that ran it,
-// grouped into rounds). Two differences are adapted here: an attachment carries no `url` on os-next (the
-// page signs one when it renders), and a failed script settlement carries fewer fields than
+// apps/os's event vocabulary for the loop, so the feed model IS apps/os's: `reduceAgentUi` folds every
+// committed event into messages and activities (an LLM step that wrote a script, the code step that
+// ran it, grouped into rounds). Three differences are adapted here: an attachment carries no `url` on
+// os-next (the page signs one when it renders); a SCRIPT is the CONTEXT's on os-next —
+// `context/run-requested` / `context/run-settled`, identified by the request's offset (os-next
+// src/stream/core-processor.ts) — where the reducer reads apps/os's `capability-host/script-run-*`
+// with an `executionId` (`adaptContextRuns`); and a failed settlement carries fewer fields than
 // apps/os's strict schema (the missing ones follow from `failureKind`).
 import { z } from "zod";
 import { sliceText, type StreamText } from "@iterate-com/shared/chunked-text";
@@ -54,6 +57,65 @@ export function toAgentEvent(raw: unknown, streamPath: string): Event | null {
     };
   }
   return { ...event, payload, streamPath };
+}
+
+/** os-next's script events as the shared reducer reads them. A `context/run-requested` the agent
+ *  appended while processing an assistant item (`source.processor.whileProcessing`, the engine's
+ *  stamp) is apps/os's `script-run-requested` with the ids the reducer keys on — `agent-output:<that
+ *  offset>` for a codemode script, `reply:<that offset>` for the plain-response handler (the
+ *  processor's idempotency key says which) — and one any other caller asked for (`itx.run` on the
+ *  agent's path) is `run:<its offset>`; its `context/run-settled` names the request by offset, so the
+ *  settlement takes the same id. A run never expires on os-next (a restart settles it interrupted),
+ *  so `expiresAt` is the ten-minute display deadline the reducer's inferred close needs; the request's
+ *  offset rides along as `requestOffset`, what a settlement's developer item names (`actor`). */
+export function adaptContextRuns(events: readonly Event[]): Event[] {
+  const executionIdByRequestOffset = new Map<number, string>();
+  return events.map((event) => {
+    if (event.type === "events.iterate.com/context/run-requested") {
+      const payload = isRecord(event.payload) ? event.payload : {};
+      const askedWhile = event.source?.processor?.whileProcessing?.offset;
+      const executionId =
+        askedWhile === undefined
+          ? `run:${String(event.offset)}`
+          : `${event.idempotencyKey?.includes("plain-response") ? "reply" : "agent-output"}:${String(askedWhile)}`;
+      executionIdByRequestOffset.set(event.offset, executionId);
+      return {
+        ...event,
+        type: "events.iterate.com/capability-host/script-run-requested",
+        payload: {
+          code: typeof payload.code === "string" ? payload.code : "",
+          executionId,
+          expiresAt: Date.parse(event.createdAt) + 10 * 60_000,
+          requestOffset: event.offset,
+        },
+      };
+    }
+    if (event.type === "events.iterate.com/context/run-settled") {
+      const payload = isRecord(event.payload) ? event.payload : {};
+      const requestOffset = typeof payload.requestOffset === "number" ? payload.requestOffset : NaN;
+      const settlement = isRecord(payload.settlement) ? payload.settlement : {};
+      return {
+        ...event,
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: {
+          executionId:
+            executionIdByRequestOffset.get(requestOffset) ?? `run:${String(requestOffset)}`,
+          requestOffset,
+          settlement:
+            settlement.status === "failed"
+              ? {
+                  // `interrupted`: the context restarted mid-run — the script may have run.
+                  phase: "execution",
+                  executionMayHaveOccurred: true,
+                  cancellation: "not-applicable",
+                  ...settlement,
+                }
+              : settlement,
+        },
+      };
+    }
+    return event;
+  });
 }
 
 /** The whole feed from the log: every event in offset order through the shared reducer, then —
@@ -279,11 +341,13 @@ export function scriptTrace(events: readonly Event[], executionId: string): Scri
     const p = isRecord(event.payload) ? event.payload : {};
     return p.executionId === executionId;
   });
+  // The developer item names the run by its request offset (os-next's actor), the adapted request
+  // carries that offset beside its executionId.
   const rendered = events.find((event) => {
     if (event.type !== "events.iterate.com/agent/context-added") return false;
     const p = isRecord(event.payload) ? event.payload : {};
     const actor = isRecord(p.actor) ? p.actor : {};
-    return actor.type === "script" && actor.executionId === executionId;
+    return actor.type === "script" && actor.requestOffset === payload.requestOffset;
   });
   return {
     executionId,
