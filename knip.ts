@@ -126,18 +126,6 @@ function makeDocsWorkspace(): WorkspaceConfig {
   };
 }
 
-function makeBrowserExtensionWorkspace(): WorkspaceConfig {
-  return {
-    entry: ["background.js", "panel.js"],
-    project: ["*.js"],
-    // capnweb.js is the package's browser bundle, copied verbatim by `pnpm vendor` (the
-    // devDependency pins the version); nothing imports the package itself.
-    ignore: ["capnweb.js"],
-    ignoreDependencies: ["capnweb"],
-    vite: false,
-  };
-}
-
 function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
     entry: ["vite.config.ts", "scripts/router.ts", "scripts/**/*.ts", "src/worker.ts!"],
@@ -282,7 +270,6 @@ const config: KnipConfig = {
     "!apps/tanstack",
     "!apps/kit",
     "!apps/docs",
-    "!apps/browser-extension",
     "packages/*",
     "!packages/shared",
     "!packages/test-support",
@@ -313,7 +300,6 @@ const config: KnipConfig = {
     "apps/tanstack": makeTanstackTodoWorkspace(),
     "apps/kit": makeKitWorkspace(),
     "apps/docs": makeDocsWorkspace(),
-    "apps/browser-extension": makeBrowserExtensionWorkspace(),
     "packages/shared": makeSharedWorkspace(),
     "packages/test-support": { project: ["src/**/*.ts"] },
     "packages/ui": makeUiWorkspace(),

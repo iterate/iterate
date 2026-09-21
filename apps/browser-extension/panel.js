@@ -1,10 +1,152 @@
-// panel.js — the whole side panel, after apps/spa/public/app.js: the OAuth dance in oauth.js, then
-// ONE WebSocket to the platform's /api opened bare, the credential presented IN the `authenticate`
-// call, and this Chrome lent to the project's root context as `itx.chrome` — a live RpcTarget the
-// project's agents and workers call back into for as long as the panel is open.
-import { newWebSocketRpcSession } from "./capnweb.js";
-import { ChromeBrowser } from "./chrome-browser.js";
-import { currentSession, freshAccessToken, signIn, signOut } from "./oauth.js";
+// panel.js — the whole extension, after apps/spa/public/{oauth,app}.js: the OAuth dance through
+// Chrome's identity window, then ONE WebSocket to the platform's /api opened bare, the credential
+// presented IN the `authenticate` call, and this Chrome lent to the project's root context as
+// `itx.chrome` — a live RpcTarget the project's agents and workers call back into while the panel
+// is open. capnweb.js is the package's own browser bundle, copied verbatim (README).
+import { newWebSocketRpcSession, RpcTarget } from "./capnweb.js";
+
+// The toolbar action opens the side panel from now on (persisted; the first time, open the panel
+// from Chrome's side panel menu). No service worker needed for that.
+void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+
+// ── OAuth: discovery, a one-time public-client registration per issuer (RFC 7591), PKCE (S256), the
+// identity window, refresh. Tokens live in chrome.storage.local until sign-out; the access token is
+// short-lived (the issuer renews an interactive grant's token hourly through the rotating refresh token).
+
+async function discover(issuer) {
+  const response = await fetch(`${issuer}/.well-known/oauth-authorization-server`);
+  if (!response.ok) throw new Error(`${issuer} is not an OAuth issuer (${response.status})`);
+  return response.json();
+}
+
+/** Where the issuer sends Chrome back: `https://<extension id>.chromiumapp.org/`. The manifest's
+ *  `key` keeps the id, and so this URL, the same on every install. */
+const redirectUri = () => chrome.identity.getRedirectURL();
+
+async function clientIdFor(issuer, metadata) {
+  const key = `client:${issuer}`;
+  const cached = (await chrome.storage.local.get(key))[key];
+  if (cached) return cached;
+  const response = await fetch(metadata.registration_endpoint, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      client_name: "Iterate Chrome extension",
+      redirect_uris: [redirectUri()],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+    }),
+  });
+  if (!response.ok) throw new Error(`Client registration failed (${response.status})`);
+  const { client_id } = await response.json();
+  await chrome.storage.local.set({ [key]: client_id });
+  return client_id;
+}
+
+const base64url = (bytes) =>
+  btoa(String.fromCharCode(...bytes))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+const random = () => base64url(crypto.getRandomValues(new Uint8Array(32)));
+
+/** Sign in at `issuer` in Chrome's identity window (the issuer's own login and consent pages, which
+ *  share the profile's cookies), then exchange the code. Resolves with the stored session. */
+async function signIn(issuer) {
+  const metadata = await discover(issuer);
+  const clientId = await clientIdFor(issuer, metadata);
+  const verifier = random();
+  const state = random();
+  const url = new URL(metadata.authorization_endpoint);
+  url.search = new URLSearchParams({
+    response_type: "code",
+    client_id: clientId,
+    redirect_uri: redirectUri(),
+    code_challenge: base64url(
+      new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))),
+    ),
+    code_challenge_method: "S256",
+    scope: "iterate",
+    state,
+    resource: `${issuer}/api`,
+  }).toString();
+  const callback = await chrome.identity.launchWebAuthFlow({ interactive: true, url: url.href });
+  if (!callback) throw new Error("The sign-in window closed before the issuer sent Chrome back.");
+  const params = new URL(callback).searchParams;
+  const oauthError = params.get("error");
+  if (oauthError) throw new Error(params.get("error_description") || oauthError);
+  if (params.get("state") !== state)
+    throw new Error("The OAuth state did not match — start the sign-in again.");
+  const code = params.get("code");
+  if (!code) throw new Error("The issuer sent Chrome back without an authorization code.");
+  const tokens = await tokenRequest(metadata.token_endpoint, {
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: redirectUri(),
+    client_id: clientId,
+    code_verifier: verifier,
+    resource: `${issuer}/api`,
+  });
+  return store(issuer, clientId, tokens);
+}
+
+async function tokenRequest(endpoint, params) {
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(params),
+  });
+  if (!response.ok)
+    throw new Error(`The token endpoint answered ${response.status}: ${await response.text()}`);
+  return response.json();
+}
+
+async function store(issuer, clientId, tokens, previousRefreshToken) {
+  const session = {
+    issuer,
+    clientId,
+    accessToken: tokens.access_token,
+    // Refresh tokens rotate: the newest one wins, the previous one stands in when none came.
+    refreshToken: tokens.refresh_token || previousRefreshToken,
+    expiresAt: Date.now() + tokens.expires_in * 1000,
+  };
+  await chrome.storage.local.set({ session });
+  return session;
+}
+
+/** The access token, refreshed through the refresh token when it is about to expire. */
+async function freshAccessToken(session) {
+  if (Date.now() < session.expiresAt - 30_000) return session.accessToken;
+  if (!session.refreshToken)
+    throw new Error("The access token expired and the grant cannot refresh. Sign in again.");
+  const metadata = await discover(session.issuer);
+  const tokens = await tokenRequest(metadata.token_endpoint, {
+    grant_type: "refresh_token",
+    refresh_token: session.refreshToken,
+    client_id: session.clientId,
+    resource: `${session.issuer}/api`,
+  });
+  const refreshed = await store(session.issuer, session.clientId, tokens, session.refreshToken);
+  return refreshed.accessToken;
+}
+
+// ── What this Chrome lends: an RpcTarget (capnweb passes it by reference, so a call on the project's
+// root context runs HERE) with one method.
+
+class ChromeBrowser extends RpcTarget {
+  /** Open an http(s) page in a new active tab; answers the tab's id and the URL it opened. */
+  async openPage(input) {
+    if (!input || typeof input.url !== "string") throw new Error("openPage() takes { url }.");
+    const target = new URL(input.url);
+    if (target.protocol !== "http:" && target.protocol !== "https:")
+      throw new Error("openPage() only accepts http and https URLs.");
+    const tab = await chrome.tabs.create({ active: true, url: target.href });
+    return { tabId: tab.id, url: target.href };
+  }
+}
+
+// ── The panel.
 
 /** Which platform and which project — remembered across panel openings. */
 async function settings() {
@@ -80,7 +222,7 @@ async function signedIn(session) {
     } catch (error) {
       console.error(error);
     }
-    await signOut();
+    await chrome.storage.local.remove("session");
     await signedOut(session.issuer);
   };
   const input = element("project", HTMLInputElement);
@@ -134,10 +276,8 @@ async function connect(session, project) {
         <div class="status"><span>Chrome capability</span><span>lent as <code>itx.chrome</code></span></div>
         <p><button id="prove">Open a page through the project</button></p>
         <p id="proof-result" class="muted"></p>
-        <div class="proof">
-          <span>Or post this to one of the project's agents</span>
-          <p>Call itx.cd('/').chrome.openPage({ url: "${escape(proofUrl)}" }) and report the tabId and url it returns.</p>
-        </div>
+        <p class="muted">Or post this to one of the project's agents:</p>
+        <p class="prompt">Call itx.cd('/').chrome.openPage({ url: "${escape(proofUrl)}" }) and report the tabId and url it returns.</p>
       </div>`;
     element("prove", HTMLButtonElement).onclick = async () => {
       const result = element("proof-result", HTMLElement);
@@ -169,7 +309,10 @@ async function connect(session, project) {
 }
 
 try {
-  const [session, { issuer }] = await Promise.all([currentSession(), settings()]);
+  const [{ session }, { issuer }] = await Promise.all([
+    chrome.storage.local.get("session"),
+    settings(),
+  ]);
   if (session) await signedIn(session);
   else await signedOut(issuer);
 } catch (error) {

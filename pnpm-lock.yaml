@@ -43,7 +43,6 @@ overrides:
   os-next>capnweb: npm:@iterate-com/capnweb@0.12.2
   iterate>capnweb: npm:@iterate-com/capnweb@0.12.2
   '@iterate-com/dummy-petshop>capnweb': npm:@iterate-com/capnweb@0.12.2
-  '@iterate-com/browser-extension>capnweb': npm:@iterate-com/capnweb@0.12.2
   quicktype-core>readable-stream: npm:vite-compatible-readable-stream@3.6.1
   srvx: 0.11.12
   wrangler: 4.107.0
@@ -434,12 +433,6 @@ importers:
       wrangler:
         specifier: 4.107.0
         version: 4.107.0(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))
-
-  apps/browser-extension:
-    devDependencies:
-      capnweb:
-        specifier: npm:@iterate-com/capnweb@0.12.2
-        version: '@iterate-com/capnweb@0.12.2'
 
   apps/dash:
     dependencies:
