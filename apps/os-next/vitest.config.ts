@@ -46,6 +46,8 @@ const onUnhandledError = (error: unknown): boolean | void => {
 export default defineConfig({
   test: {
     globalSetup: ["./vitest.global-setup.ts"],
+    // Read at the ROOT: a project's own `onUnhandledError` is not consulted (vitest 4).
+    onUnhandledError,
     projects: [
       {
         plugins: [sqlAsText],
