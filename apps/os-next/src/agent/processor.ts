@@ -105,12 +105,12 @@ export function buildChatMessages(
 export function renderCapabilityTree(rows: RewriteRuleListEntry[]): string | null {
   const visible = rows.filter((row) => row.target && row.match !== "itx");
   if (visible.length === 0) return null;
-  const line = (row: RewriteRuleListEntry): string =>
-    `${row.match} — ${row.description || `⇒ ${row.target}`}`;
   const contexts = [...new Set(visible.map((row) => row.context))];
   const body = contexts.flatMap((context) => [
     `from ${context}:`,
-    ...visible.filter((row) => row.context === context).map(line),
+    ...visible
+      .filter((row) => row.context === context)
+      .map((row) => `${row.match} — ${row.description || `⇒ ${row.target}`}`),
   ]);
   return [
     "`itx` IS THIS CONTEXT'S CAPABILITY TREE (`await itx.rewriteRules.list()`) — every name below is one you can spell inside a tag; nothing else resolves:",

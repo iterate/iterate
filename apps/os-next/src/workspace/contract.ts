@@ -46,7 +46,7 @@ export const WorkspaceContract = defineProcessorContract({
   events: {
     "events.iterate.com/workspace/create-requested": {
       description:
-        "Someone asked for this workspace (`itx.workspaces.create(path)`). The context it lands on IS the workspace; `creator` is the context that asked — the saga writes the child\'s parent link `itx ⇒ itx.builtins.cd(creator)` before the certificate, so the link is part of the birth and nothing re-points a born context. Nothing to provision — the processor lands created (or create-failed, should the cross-post fail); a request after a failure is a new attempt, one after the certificate a harmless fact.",
+        "Someone asked for this workspace (`itx.workspaces.create(path)`). The context it lands on IS the workspace; `creator` is the context that asked — the saga writes the child's parent link `itx ⇒ itx.builtins.cd(creator)` before the certificate, so the link is part of the birth and nothing re-points a born context. Nothing to provision — the processor lands created (or create-failed, should the cross-post fail); a request after a failure is a new attempt, one after the certificate a harmless fact.",
       payloadSchema: z.object({ creator: z.string().optional() }),
     },
     "events.iterate.com/workspace/created": {

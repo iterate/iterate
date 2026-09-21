@@ -29,7 +29,6 @@ import {
   normalizedItxExpression,
   type ItxExpression,
   type ItxExpressionInput,
-  print,
   installPrototypeInvokeFallback,
 } from "iterate/next/expression";
 import type { IterateContextApi, RewriteRuleConfigured } from "iterate/next/api";

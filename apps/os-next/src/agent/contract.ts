@@ -185,7 +185,7 @@ export const AgentContract = defineProcessorContract({
   events: {
     "events.iterate.com/agent/create-requested": {
       description:
-        "Someone asked for this agent (`itx.agents.create(path)`). The context it lands on IS the agent; `creator` is the context that asked — the saga writes the child\'s parent link `itx ⇒ itx.builtins.cd(creator)` before the certificate, so the link is part of the birth and nothing re-points a born context. The processor lands created (with the default system prompt beside it) or create-failed; a request after a failure is a new attempt, one after the certificate a harmless fact.",
+        "Someone asked for this agent (`itx.agents.create(path)`). The context it lands on IS the agent; `creator` is the context that asked — the saga writes the child's parent link `itx ⇒ itx.builtins.cd(creator)` before the certificate, so the link is part of the birth and nothing re-points a born context. The processor lands created (with the default system prompt beside it) or create-failed; a request after a failure is a new attempt, one after the certificate a harmless fact.",
       payloadSchema: z.object({ creator: z.string().optional() }),
     },
     "events.iterate.com/agent/created": {
