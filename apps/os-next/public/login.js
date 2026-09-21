@@ -98,43 +98,49 @@
         autofocus: options.length === 1 ? "" : undefined,
       }),
     );
-  // the password: the email and the password in one form, signed in on submit
-  if (state.password)
+  // ONE form for the email sign-ins: the email; the password beside it when this deployment has one
+  // ("Sign in"); "Email me a code instead" when a code is offered too — a second submit of the SAME
+  // form that drops the password field before it posts, so the server reads an email alone (a code
+  // request), never a blank password (a wrong attempt). A code-only deployment shows the email and
+  // Continue; a password-only one the email, the password and Sign in.
+  if (state.password || state.emailSignIn) {
+    const password = state.password
+      ? el("input", {
+          type: "password",
+          name: "password",
+          autocomplete: "current-password",
+          required: "",
+        })
+      : null;
+    const codeButton =
+      state.emailSignIn && state.password
+        ? el("button", {
+            class: "quiet",
+            type: "submit",
+            formnovalidate: "",
+            text: "Email me a code instead",
+          })
+        : null;
+    if (codeButton && password)
+      codeButton.addEventListener("click", () => {
+        password.disabled = true; // a disabled field is not posted: this submit asks for a code
+      });
     options.push(
       el(
         "form",
         { method: "post", action: "/login" },
         next(),
         emailField(),
-        el(
-          "label",
-          {},
-          "Password ",
-          el("input", {
-            type: "password",
-            name: "password",
-            autocomplete: "current-password",
-            required: "",
-          }),
-        ),
-        el("button", { class: "primary", type: "submit", text: "Sign in" }),
-      ),
-    );
-  // the mailed code: the email alone, a code on its way on submit
-  if (state.emailSignIn)
-    options.push(
-      el(
-        "form",
-        { method: "post", action: "/login" },
-        next(),
-        emailField(),
+        password && el("label", {}, "Password ", password),
         el("button", {
-          class: state.password ? "quiet" : "primary",
+          class: "primary",
           type: "submit",
-          text: state.password ? "Email me a code instead" : "Continue",
+          text: state.password ? "Sign in" : "Continue",
         }),
+        codeButton,
       ),
     );
+  }
   if (state.google)
     options.push(
       el("p", {}, el("a", { class: "button", href: state.google, text: "Continue with Google" })),

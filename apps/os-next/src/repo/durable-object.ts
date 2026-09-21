@@ -4,9 +4,9 @@ import { z } from "zod";
 // live in git, in Cloudflare Artifacts, and THIS facet is the only thing that speaks git (git-wire.ts):
 // `itx.cfArtifacts.get(path)` — the binding proxy, addressed by this same path — hands it a token and
 // the remote URL, and every read and write here is git-over-HTTPS from inside the facet. It is also
-// what makes a repo a DOMAIN OBJECT: `create()` lands the creation facts on its path (the certificate
-// cross-posted to `/`, where the project catalog folds it), every commit through it is a
-// `repo/commit-completed` fact, and every other method refuses until it is created.
+// what makes a repo a DOMAIN OBJECT: it hosts the repo processor (processor.ts) — the creation saga
+// `itx.repos.create(path)` opens — every commit through it is a `repo/commit-completed` fact, and every
+// method refuses until the certificate has landed (`state.creation`).
 //
 // SCOPE, deliberately small: branch `main` only (REF); text content only. A read is ONE ls-refs, and
 // the tip's whole snapshot in one shallow fetch (`deepen: 1`) only when the tip moved — memoized in
@@ -34,7 +34,7 @@ import {
   type RepoLogEntry,
   type RepoManifest,
 } from "./git-wire.ts";
-import type { RepoIdentity, RepoView } from "./contract.ts";
+import type { RepoState } from "./contract.ts";
 import { RepoProcessor } from "./processor.ts";
 
 /** How long a minted git credential lives — and how long this facet reuses one before minting again. */
@@ -57,11 +57,11 @@ function filePath(path: string): string {
 }
 
 export class RepoDurableObject extends StreamProcessorDurableObject<
-  RepoView,
+  RepoState,
   { ITX?: ItxEntrypointService },
   ItxEntrypointScope
 > {
-  processor = new RepoProcessor();
+  processor = new RepoProcessor((call) => this.withItx(call));
 
   /** The context this facet is hosted on IS the repo: its path is the one name it goes by, here and
    *  at `itx.cfArtifacts` (which derives the Artifacts name from it). */
@@ -135,49 +135,16 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     return (this.#snapshotMemo = { tip, files });
   }
 
-  /** Bring the repo into being: `repos/create-requested` on this path, the Artifacts repo
-   *  provisioned (one that exists is fine), then the certificate on `/` and on this path — or
-   *  `repos/create-failed`, thrown; a later `create()` is a new attempt. Idempotent: a created repo
-   *  answers at once. Every other method refuses until this has completed. */
-  async create(): Promise<RepoIdentity> {
-    const path = await this.#path();
-    if ((await this.snapshot()).state.creation === "created") return { path };
-    await this.withItx((itx) =>
-      itx.append({ type: "events.iterate.com/repos/create-requested", payload: { path } }),
-    );
-    try {
-      await this.withItx((itx) => itx.cfArtifacts.create(path));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await this.withItx((itx) =>
-        itx.append({
-          type: "events.iterate.com/repos/create-failed",
-          payload: { path, error: message },
-        }),
-      );
-      throw new Error(`repo ${path}: creation failed — ${message}`);
-    }
-    // `/` first, this path last: a cross-post that fails leaves the creation requested, so the next
-    // create() runs again (provisioning tolerates an existing repo; the certificate is keyed).
-    const certificate = {
-      type: "events.iterate.com/repos/created",
-      payload: { path },
-      idempotencyKey: `repos/created:${path}`,
-    };
-    await this.withItx((itx) => itx.cd("/").append(certificate));
-    await this.withItx((itx) => itx.append(certificate));
-    this.#confirmedCreated = true;
-    return { path };
-  }
-
-  /** Every method past `create()` starts here: a repo not yet created refuses. Creation is terminal,
+  /** Every verb starts here: a repo whose certificate has not landed refuses. Creation is terminal,
    *  so one confirming read per incarnation. */
   #confirmedCreated = false;
   async #created(): Promise<string> {
     const path = await this.#path();
     if (!this.#confirmedCreated) {
-      if ((await this.snapshot()).state.creation !== "created")
-        throw new Error(`repo ${path}: not created — call create() first`);
+      if ((await this.snapshot()).state.creation?.status !== "created")
+        throw new Error(
+          `repo ${path}: not created — itx.repos.create(${JSON.stringify(path)}) first`,
+        );
       this.#confirmedCreated = true;
     }
     return path;
