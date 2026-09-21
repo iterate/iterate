@@ -128,6 +128,8 @@ export class IterateContextRpcTarget extends RpcTarget {
 
   /** Dispatch on the DO under this context's caller — the one place the edge dispatches. */
   #invokeOnDurableObject(itxExpression: ItxExpression, args: unknown[] = []): Promise<unknown> {
+    // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the call denotes
+    // whatever expression the caller spelled, so `unknown` is the honest contract here.
     return this.#durableObject.invoke(itxExpression, args, this.#caller) as Promise<unknown>;
   }
 

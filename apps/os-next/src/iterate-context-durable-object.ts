@@ -1348,6 +1348,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // The edge's stamp (ingress after the cookie check, a session's terminal fetch): the call runs
         // under that principal, and the header stays on the Request the app receives. Trusted here —
         // the edge sets it and ItxEntrypoint strips a loaded worker's, so it is the edge's JSON or absent.
+        // Asserted, not parsed: the header is the platform's own JSON of a Principal — the edge
+        // writes it after admission and every other source of it is stripped (above), so its shape
+        // is the edge's, and a parse here would only re-check the platform against itself.
         const principal = JSON.parse(
           headers.get(ITX_PRINCIPAL_HEADER) ?? "null",
         ) as Principal | null;
