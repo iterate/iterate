@@ -62,3 +62,23 @@ bool iterate_kit_read_int_field(
       capnweb_value_object_get(object, name, &value) &&
       capnweb_value_get_int64(&value, result);
 }
+
+bool iterate_kit_read_string_field(
+    const struct capnweb_value *object,
+    const char *name,
+    char *buffer,
+    size_t capacity,
+    size_t *length) {
+  struct capnweb_value value = {0};
+  size_t copied = 0U;
+  if (object == NULL || name == NULL || buffer == NULL || capacity == 0U ||
+      length == NULL || !capnweb_value_object_get(object, name, &value) ||
+      capnweb_value_get_type(&value) != CAPNWEB_JSON_STRING ||
+      capnweb_value_copy_string(&value, buffer, capacity, &copied) != CAPNWEB_OK ||
+      copied >= capacity) {
+    return false;
+  }
+  buffer[copied] = '\0';
+  *length = copied;
+  return true;
+}

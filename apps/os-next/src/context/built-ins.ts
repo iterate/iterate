@@ -14,7 +14,6 @@ import { stampPrincipal, type Caller } from "iterate/next/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
 import { codedError } from "iterate/next/lib";
 import {
-  itxExpressionStepName,
   print,
   type ItxExpression,
   type ItxExpressionInput,
@@ -110,7 +109,9 @@ export interface BuiltInScope extends LibraryRoots {
    *  can spell `itx.builtins.append(…)`. */
   builtins: Omit<BuiltInScope, "builtins">;
   /** Identify this context. */
-  whoami(): { projectId: string; path: string };
+  whoami():
+    | { projectId: string; path: string; projectSlug?: string; projectUrl?: string }
+    | Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
   /** Durable key/value prefixed with the RESOURCE OWNER's id (iterate-context.ts `resourceScope`:
    *  a project's id, or a global user's/organization's subtree) — the `${owner.id}:` prefix IS the
    *  isolation. */
@@ -360,6 +361,7 @@ function r2ObjectRecord(object: R2Object, prefix: string): R2ObjectRecord {
 
 /** What the CONTEXT (the DO) injects: identity, the bindings, and the seams only it can serve. */
 interface BuildBuiltInsDeps {
+  projectInfo?: () => Promise<{ projectSlug?: string; projectUrl?: string }>;
   projectId: string;
   path: string;
   /** The codec name of the context these roots belong to (loader cache keys). */
@@ -404,8 +406,7 @@ interface BuildBuiltInsDeps {
   egress: (request: Request) => Promise<Response>;
   /** WHO is calling right now — the `Caller` the DO runs this call under (the fetch lane's header,
    *  or the edge's stamp), `{ principal: null }` for an anonymous session, a processor, a loaded
-   *  worker and the KERNEL's own delivery loop. Carried across sibling `cd` hops; in the global
-   *  namespace `cd` reads it to tell the kernel's config funnel from a person's path. */
+   *  worker and the KERNEL's own delivery loop. Carried across permitted sibling `cd` hops. */
   caller: () => Caller;
   /** The rpcStubs view — closures over the DO's transport table (the pager sockets can never move). */
   rpcStubs: BuiltInScope["rpcStubs"];
@@ -490,7 +491,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   // Each root implements one member of `BuiltInScope` above (the canonical doc of the surface); the
   // comments here add only the WHY of a code branch.
   return {
-    whoami: () => ({ projectId, path }),
+    whoami: () =>
+      deps.projectInfo
+        ? deps.projectInfo().then((project) => ({ projectId, path, ...project }))
+        : { projectId, path },
     kv: {
       get: (k: string) => env.ITX_KV.get(kvPrefix + k),
       put: async (k: string, v: string) => {
@@ -667,21 +671,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     cd: (contextPath: string) =>
       new InvokeHandle((itxExpressionSteps) => {
         const siblingPath = resolveContextPath(path, contextPath);
-        // THE GLOBAL NAMESPACE IS NOT NAVIGABLE (iterate-context.ts `cd`): a person's expression —
-        // a rule or subscription written into their own context, run under their principal — may
-        // not name another global path. The ONE hop that exists here is the kernel's config funnel,
-        // `itx.cd('/').worker…` (the birth row every context carries), which the delivery loop runs
-        // under NO principal — so a user's row that spells the same hop can only feed the funnel.
-        // Stamped `retryable: false`: a subscription row naming another path can only repeat this
-        // refusal, so the delivery loop halts it at once instead of climbing its ladder.
-        if (
-          projectId === GLOBAL_PROJECT_ID &&
-          !(
-            deps.caller().principal === null &&
-            siblingPath === "/" &&
-            itxExpressionStepName(itxExpressionSteps[0]) === "worker"
-          )
-        )
+        // Global contexts are addressed by identity, never navigated through cd.
+        if (projectId === GLOBAL_PROJECT_ID)
           throw Object.assign(
             codedError(
               "FORBIDDEN",

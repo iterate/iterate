@@ -1446,7 +1446,20 @@ static void start_voice_setup(struct voice_setup_ticket *ticket) {
     CAPNWEB_EXPRESSION_STRING,
     {.string = {ticket->activation, strlen(ticket->activation)}},
   };
+  bool has_screen = false;
+  for (size_t m = 0; m < runtime.peer.options.module_count; ++m) {
+    const struct iterate_kit_module *module = &runtime.peer.options.modules[m];
+    for (size_t n = 0; n < module->method_count; ++n) {
+      const struct iterate_kit_method *method = &module->methods[n];
+      if (method->path_count == 2 && strcmp(method->path[0], "screen") == 0 &&
+          strcmp(method->path[1], "info") == 0) has_screen = true;
+    }
+  }
+  const struct capnweb_expression screen = {
+    CAPNWEB_EXPRESSION_BOOLEAN, {.boolean = has_screen},
+  };
   const struct capnweb_object_field fields[] = {
+    {{"screen", sizeof("screen") - 1U}, &screen},
     {{"streamPath", sizeof("streamPath") - 1U}, &path},
     {{"activation", sizeof("activation") - 1U}, &activation},
   };
@@ -2696,6 +2709,13 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
           runtime.voice_stream_generation == runtime.connection.generation;
       const bool ready = api_ready &&
                          (!runtime.view.call_active || stream_ready);
+      /* An idle device needs only its mounted project; the voice stream is
+       * created on the first press. Do not leave the startup UI waiting for it. */
+      if (api_ready && !runtime.activation_live && !runtime.view.fault &&
+          runtime.view.screen == ITERATE_KIT_VOICE_SCREEN_CONNECTING) {
+        runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_IDLE;
+        runtime.view.status = "";
+      }
       runtime.view.api_ready = api_ready;
       runtime.view.stream_ready = stream_ready;
       if (ready != published_link_ready) {

@@ -12,7 +12,7 @@ path and a namespace for fresh conversations, with no per-board model choice.
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `components/core`           | Cap’n Web peer, itx mount and stream subscription, WebSocket framing, provisioning image decode, session grammar, microphone flush and playout; it includes no audio or platform header (`tests/verify_core_boundary.cmake`) |
 | `components/audio`          | PCM conversion, AEC processing and audio accounting                                                                                                                                                                          |
-| `components/capabilities`   | the lent capabilities: conversation, health, speaker and system update on every board; camera and servos where the hardware exists                                                                                           |
+| `components/capabilities`   | the lent capabilities: conversation, health, speaker and system update on every board; screens, cameras and servos where the hardware exists                                                                                 |
 | `components/avatar`         | the PCM-clocked talking head ([its README](components/avatar/README.md))                                                                                                                                                     |
 | `components/voice`          | the voice loop: activation, continuous capture, the two audio tasks and the itx session, compiled once per platform it links                                                                                                 |
 | `platforms/iterate_esp_idf` | the ESP-IDF platform: Wi-Fi, ESP-TLS WebSocket transport, the `iterate_kit` partition, OTA, the RTC restart note, board table, codecs, LED ring and wake word                                                                |
@@ -20,7 +20,7 @@ path and a namespace for fresh conversations, with no per-board model choice.
 | `platforms/darwin`          | the Mac platform: CoreAudio behind the codec seam, VoiceProcessingIO echo cancellation, OpenSSL WebSocket transport, provisioning read from a file                                                                           |
 | `devices/<board>`           | board-only pins, codecs, display and DSP facts                                                                                                                                                                               |
 | `targets/<board>`           | target composition, partitions and SDK defaults                                                                                                                                                                              |
-| `targets/mac`               | the Mac as a board: `iterate-kit-mac`, with the keyboard as its button                                                                                                                                                       |
+| `devices/mac`               | the Mac as a board: `iterate-kit-mac`, with the keyboard as its button                                                                                                                                                       |
 | `tests`                     | host tests; `tests/fakes/esp_idf` is the scriptable platform half a loop test needs                                                                                                                                          |
 
 The loop reaches its platform through five headers under
@@ -73,6 +73,16 @@ itx expression it answers, `itx.clients.<device_name>` (every character outside
 JavaScript), and its conversation namespace `/agents/voice/v23/<device_name>`
 from it.
 
+USB-C boards using a FUSB302B can reuse `fusb302_esp_start()` with their I2C
+device and voltage/current/power limits. The driver is a fixed-supply PD 2.0
+sink (up to 20 V / 3 A); it never requests PPS, EPR or a power-role swap.
+Its private task services the PHY while board code reads a copied status.
+`USB_ONLY` is an expected computer-port outcome; `READY` requires Accept and
+PS_RDY, and failures retain a reason until reboot. Keep the amplifier off
+during initial negotiation and refresh its supply mode after contract changes.
+Satellite1 shows the integration: its speaker rating and amplifier gain stay
+in the board, independently of the reusable PD driver.
+
 Register the board once in `apps/kit/src/firmware/catalog.ts`: device identity,
 ESP-IDF target, chip and flash plan, including its configuration partition.
 Use the target's partition CSV and generated `flasher_args.json` to establish
@@ -81,6 +91,24 @@ partition table. Provide its checked-in chime assets if it uses them. The
 browser selector and the release builder consume the catalog. The air-path
 proof, `apps/os-next/scripts/voice-board.ts`, takes the device name on
 `--device` and needs no registration.
+
+## Remote screens
+
+`components/capabilities/screen` owns the shared image protocol. A board
+provides dimensions, supported/preferred wire formats, refresh timing, a
+staging buffer, and submit/status callbacks. `screen.info()` exposes these
+facts; `screen.setImage()` accepts contiguous bounded base64 chunks and
+`screen.status()` acknowledges hardware completion. Monochrome (`mono1`),
+16-level grayscale (`gray4`) and big-endian RGB565 use row-major pixels with
+each row padded to whole bytes. Panel-native packing belongs to the driver.
+
+`apps/os-next/examples/voice-agent/screen.ts` validates metadata and converts
+browser PNGs at the advertised resolution; `voice.setImage` waits for a bounded
+refresh acknowledgment. E-paper submits to a separate task so image updates
+cannot stall voice capture, playback or button handling. The voice loop checks
+registered capabilities to include screen guidance in a call. See the
+[NOTE4 adapter](devices/zectrix_note4/README.md) and
+[Waveshare adapter](devices/waveshare_s3_rlcd/README.md).
 
 ## Build and provision
 
@@ -103,10 +131,10 @@ pnpm firmware:test:host
 
 `pnpm firmware:build:host` (from `apps/kit`) configures and builds every host
 target into `firmware/.build/host`, `iterate-kit-mac` among them. It runs the
-voice loop the four ESP boards run, with the Mac's hardware behind the same
+voice loop the ESP boards run, with the Mac's hardware behind the same
 seams: CoreAudio behind the codec seam (`platforms/darwin/darwin_audio_codec.c`),
 Apple's VoiceProcessingIO where the HAVPE has its XMOS, the keyboard as the
-button, the provisioning image read from a file. `targets/mac/main.c` pumps the
+button, the provisioning image read from a file. `devices/mac/mac_device.c` pumps the
 loop's two audio tasks on one thread — a control step, two capture steps and a
 playback step every 5 ms — the way the voice loop tests pump them.
 
@@ -204,7 +232,7 @@ pnpm firmware:release
 pnpm firmware:sync
 ```
 
-`firmware:release` builds all five reviewed catalogue targets into a
+`firmware:release` builds all catalogue targets into a
 fingerprinted cache, checks their ESP-IDF flash plans and configuration
 partitions, then records a hash for every part. `firmware:sync` only publishes
 that current cache as hashed ESP Web Tools parts and manifests. Do not edit

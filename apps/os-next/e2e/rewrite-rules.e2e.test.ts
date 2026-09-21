@@ -125,12 +125,7 @@ test("rewriteRules.list() is the EFFECTIVE table: platform rows with their origi
     origin: "platform",
   });
   expect(before.every((row: { origin: string }) => row.origin === "platform")).toBe(true);
-  // the config worker's default is a platform row too — listed, and a `null` at it MASKS it
-  expect(before).toContainEqual({
-    match: "itx.worker",
-    target: expect.stringMatching(/^itx\.workers\.get\(/),
-    origin: "platform",
-  });
+
   await itx.provide("itx.kv", "itx.builtins.whoami");
   const after = await itx.rewriteRules.list();
   expect(after.filter((row: { match: string }) => row.match === "itx.kv")).toEqual([

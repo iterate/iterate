@@ -269,10 +269,18 @@ iterate_kit_add_test(iterate-kit-led-ring-pixels-test led_ring_pixels_test.c
 set(ITERATE_KIT_BOARD_CHIPS
   "${CMAKE_CURRENT_SOURCE_DIR}/../platforms/iterate_esp_idf/components/board")
 
+iterate_kit_add_test(iterate-kit-fusb302-test fusb302_test.c
+  "${ITERATE_KIT_BOARD_CHIPS}/fusb302.c"
+  INCLUDES "${ITERATE_KIT_BOARD_CHIPS}/include")
+
 iterate_kit_add_test(iterate-kit-tas2780-registers-test tas2780_registers_test.c
   "${ITERATE_KIT_BOARD_CHIPS}/codecs/tas2780_registers.c"
   INCLUDES "${ITERATE_KIT_BOARD_CHIPS}/include"
   LINK iterate-kit-core iterate-kit-capabilities)
+
+iterate_kit_add_test(iterate-kit-satellite1-power-policy-test satellite1_power_policy_test.c
+  ../devices/satellite1/satellite1_power_policy.c
+  INCLUDES ../devices/satellite1)
 
 iterate_kit_add_test(iterate-kit-pcm5122-registers-test pcm5122_registers_test.c
   "${ITERATE_KIT_BOARD_CHIPS}/codecs/pcm5122_registers.c"
@@ -285,3 +293,6 @@ iterate_kit_add_test(iterate-kit-xmos-spi-registers-test xmos_spi_registers_test
   LINK iterate-kit-core iterate-kit-capabilities)
 
 iterate_kit_add_core_test(iterate-kit-itx-multiplex-test itx_multiplex_test.c)
+
+iterate_kit_add_test(iterate-kit-screen-test screen_test.c
+  LINK iterate-kit-capabilities)
