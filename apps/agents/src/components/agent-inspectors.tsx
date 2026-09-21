@@ -27,7 +27,6 @@ import type {
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { sliceText, type StreamText } from "@iterate-com/shared/chunked-text";
 import {
-  formatClockTime,
   formatDateTime,
   formatSeconds,
   isRecord,
@@ -548,48 +547,5 @@ function RawEventContent({
         <SerializedObjectCodeBlock data={ordered} initialFormat="yaml" showToggle showCopyButton />
       </div>
     </>
-  );
-}
-
-// ── the raw log ──
-
-function deltaColorClass(deltaMs: number): string {
-  if (deltaMs < 1_000) return "text-muted-foreground/60";
-  if (deltaMs < 5_000) return "text-emerald-600 dark:text-emerald-500";
-  if (deltaMs < 30_000) return "text-amber-600 dark:text-amber-500";
-  return "text-destructive";
-}
-
-export function EventsList({
-  events,
-  onOpen,
-}: {
-  events: readonly Event[];
-  onOpen: (offset: number) => void;
-}) {
-  return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col px-4 py-2 md:px-6">
-      {events.map((event, index) => {
-        const previous = events[index - 1];
-        const delta = previous ? Date.parse(event.createdAt) - Date.parse(previous.createdAt) : 0;
-        return (
-          <button
-            key={event.offset}
-            type="button"
-            onClick={() => onOpen(event.offset)}
-            className="flex w-full items-baseline gap-3 rounded-md px-2 py-1 text-left font-mono text-xs hover:bg-muted/60"
-          >
-            <span className="w-12 shrink-0 text-muted-foreground/60">#{event.offset}</span>
-            <span className="min-w-0 flex-1 truncate">{shortEventType(event.type)}</span>
-            <span className={cn("w-16 shrink-0 text-right tabular-nums", deltaColorClass(delta))}>
-              {previous ? `+${formatSeconds(delta)}` : ""}
-            </span>
-            <span className="w-20 shrink-0 text-right text-muted-foreground/60">
-              {formatClockTime(Date.parse(event.createdAt))}
-            </span>
-          </button>
-        );
-      })}
-    </div>
   );
 }

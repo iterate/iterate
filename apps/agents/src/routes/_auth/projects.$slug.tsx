@@ -3,7 +3,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { CircleIcon } from "lucide-react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/next/app";
-import { useLiveState } from "iterate/next/react";
+import {
+  useContextLog,
+  useContextPresence,
+  useContextProcessors,
+  useLiveState,
+} from "iterate/next/react";
 import {
   Conversation,
   ConversationContent,
@@ -21,10 +26,11 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/u
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
-import type { Event } from "@iterate-com/ui/components/events/types";
 import type { AgentUiLlmStep } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { ContextView } from "@iterate-com/ui/components/context-view/context-view";
 import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
-import { EventsList, InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
+import { InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
+import { FacetLiveState } from "../../components/facet-live-state.tsx";
 import { AgentsNav } from "../../components/agents-nav.tsx";
 import { AgentComposer, type StreamInterrupt } from "../../components/composer.tsx";
 import { QueuedMessagesPanel } from "../../components/queued-messages.tsx";
@@ -140,31 +146,24 @@ function AgentsPage() {
 // ── the agent's log, live ──
 
 /** The agent's context, its log so far, and whether the catch-up read has reached the head. */
-function useAgentLog(api: AuthenticatedApp["api"], project: string, path: string) {
+/** The agent's context — `project.cd(path)` — held for the page's life: the stub every call
+ *  (the composer's `message`, the live states) goes through. Released on unmount AND again after
+ *  the connect settles, since an unmount mid-await comes before the handle that await returns. */
+function useAgentContext(
+  api: AuthenticatedApp["api"],
+  project: string,
+  path: string,
+): { context: Context | undefined; error: string | undefined } {
   const [context, setContext] = useState<Context>();
-  const [events, setEvents] = useState<Map<number, Event>>(() => new Map());
-  const [caughtUp, setCaughtUp] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string>();
   useEffect(() => {
     let disposed = false;
-    const merge = (batch: unknown[]) =>
-      setEvents((held) => {
-        const next = new Map(held);
-        for (const raw of batch) {
-          const event = toAgentEvent(raw, path);
-          if (event) next.set(event.offset, event);
-        }
-        return next;
-      });
-    // What the connect holds so far; released on unmount AND again after the connect settles, since
-    // an unmount mid-await comes before the handle that await returns.
-    const held: { stub?: Project; agent?: Context; subscription?: { [Symbol.dispose](): void } } =
-      {};
+    setError(undefined);
+    const held: { stub?: Project; agent?: Context } = {};
     const release = () => {
-      held.subscription?.[Symbol.dispose]();
       held.agent?.[Symbol.dispose]();
       held.stub?.[Symbol.dispose]();
-      held.subscription = held.agent = held.stub = undefined;
+      held.agent = held.stub = undefined;
     };
     (async () => {
       held.stub = await api.projects.get(project);
@@ -174,34 +173,38 @@ function useAgentLog(api: AuthenticatedApp["api"], project: string, path: string
       // A capnweb stub is a callable proxy: handed to a state setter directly, React would take it
       // for an updater and CALL it (an empty method call the server refuses).
       setContext(() => agent);
-      // Subscribe BEFORE the catch-up read, so nothing lands between the two; a push is a batch of
-      // committed events (and the ephemeral chunk windows), deduped into the map by offset.
-      held.subscription = await agent.subscribe({
-        consumes: FEED_SUBSCRIPTION,
-        target: (batch: unknown[]) => !disposed && merge(batch),
-      });
-      for (let after = 0; ; ) {
-        const page = await agent.readEvents(after, 500);
-        if (disposed) return;
-        merge(page.events);
-        if (page.atHead || page.scannedThroughOffset <= after) break;
-        after = page.scannedThroughOffset;
-      }
-      setCaughtUp(true);
     })()
+      // the connect itself failing (no such project, no such path, the sign-in gone) is the page's
+      // message; what fails after the handle exists is the log hook's
       .catch((e: unknown) => !disposed && setError(e instanceof Error ? e.message : String(e)))
       .finally(() => disposed && release());
     return () => {
       disposed = true;
       release();
+      setContext(undefined);
     };
   }, [api, project, path]);
-  // In offset order, the context's script runs in the reducer's vocabulary (agent-events.ts).
-  const sorted = useMemo(
-    () => adaptContextRuns([...events.values()].sort((a, b) => a.offset - b.offset)),
-    [events],
+  return { context, error };
+}
+
+/** The agent's log, from the SDK's `useContextLog` over its context (subscribed for every committed
+ *  event and the streamed chunk windows, caught up with `readEvents`), then — for the chat and its
+ *  traces — as the shared reducer reads it: the wire envelope tagged with the path, the context's
+ *  script runs in the reducer's vocabulary (agent-events.ts). The raw log itself feeds the Events
+ *  view untouched. */
+function useAgentLog(context: Context | undefined, path: string) {
+  const log = useContextLog(context, { consumes: FEED_SUBSCRIPTION });
+  const events = useMemo(
+    () =>
+      adaptContextRuns(
+        log.events.flatMap((event) => {
+          const tagged = toAgentEvent(event, path);
+          return tagged ? [tagged] : [];
+        }),
+      ),
+    [log.events, path],
   );
-  return { context, events: sorted, caughtUp, error };
+  return { log, events, caughtUp: log.caughtUp, error: log.error || null };
 }
 
 /** apps/os's interrupt affordance for the running turn, shared by the composer and the queued
@@ -253,7 +256,11 @@ function AgentConversation({ project, path }: { project: string; path: string })
   const search = Route.useSearch();
   const navigate = useNavigate();
   const { slug } = Route.useParams();
-  const { context, events, caughtUp, error } = useAgentLog(api, project, path);
+  const { context, error: connectError } = useAgentContext(api, project, path);
+  const { log, events, caughtUp, error: logError } = useAgentLog(context, path);
+  const error = connectError || logError;
+  const processors = useContextProcessors(context, log.events);
+  const presence = useContextPresence(context, log.events);
   const live = useLiveState<unknown>(context, {
     key: "agent",
     door: async () =>
@@ -409,7 +416,18 @@ function AgentConversation({ project, path }: { project: string; path: string })
       {error ? <p className="px-4 py-2 text-sm text-destructive">{error}</p> : null}
       {view === "events" ? (
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <EventsList events={events} onOpen={(offset) => onInspect({ kind: "event", offset })} />
+          <ContextView
+            className="mx-auto w-full max-w-3xl px-4 py-2 md:px-6"
+            title={<span className="font-mono text-xs">{path}</span>}
+            events={log.events}
+            caughtUp={caughtUp}
+            error={error || undefined}
+            processors={processors.rows}
+            presence={presence}
+            renderCoreState={() => <FacetLiveState itx={context} name="core" />}
+            renderLiveState={(name) => <FacetLiveState itx={context} name={name} />}
+            emptyText="Nothing has happened on this agent yet."
+          />
         </div>
       ) : (
         <>
