@@ -27,9 +27,11 @@ export class WorkspaceCollectionRpcTarget extends RpcTarget {
   }
 
   /** Bring the workspace at `path` into being: the `workspace` processor row on that path, then
-   *  `workspace/create-requested`, then the terminal fact — `workspace/created` (in the catalog by
-   *  then), or `workspace/create-failed`, thrown; a later call is a new attempt. Idempotent: a created
-   *  workspace answers at once. Data back, never the handle: `itx.workspaces.get(path)` addresses it. */
+   *  `workspace/create-requested`, then the terminal fact — `workspace/created` (in the catalog by then), or
+   *  `workspace/create-failed`, thrown; a later call is a new attempt. Idempotent: a created workspace answers
+   *  at once, and a creation already open is WAITED ON, never requested again — the terminal is
+   *  sought after the request that opened it, so a certificate landing between the read and the
+   *  wait is seen, not missed. Data back, never the handle: `itx.workspaces.get(path)` addresses it. */
   create(path: string): Promise<{ path: string }> {
     return this.withItx(async (itx) => {
       const context = itx.cd(path);
@@ -40,23 +42,26 @@ export class WorkspaceCollectionRpcTarget extends RpcTarget {
         "facets",
         ["get", "workspace"],
         ["snapshot"],
-      ])) as {
-        state: WorkspaceState;
-      };
+      ])) as { state: WorkspaceState };
       if (state.creation?.status === "created") return { path };
-      await context.processors.enable("workspace");
-      // Over the loopback stub an append's answer types as an RPC result, not the array the context
-      // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
-      const [requested] = (await context.append({
-        type: "events.iterate.com/workspace/create-requested",
-        payload: {},
-      })) as unknown as StreamEvent[];
+      let requestedAtOffset: number;
+      if (state.creation?.status === "requested") requestedAtOffset = state.creation.offset;
+      else {
+        await context.processors.enable("workspace");
+        // Over the loopback stub an append's answer types as an RPC result, not the array the context
+        // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
+        const [requested] = (await context.append({
+          type: "events.iterate.com/workspace/create-requested",
+          payload: {},
+        })) as unknown as StreamEvent[];
+        requestedAtOffset = requested!.offset;
+      }
       const settled = (await context.waitForEvent({
         type: [
           "events.iterate.com/workspace/created",
           "events.iterate.com/workspace/create-failed",
         ],
-        afterOffset: requested!.offset,
+        afterOffset: requestedAtOffset,
       })) as unknown as StreamEvent;
       if (settled.type === "events.iterate.com/workspace/create-failed")
         throw new Error(`workspace ${path}: creation failed — ${String(settled.payload?.error)}`);

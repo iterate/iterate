@@ -23,11 +23,11 @@ export class AgentCollectionRpcTarget extends RpcTarget {
   }
 
   /** Bring the agent at `path` into being: the `agent` processor row on that path, then
-   *  `agent/create-requested`, then the terminal fact — `agent/created` (in the catalog by then, the
-   *  default system prompt beside it on the path), or `agent/create-failed`, thrown; a later call is
-   *  a new attempt. Idempotent: a created agent answers at once. Data back, never the handle:
-   *  `itx.agents.get(path)` addresses it. An operator's instructions are their own append after:
-   *  `itx.agents.get(path).append({ type: "events.iterate.com/agent/context-added", … })`. */
+   *  `agent/create-requested`, then the terminal fact — `agent/created` (in the catalog by then), or
+   *  `agent/create-failed`, thrown; a later call is a new attempt. Idempotent: a created agent answers
+   *  at once, and a creation already open is WAITED ON, never requested again — the terminal is
+   *  sought after the request that opened it, so a certificate landing between the read and the
+   *  wait is seen, not missed. Data back, never the handle: `itx.agents.get(path)` addresses it. */
   create(path: string): Promise<{ path: string }> {
     return this.withItx(async (itx) => {
       const context = itx.cd(path);
@@ -38,20 +38,23 @@ export class AgentCollectionRpcTarget extends RpcTarget {
         "facets",
         ["get", "agent"],
         ["snapshot"],
-      ])) as {
-        state: AgentState;
-      };
+      ])) as { state: AgentState };
       if (state.creation?.status === "created") return { path };
-      await context.processors.enable("agent");
-      // Over the loopback stub an append's answer types as an RPC result, not the array the context
-      // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
-      const [requested] = (await context.append({
-        type: "events.iterate.com/agent/create-requested",
-        payload: {},
-      })) as unknown as StreamEvent[];
+      let requestedAtOffset: number;
+      if (state.creation?.status === "requested") requestedAtOffset = state.creation.offset;
+      else {
+        await context.processors.enable("agent");
+        // Over the loopback stub an append's answer types as an RPC result, not the array the context
+        // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
+        const [requested] = (await context.append({
+          type: "events.iterate.com/agent/create-requested",
+          payload: {},
+        })) as unknown as StreamEvent[];
+        requestedAtOffset = requested!.offset;
+      }
       const settled = (await context.waitForEvent({
         type: ["events.iterate.com/agent/created", "events.iterate.com/agent/create-failed"],
-        afterOffset: requested!.offset,
+        afterOffset: requestedAtOffset,
       })) as unknown as StreamEvent;
       if (settled.type === "events.iterate.com/agent/create-failed")
         throw new Error(`agent ${path}: creation failed — ${String(settled.payload?.error)}`);

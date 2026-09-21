@@ -25,7 +25,9 @@ export class RepoCollectionRpcTarget extends RpcTarget {
   /** Bring the repo at `path` into being: the `repo` processor row on that path, then
    *  `repo/create-requested`, then the terminal fact — `repo/created` (in the catalog by then), or
    *  `repo/create-failed`, thrown; a later call is a new attempt. Idempotent: a created repo answers
-   *  at once. Data back, never the handle: `itx.repos.get(path)` addresses it. */
+   *  at once, and a creation already open is WAITED ON, never requested again — the terminal is
+   *  sought after the request that opened it, so a certificate landing between the read and the
+   *  wait is seen, not missed. Data back, never the handle: `itx.repos.get(path)` addresses it. */
   create(path: string): Promise<{ path: string }> {
     return this.withItx(async (itx) => {
       const context = itx.cd(path);
@@ -36,20 +38,23 @@ export class RepoCollectionRpcTarget extends RpcTarget {
         "facets",
         ["get", "repo"],
         ["snapshot"],
-      ])) as {
-        state: RepoState;
-      };
+      ])) as { state: RepoState };
       if (state.creation?.status === "created") return { path };
-      await context.processors.enable("repo");
-      // Over the loopback stub an append's answer types as an RPC result, not the array the context
-      // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
-      const [requested] = (await context.append({
-        type: "events.iterate.com/repo/create-requested",
-        payload: {},
-      })) as unknown as StreamEvent[];
+      let requestedAtOffset: number;
+      if (state.creation?.status === "requested") requestedAtOffset = state.creation.offset;
+      else {
+        await context.processors.enable("repo");
+        // Over the loopback stub an append's answer types as an RPC result, not the array the context
+        // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
+        const [requested] = (await context.append({
+          type: "events.iterate.com/repo/create-requested",
+          payload: {},
+        })) as unknown as StreamEvent[];
+        requestedAtOffset = requested!.offset;
+      }
       const settled = (await context.waitForEvent({
         type: ["events.iterate.com/repo/created", "events.iterate.com/repo/create-failed"],
-        afterOffset: requested!.offset,
+        afterOffset: requestedAtOffset,
       })) as unknown as StreamEvent;
       if (settled.type === "events.iterate.com/repo/create-failed")
         throw new Error(`repo ${path}: creation failed — ${String(settled.payload?.error)}`);

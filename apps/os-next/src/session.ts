@@ -18,6 +18,7 @@ import {
 import { describeReach, type Directory, type Project, type Reach } from "./directory.ts";
 import type { AppConfig } from "./app-config.ts";
 import type { AuthenticationFact } from "./account/contract.ts";
+import type { ProjectState } from "./project/contract.ts";
 
 /** A project as a caller names it: its minted id (`prj_<hex>`) or its slug (a URL's
  *  `/projects/<slug>`, a hostname's label) — the directory resolves either (`projectIdOf`), and the
@@ -419,12 +420,14 @@ class ProjectCollection extends RpcTarget {
    *  named projects creates none: FORBIDDEN. A slug ANY org already holds is refused, coded
    *  (PROJECT_NAME_TAKEN); the same org's again is idempotent.
    *
-   *  THE DIRECTORY ROW, THEN THE SAGA: the `project` processor row is enabled on `/` and
-   *  `project/create-requested` appended there — the row's facts, under this caller — and the
-   *  context is returned AT ONCE (apps/os's `waitUntilCreated: false`): the project processor
-   *  (src/project/processor.ts) lands `project/created` or `project/create-failed` from state at
-   *  head, and the dash watches the facet's live state. `enable` is idempotent at the door and the
-   *  request is keyed, so a repeated create of the same slug appends nothing new. */
+   *  THE DIRECTORY ROW, THEN THE SAGA — the same rule every entity collection follows: the `project`
+   *  facet's state is read first; a project already created, or one whose creation is open, gets
+   *  its context back and nothing appended; otherwise (never requested, or the last attempt failed)
+   *  the `project` processor row is enabled on `/` and a NEW `project/create-requested` appended
+   *  there — the row's facts, under this caller. The context is returned AT ONCE (apps/os's
+   *  `waitUntilCreated: false`): the project processor (src/project/processor.ts) lands
+   *  `project/created` or `project/create-failed` from state at head, and the dash watches the
+   *  facet's live state. */
   async create(input: { project: string; orgId?: string }): Promise<IterateContextRpcTarget> {
     const data = z.object({ project: z.string(), orgId: z.string().optional() }).parse(input);
     const project = await this.#input.directory.createProject(
@@ -433,6 +436,16 @@ class ProjectCollection extends RpcTarget {
       data.orgId,
     );
     const context = this.#context(project.id);
+    // The facet is the platform's own ProjectDurableObject and `snapshot()` the engine's
+    // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.
+    const { state } = (await context.invoke([
+      "itx",
+      "facets",
+      ["get", "project"],
+      ["snapshot"],
+    ])) as { state: ProjectState };
+    if (state.creation?.status === "created" || state.creation?.status === "requested")
+      return context;
     await context.invoke(["itx", "processors", ["enable", "project"]]);
     await context.invoke([
       "itx",
@@ -441,7 +454,6 @@ class ProjectCollection extends RpcTarget {
         {
           type: "events.iterate.com/project/create-requested",
           payload: { slug: project.slug, orgId: project.orgId },
-          idempotencyKey: "project/create-requested",
         },
       ],
     ]);
