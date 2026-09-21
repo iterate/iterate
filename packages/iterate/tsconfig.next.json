@@ -10,8 +10,6 @@
     "src/next/app-session.ts",
     "src/next/client/live-state.ts",
     "src/next/client/react.tsx",
-    "src/next/client/dashboard.tsx",
-    "src/next/client/dashboard-data.ts",
     "src/next/api.ts",
     "src/next/lib.ts",
     "src/next/expression.ts",

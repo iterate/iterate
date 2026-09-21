@@ -15,7 +15,7 @@ import type { IterateContextDurableObject } from "../iterate-context-durable-obj
 //
 //   LAYER 1 — THE BORROWED RPC STUBS. Anyone with a Workers-RPC route to this DO can LEND a stub
 //   under an OPAQUE key (`lendRpcStub`); the DO keeps it BORROWED — every call on that key rides
-//   it — and RETURNS it at its idle quiesce (`returnBorrowedRpcStubs`), because a DO holding a stub
+//   it — and RETURNS it at the pins' release (`returnBorrowedRpcStubs`), because a DO holding a stub
 //   is pinned awake and this DO must hibernate with any number of clients attached. A lender with no
 //   pager (below) is one-shot: after the return the key is offline until someone lends again.
 //
@@ -102,7 +102,7 @@ export class RpcStubDirectory {
    *  terminal-fetch call into its serve(). */
   readonly #rpcStubFetch: RpcStubFetchServer;
 
-  // LAYER 1 — the borrowed rpc stubs, in memory ONLY; returned at the DO's idle quiesce — never per
+  // LAYER 1 — the borrowed rpc stubs, in memory ONLY; returned at the DO's pins' release — never per
   // call, never on a timer (a pending timer would itself pin the DO out of hibernation).
   readonly #borrowedRpcStubs = new Map<string, BorrowedRpcStub>();
 
@@ -173,7 +173,7 @@ export class RpcStubDirectory {
       return await borrowed.invoke(itxExpressionSteps);
     } catch (error) {
       // A BROKEN STUB IS DROPPED, NEVER KEPT (v4 §2.7): every later call on it would fail the same
-      // way until the idle return, while its pager may already lend a live one — so the NEXT call
+      // way until the pins' release, while its pager may already lend a live one — so the NEXT call
       // pages again. Only the stub THIS call rode: a re-lend that landed meanwhile is the live one.
       // The failed call is not retried.
       if (isBrokenRpcStubError(error) && this.#borrowedRpcStubs.get(rpcStubKey) === borrowed) {
@@ -184,7 +184,7 @@ export class RpcStubDirectory {
     }
   }
 
-  /** Any stub borrowed right now (O(1)) — what makes the idle deadline worth arming. */
+  /** Any stub borrowed right now (O(1)) — what makes the release timer worth starting. */
   hasBorrowedRpcStubs(): boolean {
     return this.#borrowedRpcStubs.size > 0;
   }
@@ -414,7 +414,7 @@ export type ClientRpcStub = { dup(): ClientRpcStub; [k: string]: unknown };
 /** WHAT THE EDGE LENDS (and the DO borrows as `BorrowedRpcStub`): a per-page Workers-RPC leg
  *  wrapping the session's capnweb stub, walking itx-expression steps on it (a DIRECT dotted dispatch
  *  — never `.apply`), so a call from the stream reaches the client's actual function over the capnweb
- *  WebSocket. Minted fresh per page and returned at the DO's idle quiesce. */
+ *  WebSocket. Minted fresh per page and returned at the DO's pins' release. */
 class LentRpcStub extends WorkersRpcTarget {
   #clientRpcStub: ClientRpcStub;
   /** THE ONE "the lend ended" reason, SHARED across every page of one pager (a `{ reason }` holder)

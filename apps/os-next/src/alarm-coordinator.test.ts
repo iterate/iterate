@@ -49,7 +49,7 @@ test("a restored alarm is only the dedupe seed: the same derived time is not re-
   alarms.reconcile();
   expect(writes).toEqual([]);
   // Nothing durable is due before T + 30 s: the stored T + 20 s was a reason that no longer exists
-  // (an idle deadline of a dead incarnation, say), and superseding it is right.
+  // (one a dead incarnation left, say), and superseding it is right.
   deadlines.splice(0, deadlines.length, T + 30_000);
   alarms.reconcile();
   expect(writes).toEqual([T + 30_000]);

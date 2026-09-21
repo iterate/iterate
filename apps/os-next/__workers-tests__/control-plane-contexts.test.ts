@@ -26,14 +26,11 @@ async function userSession(email: string): Promise<any> {
   return root.authenticate({ ...adminCredentials(), as: { email } });
 }
 
-/** Assert `thunk` is REFUSED with a coded error (the code the refusal must carry, so a broken
+/** Assert `thunk` is REFUSED with the FORBIDDEN code (the code the refusal must carry, so a broken
  *  pipeline or a typo never passes as a refusal). Explicit try/catch, not `expect().rejects`,
  *  because a capnweb stub is a custom thenable `.rejects` doesn't handle. Under a `test.fails` the
  *  thunk resolving is what keeps the expected-fail passing while that gap is open. */
-async function refuses(
-  thunk: () => Promise<unknown>,
-  code: "FORBIDDEN" | "PROJECT_NAME_RESERVED" = "FORBIDDEN",
-): Promise<void> {
+async function refuses(thunk: () => Promise<unknown>): Promise<void> {
   let refusal: unknown;
   try {
     await thunk();
@@ -41,7 +38,7 @@ async function refuses(
     refusal = error;
   }
   expect(refusal, "expected this to be refused, but it was allowed — still insecure").toBeDefined();
-  expect((refusal as { code?: string }).code).toBe(code);
+  expect((refusal as { code?: string }).code).toBe("FORBIDDEN");
 }
 
 describe("shape — a global context is an ordinary context (passing)", () => {
@@ -196,10 +193,33 @@ describe("security requirements — the global namespace is not navigable", () =
     await refuses(() => admin.projects.get("global").invoke(["itx", ["readEvents"]]));
   });
 
-  test("a project named 'global' must not collide with the deployment-global namespace", async () => {
+  test("a project named 'global' cannot collide with the deployment-global namespace: its id is minted, only its slug is the word — and `projects.get('global')` stays refused", async () => {
     const s = await userSession("collide@sec.test");
-    // The slug IS the id, so the word is reserved at the catalog: `Global` slugs to it too.
-    await refuses(() => s.projects.create({ project: "Global" }), "PROJECT_NAME_RESERVED");
+    // A project's id is minted (`prj_<hex>`), never its name — so `Global` (slug `global`) is an
+    // ordinary project whose context is nowhere near `(global, "/")`.
+    using named = await s.projects.create({ project: "Global" });
+    const who = (await named.whoami()) as { projectId: string; path: string };
+    expect(who).toEqual({
+      projectId: expect.stringMatching(/^prj_[0-9a-f]{32}$/),
+      path: "/",
+      projectSlug: "global",
+      projectUrl: "https://global.projects.test",
+    });
+    const listed = (await s.projects.list()) as { id: string; slug: string }[];
+    expect(listed.map(({ id, slug }) => ({ id, slug }))).toEqual([
+      { id: who.projectId, slug: "global" },
+    ]);
+    // The word itself still names no project at the catalog.
+    await refuses(() => s.projects.get("global").invoke(["itx", ["readEvents"]]));
+    // And a context that IS the project reads its own log, not the global root's.
+    const [mark] = (await named.invoke(["itx", ["append", { type: "collide-mark" }]])) as {
+      type: string;
+    }[];
+    expect(mark.type).toBe("collide-mark");
+    const rootPage = (await stub("global").invoke(["itx", ["readEvents"]])) as {
+      events: { type: string }[];
+    };
+    expect(rootPage.events.some((event) => event.type === "collide-mark")).toBe(false);
   });
 
   test("a user cannot reach an organization they do not belong to", async () => {

@@ -19,7 +19,7 @@ import {
 
 // ── the library ── the memo `buildLibrary` keeps over the three verbs: a connect with the same
 // (verb, url, options) is ONE live connection for the context's life; `releaseConnections()` (the
-// idle quiesce's call) closes what it holds and the next use reopens; a connect that FAILS is never
+// pins' release's call) closes what it holds and the next use reopens; a connect that FAILS is never
 // kept. ONE fake `itx.fetch` serves all three remotes by host and records every handshake.
 
 describe("the library", () => {
@@ -122,7 +122,7 @@ describe("the library", () => {
     });
 
     test("a held connection reused CONCURRENTLY after close re-handshakes ONCE — no session-less post", async () => {
-      // The idle quiesce closes the memoized client while a caller still holds the connection; its
+      // The pins' release closes the memoized client while a caller still holds the connection; its
       // next request re-handshakes. Two concurrent requests must share ONE handshake and neither may
       // post before the session id is established — this fake server delays initialize and rejects a
       // session-less non-initialize (a real MCP server 400s), so a request that skips the shared

@@ -67,13 +67,16 @@ test("create() births the agent — the processor row, the certificate on / and 
   expect(systemItem.role).toBe("system");
   expect(systemItem.content).toMatch(/^You are an agent on the iterate platform/);
   expect(systemItem.content).toMatch(/<codemode/);
-  expect(systemItem.content).toMatch(/INSTRUCTIONS FROM THE OPERATOR[^\n]*\nBe terse\.$/);
-  // ONE processor row for the agent (the other row on any context is the project's config funnel).
+  expect(systemItem.content).toMatch(
+    /INSTRUCTIONS FROM THE OPERATOR[^\n]*\nBe terse\.\nCURRENT PROJECT:/,
+  );
+  expect(systemItem.content).toContain(JSON.stringify(await itx.cd("/agents/support").whoami()));
+  // One explicit processor row for the agent; no automatic config subscription.
   expect(
     own
       .filter((e) => e.type === "events.iterate.com/stream/subscription-configured")
       .map((e) => e.payload.name),
-  ).toEqual(["config", "agent"]);
+  ).toEqual(["agent"]);
   expect(short(await readAll(itx))).toEqual(["agent/created"]); // only the certificate crosses to /
   expect(await itx.agents.list()).toEqual([
     { path: "/agents/support", createdAt: expect.any(String) },
@@ -100,11 +103,15 @@ test("the loop: a person's words → the model → a script run against itx → 
     offset: expect.any(Number),
   });
 
-  // Wait for the LAST derived fact, the prose's web-message-sent — appended a beat after the
-  // assistant item it derives from; reading at the assistant's words raced it on the deployed worker.
-  const log = await until("the prose that ends the turn", async () => {
+  // Wait for the LAST derived fact: the plain-response handler's script-run-settled, appended a
+  // beat after the prose's web-message-sent it follows — reading at the prose raced it on the
+  // deployed worker (17 of the 18 events, twice on main).
+  const log = await until("the settle that ends the turn", async () => {
     const all = await readAll(support);
-    return all.filter((e) => e.type === "events.iterate.com/agents/web-message-sent").length === 2
+    const count = (type: string) =>
+      all.filter((e) => e.type === `events.iterate.com/${type}`).length;
+    return count("agents/web-message-sent") === 2 &&
+      count("capability-host/script-run-settled") === 2
       ? all
       : undefined;
   }).catch(async (error: unknown) => {

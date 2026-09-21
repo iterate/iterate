@@ -8,13 +8,15 @@
 // ones the SDK and the first-party facets spell, with the platform's own signatures (context/built-ins.ts).
 import type { FacetHandle, InvokeHandle, ItxExpressionInput } from "./expression.ts";
 import type { Principal } from "./principal.ts";
-import type { ScheduleReceipt, StreamEvent, StreamEventInput } from "./stream/processor.ts";
+import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
 
 /** What `authenticate` accepts: the browser (its login cookie rode the upgrade), a device or script
- *  (its bearer token did), or the operator (the deployment's admin secret, verified in-band). */
+ *  (its bearer token did — or, on a socket opened bare, presented here as `token`: a static page on
+ *  another origin cannot put a header on a WebSocket), or the operator (the deployment's admin
+ *  secret, verified in-band). */
 export type SessionCredentials =
   | { type: "from-server-cookie" }
-  | { type: "bearer" }
+  | { type: "bearer"; token?: string }
   | { type: "admin-secret"; secret: string; as?: { email: string } };
 
 /** One page of a context's durable log (`readEvents`). */
@@ -54,6 +56,9 @@ export type WorkerSource = Record<string, string> | ItxExpressionInput;
 export type FacetSpec = { source: WorkerSource; cacheKey?: string; className: string };
 
 /** A context (a project, a user, an organization): every `itx` root, reached through `invoke`. */
+/** What `schedules.set` answers: the definition's identity, to cancel exactly it. */
+export type ScheduleReceipt = { key: string; scheduledAtOffset: number };
+
 export interface IterateContextApi {
   invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown>;
   /** Another context of this project, by path (`..` and `/` allowed; the global namespace is not). */
@@ -79,6 +84,9 @@ export interface IterateContextApi {
       ): Promise<ScheduleReceipt>;
       cancel(schedule: string | [string, string] | ScheduleReceipt): Promise<StreamEvent[]>;
     };
+    /** A hosted processor's claim on this context's alarm: "revive me by `at`" (a facet with a
+     *  `runInBackground` attempt in flight), or `null` to release it. */
+    processors: { claim(name: string, at: number | null): Promise<void> };
   };
   whoami():
     | { projectId: string; path: string; projectSlug?: string; projectUrl?: string }
@@ -170,18 +178,33 @@ export type ConsentAnswer =
       query: string;
       clientName: string;
       email: string;
-      projects: { id: string; orgId: string }[];
-      orgs: { id: string; name: string; role?: string }[];
+      projects: ProjectRecord[];
+      orgs: OrgRecord[];
       projectBound: boolean;
       scopes: string[];
       denyLocation: string;
+      projectHostnameBase: string;
+      /** the onboarding step's first draft of an organization name, from the person's name or email */
+      suggestedOrganizationName: string;
     }
   | { kind: "redirect"; location: string }
   | { kind: "invalid"; description: string };
 
-/** A project as the catalog lists it. */
+/** An organization as the session lists it: its minted id, its free-text name, the person's role
+ *  in it, and how many projects it holds (every one of them, not only those this grant lists). */
+export interface OrgRecord {
+  id: string;
+  name: string;
+  role?: string;
+  projects: number;
+}
+
+/** A project as the catalog lists it: addressed by `id` everywhere (`projects.get`, a grant's list,
+ *  an MCP call's `project`, an app's URL); `slug` is the label of its hostnames and its name to a
+ *  person. The id is the one stable identifier. */
 export interface ProjectRecord {
   id: string;
+  slug: string;
   orgId: string;
 }
 
@@ -194,10 +217,17 @@ export interface IterateSessionApi {
     scopes: string[];
     platformOrigin: string;
     projectHostnameBase: string;
+    /** the MCP server's origin (the dash's connect page) — "" when this deployment serves none */
+    mcpOrigin: string;
   };
   /** The organizations this session reaches. */
-  orgs(): Promise<{ id: string; name: string; role?: string }[]>;
-  createOrg(name: string): Promise<{ id: string; name: string; role?: string }>;
+  orgs(): Promise<OrgRecord[]>;
+  /** A new organization — `organizations:write`; the person is its owner. */
+  createOrg(name: string): Promise<OrgRecord>;
+  /** Rename an organization the person owns — `organizations:write`. */
+  updateOrg(orgId: string, input: { name: string }): Promise<OrgRecord>;
+  /** Delete an organization the person owns, while it holds no project — `organizations:write`. */
+  deleteOrg(orgId: string): Promise<void>;
   /** OAuth grants this session may manage (a signed-in person's): list, end, mint one for a device. */
   grants: {
     list(cursor?: string): Promise<{
@@ -220,7 +250,10 @@ export interface IterateSessionApi {
   };
   projects: {
     list(): Promise<ProjectRecord[]>;
+    /** the project's root context, by its slug or its id */
     get(project: string): Promise<IterateContextApi>;
+    /** a new project: `project` is slugged into its hostname label, its id is minted — the returned
+     *  context's `whoami()` says it, so does `list()` */
     create(input: { project: string; orgId?: string }): Promise<IterateContextApi>;
   };
   organizations: { get(orgId: string): Promise<IterateContextApi> };

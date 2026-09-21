@@ -1,6 +1,6 @@
 // scripts/voice-install.ts — put the voice agent on an os-next project.
 //
-// Bundles examples/voice-agent/{voice-agent,agent,worker}.ts (esbuild; the SDK stays the injected
+// Bundles examples/voice-agent/{voice-agent,voice-delegate,worker}.ts (esbuild; the SDK stays the injected
 // "./processor.js"), writes the three bundles to the project's KV (edge-cached: a fresh
 // conversation's facets load without a git read), mounts worker.js at `itx.voice` (the project's
 // own ingress configuration is untouched), sets /secrets/openai, and runs one throwaway
@@ -57,12 +57,12 @@ async function main(): Promise<void> {
   if (!PRESERVE_PROJECT && !apiKey) throw new Error("OPENAI_API_KEY unset");
   const voiceAgent = await bundle("voice-agent.ts");
   const voiceAgentKey = `voice-agent:${hash8(voiceAgent)}`;
-  const agent = await bundle("agent.ts");
-  const agentKey = `agent:${hash8(agent)}`;
+  const voiceDelegate = await bundle("voice-delegate.ts");
+  const voiceDelegateKey = `voice-delegate:${hash8(voiceDelegate)}`;
   const worker = (await bundle("worker.ts"))
     .replace('"voice-agent:dev"', JSON.stringify(voiceAgentKey))
-    .replace('"agent:dev"', JSON.stringify(agentKey));
-  if (!worker.includes(voiceAgentKey) || !worker.includes(agentKey))
+    .replace('"voice-delegate:dev"', JSON.stringify(voiceDelegateKey));
+  if (!worker.includes(voiceAgentKey) || !worker.includes(voiceDelegateKey))
     throw new Error("a facet cache key was not substituted into the worker");
   const workerKey = `voice-worker:${hash8(worker)}`;
   const fontCss = await screenFontCss();
@@ -73,7 +73,7 @@ async function main(): Promise<void> {
     await root.secrets.set("openai", apiKey!, { urls: ["https://api.openai.com"] });
   }
   await root.kv.put("voice-agent.js", voiceAgent);
-  await root.kv.put("agent.js", agent);
+  await root.kv.put("voice-delegate.js", voiceDelegate);
   await root.kv.put("worker.js", worker);
   await root.kv.put("screen-font.css", fontCss);
   // `itx.voice` is its own mount: the project's ingress target
@@ -106,10 +106,10 @@ async function main(): Promise<void> {
       {
         project: PROJECT,
         voiceAgentKiB: Math.round(voiceAgent.length / 1024),
-        agentKiB: Math.round(agent.length / 1024),
+        voiceDelegateKiB: Math.round(voiceDelegate.length / 1024),
         workerKiB: Math.round(worker.length / 1024),
         voiceAgentKey,
-        agentKey,
+        voiceDelegateKey,
         workerKey,
         preserveProject: PRESERVE_PROJECT,
         warmupMs,

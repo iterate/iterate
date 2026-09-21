@@ -1,10 +1,12 @@
 import { AuthorizationError, CimdFetchError } from "@cloudflare/workers-oauth-provider";
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
+import { suggestOrganizationName } from "@iterate-com/shared/name-suggestions";
 import { codedError } from "iterate/next/lib";
+import { OAuthScope, OAuthScopes } from "iterate/next/oauth-scopes";
 import type { Env } from "./control-plane.ts";
 import { directory, type Org, type Project } from "./directory.ts";
-import { projectHostOf } from "./hosts.ts";
+import { customProjectHostOf, projectHostOf } from "./hosts.ts";
 import { appConfigOf } from "./app-config.ts";
 import {
   authorizationOf,
@@ -20,23 +22,37 @@ export type ConsentView =
       kind: "consent";
       query: string;
       clientName: string;
+      /** the OAuth client id — what the page asks `/client-icon` for the client's picture by */
+      clientId: string;
       email: string;
+      /** the identity provider's picture of the signed-in person, when the sign-in brought one */
+      picture?: string;
       projects: Project[];
       orgs: Org[];
       projectBound: boolean;
       scopes: string[];
       denyLocation: string;
+      /** where a project's own site lives — `<slug>.<base>` — for the New project form's hint;
+       *  blank when the deployment serves no project hosts */
+      projectHostnameBase: string;
+      /** the onboarding step's first draft of an organization name (apps/auth's heuristic): from
+       *  the person's display name, else their email's company domain or local part */
+      suggestedOrganizationName: string;
     }
   | { kind: "redirect"; location: string }
   | { kind: "invalid"; description: string };
 
-/** A platform-served project CIMD client can receive only that project's authority. */
+/** A platform-served project CIMD client can receive only that project's authority — on a host
+ *  under the project hostname base or on a project's custom apex (the same two hostname checks
+ *  worker.ts admits a project host with). */
 async function projectsForClient(env: Env, clientId: string, userId: string) {
   const projects = await directory(env.DB).listProjects(userId);
   const url = URL.canParse(clientId) ? new URL(clientId) : null;
+  const config = appConfigOf(env);
   const host =
     url?.pathname === "/.auth/client.json"
-      ? projectHostOf(url.hostname, appConfigOf(env).projectHostnameBase)
+      ? (projectHostOf(url.hostname, config.projectHostnameBase) ??
+        customProjectHostOf(url.hostname, config.projectCustomHostnames))
       : null;
   if (!host) return { projects, projectBound: false };
   const project = await directory(env.DB).getProject(host.project);
@@ -70,7 +86,7 @@ export class Consent extends RpcTarget {
   constructor(env: Env, grant: AccessGrant) {
     super();
     if (grant.kind !== "issuer")
-      throw codedError("FORBIDDEN", "Sign in to Iterate to approve access.");
+      throw codedError("FORBIDDEN", "Sign in to iterate to approve access.");
     this.#env = env;
     this.#grant = grant;
   }
@@ -99,21 +115,39 @@ export class Consent extends RpcTarget {
         query,
         denyLocation: denied.href,
         clientName: client?.clientName ?? request.clientId,
+        clientId: request.clientId,
         email: this.#grant.email,
+        picture: this.#grant.picture,
         scopes: request.scope,
         orgs: await directory(env.DB).listOrgs(this.#grant.userId),
+        projectHostnameBase: appConfigOf(env).projectHostnameBase,
+        suggestedOrganizationName: suggestOrganizationName({
+          name: this.#grant.name,
+          email: this.#grant.email,
+        }),
         ...(await projectsForClient(env, request.clientId, this.#grant.userId)),
       };
     } catch (error) {
       return authorizationFailure(error);
     }
   }
+  /** Approve: the projects ticked (`["*"]` = every current and future project) and, task-based
+   *  consent, the scopes left ticked — `iterate` always, never one the request did not ask for; the
+   *  grant and its tokens carry exactly that set (`session.info().scopes` tells the app). Without
+   *  `scopes`, the request's whole set. */
   async approve(input: {
     query: string;
     projects: string[];
+    scopes?: string[];
   }): Promise<{ redirectTo: string } | { error: string }> {
     const env = this.#env;
-    const data = z.object({ query: z.string(), projects: z.array(z.string()) }).parse(input);
+    const data = z
+      .object({
+        query: z.string(),
+        projects: z.array(z.string()),
+        scopes: z.array(z.string()).optional(),
+      })
+      .parse(input);
     try {
       const request = await this.#request(data.query);
       const client = await oauthHelpers(env).lookupClient(request.clientId);
@@ -127,11 +161,17 @@ export class Consent extends RpcTarget {
       const allProjects = !projectBound && checked.has("*");
       if (!allProjects && !granted.length)
         return { error: "Choose at least one project you can access." };
+      const scope = OAuthScopes.parse(
+        (data.scopes || request.scope).filter(
+          (candidate) =>
+            request.scope.includes(candidate) && OAuthScope.safeParse(candidate).success,
+        ),
+      );
       return await oauthHelpers(env).completeAuthorization({
         request,
         userId: this.#grant.userId,
         metadata: { clientName: client?.clientName ?? request.clientId },
-        scope: request.scope,
+        scope,
         revokeExistingGrants: false,
         props: {
           kind: "app",

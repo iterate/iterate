@@ -1,5 +1,5 @@
 # Called by PR and main workflows. Each caller holds its lifecycle lock
-# until every job here, including cleanup, has finished.
+# until every job here, including cleanup and trace collection, has finished.
 name: Preview run
 on:
   workflow_call:
@@ -33,6 +33,45 @@ env:
   PREVIEW_TARGET_ARGS: ${{ inputs.pull-request-number && format('--pull-request-number {0}', inputs.pull-request-number) || format('--commit {0}', inputs.head-sha) }}
   TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
 jobs:
+  plan:
+    name: Plan preview work
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 5
+    outputs:
+      tests: ${{ steps.plan.outputs.tests }}
+      deploy: ${{ steps.plan.outputs.deploy }}
+      commit: ${{ steps.plan.outputs.commit }}
+      slot: ${{ steps.plan.outputs.slot }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ inputs.head-sha }}
+          fetch-depth: 0
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Decide preview work from the head commit
+        id: plan
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
+          pnpm preview ci-plan $PREVIEW_TARGET_ARGS
+          ${{ inputs.all-apps && '--all-apps' || '' }}
+      - name: Signal preview plan (including inherited failures)
+        if: always() && steps.plan.outputs.tests != ''
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          # The shell tracer also writes step outputs; only these belong in the signal.
+          PLAN_VALUES: ${{ steps.plan.outputs.values }}
+        run: >-
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          pnpm exec trpc-cli scripts/ci/status.ts set preview-plan --values "$PLAN_VALUES"
+
   prepare:
     name: Deploy and readiness
     runs-on:
@@ -49,10 +88,20 @@ jobs:
       - name: Reconcile dependencies (baked)
         id: install_dependencies
         run: node scripts/depot-ci/dependencies.mjs install
+      - name: Wait for preview plan
+        id: plan
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          pnpm exec trpc-cli scripts/ci/status.ts wait-for plan preview-plan
       - name: Reset test artifacts
+        if: steps.plan.outputs.tests == 'true'
         id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
       - name: Enforce preview deployment epoch
+        if: steps.plan.outputs.tests == 'true'
         id: deployment_epoch
         run: |-
           set -euo pipefail
@@ -63,6 +112,7 @@ jobs:
             exit 1
           fi
       - name: Verify coordination and signal preparing
+        if: steps.plan.outputs.tests == 'true'
         id: signal_preparing
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -71,6 +121,7 @@ jobs:
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
           pnpm exec trpc-cli scripts/ci/status.ts set preparing
       - name: Check fixed Playwright capacity
+        if: steps.plan.outputs.tests == 'true'
         id: catalogue
         env:
           CI: "true"
@@ -79,6 +130,7 @@ jobs:
           PLAYWRIGHT_CAPACITY_FILE: test-results/playwright-catalogue.json
         run: pnpm spec --list --reporter=./scripts/preview/playwright-capacity-reporter.ts
       - name: Deploy once and wait for readiness
+        if: steps.plan.outputs.tests == 'true'
         id: prepare
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -86,14 +138,16 @@ jobs:
         run: >-
           doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
           pnpm preview ci-prepare $PREVIEW_TARGET_ARGS
-          ${{ inputs.all-apps && '--all-apps' || '' }}
+          ${{ steps.plan.outputs.deploy == 'false' && format('--reuse-commit {0} --reuse-slot {1}', steps.plan.outputs.commit, steps.plan.outputs.slot) || '' }}
       - name: Publish prepared deployment identity
+        if: steps.plan.outputs.tests == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: preview-ci-plan
           path: test-results/preview-ci-plan.json
           if-no-files-found: error
       - name: Signal prepared preview
+        if: steps.plan.outputs.tests == 'true'
         id: signal_ready
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -103,10 +157,10 @@ jobs:
           pnpm exec trpc-cli scripts/ci/status.ts set preview-ready
       - name: Collect test artifacts
         id: collect_artifacts
-        if: always()
+        if: always() && steps.plan.outputs.tests == 'true'
         run: scripts/preview/collect-test-artifacts.sh test-results
       - name: Upload results
-        if: always()
+        if: always() && steps.plan.outputs.tests == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: preview-ci-prepare
@@ -115,6 +169,8 @@ jobs:
           if-no-files-found: error
 
   apps:
+    needs: plan
+    if: needs.plan.outputs.tests == 'true'
     name: App tests
     runs-on:
       size: 16x64
@@ -169,7 +225,14 @@ jobs:
           if-no-files-found: error
 
   playwright:
+    needs: plan
+    if: needs.plan.outputs.tests == 'true'
     name: Playwright ${{ matrix.shard }}/6
+    env:
+      # Each shard has its own runner, so the early server can use a fixed port.
+      PLAYWRIGHT_MOBILE_WEB_PORT: "8081"
+      PLAYWRIGHT_MOBILE_WEB_PRESTARTED: "1"
+      MOBILE_WEB_LOG: test-results/playwright-shard-${{ matrix.shard }}/mobile-web.log
     strategy:
       fail-fast: false
       matrix:
@@ -191,6 +254,29 @@ jobs:
       - name: Reset test artifacts
         id: reset_artifacts
         run: rm -rf test-results apps/os/test-results apps/streams-example-app/test-results
+      - name: Start mobile web server
+        id: start_mobile_web
+        env:
+          CI: "true"
+          PLAYWRIGHT_TEST: "1"
+        # TODO: use Playwright --list --shard to start only where mobile tests
+        # are selected. Per-project webServer support was reverted before release:
+        # https://github.com/microsoft/playwright/pull/41167
+        # Start on every shard for now; backend deployment is already running.
+        run: |-
+          set -euo pipefail
+          mkdir -p "$(dirname "$MOBILE_WEB_LOG")"
+          nohup setsid pnpm --dir apps/mobile start:web --port "$PLAYWRIGHT_MOBILE_WEB_PORT" \
+            > "$MOBILE_WEB_LOG" 2>&1 < /dev/null &
+          export MOBILE_WEB_PID="$!"
+          echo "pid=$MOBILE_WEB_PID" >> "$GITHUB_OUTPUT"
+          # Keep the existing 120s startup budget; failures include the server log below.
+          timeout 120 bash -c '
+            until curl --fail --silent --max-time 2 "http://127.0.0.1:$PLAYWRIGHT_MOBILE_WEB_PORT/" > /dev/null; do
+              kill -0 "$MOBILE_WEB_PID" || exit 1
+              sleep 0.2
+            done
+          '
       - name: Reconcile browser installation
         id: install_browser
         run: pnpm exec playwright install chromium
@@ -216,6 +302,18 @@ jobs:
           doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
           pnpm preview ci-test $PREVIEW_TARGET_ARGS
           --shard ${{ matrix.shard }}
+      - name: Stop mobile web server and print logs
+        id: stop_mobile_web
+        if: always()
+        env:
+          MOBILE_WEB_PID: ${{ steps.start_mobile_web.outputs.pid }}
+        run: |-
+          if [ -n "$MOBILE_WEB_PID" ]; then
+            # Stop the whole pnpm/Expo process group, as Playwright does for its servers.
+            # It may already have exited after a startup failure.
+            kill -KILL -- "-$MOBILE_WEB_PID" 2>/dev/null || true
+            cat "$MOBILE_WEB_LOG"
+          fi
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
@@ -227,8 +325,9 @@ jobs:
 
   finish:
     name: Collect results and clean up
-    needs: prepare
-    if: always()
+    needs: [plan, prepare]
+    # Prepare may already be deploying when plan fails after publishing its decision.
+    if: always() && needs.plan.outputs.tests == 'true'
     runs-on:
       size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
@@ -282,6 +381,27 @@ jobs:
           doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
           pnpm exec trpc-cli scripts/ci/status.ts set-pending-check-green
           "All preview tests passed. Cleanup and restoration run afterwards; their final outcome is reflected in this check. See Depot for current cleanup progress."
+      - name: Collect preparation and test trace
+        id: trace
+        if: always() && steps.consumers.outputs.settled == 'true'
+        timeout-minutes: 5
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          # Same-runner outputs preserve the measured verdict before Depot logs catch up.
+          CI_TRACE_GREEN: ${{ steps.tests_passed.outputs.ci-trace-green }}
+          CI_TRACE_VALIDATION_END: ${{ steps.merge_reports.outputs.ci-trace-end }}
+          CI_TRACE_GREEN_END: ${{ steps.tests_passed.outputs.ci-trace-end }}
+        run: >-
+          doppler run --project _shared --config preview --
+          pnpm exec trpc-cli scripts/ci/tracing/cli.ts current ci-trace.ignoreme
+      - name: Upload public CI trace
+        if: always() && steps.trace.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.trace.outputs.artifact-name }}
+          path: ci-trace.ignoreme/trace.*
+          if-no-files-found: error
+          retention-days: 30
       - name: Retire test data and restore the preview
         id: erase
         if: always() && steps.consumers.outputs.settled == 'true'
@@ -294,7 +414,7 @@ jobs:
           doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN --
           pnpm preview erase $PREVIEW_TARGET_ARGS
           --ran-head-sha "${{ inputs.head-sha }}"
-          ${{ needs.prepare.result == 'success' && '--restore' || '' }}
+          ${{ needs.prepare.result == 'success' && '--restore --prepared-ci-plan' || '' }}
       - name: Normalize and send preview test telemetry
         id: telemetry
         if: always()
@@ -344,12 +464,15 @@ jobs:
           test "$PREPARE_RESULT" = success
           test "$CONSUMERS_SETTLED" = true
           test "$CONSUMERS_SUCCEEDED" = true
-      - name: Dispatch completed-run trace collector
-        id: trace_collector
-        if: always()
+      - name: Publish settled preview evidence
+        id: settled
+        # Publish no pending status, and keep test failures red. Missing reports
+        # or a skipped/failed restoration cannot certify an inheritable result.
+        if: always() && !cancelled() && steps.erase.outcome == 'success' && steps.erase.outputs.restored == 'true' && steps.merge_reports.outputs.test_outcome != ''
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          CI_TRACE_REF: ${{ github.head_ref || github.ref_name }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: >-
-          doppler run --project _shared --config preview --
-          pnpm exec trpc-cli scripts/ci/tracing/cli.ts dispatch "$CI_TRACE_REF"
+          doppler run --project _shared --config preview --preserve-env=GITHUB_TOKEN --
+          pnpm exec trpc-cli scripts/ci/status.ts set-preview-settled
+          "${{ steps.merge_reports.outputs.test_outcome }}"

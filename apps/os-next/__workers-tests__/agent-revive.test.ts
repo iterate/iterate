@@ -1,12 +1,12 @@
 // __workers-tests__/agent-revive.test.ts — THE GUARANTEE: an agent's open LLM request survives the
 // death of its context. The model call runs in the facet's BACKGROUND (rule 3, packages/iterate
 // stream/processor.ts: never awaited by a batch), so no batch, cursor or push remembers it; what does
-// is the one-shot REVIVE the engine arms on the context BEFORE any background attempt starts — a
-// scheduled append, the one timer a facet has (workerd#6810: facets cannot set alarms). Killed
-// mid-call, the context keeps its alarm; the alarm's tick is a durable commit; the commit is pushed
-// to the agent row; the push materializes the facet, which catches up, finds the request open with
-// nobody running it, and runs it again. These tests are the only ones that can kill a context on
-// purpose (evictDurableObject) and fire its alarm on demand (runDurableObjectAlarm).
+// is the CLAIM the engine holds on its context's alarm while any attempt is in flight (a kv row on
+// the context, `processors.claim` — facets cannot set alarms, workerd#6810). Killed mid-call, the
+// context keeps its alarm; the alarm pass spends the claim and calls the facet's `revive()`, which
+// materializes it, catches up, finds the request open with nobody running it, and runs it again.
+// These tests are the only ones that can kill a context on purpose (evictDurableObject) and fire
+// its alarm on demand (runDurableObjectAlarm).
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "capnweb";
 import { beforeAll, expect, test, vi } from "vitest";
@@ -61,10 +61,12 @@ test("KILLED MID-CALL, THE REQUEST CONTINUES: the context dies with the model ca
   expect(short(await read(AGENT))).toContain("agent/llm-request-requested");
   expect(short(await read(AGENT))).not.toContain("agent/llm-request-settled");
 
-  // (1) THE PROMISE, MADE BEFORE ANY DEATH: with an attempt in flight, the context holds a durable
-  // wake — the engine's revive schedule, and the alarm the context derives from it.
-  const schedules = (await s.invoke("itx.schedules.list()")) as { key: string }[];
-  expect(schedules.map((row) => row.key)).toEqual([JSON.stringify(["revive", "agent"])]);
+  // (1) THE PROMISE, MADE BEFORE ANY DEATH: with an attempt in flight, the context holds the agent's
+  // claim — a kv row — and the alarm derived from it. No schedule, no event: nothing in the log.
+  expect(await s.invoke("itx.schedules.list()")).toEqual([]);
+  expect(
+    await runInDurableObject(s, (_i, state) => state.storage.kv.get("facet-claim:agent")),
+  ).toBeGreaterThan(Date.now());
   expect(await runInDurableObject(s, (_i, state) => state.storage.getAlarm())).not.toBeNull();
 
   // (2) THE DEATH: the release aborts the facet with its call in flight (what a crash or an eviction
@@ -77,9 +79,9 @@ test("KILLED MID-CALL, THE REQUEST CONTINUES: the context dies with the model ca
   await new Promise((r) => setTimeout(r, 300));
   expect(model.calls).toBe(1); // stalled, not settled: nobody is running the open request
 
-  // (3) THE REVIVE: time passes the revive delay and the alarm fires into an evicted context. The
-  // fresh incarnation's wake and the tick are pushed to the agent row; the facet materializes, finds
-  // the open request, asks the model again — and this time the answer lands.
+  // (3) THE REVIVE: time passes the claim and the alarm fires into an evicted context. The pass
+  // spends the claim and calls the facet's revive(): it materializes, catches up, finds the open
+  // request with nobody running it, asks the model again — and this time the answer lands.
   vi.useFakeTimers({ now: Date.now() + 21_000, toFake: ["Date"], shouldAdvanceTime: true });
   try {
     expect(await runDurableObjectAlarm(s)).toBe(true); // an alarm WAS in storage: the revive's
@@ -93,19 +95,23 @@ test("KILLED MID-CALL, THE REQUEST CONTINUES: the context dies with the model ca
   const log = await read(AGENT);
   const settled = log.find((e) => e.type === "events.iterate.com/agent/llm-request-settled")!;
   expect(settled.payload).toMatchObject({ result: { status: "succeeded", text: "42" } });
-  // ONE request, run twice; the second run follows a wake BY ALARM and the revive tick.
+  // ONE request, run twice; the second run follows a wake BY ALARM — the only thing between the
+  // request and its settle besides the wake record is the agent's own work: no tick, no schedule.
   expect(short(log).filter((t) => t === "agent/llm-request-requested")).toHaveLength(1);
   const requested = log.find((e) => e.type === "events.iterate.com/agent/llm-request-requested")!;
   const between = log.filter((e) => e.offset > requested.offset && e.offset < settled.offset);
-  expect(between.map((e) => e.type)).toContain("events.iterate.com/stream/woken");
-  expect(between.at(-1)?.type).not.toBe("events.iterate.com/agent/llm-request-requested");
-  expect(
-    between.filter((e) => e.type === "events.iterate.com/stream/woken").at(-1)?.payload,
-  ).toMatchObject({ reason: "alarm" });
-  expect(between.map((e) => e.type)).toContain("events.iterate.com/processor/revived");
-  // Settled, nothing in flight: the revive is retracted and the context owes no alarm for it.
+  expect(between.map((e) => e.type)).toEqual(["events.iterate.com/stream/woken"]);
+  expect(between[0]!.payload).toMatchObject({ reason: "alarm" });
+  // Settled, nothing in flight: the claim is released and the context owes no alarm.
   await until(
-    "no schedule",
-    async () => ((await s.invoke("itx.schedules.list()")) as unknown[]).length === 0,
+    "no claim",
+    async () =>
+      (await runInDurableObject(s, (_i, state) => state.storage.kv.get("facet-claim:agent"))) ===
+      undefined,
+  );
+  // the claim goes first and the alarm derived from it a moment later: wait for it the same way
+  await until(
+    "no alarm",
+    async () => (await runInDurableObject(s, (_i, state) => state.storage.getAlarm())) === null,
   );
 });

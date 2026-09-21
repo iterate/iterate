@@ -2,24 +2,25 @@
 // lane — the ONLY lane that can fire the DO's alarm (runDurableObjectAlarm) and force a graceful
 // teardown (evictDurableObject) deterministically).
 //
-// Target surface: IterateContextDurableObject.alarm()/#lastPinUseMs/#liveFacetNames/#facetWorkInFlight
+// Target surface: IterateContextDurableObject.alarm()/#pinCallEnded/#liveFacetNames/#facetWorkInFlight
 // (src/iterate-context-durable-object.ts), the delivery loop's cursor lane +
 // `deliverEveryCursorSubscription` (src/stream/subscription-delivery.ts), and the rpc-stub directory
 // (src/context/rpc-stubs.ts).
 //
-// THE ALARM DOES TWO THINGS, IN ORDER — this file pins both:
-//   1. `deliverEveryCursorSubscription`: every CURSOR subscription (a target that cannot own its
-//      progress — a stateless Worker-Loader entrypoint) whose retry is due is delivered from its
-//      cursor row; the awaited call is the ack, the ladder resets. AWAITED before step 2, so the quiesce never aborts a
-//      delivery in flight and a later retry's re-arm lands before the actor hibernates.
-//   2. the idle QUIESCE: 30s without a PIN being used RETURNS every borrowed stub and closes every
-//      open socket — the two things that keep an actor resident on the edge (measured) — and aborts
-//      every live facet on the way, so the actor can hibernate. A facet is NOT a pin: on the edge it
-//      dies with the actor, so it arms nothing; here in workerd a materialized facet or a borrowed
-//      stub does keep the DO non-hibernatable (workerd#6800 — evictDurableObject on such a DO times
-//      out after 30s, "still has active references"), so a test must release BEFORE it can evict
-//      (support.ts's `quiesce` runs the release directly). Only a borrowed stub ARMS the alarm:
-//      every pin below that fires the alarm borrows one FIRST.
+// THE ALARM SERVES DURABLE OBLIGATIONS ONLY, in order — this file pins the cursor half and the
+// negative space:
+//   1. the due scheduled appends (scheduled-appends.test.ts);
+//   2. `deliverEveryCursorSubscription`: every CURSOR subscription (a target that cannot own its
+//      progress — a stateless Worker-Loader entrypoint) whose claim is due is delivered from its
+//      cursor row; the awaited call is the ack, the ladder resets;
+//   3. the due CLAIMS of hosted processors (agent-revive.test.ts): each spent, the facet revived.
+// PINS ARE NOT THE ALARM'S: a borrowed stub or an open library socket keeps an actor resident on the
+// edge (measured), and a TIMER 30 s after the pin's last use returns the stubs and closes the sockets
+// — memory releasing memory, no durable alarm. A facet is NOT a pin: on the edge it dies with the
+// actor. Here in workerd a materialized facet or a borrowed stub does keep the DO non-hibernatable
+// (workerd#6800 — evictDurableObject on such a DO times out after 30s, "still has active
+// references"), so a test must release BEFORE it can evict (support.ts's `quiesce` runs the release
+// directly, facets included).
 //
 // PROCESSORS here are what they are everywhere: userspace two-class sources — a pure
 // `StreamProcessor` (`CounterProcessor`) and its one-line `StreamProcessorDurableObject` host
@@ -123,10 +124,10 @@ async function untilStubs(ctx: string, n: number, timeoutMs = 5_000): Promise<Re
   }
 }
 
-// ─────────── THE ALARM'S SECOND JOB: the idle quiesce, and what survives the eviction it enables ───────────
+// ─────────── THE RELEASE (`releasePins`, run directly by these tests), and what survives the eviction it enables ───────────
 
 test("QUIESCE PRESERVES CURSOR+STATE: abort an idle facet, re-materialize from the startup memo, snapshot is unchanged", async () => {
-  // A facet aborted by the idle quiesce and re-materialized by the next call (`itx.facets.get(name)`
+  // A facet aborted by the release and re-materialized by the next call (`itx.facets.get(name)`
   // reads the `facet:<name>` startup memo — no configure(), no side channel; its identity is
   // ctx.props) keeps its durable checkpoint + reduced state. Were re-materialization broken, the
   // post-quiesce snapshot would throw NO_FACET or reset to n=0.
@@ -295,15 +296,15 @@ test("A BARE PROBE ON A DORMANT CONTEXT LEAVES NO ALARM: nothing is subscribed o
   expect(await alarmAt(ctx)).toBeNull();
 });
 
-test("AN OBSERVED PASS: an exact waitForEvent observer receives one ephemeral trace, a read with includeEphemeral holds the whole pass, the durable log is untouched — and observing is not a pin's use, so the observed pass releases", async () => {
+test("AN OBSERVED PASS: an exact waitForEvent observer receives one ephemeral trace, a read with includeEphemeral holds the whole pass, and the durable log holds only what the pass appended", async () => {
   const ctx = "prj_q_observed";
   const s = stub(ctx);
-  // A BORROWED STUB is the pin that arms the idle deadline (a facet is not a pin: it does not keep
-  // the actor resident on the edge, so nothing arms an alarm for it).
-  const clientItx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
-  await clientItx.provide("itx.p0", new Echo(0));
-  const caller = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
-  expect(await caller.invoke("itx.p0.echo('warm')")).toBe("echo-0:warm");
+  // A SCHEDULE is what arms this alarm (a pin arms nothing: pins are released by a timer).
+  await s.invoke([
+    "itx",
+    "schedules",
+    ["set", { key: "tick", when: { afterMs: 61_000 }, events: [{ type: "tick" }] }],
+  ]);
   expect(await alarmAt(ctx)).not.toBeNull();
   const rowsBefore = await durableCount(ctx);
   const observed = s.invoke([
@@ -320,9 +321,7 @@ test("AN OBSERVED PASS: an exact waitForEvent observer receives one ephemeral tr
   }
   const trace = await observed;
   expect(trace).toMatchObject({ type: STREAM_ALARM_TRACE_EVENT, ephemeral: true });
-  expect(trace.payload).toMatchObject({ reason: "alarm-fired", borrowedRpcStubs: true });
-  // The observer's call resolving mid-pass touches no pin (only a borrowed stub's call or a
-  // library connection's use moves the idle clock), so THIS pass returns the stub.
+  expect(trace.payload).toMatchObject({ reason: "alarm-fired", dueSchedules: 1 });
   const ring = (
     (await s.invoke(["itx", ["readEvents", 0, 500, { includeEphemeral: true }]])) as {
       events: StreamEvent[];
@@ -330,47 +329,56 @@ test("AN OBSERVED PASS: an exact waitForEvent observer receives one ephemeral tr
   ).events
     .filter((event) => event.type === STREAM_ALARM_TRACE_EVENT)
     .map((event) => event.payload as unknown as AlarmTrace);
-  expect(ring.map((t) => t.reason)).toEqual(["alarm-fired", "quiesce", "alarm-pass"]);
-  const pass = ring.at(-1)!;
-  expect(pass.alarm.after).toBeNull(); // released everything: no deadline left, no alarm
-  expect(pass.borrowedRpcStubs).toBe(false);
-  expect(pass.lastPinUseMs).toBeNull();
-  expect(await durableCount(ctx)).toBe(rowsBefore);
-  expect(await alarmAt(ctx)).toBeNull();
+  expect(ring.map((t) => t.reason)).toEqual(["alarm-fired", "alarm-pass"]);
+  // The tick and its completion are the pass's two durable rows; the traces took none.
+  expect(await durableCount(ctx)).toBe(rowsBefore + 2);
+  // The one-shot schedule spent and the tick's delivery acked: no deadline left, no alarm.
+  await until("no alarm", async () => (await alarmAt(ctx)) === null);
 });
-
-test("A FACET IS NOT A PIN: a request that materializes and calls a facet arms NO alarm; a borrowed stub arms the idle deadline, a call that touches no pin leaves it, and the quiesce returns the stub", async () => {
-  const ctx = "prj_q_pin_clock";
-  const s = stub(ctx);
-  await enableCounter(ctx);
-  await s.append({ type: "a/1" }); // the push materializes the facet
-  await new Promise((r) => setTimeout(r, 300));
-  await snapCounter(ctx); // and a direct facet call
-  await until("config acked", async () => (await alarmAt(ctx)) === null);
-  expect(await alarmAt(ctx)).toBeNull(); // a facet does not keep the actor resident on the edge: no deadline, no alarm
-  // A borrowed stub DOES pin the actor: its use arms the idle deadline.
-  const clientItx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
-  await clientItx.provide("itx.p0", new Echo(0));
-  const caller = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
-  expect(await caller.invoke("itx.p0.echo('warm')")).toBe("echo-0:warm");
-  const armed = await alarmAt(ctx);
-  expect(armed).not.toBeNull();
-  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
-  try {
-    vi.setSystemTime(Date.now() + 30_000);
+test(
+  "NO PIN ARMS AN ALARM: a facet arms nothing, a borrowed stub arms nothing — the stub is returned by a TIMER 30 s after its last use, and a call after that borrows it again",
+  { timeout: 60_000 },
+  async () => {
+    const ctx = "prj_q_pin_clock";
+    const s = stub(ctx);
+    await enableCounter(ctx);
+    await s.append({ type: "a/1" }); // the push materializes the facet
+    await new Promise((r) => setTimeout(r, 300));
+    await snapCounter(ctx); // and a direct facet call
+    await until("config acked", async () => (await alarmAt(ctx)) === null);
+    expect(await alarmAt(ctx)).toBeNull(); // a facet does not keep the actor resident on the edge: no deadline, no alarm
+    // A borrowed stub DOES pin the actor — and still arms nothing: a pin is memory, released by a
+    // timer that is memory too (the stub keeps the actor resident until it fires).
+    const clientItx = await (
+      await openSession()
+    )
+      .authenticate(adminCredentials())
+      .projects.get(ctx);
+    await clientItx.provide("itx.p0", new Echo(0));
+    const caller = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
+    const usedAt = Date.now();
+    expect(await caller.invoke("itx.p0.echo('warm')")).toBe("echo-0:warm");
+    expect((await stateOf(ctx)).borrowedRpcStubs).toBeGreaterThanOrEqual(1);
+    expect(await alarmAt(ctx)).toBeNull();
     await s.invoke("itx.schedules.list()"); // a request, not a pin's use
     await snapCounter(ctx); // a facet call: not a pin's use either
-    expect(await alarmAt(ctx)).toBe(armed);
-    expect(await caller.invoke("itx.p0.echo('again')")).toBe("echo-0:again"); // the stub's use: a fresh quiet period
-    expect(await alarmAt(ctx)).toBeGreaterThan(armed!);
-  } finally {
-    vi.useRealTimers();
-  }
-  await quiesce(ctx);
-  expect((await stateOf(ctx)).borrowedRpcStubs).toBe(0);
-  expect(await alarmAt(ctx)).toBeNull();
-});
-
+    expect(await alarmAt(ctx)).toBeNull();
+    // THE TIMER: the quiet period after the stub's last use ends with the stub returned.
+    await until(
+      "released by the timer",
+      async () => (await stateOf(ctx)).borrowedRpcStubs === 0,
+      45_000,
+    );
+    expect(Date.now() - usedAt).toBeGreaterThanOrEqual(30_000);
+    expect(await alarmAt(ctx)).toBeNull();
+    // A call after the release borrows again (the pager re-dials): a fresh quiet period.
+    expect(await caller.invoke("itx.p0.echo('again')")).toBe("echo-0:again");
+    expect((await stateOf(ctx)).borrowedRpcStubs).toBeGreaterThanOrEqual(1);
+    await quiesce(ctx);
+    expect((await stateOf(ctx)).borrowedRpcStubs).toBe(0);
+    expect(await alarmAt(ctx)).toBeNull();
+  },
+);
 test("A '*' FACET WAKE ARMS NOTHING: a facet-hosting context holds no alarm after a request, and an alarm-woken incarnation whose wake record materializes the facet leaves none either — one woken, then quiet", async () => {
   const ctx = "prj_q_star_facet_wake";
   const s = stub(ctx);
@@ -413,7 +421,7 @@ test("A WAKE MAKES NO LOOP: an incarnation the alarm woke delivers its own wake 
       (event) => event.type === "events.iterate.com/stream/woken",
     );
   const before = (await wokens()).length;
-  // An alarm with no reason left behind (a dead incarnation's idle deadline, say — set here on the
+  // An alarm with no reason left behind (a stray one a dead incarnation left, say — set here on the
   // quiet incarnation, which is then evicted) fires for real and wakes a FRESH incarnation: its
   // constructor reads the alarm, so its wake record says so.
   await runInDurableObject(s, (_inst, state) => state.storage.setAlarm(Date.now() + 300));
@@ -429,7 +437,7 @@ test("A WAKE MAKES NO LOOP: an incarnation the alarm woke delivers its own wake 
   expect(await wokens()).toHaveLength(before + 1);
 });
 
-test("A BORROW IS A USE: the first call through a stub arms the idle deadline a quiet period out — never an instant already past, which would fire an alarm pass for nothing", async () => {
+test("A BORROW ARMS NOTHING: the first call through a stub — a live '*' subscriber's callback lent, and a commit's reconcile landing while that first call is in flight — leaves no alarm and runs no pass", async () => {
   const ctx = "prj_q_first_borrow";
   const clientItx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
   await clientItx.provide("itx.p0", new Echo(0));
@@ -443,13 +451,11 @@ test("A BORROW IS A USE: the first call through a stub arms the idle deadline a 
     consumes: ["*"],
     target: (events: unknown[]) => void seen.push(...events),
   });
-  const before = Date.now();
   await stub(ctx).append({ type: "mark" });
   expect(await caller.invoke("itx.p0.echo('first')")).toBe("echo-0:first"); // and a direct borrow
-  await new Promise((r) => setTimeout(r, 800)); // an alarm armed in the past would have fired by now
-  const armed = await alarmAt(ctx);
-  expect(armed).not.toBeNull();
-  expect(armed!).toBeGreaterThanOrEqual(before + 30_000);
+  await new Promise((r) => setTimeout(r, 800)); // an alarm armed for the borrow would show by now
+  await until("config acked", async () => (await alarmAt(ctx)) === null);
+  expect(await alarmAt(ctx)).toBeNull();
   const ring = (
     (await stub(ctx).invoke(["itx", ["readEvents", 0, 500, { includeEphemeral: true }]])) as {
       events: StreamEvent[];
@@ -457,42 +463,20 @@ test("A BORROW IS A USE: the first call through a stub arms the idle deadline a 
   ).events.filter((event) => event.type === STREAM_ALARM_TRACE_EVENT);
   expect(ring).toEqual([]); // no pass ran: nothing was due
 });
-
-test("A BORROW RACES THE QUIESCE ALARM: a stub invoke fired concurrently with the alarm still answers", async () => {
-  // A quiesce RETURNS borrowed stubs (#borrowed) but never touches a PENDING page (#rpcStubPagesInFlight),
-  // and the borrow the invoke makes is the pin's use that keeps the actor warm. PINS: an invoke that
-  // borrows a stub while the 30s alarm fires resolves with the right per-client answer (the stub it
-  // is borrowing is not returned out from under it).
+test("A BORROW RACES THE RELEASE: a stub invoke fired concurrently with the pins' release still answers", async () => {
+  // A release RETURNS borrowed stubs (#borrowed) but never touches a PENDING page (#rpcStubPagesInFlight),
+  // and the borrow the invoke makes is a pin's use that keeps the actor warm: an invoke that borrows
+  // a stub while the release runs resolves with the right per-client answer (the stub it is
+  // borrowing is not returned out from under it).
   const ctx = "prj_pagein";
   const clientItx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
   for (let i = 0; i < 4; i++) await clientItx.provide(`itx.p${i}`, new Echo(i));
   const caller = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
-
-  // THERE MUST BE AN ALARM TO RACE. Lending four stubs arms nothing — the idle deadline arms only
-  // while a stub is BORROWED (or the library holds a socket); a facet is not a pin — so warm one
-  // stub first and read the schedule back. Without this the alarm below fires into an empty
-  // schedule and the race is vacuous.
   expect(await caller.invoke("itx.p0.echo('warm')")).toBe("echo-0:warm");
   expect((await stateOf(ctx)).borrowedRpcStubs).toBeGreaterThanOrEqual(1);
-  expect(await alarmAt(ctx)).not.toBeNull();
-
-  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
-  let raced: unknown;
-  let alarmRan: boolean;
-  try {
-    vi.setSystemTime(Date.now() + 61_000);
-    const alarmP = runDurableObjectAlarm(stub(ctx));
-    const invokeP = caller.invoke("itx.p2.echo('race')");
-    const [ran, inv] = await Promise.all([alarmP, invokeP]);
-    alarmRan = ran;
-    raced = inv;
-  } finally {
-    vi.useRealTimers();
-  }
-  expect(alarmRan).toBe(true); // the armed alarm really ran alongside the invoke
+  const [, raced] = await Promise.all([quiesce(ctx), caller.invoke("itx.p2.echo('race')")]);
   expect(raced).toBe("echo-2:race");
 });
-
 test("SCALE DROP + QUIESCE + EVICT + WAKE: a DISPOSED live provide stays gone; the fan-out reaches EXACTLY the survivors", async () => {
   // Extends hibernation-at-scale's "eviction preserves the fleet" with a provider disposing one of
   // its own provides before the wake. PINS: the drop is honored across the eviction (the dropped
@@ -515,10 +499,9 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a DISPOSED live provide stays gone; t
   const dropped = await untilStubs(ctx, K - 1); // the relay's close lands at the DO a beat later
   expect(dropped.rpcStubPagers).toBe(K - 1);
 
-  // The K-1 surviving lends arm nothing on their own, so warm one stub: that borrow is what arms
-  // the idle deadline AND what the quiesce then has to return.
+  // Warm one stub: that borrow is what the release then has to return — and it arms nothing.
   expect(await caller.invoke("itx.k0.echo('warm')")).toBe("echo-0:warm");
-  expect(await alarmAt(ctx)).not.toBeNull();
+  expect(await alarmAt(ctx)).toBeNull();
   await quiesce(ctx);
   const q = await stateOf(ctx);
   expect(q.borrowedRpcStubs).toBe(0); // the quiesce returned every borrowed stub (evict precondition)

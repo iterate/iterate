@@ -1,5 +1,3 @@
-import type { ProjectIdOrSlug } from "./session.ts";
-
 /** A DNS label: lowercase letters and digits, single hyphens inside. */
 const DNS_LABEL = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /** An app label: a DNS label that is also an itx identifier (it becomes a step, `itx.apps.<label>`). */
@@ -15,15 +13,27 @@ export function hostnameLabelsUnderBase(hostname: string, base: string): string[
   return host.endsWith(suffix) ? host.slice(0, -suffix.length).split(".") : null;
 }
 
+/** A CUSTOM HOSTNAME — one of the deployment's own that IS a project's apex (`APP_CONFIG_PROJECT_CUSTOM_HOSTNAMES`,
+ *  `iterate2.com=iterate`): the apex shape, `app: null`, so the project's config worker
+ *  `fetch` answers exactly as it does on `<project>.<base>`. Null for a hostname the map does not
+ *  name. Pure. */
+export function customProjectHostOf(
+  hostname: string,
+  hostnames: Record<string, string>,
+): { app: null; project: string } | null {
+  const project = hostnames[hostname.toLowerCase().replace(/\.$/, "")];
+  return project ? { app: null, project } : null;
+}
+
 /** The app + project a host names, or null when `hostname` is not a project host under `base` (a
  *  blank `base` ⇒ no project-host ingress at all). `<app>--<project>.<base>` and
  *  `<app>.<project>.<base>` name the app `<app>`; the apex `<project>.<base>` names none (`app:
- *  null` — the config worker answers). `project` is the label as written, an id or a slug: whether
+ *  null` — the config worker answers). `project` is the label as written — a slug: whether
  *  the project EXISTS, and which id it is, is the directory's answer (the edge above). Pure. */
 export function projectHostOf(
   hostname: string,
   base: string,
-): { app: string | null; project: ProjectIdOrSlug } | null {
+): { app: string | null; project: string } | null {
   const labels = hostnameLabelsUnderBase(hostname, base);
   if (!labels || labels.length > 2) return null; // deeper than `<app>.<project>` is not a project host
   const [first, second] = labels as [string, string?];

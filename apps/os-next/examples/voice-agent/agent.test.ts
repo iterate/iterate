@@ -11,7 +11,7 @@ beforeAll(async () => {
     import.meta.url,
   ).pathname;
   const bundle = await build({
-    entryPoints: [new URL("./agent.ts", import.meta.url).pathname],
+    entryPoints: [new URL("./voice-delegate.ts", import.meta.url).pathname],
     bundle: true,
     write: false,
     format: "esm",

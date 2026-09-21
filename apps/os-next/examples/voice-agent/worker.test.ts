@@ -174,7 +174,7 @@ test.each(["waveshare-rlcd-4-2", "zectrix-note4", "havpe"])(
     });
     const events = append.mock.calls[0]!;
     const contextType = "events.iterate.com/agents/context-added";
-    const subscription = events.find((event) => event.payload?.name === "voice-delegation-agent");
+    const subscription = events.find((event) => event.payload?.name === "voice-delegate");
     expect(subscription).toBeDefined();
     expect(events.some((event) => event.type === contextType)).toBe(device !== "havpe");
     if (device !== "havpe") {

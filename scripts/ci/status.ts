@@ -30,17 +30,21 @@ export default class CiStatus {
     this.attemptId = z.string().min(1).parse(url.searchParams.get("attempt"));
   }
 
-  /** Publish a milestone for this exact workflow execution and job attempt. */
-  async set(milestone: string) {
-    const workflow = await this.workflow();
-    const context = `ci/${this.workflowId}/${workflow.executions[0].executionId}/${this.jobId}/${this.attemptId}/${milestone}`;
+  /** Publish a milestone and optional step outputs for this exact job attempt. */
+  async set(milestone: string, options: { values?: Record<string, string> } = {}) {
+    const values = Values.parse(options.values || { milestone });
+    const lines = Object.entries(values).map(([name, value]) => `${name}=${value}`);
+    // Keep coordination data small; artifact identities and full reasons belong elsewhere.
+    const description = z.string().max(140).parse(lines.join("; "));
+    await this.workflow();
+    const context = `${milestone} ${this.attemptId}`;
     await this.request(
       "github",
       `/repos/${this.env.GITHUB_REPOSITORY}/statuses/${this.env.CI_HEAD_SHA}`,
       {
         context,
         state: "success",
-        description: `Reached ${milestone}`,
+        description,
         target_url: this.env.DEPOT_JOB_URL,
       },
     );
@@ -51,7 +55,7 @@ export default class CiStatus {
       );
   }
 
-  /** Wait for a producer milestone, failing if its job stops without signaling. */
+  /** Wait for a milestone and write its values to step outputs; fail if its producer stops. */
   async waitFor(producer: string, milestone: string) {
     console.log(`[ci:status] waiting for ${producer}/${milestone}`);
     let linked = false;
@@ -69,7 +73,7 @@ export default class CiStatus {
           );
           linked = true;
         }
-        const context = `ci/${this.workflowId}/${workflow.executions[0].executionId}/${job.jobId}/${attempt.attemptId}/${milestone}`;
+        const context = `${milestone} ${attempt.attemptId}`;
         // Read the signal AFTER liveness. A final status write followed by job
         // termination must not be mistaken for a producer that forgot to signal.
         for (let page = 1; ; page++) {
@@ -82,8 +86,10 @@ export default class CiStatus {
           );
           const status = statuses.find((entry) => entry.context === context);
           if (status?.state === "success") {
+            const description = z.string().parse(status.description);
+            await appendFile(this.env.GITHUB_OUTPUT, description.replace(/; ?/g, "\n") + "\n");
             console.log(`[ci:status] reached ${context}`);
-            return { producer, attemptId: attempt.attemptId };
+            return { producer, attemptId: attempt.attemptId, description };
           }
           if (status && status.state !== "pending")
             throw new Error(`Milestone ${context}: ${status.state}`);
@@ -145,7 +151,63 @@ export default class CiStatus {
     if (workflow.jobs.find((job) => job.jobId === this.jobId)?.status !== "running")
       throw new Error("This Depot job is no longer running");
     if (workflow.jobs.some((job) => job.jobId !== this.jobId && job.status !== "finished"))
-      throw new Error("Cannot publish success before every other job has succeeded");
+      throw new Error("Cannot publish success before every preview producer has succeeded");
+    const check = await this.ownCheck();
+    if (check.status !== "in_progress") throw new Error("This GitHub check is no longer running");
+    const response = await fetch(
+      `https://api.github.com/repos/${this.env.GITHUB_REPOSITORY}/check-runs/${check.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          authorization: `Bearer ${this.env.GITHUB_TOKEN}`,
+          accept: "application/vnd.github+json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          status: "completed",
+          conclusion: "success",
+          output: {
+            title: "Preview test summary",
+            summary,
+          },
+        }),
+        signal: AbortSignal.any([this.signal, AbortSignal.timeout(15_000)]),
+      },
+    );
+    if (!response.ok) throw new Error(`Updating own GitHub check returned HTTP ${response.status}`);
+    const greenAt = Date.now();
+    const marker = JSON.stringify({ kind: "check-green", time: greenAt, checkId: check.id });
+    await appendFile(this.env.GITHUB_OUTPUT, `ci-trace-green=${marker}\n`);
+    if (process.env.CI_TRACE_ENABLED === "1") console.log(`\n@@ci-trace ${marker}`);
+    console.log(
+      `[ci:status] check ${check.id} set green at ${new Date(greenAt).toISOString()}; job continues`,
+    );
+    return { checkId: check.id };
+  }
+
+  /** Publish reusable evidence after complete test collection and successful restoration. */
+  async setPreviewSettled(tests: "success" | "failure") {
+    const workflow = await this.workflow();
+    const self = workflow.jobs.find((job) => job.jobId === this.jobId);
+    if (!self?.jobKey.endsWith(":finish") || self.status !== "running")
+      throw new Error("Only the running preview finalizer can publish preview-settled");
+    if (workflow.jobs.some((job) => job !== self && !["finished", "failed"].includes(job.status)))
+      throw new Error("Cannot publish preview-settled with unfinished or cancelled jobs");
+    const check = await this.ownCheck();
+    await this.request(
+      "github",
+      `/repos/${this.env.GITHUB_REPOSITORY}/statuses/${this.env.CI_HEAD_SHA}`,
+      {
+        context: "preview-settled",
+        state: "success",
+        description: `tests=${tests}; deployment=restored; check=${check.id}`,
+        target_url: this.env.DEPOT_JOB_URL,
+      },
+    );
+    console.log(`[ci:status] preview-settled: tests=${tests}; deployment=restored`);
+  }
+
+  private async ownCheck() {
     const checks = [];
     for (let page = 1; ; page++) {
       const { check_runs } = CheckRuns.parse(
@@ -167,39 +229,8 @@ export default class CiStatus {
         url.searchParams.get("job") === this.jobId
       );
     });
-    if (matches.length !== 1 || matches[0].status !== "in_progress")
-      throw new Error("Expected one running GitHub check for this exact Depot job");
-    const check = matches[0];
-    const response = await fetch(
-      `https://api.github.com/repos/${this.env.GITHUB_REPOSITORY}/check-runs/${check.id}`,
-      {
-        method: "PATCH",
-        headers: {
-          authorization: `Bearer ${this.env.GITHUB_TOKEN}`,
-          accept: "application/vnd.github+json",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          status: "completed",
-          conclusion: "success",
-          output: {
-            title: "Check marked successful",
-            summary,
-          },
-        }),
-        signal: AbortSignal.any([this.signal, AbortSignal.timeout(15_000)]),
-      },
-    );
-    if (!response.ok) throw new Error(`Updating own GitHub check returned HTTP ${response.status}`);
-    const greenAt = Date.now();
-    if (process.env.CI_TRACE_ENABLED === "1")
-      console.log(
-        `\n@@ci-trace ${JSON.stringify({ kind: "check-green", time: greenAt, checkId: check.id })}`,
-      );
-    console.log(
-      `[ci:status] check ${check.id} set green at ${new Date(greenAt).toISOString()}; job continues`,
-    );
-    return { checkId: check.id };
+    if (matches.length !== 1) throw new Error("Expected one GitHub check for this exact Depot job");
+    return matches[0];
   }
 
   private async workflow() {
@@ -267,7 +298,7 @@ const Workflow = z.object({
   workflowId: z.string(),
   repo: z.string(),
   headSha: z.string(),
-  executions: z.array(z.object({ executionId: z.string(), execution: z.number() })),
+  executions: z.array(z.object({ execution: z.number() })),
   jobs: z.array(
     z.object({
       jobId: z.string(),
@@ -284,9 +315,23 @@ const Statuses = z.object({
     z.object({
       context: z.string(),
       state: z.enum(["pending", "success", "failure", "error"]),
+      description: z.string().nullable(),
     }),
   ),
 });
+// Reserve separators so descriptions convert directly into GITHUB_OUTPUT lines.
+const Values = z.record(
+  z
+    .string()
+    .min(1)
+    .refine((name) => !/[^A-Za-z0-9_-]/.test(name), "Invalid step output name"),
+  z
+    .string()
+    .refine(
+      (value) => !/[;\r\n]/.test(value),
+      "Step output values cannot contain semicolons or newlines",
+    ),
+);
 const terminal = new Set(["finished", "failed", "cancelled", "skipped"]);
 
 const CheckRuns = z.object({

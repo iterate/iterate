@@ -5,7 +5,10 @@ import { authorizationCodeRequest } from "iterate/next/oauth";
 import type { IterateRpcTarget } from "../../src/session.ts";
 import { adminCredentials, publicSession, workerUrl } from "./client.ts";
 
-export async function oauthSession(project: string, user: { email: string }) {
+/** A real OAuth grant for `user`, consented to the one project `projectId` (consent ticks projects
+ *  by their minted id, as the console does): the public session, its token, the principal it
+ *  stamps, and the issuer cookie the account itself speaks with. */
+export async function oauthSession(projectId: string, user: { email: string }) {
   const issuer = new URL(workerUrl("/")).origin;
   const login = await fetch(workerUrl("/login"), {
     method: "POST",
@@ -35,7 +38,7 @@ export async function oauthSession(project: string, user: { email: string }) {
   );
   const approved = await issuerApi
     .authenticate({ type: "from-server-cookie" })
-    .consent.approve({ query: flow.url.search, projects: [project] });
+    .consent.approve({ query: flow.url.search, projects: [projectId] });
   if (!("redirectTo" in approved)) throw new Error(JSON.stringify(approved));
   const callback = new URL(approved.redirectTo);
   if (callback.searchParams.get("state") !== flow.state) throw new Error("OAuth state changed");

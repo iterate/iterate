@@ -158,13 +158,16 @@ test("wrong nonce, signature and unverified email cannot establish issuer identi
   }
 });
 
-test("deployed email fixture requires the administrator credential", async () => {
+test("an email alone never makes a session: a code follows it; only the administrator credential signs a fixture straight in", async () => {
   const response = await SELF.fetch(`${origin}/login`, {
     method: "POST",
+    redirect: "manual",
     body: new URLSearchParams({ email: "unverified@example.com" }),
   });
-  expect(response.status).toBe(401);
-  expect(response.headers.has("set-cookie")).toBe(false);
+  expect(response.status).toBe(303);
+  expect(
+    response.headers.getSetCookie().some((cookie) => cookie.startsWith("__Host-itx-session=")),
+  ).toBe(false);
   expect((await SELF.fetch("https://unknown.projects.test/.auth/identity/callback")).status).toBe(
     421,
   );

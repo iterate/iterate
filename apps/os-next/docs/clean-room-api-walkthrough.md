@@ -43,9 +43,9 @@ the only place capnweb terminates. It reaches the DO over Workers RPC. Loaded
 userspace code runs in Worker Loader isolates or as facets of the DO, and its
 entire world is one binding, `env.ITX`. The control plane — an OAuth AS, the D1
 directory of users, orgs and projects (a project's id IS its DNS-safe name),
-`/mcp`, the console's server half — runs IN-PROCESS as the same worker's
-catch-all (`src/control-plane.ts`), and the console itself is a TanStack Start
-app (`src/routes/**`) the same worker SSRs; a project host
+`/mcp`, the issuer's two pages — runs IN-PROCESS as the same worker's
+catch-all (`src/control-plane.ts`): `/login` and the `/authorize` consent, files in `public/`
+served by the assets binding (no framework, no build); a project host
 (`<app>--<project>.<base>`, `<app>.<project>.<base>`, the apex `<project>.<base>` — the one
 HTTP way into a project) is admitted by one directory read before any DO is
 dialled. Egress is terminal: secrets substituted, then `fetch`.
@@ -99,30 +99,21 @@ packages/v3/project-worker/
   wrangler.jsonc                 bindings: ITERATE_CONTEXT (DO), SECRET (DO, one per secret), LOADER, AI, ARTIFACTS, ITX_KV,
                                  OAUTH_KV, DB (D1: the directory), CF_VERSION_METADATA; the APP_CONFIG_* vars;
                                  the *.project-worker.iterate.com route (project hosts)
-  wrangler.test.jsonc            the workers lane's config (no AI; fresh local D1 + OAuth KV; its worker is the
-                                 BUILT one, dist/server/index.js)
-  vite.config.ts                 THE BUILD: the Cloudflare plugin + TanStack Start + React — `vite build` emits
-                                 dist/client (the console's bundle + public/) and dist/server (the worker +
-                                 wrangler.json, what `pnpm deploy` and both local lanes consume); runs build-sdk.mjs
+  wrangler.test.jsonc            the workers lane's config (no AI; fresh local D1 + OAuth KV; its worker is
+                                 src/worker.ts, bundled by the plugin)
   vitest.config.ts               THE ONE test config: four projects — unit · workers · e2e · bench
-  build-sdk.mjs                  bundles src/sdk/index.ts → generated/processor-sdk.ts (processor.js),
-                                 client/demo.tsx → public/demo.html (the hosted /demo page, a static asset)
-  scripts/                       dev.ts (`pnpm dev`: vite build → the schema into the local D1 → wrangler dev on
-                                 dist/server/wrangler.json), generate-route-tree.ts (`routes:generate` / `routes:check`)
+  scripts/                       build.ts (THE BUILD, one esbuild script: wrangler.jsonc, src/generated/*.js — the
+                                 injected SDK's text and the presence fixture's source), dev.ts (`pnpm dev`: the
+                                 build, then wrangler dev on wrangler.jsonc, which bundles src/worker.ts itself)
+  public/                        the issuer's two pages as files — login.html, authorize.html, issuer.css, login.js,
+                                 authorize.js, _headers (their CSP) — served by the assets binding (no framework, no build).
+                                 The dash — sessions, projects, organizations — is apps/dash on dash.iterate2.com, an
+                                 ordinary OAuth client of this issuer; agents and notes are apps of the same shape.
   src/
-    routes/                      THE CONSOLE, a TanStack Start app (file routes, SSR'd by the worker):
-                                 __root.tsx (the shell + console.css) · login.tsx (/login: the email form,
-                                 "continue as / switch account") · _auth.tsx (no session ⇒ /login?next=) ·
-                                 _auth/index.tsx (/: the account page — orgs, projects with an `open` link per
-                                 host, create a project, log out) · _auth/authorize.tsx (/authorize: the OAuth
-                                 consent and THE PROJECT SELECTION); -session.ts (the one session read) and
-                                 -console-context.ts (the one typed door to the worker's env + request for every
-                                 server function). router.tsx · routeTree.gen.ts (generated, checked in) · console.css
     worker.ts                    THE EDGE and the front door. default fetch: project-host ingress (the three
                                  host shapes, admission, x-iterate-app, the OAuth bearer or the app's
                                  /.auth/* session, the principal stamp —
-                                 the one HTTP way into a project), /api, /version, the static assets (the
-                                 platform host's alone); everything else on the worker's hostname is the
+                                 the one HTTP way into a project), /api, /version, everything else on the worker's hostname is the
                                  in-process control plane.
                                  Exports ItxEntrypoint, IterateContextDurableObject.
     session.ts                   IterateRpcTarget → SessionRpcTarget (whoami, projects, grants) → ProjectCollection
@@ -230,7 +221,7 @@ imported as `capnweb`). There is no client SDK. The session shape is apps/os's.
 import { newWebSocketRpcSession, newHttpBatchRpcSession } from "capnweb";
 
 using api = newWebSocketRpcSession("wss://<worker>/api");
-const session = api.authenticate({ type: "from-server-cookie" }); // the console's login cookie rode the handshake
+const session = api.authenticate({ type: "from-server-cookie" }); // the issuer's login cookie rode the handshake
 const itx = session.projects.get("prj_demo"); // the project ROOT, path "/"
 const agent = itx.cd("/agents/x"); // a context within the project
 const inbox = agent.cd("../inbox"); // relative resolves; absolute by convention
@@ -744,7 +735,7 @@ reachable the same way, and a terminal `.fetch(request)` is an ordinary call on
 the facet's own fetch — plain HTTP only. A facet never answers a WebSocket
 (`FACET_NO_UPGRADE`): a socket terminates at the edge — a session's `/api`
 socket, a project host's lent-stub upgrade — and the facet behind it is reached
-by itx expression, so the idle quiesce can abort an idle facet with nothing to lose.
+by itx expression, so a facet can be aborted at any time with nothing to lose.
 
 One reduce-only processor is always on and runs **inline** in the commit
 transaction: the core reduce (`src/stream/core-processor.ts`, slug `core`,
@@ -1362,13 +1353,13 @@ clamped to the stream head. Every subscription made through `subscribe` is
 removed when its handle is disposed or the session ends (capnweb disposes the
 exported handle); `processors.enable` returns no handle, so a processor's row
 stays until `processors.disable`. The DO's
-idle quiesce is 30 s from the last use of a pin (a
-borrowed stub called, an open capnweb socket used — a request, an append, a facet call move nothing),
-rounded up to the next 10 s: the alarm then returns every borrowed stub and closes every library
+pins are released 30 s after the last use of one (a
+borrowed stub called, an open capnweb socket used — a request, an append, a facet call move nothing)
+by a plain timer, never the alarm: it returns every borrowed stub and closes every library
 connection — a live facet is not a pin, it dies with the actor; the next call re-borrows them (a facet delete — `processors.disable`'s
 one effect — that lands while a facet's source is loading wins: the load refuses with `NO_FACET` instead of
-resurrecting an orphan), and a context with nothing pinned
-arms no idle alarm at all. Configuring a subscription drops whatever the loop remembered under
+resurrecting an orphan), and no pin ever arms an alarm: the alarm serves durable obligations only
+(schedules, and the claims of cursor rows and hosted processors). Configuring a subscription drops whatever the loop remembered under
 that name (the old target's cursor included) and wakes a facet target at once,
 as the head of that name's push chain. Re-subscribing a HALTED row with the same
 target un-halts it and restarts from now; to replay from the halt point, append
@@ -1427,10 +1418,10 @@ class IterateContextDurableObject extends DurableObject<Env> {
    *  502 — ProjectSecretRefused — to the caller), then the terminal fetch. */
   fetch(request: Request): Promise<Response>;
   /** THE ALARM PASS: the wake record (`"alarm"`), the due schedules, every cursor row's owed delivery,
-   *  then the idle quiesce (returns borrowed stubs, closes library connections); the next deadline
-   *  is derived once, when the pass ends. */
+   *  then every due claim of a hosted processor (spent, and the facet's `revive()` called); the next
+   *  deadline is derived once, when the pass ends. Pins are released by a timer, not here. */
   alarm(): Promise<void>;
-  /** DO-only, for the workers lane: the quiesce's release, plus every live facet aborted. */
+  /** DO-only, for the workers lane: the pins' release, plus every live facet aborted. */
   releasePins(): void;
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void;
   webSocketClose(ws: WebSocket, code: number, reason: string): void;
@@ -1477,12 +1468,10 @@ origin — the provider wants its one resource as an absolute URL) owning `/oaut
 `/oauth/register` (DCR; CIMD for clients that self-describe by URL), `/.well-known/*` and the bearer
 check on `/mcp` (its ONLY protected route, and its ONE resource: `<origin>/mcp`, this origin the
 authorization server — every token is bound to it, a foreign one refused); everything else falls
-through to THE CONSOLE — a TanStack Start app (`src/routes/**`: `/login`, the account page at `/`,
-the `/authorize` consent), SSR'd through the Start server entry with the worker's env and the
-request as every server function's `context`; the routes' `createServerFn`s call this file's
-console half (`signIn`, `accountOf`, `createProjectFor`, `consentOf`, `approveConsent`), and the
-machine doors beside them (`consoleDoor`) are the same actions as plain form POSTs (the console's own
-forms post there until the page hydrates) — `POST /login`,
+through to THE ISSUER'S PAGES — `/login` and `/authorize`, files in public/ the assets binding serves;
+the consent page's script asks `/authorize.json` what to show and posts approve / create an
+organization / create a project to `/authorize`, answered by a session built the way `/api` builds one (`consentDoor`); the one
+machine endpoint beside them (`loginFormPost`) is the sign-in form's plain POST — `POST /login`,
 `/logout` (the session is the signed `__Host-itx-control-plane-session` cookie, `signClaims` under
 `APP_CONFIG_SESSION_SECRET`), `POST /projects` (a program creates projects over `/api`,
 `projects.create`), `POST /authorize`. The `/authorize` consent is THE PROJECT SELECTION: the user's
@@ -1495,7 +1484,7 @@ the bearer's principal, `project` optional when the grant reaches exactly one,
 required for the admin secret, refused outside the grant (apps/os's `resolveToolProject`) and refused
 as a context name (the
 expression `cd`s); an expression error is an `isError` result led by its code. No tool creates a
-project: a project is created on the console or over `/api` (`projects.create`). One more bearer
+project: a project is created on the OS, in consent, or over `/api` (`projects.create`). One more bearer
 rides the provider's `resolveExternalToken`: the admin secret (`{ actor: "admin" }`, every project);
 what any bearer reaches is its grant's `Reach` (`authorizationOf`, `src/oauth.ts`) — the projects
 the consent chose (a personal access token's, the ones named at mint), else the user's membership —
@@ -1520,7 +1509,7 @@ Bindings (`wrangler.jsonc`):
 | `APP_CONFIG_*` vars   | configuration (`src/app-config.ts`)          | parsed once per isolate into one typed object, an unknown var warned about at boot and ignored: `ENVIRONMENT_NAME`, `PLATFORM_ORIGIN`, `MCP_ORIGIN`, `PROJECT_HOSTNAME_BASE`, `ARTIFACTS_ACCOUNT_ID`, `ARTIFACTS_NAMESPACE`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `TEST_EMAIL_LOGIN`, `SESSION_SECRET` and `ADMIN_API_SECRET` (both required; wrangler secrets on a deployment) |
 
 The route `*.project-worker.iterate.com/*` (a wildcard DNS record in the zone) is the project hosts;
-`public/` is served as static assets (`/demo`). The e2e lane boots this same config, patched
+The e2e lane boots this same config, patched
 (`e2e/support/worker-config.ts`: absolute paths, `APP_CONFIG_ENVIRONMENT_NAME=e2e`,
 `APP_CONFIG_PROJECT_HOSTNAME_BASE=localhost`, vars for the three secrets); the workers lane runs
 `wrangler.test.jsonc` (no build block, no `AI`).
@@ -1591,7 +1580,7 @@ sequenceDiagram
   D->>E: stub.invoke([["move", 10]])
   E->>C: robotObject.move(10)   (capnweb, same session)
   C-->>D: result
-  Note over D: stub kept BORROWED while traffic flows,<br/>RETURNED at idle quiesce; a page borrows it back
+  Note over D: stub kept BORROWED while traffic flows,<br/>RETURNED by the pins' 30 s timer; a page borrows it back
 ```
 
 The DO never holds a client stub across idle, so any number of connected
@@ -1713,7 +1702,7 @@ itself.
 | incarnation           | one life of the DO between evictions; the first door's `stream/woken` (`appendWakeRecord`, `reason: "alarm"` when that door is the alarm handler) opens each (offset 1 is the first one's `stream/created`); ephemeral offsets are unique within one                                                                                                                                                                                                 |
 | live state            | a `LiveState` holder's `{ rev, state }` plus `live-state/changed` deltas; clients chain revs and re-seed on a gap                                                                                                                                                                                                                                                                                                                                    |
 | egress                | any fetch leaving project code: `getSecret("/secrets/NAME")` (and `{ field: "a.b" }`) substituted in the DO (URL + headers; a missing or origin-bound secret is a 502), then the terminal `fetch` — no next door                                                                                                                                                                                                                                     |
-| control plane         | the in-process catch-all of the one worker (`src/control-plane.ts`): the OAuth AS, the D1 directory (users → orgs → projects; a project's id IS its slug), `/mcp`, the console's server half + the Start entry that SSRs the console (`src/routes/**`); what admits a project host and answers membership                                                                                                                                            |
+| control plane         | the in-process catch-all of the one worker (`src/control-plane.ts`): the OAuth AS, the D1 directory (users → orgs → projects; a project's id IS its slug), `/mcp`, the issuer's pages — `/login` and the `/authorize` consent form, rendered whole; what admits a project host and answers membership                                                                                                                                                |
 | project host          | the one HTTP way into a project: `<app>--<project>.<base>` and `<app>.<project>.<base>` are the app `itx.apps.<app>` of the project's root context, the apex `<project>.<base>` its config worker's `fetch`; the Request verbatim, `x-iterate-app` the host's label; admitted by one directory read (421 otherwise); an OAuth grant — the app's `/.auth/*` browser session, or an access token as `Authorization: Bearer` — stamps `x-itx-principal` |
 | fetch lane            | the DO's `x-itx-expression` door: a project host from outside, a terminal `itx.x.fetch(request)` from inside a session, `env.ITX.fetch` from loaded code                                                                                                                                                                                                                                                                                             |
 

@@ -1,22 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded logout request, no live capabilities.
 import { newHttpBatchRpcSession } from "capnweb";
+import * as oauth from "oauth4webapi";
 import { z } from "zod";
 import { authorizationCodeRequest } from "./client/oauth.ts";
 import { OAuthScopes } from "./oauth-scopes.ts";
 import { isLocalOrigin } from "./lib.ts";
 import type { IterateApi } from "./api.ts";
 
-const TokenResponse = z.object({
-  token_type: z
-    .string()
-    .transform((type) => type.toLowerCase())
-    .pipe(z.literal("bearer")),
-  access_token: z.string().min(1),
-  refresh_token: z.string().min(1),
-  expires_in: z.number().positive(),
-  scope: z.string(),
-});
 export type BrowserHost = { origin: string; issuer: string; resource: string; scopes: string[] };
 type Base = BrowserHost & { clientId: string; next: string; until: number };
 type Pending = Base & { phase: "pending"; state: string; verifier: string };
@@ -79,30 +70,59 @@ export class BrowserSession extends DurableObject {
     });
   }
 
-  complete(input: { state: string; issuer: string; code: string; error: string }) {
+  /** The issuer's redirect back to `/.auth/callback`, its query string. oauth4webapi validates it
+   *  (the state matches this browser's pending flow, the `iss` matches the issuer, no `error`), then
+   *  exchanges the code for tokens. */
+  complete(callbackQuery: string) {
     return this.#serial(async () => {
       const data = await this.ctx.storage.get<StoredSession>("session");
-      if (
-        !data ||
-        data.phase !== "pending" ||
-        data.until <= Date.now() ||
-        data.state !== input.state ||
-        data.issuer !== input.issuer
-      )
+      if (!data || data.phase !== "pending" || data.until <= Date.now())
         return {
           error: "This sign-in expired or does not match this browser. Start sign-in again.",
         };
-      if (input.error || !input.code) {
-        await this.#clear();
-        return { error: "Authorization was declined." };
+      const as: oauth.AuthorizationServer = {
+        issuer: data.issuer,
+        token_endpoint: `${data.issuer}/oauth/token`,
+        authorization_response_iss_parameter_supported: true,
+      };
+      const client: oauth.Client = { client_id: data.clientId };
+      let callback: URLSearchParams;
+      try {
+        callback = oauth.validateAuthResponse(
+          as,
+          client,
+          new URLSearchParams(callbackQuery),
+          data.state,
+        );
+      } catch (error) {
+        // A provider `error=` (the person declined) ends the flow; a state/iss mismatch leaves the
+        // pending flow to be retried from a genuine browser.
+        if (error instanceof oauth.AuthorizationResponseError) {
+          await this.#clear();
+          return { error: "Authorization was declined." };
+        }
+        return {
+          error: "This sign-in expired or does not match this browser. Start sign-in again.",
+        };
       }
-      const stored = await this.#exchange(data, {
-        grant_type: "authorization_code",
-        code: input.code,
-        redirect_uri: `${data.origin}/.auth/callback`,
-        code_verifier: data.verifier,
-      });
-      if (!stored) return { error: "Sign-in could not complete. Start sign-in again." };
+      const started = Date.now();
+      let tokens: oauth.TokenEndpointResponse;
+      try {
+        const response = await oauth.authorizationCodeGrantRequest(
+          as,
+          client,
+          oauth.None(),
+          callback,
+          `${data.origin}/.auth/callback`,
+          data.verifier,
+          this.#tokenOptions(data),
+        );
+        tokens = await oauth.processAuthorizationCodeResponse(as, client, response);
+      } catch (error) {
+        await this.#endOnDeadGrant(error);
+        return { error: "Sign-in could not complete. Start sign-in again." };
+      }
+      await this.#activate(data, tokens, started);
       return { next: data.next };
     });
   }
@@ -170,33 +190,50 @@ export class BrowserSession extends DurableObject {
       return null;
     }
     if (data.expiresAt > Date.now() + 30_000) return data.accessToken;
-    return (
-      (
-        await this.#exchange(data, {
-          grant_type: "refresh_token",
-          refresh_token: data.refreshToken,
-        })
-      )?.accessToken ?? null
-    );
-  }
-  async #exchange(data: StoredSession, fields: Record<string, string>) {
+    const as: oauth.AuthorizationServer = {
+      issuer: data.issuer,
+      token_endpoint: `${data.issuer}/oauth/token`,
+    };
+    const client: oauth.Client = { client_id: data.clientId };
     const started = Date.now();
-    const response = await fetch(`${data.issuer}/oauth/token`, {
-      method: "POST",
-      body: new URLSearchParams({ ...fields, client_id: data.clientId, resource: data.resource }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!response.ok) {
-      const refusal = z
-        .object({ error: z.string() })
-        .safeParse(await response.json().catch(() => null));
-      if (response.status === 400 && refusal.success && refusal.data.error === "invalid_grant") {
-        await this.#clear();
-        return null;
-      }
-      throw new Error(`Iterate token exchange failed (${response.status}). Try again.`);
+    let tokens: oauth.TokenEndpointResponse;
+    try {
+      const response = await oauth.refreshTokenGrantRequest(
+        as,
+        client,
+        oauth.None(),
+        data.refreshToken,
+        this.#tokenOptions(data),
+      );
+      tokens = await oauth.processRefreshTokenResponse(as, client, response);
+    } catch (error) {
+      await this.#endOnDeadGrant(error);
+      return null;
     }
-    const tokens = TokenResponse.parse(await response.json());
+    return (await this.#activate(data, tokens, started)).accessToken;
+  }
+
+  /** The token request's shared options: the audience (RFC 8707 resource), a bounded timeout, and —
+   *  only for a local http issuer — oauth4webapi's opt-out of its HTTPS-only default. */
+  #tokenOptions(data: StoredSession): oauth.TokenEndpointRequestOptions {
+    const options: oauth.TokenEndpointRequestOptions = {
+      additionalParameters: { resource: data.resource },
+      signal: AbortSignal.timeout(10_000),
+    };
+    if (isLocalOrigin(data.issuer)) options[oauth.allowInsecureRequests] = true;
+    return options;
+  }
+
+  /** Write the active session from a token response. A refresh reuses the prior refresh token when
+   *  the issuer does not rotate it. */
+  async #activate(
+    data: StoredSession,
+    tokens: oauth.TokenEndpointResponse,
+    started: number,
+  ): Promise<Active> {
+    const refreshToken =
+      tokens.refresh_token || (data.phase === "active" ? data.refreshToken : undefined);
+    if (!refreshToken) throw new Error("Iterate returned no refresh token.");
     const { origin, issuer, resource, clientId, next } = data;
     const stored: Active = {
       origin,
@@ -205,15 +242,30 @@ export class BrowserSession extends DurableObject {
       clientId,
       next,
       phase: "active",
-      scopes: OAuthScopes.parse(tokens.scope.split(" ").filter(Boolean)),
+      // An omitted (or empty) `scope` means unchanged (RFC 6749 §5.1) — keep what the grant already
+      // holds rather than silently narrow to `iterate`.
+      scopes: tokens.scope
+        ? OAuthScopes.parse(tokens.scope.split(" ").filter(Boolean))
+        : data.scopes,
       accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
-      expiresAt: started + tokens.expires_in * 1000,
+      refreshToken,
+      expiresAt: started + (tokens.expires_in ?? 0) * 1000,
       until: data.phase === "pending" ? started + 30 * 24 * 3600_000 : data.until,
     };
     await this.ctx.storage.put("session", stored);
     await this.ctx.storage.setAlarm(stored.until);
     return stored;
+  }
+
+  /** A dead code or refresh token (`invalid_grant`) ends the session; other failures are transient. */
+  async #endOnDeadGrant(error: unknown): Promise<void> {
+    if (error instanceof oauth.ResponseBodyError && error.error === "invalid_grant") {
+      await this.#clear();
+      return;
+    }
+    throw error instanceof oauth.ResponseBodyError
+      ? new Error(`Iterate token exchange failed (${error.status}). Try again.`)
+      : error;
   }
   /** An operation failure must not reset the DO or fail other tabs' requests. */
   #serial<T>(work: () => Promise<T>): Promise<T> {

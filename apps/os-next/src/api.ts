@@ -42,6 +42,18 @@ export function oauthResponse(
       bearer_methods_supported: ["header"],
     });
   }
+  // THE BARE SOCKET: a capnweb client with no credential on the upgrade — a static page on another
+  // origin, whose browser cannot put a bearer on a WebSocket — opens the transport empty and presents
+  // its token IN-BAND, `authenticate({ type: "bearer", token })` (capnweb's own pattern; session.ts,
+  // bound to the socket by rpc.ts). Empty = the root and nothing else: no capability until that call
+  // resolves through the same gate the header goes through. The HTTP form stays behind the gate —
+  // the console's sign-in probe (iterate/next/app) reads its 401.
+  if (
+    url.pathname === "/api" &&
+    !request.headers.has("authorization") &&
+    request.headers.get("upgrade")?.toLowerCase() === "websocket"
+  )
+    return rpcResponse(request, env, ctx, null);
   return new OAuthProvider(providerOptions(env, protectedApi, defaultHandler)).fetch(
     request,
     env,

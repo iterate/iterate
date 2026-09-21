@@ -24,9 +24,8 @@
 # The only Depot secret is DOPPLER_TOKEN. GitHub supplies the job-scoped token;
 # Doppler supplies every other credential.
 #
-# Keep the `paths` list below in sync with `cloudflarePreviewSharedPaths` +
-# `cloudflarePreviewAdditionalTriggerPaths` + each app's `paths` in
-# scripts/preview/preview.ts (asserted in scripts/preview/preview.test.ts).
+# Head-commit selection and inherited results are decided by ci-plan. Workflow
+# path filters use cumulative PR diffs and cannot express that policy.
 
 name: Preview
 
@@ -42,36 +41,6 @@ on:
       - opened
       - reopened
       - synchronize
-    paths:
-      - .depot/workflows/preview.yml
-      - .depot/workflows/preview-run.yml
-      - packages/shared/**
-      - packages/ui/**
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
-      - patches/**
-      - scripts/preview/**
-      - scripts/ci/status.ts
-      - scripts/ci/tracing/**
-      - scripts/depot-ci/**
-      - .depot/workflows/ci-trace.yml
-      - envs.ts
-      - scripts/lib/**
-      - apps/auth-example/**
-      - apps/os/**
-      - configs/**
-      - specs/**
-      - playwright.config.ts
-      - apps/mobile/**
-      - packages/iterate/**
-      - apps/auth/**
-      - apps/auth-contract/**
-      - apps/os/src/domains/streams/**
-      - apps/docs/**
-      - packages/workspace-documents/**
-      - apps/semaphore/**
-      - apps/streams-example-app/**
-      - apps/dummy-petshop/**
   workflow_dispatch:
     inputs:
       pull-request-number:
@@ -95,5 +64,5 @@ jobs:
     with:
       pull-request-number: ${{ format('{0}', github.event.pull_request.number || inputs.pull-request-number) }}
       head-sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      all-apps: ${{ github.event_name == 'workflow_dispatch' }}
+      all-apps: ${{ vars.PREVIEW_FORCE_ALL_APPS == 'true' || github.event_name == 'workflow_dispatch' }}
     secrets: inherit

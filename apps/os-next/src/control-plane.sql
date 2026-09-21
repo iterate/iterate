@@ -37,10 +37,12 @@ create table if not exists org_members (
   primary key (org_id, user_id)
 );
 
--- A project's id is ONE DNS-safe name (a slug), stored once: the directory row, the context DO's
--- name (`{id}.iterate{path}`) and the project-host label (`<app>--<id>.<base>`). Globally unique.
+-- A project is addressed by its minted id everywhere — the context DO's name (`{id}.iterate{path}`),
+-- a grant's project list, the API. Its slug is the DNS label of its hostnames (`<app>--<slug>.<base>`)
+-- and its name to a person: globally unique, not an address. The id is the one stable identifier.
 create table if not exists projects (
-  id text primary key,
+  id text primary key,            -- prj_<hex> (minted)
+  slug text not null unique,
   org_id text not null references orgs(id),
   created_at text not null default current_timestamp
 );

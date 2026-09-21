@@ -139,16 +139,6 @@ export function liveActivityLabel(runningSteps: readonly AgentUiStep[]): string 
   return "Waiting for a response";
 }
 
-/** A returned string is itself; anything else is pretty JSON (apps/os's stringifyScriptResult). */
-export function stringifyScriptResult(result: unknown): string {
-  if (typeof result === "string") return result;
-  try {
-    return JSON.stringify(result, null, 2) || String(result);
-  } catch {
-    return String(result);
-  }
-}
-
 /** The llm request behind each assistant bubble (its item id → the request offset), so clicking the
  *  message opens its trace: a `web-message-sent` names its request directly, or inherits the nearest
  *  preceding assistant response's (a bare reply's message is sent by a script that carries none). */

@@ -1,5 +1,6 @@
-# The Vite build (vite.config.ts): dist/client (the console's bundle) and
-# dist/server (index.js + wrangler.json) — what `pnpm deploy` and the local lanes consume.
-dist/
+# scripts/build.ts: the two generated modules (their .d.ts siblings are committed). Only the
+# declarations belong in git — a stale generated .ts here shadows them for tsc.
+/src/generated/*
+!/src/generated/*.d.ts
 
 /wrangler.jsonc

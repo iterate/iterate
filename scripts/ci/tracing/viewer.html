@@ -153,6 +153,7 @@
         overflow: hidden;
         white-space: nowrap;
         text-overflow: ellipsis;
+        line-height: 1.5;
       }
       .toggle {
         width: 22px;
@@ -300,7 +301,7 @@
         dependency arrows; tap a linked span below to reveal it.
       </p>
       <div class="stats" id="stats"></div>
-      <p id="green-note"></p>
+      <p id="outcome-note"></p>
       <p id="notice"></p>
       <div class="tools">
         <input
@@ -332,10 +333,15 @@
       <details>
         <summary>Where these timings come from</summary>
         <p>
-          Time to green measures this preview workflow from its start to the first successful check
-          update. Older runs use the successful early-green step’s end, or workflow completion when
-          there was no early-green step. It does not include other workflows on the commit. Cleanup
-          may continue afterwards and can still turn the check red.
+          Time to green runs from execution creation to the acknowledged test-result check update,
+          including workflow queuing and result validation. Older runs use the successful
+          early-green step’s end. Cleanup and report generation are excluded; their outcome remains
+          in Depot. Other workflows on the commit are outside this report.
+        </p>
+        <p>
+          Time to red uses the first failed producer job or test-result validation in this
+          execution. Failed attempts that recover on retry do not count. If failure timing is
+          missing, the preview’s end provides an upper bound, labelled in the summary.
         </p>
         <p>
           Workflow and runner attempt times come from Depot. Shell steps have explicit start/exit
@@ -402,13 +408,17 @@
             .sort((a, b) => {
               if (s === root) {
                 const rank = (span) =>
-                  span.name === "Prepare"
-                    ? 0
-                    : span.name === "App tests"
-                      ? 1
-                      : span.name.startsWith("Playwright ")
-                        ? 2
-                        : 3;
+                  span.a["ci.kind"] === "queue"
+                    ? -1
+                    : span.a["ci.job.key"]?.endsWith(":plan")
+                      ? 0
+                      : span.name === "Prepare"
+                        ? 1
+                        : span.name === "App tests"
+                          ? 2
+                          : span.name.startsWith("Playwright ")
+                            ? 3
+                            : 4;
                 return (
                   rank(a) - rank(b) || a.name.localeCompare(b.name, undefined, { numeric: true })
                 );
@@ -436,12 +446,28 @@
         `${root.a["ci.source.sha"].slice(0, 12)} · ${new Date(root.start).toISOString()} · ${root.a["ci.workflow.id"]}`;
       const tests = spans.filter((s) => s.a["ci.kind"] === "test");
       const greenMs = root.a["ci.time_to_green_ms"];
+      const failed = root.a["ci.status"] === "failed";
+      const outcomeMs = failed ? root.a["ci.time_to_red_ms"] : greenMs;
       const stats = [
-        [greenMs === undefined ? "Not recorded" : duration(Number(greenMs)), "Time to green"],
-        [duration(root.end - root.start), "workflow wall time"],
+        [
+          outcomeMs === undefined ? "Not recorded" : duration(Number(outcomeMs)),
+          failed ? "Time to red" : "Time to green",
+        ],
         [spans.filter((s) => s.a["ci.attempt.id"]).length, "runner attempts"],
-        [tests.length, "test attempts"],
-        [tests.filter((s) => Number(s.a["test.retry"]) > 0).length, "retries"],
+        [tests.length, "test spans"],
+        [
+          tests.reduce(
+            (total, s) =>
+              total +
+              (s.a["test.attempt_detail"] === "aggregate-only"
+                ? Number(s.a["test.retry_count"] || 0)
+                : Number(s.a["test.retry"]) > 0
+                  ? 1
+                  : 0),
+            0,
+          ),
+          "retries",
+        ],
       ];
       for (const [value, label] of stats) {
         const el = document.createElement("div");
@@ -453,12 +479,20 @@
         el.append(strong, small);
         document.getElementById("stats").append(el);
       }
-      document.getElementById("green-note").textContent =
-        greenMs === undefined
-          ? "No successful check update was recorded for this preview workflow."
-          : root.a["ci.status"] === "finished"
-            ? "Time to green covers this preview workflow; cleanup can continue afterwards."
-            : `This preview went green, then ${root.a["ci.status"]}. Time to green records that earlier milestone.`;
+      let outcomeNote;
+      if (failed) {
+        outcomeNote =
+          outcomeMs === undefined
+            ? "Failure timing was not recorded in this report. Regenerate it to measure time to red."
+            : `Time to red: ${root.a["ci.red.evidence"]}. Other test jobs can continue afterwards.`;
+      } else {
+        outcomeNote =
+          greenMs === undefined
+            ? "No successful test-result check update was recorded."
+            : "Time to green includes preparation, tests and result validation.";
+      }
+      outcomeNote += " Includes workflow queuing; excludes cleanup and report generation.";
+      document.getElementById("outcome-note").textContent = outcomeNote;
       const incomplete = spans.filter((s) => s.a["ci.status"] === "incomplete").length;
       if (incomplete || !tests.length)
         document.getElementById("notice").textContent =
