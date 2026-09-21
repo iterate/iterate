@@ -22,7 +22,7 @@ export const ProjectContract = defineProcessorContract({
   // version is reused as-is by the engine, so the bump is what re-reduces every existing root log.
   version: "4",
   description:
-    "The project: where its own creation stands, and the catalog of every repo, workspace and agent born under it (from the birth certificates cross-posted to /) and every MCP connection born under it.",
+    "The project: where its own creation stands, and the catalog of every repo, workspace and agent born under it (from the birth and death certificates cross-posted to /) and every MCP connection born under it.",
   /** THE REDUCED STATE — what the reduce keeps between events: where the project's OWN creation
    *  stands, as the OFFSET of the event that says so (the request, the certificate, or the failure —
    *  read that event for the error), and the CATALOG of what exists under it — read by each
@@ -81,8 +81,16 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/repo/created",
     "events.iterate.com/workspace/created",
     "events.iterate.com/agent/created",
+    "events.iterate.com/repo/deleted",
+    "events.iterate.com/workspace/deleted",
+    "events.iterate.com/agent/deleted",
   ],
-  emits: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
+  emits: [
+    "events.iterate.com/project/created",
+    "events.iterate.com/project/create-failed",
+    // the core's: the saga points the project's apex at the seeded config repo's commit
+    "events.iterate.com/project/ingress-configured",
+  ],
 });
 
 /** The project's reduced state: where its creation stands, and the catalog (the contract's

@@ -38,6 +38,8 @@ export class FakeArtifacts extends RpcTarget {
   readonly #server: FakeGitServer;
   /** Every repo path `create` made (not the seeded ones). */
   readonly created: string[] = [];
+  /** Every repo path `delete` was asked for, in order — whether or not it still existed. */
+  readonly deleted: string[] = [];
   /** How many `create` calls still fail (the creation's failure story). */
   failCreates = 0;
 
@@ -88,7 +90,9 @@ export class FakeArtifacts extends RpcTarget {
   list(_options: { limit?: number; cursor?: string } = {}): { repos: { path: string }[] } {
     return { repos: this.#server.repos().map((name) => ({ path: repoPathOf(name) })) };
   }
+  /** True when the repo existed; false for one already gone — as the proxy's `delete` answers. */
   delete(path: string): boolean {
+    this.deleted.push(path);
     return this.#server.deleteRepo(repoArtifactName(path));
   }
 

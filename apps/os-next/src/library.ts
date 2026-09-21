@@ -48,8 +48,8 @@ import type { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 // from the stream, the DO or the context folder, except context/expression.ts — the codec and the
 // pipelinable handle).
 //
-// The verbs: `run` · `connectToMcp` · `connectToOpenApi` · `connectToCapnweb` · `repos.get`/`list`/`create` ·
-// `workspaces.get`/`list`/`create` · `agents.get`/`list`/`create` · `mcpConnections.list` · `files.get`/`list`. `run` is sugar over
+// The verbs: `run` · `connectToMcp` · `connectToOpenApi` · `connectToCapnweb` · `repos.get`/`list`/`create`/`delete` ·
+// `workspaces.get`/`list`/`create`/`delete` · `agents.get`/`list`/`create`/`delete` · `mcpConnections.list` · `files.get`/`list`. `run` is sugar over
 // `itx.workers.get` (the run section); an entity's `get(path)` is a handle over `itx.cd(path).facets.get`,
 // its `list()` and `create(path)` one dispatch on the collection the `project` facet on `/` carries
 // (the entities section). The three connectors each
@@ -122,6 +122,8 @@ export interface LibraryRoots {
     get(path: string): InvokeHandle & RepoFacet;
     list(): Promise<{ path: string; createdAt: string }[]>;
     create(path: string): Promise<{ path: string }>;
+    /** The entity's deletion saga on that path: the request, the death certificate (cross-posted to `/`, the catalog drops it), then the row disabled. */
+    delete(path: string): Promise<{ path: string }>;
   };
   /** THE WORKSPACES (src/workspace/): the workspace of ANY context, at most one per path — a
    *  workspace IS its path. `create(path)` is the collection's (src/workspace/collection.ts): the
@@ -136,6 +138,8 @@ export interface LibraryRoots {
     get(path: string): InvokeHandle & WorkspaceFacet;
     list(): Promise<{ path: string; createdAt: string }[]>;
     create(path: string): Promise<{ path: string }>;
+    /** The entity's deletion saga on that path: the request, the death certificate (cross-posted to `/`, the catalog drops it), then the row disabled. */
+    delete(path: string): Promise<{ path: string }>;
   };
   /** THE AGENTS (src/agent/): an agent as a DOMAIN OBJECT — a conversation on the context at ANY
    *  path (`/agents/<name>` by convention), driven by a model that acts by writing scripts against
@@ -153,6 +157,8 @@ export interface LibraryRoots {
     get(path: string): InvokeHandle & AgentFacet;
     list(): Promise<{ path: string; createdAt: string }[]>;
     create(path: string): Promise<{ path: string }>;
+    /** The entity's deletion saga on that path: the request, the death certificate (cross-posted to `/`, the catalog drops it), then the row disabled. */
+    delete(path: string): Promise<{ path: string }>;
   };
   /** THE MCP CONNECTIONS of the project: every grant whose connection context was born here (its
    *  first run over MCP) — the context's path (`/mcp/inbound/<grantId>`, its transcript) and when.
@@ -281,6 +287,8 @@ export function buildLibrary(itx: LibraryItx): {
           >,
         create: (path) =>
           projectFacet(itx, [["repos"], ["create", path]]) as Promise<{ path: string }>,
+        delete: (path) =>
+          projectFacet(itx, [["repos"], ["delete", path]]) as Promise<{ path: string }>,
       },
       workspaces: {
         get: (path) =>
@@ -291,6 +299,8 @@ export function buildLibrary(itx: LibraryItx): {
           >,
         create: (path) =>
           projectFacet(itx, [["workspaces"], ["create", path]]) as Promise<{ path: string }>,
+        delete: (path) =>
+          projectFacet(itx, [["workspaces"], ["delete", path]]) as Promise<{ path: string }>,
       },
       agents: {
         get: (path) => entityHandle(itx, path, "agent", AgentContract) as InvokeHandle & AgentFacet,
@@ -300,6 +310,8 @@ export function buildLibrary(itx: LibraryItx): {
           >,
         create: (path) =>
           projectFacet(itx, [["agents"], ["create", path]]) as Promise<{ path: string }>,
+        delete: (path) =>
+          projectFacet(itx, [["agents"], ["delete", path]]) as Promise<{ path: string }>,
       },
       files: {
         get: (path) => fileHandle(itx, path),

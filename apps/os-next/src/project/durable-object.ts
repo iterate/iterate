@@ -20,7 +20,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
   { ITX?: ItxEntrypointService },
   ItxEntrypointScope
 > {
-  processor = new ProjectProcessor();
+  processor = new ProjectProcessor((call) => this.withItx(call));
 
   // THE COLLECTIONS are METHODS, not fields: Workers RPC reaches only what the PROTOTYPE declares,
   // and an RpcTarget a METHOD returns is the shape it hands back as a stub — so the library spells

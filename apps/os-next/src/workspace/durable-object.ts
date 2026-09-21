@@ -9,7 +9,8 @@
 // workspace a DOMAIN OBJECT: it hosts the workspace processor (processor.ts) — the creation saga
 // `itx.workspaces.create(path)` opens, whose certificate is cross-posted to `/` for the catalog
 // `itx.workspaces.list()` reads — and every method refuses until the certificate has landed
-// (`state.creation`).
+// (`state.creation`) and again once deletion has been asked for (`state.deletion`, the saga
+// `itx.workspaces.delete(path)` opens; the overlay goes with the facet when the row is dropped).
 //
 // Storage is this facet's own SQLite: one `files` table, a row per touched path — its content, or the
 // `deleted` flag that makes it a whiteout. Text only, ONE writer, no policies. The repo facets speak
@@ -103,17 +104,17 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
 
   // ── the created guard ──
 
-  /** Every verb starts here: a workspace whose certificate has not landed refuses. Creation is
-   *  terminal, so one confirming read per incarnation. */
-  #confirmedCreated = false;
+  /** Every verb starts here: a workspace whose certificate has not landed refuses, and so does one
+   *  whose deletion has been asked for. Deletion can land at any moment, so the state is read on
+   *  every call (in memory once the facet is caught up). */
   async #created(): Promise<void> {
-    if (this.#confirmedCreated) return;
     const path = await this.#path();
-    if ((await this.snapshot()).state.creation?.status !== "created")
+    const { state } = await this.snapshot();
+    if (state.deletion) throw new Error(`workspace ${path}: deleted`);
+    if (state.creation?.status !== "created")
       throw new Error(
         `workspace ${path}: not created — itx.workspaces.create(${JSON.stringify(path)}) first`,
       );
-    this.#confirmedCreated = true;
   }
 
   /** The mount table: every repo in the project catalog at its OWN path. */

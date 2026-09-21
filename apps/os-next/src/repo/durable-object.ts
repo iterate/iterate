@@ -6,7 +6,8 @@ import { z } from "zod";
 // the remote URL, and every read and write here is git-over-HTTPS from inside the facet. It is also
 // what makes a repo a DOMAIN OBJECT: it hosts the repo processor (processor.ts) — the creation saga
 // `itx.repos.create(path)` opens — every commit through it is a `repo/commit-completed` fact, and every
-// method refuses until the certificate has landed (`state.creation`).
+// method refuses until the certificate has landed (`state.creation`) and again once deletion has been
+// asked for (`state.deletion`, the saga `itx.repos.delete(path)` opens).
 //
 // SCOPE, deliberately small: branch `main` only (REF); text content only. A read is ONE ls-refs, and
 // the tip's whole snapshot in one shallow fetch (`deepen: 1`) only when the tip moved — memoized in
@@ -135,18 +136,17 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     return (this.#snapshotMemo = { tip, files });
   }
 
-  /** Every verb starts here: a repo whose certificate has not landed refuses. Creation is terminal,
-   *  so one confirming read per incarnation. */
-  #confirmedCreated = false;
+  /** Every verb starts here: a repo whose certificate has not landed refuses, and so does one whose
+   *  deletion has been asked for. Deletion can land at any moment, so the state is read on every
+   *  call (in memory once the facet is caught up). */
   async #created(): Promise<string> {
     const path = await this.#path();
-    if (!this.#confirmedCreated) {
-      if ((await this.snapshot()).state.creation?.status !== "created")
-        throw new Error(
-          `repo ${path}: not created — itx.repos.create(${JSON.stringify(path)}) first`,
-        );
-      this.#confirmedCreated = true;
-    }
+    const { state } = await this.snapshot();
+    if (state.deletion) throw new Error(`repo ${path}: deleted`);
+    if (state.creation?.status !== "created")
+      throw new Error(
+        `repo ${path}: not created — itx.repos.create(${JSON.stringify(path)}) first`,
+      );
     return path;
   }
 

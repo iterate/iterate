@@ -162,7 +162,7 @@ test("revoking a grant closes its live public socket and held capability within 
   }
 }, 75_000);
 
-test("projects.create({ project }) is a saga on /: the directory row, the `project` processor row, `project/create-requested` under the caller, then `project/created` from the processor — the facet's live state says so; the same slug again appends nothing new", async () => {
+test("projects.create({ project }) is a saga on /: the directory row, the `project` processor row, `project/create-requested` under the caller, then the processor seeds /repos/config, publishes it and lands `project/created` — the catalog and the apex say so; the same slug again appends nothing new", async () => {
   const slug = freshDnsSafeProjectSlug("create-saga");
   const api = session().authenticate(adminCredentials());
   // returns AT ONCE — the request is on the log, the certificate is the processor's to land
@@ -175,14 +175,26 @@ test("projects.create({ project }) is a saga on /: the directory row, the `proje
     (await projectFacts()).find((e) => e.type === "events.iterate.com/project/created"),
   );
   const [requested, ...rest] = await projectFacts();
+  // the saga's own facts on /: the request, the apex pointed at the seeded commit, the certificate
   expect([requested, ...rest].map((e) => e.type)).toEqual([
     "events.iterate.com/project/create-requested",
+    "events.iterate.com/project/ingress-configured",
     "events.iterate.com/project/created",
   ]);
   expect(requested.payload).toEqual({ slug, orgId: expect.any(String) }); // the directory row's facts
   expect(requested.source?.principal).toEqual({ actor: "admin" }); // the caller's, not the platform's
   expect(created.payload).toEqual({}); // existence only
   expect(await processorNames(itx)).toContain("project");
+  // the seed: the config repo in the catalog (its certificate crossed to /), its two files on main
+  expect((await itx.repos.list()).map((r: { path: string }) => r.path)).toEqual(["/repos/config"]);
+  expect((await itx.repos.get("/repos/config").listFiles()).paths).toEqual([
+    "AGENTS.md",
+    "worker.ts",
+  ]);
+  // published: the apex answers the seeded homepage worker (subdomain routing under the test's base)
+  expect((await fetchProjectHost(`${slug}.${ingressHostname()}`, "/")).text.trim()).toBe(
+    `Homepage of project ${slug}`,
+  );
   // the facet reduces its own certificate: the state the dash renders
   expect(await itx.facets.get("project").liveSnapshot()).toMatchObject({
     state: { creation: { status: "created", offset: created.offset } },

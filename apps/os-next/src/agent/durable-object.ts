@@ -6,9 +6,10 @@
 // `itx.agents.create(path)` (src/agent/collection.ts): the processor row on the path, then
 // `agent/create-requested`, then the saga in the processor lands the certificate — cross-posted to `/`
 // first, then here with the default system prompt beside it. `message(text)`, a person's words, is
-// the one verb of its own, and it refuses until the certificate has landed (`state.creation`).
-// Subscribed, the loop runs on every commit and after every eviction. Hosted from `ctx.exports`
-// (first-party-facets.ts): ordinary bundled worker code.
+// the one verb of its own, and it refuses until the certificate has landed (`state.creation`) and
+// again once deletion has been asked for (`state.deletion`, the saga `itx.agents.delete(path)` opens
+// — the loop runs no more turns from then on). Subscribed, the loop runs on every commit and after
+// every eviction. Hosted from `ctx.exports` (first-party-facets.ts): ordinary bundled worker code.
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
 import type { StreamEvent } from "iterate/next/stream/processor";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
@@ -80,18 +81,17 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
     return (appended as unknown as StreamEvent[])[0]!;
   }
 
-  /** Every verb starts here: an agent whose certificate has not landed refuses. Creation is
-   *  terminal, so one confirming read per incarnation. */
-  #confirmedCreated = false;
+  /** Every verb starts here: an agent whose certificate has not landed refuses, and so does one
+   *  whose deletion has been asked for. Deletion can land at any moment, so the state is read on
+   *  every call (in memory once the facet is caught up). */
   async #created(): Promise<string> {
     const path = await this.#path();
-    if (!this.#confirmedCreated) {
-      if ((await this.snapshot()).state.creation?.status !== "created")
-        throw new Error(
-          `agent ${path}: not created — itx.agents.create(${JSON.stringify(path)}) first`,
-        );
-      this.#confirmedCreated = true;
-    }
+    const { state } = await this.snapshot();
+    if (state.deletion) throw new Error(`agent ${path}: deleted`);
+    if (state.creation?.status !== "created")
+      throw new Error(
+        `agent ${path}: not created — itx.agents.create(${JSON.stringify(path)}) first`,
+      );
     return path;
   }
 }
