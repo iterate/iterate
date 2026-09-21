@@ -201,7 +201,8 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
    *  under a name ending in `.js` (Cloudflare's rule: "Module name must end with '.js'"), so `.js` is
    *  the one extension a sibling module may have; `worker.ts` is a name — the platform's seed — and
    *  it rides as `cap.js`. A `.md`, a `.css`, a `.json` is not a module: a worker that serves one
-   *  exports its text from a `.js` file. A commit with no `main` is a refusal, never an empty worker. */
+   *  exports its text from a `.js` file. A commit with no `main` is a refusal, never an empty worker;
+   *  a repo file at `cap.js` is shadowed by `main` (the loader's name for it). */
   async modules(options?: { main?: string; commitOid?: string }): Promise<Record<string, string>> {
     await this.#created();
     const { main = "worker.ts", commitOid } =
@@ -218,9 +219,12 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     const { files } = await this.#fresh(commitOid);
     if (!Object.hasOwn(files, main))
       throw new Error(`modules: no file at ${JSON.stringify(main)} to be the main module`);
-    const out: Record<string, string> = { "cap.js": files[main]! };
+    const out: Record<string, string> = {};
     for (const [path, content] of Object.entries(files))
       if (path.endsWith(".js")) out[path] = content;
+    // `cap.js` is the loader's name for the main module, set LAST: a repo file that happens to sit at
+    // `cap.js` is shadowed by `main`, never the other way round.
+    out["cap.js"] = files[main]!;
     return out;
   }
   async listFiles(): Promise<{ commitOid: string | null; paths: string[] }> {
