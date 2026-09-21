@@ -20,9 +20,9 @@ import {
 } from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
 import {
-  fetchProjectHost,
+  fetchProjectUrl,
   freshDnsSafeProjectSlug,
-  ingressHostname,
+  projectUrl,
   registerProject,
 } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
@@ -276,12 +276,12 @@ test("a personal access token — one OAuth grant the account mints — is the u
 
   // a project host: the covered project's app sees the stamped principal and no bearer; a project
   // the token does not cover is refused before any Durable Object is dialled
-  const base = ingressHostname();
+  const echoOf = (project: string) => projectUrl({ project, app: "echo", path: "/" });
   const bearer = { Authorization: `Bearer ${token}` };
-  const covered = await fetchProjectHost(`echo--${slug}.${base}`, "/", bearer);
+  const covered = await fetchProjectUrl(echoOf(slug), bearer);
   expect(covered.status, covered.text).toBe(200);
   expect(JSON.parse(covered.text)).toEqual({ principal, authorization: null });
-  expect((await fetchProjectHost(`echo--${otherSlug}.${base}`, "/", bearer)).status).toBe(403);
+  expect((await fetchProjectUrl(echoOf(otherSlug), bearer)).status).toBe(403);
 
   // the account lists it as what it is …
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory read on the account session.
@@ -352,7 +352,7 @@ test("a personal access token — one OAuth grant the account mints — is the u
   const endedMcp = await fetch(mcp, { method: "POST", headers: mcpHeaders, body: "{}" });
   expect(endedMcp.status).toBe(401);
   await endedMcp.body?.cancel();
-  expect((await fetchProjectHost(`echo--${slug}.${base}`, "/", bearer)).status).toBe(401);
+  expect((await fetchProjectUrl(echoOf(slug), bearer)).status).toBe(401);
   // … and the end is the account's fact too
   const ended = await until("the end is on the account context", async () =>
     (await accountEvents()).find(
