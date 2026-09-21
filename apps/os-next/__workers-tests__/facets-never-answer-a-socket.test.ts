@@ -1,10 +1,12 @@
-// __workers-tests__/facets-never-answer-a-socket.test.ts — a facet answers RPC and plain HTTP,
-// NEVER a WebSocket. A socket terminates at the edge (a session's /api pager socket on the context
-// DO, a project host's lent-stub upgrade leg) and the facet behind it is reached by itx expression;
-// so `IterateContextDurableObject#invokeFacet` refuses an upgrade aimed at a facet, coded
-// FACET_NO_UPGRADE, BEFORE the facet is even materialized — and a test's direct release can abort
-// an idle facet with nothing to lose (a socket a facet held would die with it, 1006, unseen by the
-// parent: measured 2026-09-13, the reason for this rule).
+// __workers-tests__/facets-never-answer-a-socket.test.ts — a facet reached BY ITX EXPRESSION answers
+// RPC and plain HTTP, NEVER a WebSocket. A socket terminates at the edge (a session's /api pager
+// socket on the context DO, a project host's lent-stub upgrade leg) and the facet behind it is
+// reached by itx expression; so the context DO's `facets.get` door refuses an upgrade aimed at a
+// facet, coded FACET_NO_UPGRADE, BEFORE the facet is even materialized — and a test's direct release
+// can abort an idle facet with nothing to lose (a socket a facet HELD would die with it, 1006, unseen
+// by the parent: measured 2026-09-13, the reason for this rule). The one facet that PROXIES a socket
+// — the `secret` facet, reached by egress, never by expression — is the other test:
+// secret-facet-proxies-a-socket.test.ts.
 //
 // Pinned in the `workers` vitest project (inside workerd) because the refusal must be seen on the
 // production route — a project host `<app>--<project>.projects.test`, the edge's `x-itx-expression:

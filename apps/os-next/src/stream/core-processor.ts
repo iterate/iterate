@@ -38,7 +38,6 @@ import { z } from "zod";
 import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/next/stream/processor";
 import { normalizeIngressConfigured } from "../context/ingress.ts";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
-import { isRefreshKind, type SecretCatalogEntry } from "../secrets.ts";
 import {
   isBuiltInRoot,
   isBuiltInsRooted,
@@ -286,10 +285,6 @@ export type CoreState = {
    *  and not yet settled — what is running right now, or what a restart left open (never re-run:
    *  the wake record settles it `interrupted`, stream.ts). The code stays on the request event. */
   scriptRuns: Record<number, OpenScriptRun>;
-  /** THE SECRETS CATALOG, by name — the origins a secret is pinned to and its refresh strategy's
-   *  kind, never a value (the value is physical, in the secret's own Durable Object):
-   *  `itx.secrets.list()` reads this, strongly consistent. */
-  secrets: Record<string, Omit<SecretCatalogEntry, "name">>;
 };
 
 /** One open script run: when it was asked for (its identity is its key, the request's offset). */
@@ -360,7 +355,6 @@ export const CoreContract = {
     ingressTarget: null,
     schedules: {},
     scriptRuns: {},
-    secrets: {},
   }),
 };
 
@@ -428,28 +422,6 @@ export function reduceCoreEvent(
       const scriptRuns = draftOf(state.scriptRuns, draftTables);
       delete scriptRuns[requestOffset];
       return { ...state, scriptRuns };
-    }
-    case "events.iterate.com/secrets/changed": {
-      const name = payload.name as string;
-      const next = payload.deleted
-        ? undefined
-        : {
-            // The fact is appended by the `secrets` built-in (context/built-ins.ts) from a normalized
-            // record, so a well-formed payload carries strings and a known kind; a hand-appended one
-            // is read the same way and anything else in it is dropped, never trusted.
-            ...(Array.isArray(payload.urls) &&
-              payload.urls.length > 0 && {
-                urls: payload.urls.filter((url): url is string => typeof url === "string"),
-              }),
-            ...(isRefreshKind(payload.refresh) && { refresh: payload.refresh }),
-          };
-      // A no-op is `undefined`, not a fresh object (the rules case says why).
-      if (next ? jsonEqual(state.secrets[name], next) : state.secrets[name] === undefined)
-        return undefined;
-      const secrets = draftOf(state.secrets, draftTables);
-      if (next) secrets[name] = next;
-      else delete secrets[name];
-      return { ...state, secrets };
     }
     case "events.iterate.com/stream/created":
       return {

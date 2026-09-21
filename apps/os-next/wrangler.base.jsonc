@@ -76,24 +76,23 @@
     "bindings": [
       { "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" },
       { "name": "BROWSER_SESSION", "class_name": "BrowserSession" },
-      // THE SECRET CELL: one per project secret (`<projectId>:<name>`) — the material, its pin and
-      // its refresh strategy; egress forwards a placeholder-bearing request to it (src/secret-durable-object.ts).
-      { "name": "SECRET", "class_name": "SecretDurableObject" },
     ],
   },
   // The DOs' lifecycle, declaratively: SQLite-backed classes, no migration history to replay.
   "exports": {
     "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "BrowserSession": { "type": "durable-object", "storage": "sqlite" },
-    "SecretDurableObject": { "type": "durable-object", "storage": "sqlite" },
     // THE FIRST-PARTY FACETS: Durable Object classes hosted as facets of a context through
     // `ctx.exports` (iterate-context-durable-object.ts FIRST_PARTY_FACET_CLASSES) — declared like any
     // DO class (wrangler requires the storage line); their state lives in the facet's own SQLite.
+    // `SecretDurableObject` was a bound namespace (`SECRET`) until 2026-09-21; the facet of the same
+    // name took over, and the old objects are unreachable by name — set the secrets again.
     "AccountDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "AgentDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "OrganizationDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "ProjectDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "RepoDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    "SecretDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "WorkspaceDurableObject": { "type": "durable-object", "storage": "sqlite" },
   },
 

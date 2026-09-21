@@ -11,6 +11,7 @@
 //   ConsumedEvent<typeof AccountContract>                    what the reduce sees
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
+import { SecretContract } from "../secret/contract.ts";
 
 // Each fact's payload is spelled once and used twice — by its event and by the state that keeps it.
 
@@ -50,10 +51,11 @@ export type ConsentApproved = z.infer<typeof ConsentApproved>;
 
 export const AccountContract = defineProcessorContract({
   slug: "account",
-  // 2: the state grew tokens, ended grants and consents (the control-plane facts).
-  version: "2",
+  // 2: the state grew tokens, ended grants and consents (the control-plane facts); 3: `secrets`, the
+  // user's own secrets' catalog.
+  version: "3",
   description:
-    "The user's account: authentications, personal access tokens, ended grants, consents.",
+    "The user's account: authentications, personal access tokens, ended grants, consents, and the catalog of the user's own secrets.",
   /** THE REDUCED STATE — the record of the account, folded from the facts above: what a client
    *  reads through live state. The lists ARE the events they are folded from — no re-spelling. */
   stateSchema: z.object({
@@ -75,6 +77,19 @@ export const AccountContract = defineProcessorContract({
     endedGrants: z.record(z.string(), z.object({ at: z.string() })).default({}),
     /** Every consent approved, in order: the client and what it was given. */
     consents: z.array(ConsentApproved.extend({ at: z.string() })).default([]),
+    /** Every secret set under this owner, by its path (`/secrets/<name>`, what the placeholder
+     *  spells; the context lives under this root): the pin, the refresh strategy's kind, and when
+     *  it was first set — never a value. What `itx.secrets.list()` reads here. */
+    secrets: z
+      .record(
+        z.string(),
+        z.object({
+          urls: z.array(z.string()),
+          refresh: z.enum(["oauth-refresh-token", "waitrose-session"]).optional(),
+          createdAt: z.string(),
+        }),
+      )
+      .default({}),
   }),
   events: {
     "events.iterate.com/account/authenticated": {
@@ -95,11 +110,16 @@ export const AccountContract = defineProcessorContract({
       payloadSchema: ConsentApproved,
     },
   },
+  // THE RELATIONSHIP: the account consumes the user's own secrets' certificates without owning them
+  // (src/secret/contract.ts: cross-posted from `/users/<id>/secrets/<name>`).
+  processorDeps: [SecretContract],
   consumes: [
     "events.iterate.com/account/authenticated",
     "events.iterate.com/account/grant-minted",
     "events.iterate.com/account/grant-ended",
     "events.iterate.com/account/consent-approved",
+    "events.iterate.com/secret/set",
+    "events.iterate.com/secret/deleted",
   ],
   emits: [],
 });

@@ -3,7 +3,7 @@
 // incarnation (woken), the pause latch (paused/resumed), the itx-expression rewrite rules (a MAP by
 // match: configured sets or, with a null target, deletes), the subscriptions table (by name:
 // configured REPLACES or, with a null target, drops; delivery-halted marks, delivery-resumed clears
-// the halt and records the seek) and the secrets catalog (names + origins, never a value). No clock, no effects: the same log always reduces to the same state, an ephemeral
+// the halt and records the seek). No clock, no effects: the same log always reduces to the same state, an ephemeral
 // event never reduces (the checkpoint must rebuild from the durable log alone), and a malformed
 // hand-appended event THROWS at the reduce — the host contains it (stream.test.ts pins the skip). The DOORS that build these events are pinned beside their modules
 // (context/itx-expression-rewriting.test.ts, the subscriptions section below).
@@ -42,7 +42,6 @@ describe("the contract", () => {
       ingressTarget: null,
       schedules: {},
       scriptRuns: {},
-      secrets: {},
     });
     // the events it OWNS beyond its control events: the run pair, schemas right here
     expect(Object.keys(CoreContract.events)).toEqual([
@@ -797,79 +796,6 @@ describe("the builtins root, as the reduce sees it: masks, the platform-equivale
       const s = reduceAll(log);
       expect(s.subscriptions.s.hostedFacet?.name).toBe(hosts);
       if (target) expect(print(s.subscriptions.s.target)).toBe(target);
-    });
-});
-
-describe("the secrets catalog — by name, the origin only, never a value", () => {
-  const changed = (offset: number, payload: Record<string, unknown>) =>
-    at(offset, "events.iterate.com/secrets/changed", payload);
-  // `identity` is what the LAST event's reduce hands back: a new state, or `undefined` — the host's
-  // change signal (no checkpoint rewrite, no live delta) for a no-op.
-  const rows: {
-    title: string;
-    events: StreamEvent[];
-    becomes: CoreState["secrets"];
-    identity: "a new state" | "undefined (a no-op)";
-  }[] = [
-    {
-      title: "a set",
-      events: [changed(1, { name: "a" })],
-      becomes: { a: {} },
-      identity: "a new state",
-    },
-    {
-      title: "a set with a pin and a refresh strategy's kind",
-      events: [
-        changed(1, {
-          name: "a",
-          urls: ["https://api.example.com"],
-          refresh: "oauth-refresh-token",
-        }),
-      ],
-      becomes: { a: { urls: ["https://api.example.com"], refresh: "oauth-refresh-token" } },
-      identity: "a new state",
-    },
-    {
-      title: "a re-set REPLACES (the pin and the strategy can be dropped)",
-      events: [
-        changed(1, { name: "a", urls: ["https://api.example.com"], refresh: "waitrose-session" }),
-        changed(2, { name: "a" }),
-      ],
-      becomes: { a: {} },
-      identity: "a new state",
-    },
-    {
-      title: "a re-set with the SAME pin is a no-op",
-      events: [
-        changed(1, { name: "a", urls: ["https://api.example.com"] }),
-        changed(2, { name: "a", urls: ["https://api.example.com"] }),
-      ],
-      becomes: { a: { urls: ["https://api.example.com"] } },
-      identity: "undefined (a no-op)",
-    },
-    {
-      title: "a delete removes",
-      events: [changed(1, { name: "a" }), changed(2, { name: "a", deleted: true })],
-      becomes: {},
-      identity: "a new state",
-    },
-    {
-      title: "deleting what is not there is a no-op",
-      events: [
-        changed(1, { name: "a" }),
-        changed(2, { name: "a", deleted: true }),
-        changed(3, { name: "b", deleted: true }),
-      ],
-      becomes: {},
-      identity: "undefined (a no-op)",
-    },
-  ];
-  for (const { title, events, becomes, identity } of rows)
-    test(`${title} — the last reduce returns ${identity}`, () => {
-      const before = reduceAll(events.slice(0, -1));
-      const out = reduceCoreEvent({ event: events.at(-1)!, state: before });
-      expect(out ? "a new state" : "undefined (a no-op)").toBe(identity);
-      expect((out || before).secrets).toEqual(becomes);
     });
 });
 

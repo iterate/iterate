@@ -32,7 +32,7 @@ on top of the stream.
   project code is egress with `getSecret("/secrets/NAME")` substitution.
 - **The stream.** One append-only log per context. One inline reduce (`core`)
   reduces the context's own control events at the commit point — identity, wake,
-  pause, the rewrite rules, the subscriptions, the secrets catalog; one delivery loop hands every
+  pause, the rewrite rules, the subscriptions; one delivery loop hands every
   commit to the subscriptions; a processor is a Durable Object class hosted as a
   facet and subscribed to the log.
 
@@ -96,7 +96,7 @@ The tree is laid out by primitive, one folder per chapter of the tutorial.
 
 ```text
 packages/v3/project-worker/
-  wrangler.jsonc                 bindings: ITERATE_CONTEXT (DO), SECRET (DO, one per secret), LOADER, AI, ARTIFACTS, ITX_KV,
+  wrangler.jsonc                 bindings: ITERATE_CONTEXT (DO), LOADER, AI, ARTIFACTS, ITX_KV,
                                  OAUTH_KV, DB (D1: the directory), CF_VERSION_METADATA; the APP_CONFIG_* vars;
                                  the *.project-worker.iterate.com route (project hosts)
   wrangler.test.jsonc            the workers lane's config (no AI; fresh local D1 + OAuth KV; its worker is
@@ -138,8 +138,9 @@ packages/v3/project-worker/
                                  (DurableObjectNameCodec, resolveContextPath); ItxEntrypoint (what a loaded
                                  worker's env.ITX is)
     iterate-context-durable-object.ts  THE CONTEXT DO: stream + the core reduce + delivery + facets +
-                                 rpc stubs + the fetch doors + egress (substituteProjectSecrets:
-                                 getSecret("/secrets/NAME") in the URL + headers). One class.
+                                 rpc stubs + the fetch doors + egress (a getSecret("/secrets/NAME") request
+                                 forwarded to the context at that path, whose `secret` facet substitutes,
+                                 src/secret/durable-object.ts). One class.
     lib.ts                       codedError / errorCode / reportIssue · diff / applyPatch / jsonEqual · withTimeout
     library.ts                   THE LIBRARY: connectToMcp, connectToOpenApi, connectToCapnweb; the memo
                                  table
@@ -169,7 +170,7 @@ packages/v3/project-worker/
                                  class), ProcessorEngine, consumesEvent, StreamEventInput / StreamEvent,
                                  the reduce checkpoint, LiveState<S>, defineProcessorContract (zod)
       core-processor.ts          the core reduce (slug core, 8.0.0): created/woken/paused/resumed
-                                 + the rewrite rules (a map) + the subscriptions + the secrets catalog,
+                                 + the rewrite rules (a map) + the subscriptions,
                                  one reduce (reduceCoreEventBatch: each table copied once per batch, a draft);
                                  subscriptionConfiguredEvent ({ name, target | null, consumes?, afterOffset? })
       subscription-delivery.ts   THE ONE DELIVERY LOOP: push to a facet or lent stub, else a
@@ -580,24 +581,30 @@ interface BuiltInScope {
     list(prefix?: string): Promise<{ keys: string[] }>;
   };
 
-  /** The project's secrets for egress, each its own Durable Object: `getSecret("/secrets/NAME")` in
-   *  an outbound request's URL or headers substitutes to the value at egress (`fetch`);
-   *  `getSecret("/secrets/NAME", { field: "a.b" })` to one field of a JSON material. WRITE-ONLY —
-   *  `set(name, material, { urls, refresh? })` (the pin is required: a secret is sent to those
-   *  origins ONLY; `refresh` is `oauth-refresh-token` or `waitrose-session`, run by the object on a
-   *  401), `beginOAuth(name, options)` (the provider's authorize URL; the platform's callback and the
-   *  object obtain the first tokens), `delete`, and a `list` of names, pins and strategy kinds, never
-   *  a value. Every change appends `events.iterate.com/secrets/changed { name, urls, refresh? }` (or
-   *  `{ name, deleted: true }`) — the value never enters the log. A name is `[a-zA-Z0-9._-]+`. */
+  /** The secrets for egress — each a DOMAIN OBJECT on the context at `/secrets/<name>` under the
+   *  resource owner's root, its value in the `secret` facet there (`src/secret/`: contract · processor ·
+   *  durable-object, the entity pattern): `getSecret("/secrets/NAME")` in an outbound request's URL or
+   *  headers substitutes to the value at egress (`fetch`); `getSecret("/secrets/NAME", { field: "a.b" })`
+   *  to one field of a JSON material. A secret IS its path, and the path is what the placeholder
+   *  spells. WRITE-ONLY — `set(path, material, { urls, refresh? })` (the pin is required: a secret is
+   *  sent to those origins ONLY; `refresh` is `oauth-refresh-token` or `waitrose-session`, run by the
+   *  facet on a 401), `beginOAuth(path, options)` (the provider's authorize URL; the platform's callback
+   *  and the facet obtain the first tokens), `completeOAuth(path, { code, nonce })` (the callback's),
+   *  `delete(path)`, and a `list()` of paths, pins, strategy kinds and `createdAt`, never a value. Every
+   *  writing verb runs on the secret's own context and lands its fact there — `secret/set { path, urls,
+   *  refresh? }`, `secret/deleted { path }` — attributed to the caller, cross-posted to the owner's root
+   *  (the catalog `list()` reads: the `project` facet's `secrets`); the value never enters a log. The
+   *  name is `[a-zA-Z0-9._-]+`. */
   secrets: {
     set(
-      name: string,
+      path: string,
       material: string | object,
       options: { urls: string[]; refresh?: SecretRefresh },
-    ): Promise<{ ok: true }>;
-    beginOAuth(name: string, options: SecretOAuthOptions): Promise<{ authorizationUrl: string }>;
-    delete(name: string): Promise<{ ok: true }>;
-    list(): Promise<{ name: string; urls?: string[]; refresh?: string }[]>;
+    ): Promise<{ path: string }>;
+    beginOAuth(path: string, options: SecretOAuthOptions): Promise<{ authorizationUrl: string }>;
+    completeOAuth(path: string, input: { code: string; nonce: string }): Promise<{ path: string }>;
+    delete(path: string): Promise<{ path: string }>;
+    list(): Promise<{ path: string; urls: string[]; refresh?: string; createdAt: string }[]>;
   };
 
   /** Workers AI, the binding verbatim; Cloudflare Artifacts project-scoped (the escape hatch); the
@@ -622,10 +629,11 @@ interface BuiltInScope {
    *  Own path → same isolate; anything else → a Workers-RPC call to that DO. */
   cd(path: string): InvokeHandle;
 
-  /** Egress: a request naming a secret is forwarded to that secret's Durable Object, which substitutes
-   *  the placeholders in the URL and headers (a placeholder with no stored secret, or a secret pinned
-   *  to other origins, is a 502 to the caller — never sent), refreshes on a 401, then the terminal
-   *  `fetch` — the same path a loaded worker's globalOutbound lands on. */
+  /** Egress: a request naming a secret is forwarded to the context at that path (a DO hop), whose
+   *  `secret` facet substitutes the placeholders in the URL and headers (a placeholder with no stored
+   *  secret, or a secret pinned to other origins, is a 502 to the caller — never sent), refreshes on a
+   *  401, then the terminal `fetch` — the same path a loaded worker's globalOutbound lands on. A
+   *  WebSocket upgrade rides through: the facet dials the socket and hands the 101 back. */
   fetch(request: Request): Promise<Response>;
 
   /** The rpc-stub REGISTRY — physical, never event-sourced: a client's live value lent under an
@@ -736,6 +744,10 @@ the facet's own fetch — plain HTTP only. A facet never answers a WebSocket
 (`FACET_NO_UPGRADE`): a socket terminates at the edge — a session's `/api`
 socket, a project host's lent-stub upgrade — and the facet behind it is reached
 by itx expression, so a facet can be aborted at any time with nothing to lose.
+The one facet that PROXIES a socket — `secret`, dialling a pinned host for egress and
+handing the 101 straight back — is reached by `#egress`, never by expression, and
+holds no socket of its own (measured 2026-09-21: the frames round-trip, its abort
+closes the socket, 1006).
 
 One reduce-only processor is always on and runs **inline** in the commit
 transaction: the core reduce (`src/stream/core-processor.ts`, slug `core`,
@@ -743,7 +755,7 @@ contract 8.0.0), owned by the `Stream` itself (`stream.coreReducedState`). It re
 events — and nothing else — into everything the DO needs synchronously at its
 doors: who it is, which incarnation runs, whether appends are paused, the
 rewrite rules every call goes through, the subscriptions every commit is sent
-to, and the secrets catalog (names and origins, never a value). A commit's batch
+to. A commit's batch
 is reduced at once (`reduceCoreEventBatch`): each table is copied ONCE per batch, on its
 first touch, then mutated in place; the contract's single-event `reduce` stays
 pure. It has no facet, but `snapshot()`, `liveSnapshot()` and `waitUntilProcessed()` (always
@@ -782,9 +794,11 @@ type CoreState = {
       resumed?: { afterOffset?: number; atOffset: number };
     }
   >;
-  // THE SECRETS CATALOG: by name — the pin and the strategy kind, never a value (the value is
-  // physical, in the secret's own Durable Object); `itx.secrets.list()` reads this, strongly consistent
-  secrets: Record<string, { urls?: string[]; refresh?: string }>;
+  // NO secrets catalog here (since 2026-09-21): a secret is a domain object at `/secrets/<name>`, and its
+  // catalog is the owner root facet's `secrets` (`src/project/contract.ts`; `account` / `organization` for
+  // the global owners) — folded from the `secret/set` / `secret/deleted` cross-posted to the root, by path:
+  // the pin, the strategy kind and `createdAt`, never a value (the value is physical, in the `secret`
+  // facet on the secret's own path); `itx.secrets.list()` reads that facet, strongly consistent
 };
 
 type ItxExpressionRewriteRule = CoreState["itxExpressionRewriteRules"][string];
@@ -798,8 +812,8 @@ policy — a token-bucket breaker is a facet processor that appends
 `stream/paused` (section 5.3).
 
 There is no separate status verb anywhere: runtime state IS reduced state.
-Identity, incarnation, pause, the rewrite rules, the subscription rows and the
-secrets catalog are one snapshot, `itx.facets.get('core').snapshot()`; the rules printed are
+Identity, incarnation, pause, the rewrite rules and the subscription rows are one
+snapshot, `itx.facets.get('core').snapshot()`; the rules printed are
 `itx.rewriteRules.list()`; presence is `itx.rpcStubs.list()`;
 enabled processors are `itx.subscriptions.list()` entries whose target ends in
 `.processEventBatch`, and a halted delivery is a `halted` field. A snapshot reads
@@ -1244,20 +1258,20 @@ await itx.append({ type: "events.iterate.com/stream/resumed" });
   (the verbs build exactly these; appending one by hand is the durable
   spelling):
 
-| Event                                                                                         | Payload                                             | Written by                                                                                                                                    |
-| --------------------------------------------------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `events.iterate.com/itx/rewrite-rule-configured`                                              | `{ match, target \| null }` (both strings)          | `provide` (a live stub or an expression); `null` on dispose / session end, or by the DO when the key's last pager closes                      |
-| `events.iterate.com/stream/subscription-configured`                                           | `{ name, target \| null, consumes?, afterOffset? }` | `subscribe` / `processors.enable`; `null` from `processors.disable`, dispose, session end, or the DO when a lent callback's last pager closes |
-| `events.iterate.com/secrets/changed`                                                          | `{ name, origin? }` / `{ name, deleted: true }`     | `itx.secrets.set` / `.delete` — the name, never the value                                                                                     |
-| `events.iterate.com/stream/subscription-delivery-halted`                                      | `{ name, afterOffset, attempts, error? }`           | the delivery loop, after the ladder                                                                                                           |
-| `events.iterate.com/stream/subscription-delivery-resumed`                                     | `{ name, afterOffset? }`                            | you, to un-halt and optionally seek                                                                                                           |
-| `events.iterate.com/rpc-stub/attached` / `detached` (ephemeral)                               | `{ rpcStubKey }`                                    | the rpc-stub directory, first/last pager of a key                                                                                             |
-| `events.iterate.com/live-state/changed` (ephemeral)                                           | `{ key, from, to, patch }`                          | `LiveState.set`                                                                                                                               |
-| `events.iterate.com/stream/created`                                                           | `{ projectId, path }`                               | the DO constructor (`Stream.appendBirthRecord`), offset 1, once                                                                               |
-| `events.iterate.com/stream/woken`                                                             | `{ incarnation, reason }`                           | the first door of every incarnation (`Stream.appendWakeRecord`; the alarm handler says `"alarm"`)                                             |
-| `events.iterate.com/stream/paused` / `resumed`                                                | `{ reason }` / `{}`                                 | you, or a policy facet such as `BreakerProcessor`                                                                                             |
-| `events.iterate.com/stream/append-scheduled` · `append-schedule-{cancelled,completed,failed}` | docs/scheduled-appends.md                           | `itx.schedules` / the alarm pass                                                                                                              |
-| `events.iterate.com/stream/trace/alarm` (ephemeral)                                           | `AlarmTrace`                                        | the DO's alarm pass — `alarm-fired` / `alarm-pass` / `alarm-abandoned`; never subscription input                                              |
+| Event                                                                                         | Payload                                             | Written by                                                                                                                                                                                          |
+| --------------------------------------------------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `events.iterate.com/itx/rewrite-rule-configured`                                              | `{ match, target \| null }` (both strings)          | `provide` (a live stub or an expression); `null` on dispose / session end, or by the DO when the key's last pager closes                                                                            |
+| `events.iterate.com/stream/subscription-configured`                                           | `{ name, target \| null, consumes?, afterOffset? }` | `subscribe` / `processors.enable`; `null` from `processors.disable`, dispose, session end, or the DO when a lent callback's last pager closes                                                       |
+| `events.iterate.com/secret/set` · `secret/deleted`                                            | `{ path, urls, refresh? }` / `{ path }`             | `itx.secrets.set` / `.delete`, on the secret's path and cross-posted to the owner's root — the path, the pin, never the value; NOT core: the `project` facet folds them (`src/project/contract.ts`) |
+| `events.iterate.com/stream/subscription-delivery-halted`                                      | `{ name, afterOffset, attempts, error? }`           | the delivery loop, after the ladder                                                                                                                                                                 |
+| `events.iterate.com/stream/subscription-delivery-resumed`                                     | `{ name, afterOffset? }`                            | you, to un-halt and optionally seek                                                                                                                                                                 |
+| `events.iterate.com/rpc-stub/attached` / `detached` (ephemeral)                               | `{ rpcStubKey }`                                    | the rpc-stub directory, first/last pager of a key                                                                                                                                                   |
+| `events.iterate.com/live-state/changed` (ephemeral)                                           | `{ key, from, to, patch }`                          | `LiveState.set`                                                                                                                                                                                     |
+| `events.iterate.com/stream/created`                                                           | `{ projectId, path }`                               | the DO constructor (`Stream.appendBirthRecord`), offset 1, once                                                                                                                                     |
+| `events.iterate.com/stream/woken`                                                             | `{ incarnation, reason }`                           | the first door of every incarnation (`Stream.appendWakeRecord`; the alarm handler says `"alarm"`)                                                                                                   |
+| `events.iterate.com/stream/paused` / `resumed`                                                | `{ reason }` / `{}`                                 | you, or a policy facet such as `BreakerProcessor`                                                                                                                                                   |
+| `events.iterate.com/stream/append-scheduled` · `append-schedule-{cancelled,completed,failed}` | docs/scheduled-appends.md                           | `itx.schedules` / the alarm pass                                                                                                                                                                    |
+| `events.iterate.com/stream/trace/alarm` (ephemeral)                                           | `AlarmTrace`                                        | the DO's alarm pass — `alarm-fired` / `alarm-pass` / `alarm-abandoned`; never subscription input                                                                                                    |
 
 Refusals surface as coded errors (`src/lib.ts`): `STREAM_PAUSED`,
 `IDEMPOTENCY_CONFLICT`, `OFFSET_CONFLICT`, `NO_ITX_EXPRESSION_MATCH`, `NO_FACET`,
@@ -1413,9 +1427,10 @@ class IterateContextDurableObject extends DurableObject<Env> {
   // ── native platform entry points ──
   /** Ordered partial-fetch walk: x-itx-rpc-stub-pager (the pager WS) → x-itx-fetch-upgrade (the
    *  101 leg of an rpc-stub fetch) → x-itx-expression (the fetch lane, run under the x-itx-principal
-   *  stamp when the edge set one) → else EGRESS (#egress): getSecret("/secrets/NAME") substitution in
-   *  the URL and headers inside the secret's cell, `SecretDurableObject` (a missing secret, or one pinned to other origins, is a
-   *  502 — ProjectSecretRefused — to the caller), then the terminal fetch. */
+   *  stamp when the edge set one) → else EGRESS (#egress): a getSecret("/secrets/NAME") request is
+   *  forwarded to the context at that path, whose `secret` facet substitutes it in the URL and headers
+   *  (src/secret/durable-object.ts; a missing secret, or one pinned to other origins, is a 502 —
+   *  ProjectSecretRefused — to the caller), then the terminal fetch. */
   fetch(request: Request): Promise<Response>;
   /** THE ALARM PASS: the wake record (`"alarm"`), the due schedules, every cursor row's owed delivery,
    *  then every due claim of a hosted processor (spent, and the facet's `revive()` called); the next
@@ -1502,7 +1517,6 @@ Bindings (`wrangler.jsonc`):
 | `AI`                  | Workers AI                                   | `itx.ai`, the binding verbatim                                                                                                                                                                                                                                                                           |
 | `ARTIFACTS`           | Cloudflare Artifacts namespace               | `itx.cfArtifacts` (project-scoped), `itx.git`                                                                                                                                                                                                                                                            |
 | `ITX_KV`              | KV                                           | `itx.kv`, keys prefixed `${projectId}:`                                                                                                                                                                                                                                                                  |
-| `SECRET`              | Durable Object (`SecretDurableObject`)       | THE SECRET CELL, one per secret of a project (`<projectId>:<name>`): the material, its pin and its refresh strategy; `itx.secrets` writes it, egress forwards a placeholder-bearing request to it (src/secrets.ts, src/secret-durable-object.ts)                                                         |
 | `DB`                  | D1                                           | the control plane's directory (`definitions.sql`)                                                                                                                                                                                                                                                        |
 | `OAUTH_KV`            | KV                                           | the OAuth AS's store (grants, tokens, DCR clients)                                                                                                                                                                                                                                                       |
 | `CF_VERSION_METADATA` | version metadata                             | `worker.ts` reads it into `deployId`: every loader cacheKey, and `/version`                                                                                                                                                                                                                              |
@@ -1696,13 +1710,13 @@ itself.
 | push                  | delivery to a target that owns its progress: `(events, range)`, fire-and-forget to a lent stub, awaited to a facet                                                                                                                                                                                                                                                                                                                                   |
 | stream-kept cursor    | delivery to a target that cannot own progress: at-least-once from a row in the `subscription_cursors` table, retry ladder, halt fact                                                                                                                                                                                                                                                                                                                 |
 | processor             | a pure `StreamProcessor` (contract + reduce, optional effects) inside a `StreamProcessorDurableObject` host, hosted as a facet and subscribed to `processEventBatch`; durable configuration; the core reduce is one hosted inline instead                                                                                                                                                                                                            |
-| core reduce           | the ONE reduce-only processor run inside the commit transaction: `core` (identity, wake, pause, rewrite rules, subscriptions, the secrets catalog), owned by the `Stream`                                                                                                                                                                                                                                                                            |
+| core reduce           | the ONE reduce-only processor run inside the commit transaction: `core` (identity, wake, pause, rewrite rules, subscriptions), owned by the `Stream`                                                                                                                                                                                                                                                                                                 |
 | facet                 | a workerd `ctx.facets` child of the DO with its own storage; hosts loaded `DurableObject` classes, processors included                                                                                                                                                                                                                                                                                                                               |
 | scanned range         | `{ after, through }` delivered with each batch; the contiguity proof subscribers chain                                                                                                                                                                                                                                                                                                                                                               |
 | ephemeral             | an event that takes an offset but is never stored and costs no write; delivered only to subscribers that name its type                                                                                                                                                                                                                                                                                                                               |
 | incarnation           | one life of the DO between evictions; the first door's `stream/woken` (`appendWakeRecord`, `reason: "alarm"` when that door is the alarm handler) opens each (offset 1 is the first one's `stream/created`); ephemeral offsets are unique within one                                                                                                                                                                                                 |
 | live state            | a `LiveState` holder's `{ rev, state }` plus `live-state/changed` deltas; clients chain revs and re-seed on a gap                                                                                                                                                                                                                                                                                                                                    |
-| egress                | any fetch leaving project code: `getSecret("/secrets/NAME")` (and `{ field: "a.b" }`) substituted in the DO (URL + headers; a missing or origin-bound secret is a 502), then the terminal `fetch` — no next door                                                                                                                                                                                                                                     |
+| egress                | any fetch leaving project code: a `getSecret("/secrets/NAME")` (and `{ field: "a.b" }`) request forwarded to the context at that path, whose `secret` facet substitutes (URL + headers; a missing or origin-bound secret is a 502), then the terminal `fetch` — no next door                                                                                                                                                                         |
 | control plane         | the in-process catch-all of the one worker (`src/control-plane.ts`): the OAuth AS, the D1 directory (users → orgs → projects; a project's id IS its slug), `/mcp`, the issuer's pages — `/login` and the `/authorize` consent form, rendered whole; what admits a project host and answers membership                                                                                                                                                |
 | project host          | the one HTTP way into a project: `<app>--<project>.<base>` and `<app>.<project>.<base>` are the app `itx.apps.<app>` of the project's root context, the apex `<project>.<base>` its config worker's `fetch`; the Request verbatim, `x-iterate-app` the host's label; admitted by one directory read (421 otherwise); an OAuth grant — the app's `/.auth/*` browser session, or an access token as `Authorization: Bearer` — stamps `x-itx-principal` |
 | fetch lane            | the DO's `x-itx-expression` door: a project host from outside, a terminal `itx.x.fetch(request)` from inside a session, `env.ITX.fetch` from loaded code                                                                                                                                                                                                                                                                                             |

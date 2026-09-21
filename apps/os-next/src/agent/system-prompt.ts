@@ -62,7 +62,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   'return await itx.workspaces.get("/workspaces/me").gitCommit({ message: "draft", scope: "/repos/config" })',
   "",
   "SECRETS (never the values — a placeholder in an outbound request substitutes at egress)",
-  "return await itx.secrets.list()                              // [{ name, ... }]",
+  "return await itx.secrets.list()                              // [{ path, urls, refresh?, createdAt }]",
   'const r = await itx.fetch(new Request("https://api.example.com/me", { headers: { authorization: \'Bearer getSecret("/secrets/example")\' } })); return await r.json()',
   "",
   "THE INTERNET (through the project's egress)",

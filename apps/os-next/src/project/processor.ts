@@ -1,6 +1,7 @@
 // src/project/processor.ts — THE PROJECT PROCESSOR: the reduce of the project's own creation facts
-// and of the birth certificates cross-posted to `/` (the catalog: first certificate wins — a repo, a
-// workspace or an agent is born once, an MCP connection per grant — and a death certificate drops the entry), and THE SAGA — the project's
+// and of the certificates cross-posted to `/` (the catalog: first certificate wins — a repo, a
+// workspace or an agent is born once, an MCP connection per grant; a secret's latest `set` is its
+// row — and a death certificate drops the entry), and THE SAGA — the project's
 // creation, run from state at head: the config repo (`itx.repos.create("/repos/config")`, the same
 // collection a caller uses), its seed committed when `main` is unborn (the homepage worker and an
 // AGENTS.md, below), the project's ingress pointed at that commit (`project/ingress-configured`, the
@@ -18,6 +19,7 @@ import {
   StreamProcessor,
 } from "iterate/next/stream/processor";
 import type { WithItx } from "iterate/next/sdk";
+import { jsonEqual } from "iterate/next/lib";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { ProjectContract, type ProjectState } from "./contract.ts";
 
@@ -85,6 +87,25 @@ export class ProjectProcessor extends StreamProcessor<
         if (!state.agents[event.payload.path]) return undefined;
         const { [event.payload.path]: _gone, ...agents } = state.agents;
         return { ...state, agents };
+      }
+      case "events.iterate.com/secret/set": {
+        // The latest write is the row (a rotation keeps the row, a new pin or strategy replaces
+        // it); the first set's time stays. The same pin and strategy again is a no-op.
+        const { path, urls, refresh } = event.payload;
+        const known = state.secrets[path];
+        if (known && known.refresh === refresh && jsonEqual(known.urls, urls)) return undefined;
+        return {
+          ...state,
+          secrets: {
+            ...state.secrets,
+            [path]: { urls, refresh, createdAt: known?.createdAt ?? event.createdAt },
+          },
+        };
+      }
+      case "events.iterate.com/secret/deleted": {
+        if (!state.secrets[event.payload.path]) return undefined;
+        const { [event.payload.path]: _gone, ...secrets } = state.secrets;
+        return { ...state, secrets };
       }
       case "events.iterate.com/project/mcp-connection-created": {
         const { grantId, path } = event.payload;
