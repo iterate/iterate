@@ -38,6 +38,7 @@ export const Route = createFileRoute("/_auth/sessions")({
   // step-up instead of the error the API would answer with.
   loader: async ({ context, deps }) =>
     context.info.scopes.includes("account") ? await context.api.grants.list(deps.cursor) : null,
+  head: () => ({ meta: [{ title: "Sessions · Dash" }] }),
   component: SessionsPage,
 });
 

@@ -34,6 +34,7 @@ const shell = getRouteApi("/_auth");
 
 export const Route = createFileRoute("/_auth/organizations/")({
   validateSearch: z.object({ new: z.literal(1).optional().catch(undefined) }),
+  head: () => ({ meta: [{ title: "Organizations · Dash" }] }),
   staticData: { page: "Organizations" },
   component: OrganizationsPage,
 });

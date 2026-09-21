@@ -1,5 +1,5 @@
 import { createFileRoute, useRouterState } from "@tanstack/react-router";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { CircleIcon } from "lucide-react";
 import { z } from "zod";
 import { useLiveState } from "iterate/next/react";
@@ -71,7 +71,8 @@ function CallPage() {
  *  places the call; Hang up ends it and reports what this browser saw. */
 function Phone({ project }: { project: string }) {
   const { api } = Route.useRouteContext();
-  const [audio, setAudio] = useState<AudioSession>();
+  // the microphone and speaker of the call in progress: read by Hang up, never rendered
+  const audio = useRef<AudioSession>(undefined);
   const [call, setCall] = useState<Call>();
   const [facts, setFacts] = useState<CallFact[]>([]);
   const [busy, setBusy] = useState(false);
@@ -92,7 +93,7 @@ function Phone({ project }: { project: string }) {
     let opened: AudioSession | undefined; // the session THIS press opened, not the render's state
     try {
       opened = await openAudio(); // inside the click: the browser wants a gesture
-      setAudio(opened);
+      audio.current = opened;
       const started = await startCall({
         api,
         projectId: project,
@@ -103,28 +104,29 @@ function Phone({ project }: { project: string }) {
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
       await opened?.close();
-      setAudio(undefined);
+      audio.current = undefined;
     } finally {
       setBusy(false);
     }
   };
   const onHangUp = async () => {
     setBusy(true);
+    const opened = audio.current;
     try {
       await call?.hangUp();
-      if (call && audio) {
+      if (call && opened) {
         // What this browser saw: the one hop the relay cannot measure.
-        const speaker = await audio.speaker.stats();
+        const speaker = await opened.speaker.stats();
         const s = call.stats;
         setLastStats(
           `last call: handshake ${s.handshakeMs ?? "?"} ms · mic ${s.micFramesSent} frames sent, ${s.micFramesDropped} dropped · ` +
             `speaker ${s.spkChunksReceived} chunks (${Math.round(s.spkMsReceived)} ms) received, ${speaker.playedMs} ms played, ${speaker.underruns} underruns`,
         );
       }
-      await audio?.close();
+      await opened?.close();
     } finally {
       setCall(undefined);
-      setAudio(undefined);
+      audio.current = undefined;
       setBusy(false);
     }
   };

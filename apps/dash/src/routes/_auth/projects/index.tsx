@@ -33,13 +33,14 @@ import {
 } from "@iterate-com/ui/components/table";
 import { AllowOrganizations } from "../../../components/allow-organizations.tsx";
 import { ListPage } from "../../../components/list-page.tsx";
+import { projectHostOf } from "../../../lib/origins.ts";
 import type { Org } from "../../../lib/projects.ts";
-import { projectHostOf } from "../../_auth.tsx";
 
 const shell = getRouteApi("/_auth");
 
 export const Route = createFileRoute("/_auth/projects/")({
   validateSearch: z.object({ new: z.literal(1).optional().catch(undefined) }),
+  head: () => ({ meta: [{ title: "Projects · Dash" }] }),
   component: ProjectsPage,
 });
 

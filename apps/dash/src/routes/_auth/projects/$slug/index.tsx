@@ -12,7 +12,7 @@ import { Badge } from "@iterate-com/ui/components/badge";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { projectHostOf } from "../../../_auth.tsx";
+import { projectHostOf } from "../../../../lib/origins.ts";
 
 const shell = getRouteApi("/_auth");
 

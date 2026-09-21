@@ -27,20 +27,25 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
     // the URL names the project by slug (its id works too); one this sign-in lacks → sign in again
     const project = projects.find((item) => item.slug === params.slug || item.id === params.slug);
     if (!project) return context.signInFor(params.slug);
-    using itx = await context.api.projects.get(project.id);
-    await itx.invoke(["itx", "repos", ["get", REPO], ["create"]]);
-    await itx.invoke(["itx", "workspaces", ["get", WORKSPACE], ["create"]]);
-    const note =
-      z
-        .string()
-        .nullable()
-        .parse(await itx.invoke(["itx", "workspaces", ["get", WORKSPACE], ["readFile", FILE]])) ??
-      "";
-    const tip = z
-      .string()
-      .nullable()
-      .parse(await itx.invoke(["itx", "repos", ["get", REPO], ["tip"]]));
-    return { projects, project, note, tip };
+    // the project's root context, pipelined: the calls below ride it before it has resolved
+    using itx = context.api.projects.get(project.id);
+    // two chains side by side, each its own context: the workspace comes into being and the file is
+    // read through it (its overlay, else the tip of a repo the catalog lists — none yet reads as no
+    // note); the repo comes into being (idempotent: the project seeded it) and its tip is read
+    const [note, tip] = await Promise.all([
+      itx
+        .invoke(["itx", "workspaces", ["get", WORKSPACE], ["create"]])
+        .then(() => itx.invoke(["itx", "workspaces", ["get", WORKSPACE], ["readFile", FILE]])),
+      itx
+        .invoke(["itx", "repos", ["get", REPO], ["create"]])
+        .then(() => itx.invoke(["itx", "repos", ["get", REPO], ["tip"]])),
+    ]);
+    return {
+      projects,
+      project,
+      note: z.string().nullable().parse(note) || "",
+      tip: z.string().nullable().parse(tip),
+    };
   },
   component: NotesPage,
 });
