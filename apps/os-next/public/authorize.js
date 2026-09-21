@@ -295,7 +295,20 @@ function renderInvalid(view) {
 
 function render() {
   const view = state.view;
-  if (!view) return;
+  if (!view) {
+    // nothing to draw yet: a first description that failed (the socket dropped, the platform
+    // refused) shows where "Loading…" was, with the way to try again — a fresh load, since the
+    // socket is opened once, at the top
+    if (state.error)
+      card
+        .querySelector("header")
+        ?.replaceChildren(
+          el("h1", { text: "Authorize" }),
+          errorLine(),
+          el("p", {}, el("a", { class: "button", href: location.href, text: "Try again" })),
+        );
+    return;
+  }
   if (view.kind === "invalid") return renderInvalid(view);
   if (!view.projectBound && !view.projects.length) return renderOnboarding(view);
   const { clientName, email, picture, projects, orgs, projectBound, scopes, denyLocation } = view;

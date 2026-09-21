@@ -142,3 +142,24 @@ test("a consent page whose session ends underneath it returns to sign-in", async
   await page.waitForURL(/\/login\?next=%2Fauthorize%3F/);
   expect(errors).toEqual([]);
 });
+
+test("a consent page that cannot reach the platform says so instead of loading forever", async ({
+  page,
+  baseURL,
+}) => {
+  const origin = new URL(baseURL!).origin;
+  await signIn(page, origin, `offline-${stamp()}@example.com`);
+  // the platform's socket drops before it answers anything
+  await page.routeWebSocket(/\/api$/, (socket) => socket.close({ code: 1011, reason: "gone" }));
+  const flow = await authorizationCodeRequest({
+    issuer: origin,
+    clientId: claudeClient,
+    redirectUri: "http://127.0.0.1:1/callback",
+    resources: [`${origin}/mcp`],
+    scopes: ["iterate"],
+  });
+  await page.goto(flow.url.href);
+  await page.getByRole("alert").waitFor();
+  expect(await page.getByText("Loading…", { exact: true }).count()).toBe(0);
+  await page.getByRole("link", { name: "Try again", exact: true }).waitFor();
+});
