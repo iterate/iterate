@@ -18,7 +18,7 @@
 
 import { expect, test } from "vitest";
 import { append, codeOf, freshCtx, openItx, readHead, rejection, until } from "./support/client.ts";
-import { fetchProjectHost, projectHostnameBase } from "./support/project-host.ts";
+import { fetchProjectHost, ingressHostname } from "./support/project-host.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
 import { SlackReplayTarget, Tools } from "./support/targets.ts";
 
@@ -30,7 +30,7 @@ test("a project label outside the DNS grammar is not a project host: the edge na
   // is nothing else, so the edge answers 421 (a fall-through to the control plane would be a working
   // platform origin on a name the platform never chose) and no Durable Object is ever named or
   // minted for it; the DO-name codec's own charset gate (`:` and the rest) is src/iterate-context.test.ts.
-  const answer = await fetchProjectHost(`site--prj_evil.${projectHostnameBase()}`, "/w?repo=x");
+  const answer = await fetchProjectHost(`site--prj_evil.${ingressHostname()}`, "/w?repo=x");
   expect(answer.status, answer.text).toBe(421);
   expect(answer.text).toContain("not a project host");
 });

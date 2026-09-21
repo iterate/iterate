@@ -7,73 +7,48 @@ import { authorizationCodeRequest } from "iterate/next/oauth";
 
 const claudeClient = "https://claude.ai/oauth/claude-code-client-metadata";
 const stamp = () => `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}`;
-const isLocal = (origin: string) => new URL(origin).hostname === "localhost";
-/** The code step accepts 424242 locally and on a deployment that says so. */
-const acceptsTestCode = (origin: string) =>
-  isLocal(origin) || process.env.TEST_EMAIL_LOGIN === "true";
-const adminSecret = (origin: string) => {
-  const secret = process.env.ADMIN_API_SECRET || (isLocal(origin) && "dev-admin-api-secret");
-  if (!secret) throw new Error("ADMIN_API_SECRET is required for the deployed identity fixture");
-  return secret;
+/** The deployment's sign-in password (src/app-config.ts `login.password`): the local worker's
+ *  (scripts/dev.ts), else the run's LOGIN_PASSWORD. */
+const loginPassword = (origin: string) => {
+  const password =
+    process.env.LOGIN_PASSWORD || (new URL(origin).hostname === "localhost" && "dev");
+  if (!password) throw new Error("LOGIN_PASSWORD is required to sign in to a deployed worker");
+  return password;
 };
 
-/** Sign in the way auth.spec.ts does: the test code where the deployment accepts one, else the
- *  administrator's identity fixture — and land on `next`. */
-async function signIn(page: Page, origin: string, email: string, next = "/") {
-  await page.goto(`${origin}/login?next=${encodeURIComponent(next)}`);
-  if (acceptsTestCode(origin)) {
-    await page.getByRole("textbox", { name: "Email", exact: true }).fill(email);
+/** The page's password step: the email, the password (on the first step where the page shows it at
+ *  once, else behind Continue), Continue. */
+async function passwordStep(page: Page, origin: string, email: string, password?: string) {
+  await page.getByRole("textbox", { name: "Email", exact: true }).fill(email);
+  const field = page.getByRole("textbox", { name: "Password", exact: true });
+  if (!(await field.isVisible()))
     await page.getByRole("button", { name: "Continue", exact: true }).click();
-    await page.getByRole("textbox", { name: "Code", exact: true }).fill("424242");
-    await page.getByRole("button", { name: "Continue", exact: true }).click();
-    // the sign-in lands on `next` by way of the session's callback: wait for the destination
-    // itself, not the first URL that is no longer /login (that one may still be mid-callback)
-    await page.waitForURL(new URL(next, origin).href);
-    return;
-  }
-  await page.getByRole("heading", { name: "Sign in to iterate", exact: true }).waitFor();
-  const response = await page.request.post(`${origin}/login`, {
-    headers: { Authorization: `Bearer ${adminSecret(origin)}` },
-    form: { email, next },
-    maxRedirects: 0,
-  });
-  expect(response.status(), await response.text()).toBe(302);
-  await response.dispose();
-  await page.goto(new URL(next, origin).href);
+  await field.fill(password || loginPassword(origin));
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
 }
 
-test("the sign-in page refuses a wrong code in place, restarts for another email, and tells a signed-in browser where to go", async ({
+/** Sign in the way auth.spec.ts does — the page's password step — and land on `next`. */
+async function signIn(page: Page, origin: string, email: string, next = "/") {
+  await page.goto(`${origin}/login?next=${encodeURIComponent(next)}`);
+  await passwordStep(page, origin, email);
+  await page.waitForURL((url) => url.pathname !== "/login");
+}
+
+test("the sign-in page refuses a wrong password in place, keeps the email, and tells a signed-in browser where to go", async ({
   page,
   baseURL,
 }) => {
   const origin = new URL(baseURL!).origin;
-  test.skip(
-    !acceptsTestCode(origin),
-    "the code step needs a deployment that accepts the test code",
-  );
   const email = `pages-${stamp()}@example.com`;
   await page.goto(`${origin}/login`);
-  await page.getByRole("textbox", { name: "Email", exact: true }).fill(email);
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
-  await page.getByText(`We sent a code to ${email}.`).waitFor();
-  // a wrong code is refused where it was typed; the email is remembered
-  await page.getByRole("textbox", { name: "Code", exact: true }).fill("000000");
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
-  await page
-    .getByRole("alert")
-    .filter({ hasText: /not right/ })
-    .waitFor();
-  await page.getByText(`We sent a code to ${email}.`).waitFor();
-  // another email: back to the first step, the code step gone
-  await page.getByRole("button", { name: "Use a different email", exact: true }).click();
-  await page.getByRole("textbox", { name: "Email", exact: true }).waitFor();
-  expect(await page.getByRole("textbox", { name: "Code", exact: true }).count()).toBe(0);
+  // a wrong password is refused where it was typed; the email is remembered, nobody is signed in
+  await passwordStep(page, origin, email, "not-the-password");
+  await page.getByRole("alert").waitFor();
+  expect(await page.getByRole("textbox", { name: "Email", exact: true }).inputValue()).toBe(email);
+  expect(await page.getByText(`Signed in as ${email}.`).count()).toBe(0);
   // signed in with nowhere asked for: the page says so and points onward (to the dash, where the
   // deployment has one — /login.json says), and can switch account
-  await page.getByRole("textbox", { name: "Email", exact: true }).fill(email);
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
-  await page.getByRole("textbox", { name: "Code", exact: true }).fill("424242");
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await passwordStep(page, origin, email);
   await page.getByText(`Signed in as ${email}.`).waitFor();
   const { dash } = (await (await page.request.get(`${origin}/login.json`)).json()) as {
     dash: string | null;

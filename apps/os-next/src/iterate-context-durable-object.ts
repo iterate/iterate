@@ -48,6 +48,7 @@ import {
   type Caller,
   type Principal,
 } from "iterate/next/principal";
+import { projectUrlOf } from "iterate/next/project-ingress";
 import {
   assertFacetSourceWithinCeiling,
   facetLoaderOwner,
@@ -84,7 +85,8 @@ import { AlarmCoordinator } from "./alarm-coordinator.ts";
 import { DurableObjectNameCodec, itxEntrypointFor, resourceScope } from "./iterate-context.ts";
 import { secretNamesReferenced } from "./secrets.ts";
 import type { SecretDurableObject } from "./secret-durable-object.ts";
-import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
+import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "./app-config.ts";
+import { ITX_PLATFORM_ORIGIN_HEADER } from "./platform-origin.ts";
 import {
   ItxExpressionResolver,
   restoreRuleTarget,
@@ -94,7 +96,7 @@ import {
   BUILT_IN_ROOTS,
 } from "./context/itx-expression-rewriting.ts";
 import { signedFileUrl } from "./context/file-urls.ts";
-import { directory } from "./directory.ts";
+import { directory, ensureDirectorySchema } from "./directory.ts";
 import {
   buildBuiltIns,
   type RewriteRuleListEntry,
@@ -199,6 +201,11 @@ export interface Env extends AppConfigEnv {
  *  neither a visitor on a project host nor loaded code on `env.ITX.fetch` can pick an app the
  *  expression did not. */
 const ITERATE_APP_HEADER = "x-iterate-app";
+
+/** WHO is calling, as this DO runs a call: the SDK's `Caller` (the principal) plus THE PLATFORM
+ *  ORIGIN the caller reached the platform on (iterate-context.ts; the fetch lane's header) — what a
+ *  public URL is composed from (`itx.url`, a signed file URL), because a DO isolate knows no origin
+ *  of its own. Null/absent for a caller with none (a loaded worker, the delivery loop, an alarm). */
 
 export class IterateContextDurableObject extends DurableObject<Env> {
   /** WHO THIS DO IS: the DO name parsed ONCE into `{ name, projectId, path }`. A context is only
@@ -343,12 +350,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     storage: this.ctx.storage,
     path: this.#durableObjectAddress.path,
     projectId: this.#durableObjectAddress.projectId,
-    recentEphemeralsBudgetChars: this.#appConfig.recentEphemeralsBudgetChars,
     onCommit: (freshEvents, afterOffset, throughOffset) => {
       // An alarm trace answers waitForEvent, never a subscription (AlarmTrace says why).
       const events = freshEvents.filter((event) => event.type !== STREAM_ALARM_TRACE_EVENT);
       if (events.length === 0) return;
-      this.#callerStorage.run({ principal: null }, () => {
+      this.#callerStorage.run(this.#withPlatformOrigin({ principal: null }), () => {
         this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset);
         this.#startRequestedRuns(events);
       });
@@ -575,41 +581,56 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     append: async (...events) => this.#appendAndRunCommittedEffects(events),
     read: async (afterOffset, limit, options) => this.#stream.read(afterOffset, limit, options),
     invoke: (call, args = [], caller = this.#callerStorage.getStore() ?? { principal: null }) =>
-      this.#callerStorage.run(caller, () => this.#itxExpressionResolver.invoke(call, ...args)),
+      this.#callerStorage.run(this.#withPlatformOrigin(caller), () =>
+        this.#itxExpressionResolver.invoke(call, ...args),
+      ),
   };
 
   /** `itx.builtins` — the physical scope this context resolves against (context/built-ins.ts). */
   readonly #builtIns: Record<string, unknown> = buildBuiltIns({
     projectInfo: async () => {
       if (this.#durableObjectAddress.projectId === "global") return {};
+      await ensureDirectorySchema(this.env.DB);
       const row = await this.env.DB.prepare("SELECT * FROM projects WHERE id = ?")
         .bind(this.#durableObjectAddress.projectId)
         .first();
       if (!row) return {};
       const project = z.object({ id: z.string(), slug: z.string().optional() }).parse(row);
       const projectSlug = project.slug || project.id;
-      const base = this.#appConfig.projectHostnameBase;
-      return { projectSlug, ...(base && { projectUrl: `https://${projectSlug}.${base}` }) };
+      // the apex URL, when the caller carries the platform origin to compose it with
+      const platformOrigin = this.#callerStorage.getStore()?.platformOrigin;
+      const url = platformOrigin
+        ? projectUrlOf(this.#appConfig.urls.ingressRouting, platformOrigin, {
+            project: projectSlug,
+          })
+        : null;
+      return { projectSlug, ...(url && { projectUrl: url.href }) };
     },
     projectId: this.#durableObjectAddress.projectId,
     path: this.#durableObjectAddress.path,
     iterateContextName: this.#durableObjectAddress.name,
     env: this.env,
     deployId: this.#appConfig.deployId,
-    artifactsAccountId: this.#appConfig.artifactsAccountId,
-    artifactsNamespace: this.#appConfig.artifactsNamespace,
+    ingressRouting: this.#appConfig.urls.ingressRouting,
+    platformOrigin: () => this.#callerStorage.getStore()?.platformOrigin ?? null,
     signFileUrl: async (input) => {
-      // the URL's host carries the project's slug (the edge admits a project host by it); the
-      // claim carries the id — a global context (a user's, an organization's) has no host
+      const platformOrigin = this.#callerStorage.getStore()?.platformOrigin;
+      if (!platformOrigin)
+        throw new Error(
+          "files: a signed URL is composed from the platform origin the caller reached the platform on — this call carries none (call it from a session)",
+        );
+      // the URL carries the project's slug (the edge admits a project by it); the claim carries
+      // the id — a global context (a user's, an organization's) has no URL
+      await ensureDirectorySchema(this.env.DB);
       const project = await directory(this.env.DB).getProject(input.project);
       if (!project)
         throw new Error("files: only a project's context can sign a file URL — it has the host");
       return signedFileUrl({
         ...input,
         host: project.slug,
-        secret: this.#appConfig.sessionSecret.exposeSecret(),
-        platformOrigin: this.#appConfig.platformOrigin,
-        projectHostnameBase: this.#appConfig.projectHostnameBase,
+        secret: await sessionSigningSecretOf(this.#appConfig),
+        routing: this.#appConfig.urls.ingressRouting,
+        platformOrigin,
       });
     },
     secrets: () =>
@@ -1300,9 +1321,20 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     caller: Caller = { principal: null },
   ): Promise<unknown> {
     this.#stream.appendWakeRecord("request");
-    return this.#callerStorage.run(caller, () => this.#itxExpressionResolver.invoke(call, ...args));
+    return this.#callerStorage.run(this.#withPlatformOrigin(caller), () =>
+      this.#itxExpressionResolver.invoke(call, ...args),
+    );
   }
   readonly #callerStorage = new AsyncLocalStorage<Caller>();
+  /** THE PLATFORM ORIGIN this context was last reached on. A loaded worker's calls carry none
+   *  (ItxEntrypoint mints their stub with no request behind it), so a caller without one gets the last
+   *  one that had it — the way the edge remembers its first platform request's (platform-origin.ts):
+   *  one deployment, one origin. Null until any caller has said. */
+  #platformOrigin: string | null = null;
+  #withPlatformOrigin(caller: Caller): Caller {
+    if (caller.platformOrigin) this.#platformOrigin = caller.platformOrigin;
+    return caller.platformOrigin ? caller : { ...caller, platformOrigin: this.#platformOrigin };
+  }
 
   // ── native fetch: the rpc-stub pager door, the fetch lane, egress ──
 
@@ -1355,9 +1387,18 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           headers.get(ITX_PRINCIPAL_HEADER) ?? "null",
         ) as Principal | null;
         const grant = headers.get(ITX_GRANT_HEADER) || undefined;
+        // The platform origin the caller reached the platform on (platform-origin.ts): the edge's
+        // stamp, stripped before the app sees the Request (an app composes URLs through `itx.url`).
+        const platformOrigin = headers.get(ITX_PLATFORM_ORIGIN_HEADER);
+        headers.delete(ITX_PLATFORM_ORIGIN_HEADER);
         const forwarded = new Request(request, { headers });
-        const result = await this.#callerStorage.run({ principal, grant }, () =>
-          this.#itxExpressionResolver.invoke(itxExpressionEndingInFetch(itxExpression), forwarded),
+        const result = await this.#callerStorage.run(
+          this.#withPlatformOrigin({ principal, grant, platformOrigin }),
+          () =>
+            this.#itxExpressionResolver.invoke(
+              itxExpressionEndingInFetch(itxExpression),
+              forwarded,
+            ),
         );
         return result instanceof Response
           ? result

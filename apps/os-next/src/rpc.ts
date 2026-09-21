@@ -16,6 +16,7 @@ import {
   type SessionInput,
 } from "./session.ts";
 import { appConfigOf } from "./app-config.ts";
+import { platformOriginOf } from "./platform-origin.ts";
 
 /** Cap’n Web always terminates at /api in the stateless edge. Its root is an
  * already-authorized session — or, on a socket opened BARE (api.ts: no credential on the upgrade),
@@ -51,6 +52,7 @@ export async function rpcResponse(
     waitUntil: (promise) => ctx.waitUntil(promise),
     directory: directory(env.DB),
     appConfig: appConfigOf(env),
+    platformOrigin: platformOriginOf(env, new URL(request.url).origin),
     onProjectAccess: (projectId) => projects.add(projectId),
     resolveBearer: async (token) => {
       // Claimed BEFORE the gate is awaited: two tokens racing on one socket cannot both bind.

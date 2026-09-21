@@ -29,7 +29,6 @@ import {
 } from "iterate/next/stream/processor";
 import type { WithItx } from "iterate/next/sdk";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
-import { type AppConfigEnv, appConfigOf } from "../app-config.ts";
 import type { RunSettlement } from "../stream/core-processor.ts";
 import {
   AgentContract,
@@ -39,6 +38,11 @@ import {
   type LlmUsage,
 } from "./contract.ts";
 import { parseCodemodeResponse } from "./codemode-format.ts";
+
+/** THE AI GATEWAY the agent's model calls go through — `default`, the gateway Cloudflare creates on
+ *  an account's first authenticated request; unified billing pays the provider, no key anywhere. A
+ *  property of the code, not of a deployment. */
+const AI_GATEWAY_ID = "default";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./system-prompt.ts";
 
 /** apps/os's failure backoff, folded into the debounce window: doubling from the policy's base per
@@ -276,7 +280,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       withItx: WithItx<ItxEntrypointScope>;
       /** The host's bindings: `AI` for a partner model on Cloudflare's billing, and the app config
        *  the gateway metadata is read from. */
-      env: { AI: Ai } & AppConfigEnv;
+      /** The Workers AI binding — the partner-model route (an `openai/…` model) goes through it. */
+      env: { AI: Ai };
       /** The clock and the wait, injected only so a unit test can make the debounce instant. */
       now?: () => number;
       sleep?: (ms: number) => Promise<void>;
@@ -924,7 +929,6 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     // can reach, and a partner model takes the PROVIDER's request body (here the Responses API's),
     // which no catalog input type names. Nothing is trusted from either: the answer is a Response
     // checked for status and parsed event by event below.
-    const config = appConfigOf(this.deps.env);
     const { projectId, path } = await this.#identity();
     const raw: unknown = await raceAbort(
       signal,
@@ -939,10 +943,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         {
           returnRawResponse: true,
           gateway: {
-            id: config.aiGatewayId,
+            id: AI_GATEWAY_ID,
             skipCache: true,
             metadata: {
-              environment: config.environmentName,
               projectId,
               streamPath: path,
               context: "agent-turn",

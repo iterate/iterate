@@ -6,3 +6,5 @@
 /public/capnweb.js
 
 /wrangler.jsonc
+# scripts/build.ts: the self-host config (SELF-HOSTING.md), the same bindings with no ids
+/wrangler.self-host.jsonc

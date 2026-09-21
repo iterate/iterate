@@ -1,5 +1,6 @@
-// Public /api starts with an authorized Session. Only /internal/rpc exposes the
-// administrator gate. Sessions vend project contexts and own their teardown.
+// Public /api starts with a session: the OAuth gate's, resolved on the upgrade, or one a bare
+// socket authenticates IN-BAND — a bearer token, or the operator's admin secret. Sessions vend
+// project contexts and own their teardown.
 
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
@@ -31,7 +32,8 @@ export type ProjectRef = string;
  *  the request, so either only says "hand me that session". `bearer` WITH a `token` is the in-band
  *  form (capnweb's own pattern): a client that opened the socket bare — a static page on another
  *  origin, whose browser cannot put a header on a WebSocket (api.ts) — presents its token here, and
- *  it goes through the same gate. `admin-secret` is the operator/CLI credential, verified in-band. */
+ *  it goes through the same gate. `admin-secret` is the operator/CLI credential, verified in-band on
+ *  any transport — a bare socket, or one the gate already resolved. */
 const SessionCredentials = z.discriminatedUnion("type", [
   z.object({ type: z.literal("from-server-cookie") }),
   z.object({ type: z.literal("bearer"), token: z.string().min(1).optional() }),
@@ -53,6 +55,9 @@ export interface SessionInput {
   directory: Directory;
   /** Configuration for operator authentication and context capabilities. */
   appConfig: AppConfig;
+  /** THE PLATFORM ORIGIN this session was reached on (platform-origin.ts) — what every context it
+   *  vends composes public URLs with (a DO isolate cannot know it: the caller carries it). */
+  platformOrigin: string;
   /** A live transport tracks projects whose capabilities it has handed out. */
   onProjectAccess?: (projectId: string) => void;
   /** The in-band bearer (rpc.ts): verify a token a bare socket presents and bind the transport to
@@ -62,15 +67,16 @@ export interface SessionInput {
 
 /** THE `/api` ROOT — the one thing a fresh capnweb connection holds. `authenticate(credentials)` is
  *  its only real verb: it returns the `SessionRpcTarget` you reach `.user`/`.projects`/… through.
- *  On the public transport the OAuth gate has already resolved the caller, so `authenticate({ type:
- *  "from-server-cookie" })` hands back that session; the operator door carries no resolved session,
- *  so `authenticate({ type: "admin-secret", secret })` verifies the deployment admin secret in-band.
+ *  On a transport the OAuth gate resolved, `authenticate({ type: "from-server-cookie" })` hands back
+ *  that session; a bare socket (api.ts) carries none, so it authenticates in-band —
+ *  `authenticate({ type: "bearer", token })`, or `authenticate({ type: "admin-secret", secret })`,
+ *  the deployment admin secret verified here.
  *  Its teardown owns every context the session it vends hands out. */
 export class IterateRpcTarget extends RpcTarget {
   readonly #input: SessionInput;
   readonly #sessionTeardown: SessionTeardown;
-  /** The authority the transport already resolved (public `/api`), or null (the operator door, which
-   *  authenticates in-band with the admin secret). */
+  /** The authority the transport already resolved (a credential on the upgrade), or null (a bare
+   *  socket, which authenticates in-band). */
   readonly #resolved: SessionAuthority | null;
 
   constructor(
@@ -114,7 +120,7 @@ export class IterateRpcTarget extends RpcTarget {
     }
     const admin = await verifyAdminSecret(
       credentials.data.secret,
-      this.#input.appConfig.adminApiSecret.exposeSecret(),
+      this.#input.appConfig.secrets.adminBearer.exposeSecret(),
     );
     if (!admin) throw codedError("INVALID_CREDENTIALS", "The admin secret did not match.");
     // Test/operator fixture only; product impersonation must retain operator attribution.
@@ -215,7 +221,11 @@ export class SessionRpcTarget extends RpcTarget {
     this.#projects = new ProjectCollection(
       input,
       sessionTeardown,
-      { principal: authority.principal, grant: authority.grant },
+      {
+        principal: authority.principal,
+        grant: authority.grant,
+        platformOrigin: input.platformOrigin,
+      },
       authority.reach,
     );
     this.#organizations = new OrganizationCollection(
@@ -246,9 +256,9 @@ export class SessionRpcTarget extends RpcTarget {
     return {
       principal: this.#authority.principal,
       scopes: this.#authority.scopes ?? [],
-      platformOrigin: this.#input.appConfig.platformOrigin,
-      projectHostnameBase: this.#input.appConfig.projectHostnameBase,
-      mcpOrigin: this.#input.appConfig.mcpOrigin,
+      platformOrigin: this.#input.platformOrigin,
+      ingressRouting: this.#input.appConfig.urls.ingressRouting,
+      mcpOrigin: this.#input.appConfig.urls.mcp,
     };
   }
 
@@ -283,7 +293,11 @@ export class SessionRpcTarget extends RpcTarget {
 
   /** WHO this session is, as an event's stamp: the principal and the grant it acts through. */
   get #caller(): Caller {
-    return { principal: this.#authority.principal, grant: this.#authority.grant };
+    return {
+      principal: this.#authority.principal,
+      grant: this.#authority.grant,
+      platformOrigin: this.#input.platformOrigin,
+    };
   }
 
   /** A new organization named `name`, the person its owner — and the fact of it on the

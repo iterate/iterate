@@ -1,19 +1,29 @@
-// ── app config ── THE WORKER'S CONFIGURATION: one typed object per isolate, parsed from the
-// `APP_CONFIG_*` wrangler vars (the shared env parser, `@iterate-com/shared/config`) plus the
-// platform-supplied deploy identity (the version-metadata binding). Loud on anything malformed, at
-// first use — never a silent default.
+// ── app config ── THE WORKER'S CONFIGURATION: ONE JSON object per deployment — the `APP_CONFIG`
+// Worker secret — parsed once per isolate by the shared env parser (`@iterate-com/shared/config`),
+// plus the platform-supplied deploy identity (the version-metadata binding). Loud on anything
+// malformed, at first use — never a silent default.
 //
-// Configuration is what differs between deployments of the SAME code: the vars below and the deploy
-// id. A constant (timeouts, budgets, key conventions, the loaded-worker compatibility flags) is a
-// property of the code and lives beside its consumer. The schema field names ARE the vars, uppercased
-// with `_`: `APP_CONFIG_PROJECT_HOSTNAME_BASE` → `projectHostnameBase` (the shared parser's mapping);
-// an `APP_CONFIG_*` var the schema does not name is warned about loudly at boot, never silently kept.
+// Configuration is what differs between deployments of the SAME code. A constant (a timeout, a
+// budget, the AI Gateway's name, the loaded-worker compatibility flags) is a property of the code and
+// lives beside its consumer. The object's keys are the schema's own names, nested as the schema is:
+//
+//   {
+//     urls: { os, mcp, dash, ingressRouting: { type, hostname }, temporaryCustomHostnames: {} },
+//     login: { password, emailCode: { from }, google: { clientId, clientSecret } },
+//     secrets: { key, previousKey, adminBearer },
+//   }
+//
+// Any key can also be set ALONE as a var, the path joined by `__`: `APP_CONFIG_URLS__OS`,
+// `APP_CONFIG_LOGIN__PASSWORD`, `APP_CONFIG_SECRETS__KEY` — the parser merges it on top of the object
+// (that is how a deployment's `urls` come from envs.ts while its secrets come from the one blob, and
+// how `secrets.key` stands alone as its own Worker secret so it can rotate with `previousKey` beside
+// it). A blank var is unset. A key the schema does not name is warned about loudly at boot and
+// dropped, never silently kept.
 
-import { parseAppConfigFromEnv, redacted, type Redacted } from "@iterate-com/shared/config";
+import { compileRawAppConfigFromEnv, redacted, type Redacted } from "@iterate-com/shared/config";
 import { z } from "zod";
-import { isLocalOrigin } from "iterate/next/lib";
 
-/** A field's failure message names the SHAPE; `parseAppConfig` prefixes the env var it came from. */
+/** A field's failure message names the SHAPE; `parseAppConfig` prefixes where it came from. */
 const REQUIRED = "required, but unset or blank";
 
 /** An HTTP(S) origin with no path or query — `new URL(v).origin === v`. */
@@ -30,118 +40,115 @@ const httpOrigin = z
     return url.origin === value && (url.protocol === "https:" || url.protocol === "http:");
   }, "expected an HTTP(S) origin without a path");
 
-/** A REQUIRED secret (an HMAC key, an admin bearer): present, non-blank, and never printed
- *  (`Redacted` — `.exposeSecret()` at the one place it is used). A blank secret would sign/verify
- *  nothing, so it is refused at boot. */
-const requiredSecret = redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED));
+/** An origin a deployment may leave out (blank ⇒ the documented default). */
+const optionalOrigin = z.union([z.literal(""), httpOrigin]).default("");
 
-/** THE `APP_CONFIG_*` SCHEMA — one field per wrangler var, PER-FIELD validation only. Cross-field
- *  rules (a distinct MCP origin, Google id+secret together) and the derived `testEmailLogin` live in
- *  `parseAppConfig`, because the shared env parser needs a plain object schema to check override keys
- *  against. */
+/** A DNS name: lowercase labels, no scheme, no trailing dot, no wildcard — the wildcard is implied. */
+const dnsName = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)*$/, "expected a DNS name");
+
+/** THE `APP_CONFIG` SCHEMA — PER-FIELD validation only; the cross-field rules (a distinct MCP origin,
+ *  the ingress routing's hostname, at least one sign-in mechanism) live in `parseAppConfig`, because
+ *  the shared env parser needs plain object schemas to check override keys against. Every object
+ *  `prefault`s to `{}` so a deployment that names none of a block's keys still gets the block. */
 export const AppConfig = z.object({
-  /** Which deployment this is, as a word a human reads at `/version`: "poc", "test" (the workers
-   *  lane), "e2e". Required. */
-  environmentName: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
-  /** The fixed issuer/console origin. Required. */
-  platformOrigin: httpOrigin,
-  /** An optional separate MCP origin (blank ⇒ served on the platform origin). */
-  mcpOrigin: z.union([z.literal(""), httpOrigin]).default(""),
-  /** The dash's origin (apps/dash: projects, organizations, sessions) — where the platform's one
-   *  landing page (`/`, control-plane.ts) sends a person, this origin being headless. Blank ⇒ the page
-   *  names no dash. */
-  dashOrigin: z.union([z.literal(""), httpOrigin]).default(""),
-  /** The base every project host hangs under — `<app>--<project>.<base>`, `<project>.<base>`
-   *  (the project host section); blank ⇒ no project-host ingress. */
-  projectHostnameBase: z.string().trim().default(""),
-  /** Hostnames of the deployment's own that ARE a project's apex — `iterate2.com=iterate`, comma-separated
-   *  pairs: a request there lands on that project's config worker `fetch` (hosts.ts
-   *  `customProjectHostOf`); the route and the DNS record are the deployment's (envs.ts). Blank ⇒ none.
-   *  (Pairs, not JSON: the shared env parser expands a JSON value into nested overrides.) */
-  projectCustomHostnames: z
-    .string()
-    .trim()
-    .default("")
-    .transform((text, ctx): Record<string, string> => {
-      const hostnames: Record<string, string> = {};
-      for (const pair of text.split(",")) {
-        if (!pair.trim()) continue;
-        const [hostname = "", project = "", ...rest] = pair.split("=").map((part) => part.trim());
-        if (!hostname || !project || rest.length) {
-          ctx.addIssue({
-            code: "custom",
-            message: `a comma-separated list of hostname=project, got ${JSON.stringify(pair.trim())}`,
-          });
-          return {};
-        }
-        hostnames[hostname.toLowerCase()] = project;
-      }
-      return hostnames;
-    }),
-  /** The HMAC secret the control plane's session cookie is signed with (control-plane.ts). */
-  sessionSecret: requiredSecret,
-  /** The deployment's admin secret — `authenticate({ type: "admin-secret" })` and the project host's
-   *  admin bearer: every project. */
-  adminApiSecret: requiredSecret,
-  /** The key a project secret's material is encrypted with at rest (secret-at-rest.ts) — any string;
-   *  the AES-256 key is its SHA-256. Losing it loses every stored secret's material (the catalog
-   *  survives; each secret is set again). */
-  secretsKey: requiredSecret,
-  /** The key before a rotation, decrypt-only: a record it opens is written back under `secretsKey`
-   *  on that read, so the old key can be dropped once every record has been read once. Blank when
-   *  not rotating. */
-  secretsKeyPrevious: redacted(z.string().trim().default("")),
-  /** The Cloudflare account + Artifacts namespace `itx.cfArtifacts` names git remotes with; blank
-   *  where no Artifacts binding exists (the vitest workers project). */
-  artifactsAccountId: z.string().trim().default(""),
-  artifactsNamespace: z.string().trim().default(""),
-  /** How much of its ephemerals a context incarnation keeps for `readEvents(…, { includeEphemeral })`,
-   *  serialized JS chars (stream/stream.ts, the recent-ephemerals ring). */
-  recentEphemeralsBudgetChars: z.coerce
-    .number()
-    .int()
-    .positive()
-    .default(1024 * 1024),
-  /** The AI Gateway (its id on the worker's account) the agent facet's OpenAI calls go through
-   *  (agent/durable-object.ts) — Cloudflare's unified billing pays the provider; no key anywhere. */
-  aiGatewayId: z.string().trim().default("default"),
-  /** The address the sign-in code is mailed from (login-code.ts, through the `EMAIL` binding), on a
-   *  domain onboarded for Email Sending — `iterate <login@iterate2.com>`. Blank ⇒ no email sign-in,
-   *  unless `testEmailLogin` (whose code needs no mail). */
-  loginEmailFrom: z.string().trim().default(""),
-  googleClientId: z.string().trim().default(""),
-  /** The Google OAuth client secret — a secret, blank where Google login is off. */
-  googleClientSecret: redacted(z.string().trim().default("")),
-  /** Assume any entered email, without verification — local development or explicit test deployments
-   *  only. The parser coerces `"true"`/`"false"` to booleans, so accept either spelling; DERIVED to a
-   *  boolean in `parseAppConfig` (a local platform origin turns it on regardless). */
-  testEmailLogin: z
-    .preprocess(
-      (value) => (value === true ? "true" : value === false ? "false" : value),
-      z.enum(["", "true", "false"], { error: "expected true or false" }),
-    )
-    .optional(),
+  /** Where this deployment answers. Every one optional. */
+  urls: z
+    .object({
+      /** THE ISSUER — the OAuth issuer identifier, the `__Host-` cookie's origin, what resource tokens
+       *  are bound to. Blank ⇒ each request's own origin (a deployment with one hostname, workers.dev). */
+      os: optionalOrigin,
+      /** A separate MCP origin. Blank ⇒ `/mcp` on `urls.os`. */
+      mcp: optionalOrigin,
+      /** The dash (apps/dash) — where the landing page (`/`, control-plane.ts) sends a person, this
+       *  origin being headless. Blank ⇒ the page names no dash. */
+      dash: optionalOrigin,
+      /** How projects are reached over HTTP (project-ingress.ts): `subdomains` hangs
+       *  `<app>--<project>.<hostname>` and the apex `<project>.<hostname>` under a wildcard on
+       *  `hostname`; `paths` serves `<urls.os>/projects/<project>/<app>/…` from the one origin. Unset ⇒ no
+       *  ingress: `/api` and `/mcp` still answer, no app has an HTTP door. */
+      ingressRouting: z
+        .object({
+          type: z.enum(["subdomains", "paths"], { error: 'expected "subdomains" or "paths"' }),
+          /** `subdomains` only: the hostname the wildcard is on. */
+          hostname: z.string().trim().default(""),
+        })
+        .optional(),
+      /** TEMPORARY — hostnames of this deployment's own that ARE a project's apex
+       *  (`{ "iterate2.com": "iterate" }`): a request there lands on that project's config worker
+       *  `fetch` exactly as `<project>.<hostname>` does; the route and the DNS record are the
+       *  deployment's (envs.ts). This belongs in the project's own runtime config, not the platform's. */
+      temporaryCustomHostnames: z.record(dnsName, z.string().trim().min(1, REQUIRED)).default({}),
+    })
+    .prefault({}),
+  /** How a person signs in. Each mechanism is on iff its block is present; `parseAppConfig` refuses a
+   *  deployment with none (nobody could ever sign in). */
+  login: z
+    .object({
+      /** A GLOBAL PASSWORD: anyone who knows it signs in as the email they type — the membership is
+       *  the password, the email is the name tag. The self-host default; also how the specs sign in.
+       *  Blank ⇒ off. */
+      password: redacted(z.string().trim().default("")),
+      /** A six-digit code mailed through the `EMAIL` binding (login-code.ts) from `from`, an address on
+       *  a domain onboarded for Email Sending in the deployment's account. */
+      emailCode: z
+        .object({ from: z.string({ error: REQUIRED }).trim().min(1, REQUIRED) })
+        .optional(),
+      /** Google sign-in (identity.ts): the OAuth client, both halves. */
+      google: z
+        .object({
+          clientId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
+          clientSecret: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
+        })
+        .optional(),
+    })
+    .prefault({}),
+  /** The deployment's own keys. */
+  secrets: z
+    .object({
+      /** THE KEY. Project secrets' material at rest is encrypted under it (secret-at-rest.ts, the AES
+       *  key its SHA-256), and the session-signing secret derives from it under a label
+       *  (`sessionSigningSecretOf`). Any string. Losing it loses every stored secret's material (the
+       *  catalog survives; each secret is set again) and signs every session out. */
+      key: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
+      /** The key before a rotation, decrypt-only: a record it opens is written back under `key` on that
+       *  read, so it can be dropped once every record has been read once. Blank when not rotating. */
+      previousKey: redacted(z.string().trim().default("")),
+      /** THE OPERATOR'S BEARER — `authenticate({ type: "admin-secret" })` on `/api` (every project, `as`
+       *  a user without a login) and a bearer on `/mcp`: the deployed specs, CI, tooling. Blank ⇒ no
+       *  operator door (a self-host needs none: a personal access token covers scripting). */
+      adminBearer: redacted(z.string().trim().default("")),
+    })
+    // the prefault must satisfy the input type; `key: ""` then fails `min(1)` naming secrets.key
+    .prefault({ key: "" }),
 });
 
-/** THE WORKER'S CONFIGURATION: the parsed `APP_CONFIG_*` fields (secrets as `Redacted`), with
- *  `testEmailLogin` derived to a boolean and the deploy identity folded in. */
-export type AppConfig = Omit<z.output<typeof AppConfig>, "testEmailLogin"> & {
-  /** Assume any entered email, without verification: a local platform origin OR the flag set. */
-  readonly testEmailLogin: boolean;
+/** How projects are reached over HTTP, narrowed: `subdomains` always carries its hostname. */
+export type IngressRouting = { type: "subdomains"; hostname: string } | { type: "paths" } | null;
+
+/** THE WORKER'S CONFIGURATION: the parsed object (secrets as `Redacted`), the ingress routing
+ *  narrowed, the deploy identity folded in. */
+export type AppConfig = Omit<z.output<typeof AppConfig>, "urls"> & {
+  readonly urls: Omit<z.output<typeof AppConfig>["urls"], "ingressRouting"> & {
+    readonly ingressRouting: IngressRouting;
+  };
   /** Cloudflare's version id of the running deployment (`CF_VERSION_METADATA.id`; local workerd mints
    *  one too); "unversioned" where the binding is absent or blank. In every loader cacheKey and at
    *  `/version`. */
   readonly deployId: string;
 };
 
-/** The slice of `env` the configuration reads: the version-metadata binding and the `APP_CONFIG_*`
- *  vars, each an optional string. The worker's `Env` extends this. */
-export type AppConfigEnv = { CF_VERSION_METADATA?: { id: string } } & {
+/** The slice of `env` the configuration reads: the version-metadata binding, the `APP_CONFIG` object
+ *  and the `APP_CONFIG_*` overrides, each an optional string. The worker's `Env` extends this. */
+export type AppConfigEnv = { CF_VERSION_METADATA?: { id: string }; APP_CONFIG?: string } & {
   [Name in `APP_CONFIG_${string}`]?: string;
 };
 
-/** The `APP_CONFIG_*` var a schema field came from — the inverse of the shared parser's mapping, so a
- *  boot error names the variable a human sets, not the camelCase field. */
+/** The override var a schema path answers to — `["urls", "os"]` → `APP_CONFIG_URLS__OS` — the inverse
+ *  of the shared parser's mapping, so a boot error names both spellings a human might have used. */
 function envVarNameOf(path: readonly (string | number | symbol)[]): string {
   return `APP_CONFIG_${path
     .map((segment) =>
@@ -152,31 +159,92 @@ function envVarNameOf(path: readonly (string | number | symbol)[]): string {
     .join("__")}`;
 }
 
-/** Parse the configuration out of `env` (a worker env, or any record — only `APP_CONFIG_*` keys are
- *  read). Pure; the door every test goes through. A malformed variable throws naming itself. */
+/** Where a field came from, for a message: its path in the object and its var spelling. */
+function fieldNameOf(path: readonly (string | number | symbol)[]): string {
+  return `APP_CONFIG ${path.map(String).join(".")} (${envVarNameOf(path)})`;
+}
+
+/** Warn, loudly, about a key the schema does not name — the shared parser does this for the
+ *  `APP_CONFIG_*` overrides; this does it for the object itself, which reaches the schema whole. Walks
+ *  the plain objects only; a record accepts any key. */
+function warnUnknownKeys(raw: unknown, schema: z.ZodTypeAny, path: string[]): void {
+  const object = z.record(z.string(), z.unknown()).safeParse(raw);
+  if (!object.success) return;
+  let current: z.ZodTypeAny = schema;
+  while (
+    current instanceof z.ZodDefault ||
+    current instanceof z.ZodPrefault ||
+    current instanceof z.ZodOptional
+  )
+    current = current.unwrap() as z.ZodTypeAny;
+  if (!(current instanceof z.ZodObject)) return;
+  for (const [key, value] of Object.entries(object.data)) {
+    const child = current.shape[key] as z.ZodTypeAny | undefined;
+    if (!child) {
+      console.warn(
+        `APP_CONFIG: unknown key "${[...path, key].join(".")}" — not in the schema, ignored. Remove it, or add it to app-config.ts.`,
+      );
+      continue;
+    }
+    warnUnknownKeys(value, child, [...path, key]);
+  }
+}
+
+/** Parse the configuration out of `env` (a worker env, or any record — only `APP_CONFIG` and the
+ *  `APP_CONFIG_*` keys are read; a blank one is unset). Pure; the door every test goes through. A
+ *  malformed field throws naming itself. */
 export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig {
+  const configEnv: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (!(key === "APP_CONFIG" || key.startsWith("APP_CONFIG_"))) continue;
+    if (typeof value !== "string" || !value.trim()) continue;
+    configEnv[key] = value;
+  }
   let parsed: z.output<typeof AppConfig>;
   try {
-    parsed = parseAppConfigFromEnv({
+    const raw = compileRawAppConfigFromEnv({
       configSchema: AppConfig,
       prefix: "APP_CONFIG_",
-      env: env as Record<string, unknown>,
+      env: configEnv,
     });
+    warnUnknownKeys(raw, AppConfig, []);
+    parsed = AppConfig.parse(raw);
   } catch (error) {
     if (error instanceof z.ZodError) {
       const issue = error.issues[0]!;
-      throw new Error(`${envVarNameOf(issue.path)}: ${issue.message}`);
+      throw new Error(`${fieldNameOf(issue.path)}: ${issue.message}`);
     }
     throw error;
   }
-  if (parsed.mcpOrigin && parsed.mcpOrigin === parsed.platformOrigin)
-    throw new Error("APP_CONFIG_MCP_ORIGIN: requires a distinct APP_CONFIG_PLATFORM_ORIGIN");
-  if (Boolean(parsed.googleClientId) !== Boolean(parsed.googleClientSecret.exposeSecret()))
-    throw new Error("Google client ID and secret must be configured together.");
-  const { testEmailLogin, ...rest } = parsed;
+  const { urls, login } = parsed;
+  if (urls.mcp && !urls.os)
+    throw new Error(
+      `${fieldNameOf(["urls", "mcp"])}: a separate MCP origin needs urls.os set (platform-origin.ts learns a blank urls.os from the first platform request, which must not be the MCP origin)`,
+    );
+  if (urls.mcp && urls.mcp === urls.os)
+    throw new Error(`${fieldNameOf(["urls", "mcp"])}: must differ from urls.os`);
+  let ingressRouting: IngressRouting = null;
+  if (urls.ingressRouting?.type === "subdomains") {
+    const hostname = dnsName.safeParse(urls.ingressRouting.hostname);
+    if (!hostname.success)
+      throw new Error(
+        `${fieldNameOf(["urls", "ingressRouting", "hostname"])}: ${hostname.error.issues[0]!.message} (the hostname the project wildcard is on)`,
+      );
+    ingressRouting = { type: "subdomains", hostname: hostname.data };
+  } else if (urls.ingressRouting?.type === "paths") {
+    if (urls.ingressRouting.hostname)
+      throw new Error(
+        `${fieldNameOf(["urls", "ingressRouting", "hostname"])}: not for "paths" — projects are paths on urls.os`,
+      );
+    ingressRouting = { type: "paths" };
+  }
+  if (!login.password.exposeSecret() && !login.emailCode && !login.google)
+    throw new Error(
+      `${fieldNameOf(["login"])}: no sign-in mechanism — set login.password, login.emailCode or login.google`,
+    );
   return {
-    ...rest,
-    testEmailLogin: isLocalOrigin(parsed.platformOrigin) || testEmailLogin === "true",
+    ...parsed,
+    urls: { ...urls, ingressRouting },
     deployId,
   };
 }
@@ -185,8 +253,8 @@ const appConfigByEnv = new WeakMap<object, AppConfig>();
 
 /** The configuration of the isolate `env` belongs to — parsed on first use, then the same object every
  *  time (a WeakMap on the env object: a worker's `env` and a DO's `this.env` are stable for the
- *  isolate's life). A malformed variable throws HERE, on the first request or the first DO
- *  construction, naming the variable. */
+ *  isolate's life). A malformed field throws HERE, on the first request or the first DO
+ *  construction, naming the field. */
 export function appConfigOf(env: AppConfigEnv): AppConfig {
   let appConfig = appConfigByEnv.get(env);
   if (!appConfig) {
@@ -194,6 +262,36 @@ export function appConfigOf(env: AppConfigEnv): AppConfig {
     appConfigByEnv.set(env, appConfig);
   }
   return appConfig;
+}
+
+const sessionSigningSecretByConfig = new WeakMap<AppConfig, Promise<string>>();
+
+/** THE SESSION-SIGNING SECRET (principal.ts `signClaims`/`verifyClaims`: the login flow's cookie, a
+ *  signed file URL): `secrets.key` under its own label, SHA-256, hex — so the one key a deployment
+ *  holds serves two algorithms without being reused raw (secret-at-rest.ts hashes the key under the
+ *  other). Rotating the key signs every session out; a mid-rotation `previousKey` opens no session.
+ *  Async (WebCrypto), computed once per config object. */
+export function sessionSigningSecretOf(config: AppConfig): Promise<string> {
+  let secret = sessionSigningSecretByConfig.get(config);
+  if (!secret) {
+    secret = crypto.subtle
+      .digest(
+        "SHA-256",
+        new TextEncoder().encode(`iterate-session-signing:${config.secrets.key.exposeSecret()}`),
+      )
+      .then((digest) =>
+        Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""),
+      );
+    sessionSigningSecretByConfig.set(config, secret);
+  }
+  return secret;
+}
+
+/** The at-rest keys as secret-at-rest.ts takes them: the key, and the previous one only while
+ *  rotating. */
+export function atRestKeysOf(config: AppConfig): { current: string; previous?: string } {
+  const previous = config.secrets.previousKey.exposeSecret();
+  return { current: config.secrets.key.exposeSecret(), previous: previous || undefined };
 }
 
 export type { Redacted };

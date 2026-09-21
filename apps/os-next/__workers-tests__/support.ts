@@ -46,11 +46,18 @@ export async function applyDirectorySchema(): Promise<void> {
   await db.batch(statements.map((statement) => db.prepare(statement)));
 }
 
-/** This lane's admin secret (wrangler.test.jsonc `APP_CONFIG_ADMIN_API_SECRET`). */
+/** This lane's admin bearer (wrangler.test.jsonc `APP_CONFIG_SECRETS__ADMIN_BEARER`). */
 const adminApiSecret = (): string =>
-  String((env as unknown as { APP_CONFIG_ADMIN_API_SECRET: string }).APP_CONFIG_ADMIN_API_SECRET);
-/** THE lane's credentials (src/session.ts): the admin secret — every project, `{ actor: "admin" }`. */
+  String(
+    (env as unknown as { APP_CONFIG_SECRETS__ADMIN_BEARER: string })
+      .APP_CONFIG_SECRETS__ADMIN_BEARER,
+  );
+/** THE lane's credentials (src/session.ts): the admin bearer — every project, `{ actor: "admin" }`. */
 export const adminCredentials = () => ({ type: "admin-secret" as const, secret: adminApiSecret() });
+/** This lane's sign-in password (wrangler.test.jsonc `APP_CONFIG_LOGIN__PASSWORD`) — what a browser
+ *  session is minted with through `POST /login` (email + password). */
+export const loginPassword = (): string =>
+  String((env as unknown as { APP_CONFIG_LOGIN__PASSWORD: string }).APP_CONFIG_LOGIN__PASSWORD);
 
 /** An app that answers with what the platform handed it: the principal stamp, the bearer and the
  *  trusted app label — provided as `itx.apps.<label>` and fetched on a project host. */
@@ -70,10 +77,11 @@ export default class Echo extends WorkerEntrypoint {
 // capnweb sessions live for the whole file; disposed at teardown (sessions left open turn into
 // unhandled-rejection noise).
 const sessions: unknown[] = [];
-/** Open a capnweb session to the worker over a WebSocket upgrade on SELF.fetch —
- *  newWebSocketRpcSession accepts the existing (accepted) socket per its typings. */
+/** Open a capnweb session to the worker over a BARE WebSocket upgrade on SELF.fetch (`/api` with no
+ *  credential: the socket authenticates in-band) — newWebSocketRpcSession accepts the existing
+ *  (accepted) socket per its typings. */
 export async function openSession(): Promise<any> {
-  const res = await SELF.fetch(`https://control.test/internal/rpc`, {
+  const res = await SELF.fetch(`https://control.test/api`, {
     headers: { Upgrade: "websocket" },
   });
   if (!res.webSocket) throw new Error(`expected a 101 with a WebSocket, got ${res.status}`);

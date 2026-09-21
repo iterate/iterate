@@ -22,6 +22,7 @@ import {
   InvokeHandle,
   RpcStubHandle,
 } from "iterate/next/expression";
+import { projectUrlOf, type IngressRouting } from "iterate/next/project-ingress";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
   ScheduleKey,
@@ -112,6 +113,13 @@ export interface BuiltInScope extends LibraryRoots {
   whoami():
     | { projectId: string; path: string; projectSlug?: string; projectUrl?: string }
     | Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
+  /** THE PUBLIC URL of this project over HTTP — the apex (the config worker's `fetch`) or `app`'s
+   *  (`itx.apps.<app>`), at `path` (default "/") — composed from the deployment's ingress routing
+   *  (iterate/next/project-ingress: `<app>--<slug>.<hostname>/…` under subdomains,
+   *  `<origin>/<slug>/<app>/…` under paths). Refused on a deployment with no project ingress, and on
+   *  a call carrying no platform origin (a processor's own turn, a loaded worker: hold the URL a
+   *  session handed you instead). Only a project's context has one. */
+  url(target?: { app?: string; path?: string }): Promise<string>;
   /** Durable key/value prefixed with the RESOURCE OWNER's id (iterate-context.ts `resourceScope`:
    *  a project's id, or a global user's/organization's subtree) — the `${owner.id}:` prefix IS the
    *  isolation. */
@@ -382,9 +390,12 @@ interface BuildBuiltInsDeps {
   };
   /** The deploy identity every loader cacheKey folds in (worker.ts `AppConfig`). */
   deployId: string;
-  /** The Artifacts account + namespace `itx.cfArtifacts` names git remotes with (worker.ts `AppConfig`). */
-  artifactsAccountId: string;
-  artifactsNamespace: string;
+  /** How projects are reached over HTTP (app-config.ts `urls.ingressRouting`) — `itx.url`. */
+  ingressRouting: IngressRouting;
+  /** THE PLATFORM ORIGIN the current call's caller reached the platform on (the DO's caller record)
+   *  — null when the call carries none: a processor's own turn, a loaded worker's `env.ITX`, the
+   *  delivery loop, an alarm. */
+  platformOrigin: () => string | null;
   /** A signed file URL on the project host (file-urls.ts `signedFileUrl`, closed over the app
    *  config's secret and hosts) — `itx.r2.presign`. */
   signFileUrl: (input: {
@@ -495,6 +506,30 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       deps.projectInfo
         ? deps.projectInfo().then((project) => ({ projectId, path, ...project }))
         : { projectId, path },
+    url: async (target: { app?: string; path?: string } = {}) => {
+      const platformOrigin = deps.platformOrigin();
+      if (!platformOrigin)
+        throw codedError(
+          "INVALID_INPUT",
+          "itx.url: this call carries no platform origin to compose a URL with — call it from a session, or hold the URL a session handed you",
+        );
+      const slug = (await deps.projectInfo?.())?.projectSlug;
+      if (!slug)
+        throw codedError("INVALID_INPUT", "itx.url: only a project's context has a public URL");
+      const url = projectUrlOf(deps.ingressRouting, platformOrigin, {
+        project: slug,
+        app: target.app || null,
+        path: target.path,
+      });
+      if (!url)
+        throw codedError(
+          "INVALID_INPUT",
+          deps.ingressRouting
+            ? `itx.url: ${JSON.stringify(target)} is not an address in this project (an app label is [a-z][a-z0-9-]*; a path starts with "/")`
+            : "itx.url: this deployment has no project ingress (APP_CONFIG urls.ingressRouting is unset) — nothing serves a project over HTTP",
+        );
+      return url.href;
+    },
     kv: {
       get: (k: string) => env.ITX_KV.get(kvPrefix + k),
       put: async (k: string, v: string) => {
@@ -584,9 +619,20 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // No append here: the catalog learns of the secret when the exchange succeeds, so an
       // abandoned attempt leaves no row that advertises a pin and a strategy the object does not hold.
       beginOAuth: (name, options) =>
-        onRootContext(["beginOAuth", name, options], () =>
-          secretStore(name).beginOAuth(normalizeSecretOAuth(options), secretsCatalog),
-        ),
+        onRootContext(["beginOAuth", name, options], () => {
+          // the provider's callback hangs under the platform origin — the caller's, not a DO's
+          const platformOrigin = deps.platformOrigin();
+          if (!platformOrigin)
+            throw codedError(
+              "INVALID_INPUT",
+              "itx.secrets.beginOAuth: this call carries no platform origin for the callback URL — call it from a session",
+            );
+          return secretStore(name).beginOAuth(
+            normalizeSecretOAuth(options),
+            secretsCatalog,
+            platformOrigin,
+          );
+        }),
       // The object FIRST here (the exchange most often fails on the provider's side — a junk code,
       // a stale attempt — and must leave no row), then the fact. A refused append undoes the write
       // THIS call made (`exchanged`), so what `list()` says and what egress finds never disagree; a
@@ -632,12 +678,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     },
     ai: env.AI, // the binding object itself — dispatch walks its methods
     browser: cfBrowser(env.BROWSER),
-    cfArtifacts: projectScopedArtifacts({
-      namespace: env.ARTIFACTS,
-      projectId: owner.id,
-      accountId: deps.artifactsAccountId,
-      namespaceName: deps.artifactsNamespace,
-    }),
+    cfArtifacts: projectScopedArtifacts({ namespace: env.ARTIFACTS, projectId: owner.id }),
     append,
     schedules: {
       ...deps.schedules,

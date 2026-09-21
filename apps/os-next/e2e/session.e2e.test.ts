@@ -22,8 +22,7 @@ import { oauthSession } from "./support/principal.ts";
 import {
   fetchProjectHost,
   freshDnsSafeProjectSlug,
-  projectHostnameBase,
-  projectHostsAreLocal,
+  ingressHostname,
   registerProject,
 } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
@@ -277,7 +276,7 @@ test("a personal access token — one OAuth grant the account mints — is the u
 
   // a project host: the covered project's app sees the stamped principal and no bearer; a project
   // the token does not cover is refused before any Durable Object is dialled
-  const base = projectHostnameBase();
+  const base = ingressHostname();
   const bearer = { Authorization: `Bearer ${token}` };
   const covered = await fetchProjectHost(`echo--${slug}.${base}`, "/", bearer);
   expect(covered.status, covered.text).toBe(200);
@@ -413,17 +412,17 @@ export default class Mine extends WorkerEntrypoint {
   expect(html).toContain("dynamic web capability");
 });
 
-test("/version answers `<deployId> <environmentName>` — the deploy stamp a smoke waits for", async () => {
+test("/version answers `<deployId> <platformOrigin>` — the deploy stamp a smoke waits for", async () => {
   // The deploy id is Cloudflare's version id of the deploy (what `wrangler deploy` prints) — local
-  // workerd mints one too — or "unversioned" where the binding is absent; then the configuration
-  // (src/worker.ts `parseAppConfig`): the e2e lane names itself "e2e", a deployed worker names its environment.
+  // workerd mints one too — or "unversioned" where the binding is absent; then the platform origin:
+  // the issuer (src/app-config.ts `urls.os`, or the request's own origin where a deployment leaves
+  // it blank) — the one thing that names a deployment, local or deployed.
   const versionRes = await fetch(workerUrl("/version"));
   expect(versionRes.status).toBe(200);
-  const [deployId, environmentName, ...rest] = (await versionRes.text()).trim().split(" ");
+  const [deployId, platformOrigin, ...rest] = (await versionRes.text()).trim().split(" ");
   expect(rest).toEqual([]);
   expect(deployId).toMatch(/^(?:[0-9a-f-]{36}|unversioned)$/);
-  if (projectHostsAreLocal()) expect(environmentName).toBe("e2e");
-  else expect(environmentName).toMatch(/^[a-z][a-z0-9_-]*$/);
+  expect(platformOrigin).toBe(new URL(workerUrl("/")).origin);
 });
 
 // ── THE CROSS-CONTEXT LEND PIN — the reviewer's exact probe: root provides a live fn under `itx.clash`,
