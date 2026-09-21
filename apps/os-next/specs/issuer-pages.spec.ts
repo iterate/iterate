@@ -26,7 +26,9 @@ async function signIn(page: Page, origin: string, email: string, next = "/") {
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByRole("textbox", { name: "Code", exact: true }).fill("424242");
     await page.getByRole("button", { name: "Continue", exact: true }).click();
-    await page.waitForURL((url) => url.pathname !== "/login");
+    // the sign-in lands on `next` by way of the session's callback: wait for the destination
+    // itself, not the first URL that is no longer /login (that one may still be mid-callback)
+    await page.waitForURL(new URL(next, origin).href);
     return;
   }
   await page.getByRole("heading", { name: "Sign in to iterate", exact: true }).waitFor();
@@ -116,7 +118,7 @@ test("a consent page whose session ends underneath it returns to sign-in", async
     issuer: origin,
     clientId: claudeClient,
     redirectUri: "http://127.0.0.1:1/callback",
-    resources: [`${origin}/mcp`],
+    resources: [process.env.MCP_BASE_URL || `${origin}/mcp`],
     scopes: ["iterate"],
   });
   await page.goto(flow.url.href);
@@ -155,7 +157,7 @@ test("a consent page that cannot reach the platform says so instead of loading f
     issuer: origin,
     clientId: claudeClient,
     redirectUri: "http://127.0.0.1:1/callback",
-    resources: [`${origin}/mcp`],
+    resources: [process.env.MCP_BASE_URL || `${origin}/mcp`],
     scopes: ["iterate"],
   });
   await page.goto(flow.url.href);
