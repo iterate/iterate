@@ -103,6 +103,16 @@ export function ContextView({
     [allRenderers],
   );
   const items = useMemo(() => foldEvents(shown, mode, factOf), [shown, mode, factOf]);
+  /** Per item, who acted on the last row before it that anyone acted on ("" at the top). */
+  const whoBefore = useMemo(() => {
+    let last = "";
+    return items.map((item) => {
+      const before = last;
+      const event = lastEventOf(item);
+      if (event && actorLabel(event)) last = actorLabel(event);
+      return before;
+    });
+  }, [items]);
   const types = useMemo(() => typeCounts(events), [events]);
   const filtered = Boolean(filter.query) || filter.types.size > 0 || Boolean(filter.actor);
   const toggleType = (type: string) => {
@@ -227,8 +237,9 @@ export function ContextView({
           const previous = lastEventOf(items[index - 1]);
           if (item.kind === "day") return <DaySeparator key={item.key} date={item.date} />;
           const first = item.kind === "event" ? item.event : item.events[0]!;
-          // who acted is named when it changes hands — the row before was someone else's, or nobody's
-          const showWho = !previous || actorLabel(previous) !== actorLabel(first);
+          // who acted is named when it changes hands: the last row that WAS someone's (the platform's
+          // own housekeeping between two of a person's rows names nobody) was someone else's
+          const showWho = actorLabel(first) !== whoBefore[index];
           if (item.kind === "repeat")
             return (
               <RepeatRow
