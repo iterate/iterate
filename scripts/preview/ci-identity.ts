@@ -36,6 +36,7 @@ export async function readPreviewCiResults(
 ) {
   const failures: string[] = [];
   let durationMs = 0;
+  let complete = keys.length > 0;
   for (const key of keys) {
     try {
       const receipt = PreviewCiReceipt.parse(
@@ -45,11 +46,14 @@ export async function readPreviewCiResults(
       if (receipt.key !== key)
         throw new Error(`Expected result for ${key}, received ${receipt.key}`);
       durationMs = Math.max(durationMs, receipt.durationMs);
+      // Ordinary test failures exit 1; killed/timed-out commands are inconclusive.
+      if (![0, 1].includes(receipt.exitCode)) complete = false;
       if (receipt.exitCode !== 0)
         failures.push(receipt.error || `${key} failed with exit ${receipt.exitCode}`);
     } catch (error) {
+      complete = false;
       failures.push(`Missing or invalid ${key} result: ${String(error)}`);
     }
   }
-  return { failures, durationMs };
+  return { failures, durationMs, complete };
 }

@@ -229,13 +229,7 @@ test("an issuer session minted before a scope existed still holds every scope â€
       deadline: Date.now() + 30 * 24 * 3600_000,
     },
   });
-  const callback = new URL(approved.redirectTo).searchParams;
-  const result = await flow.session.complete({
-    state: callback.get("state") || "",
-    issuer: callback.get("iss") || "",
-    code: callback.get("code") || "",
-    error: callback.get("error") || "",
-  });
+  const result = await flow.session.complete(new URL(approved.redirectTo).search);
   expect(result.error).toBeUndefined();
   const old = await connect({ Cookie: flow.setCookie.split(";")[0]!, Origin: origin });
   expect((await old.info()).scopes).toEqual(["iterate", "account", "organizations:write"]);

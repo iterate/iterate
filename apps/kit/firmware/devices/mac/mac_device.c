@@ -1,8 +1,8 @@
 /*
- * main.c: the Mac as a board.
+ * mac_device.c: the Mac as a board.
  *
- * Runs the shared voice loop (components/voice) — the same program the four
- * ESP boards run — with this laptop's hardware behind the same seams: CoreAudio
+ * Runs the shared voice loop (components/voice) — the same program the
+ * ESP boards run — with this laptop's hardware: CoreAudio
  * behind the codec (platforms/darwin), Apple's VoiceProcessingIO where the
  * HAVPE has its XMOS, the keyboard as the button, the provisioning image read
  * from a file instead of a partition. The loop's audio tasks are pumped from

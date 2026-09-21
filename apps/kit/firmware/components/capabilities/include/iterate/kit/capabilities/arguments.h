@@ -39,6 +39,17 @@ bool iterate_kit_read_int_field(
     const char *name,
     int64_t *result);
 
+/** Copy one string field, including neither quotes nor a trailing NUL.
+ * `length` receives the decoded byte count. The value must fit with its NUL
+ * terminator in `capacity`; this deliberately makes transport-sized inputs a
+ * caller-visible bound instead of a truncated command. */
+bool iterate_kit_read_string_field(
+    const struct capnweb_value *object,
+    const char *name,
+    char *buffer,
+    size_t capacity,
+    size_t *length);
+
 #ifdef __cplusplus
 }
 #endif

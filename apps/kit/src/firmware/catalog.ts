@@ -57,6 +57,7 @@ const partitionTable = {
 };
 
 function release(input: {
+  version?: string;
   target: string;
   app: string;
   otaDataOffset: number;
@@ -64,7 +65,7 @@ function release(input: {
   hasWakeWordModel?: boolean;
 }): EspWebToolsFirmwareRelease {
   return {
-    version: "gpt-live-1",
+    version: input.version || "gpt-live-1",
     artifact: {
       kind: "esp-web-tools",
       target: input.target,
@@ -91,6 +92,34 @@ function release(input: {
  * checkout by `pnpm firmware:release`; sync publishes only its verified cache.
  */
 export const firmwareCatalog: readonly FirmwareDevice[] = [
+  {
+    id: "zectrix-note4",
+    name: "ZECTRIX NOTE4",
+    description: "E-paper voice companion with monochrome and 16-level grayscale images",
+    proofLabel: "ZECTRIX NOTE4",
+    releases: [
+      release({
+        target: "zectrix_note4",
+        app: "iterate-kit-zectrix-note4.bin",
+        otaDataOffset: 0x411000,
+        configurationOffset: 0x410000,
+      }),
+    ],
+  },
+  {
+    id: "waveshare-rlcd-4-2",
+    name: "Waveshare ESP32-S3 RLCD 4.2",
+    description: "Reflective display and KEY-button voice companion (experimental audio)",
+    proofLabel: "Waveshare RLCD 4.2",
+    releases: [
+      release({
+        target: "waveshare_s3_rlcd",
+        app: "iterate-kit-waveshare-s3-rlcd.bin",
+        otaDataOffset: 0x411000,
+        configurationOffset: 0x410000,
+      }),
+    ],
+  },
   {
     id: DEFAULT_DEVICE_ID,
     name: "Home Assistant Voice Preview Edition",

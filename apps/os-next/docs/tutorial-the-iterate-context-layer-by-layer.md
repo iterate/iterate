@@ -527,7 +527,7 @@ Every rule below is a row in its table test.
 The resolver (`resolveItxExpression` in the same file) is rule 5 as a loop: while the call is not
 rooted at `itx.builtins`, pick the most specific context row and rewrite (a `null` target throws
 `NO_ITX_EXPRESSION_MATCH` "is masked"); with no row, a built-in root becomes `itx.builtins.<root>` and
-the loop ends; one more platform row, `itx.worker`, is chapter 7's; anything else is
+the loop ends; anything else is
 `NO_ITX_EXPRESSION_MATCH` "no rewrite rule matches … (default-deny; configure a rule first)".
 
 ### The implicit platform rows, and `itx.builtins`
@@ -541,11 +541,6 @@ table, your rows plus the platform rows, each with its origin:
 ```ts
 const before = await itx.rewriteRules.list();
 expect(before).toContainEqual({ match: "itx.kv", target: "itx.builtins.kv", origin: "platform" });
-expect(before).toContainEqual({
-  match: "itx.worker",
-  target: expect.stringMatching(/^itx\.workers\.get\(/),
-  origin: "platform",
-}); // the config worker's default (chapter 7)
 await itx.provide("itx.kv", "itx.builtins.whoami");
 const after = await itx.rewriteRules.list();
 expect(after.filter((row) => row.match === "itx.kv")).toEqual([
@@ -832,16 +827,14 @@ The DO's constructor appends the platform's own records before any door opens, s
 materializes a context — a bare read included. The first incarnation writes `stream/created {
 projectId, path }` at offset 1 and `stream/woken { incarnation, reason: "request" }` at 2 (a later
 incarnation's wake record is appended by the first door that opens on it — `"alarm"` when that door
-is the alarm handler); the config-worker funnel
-(chapter 7) subscribes `config` at 4; offsets 3 and 5 are ephemeral live-state deltas; the first user
-append lands at 6:
+is the alarm handler). Offset 3 is the ephemeral live-state delta; no subscription
+is installed automatically, and the first user append lands at 4:
 
 ```ts
 const page = await itx.invoke("itx.readEvents(0)");
 expect(page.events.map((e) => [e.type, e.offset])).toEqual([
   ["events.iterate.com/stream/created", 1],
   ["events.iterate.com/stream/woken", 2],
-  ["events.iterate.com/stream/subscription-configured", 4],
 ]);
 expect((await itx.invoke(`itx.append({ type: 'hello' })`))[0].offset).toBe(6);
 // e2e/stream.e2e.test.ts
@@ -946,14 +939,14 @@ REPLACES — one row, one more event (`e2e/rpc-stubs-reconnect-and-attach.e2e.te
 
 ### The rows are a slice of core
 
-`itx.subscriptions.list()` is the read door, the table joined with the stream-kept cursors. Every
-context is born holding one row — the config-worker funnel of chapter 7 — so "nothing here" is `["config"]`:
+`itx.subscriptions.list()` joins explicitly configured rows with their delivery cursors.
+A new context has no subscriptions:
 
 ```ts
-expect((await itx.subscriptions.list()).map((r) => r.name)).toEqual(["config"]);
+expect((await itx.subscriptions.list()).map((r) => r.name)).toEqual([]);
 const subscription = await itx.subscribe({ target: () => undefined });
 const name = await subscription.name;
-expect((await itx.subscriptions.list()).map((r) => r.name)).toEqual(["config", name]);
+expect((await itx.subscriptions.list()).map((r) => r.name)).toEqual([name]);
 expect(await itx.rpcStubs.list()).toContain(`subscription:${name}`); // presence: the lent callback
 await itx.subscribe({ name, target: null }); // the row goes, the callback is recalled
 // e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts
@@ -1407,98 +1400,39 @@ The same for a facet: hosted from a producer, its state persists, the producer r
 memo keeps the key so a bare `facets.get(name)` re-materializes it. A producer that THREW does not
 poison its key: the next attempt re-runs the producer and loads under the id's next generation.
 
-### The config worker convention
+### Explicit config-worker targets
 
-A project has ONE event handler, and every context subscribes it at birth. Three things:
-
-1. **`itx.worker` is a platform row** — `itx.worker ⇒ itx.workers.get({ source: <the bundled
-no-op ConfigWorker>, cacheKey: 'config:default' })`, shown by `itx.rewriteRules.list()`. A project
-   OVERRIDES it with its own rule; a `null` at it MASKS (default-deny), never the no-op.
-2. **Every context subscribes `config` in its constructor**, cross-context, at-least-once:
+A `ConfigWorker` is a stateless worker loaded through `itx.workers.get({ source,
+cacheKey })`. It receives events only through explicit subscriptions. A fresh
+context has no config subscription, and loading a worker does not publish it.
 
 ```ts
-// iterate-context-durable-object.ts — the constructor, abridged
-this.ctx.blockConcurrencyWhile(async () => {
-  this.#alarms.restore(await this.ctx.storage.getAlarm()); // the dedupe seed only — null while an alarm is firing
-  this.#stream.appendBirthRecord(); // created + woken on a fresh store; a store with rows records its wake at its first door
-  this.#stream.append(
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: { name: "config", target: "itx.cd('/').worker.processEventBatch", consumes: ["*"] },
-      idempotencyKey: "config-subscription", // one row per context whatever the incarnation
-    }),
-  );
-});
-```
-
-3. **The author extends `ConfigWorker`** from the SDK and overrides `processEvent`; the platform calls
-   `processEventBatch`. Stateless by design — the SUBSCRIBING context keeps the cursor — so
-   `processEvent` must be idempotent. The same class answers the project's hosts through `fetch`
-   (chapter 8):
-
-```ts
-// sdk/index.ts — abridged
-export abstract class ConfigWorker<Env> extends WorkerEntrypoint<Env> {
-  async processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
-    const itx = this.env.ITX.get();
-    try {
-      for (const event of events) await this.processEvent({ event, range, itx });
-    } finally {
-      (itx as unknown as Disposable)[Symbol.dispose]?.();
-    }
-  }
-  processEvent(_args: ConfigEventArgs): void | Promise<void> {}
-}
-```
-
-The whole convention on one context, source in KV as the repo stand-in:
-
-```ts
-const CONFIG_WORKER_SRC = `import { ConfigWorker } from "./processor.js";
-export default class Config extends ConfigWorker {
-  async processEvent({ event, itx }) {
-    if (event.type === "events.iterate.com/config-ping")
-      await itx.builtins.append({
-        type: "events.iterate.com/config-pong",
-        payload: { pinged: event.offset },
-        idempotencyKey: "config-pong@" + event.offset, // an at-least-once redelivery is a no-op
-      });
-  }
-}`;
-await itx.kv.put("/repos/config/worker.ts", CONFIG_WORKER_SRC);
-await itx.provide("itx.worker", [
+const target = [
   "itx",
   "workers",
-  ["get", { source: `itx.kv.get('/repos/config/worker.ts')`, cacheKey: "config:v1" }],
-]);
+  [
+    "get",
+    {
+      source: "itx.kv.get('config.js')",
+      cacheKey: "config:v1",
+    },
+  ],
+];
 await itx.subscribe({
   name: "config",
-  target: "itx.worker.processEventBatch",
-  consumes: ["events.iterate.com/config-ping"],
+  target: [...target, "processEventBatch"],
+  consumes: ["ping"],
 });
-const [ping] = await itx.append({ type: "events.iterate.com/config-ping" });
-await until(async () =>
-  (await readAll(itx)).some(
-    (e) => e.type === "events.iterate.com/config-pong" && e.payload?.pinged === ping.offset,
-  ),
-);
-// e2e/config-worker.e2e.test.ts
+await itx.append({
+  type: "events.iterate.com/project/ingress-configured",
+  payload: { target },
+});
 ```
 
-And the FUNNEL: set the override at the root, and a fresh child context's ping reaches the root's
-config worker with no manual subscribe — the child's birth row did it:
-
-```ts
-const root = openItx(project); // the KV source and the `itx.worker` override as above, at the root
-const child = root.cd("/child"); // auto-subscribes itx.cd('/').worker.processEventBatch at birth
-const [ping] = await child.append({ type: "events.iterate.com/funnel-ping" });
-await until(async () =>
-  (await readAll(root)).some(
-    (e) => e.type === "events.iterate.com/funnel-pong" && e.payload?.at === ping.offset,
-  ),
-);
-// e2e/config-worker.e2e.test.ts
-```
+Apex ingress invokes the configured target's `fetch(request)`; without a target
+it returns 404. Changes are explicit configuration events. The planned project
+creation saga will own publication after verifying a candidate revision; see
+[project creation](project-creation.md). The SDK does not change routing on commits.
 
 ### `itx.repos` and `itx.cfArtifacts`: where code lives
 
@@ -1528,22 +1462,20 @@ const tok = await a.cfArtifacts.get(path).createToken("read", 300); // pipelined
 // e2e/cfartifacts.e2e.test.ts (deployed only)
 ```
 
-The payoff is the config worker with its source moved out of KV and into a real repo, nothing else
-changed — the `itx.worker` rewrite is what points at it, and a commit to that repo re-points it
-(the base `ConfigWorker` follows `repo/commit-completed` with a new `cacheKey`):
+To load code from the repository, pass the source producer and its revision explicitly:
 
 ```ts
-await itx.repos.get("/repos/config").writeFile("worker.ts", CONFIG_WORKER_SRC);
-await itx.provide("itx.worker", [
-  "itx",
-  "workers",
-  [
-    "get",
-    { source: `itx.repos.get('/repos/config').readFile('worker.ts')`, cacheKey: "config:repo:v1" },
-  ],
-]);
-// e2e/config-worker.e2e.test.ts
+const { commitOid } = await itx.repos
+  .get("/repos/config")
+  .writeFile("worker.ts", CONFIG_WORKER_SRC);
+const worker = itx.workers.get({
+  source: "itx.repos.get('/repos/config').readFile('worker.ts')",
+  cacheKey: commitOid,
+});
 ```
+
+Publication requires configuring the ingress target and desired subscriptions.
+A commit does not implicitly update either.
 
 **What this brick leaves on the table:** everything so far spoke capnweb or Workers RPC. The web
 speaks HTTP: a browser tab, a webhook, `curl`, a third-party API that wants a bearer token you must
@@ -1632,9 +1564,8 @@ host-scoped cookies and WebSocket upgrades survive. There, at the DO's fetch lan
 for any other — so neither a visitor nor loaded code can pick an app the expression did not.
 
 An app host lands on `itx.apps.<app>.fetch(request)`: an app is one rule row and the log never names
-a hostname. A host naming no app lands on the project's config worker (chapter 7),
-`itx.worker.fetch(request)`: the bundled default answers 404, and a project that wants its own
-routing overrides `fetch` — the apex today, a custom hostname once the directory knows one:
+a hostname. A host naming no app invokes the explicit ingress target
+(chapter 7). Without a target it returns 404. A configured worker implements `fetch` — the apex today, a custom hostname once the directory knows one:
 
 ```ts
 // the config repo's worker.ts — routing by hostname, in the author's own `fetch`
@@ -1661,12 +1592,13 @@ expect(page.text).toContain(`<p>site--${projectId}.${base}/w?repo=x</p>`); // th
 expect((await fetchProjectHost(`site.${projectId}.${base}`, "/w")).status).toBe(200); // the second shape, the same row — locally: deployed, the wildcard certificate covers one label
 const seen = JSON.parse((await fetchProjectHost(host, "/echo", { "x-iterate-app": "other" })).text);
 expect(seen.app).toBe("site"); // what the app saw in x-iterate-app, whatever the visitor sent
-expect((await fetchProjectHost(`${projectId}.${base}`, "/")).status).toBe(404); // the apex: the bundled config worker's fetch
-await itx.provide("itx.worker", [
-  "itx",
-  "workers",
-  ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:ingress" }],
-]);
+expect((await fetchProjectHost(`${projectId}.${base}`, "/")).status).toBe(404); // no ingress target yet
+await itx.append({
+  type: "events.iterate.com/project/ingress-configured",
+  payload: {
+    target: ["itx", "workers", ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:ingress" }]],
+  },
+});
 expect((await fetchProjectHost(`${projectId}.${base}`, "/echo")).status).toBe(200); // the project's own fetch routes it to the site
 expect((await fetchProjectHost(`other--${projectId}.${base}`, "/")).status).toBe(404); // a label with no row: 404
 expect((await fetchProjectHost(`site--${unknown}.${base}`, "/")).status).toBe(421); // a project the directory does not know

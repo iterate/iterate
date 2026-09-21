@@ -18,11 +18,11 @@ import { type AppConfigEnv, appConfigOf } from "../app-config.ts";
 import {
   type AgentView,
   type ChatMessage,
-  DEFAULT_AGENT_SYSTEM_PROMPT,
   type FileAttachment,
   type LlmUsage,
 } from "./contract.ts";
 import { AgentProcessor } from "./processor.ts";
+import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./system-prompt.ts";
 
 /** What Workers AI answers when it does not stream: `{ response }`, or the chat-completions shape. */
 const ChatAnswer = z.union([
@@ -291,6 +291,7 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
   async create(input: { systemPrompt?: string } = {}): Promise<{ path: string }> {
     const path = await this.#path();
     if ((await this.snapshot()).state.path !== null) return { path };
+    const projectContext = `\nCURRENT PROJECT: ${JSON.stringify(await this.withItx((itx) => itx.whoami()))}`;
     const certificate = {
       type: "events.iterate.com/agent/created",
       payload: { path },
@@ -304,8 +305,8 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
         payload: {
           role: "system",
           content: input.systemPrompt
-            ? `${DEFAULT_AGENT_SYSTEM_PROMPT}\n\nINSTRUCTIONS FROM THE OPERATOR (they add to the rules above, never replace them):\n${input.systemPrompt}`
-            : DEFAULT_AGENT_SYSTEM_PROMPT,
+            ? `${DEFAULT_AGENT_SYSTEM_PROMPT}\n\nINSTRUCTIONS FROM THE OPERATOR (they add to the rules above, never replace them):\n${input.systemPrompt}${projectContext}`
+            : DEFAULT_AGENT_SYSTEM_PROMPT + projectContext,
         },
       }),
     );

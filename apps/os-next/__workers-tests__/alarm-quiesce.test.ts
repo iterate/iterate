@@ -235,7 +235,7 @@ test("a facet TWO rows host survives the removal of ONE of them — memo and sto
   const core = (await context.invoke("itx.facets.get('core').snapshot()")) as {
     state: { subscriptions: Record<string, unknown> };
   };
-  expect(Object.keys(core.state.subscriptions)).toEqual(["config", "b"]); // "config" = the funnel's birth row
+  expect(Object.keys(core.state.subscriptions)).toEqual(["b"]);
   // The startup memo row "b" depends on, and the facet's own storage, are both still there.
   const memo = await runInDurableObject(context, (_instance, state) =>
     Promise.resolve(state.storage.kv.get("facet:shared") ?? null),
@@ -287,14 +287,11 @@ test("RE-ENABLE WITH NEW SOURCE: a materialized processor re-enabled under the s
 
 // ─────────── THE ONE ALARM: no wake without a reason, and every decision observable ───────────
 
-test("A BARE PROBE ON A DORMANT CONTEXT LEAVES NO ALARM: the config delivery acks, nothing is pinned, the alarm is deleted — the every-minute wake loop's negative", async () => {
+test("A BARE PROBE ON A DORMANT CONTEXT LEAVES NO ALARM: nothing is subscribed or pinned — the every-minute wake loop's negative", async () => {
   const ctx = "prj_q_bare_probe";
   const s = stub(ctx);
-  // The probe materializes the context: created, woken, the config row — whose delivery is owed
-  // from that commit (the config row's +20 s claim is the alarm armed from birth)…
+  // The probe creates no subscription or outstanding delivery.
   await s.invoke("itx.schedules.list()");
-  // …until the config worker (the bundled no-op default) acks and the row is caught up.
-  await untilRow(ctx, "config", (r) => (r?.cursor?.confirmedOffset ?? 0) > 0);
   await until("no alarm", async () => (await alarmAt(ctx)) === null);
   expect(await alarmAt(ctx)).toBeNull();
 });
@@ -418,7 +415,6 @@ test("A WAKE MAKES NO LOOP: an incarnation the alarm woke delivers its own wake 
   const ctx = "prj_q_wake_no_loop";
   const s = stub(ctx);
   await s.invoke("itx.schedules.list()"); // born: created, woken, the config row
-  await untilRow(ctx, "config", (r) => (r?.cursor?.confirmedOffset ?? 0) > 0);
   await until("no alarm", async () => (await alarmAt(ctx)) === null);
   const wokens = async () =>
     ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events.filter(
@@ -435,7 +431,6 @@ test("A WAKE MAKES NO LOOP: an incarnation the alarm woke delivers its own wake 
   expect(woken).toHaveLength(before + 1);
   expect(woken.at(-1)!.payload).toMatchObject({ reason: "alarm" });
   // Its own wake record delivered and acked, nothing pinned: no alarm — and none appears.
-  await untilRow(ctx, "config", (r) => (r?.cursor?.confirmedOffset ?? 0) >= woken.at(-1)!.offset);
   await until("no alarm", async () => (await alarmAt(ctx)) === null);
   await new Promise((r) => setTimeout(r, 1_500));
   expect(await alarmAt(ctx)).toBeNull();
