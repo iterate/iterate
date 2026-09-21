@@ -3,8 +3,8 @@
 // the context's own runner (iterate-context-durable-object.ts `#startRequestedRuns` / `#executeRun`)
 // at that commit, and a `run-settled` naming that offset, which the caller's wait resolves on. A
 // LITERAL request appended by anyone runs the same way. A run the context's restart interrupted is
-// settled `interrupted` by the wake record — never re-run — which only this lane can prove (the
-// context is aborted mid-run).
+// settled `interrupted` by the wake record — never re-run — which only the workers project can
+// prove (the context is aborted mid-run).
 import { runInDurableObject } from "cloudflare:test";
 import { beforeAll, expect, test } from "vitest";
 import type { StreamEvent } from "iterate/next/stream/processor";
@@ -108,7 +108,7 @@ test("KILLED MID-RUN, NEVER RE-RUN: the context dies with a script in flight; th
   await runInDurableObject(stub(ROOT), (_instance, state) => {
     state.abort("killed mid-run by the test");
   }).catch(() => {}); // abort() throws by design: nothing after it runs
-  // the next door (a read) wakes a new incarnation: its wake record closes the run
+  // the next request (a read) wakes a new incarnation: its wake record closes the run
   const after = (await runEvents(ROOT)).slice(before);
   expect(after.map((e) => e.type.replace("events.iterate.com/", ""))).toEqual([
     "context/run-requested",
