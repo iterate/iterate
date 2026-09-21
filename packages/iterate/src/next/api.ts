@@ -80,7 +80,9 @@ export interface IterateContextApi {
       cancel(schedule: string | [string, string] | ScheduleReceipt): Promise<StreamEvent[]>;
     };
   };
-  whoami(): { projectId: string; path: string };
+  whoami():
+    | { projectId: string; path: string; projectSlug?: string; projectUrl?: string }
+    | Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   readEvents(
     afterOffset?: number,

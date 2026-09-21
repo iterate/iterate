@@ -37,6 +37,8 @@ admin secret is a bearer on `/mcp` too (it reaches every project, so `run` must 
 
 ## Read next
 
+- [Project creation design](docs/project-creation.md) — durable bootstrap, explicit repo/worker specs, and readiness before activation
+
 - [Scheduled appends](docs/scheduled-appends.md) — durable deadlines for userspace facets, cancellation, and executable examples
 
 - `docs/itx-surface-as-built.md` — every signature, transcribed from source (start here)

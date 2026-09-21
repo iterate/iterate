@@ -19,6 +19,7 @@ struct iterate_kit_tas2780 {
   uint32_t faults;
   uint32_t i2c_failures;
   uint8_t volume;
+  uint8_t output_level;
   bool muted;
   bool initialized;
 };
@@ -34,6 +35,9 @@ bool iterate_kit_tas2780_activate(struct iterate_kit_tas2780 *amp);
 /** Clamp to 100, write DVC (retain mute), then publish applied on success.
  * applied must be non-NULL. tas2780.cpp:547-598; step 17 percent mapping. */
 bool iterate_kit_tas2780_set_volume(struct iterate_kit_tas2780 *amp, uint8_t percent, uint8_t *applied);
+/** Output level at 0 dBFS: 11 + index/2 dBV at 48 kHz (index 0..20).
+ * Board chooses this from its supply and speaker rating, while shut down. */
+bool iterate_kit_tas2780_set_output_level(struct iterate_kit_tas2780 *amp, uint8_t index);
 /** Write MODE_CTRL=0x82; false means shutdown was not confirmed. tas2780.cpp:385-392. */
 bool iterate_kit_tas2780_shutdown(struct iterate_kit_tas2780 *amp);
 /** Read 0x49/0x4A/0x4B/0x4F; accumulate and output complete successful reads.

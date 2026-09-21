@@ -112,12 +112,17 @@ test("an app is served at / on its project host — URL verbatim, relative asset
   // never from what the config worker forwarded (the config worker itself sees none — the workers lane)
   const bare = await fetchProjectHost(`${projectId}.${base}`, "/");
   expect(bare.status, bare.text).toBe(404);
-  expect(bare.text).toContain("Not found");
-  await itx.provide("itx.worker", [
-    "itx",
-    "workers",
-    ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:ingress" }],
-  ]);
+  expect(bare.text).toContain("not configured");
+  await itx.append({
+    type: "events.iterate.com/project/ingress-configured",
+    payload: {
+      target: [
+        "itx",
+        "workers",
+        ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:ingress" }],
+      ],
+    },
+  });
   const apex = await fetchProjectHost(`${projectId}.${base}`, "/echo", {
     "x-iterate-app": "other",
   });

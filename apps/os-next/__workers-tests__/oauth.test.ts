@@ -483,7 +483,12 @@ test("console and project browsers use the same CIMD flow and independent grants
         (await tool(personal.token, "run", { script: "async (itx) => itx.whoami()" })).body.result
           .content[0].text,
       ),
-    ).toEqual({ projectId: "browser-a", path: "/" });
+    ).toEqual({
+      projectId: "browser-a",
+      path: "/",
+      projectSlug: "browser-a",
+      projectUrl: "https://browser-a.projects.test",
+    });
     const { root: personalApi } = await rpc(personal.token);
     expect((await personalApi.projects.list()).map((p: { id: string }) => p.id)).toEqual([
       "browser-a",

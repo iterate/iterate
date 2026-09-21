@@ -9,7 +9,6 @@
 
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import type { IterateContextApi, StreamPage } from "../api.ts";
-import { parse } from "../expression.ts";
 import {
   ProcessorEngine,
   type ScannedRange,
@@ -195,108 +194,21 @@ export abstract class StreamProcessorDurableObject<
   }
 }
 
-// ── ConfigWorker ── THE CONFIG WORKER base class, bundled into `processor.js` (this file).
-// A project's ONE event handler AND its web root: every context subscribes
-// `itx.cd('/').worker.processEventBatch`, so the "/" context's config worker is called with every
-// stream's committed batch; a project host that names no app (the apex `<project>.<base>`,
-// src/worker.ts) lands on `itx.worker.fetch(request)`, so `fetch` routes by hostname. `itx.worker` is
-// a platform row (itx-expression-rewriting.ts) a project re-points at its own source —
-// `itx.provide("itx.worker", "itx.workers.get({ source: itx.repos.get('/repos/config').readFile('worker.ts'), cacheKey })")`
-// — with no className: the module's DEFAULT export is the class, as in the bundled no-op default.
-// An author writes:
-//
-//   import { ConfigWorker } from "./processor.js";
-//   export default class extends ConfigWorker {
-//     async processEvent({ event, itx }) {
-//       if (event.type === "events.iterate.com/ping") await itx.builtins.append({ type: "…/pong" });
-//     }
-//     fetch(request) {
-//       if (new URL(request.url).hostname === "acme.example") return this.env.ITX.get().apps.site.fetch(request);
-//       return new Response("no app here", { status: 404 });
-//     }
-//   }
-//
-// STATELESS by design — it owns no stream and no checkpoint. The SUBSCRIBING context keeps the cursor
-// (at-least-once), so `processEvent` must be IDEMPOTENT: an `idempotencyKey` on an appended reaction
-// makes a redelivery a no-op. `range` is the contiguous `(after, through]` window the batch proves.
-
-/** The itx scope handed to `processEvent`: `env.ITX.get()` for this batch — the genuine
- *  `IterateContextRpcTarget` RpcTarget, disposed after the batch so it does not pin the parent DO past the turn. */
+// ConfigWorker is a stateless event handler loaded with an explicit workers.get spec.
+// Subscribe its processEventBatch method explicitly; fetch routing is configured separately.
 export type ConfigWorkerItx = ItxScope;
-
-/** One committed event handed to the config worker, with the batch's range and the batch's itx scope. */
 export type ConfigEventArgs = { event: StreamEvent; range: ScannedRange; itx: ConfigWorkerItx };
 
-/** A COMMIT TAKES EFFECT: when `repo/commit-completed` lands on the repo the context's `itx.worker`
- *  rule reads its source from — a rule whose target is `itx.workers.get({ source, cacheKey })` with a
- *  `source` producer spelled `itx.repos.get('<that path>')…` — the rule is re-appended with
- *  `cacheKey: <commitOid>`, so the next `itx.worker` call is a cold isolate under a new key and the
- *  producer re-reads the repo. Without this a fixed key would load the new code only after an
- *  eviction. Idempotent by key (one re-point per commit); a rule that does not read from that repo
- *  is left alone. The funnel delivers every stream's events to `/`'s worker, so the reaction runs
- *  where the rule lives. */
-async function followCommittedSource(event: StreamEvent, itx: ConfigWorkerItx): Promise<void> {
-  if (event.type !== "events.iterate.com/repo/commit-completed") return;
-  const commitOid = event.payload?.commitOid;
-  if (typeof commitOid !== "string") return;
-  const rule = await itx.rewriteRules.get("itx.worker");
-  if (!rule || rule.origin !== "context" || !rule.target) return;
-  // The rule's target and its `source` producer, spelled out — or NOT followed: a printed target past
-  // the codec's cap, a `@` hole, a `source` that is no expression. This runs ahead of the author's
-  // hook in every batch, so a rule's shape must never fail the batch (that would halt `/`'s worker).
-  let spec: Record<string, unknown>;
-  let source: ReturnType<typeof parse>;
-  try {
-    const [root, workers, get] = parse(rule.target);
-    if (root !== "itx" || workers !== "workers" || !Array.isArray(get) || get[0] !== "get") return;
-    const candidate = get[1];
-    if (
-      typeof candidate !== "object" ||
-      !candidate ||
-      !("source" in candidate) ||
-      typeof candidate.source !== "string"
-    )
-      return;
-    spec = candidate;
-    source = parse(candidate.source);
-  } catch {
-    return;
-  }
-  const [, repos, repoGet] = source;
-  if (
-    repos !== "repos" ||
-    !Array.isArray(repoGet) ||
-    repoGet[0] !== "get" ||
-    repoGet[1] !== event.path
-  )
-    return;
-  await itx.append({
-    type: "events.iterate.com/itx/rewrite-rule-configured",
-    payload: {
-      match: "itx.worker",
-      target: ["itx", "workers", ["get", { ...spec, cacheKey: commitOid }]],
-    },
-    idempotencyKey: `itx.worker@${commitOid}`,
-  });
-}
-
-/** THE CONFIG WORKER — a stateless `WorkerEntrypoint`. Override `processEvent` (the platform calls
- *  `processEventBatch`, the subscription target) and `fetch` (a project host with no app label).
- *  Nothing to construct, no contract, no reduce. */
 export abstract class ConfigWorker<
   Env extends { ITX: ItxEntrypointService } = { ITX: ItxEntrypointService },
 > extends WorkerEntrypoint<Env> {
   /** At fetch entry: `const denied = this.auth.require(request); if (denied) return denied;` */
   protected readonly auth = auth;
-  /** THE SUBSCRIBED METHOD: a committed batch, in offset order. One `env.ITX.get()` for the whole
-   *  batch (the calls pipeline through it), disposed in the `finally` — bounded to this one turn.
-   *  Before the author's hook, the one convention the base follows for every project: a commit to
-   *  the repo `itx.worker`'s source is read from re-points the rule at that commit. */
+  /** Process an explicitly subscribed batch with this worker's context scope. */
   async processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
     const itx = this.env.ITX.get();
     try {
       for (const event of events) {
-        await followCommittedSource(event, itx);
         await this.processEvent({ event, range, itx });
       }
     } finally {
@@ -309,7 +221,7 @@ export abstract class ConfigWorker<
   processEvent(_args: ConfigEventArgs): void | Promise<void> {}
 
   /** THE WEB ROOT — the Request a project host with no app label rode in on (`x-iterate-app` absent;
-   *  the edge's `itx.worker` dispatch). Route by hostname to `this.env.ITX.get().apps.<x>.fetch(request)`
+   *  the project's configured ingress target). Route by hostname to `this.env.ITX.get().apps.<x>.fetch(request)`
    *  or answer it here. Default: not found. */
   override fetch(_request: Request): Response | Promise<Response> {
     return new Response("Not found\n", { status: 404 });

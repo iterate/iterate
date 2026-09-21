@@ -118,10 +118,8 @@ The one codec every door speaks. String half ⇄ structured half.
 - **The reserved root** is `itx.builtins`: the physical scope (section 5) and the FIXED POINT of
   rewriting (section 7). `itx.builtins.kv.get('x')` runs as is and reads no rule; `itx.kv.get('x')`
   reaches the same door through the implicit platform row `itx.kv ⇒ itx.builtins.kv` unless the
-  context's own table says otherwise. A rule's match may not be rooted there; a target may. One more
-  platform row is not a built-in root: `itx.worker ⇒ itx.workers.get(<the bundled no-op ConfigWorker>)`,
-  the config worker every stream subscribes — `rewriteRules.list()` shows it, a project overrides it
-  with its own source, and a `null` at it MASKS (default-deny), never the no-op.
+  context's own table says otherwise. A rule's match may not be rooted there; a target may. Apex ingress stores its complete worker expression
+  in a `project/ingress-configured` event. It adds no implicit rewrite row or subscription.
 - The **anonymous call step** `""` calls the value itself: `itx.builtins.rpcStubs.get('cam')(1)` is
   `["itx","builtins","rpcStubs",["get","cam"],["",1]]`. It is what a rule spells when a lent stub
   is called with args.
@@ -531,7 +529,7 @@ the address — apps/os's host shapes: a request on `<app>--<project>.<base>` or
 `<app>.<project>.<base>` IS the app `itx.apps.<app>` of that project's root context (the dotted
 shape is parsed and served locally; deployed, the one-label wildcard certificate does not cover a
 second label, so only `<app>--<project>` serves until a certificate per project exists); the apex
-`<project>.<base>` names no app and lands on the project's config worker, `itx.worker.fetch(request)`
+`<project>.<base>` names no app and uses the explicit target from `project/ingress-configured` followed by `fetch(request)`
 (`src/sdk/index.ts` `ConfigWorker`: the bundled default answers 404, a project's own `fetch` routes
 by hostname — `this.env.ITX.get().apps.site.fetch(request)`). `<project>` is the project's id or its
 slug (one string here: the directory slugifies an id), resolved by the directory read below. A

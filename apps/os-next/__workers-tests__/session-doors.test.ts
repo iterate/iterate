@@ -50,13 +50,18 @@ test("the host shapes: `<app>--<project>` and `<app>.<project>` reach the same a
   // the apex: the bundled ConfigWorker's fetch — not found
   const apex = await call("https://doors-shapes.projects.test/", forged);
   expect(apex.status).toBe(404);
-  expect(await apex.text()).toContain("Not found");
+  expect(await apex.text()).toContain("not configured");
   // a project's own config worker routes the apex; the label a visitor sent is gone
-  await itx.provide("itx.worker", [
-    "itx",
-    "workers",
-    ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:doors-shapes" }],
-  ]);
+  await itx.append({
+    type: "events.iterate.com/project/ingress-configured",
+    payload: {
+      target: [
+        "itx",
+        "workers",
+        ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:doors-shapes" }],
+      ],
+    },
+  });
   const routed = await call("https://doors-shapes.projects.test/", forged);
   expect(routed.status, await routed.clone().text()).toBe(200);
   expect(await routed.json()).toEqual({ root: true, app: null });

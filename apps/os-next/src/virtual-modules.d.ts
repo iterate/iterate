@@ -9,3 +9,7 @@ declare module "virtual:presence-processor-source" {
   const modules: { "cap.js": string };
   export default modules;
 }
+declare module "*.md" {
+  const markdown: string;
+  export default markdown;
+}

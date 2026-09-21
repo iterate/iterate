@@ -33,10 +33,12 @@
 
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "capnweb";
-import { expect, test } from "vitest";
+import { beforeAll, expect, test } from "vitest";
 import { parse, print, type ItxExpression } from "iterate/next/expression";
 import { restoreRuleTarget } from "../src/context/itx-expression-rewriting.ts";
-import { adminCredentials, openSession, stub, until } from "./support.ts";
+import { adminCredentials, applyDirectorySchema, openSession, stub, until } from "./support.ts";
+
+beforeAll(applyDirectorySchema);
 
 /** One rewrite-rule row as the core snapshot serializes it (the rules are `core` state — a RECORD
  *  by canonical match; both halves are the parsed ItxExpression, so `print` them to compare against
@@ -79,13 +81,8 @@ class Alive extends RpcTarget {
   }
 }
 
-test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created, woken, config subscription) — EVERY stream subscribes itx.cd('/').worker — and leaves no alarm once that delivery is caught up", async () => {
+test("a core-snapshot probe materializes only created and woken, without subscriptions or an alarm", async () => {
   await runInDurableObject(stub("prj_doors_virginprobe"), async (instance, state) => {
-    // ANY door materializes a context: the constructor writes the birth certificate, the wake record,
-    // AND the `config` subscription — every stream subscribes the "/" context's config worker (the
-    // apps/os funnel). That subscription is a cursor delivery: a durable commit it consumes is
-    // insured on the DO's alarm until the config worker acks, and a caught-up row owes nothing (a
-    // DOWN config worker climbs a bounded ladder and halts).
     const snap = (await instance.invoke("itx.facets.get('core').snapshot()")) as {
       offset: number;
       state: { projectId?: string; path?: string; createdAt?: string; incarnation?: number };
@@ -96,13 +93,12 @@ test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created, wok
       incarnation: 1,
     });
     expect(typeof snap.state.createdAt).toBe("string");
-    expect(snap.offset).toBe(4); // reduced through created, woken and the config subscription
-    // The config row was born at its own offset with nothing before it to deliver: no alarm.
+    expect(snap.offset).toBe(2); // created and woken
+    // Nothing is subscribed, so there is no delivery to schedule.
     await until("no alarm after the probe", async () => (await state.storage.getAlarm()) === null);
     expect((await instance.read(0)).events.map((e) => [e.type, e.offset])).toEqual([
       ["events.iterate.com/stream/created", 1],
       ["events.iterate.com/stream/woken", 2],
-      ["events.iterate.com/stream/subscription-configured", 4], // the config subscription
     ]);
     expect(
       Number(
@@ -110,11 +106,10 @@ test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created, wok
           .value,
       ),
     ).toBe(1);
-    // A plain append rides past the config subscription's own commit and the two live-state deltas
-    // (the wake commit at 3, the config commit at 5) — offset 6.
+    // A plain append follows created, woken and the ephemeral core delta.
     const [mark] = (await instance.append({ type: "mark" })) as unknown as { offset: number }[];
-    expect(mark.offset).toBe(6);
-    // The mark is owed to the config worker (its 20 s claim) until it acks — then nothing is, again.
+    expect(mark.offset).toBe(4);
+    // With no subscriptions, the mark creates no delivery claim.
     await until("no alarm after the ack", async () => (await state.storage.getAlarm()) === null);
   });
 });

@@ -4,7 +4,7 @@
 // surface, exactly like a project's — except that THE GLOBAL NAMESPACE IS NOT NAVIGABLE: a session
 // holds a global context by IDENTITY only (`session.user`, `session.organizations.get` by
 // membership), a global edge handle's `cd` is refused for everyone, and inside a global DO the
-// built-in `cd` admits one hop — the kernel's config funnel `itx.cd('/').worker…` under no principal
+// built-in `cd` does not permit navigation between global contexts
 // (src/iterate-context.ts, src/context/built-ins.ts, src/session.ts). That is the whole path mask:
 // nobody can NAME another user's path. Beneath it, every project-scoped RESOURCE (`itx.kv`, the
 // secret cells and catalog, the Artifacts repos) is keyed by the RESOURCE OWNER — a project, or in
@@ -243,24 +243,12 @@ describe("security requirements — the global namespace is not navigable", () =
     expect(bPage.events.some((event) => event.type === "smuggled")).toBe(false);
   });
 
-  test("the kernel's config funnel still delivers a user context's commits to the global root: the `config` row's cursor confirms past the append", async () => {
+  test("user contexts have no implicit global subscription", async () => {
     const a = await userSession("funnel@sec.test");
-    const [mark] = (await a.user.invoke(["itx", ["append", { type: "funnel-mark" }]])) as {
-      offset: number;
-    }[];
-    const config = await until("config cursor past the mark", async () => {
-      const rows = (await a.user.invoke("itx.subscriptions.list()")) as {
-        name: string;
-        halted?: unknown;
-        cursor?: { confirmedOffset: number; attempt: number };
-      }[];
-      const configRow = rows.find((entry) => entry.name === "config");
-      return configRow?.cursor && configRow.cursor.confirmedOffset >= mark.offset
-        ? configRow
-        : undefined;
-    });
-    expect(config.halted).toBeUndefined();
-    expect(config.cursor!.attempt).toBe(0);
+    await a.user.invoke(["itx", ["append", { type: "mark" }]]);
+    const rows = (await a.user.invoke("itx.subscriptions.list()")) as { name: string }[];
+    expect(rows.map((row) => row.name)).not.toContain("config");
+    await expect(a.user.invoke("itx.builtins.cd('/').kv.list()")).rejects.toThrow("never by path");
   });
 
   // The RESOURCE OWNER beneath the mask (`resourceScope`): a user's kv, secrets and repos are keyed

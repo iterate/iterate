@@ -3,13 +3,32 @@
 A GPT-Live voice conversation as TWO facet processors on a fresh context per press — the relay and
 the agent it delegates to — with the project's root worker answering the press. Project code only; no platform deploy.
 
+The backend inherits the same system prompt and codemode parser as a normal
+platform agent (`src/agent/system-prompt.ts` and `codemode-format.ts`), with
+additional instructions for spoken answers. Keep tool examples in the shared
+prompt; do not maintain a separate voice API description.
+
+A device with a screen adds [screen-context.md](screen-context.md) as an
+ordinary developer message when the call starts, with its client name filled
+in. The agent retains supplied context messages and passes them to the model
+unchanged; it has no screen-specific matching logic. Script calls and results
+are retained through the same context events, so a later question can refer to
+the exercises or other content already displayed. Its display action is
+`itx.cd("/").voice.setImage({ device, image: { html } })`. The renderer uses
+`screen.info()` for dimensions and supported monochrome, grayscale or colour
+formats. Set `image: null` to restore the normal call-status view.
+Capture waits for `<img>` decoding and font readiness, with a five-second
+asset wait. A failed image leaves the existing screen intact. Use `<img>`
+instead of CSS backgrounds for photos; the readiness check covers image
+elements. The agent's rendering instructions live in [screen-context.md](screen-context.md).
+
 | File                               | What                                                                                                                                                                                                                                                                                                                                                            |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `voice-agent.ts`                   | `VoiceAgentDurableObject`: the GPT-Live relay and the call fold. Dials `wss://api.openai.com/v1/live/sessions` through egress with `getSecret("/secrets/openai")`, forwards `mic-frame`s, appends `spk-frame`s and transcripts, records the live model's hand-offs as `delegation-requested`, and forwards the agent's `commentary` to the live model to speak. |
 | `agent.ts`                         | `AgentDurableObject`: the project's agent as a second facet on the same context. Consumes `delegation-requested`, folds it as pending, runs one `delegation-turn` and emits `commentary` naming the delegationId. Its own fold makes an eviction mid-turn recoverable. On the press it lands `agent/created` on `/`, so `itx.agents.list()` knows it.           |
 | `delegation-turn.ts`               | The backend turn, pure: gpt-6-astra (Responses API, same secret, same egress) with one tool, an `async (itx) => …` script run by `itx.run`.                                                                                                                                                                                                                     |
 | `delegation-turn.test.ts`          | Table tests for the turn: plain answer, script step, hang-up token, model failure.                                                                                                                                                                                                                                                                              |
-| `worker.ts`                        | The project's root worker (`itx.worker`); `itx.voice` is an alias of it. `setupVoiceAgent({ streamPath, activation })` is ONE append on the fresh context: both facets' subscription rows plus `call-started`, so the relay dials at boot.                                                                                                                      |
+| `worker.ts`                        | The voice service mounted at `itx.voice` through an explicit worker spec. `setupVoiceAgent({ streamPath, activation })` is ONE append on the fresh context: both facets' subscription rows plus `call-started`, so the relay dials at boot.                                                                                                                     |
 | `processor.d.ts`                   | Types for `./processor.js`, the SDK the platform injects next to a loaded facet.                                                                                                                                                                                                                                                                                |
 | `../../scripts/voice-install.ts`   | Bundles the three files into the project's KV, appends the two rules, sets the secret, and warms both facet isolates with one throwaway conversation.                                                                                                                                                                                                           |
 | `../../scripts/voice-call.ts`      | One conversation from Node, making exactly the device's calls; prints the press timeline.                                                                                                                                                                                                                                                                       |

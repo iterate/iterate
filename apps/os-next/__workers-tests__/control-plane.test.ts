@@ -38,7 +38,12 @@ test("the directory keeps creation, listing, membership and event attribution co
     actor: expect.stringMatching(/^user_/),
   });
   using project = await ada.projects.create({ project: "adas-directory" });
-  expect(await project.whoami()).toEqual({ projectId: "adas-directory", path: "/" });
+  expect(await project.whoami()).toEqual({
+    projectId: "adas-directory",
+    path: "/",
+    projectSlug: "adas-directory",
+    projectUrl: "https://adas-directory.projects.test",
+  });
   expect((await ada.projects.list()).map((project) => project.id)).toEqual(["adas-directory"]);
   const [event] = await project.append({
     type: "note",
@@ -61,7 +66,12 @@ test("the directory keeps creation, listing, membership and event attribution co
     ]),
   );
   using other = await admin.projects.get("adas-directory");
-  expect(await other.whoami()).toEqual({ projectId: "adas-directory", path: "/" });
+  expect(await other.whoami()).toEqual({
+    projectId: "adas-directory",
+    path: "/",
+    projectSlug: "adas-directory",
+    projectUrl: "https://adas-directory.projects.test",
+  });
 });
 
 test("onboarding creates owned organizations atomically and checks the selected organization", async () => {

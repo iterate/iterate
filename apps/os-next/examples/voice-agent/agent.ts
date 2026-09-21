@@ -34,7 +34,6 @@ import {
 /** The requests this facet remembers as unanswered — a call raises them one at a time, so a
  * handful covers any real backlog while bounding the fold. */
 const MAX_PENDING_DELEGATIONS = 16;
-
 const Activation = z.string().min(1).max(64);
 const Transcript = z.array(z.object({ role: z.enum(["listener", "assistant"]), text: z.string() }));
 
@@ -45,17 +44,24 @@ const PendingDelegation = z.object({
   transcript: Transcript,
 });
 
+const ContextMessage = z.object({
+  role: z.enum(["system", "developer", "user", "assistant"]),
+  content: z.string(),
+});
+
 const AgentState = z.object({
   /** Whether `agent/created` has landed on this path — the announcement runs until it has. */
   created: z.boolean().default(false),
   /** Raised by `delegation-requested`, removed by the `commentary` that answers it; newest first.
    * The recovery ground: a pending row still here after an eviction is re-run. */
   pending: z.array(PendingDelegation).max(MAX_PENDING_DELEGATIONS).default([]),
+  /** Additional conversation context, supplied as ordinary Markdown messages. */
+  context: z.array(ContextMessage).default([]),
 });
 
 const AgentContract = defineProcessorContract({
   slug: "agent",
-  version: "1.0.0",
+  version: "2.0.0",
   description:
     "Answers the voice relay's delegations with one chat-model turn, on the conversation context beside it.",
   stateSchema: AgentState,
@@ -69,6 +75,10 @@ const AgentContract = defineProcessorContract({
       description:
         "The agent's birth certificate (src/agent/contract.ts): cross-posted to / first, landed here last.",
       payloadSchema: z.object({ path: z.string().min(1) }),
+    },
+    "events.iterate.com/agents/context-added": {
+      description: "Additional messages supplied to the conversation.",
+      payloadSchema: ContextMessage,
     },
     "events.iterate.com/voice-agent/delegation-requested": {
       description: "The live model handed a request to the backend, with the words said so far.",
@@ -102,11 +112,13 @@ const AgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/call-started",
     /* Its own certificate: consumed so the fold knows it is born. */
     "events.iterate.com/agent/created",
+    "events.iterate.com/agents/context-added",
     "events.iterate.com/voice-agent/delegation-requested",
     /* Its own answer: consumed so the pending row it settles leaves the fold. */
     "events.iterate.com/voice-agent/commentary",
   ],
   emits: [
+    "events.iterate.com/agents/context-added",
     "events.iterate.com/agent/created",
     "events.iterate.com/voice-agent/commentary",
     "events.iterate.com/voice-agent/thinking",
@@ -127,7 +139,7 @@ export type AgentDeps = {
   appendToRoot: (event: StreamEventInput) => Promise<unknown>;
 };
 
-class AgentProcessor extends StreamProcessor<AgentState, ConsumedEvent<AgentContract>> {
+export class AgentProcessor extends StreamProcessor<AgentState, ConsumedEvent<AgentContract>> {
   readonly contract = AgentContract;
 
   constructor(private readonly deps: AgentDeps) {
@@ -145,6 +157,9 @@ class AgentProcessor extends StreamProcessor<AgentState, ConsumedEvent<AgentCont
     switch (event.type) {
       case "events.iterate.com/agent/created":
         return state.created ? state : { ...state, created: true };
+
+      case "events.iterate.com/agents/context-added":
+        return { ...state, context: [...state.context, event.payload] };
 
       case "events.iterate.com/voice-agent/delegation-requested": {
         const { activation, delegationId, transcript } = event.payload;
@@ -183,7 +198,7 @@ class AgentProcessor extends StreamProcessor<AgentState, ConsumedEvent<AgentCont
     for (const pending of args.state.pending) {
       if (this.#turnsInFlight.has(pending.delegationId)) continue;
       this.#turnsInFlight.add(pending.delegationId);
-      args.runInBackground(() => this.#answer(pending, args.append));
+      args.runInBackground(() => this.#answer(pending, args.state.context, args.append));
     }
   }
 
@@ -206,19 +221,31 @@ class AgentProcessor extends StreamProcessor<AgentState, ConsumedEvent<AgentCont
 
   async #answer(
     pending: z.infer<typeof PendingDelegation>,
+    context: AgentState["context"],
     append: AgentArgs["append"],
   ): Promise<void> {
     const { activation, delegationId, transcript } = pending;
     try {
-      const turn = await runDelegationTurn(transcript, {
-        complete: this.deps.complete,
-        runScript: this.deps.runScript,
-        progress: (note) =>
-          append({
-            type: "events.iterate.com/voice-agent/thinking",
-            payload: { activation, delegationId: null, content: note },
-          }),
-      });
+      const turn = await runDelegationTurn(
+        transcript,
+        {
+          complete: this.deps.complete,
+          runScript: this.deps.runScript,
+          remember: (messages) =>
+            append(
+              ...messages.map((payload) => ({
+                type: "events.iterate.com/agents/context-added",
+                payload,
+              })),
+            ),
+          progress: (note) =>
+            append({
+              type: "events.iterate.com/voice-agent/thinking",
+              payload: { activation, delegationId: null, content: note },
+            }),
+        },
+        context,
+      );
       await append({
         type: "events.iterate.com/voice-agent/commentary",
         idempotencyKey: this.idempotencyKey(`commentary:${delegationId}`),
@@ -238,13 +265,22 @@ class AgentProcessor extends StreamProcessor<AgentState, ConsumedEvent<AgentCont
 /** The class the loader hosts: `facets.get("agent", { source, className: "AgentDurableObject" })`. */
 export class AgentDurableObject extends StreamProcessorDurableObject<AgentState> {
   processor = new AgentProcessor({
-    complete: completeWithOpenAi,
+    complete: async (messages) => {
+      const identity = await this.withItx((itx) => itx.whoami());
+      return completeWithOpenAi([
+        {
+          role: "system",
+          content: `CURRENT PROJECT: ${JSON.stringify(identity)}. Use projectUrl for website requests and verification.`,
+        },
+        ...messages,
+      ]);
+    },
     contextPath: async () => (await this.withItx((itx) => itx.whoami())).path,
     appendToRoot: (event) => this.withItx((itx) => itx.cd("/").append(event)),
     runScript: async (script) => {
-      const itx = this.env.ITX.get() as unknown as { run(script: string): Promise<unknown> };
       try {
-        return JSON.stringify((await itx.run(script)) ?? null).slice(0, 8_000);
+        const result = await this.withItx((itx) => itx.run(script));
+        return JSON.stringify(result ?? null).slice(0, 8_000);
       } catch (error) {
         return `ERROR: ${String(error instanceof Error ? error.message : error).slice(0, 8_000)}`;
       }

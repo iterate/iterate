@@ -51,29 +51,21 @@ import { enableFixtureProcessor } from "./support/sources.ts";
 test("any door materializes a fresh context: readEvents(0) starts with created then woken; the first append lands past them; core's reduced state carries identity + incarnation", async () => {
   const ctx = freshCtx("woken");
   const itx = openItx(ctx);
-  // A bare READ on a never-touched context already sees the birth records — the constructor wrote
-  // them before this door opened. The config-worker funnel auto-subscribes `config` at birth, so a
-  // durable subscription-configured record lands at offset 4 (offsets 3 and 5 are ephemeral core
-  // live-state deltas, which durable readEvents never returns).
+  // A bare read sees only the birth and wake records; no implicit subscriptions.
   const page = await itx.invoke("itx.readEvents(0)");
   expect(page.events.map((e: { type: string; offset: number }) => [e.type, e.offset])).toEqual([
     ["events.iterate.com/stream/created", 1],
     ["events.iterate.com/stream/woken", 2],
-    ["events.iterate.com/stream/subscription-configured", 4],
   ]);
   expect(page.events[0].payload).toEqual({ projectId: ctx, path: "/" });
-  expect(page.events[2].payload.name).toBe("config"); // the auto-subscribed config-worker funnel
   const incarnation = page.events[1].payload.incarnation;
   expect(incarnation).toBeGreaterThanOrEqual(1);
 
-  // one receipt per INPUT — the platform's records are never echoed as receipts — and the first
-  // user append lands at offset 6: past created (1), woken (2), the wake commit's ephemeral
-  // live-state delta (3), the config subscription-configured record (4) and its ephemeral
-  // live-state delta (5; ephemerals share the offset sequence but are not durable).
+  // The first user append follows created, woken and the ephemeral core delta.
   const receipts = await itx.invoke(`itx.append({ type: 'hello' })`);
   expect(receipts).toHaveLength(1);
   expect(receipts[0].type).toBe("hello");
-  expect(receipts[0].offset).toBe(6);
+  expect(receipts[0].offset).toBe(4);
 
   // the core reduce reduced both records — runtime state IS reduced state
   const snap = await itx.invoke("itx.facets.get('core').snapshot()");

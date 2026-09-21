@@ -49,8 +49,8 @@ type ProjectHostIdentity = { principal: Principal | null; platformBearer: boolea
  *  header replaced by `appCookies` (null ⇒ none — what the capability may see), a platform bearer
  *  (an OAuth access token, the admin secret) removed (an app's own bearer scheme passes through
  *  untouched), then the expression the host names — `itx.apps.<app>`, or the
- *  config worker `itx.worker` for a host with no app label (its `fetch` routes by hostname,
- *  sdk/index.ts `ConfigWorker`) — the hop count and the principal's stamp. The app label the app
+ *  configured explicit ingress target for a host with no app label (an empty expression
+ *  header selects the target stored on the root context) — the hop count and the principal's stamp. The app label the app
  *  sees (`x-iterate-app`) is not written here: the DO's fetch lane derives it from the expression,
  *  the one door every fetch-lane Request passes (iterate-context-durable-object.ts). */
 function projectHostRequestTo(
@@ -67,7 +67,7 @@ function projectHostRequestTo(
   if (lane.appCookies) headers.set("cookie", lane.appCookies);
   else headers.delete("cookie");
   if (lane.identity.platformBearer) headers.delete("authorization");
-  headers.set(ITX_EXPRESSION_FETCH_HEADER, lane.app ? `itx.apps.${lane.app}` : "itx.worker");
+  headers.set(ITX_EXPRESSION_FETCH_HEADER, lane.app ? `itx.apps.${lane.app}` : "");
   headers.set(PROJECT_HOST_HOPS_HEADER, String(lane.hops));
   if (lane.identity.principal)
     headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(lane.identity.principal));
