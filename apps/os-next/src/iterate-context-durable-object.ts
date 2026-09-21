@@ -122,7 +122,7 @@ const IDLE_QUIESCE_AFTER_MS = 30_000;
  *  heals at once) — so the recovery is a restart of both and ONE more attempt (`#invokeFacet`),
  *  counted per facet (`facet:<name>:restarts`, shown on `processors.list()`). apps/os carries the
  *  same recovery for its dynamic workers (issue #2288). Remove when the platform is fixed. */
-const isFacetStartPlatformFailure = (error: unknown) =>
+const isFacetStartPlatformFailure = (error: unknown): error is Error =>
   error instanceof Error &&
   (error.message.includes("Unable to deserialize cloned data") ||
     error.message.startsWith("internal error; reference = "));
@@ -1082,7 +1082,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             namespace: "iterate-context",
             name,
             restarts,
-            message: (error as Error).message,
+            message: error.message,
           });
           return await this.#invokeFacet(name, spec, itxExpressionSteps, true);
         }
