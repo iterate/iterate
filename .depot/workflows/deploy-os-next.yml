@@ -41,7 +41,7 @@ jobs:
           clean: false
           ref: ${{ inputs.ref || github.sha }}
       - name: Reconcile dependencies (baked)
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: node scripts/depot-ci/dependencies.mjs install
       # The Doppler project slug is still `project-worker` (the secrets bucket
       # predates the os-next rename; renaming a Doppler project slug is a
       # separate migration). The deployed Cloudflare Worker is os-next-prd.
@@ -75,7 +75,7 @@ jobs:
           clean: false
           ref: ${{ inputs.ref || github.sha }}
       - name: Reconcile dependencies (baked)
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)
         run: doppler setup --config prd --project project-worker
         env:
@@ -107,7 +107,7 @@ jobs:
         with:
           clean: false
       - name: Reconcile dependencies (baked)
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: node scripts/depot-ci/dependencies.mjs install
       - name: Notify Slack
         env:
           APP_DISPLAY_NAME: OS-Next

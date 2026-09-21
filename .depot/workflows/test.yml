@@ -27,7 +27,7 @@ jobs:
           clean: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Reconcile dependencies (baked)
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)
         run: doppler setup --config dev --project test
         env:

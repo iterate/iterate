@@ -28,6 +28,22 @@ test.each([
   expect(workspace.run("fingerprint")).not.toBe(before);
 });
 
+test("a manifest's non-lifecycle scripts and other non-install fields preserve the fingerprint", () => {
+  using workspace = fixture();
+  const before = workspace.run("fingerprint");
+  const manifest = JSON.parse(readFileSync(join(workspace.cwd, "package.json"), "utf8"));
+  workspace.write(
+    "package.json",
+    JSON.stringify({
+      ...manifest,
+      description: "renamed",
+      scripts: { ...manifest.scripts, test: "vitest run", "e2e:soak": "tsx scripts/e2e-soak.ts" },
+      exports: { ".": "./index.js" },
+    }),
+  );
+  expect(workspace.run("fingerprint")).toBe(before);
+});
+
 test("manifest changes affect the fingerprint even with an unchanged lockfile", () => {
   using workspace = fixture();
   const before = workspace.run("fingerprint");
