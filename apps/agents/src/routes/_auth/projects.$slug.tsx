@@ -26,7 +26,7 @@ import { ContextView } from "@iterate-com/ui/components/context-view/context-vie
 import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
 import { InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
 import { LiveStateValue } from "../../components/live-state-value.tsx";
-import { agentEventRenderers } from "../../lib/agent-event-renderers.tsx";
+import { agentEventInspectors, agentEventRenderers } from "../../lib/agent-event-renderers.tsx";
 import { AgentsNav } from "../../components/agents-nav.tsx";
 import { AgentComposer, type StreamInterrupt } from "../../components/composer.tsx";
 import { QueuedMessagesPanel } from "../../components/queued-messages.tsx";
@@ -423,6 +423,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
             caughtUp={caughtUp}
             error={error || undefined}
             renderers={agentEventRenderers}
+            inspectors={agentEventInspectors}
             processors={iterateContext.processors.rows}
             presence={iterateContext.presence}
             renderCoreState={() => <LiveStateValue state={iterateContext.liveState.core} />}
