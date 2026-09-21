@@ -667,9 +667,9 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
     // the prd account for the route to deploy; the DNS record appears on `ensure-resources --env prd`.
     temporaryCustomHostnames: {
       "iterate2.com": "iterate",
-      "garple.com": "garple",
-      "lispwoso.com": "lispwoso",
-      "templestein.com": "templestein",
+      // garple.com, lispwoso.com and templestein.com wait for their zones to move INTO the prd account
+      // (deploy 2026-09-21: "The zone … does not exist on your account", code 10083 — the route
+      // cannot be added and the deploy job goes red). Add each back the day its zone is here.
     },
     artifactsNamespace: "project-worker-prd-repos",
     resourceNamePrefix: "project-worker-prd",

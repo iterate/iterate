@@ -1357,7 +1357,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // The JSON form is an edge-set (worker.ts) or self-addressed (env.ITX.fetch) expression; the
         // resolver below canonicalizes it and rejects a malformed shape, so this parse trusts the JSON.
         if (itxExpressionHeader === "" && !this.#stream.coreReducedState.ingressTarget)
-          return new Response("Project ingress is not configured\n", { status: 404 });
+          return new Response(
+            "This project has no site yet: its config worker's fetch serves this page once the project defines one\n",
+            { status: 404 },
+          );
         const itxExpression =
           itxExpressionHeader === ""
             ? this.#stream.coreReducedState.ingressTarget!
