@@ -27,8 +27,8 @@ import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { AgentUiLlmStep } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
 import { ContextView } from "@iterate-com/ui/components/context-view/context-view";
+import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
 import { InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
 import { FacetLiveState } from "../../components/facet-live-state.tsx";
 import { AgentsNav } from "../../components/agents-nav.tsx";
@@ -149,10 +149,16 @@ function AgentsPage() {
 /** The agent's context — `project.cd(path)` — held for the page's life: the stub every call
  *  (the composer's `message`, the live states) goes through. Released on unmount AND again after
  *  the connect settles, since an unmount mid-await comes before the handle that await returns. */
-function useAgentContext(api: AuthenticatedApp["api"], project: string, path: string) {
+function useAgentContext(
+  api: AuthenticatedApp["api"],
+  project: string,
+  path: string,
+): { context: Context | undefined; error: string | undefined } {
   const [context, setContext] = useState<Context>();
+  const [error, setError] = useState<string>();
   useEffect(() => {
     let disposed = false;
+    setError(undefined);
     const held: { stub?: Project; agent?: Context } = {};
     const release = () => {
       held.agent?.[Symbol.dispose]();
@@ -168,7 +174,9 @@ function useAgentContext(api: AuthenticatedApp["api"], project: string, path: st
       // for an updater and CALL it (an empty method call the server refuses).
       setContext(() => agent);
     })()
-      .catch(() => undefined) // the log hook reports the connect's failure
+      // the connect itself failing (no such project, no such path, the sign-in gone) is the page's
+      // message; what fails after the handle exists is the log hook's
+      .catch((e: unknown) => !disposed && setError(e instanceof Error ? e.message : String(e)))
       .finally(() => disposed && release());
     return () => {
       disposed = true;
@@ -176,7 +184,7 @@ function useAgentContext(api: AuthenticatedApp["api"], project: string, path: st
       setContext(undefined);
     };
   }, [api, project, path]);
-  return context;
+  return { context, error };
 }
 
 /** The agent's log, from the SDK's `useContextLog` over its context (subscribed for every committed
@@ -248,8 +256,9 @@ function AgentConversation({ project, path }: { project: string; path: string })
   const search = Route.useSearch();
   const navigate = useNavigate();
   const { slug } = Route.useParams();
-  const context = useAgentContext(api, project, path);
-  const { log, events, caughtUp, error } = useAgentLog(context, path);
+  const { context, error: connectError } = useAgentContext(api, project, path);
+  const { log, events, caughtUp, error: logError } = useAgentLog(context, path);
+  const error = connectError || logError;
   const processors = useContextProcessors(context, log.events);
   const presence = useContextPresence(context, log.events);
   const live = useLiveState<unknown>(context, {
