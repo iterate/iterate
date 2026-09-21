@@ -20,29 +20,17 @@
 //                                                  or that is older than 7 days
 //   ... --dry-run                                  print the plan, touch no network
 //
-// A Worker Preview is a branch of an existing worker — THE PARENT (generate-wrangler-config.ts
-// PREVIEW_PARENT: os-next-preview on the dev/preview account; nothing reads its data), named `pr<n>-<branch slug>`
-// like cloudflare-os names theirs: the number keeps two branches that slugify alike apart and is how
-// the sweep maps a live preview back to its pull request. One preview per PR, redeployed in place on
-// every push; a preview's Durable Object namespaces, KV, R2, D1 and Artifacts namespace are its own
-// (proven 2026-09-21: `preview delete` takes the namespaces and the auto-provisioned KV/R2 with it).
+// A Worker Preview is a branch of an existing worker, THE PARENT (generate-wrangler-config.ts
+// PREVIEW_PARENT: os-next-preview on the dev/preview account; nothing reads its data). One preview per
+// PR, `pr<n>-<branch slug>` as cloudflare-os names theirs, redeployed in place on every push, with
+// Durable Object namespaces, KV, R2, D1 and an Artifacts namespace of its own. The apps on top —
+// dash, agents, notes, voice — are OAuth clients and nothing else: each gets a preview of its own
+// parent under the same name, its one var the issuer, this PR's os-next preview (README, "Previews").
 //
-// THE APPS ON TOP — dash, agents, notes, voice (scripts/lib/start-app.ts) — are OAuth clients of the
-// platform and nothing else: cloudflare-os's second tier. Each gets a Worker Preview of ITS OWN parent
-// (`<app>-preview`, envs.ts) under the same name, with ONE var, the issuer, set to this PR's os-next
-// preview; the app's origin is its OAuth client id, so nothing registers it. cloudflare-os rebuilds
-// and redeploys all eighteen every push (their build cache makes it cheap); ours deploy only when
-// their own paths changed since the merge-base (`changedApps`), or with --apps all.
-//
-// Environment (the Depot workflow .depot/workflows/preview-os-next.yml supplies it through Doppler
-// project `project-worker`, config `preview` — the parent's):
-//   CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID   the parent worker's account
-//   APP_CONFIG_SESSION_SECRET, APP_CONFIG_ADMIN_API_SECRET, APP_CONFIG_SECRETS_KEY
-//                                                 uploaded to the worker's Previews settings, which
-//                                                 every preview inherits (`preview secret bulk`)
-//   PREVIEW_NAME, PREVIEW_PR_NUMBER               the branch and the PR (flags override)
-//   GITHUB_TOKEN, GITHUB_REPOSITORY               the PR body update and the sweep's PR lookups
-//   PREVIEW_WRANGLER                              a wrangler binary to use instead of the pinned one
+// Environment: Doppler project-worker/preview (CLOUDFLARE_API_TOKEN + ACCOUNT_ID for the parent's
+// account; the three APP_CONFIG secrets every preview inherits), PREVIEW_NAME + PREVIEW_PR_NUMBER
+// (the branch and the PR; flags override), GITHUB_TOKEN + GITHUB_REPOSITORY (the PR body and the
+// sweep's PR lookups), PREVIEW_WRANGLER (a wrangler binary instead of the pinned one).
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
