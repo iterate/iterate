@@ -39,7 +39,7 @@ import { projectHostOf } from "../../_auth.tsx";
 const shell = getRouteApi("/_auth");
 
 export const Route = createFileRoute("/_auth/projects/")({
-  validateSearch: z.object({ new: z.literal(1).optional() }),
+  validateSearch: z.object({ new: z.literal(1).optional().catch(undefined) }),
   component: ProjectsPage,
 });
 
