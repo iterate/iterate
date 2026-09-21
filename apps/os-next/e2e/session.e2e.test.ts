@@ -14,6 +14,7 @@ import {
   rejection,
   session,
   sleep,
+  until,
   workerUrl,
 } from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
@@ -274,9 +275,33 @@ test("a personal access token — one OAuth grant the account mints — is the u
   });
   expect(
     (await readAll(api.projects.get(projectId))).find(
-      (e) => e.type === "events.iterate.com/project/mcp-client-connected",
+      (e) => e.type === "events.iterate.com/project/mcp-connection-created",
     )?.payload,
   ).toEqual({ grantId: grant!.id, path: connectionPath });
+  expect(await api.projects.get(projectId).mcpConnections.list()).toEqual([
+    { grantId: grant!.id, path: connectionPath, createdAt: expect.any(String) },
+  ]);
+  // THE ACCOUNT'S RECORD: the mint is a fact on the person's own context, stamped with them and
+  // the issuer session it was minted through (best-effort and async: wait for it)
+  const accountEvents = async () => {
+    // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded read of the account context per attempt.
+    using reader = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
+    return (await reader.authenticate({ type: "from-server-cookie" }).user.readEvents(0, 500))
+      .events as { type: string; payload: Record<string, unknown>; source?: unknown }[];
+  };
+  const minted = await until("the mint is on the account context", async () =>
+    (await accountEvents()).find(
+      (e) =>
+        e.type === "events.iterate.com/account/grant-minted" && e.payload.grantId === grant!.id,
+    ),
+  );
+  expect(minted.payload).toEqual({
+    grantId: grant!.id,
+    name: "E2E personal access token",
+    projects: [projectId],
+    expiresAt,
+  });
+  expect(minted.source).toEqual({ principal, grant: expect.stringMatching(/^grant_/) });
   // … and ends it: the same bearer is refused on /api, /mcp and the project host at once
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded revocation on the account session.
   using ender = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
@@ -290,6 +315,13 @@ test("a personal access token — one OAuth grant the account mints — is the u
   expect(endedMcp.status).toBe(401);
   await endedMcp.body?.cancel();
   expect((await fetchProjectHost(`echo--${slug}.${base}`, "/", bearer)).status).toBe(401);
+  // … and the end is the account's fact too
+  const ended = await until("the end is on the account context", async () =>
+    (await accountEvents()).find(
+      (e) => e.type === "events.iterate.com/account/grant-ended" && e.payload.grantId === grant!.id,
+    ),
+  );
+  expect(ended.source).toEqual({ principal, grant: expect.stringMatching(/^grant_/) });
 });
 
 // ── the doors ──
