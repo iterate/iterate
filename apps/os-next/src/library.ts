@@ -158,7 +158,7 @@ export interface LibraryRoots {
     delete(path: string): Promise<{ path: string }>;
   };
   /** THE MCP CONNECTIONS of the project: every grant whose connection context was born here (its
-   *  first run over MCP) — the context's path (`/mcp/inbound/<grantId>`, its transcript) and when.
+   *  first run over MCP) — the context's path (`/mcp/inbound/grants/<grantId>`, its transcript) and when.
    *  The project catalog's `mcpConnections`, folded from `project/mcp-connection-created` (mcp.ts
    *  cross-posts it to `/`). */
   mcpConnections: {

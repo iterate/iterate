@@ -42,7 +42,7 @@ export const ProjectContract = defineProcessorContract({
     /** Every agent born under the project, by path — announced by its own (userspace) processor. */
     agents: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
     /** Every MCP connection born under the project, by its grant (the connection — mcp.ts): the
-     *  context its scripts run on and are logged at (`/mcp/inbound/<grantId>`), and when it was born. */
+     *  context its scripts run on and are logged at (`/mcp/inbound/grants/<grantId>`), and when it was born. */
     mcpConnections: z
       .record(z.string(), z.object({ path: z.string(), createdAt: z.string() }))
       .default({}),

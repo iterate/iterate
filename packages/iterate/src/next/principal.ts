@@ -11,7 +11,7 @@ export type Principal = { actor: string; email?: string };
  *  `cd`, including calls without a principal. */
 export type Caller = {
   principal: Principal | null;
-  /** THE CONNECTION the principal acts through: the OAuth grant's id (`grant_…`) — one per connected
+  /** THE CONNECTION the principal acts through: the OAuth grant's id — one per connected
    *  client (a Claude Code install, a dash sign-in, a personal token), the same across every call it
    *  makes. Absent for the admin secret and the kernel. */
   grant?: string;
