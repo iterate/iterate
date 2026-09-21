@@ -12,5 +12,6 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
     if (!project) return context.signInFor(params.slug);
     return { project };
   },
+  head: ({ match }) => ({ meta: [{ title: `${match.context.project.slug} · Dash` }] }),
   component: Outlet,
 });

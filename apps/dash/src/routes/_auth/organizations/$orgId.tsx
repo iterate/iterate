@@ -46,6 +46,7 @@ export const Route = createFileRoute("/_auth/organizations/$orgId")({
     if (!org) throw notFound();
     return { org };
   },
+  head: ({ match }) => ({ meta: [{ title: `${match.context.org.name} · Dash` }] }),
   component: OrganizationSettings,
 });
 

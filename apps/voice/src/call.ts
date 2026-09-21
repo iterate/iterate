@@ -77,10 +77,8 @@ export async function startCall(input: {
     ],
     target: (events) => {
       for (const raw of events) {
-        const event = JSON.parse(JSON.stringify(raw)) as {
-          type: string;
-          payload: Record<string, unknown>;
-        };
+        // capnweb hands each row over as a plain JSON value; the shape is the relay's event contract
+        const event = raw as { type: string; payload: Record<string, unknown> };
         const kind = event.type.slice(T.length);
         const p = event.payload;
         if (kind === "spk-frame") {

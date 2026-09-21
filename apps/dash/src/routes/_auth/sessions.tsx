@@ -31,13 +31,14 @@ import {
 } from "@iterate-com/ui/components/table";
 
 export const Route = createFileRoute("/_auth/sessions")({
-  validateSearch: z.object({ cursor: z.string().optional() }),
+  validateSearch: z.object({ cursor: z.string().optional().catch(undefined) }),
   loaderDeps: ({ search }) => ({ cursor: search.cursor }),
   staticData: { page: "Sessions" },
   // `account` is optional at consent: without it there is no list to load — the page offers the
   // step-up instead of the error the API would answer with.
   loader: async ({ context, deps }) =>
     context.info.scopes.includes("account") ? await context.api.grants.list(deps.cursor) : null,
+  head: () => ({ meta: [{ title: "Sessions · Dash" }] }),
   component: SessionsPage,
 });
 

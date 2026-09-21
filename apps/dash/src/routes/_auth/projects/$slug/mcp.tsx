@@ -35,6 +35,7 @@ export const Route = createFileRoute("/_auth/projects/$slug/mcp")({
     ]);
     return { clients, grants: grants?.items ?? [] };
   },
+  head: ({ match }) => ({ meta: [{ title: `MCP · ${match.context.project.slug} · Dash` }] }),
   component: ProjectMcp,
 });
 
