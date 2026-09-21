@@ -112,14 +112,20 @@ function parseIterateContextDurableObjectName(name: string | undefined) {
  *  and dies in memory, so its release needs no durable alarm: the timer dies with the actor, and so
  *  do the pins. */
 const IDLE_QUIESCE_AFTER_MS = 30_000;
-/** WORKAROUND — on prd (never in local workerd), a Workers-RPC call into a LOADED facet can reject
- *  with V8's clone-version error: seen on alarm-woken incarnations since 2026-09-15, with identical
- *  worker code either side, in bursts. The facet container is then unusable for the incarnation (a
- *  live facet never re-runs its startup) and the cached isolate may be too — so the recovery is a
- *  restart of both and ONE more attempt (`#invokeFacet`). apps/os carries the same recovery for its
- *  dynamic workers (issue #2288). Remove when the platform is fixed. */
-const isClonedDataVersionFailure = (error: unknown) =>
-  error instanceof Error && error.message.includes("Unable to deserialize cloned data");
+/** WORKAROUND for a platform defect — https://github.com/iterate/alarm-loader-facet-repro (the
+ *  reproduction, what was measured, what was ruled out). On prd (never in local workerd) a call into
+ *  a LOADED facet started inside an alarm-woken incarnation can reject at facet start, in windows
+ *  that hit every such facet on a machine for a second to a few minutes: V8's clone-version text
+ *  when the loaded worker's env carries a stub (every facet here does), a bare "internal error;
+ *  reference = …" when it does not. The facet container is then unusable for the incarnation (a
+ *  live facet never re-runs its startup) and the loader's cached entry is too (a fresh loader id
+ *  heals at once) — so the recovery is a restart of both and ONE more attempt (`#invokeFacet`),
+ *  counted per facet (`facet:<name>:restarts`, shown on `processors.list()`). apps/os carries the
+ *  same recovery for its dynamic workers (issue #2288). Remove when the platform is fixed. */
+const isFacetStartPlatformFailure = (error: unknown): error is Error =>
+  error instanceof Error &&
+  (error.message.includes("Unable to deserialize cloned data") ||
+    error.message.startsWith("internal error; reference = "));
 /** How long one facet call may take before the facet is aborted (a call that never answers would
  *  hold the quiesce, and with it this actor, forever). */
 const FACET_CALL_WATCHDOG_MS = 60_000;
@@ -695,7 +701,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // oxlint-disable-next-line iterate/simple-truthiness-check -- the `itx.subscriptions` wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
         ...(s.afterOffset !== undefined && { afterOffset: s.afterOffset }),
         // oxlint-disable-next-line iterate/simple-truthiness-check -- the `itx.subscriptions` wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
-        ...(s.hostedFacet && { hostedFacet: s.hostedFacet }),
+        ...(s.hostedFacet && {
+          hostedFacet: { ...s.hostedFacet, restarts: this.#facetRestarts(s.hostedFacet.name) },
+        }),
         ...(cursor && {
           cursor: {
             confirmedOffset: cursor.confirmedOffset,
@@ -905,7 +913,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     name: string,
     spec: FacetSpec | undefined,
     itxExpressionSteps: ItxExpression,
-    retriedAfterCloneFailure = false,
+    retriedAfterPlatformFailure = false,
   ): Promise<unknown> {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- name arrives as a client-authored itx expression argument; the static string type is the API contract, not a runtime guarantee, so a non-string is rejected with a usage error
     if (typeof name !== "string")
@@ -1057,17 +1065,25 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         } else if (startupFailed) {
           this.#abortFacetIfRunning(name, "startup failed");
           this.#liveFacetNames.delete(name);
-        } else if (isClonedDataVersionFailure(error) && !retriedAfterCloneFailure) {
-          // The clone-version failure (the constant's doc): restart the facet AND retire its loaded
-          // identity (a cached isolate is suspect too), then the call once more, cold. One extra
-          // attempt, never a loop — a second failure is the caller's. The retry re-delivers a
+        } else if (isFacetStartPlatformFailure(error) && !retriedAfterPlatformFailure) {
+          // The platform failure (the predicate's doc): restart the facet AND retire its loaded
+          // identity (the cached entry is what stays broken), then the call once more, cold. One
+          // extra attempt, never a loop — a second failure is the caller's. The retry re-delivers a
           // pushed batch: durables are offset-guarded by the engine, ephemerals are not (a duplicate
-          // beats a lost batch; at-least-once is the facet contract). Logged, never swallowed, so the
-          // platform condition stays queryable.
-          this.#abortFacetIfRunning(name, "clone-version failure — restarting");
+          // beats a lost batch; at-least-once is the facet contract). Counted on the facet's row and
+          // logged, never swallowed, so the platform condition stays queryable without a log grep.
+          this.#abortFacetIfRunning(name, "platform failure at facet start — restarting");
           this.#liveFacetNames.delete(name);
           retireLoadedIdentity?.();
-          console.warn({ event: "facet.clone-version-retry", namespace: "iterate-context", name });
+          const restarts = this.#facetRestarts(name) + 1;
+          this.ctx.storage.kv.put(`facet:${name}:restarts`, restarts);
+          console.warn({
+            event: "facet.platform-failure-retry",
+            namespace: "iterate-context",
+            name,
+            restarts,
+            message: error.message,
+          });
           return await this.#invokeFacet(name, spec, itxExpressionSteps, true);
         }
         throw error;
@@ -1157,6 +1173,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** Delete a facet, storage included (there is no delete verb: a removed hosting row ends here). A
    *  re-load into the same name is a clean rebuild, never a resume from orphaned state. */
+  /** How many times this facet was restarted after a platform failure at its start (the predicate
+   *  `isFacetStartPlatformFailure`), over the facet's whole life on this context. */
+  #facetRestarts(name: string) {
+    // The row's value is the count this DO wrote in `#invokeFacet` (kv types it `unknown`); absent
+    // until the first restart.
+    return (this.ctx.storage.kv.get(`facet:${name}:restarts`) as number | undefined) ?? 0;
+  }
+
   #deleteFacet(name: string): void {
     if (name === CoreContract.slug)
       throw new Error(`"${name}" is the core reduce — always on, never a facet`);
@@ -1165,6 +1189,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#facetRevived(name);
     this.ctx.storage.kv.delete(`facet:${name}`);
     this.ctx.storage.kv.delete(`facet:${name}:loader-id`);
+    this.ctx.storage.kv.delete(`facet:${name}:restarts`);
     this.#facetStartupMemoByName.delete(name);
     this.#liveFacetNames.delete(name);
   }

@@ -76,7 +76,7 @@ export type SubscriptionListEntry = {
   afterOffset?: number;
   /** Set when this row HOSTS a facet (a processor): the facet's name, class and cacheKey (the source
    *  lives in the log + the facet's kv memo, never here — M1). Address-only rows have none. */
-  hostedFacet?: { name: string; className: string; cacheKey?: string };
+  hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };
   /** Present only when the STREAM keeps the cursor (a target that cannot own its progress). */
   cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
   halted?: { afterOffset: number; attempts: number; error?: string };
