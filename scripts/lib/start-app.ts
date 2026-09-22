@@ -93,7 +93,9 @@ export function writeWranglerConfig(app: StartApp) {
     durable_objects: { bindings: [{ name: "BROWSER_SESSION", class_name: "BrowserSession" }] },
     exports: { BrowserSession: { type: "durable-object", storage: "sqlite" } },
     vars: {
-      ITERATE_ORIGIN: "https://os.iterate2.com",
+      // the default issuer: prd's platform origin (envs.ts always has a prd entry); a per-PR preview's
+      // config swaps in the same PR's os-next preview (startAppPreviewConfig)
+      ITERATE_ORIGIN: osNextEnvs.prd!.baseUrl,
       // our own zones: project hosts and custom apexes are userspace and could serve a look-alike
       // issuer, so the browser-auth gate refuses to CONNECT to an issuer under them (the default
       // issuer is exempt) — derived from envs.ts, never spelled twice

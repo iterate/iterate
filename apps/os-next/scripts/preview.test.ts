@@ -1,19 +1,17 @@
 import { describe, expect, test } from "vitest";
 import {
-  previewNameOfResource,
-  previewResourceName,
-  previewWranglerConfig,
-} from "./generate-wrangler-config.ts";
-import {
   APPS,
   changedApps,
   MAX_PREVIEW_NAME_LENGTH,
+  previewNameOfResource,
   previewPullRequestNumber,
+  previewResourceName,
+  previewWranglerConfig,
   renderPullRequestSection,
   resolvePreviewName,
   slugifyPreviewName,
   splicePullRequestBody,
-} from "./preview.ts";
+} from "./preview-config.ts";
 
 describe("the preview name (cloudflare-os: pr<n>-<branch slug>)", () => {
   test.each([
@@ -55,8 +53,6 @@ describe("the PR body's managed section", () => {
     url: "https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev",
     deploymentId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
     dashboardUrl: "https://dash.cloudflare.com/x",
-    prNumber: "123",
-    branch: "feature/foo",
     apps: [
       {
         name: "dash",
@@ -65,7 +61,7 @@ describe("the PR body's managed section", () => {
     ],
   });
 
-  test("names the URL, the deployment and every operation, collapsed", () => {
+  test("names the URL, the deployment, the apps on top, and where the operations are", () => {
     expect(section).toContain(
       "https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev",
     );
@@ -73,12 +69,8 @@ describe("the PR body's managed section", () => {
     expect(section).toContain(
       "| dash | https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev |",
     );
-    expect(section).toContain("--input apps=all");
-    expect(section).toContain("<details>");
-    for (const action of ["reset", "e2e", "deploy", "delete"]) {
-      expect(section).toContain(`--input pull-request-number=123 --input action=${action}`);
-      expect(section).toContain(`pnpm preview ${action} --pr 123 --name feature/foo`);
-    }
+    expect(section).toContain("apps/os-next/README.md#previews--one-per-pull-request");
+    expect(section).not.toContain("depot ci dispatch");
   });
 
   test("appends to a body without one, keeping the author's text", () => {
