@@ -7,19 +7,35 @@ import { appConfigOf, platformOriginOf, sessionSigningSecretOf } from "./app-con
 import { startIssuerSession } from "./issuer-session.ts";
 import { directory } from "./directory.ts";
 
-const issuer = new URL("https://accounts.google.com");
-const cookie = "__Host-itx-identity-flow";
+const providers = {
+  google: {
+    name: "Google",
+    issuer: new URL("https://accounts.google.com"),
+    path: "/.auth/identity",
+    scope: "openid email profile",
+  },
+  cloudflare: {
+    name: "Cloudflare",
+    issuer: new URL("https://dash.cloudflare.com"),
+    path: "/.auth/identity/cloudflare",
+    // Cloudflare returns email + email_verified with these scopes. It rejects email/profile.
+    scope: "openid user-details.read",
+  },
+};
 const cookieAttributes = "HttpOnly; Secure; SameSite=Lax; Path=/";
 const Flow = z.object({
-  kind: z.literal("google-login"),
+  kind: z.literal("identity-login"),
+  provider: z.enum(["google", "cloudflare"]),
+  clientId: z.string(),
+  redirectUri: z.string(),
   state: z.string(),
   nonce: z.string(),
   verifier: z.string(),
   next: z.string(),
   expiresAt: z.number(),
 });
-const GoogleIdentity = z.object({
-  sub: z.string().regex(/^\d+$/),
+const VerifiedIdentity = z.object({
+  sub: z.string().min(1),
   email: z.email(),
   email_verified: z.literal(true),
   /** the account's picture and display name (the `profile` scope): the consent page's "signed in
@@ -28,25 +44,33 @@ const GoogleIdentity = z.object({
   name: z.string().optional(),
 });
 
-/** Google proves identity to our issuer; its credentials never authorize our API. */
-export async function identityDoor(request: Request, env: Env) {
+/** The upstream provider proves identity; its credentials never authorize our API. */
+export async function identityResponse(request: Request, env: Env) {
   const url = new URL(request.url);
-  if (!["/.auth/identity", "/.auth/identity/callback"].includes(url.pathname)) return null;
+  const provider = url.pathname.startsWith("/.auth/identity/cloudflare") ? "cloudflare" : "google";
+  const settings = providers[provider];
+  if (![settings.path, `${settings.path}/callback`].includes(url.pathname)) return null;
   if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
   const config = appConfigOf(env);
-  const google = config.login.google;
-  if (!google) return new Response("Google sign-in is not configured", { status: 503 });
+  const credentials = config.login[provider];
+  if (!credentials)
+    return new Response(`${settings.name} sign-in is not configured`, { status: 503 });
+  const issuer = settings.issuer;
+  const cookie = `__Host-itx-${provider}-identity-flow`;
   const as = await oauth
     .discoveryRequest(issuer)
     .then((response) => oauth.processDiscoveryResponse(issuer, response));
-  const client = { client_id: google.clientId };
+  const client = { client_id: credentials.clientId };
   const platformOrigin = platformOriginOf(config, request);
-  const redirectUri = `${platformOrigin}/.auth/identity/callback`;
+  const redirectUri = `${platformOrigin}${settings.path}/callback`;
   const signingSecret = await sessionSigningSecretOf(config);
   const headers = new Headers({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
-  if (url.pathname === "/.auth/identity") {
+  if (url.pathname === settings.path) {
     const flow = {
-      kind: "google-login",
+      kind: "identity-login",
+      provider,
+      clientId: client.client_id,
+      redirectUri,
       state: oauth.generateRandomState(),
       nonce: oauth.generateRandomNonce(),
       verifier: oauth.generateRandomCodeVerifier(),
@@ -58,7 +82,7 @@ export async function identityDoor(request: Request, env: Env) {
       client_id: client.client_id,
       redirect_uri: redirectUri,
       response_type: "code",
-      scope: "openid email profile",
+      scope: settings.scope,
       state: flow.state,
       nonce: flow.nonce,
       code_challenge: await oauth.calculatePKCECodeChallenge(flow.verifier),
@@ -74,14 +98,20 @@ export async function identityDoor(request: Request, env: Env) {
   headers.append("Set-Cookie", `${cookie}=; ${cookieAttributes}; Max-Age=0`);
   const signed = cookieValueOf(request.headers.get("cookie"), cookie);
   const flow = Flow.safeParse(signed && (await verifyClaims(signed, signingSecret)));
-  if (!flow.success || flow.data.expiresAt <= Date.now())
+  if (
+    !flow.success ||
+    flow.data.expiresAt <= Date.now() ||
+    flow.data.provider !== provider ||
+    flow.data.clientId !== client.client_id ||
+    flow.data.redirectUri !== redirectUri
+  )
     return new Response("Sign-in expired. Please start again.", { status: 400, headers });
   try {
     const parameters = oauth.validateAuthResponse(as, client, url, flow.data.state);
     const response = await oauth.authorizationCodeGrantRequest(
       as,
       client,
-      oauth.ClientSecretPost(google.clientSecret.exposeSecret()),
+      oauth.ClientSecretPost(credentials.clientSecret.exposeSecret()),
       parameters,
       redirectUri,
       flow.data.verifier,
@@ -91,14 +121,18 @@ export async function identityDoor(request: Request, env: Env) {
       requireIdToken: true,
     });
     await oauth.validateApplicationLevelSignature(as, response);
-    const identity = GoogleIdentity.safeParse(oauth.getValidatedIdTokenClaims(tokens));
+    const identity = VerifiedIdentity.safeParse(oauth.getValidatedIdTokenClaims(tokens));
     if (!identity.success)
-      return new Response("Google must verify your email before you can sign in.", {
+      return new Response(`${settings.name} must verify your email before you can sign in.`, {
         status: 403,
         headers,
       });
-    // Google's stable subject owns the account; an email change cannot change its actor.
-    const user = await directory(env.DB).upsertGoogleUser(identity.data.sub, identity.data.email);
+    // Resolve the provider and stable subject together; email changes cannot change the actor.
+    const user = await directory(env.DB).upsertIdentityUser(
+      provider,
+      identity.data.sub,
+      identity.data.email,
+    );
     const session = await startIssuerSession(env, request, user, flow.data.next, {
       picture: identity.data.picture,
       name: identity.data.name,

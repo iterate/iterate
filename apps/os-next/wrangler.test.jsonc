@@ -82,6 +82,8 @@
     "APP_CONFIG_LOGIN__EMAIL_CODE__FROM": "iterate <login@control.test>",
     "APP_CONFIG_LOGIN__GOOGLE__CLIENT_ID": "google-test-client",
     "APP_CONFIG_LOGIN__GOOGLE__CLIENT_SECRET": "google-test-secret",
+    "APP_CONFIG_LOGIN__CLOUDFLARE__CLIENT_ID": "cloudflare-test-client",
+    "APP_CONFIG_LOGIN__CLOUDFLARE__CLIENT_SECRET": "cloudflare-test-secret",
     "APP_CONFIG_SECRETS__KEY": "test-secrets-key",
     "APP_CONFIG_SECRETS__ADMIN_BEARER": "test-admin-api-secret",
   },

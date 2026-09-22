@@ -102,23 +102,30 @@ RETURNING id, email;`,
       return user!;
     },
 
-    /** Link once by verified email, then resolve by Google's stable subject.
-     * A different Google identity cannot adopt an already-linked account. */
-    async upsertGoogleUser(subject: string, email: string): Promise<User> {
+    /** The caller has verified the provider's signature and email_verified claim. Link once by
+     * verified email, then resolve by (provider, subject). One identity per provider per user. */
+    async upsertIdentityUser(
+      provider: "google" | "cloudflare",
+      subject: string,
+      email: string,
+    ): Promise<User> {
       const normalized = email.trim().toLowerCase();
       const lookup = () =>
         db
-          .prepare("SELECT user_id FROM google_identities WHERE subject = ?")
-          .bind(subject)
+          .prepare("SELECT user_id FROM user_identities WHERE provider = ? AND subject = ?")
+          .bind(provider, subject)
           .first<{ user_id: string }>();
       let identity = await lookup();
       if (!identity) {
-        const user = await d1Directory.upsertUser(normalized, `user_google_${subject}`);
+        const user = await d1Directory.upsertUser(
+          normalized,
+          `user_${provider}_${crypto.randomUUID()}`,
+        );
         await db
           .prepare(
-            "INSERT INTO google_identities (subject, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+            "INSERT INTO user_identities (provider, subject, user_id) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
           )
-          .bind(subject, user.id)
+          .bind(provider, subject, user.id)
           .run();
         identity = await lookup();
       }

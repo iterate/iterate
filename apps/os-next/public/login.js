@@ -2,7 +2,7 @@
 // whether a code is on its way (and to whom), what went wrong with the last post, and which
 // sign-ins this deployment offers; this renders that. Signing in itself is plain form posts to
 // /login — the email and the password; or the email, then the mailed code — or the link to
-// /.auth/identity (Google); no script in the loop.
+// the configured identity provider (Google or Cloudflare); no script in the redirect flow.
 (async () => {
   const root = document.getElementById("login");
   const el = (tag, props, ...children) => {
@@ -58,6 +58,32 @@
     return;
   }
   const next = () => el("input", { type: "hidden", name: "next", value: state.next });
+  const providers = [
+    { name: "Google", href: state.google, logo: "/google-logo.svg" },
+    { name: "Cloudflare", href: state.cloudflare, logo: "/cloudflare-logo.svg" },
+  ].filter((provider) => provider.href);
+  const alternatives = providers.length
+    ? [
+        (state.password || state.emailSignIn || state.codeSentTo) &&
+          el("div", { class: "login-divider", text: "or continue with" }),
+        el(
+          "div",
+          { class: "login-providers" },
+          ...providers.map((provider) =>
+            el(
+              "a",
+              {
+                class: "button provider-login",
+                href: provider.href,
+                "aria-label": `Continue with ${provider.name}`,
+              },
+              el("img", { src: provider.logo, alt: "", width: "20", height: "20" }),
+              provider.name,
+            ),
+          ),
+        ),
+      ]
+    : [];
   if (state.codeSentTo) {
     heading.textContent = "Check your inbox";
     show(
@@ -91,6 +117,7 @@
         el("input", { type: "hidden", name: "restart", value: "1" }),
         el("button", { class: "quiet", type: "submit", text: "Use a different email" }),
       ),
+      ...alternatives,
     );
     return;
   }
@@ -109,12 +136,9 @@
         autofocus: options.length === 1 ? "" : undefined,
       }),
     );
-  // ONE form for the email sign-ins: the email; the password beside it when this deployment has one
-  // ("Sign in"); "Email me a code instead" when a code is offered too — a second submit of the SAME
-  // form that drops the password field before it posts, so the server reads an email alone (a code
-  // request), never a blank password (a wrong attempt). A code-only deployment shows the email and
-  // Continue; a password-only one the email, the password and Sign in.
   if (state.password || state.emailSignIn) {
+    let usePassword = state.password && (!state.emailSignIn || state.passwordSelected);
+    const email = emailField();
     const password = state.password
       ? el("input", {
           type: "password",
@@ -123,52 +147,41 @@
           required: "",
         })
       : null;
-    const codeButton =
-      state.emailSignIn && state.password
-        ? el("button", {
-            class: "quiet",
-            type: "submit",
-            formnovalidate: "",
-            text: "Email me a code instead",
-          })
-        : null;
-    if (codeButton && password)
-      codeButton.addEventListener("click", () => {
-        password.disabled = true; // a disabled field is not posted: this submit asks for a code
+    const passwordLabel = password && el("label", {}, "Password ", password);
+    const submit = el("button", { class: "primary", type: "submit" });
+    const toggle =
+      state.emailSignIn && state.password ? el("button", { class: "quiet", type: "button" }) : null;
+    const updateMethod = () => {
+      if (password) {
+        // Hidden password fields must not validate or post when requesting an email code.
+        password.disabled = !usePassword;
+        passwordLabel.hidden = !usePassword;
+      }
+      submit.textContent = usePassword ? "Sign in" : "Send me a code";
+      if (toggle)
+        toggle.textContent = usePassword ? "Use email code instead" : "Use password instead";
+    };
+    if (toggle)
+      toggle.addEventListener("click", () => {
+        usePassword = !usePassword;
+        updateMethod();
+        (usePassword ? password : email.querySelector("input")).focus();
       });
+    updateMethod();
     options.push(
       el(
         "form",
         { method: "post", action: "/login" },
         next(),
-        emailField(),
-        password && el("label", {}, "Password ", password),
-        el("button", {
-          class: "primary",
-          type: "submit",
-          text: state.password ? "Sign in" : "Continue",
-        }),
-        codeButton,
+        email,
+        passwordLabel,
+        submit,
+        toggle,
       ),
     );
   }
-  if (state.google) {
-    if (state.password || state.emailSignIn)
-      options.push(el("div", { class: "login-divider", text: "or" }));
-    options.push(
-      el(
-        "p",
-        {},
-        el(
-          "a",
-          { class: "button google-login", href: state.google },
-          el("img", { src: "/google-logo.svg", alt: "", width: "20", height: "20" }),
-          "Continue with Google",
-        ),
-      ),
-    );
-  }
-  if (!state.password && !state.emailSignIn && !state.google)
+  options.push(...alternatives);
+  if (!state.password && !state.emailSignIn && !state.google && !state.cloudflare)
     options.push(el("p", { text: "Sign-in is not configured for this deployment." }));
   show(...options);
 })();
