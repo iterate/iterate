@@ -285,3 +285,37 @@ test("a pnpm shim for this package does not redirect source development to stale
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("an authentication timeout closes the transport without an unhandled RPC rejection", async () => {
+  const entered = Promise.withResolvers<void>();
+  class Root extends RpcTarget {
+    authenticate() {
+      entered.resolve();
+      return new Promise<never>(() => {});
+    }
+  }
+  const server = new WebSocketServer({ port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  server.on("connection", (socket) =>
+    newWebSocketRpcSession(socket as unknown as WebSocket, new Root()),
+  );
+  const address = server.address();
+  if (typeof address === "string" || !address) throw new Error("No port");
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const pending = connectOsNext({
+      baseUrl: `http://localhost:${address.port}`,
+      auth: { type: "bearer", token: "stalled" },
+    });
+    const rejected = expect(pending).rejects.toThrow("OS Next authentication timed out");
+    await entered.promise;
+    await vi.advanceTimersByTimeAsync(20_000);
+    await rejected;
+    vi.useRealTimers();
+    await vi.waitFor(() => expect(server.clients.size).toBe(0));
+  } finally {
+    vi.useRealTimers();
+    for (const socket of server.clients) socket.terminate();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

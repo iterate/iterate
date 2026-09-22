@@ -51,8 +51,11 @@ export async function connectOsNext(input: {
       },
     };
   } catch (error) {
-    root[Symbol.dispose]();
-    socket.terminate();
+    try {
+      root[Symbol.dispose]();
+    } finally {
+      socket.terminate();
+    }
     throw error;
   } finally {
     clearTimeout(timeout);
