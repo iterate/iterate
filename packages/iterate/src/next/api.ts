@@ -257,6 +257,8 @@ export interface IterateContextApi {
 /** One OAuth grant as `grants.list()` shows it: a session, a connected app, a minted token. */
 export interface GrantRecord {
   id: string;
+  clientId?: string;
+  logoUri?: string;
   name: string;
   kind: string;
   createdAt: number;

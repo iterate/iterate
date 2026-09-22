@@ -151,6 +151,14 @@ function SessionsPage() {
             {items.map((item) => (
               <TableRow key={item.id}>
                 <TableCell className="font-medium">
+                  {item.logoUri && (
+                    <img
+                      src={item.logoUri}
+                      alt=""
+                      referrerPolicy="no-referrer"
+                      className="mr-2 inline-block size-7 object-contain"
+                    />
+                  )}
                   {item.name}
                   {item.current && (
                     <Badge variant="secondary" className="ml-2">
@@ -191,7 +199,7 @@ function SessionsPage() {
                       ? "Retry cleanup"
                       : item.expired
                         ? "Remove"
-                        : item.kind === "Personal access token"
+                        : item.kind === "Personal access token" || item.kind === "Device"
                           ? "Revoke"
                           : "Log out"}
                   </Button>
