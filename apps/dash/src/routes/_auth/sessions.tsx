@@ -154,10 +154,12 @@ function SessionsPage() {
                 <TableCell className="font-medium">
                   <div className="flex items-center gap-3">
                     <Avatar className="rounded-md after:rounded-md" aria-hidden="true">
+                      {/* Base UI applies the prop to its preloader; render also sets it on the visible image. */}
                       <AvatarImage
                         src={item.logoUri}
                         alt=""
                         referrerPolicy="no-referrer"
+                        render={<img alt="" referrerPolicy="no-referrer" />}
                         className="rounded-md object-contain"
                       />
                       <AvatarFallback className="rounded-md text-xs">
