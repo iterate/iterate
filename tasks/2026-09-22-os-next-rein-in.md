@@ -1,5 +1,5 @@
 ---
-state: draft
+state: in-progress
 priority: high
 size: large
 tags: [os-next, cleanup, simplification, docs, sdk, dash, agents]
@@ -652,6 +652,38 @@ entries to four.
   `tsconfig.scripts.json` and knip's globs regardless of where voice-agent ends up living (decision
   (e) stays open). Own PR right after PR 1, since it may need type fixes.
 
+
+## What the implementers found the plan got wrong (2026-09-22, wave 2)
+
+- **The token-less `authenticate({ type: "bearer" })` is a wire contract, not dead code.** The Kit
+  firmware (`apps/kit/firmware/components/core/src/itx_mount.c`) sends `{ type: "bearer" }` alone after
+  its token rode the upgrade; the audit grepped TypeScript only. Kept, with the reason on the schema
+  (#2817, caught by Bugbot). Any "no caller" claim about the `/api` wire must grep the firmware.
+- `EntityCreationAndDeletionState` cannot live in `project/contract.ts` (it imports the three entity
+  contracts for `processorDeps`; the reverse import is an ESM cycle that throws at evaluation). It lives
+  in `src/project/entity-state.ts` (#2814). `SecretCatalogEntry` is the SDK's type in `iterate/next/api`,
+  so `built-ins.ts` pins `SecretCatalog` against it rather than deriving it.
+- `#cursorDeliveryRunning` and `#cursorDeliveryLoops` were not fully redundant: `#drainCursor` can finish
+  on its first synchronous turn and the Map entry was registered after the call. One lock, but the entry
+  is written before the drain's first turn (#2819).
+- `run`/`runOk` in `preview.ts` cannot fold into `deploy-helpers.run`: the sync `run` cannot serve the
+  concurrent spawns; one capturing `run` stays (#2816). The previews list is paged at 10 by default —
+  the sweep had been silently missing the rest. The close-triggered preview delete then crashed on a 202
+  with an empty body and on a namespace already gone (#2821).
+- `resourceMetadata` was only half dead: `authorization_servers` goes, `scopes_supported` is read (#2817).
+  Two tests did assert the `auth.require` redirect (`fetch-door.e2e` "the old RPC routes are GONE",
+  `issuer-bootstrap` `/authorize.json`); they now expect 404.
+- Fourteen test literals pinned the offset the core live-state delta used to take; deleting it moved them (#2819).
+- "Preview OS-Next / e2e" shows **skipping** on every PR by design (dispatch-only); the deployed suite
+  rides the `deploy` job. The checks list alone looks like the proof did not run.
+- `CapnwebConnection extends InvokeHandle` (an RpcTarget): the SDK names that family `*Handle`, so it
+  was left un-suffixed pending a word (#2813). Six moved comment lines in `library/openapi.ts` and
+  `library/connection.ts` still carry `lane`/`door` — decision (g).
+- Before row 9's `.strict()`: the Doppler `project-worker/preview` `APP_CONFIG` blob carries a stale
+  `login.cloudflare` key (the worker warns at every boot); remove it from Doppler first.
+- `deploy-dash.yml` still `pnpm install`s along with its three twins (agents/notes/voice); moving the
+  four to the baked dependencies is one PR, not this row's.
+
 ## 5. PR sequence
 
 Small PRs, LOC in the body, platform and app split, each proven against the deployed worker where
@@ -659,20 +691,20 @@ it touches behaviour. Order is by value over risk; items marked DECIDE need Jona
 
 | # | PR | est. LOC | risk | needs |
 |---|---|---|---|---|
-| 1 | Docs: delete as-built, walkthrough, cleanup-log, the plans/reviews/research, CONTEXT.md, the stale task; fix README/LAYERS/tutorial sentences; repoint the roots pointers | −8,000 | none | |
-| 2 | Entities: one `EntityCollectionRpcTarget(slug)`; one `SecretCatalog`; shared lifecycle schema; ingress-target literal once | −350 | low | DECIDE: share the lifecycle reduce too; move the parent link into the collection door |
-| 3 | Stream: cursor rows read the ring, drop the pushed-batch memo; delete the core live-state; the lock Set; `StreamPage`/`WaitForEventFilter` imported | −150 | med | DECIDE: a cursor target never needs a single ephemeral > 1 MiB |
-| 4 | Control plane: `platformAddressesOf`, `IngressRouting` once, `#platformOriginNow` gone, second `registrableDomainOf` gone; delete the `auth.require` gate and `resourceMetadata`; `publishGlobalFact` exported for consent and grants | −90 | low | |
-| 5 | Context core: `context/facet-host.ts`; `describeRewriteRules` into rewriting.ts; the DO's five/three duplications; `admitRow` at the append boundary via `normalizeControlEvent(event, ownPath)` | +40 / −30 | med (workers lane pins the facet lifecycle) | |
-| 6 | library.ts split into `library/{capnweb,mcp,openapi,connection}.ts`; honest header; `LibraryItx` trimmed | −50 | low | |
-| 7 | Core fold: one validation boundary; `builtInsGetStep`; the marker destructure; `ingress.ts` folded in; the reserved-name and double-ceiling checks | −60 | low | |
-| 8 | worker.ts: secret-OAuth callback out, brand registration to the entrypoint; `control-plane.ts` → `issuer-pages.ts` + `env.ts`; `login-code.ts` renamed | 0 | low | |
+| 1 | Docs: delete as-built, walkthrough, cleanup-log, the plans/reviews/research, CONTEXT.md, the stale task; fix README/LAYERS/tutorial sentences; repoint the roots pointers | −8,000 | none | MERGED #2808 |
+| 2 | Entities: one `EntityCollectionRpcTarget(slug)`; one `SecretCatalog`; shared lifecycle schema; ingress-target literal once | −350 | low | MERGED #2814 (collection, secret catalog, lifecycle schema, ingress literal; reduce + parent link still DECIDE) |
+| 3 | Stream: cursor rows read the ring, drop the pushed-batch memo; delete the core live-state; the lock Set; `StreamPage`/`WaitForEventFilter` imported | −150 | med | PARTLY MERGED in #2819 (core live-state, lock, StreamPage import, reserved-name, ceiling); the ring change still DECIDE |
+| 4 | Control plane: `platformAddressesOf`, `IngressRouting` once, `#platformOriginNow` gone, second `registrableDomainOf` gone; delete the `auth.require` gate and `resourceMetadata`; `publishGlobalFact` exported for consent and grants | −90 | low | MERGED #2815 (except the token-less bearer form — see corrections) |
+| 5 | Context core: `context/facet-host.ts`; `describeRewriteRules` into rewriting.ts; the DO's five/three duplications; `admitRow` at the append boundary via `normalizeControlEvent(event, ownPath)` | +40 / −30 | med (workers lane pins the facet lifecycle) | MERGED #2820 |
+| 6 | library.ts split into `library/{capnweb,mcp,openapi,connection}.ts`; honest header; `LibraryItx` trimmed | −50 | low | MERGED #2813 |
+| 7 | Core fold: one validation boundary; `builtInsGetStep`; the marker destructure; `ingress.ts` folded in; the reserved-name and double-ceiling checks | −60 | low | MERGED #2819 |
+| 8 | worker.ts: secret-OAuth callback out, brand registration to the entrypoint; `control-plane.ts` → `issuer-pages.ts` + `env.ts`; `login-code.ts` renamed | 0 | low | MERGED #2817 (also deletes the auth.require gate and resourceMetadata's dead half; signed-out `GET /nonexistent` is a 404, not a login redirect) |
 | 9 | app-config: discriminated union + `.strict()`; the shared parser's union early-return; local-dev defaults once | −50 | med | check the prd blob for unknown keys first |
 | 10 | agent: `agent/model-call.ts`; constants inlined; orphan docstring gone | 0 (−42 if the `@cf/` route goes) | low | DECIDE: `@cf/` route |
-| 11 | preview.ts split + scripts/lib folds; the generator's preview lines rescued; e2e env derived in global-setup; workflows to `doppler run -- pnpm e2e` | −130 | low | |
+| 11 | preview.ts split + scripts/lib folds; the generator's preview lines rescued; e2e env derived in global-setup; workflows to `doppler run -- pnpm e2e` | −130 | low | MERGED #2816 + #2821 |
 | 12 | The migration shim: one prd sweep, then delete | −14 | med | run the sweep |
 | 13 | voice-agent example + its four scripts moved out of os-next with a tsconfig and knip entry | −3,813 from os-next | low | DECIDE: `apps/kit` or its own package |
-| 14 | `memory-budget-scenarios.ts` to `scripts/`; `readModules` deleted after the prd check; un-exports; RpcTarget renames | −40 | low | prd check for `readModules` |
+| 14 | `memory-budget-scenarios.ts` to `scripts/`; `readModules` deleted after the prd check; un-exports; RpcTarget renames | −40 | low | PARTLY: the scenarios move landed in #2819, the RpcTarget renames in #2813/#2815/#2817/#2820; readModules + the rest open |
 | 15 | Naked context: drop the restate normalization and the string shadow filter | −34 | med | DECIDE: behaviour change at the owner root |
 | 16 | Comment sweep, one PR per area, under the convention in §3; the false comments fixed first | −600 to −900 | none | agree the convention |
 | 17 | The "rule N" list restored or renumbered; "M1" spelled out | +25 | none | DECIDE: restore or drop |
