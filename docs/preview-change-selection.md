@@ -22,30 +22,28 @@ the union of required work. Main and manual dispatch always request full work.
 
 ## Reading history
 
-Inspect head, then its first parent, and so on through the merge-base with
-main, inclusive. A merge's changed paths include everything it brought into
-the feature branch. If main is its second parent, inspect that merge and newer
-first-parent commits, then stop; substituting main would omit feature code.
-Multiple merge-bases fall back to deployment. Git/API errors remain errors.
+Plan uses an ordinary depth-one checkout for the checked-in scripts. History
+comes from GitHub's commit API through Octokit, independently of the local Git
+database. The constructor does no I/O; the planner uses `for await` to inspect
+one commit at a time. Responses are cached when a deployment search restarts.
+The only local Git operation in planning is an asynchronous checkout-SHA check.
 
-Plan uses an ordinary depth-one checkout to get its scripts. The history reader
-reads the actual commit's parent header (Git's revision walker hides parents at
-shallow boundaries), then fetches three additional generations only if that
-parent is missing. Fetches use `--filter=blob:none` and no tags; filename diffs
-disable rename detection, so historical file contents are not downloaded.
-A product head can decide deployment immediately, without fetching main. A
-test head can also reuse its own verified deployment without inspecting main.
+A product head needs one commit request and can decide deployment immediately.
+A test head can reuse its own verified deployment without looking up main.
+Only a search for older evidence asks GitHub for the merge-base with main, once,
+then follows first parents through that boundary, inclusive. The comparison's
+file list is never used for classification. Commit file lists include both old
+and new paths for renames.
 
-In shallow CI checkouts, only a search for older evidence fetches main, once,
-at depth four. Complete local clones use their existing history without
-fetching or becoming shallow. The reader
-then deepens head and that pinned main SHA as needed to prove the merge-base:
-3, 9, 27, then up to three batches of 81 generations. Finding a merge-base is
-not enough if another shallow path could hide a newer or second one; every
-path above the candidate bases must be complete. Budget exhaustion deploys
-head with an explicit reason. Each fetch is logged and has a 15-second timeout;
-transport and authentication failures fail planning. No checkout, index, or
-working-tree files change during these metadata fetches.
+This is deliberately conservative: encountering a merge commit, a pagination
+link, or a full page of 100 files selects deployment. The reader does not try to
+reconstruct complex merge histories or paginate large diffs. Even an already
+tested merge stops inheritance; a later docs commit may therefore do extra work.
+After 20 commits without usable evidence, deploy head. These choices have
+explicit reasons in the plan. Each API request is logged and has a 15-second
+timeout; transport, authentication and malformed-response errors fail planning.
+No metadata fetch modifies the checkout, index or local Git refs. Planning now
+requires GitHub access even in a complete local clone.
 
 For docs, look for a conclusive result **before** classifying each ancestor.
 Stop at an untested behavior change instead of walking past it to an older
@@ -115,7 +113,7 @@ registry yet.
 ## Workflow and rollout
 
 ```text
-plan:    checkout head → install → decide (fetch metadata as needed) → signal preview-plan
+plan:    checkout head → install → decide (read commit API as needed) → signal preview-plan
 prepare: checkout → install → wait for preview-plan → deploy/reuse → ready
                                            │                          │
              inherit: skip remaining steps │                          │
@@ -247,9 +245,9 @@ its deploy. Ordinary full runs retain the existing three-app restoration.
 `preview-settled` is published only after the restore succeeds. Main/manual runs
 continue to request full deployment and tests.
 
-## Lazy history acceptance
+## Initial Git implementation acceptance
 
-[PR #2744](https://github.com/iterate/iterate/pull/2744) measured these two Plan
+Before the API simplification, [PR #2744](https://github.com/iterate/iterate/pull/2744) measured these two Plan
 jobs on the same baked CI image. These are individual observations, not an
 averaged benchmark; the baseline docs commit reached an untested product
 ancestor, while the implementation commit required deployment at head.
@@ -296,3 +294,12 @@ fresh run passed without dependency or timeout changes. Subsequent product
 checkout fetches took 0.394s and 0.416s; total job times still vary with runner
 queueing. The docs-only acceptance push follows this settlement; its outcome is
 recorded in the PR body to avoid another evidence-only commit.
+
+## Async GitHub history follow-up
+
+The API version removes incremental Git fetches and shallow-history bookkeeping.
+HTTP integration tests exercise the real Octokit client against a local server:
+head-only decisions, inherited green/red results, deployment reuse, replayed
+searches, merge-base boundaries, merge/size/history limits, rename paths, roots
+and visible API errors. Fresh full-preview and docs-inheritance acceptance is
+recorded in PR #2744 after the implementation push.

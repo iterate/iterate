@@ -378,8 +378,23 @@ export async function ciPlan(options: DeployCommandOptions = {}) {
     ...options,
     requireCleanCheckout: true,
   });
-  const history = new CommitHistory(runtime.repositoryRoot, "HEAD", "origin/main");
-  if (history.head !== target.run.headSha) throw new Error("Preview head changed before planning.");
+  const checkout = await runCommand({
+    command: "git",
+    args: ["rev-parse", "HEAD"],
+    workingDirectory: runtime.repositoryRoot,
+    environment: runtime.commandEnvironment,
+    echoOutput: false,
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (checkout.exitCode !== 0) throw new Error(`Cannot read preview checkout: ${checkout.stderr}`);
+  const head = checkout.stdout.trim();
+  if (head !== target.run.headSha) throw new Error("Preview head changed before planning.");
+  const history = new CommitHistory(
+    new Octokit({ auth: target.run.githubToken }),
+    target.run.repositoryFullName,
+    head,
+    "main",
+  );
   const decision =
     options.allApps || !target.run.pullRequestNumber
       ? {

@@ -1,232 +1,164 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { createServer } from "node:http";
+import { Octokit } from "@octokit/rest";
 import { expect, test } from "vitest";
-import { CommitHistory } from "./commit-history.ts";
+import { listenOnFetchSafePort } from "../../packages/shared/src/test-support/fetch-safe-port.ts";
 import { classifyChanges, planPreview } from "./change-plan.ts";
+import { CommitHistory } from "./commit-history.ts";
 
-test("a depth-one product checkout decides from head without fetching main or old file contents", async () => {
-  using repo = repository();
-  repo.commit({ "apps/os/index.ts": "old product", "docs/unchanged.md": "old docs" });
-  const oldBlob = repo.git("rev-parse", "HEAD:apps/os/index.ts");
-  repo.git("switch", "-c", "feature");
-  const head = repo.commit({ "apps/os/index.ts": "new product" });
-  const checkout = repo.shallowCheckout();
-
-  expect(
-    await planPreview(checkout.history, {
-      findPreviewResult: async () => {
-        throw new Error("Product head needs no old results");
-      },
-      findPreviewDeployment: async () => {
-        throw new Error("Product head needs no old deployment");
-      },
-    }),
-  ).toMatchObject({ action: "deploy", changes: { Product: ["apps/os/index.ts"] } });
-  expect(checkout.git("rev-parse", "HEAD")).toBe(head);
-  expect(checkout.git("status", "--porcelain")).toBe("");
-  expect(checkout.git("for-each-ref", "--format=%(refname)", "refs/remotes/origin/main")).toBe("");
-  expect(checkout.git("rev-list", "--objects", "--missing=print", "HEAD")).toContain(`?${oldBlob}`);
-});
-
-test("a baked parent tree needs no fetch even when checkout marks head as shallow", async () => {
-  using repo = repository();
-  const parent = repo.commit({ "apps/os/index.ts": "old product" });
-  repo.git("switch", "-c", "feature");
-  repo.commit({ "apps/os/index.ts": "new product" });
-  const checkout = repo.shallowCheckout();
-  checkout.git("fetch", "--depth=1", "--filter=blob:none", "origin", parent);
-  checkout.git("remote", "set-url", "origin", join(repo.directory, "missing-remote"));
-  expect(
-    await planPreview(checkout.history, {
-      findPreviewResult: async () => null,
-      findPreviewDeployment: async () => null,
-    }),
-  ).toMatchObject({ action: "deploy", changes: { Product: ["apps/os/index.ts"] } });
-});
-
-test("planning in a complete clone does not truncate its history or require a remote", async () => {
-  using repo = repository();
-  repo.commit({ "apps/os/index.ts": "product" });
-  for (let i = 0; i < 5; i++) repo.commit({ "README.md": `main docs ${i}` });
-  const base = repo.git("rev-parse", "HEAD");
-  repo.git("switch", "-c", "feature");
-  repo.commit({ "README.md": "feature docs" });
-  const checkout = repo.shallowCheckout();
-  checkout.git("fetch", "--unshallow", "origin", "+refs/heads/main:refs/remotes/origin/main");
-  checkout.git("remote", "set-url", "origin", join(repo.directory, "missing-remote"));
-  expect(
-    await planPreview(checkout.history, {
-      findPreviewResult: async (commit) =>
-        commit === base
-          ? { commit, conclusion: "success", url: "https://depot.dev/settled-preview" }
-          : null,
-      findPreviewDeployment: async () => null,
-    }),
-  ).toMatchObject({ action: "inherit", result: { commit: base } });
-  expect(checkout.git("rev-parse", "--is-shallow-repository")).toBe("false");
-});
-
-test("a shallow docs checkout fetches enough metadata to inherit through the merge-base", async () => {
-  using repo = repository();
-  repo.commit({ "apps/os/index.ts": "old product" });
-  for (let i = 0; i < 2; i++) repo.commit({ "apps/os/index.ts": `product ${i}` });
-  const base = repo.git("rev-parse", "HEAD");
-  repo.git("switch", "-c", "feature");
-  for (let i = 0; i < 7; i++) repo.commit({ "README.md": `docs ${i}` });
-  repo.git("switch", "main");
-  for (let i = 0; i < 2; i++) repo.commit({ "apps/os/index.ts": `main ${i}` });
-  repo.git("switch", "feature");
-  const checkout = repo.shallowCheckout();
-  const lookedUp: string[] = [];
-
-  expect(
-    await planPreview(checkout.history, {
-      findPreviewResult: async (commit) => {
-        lookedUp.push(commit);
-        return commit === base
-          ? { commit, conclusion: "failure", url: "https://depot.dev/failed-preview" }
-          : null;
-      },
-      findPreviewDeployment: async () => {
-        throw new Error("Docs inherit without deployment lookup");
-      },
-    }),
-  ).toMatchObject({
-    action: "inherit",
-    changes: { Docs: ["README.md"] },
-    result: { commit: base, conclusion: "failure" },
+test("a product head decides from one GitHub request without inspecting main", async () => {
+  const requests: string[] = [];
+  await using github = await githubServer((url) => {
+    requests.push(url.pathname);
+    if (url.pathname === "/repos/iterate/iterate/commits/head") {
+      return Response.json({
+        sha: "head",
+        parents: [{ sha: "parent" }],
+        files: [{ filename: "apps/os/index.ts" }],
+      });
+    }
+    return new Response("Unexpected ancestry request", { status: 500 });
   });
-  expect(lookedUp.at(-1)).toBe(base);
-  expect(checkout.git("status", "--porcelain")).toBe("");
+  const history = new CommitHistory(github.client, "iterate/iterate", "head", "main");
+  expect(await planPreview(history, noEvidence)).toMatchObject({
+    action: "deploy",
+    changes: { Product: ["apps/os/index.ts"] },
+  });
+  expect(requests).toEqual(["/repos/iterate/iterate/commits/head"]);
 });
 
-test("a shallow test head can reuse its own deployment without fetching main", async () => {
-  using repo = repository();
-  repo.commit({ "apps/os/index.ts": "product" });
-  repo.git("switch", "-c", "feature");
-  const head = repo.commit({ "specs/new.spec.ts": "new test" });
-  const checkout = repo.shallowCheckout();
+test.each(["success", "failure"] as const)(
+  "docs follow first parents through the merge-base and inherit %s",
+  async (conclusion) => {
+    const requests: string[] = [];
+    await using github = await githubServer((url) => {
+      requests.push(url.pathname);
+      if (url.pathname.includes("/compare/")) {
+        return Response.json({ merge_base_commit: { sha: "base" } });
+      }
+      const sha = url.pathname.split("/").at(-1)!;
+      const parents = { head: ["docs"], docs: ["base"], base: ["older"] }[sha];
+      if (!parents) return new Response("Unexpected ancestor", { status: 404 });
+      return Response.json({
+        sha,
+        parents: parents.map((sha) => ({ sha })),
+        files: [{ filename: "README.md" }],
+      });
+    });
+    expect(
+      await planPreview(new CommitHistory(github.client, "iterate/iterate", "head", "main"), {
+        ...noEvidence,
+        findPreviewResult: async (commit) =>
+          commit === "base" ? { commit, conclusion, url: "https://depot.dev/preview" } : null,
+      }),
+    ).toMatchObject({ action: "inherit", result: { commit: "base", conclusion } });
+    expect(requests).toEqual([
+      "/repos/iterate/iterate/commits/head",
+      "/repos/iterate/iterate/compare/main...head",
+      "/repos/iterate/iterate/commits/docs",
+      "/repos/iterate/iterate/commits/base",
+    ]);
+  },
+);
+
+test.each(["head", "parent"])(
+  "a merge at %s deploys without trusting either parent's evidence",
+  async (merge) => {
+    await using github = await githubServer((url) => {
+      if (url.pathname.includes("/compare/"))
+        return Response.json({ merge_base_commit: { sha: "base" } });
+      const sha = url.pathname.split("/").at(-1)!;
+      return Response.json({
+        sha,
+        parents: (sha === merge ? ["first", "second"] : ["parent"]).map((sha) => ({ sha })),
+        files: [{ filename: "README.md" }],
+      });
+    });
+    const lookedUp: string[] = [];
+    expect(
+      await planPreview(new CommitHistory(github.client, "iterate/iterate", "head", "main"), {
+        ...noEvidence,
+        findPreviewResult: async (commit) => {
+          lookedUp.push(commit);
+          return { commit, conclusion: "success", url: "https://depot.dev/preview" };
+        },
+      }),
+    ).toMatchObject({ action: "deploy", reason: expect.stringContaining("merge commit") });
+    expect(lookedUp).toEqual([]);
+  },
+);
+
+test("a full page of docs files deploys because later files could change product behavior", async () => {
+  const requests: string[] = [];
+  await using github = await githubServer((url) => {
+    requests.push(url.pathname);
+    if (url.pathname.includes("/compare/"))
+      return Response.json({ merge_base_commit: { sha: "parent" } });
+    const sha = url.pathname.split("/").at(-1)!;
+    return Response.json({
+      sha,
+      parents: [{ sha: "parent" }],
+      files: Array.from({ length: 100 }, (_, i) => ({ filename: `docs/${i}.md` })),
+    });
+  });
   expect(
-    await planPreview(checkout.history, {
-      findPreviewResult: async () => {
-        throw new Error("New tests cannot inherit old outcomes");
-      },
-      findPreviewDeployment: async (commit) => ({ commit, slot: "preview-2" }),
+    await planPreview(new CommitHistory(github.client, "iterate/iterate", "head", "main"), {
+      ...noEvidence,
+      findPreviewResult: async (commit) => ({
+        commit,
+        conclusion: "success",
+        url: "https://depot.dev/preview",
+      }),
     }),
-  ).toMatchObject({ action: "reuse", deployment: { commit: head, slot: "preview-2" } });
-  expect(checkout.git("for-each-ref", "--format=%(refname)", "refs/remotes/origin/main")).toBe("");
+  ).toMatchObject({ action: "deploy", reason: expect.stringContaining("file limit") });
+  expect(requests).toEqual(["/repos/iterate/iterate/commits/head"]);
 });
 
-test("a failed metadata fetch remains a planning error", async () => {
-  using repo = repository();
-  repo.commit({ "apps/os/index.ts": "product" });
-  repo.git("switch", "-c", "feature");
-  repo.commit({ "README.md": "docs" });
-  const checkout = repo.shallowCheckout();
-  checkout.git("remote", "set-url", "origin", join(repo.directory, "missing-remote"));
-  await expect(
-    planPreview(checkout.history, {
-      findPreviewResult: async () => null,
-      findPreviewDeployment: async () => null,
-    }),
-  ).rejects.toThrow(/git fetch/);
-});
-
-test("a shallow criss-cross history cannot inherit from either merge-base", async () => {
-  using repo = repository();
-  repo.commit({ "README.md": "base" });
-  repo.git("switch", "-c", "feature");
-  const left = repo.commit({ "docs/left.md": "left" });
-  repo.git("switch", "main");
-  const right = repo.commit({ "docs/right.md": "right" });
-  repo.git("merge", "--no-ff", left, "-m", "merge left");
-  repo.git("switch", "feature");
-  repo.git("merge", "--no-ff", right, "-m", "merge right");
-  repo.commit({ "docs/head.md": "head" });
-  const checkout = repo.shallowCheckout();
+test("an unproven history stops after twenty commits and deploys", async () => {
+  let reads = 0;
+  await using github = await githubServer((url) => {
+    if (url.pathname.includes("/compare/"))
+      return Response.json({ merge_base_commit: { sha: "base" } });
+    if (++reads > 20) return new Response("Exceeded history budget", { status: 400 });
+    const sha = url.pathname.split("/").at(-1)!;
+    return Response.json({
+      sha,
+      parents: [{ sha: `commit-${reads}` }],
+      files: [{ filename: "README.md" }],
+    });
+  });
   expect(
-    await planPreview(checkout.history, {
-      findPreviewResult: async () => {
-        throw new Error("Neither merge-base is a safe boundary");
-      },
-      findPreviewDeployment: async () => null,
-    }),
-  ).toMatchObject({ action: "deploy", reason: expect.stringContaining("no single merge-base") });
+    await planPreview(
+      new CommitHistory(github.client, "iterate/iterate", "head", "main"),
+      noEvidence,
+    ),
+  ).toMatchObject({ action: "deploy", reason: expect.stringContaining("20 commits") });
+  expect(reads).toBe(20);
 });
 
-test("a shallow rename keeps both paths, including newlines", async () => {
-  using repo = repository();
-  repo.commit({ "apps/os/old\nname.ts": "product" });
-  repo.git("switch", "-c", "feature");
-  repo.git("mv", "apps/os/old\nname.ts", "README.md");
-  repo.commit({});
-  const checkout = repo.shallowCheckout();
+test("a product-to-doc rename includes both paths, including newlines", async () => {
+  await using github = await githubServer((url) => {
+    if (url.pathname.includes("/compare/"))
+      return Response.json({ merge_base_commit: { sha: "head" } });
+    return Response.json({
+      sha: "head",
+      parents: [{ sha: "parent" }],
+      files: [
+        {
+          filename: "docs/new\nname.md",
+          previous_filename: "apps/os/old\nname.ts",
+          status: "renamed",
+        },
+      ],
+    });
+  });
   expect(
-    await planPreview(checkout.history, {
-      findPreviewResult: async () => null,
-      findPreviewDeployment: async () => null,
-    }),
+    await planPreview(
+      new CommitHistory(github.client, "iterate/iterate", "head", "main"),
+      noEvidence,
+    ),
   ).toMatchObject({
     action: "deploy",
-    changes: { Product: ["apps/os/old\nname.ts"], Docs: ["README.md"] },
-  });
-});
-
-test("a real root commit has no missing parent to fetch", async () => {
-  using repo = repository();
-  repo.commit({ "README.md": "docs" });
-  repo.git("switch", "-c", "feature");
-  const checkout = repo.shallowCheckout();
-  expect(checkout.history.changedFiles(checkout.history.head)).toEqual(["README.md"]);
-  expect(checkout.git("config", "--get-regexp", "remote.origin")).not.toContain("promisor");
-});
-
-test("a shallow remote that cannot supply the merge-base exhausts a bounded metadata budget", async () => {
-  using repo = repository();
-  repo.commit({ "apps/os/index.ts": "product" });
-  repo.git("switch", "-c", "feature");
-  for (let i = 0; i < 7; i++) repo.commit({ "README.md": `docs ${i}` });
-  const remote = join(repo.directory, "remote.ignoreme");
-  repo.git("clone", "--depth=4", "--no-single-branch", `file://${repo.directory}`, remote);
-  repo.git("-C", remote, "config", "uploadpack.allowFilter", "true");
-  repo.git("-C", remote, "branch", "main", "origin/main");
-  const checkout = repo.shallowCheckout();
-  checkout.git("remote", "set-url", "origin", `file://${remote}`);
-  expect(
-    await planPreview(checkout.history, {
-      findPreviewResult: async () => {
-        throw new Error("Unproven ancestry cannot inherit");
-      },
-      findPreviewDeployment: async () => {
-        throw new Error("Docs do not look up deployments");
-      },
-    }),
-  ).toMatchObject({
-    action: "deploy",
-    reason: expect.stringContaining("metadata fetch budget exhausted"),
-  });
-});
-
-test("a docs commit inherits its failed product parent's result", async () => {
-  using repo = repository();
-  repo.commit({ "apps/os/index.ts": "main" });
-  repo.git("switch", "-c", "feature");
-  const product = repo.commit({ "apps/os/index.ts": "broken" });
-  repo.commit({ "README.md": "docs" });
-  const plan = await planPreview(repo.history(), {
-    findPreviewResult: async (commit) =>
-      commit === product
-        ? { commit, conclusion: "failure", url: "https://depot.dev/failed-preview" }
-        : null,
-    findPreviewDeployment: async () => {
-      throw new Error("No deployment lookup for inherited results");
-    },
-  });
-  expect(plan).toMatchObject({
-    action: "inherit",
-    result: { commit: product, conclusion: "failure" },
+    changes: { Product: ["apps/os/old\nname.ts"], Docs: ["docs/new\nname.md"] },
   });
 });
 
@@ -264,219 +196,212 @@ test("Docs is an explicit allowlist; shipped markdown remains product work", () 
   });
 });
 
-test.each(["success", "failure"] as const)(
-  "docs inherit %s across more docs through the merge-base",
-  async (conclusion) => {
-    using repo = repository();
-    const base = repo.commit({ "apps/os/index.ts": "main" });
-    repo.git("switch", "-c", "feature");
-    repo.commit({ "README.md": "first doc" });
-    repo.commit({ "docs/testing.md": "second doc" });
-    const lookedUp: string[] = [];
-    const plan = await planPreview(repo.history(), {
-      findPreviewResult: async (commit) => {
-        lookedUp.push(commit);
-        return commit === base
-          ? { commit, conclusion, url: "https://depot.dev/main-preview" }
-          : null;
-      },
-      findPreviewDeployment: async () => {
-        throw new Error("No deployment lookup");
-      },
+test("new tests can reuse head's deployment without asking about main or old outcomes", async () => {
+  const requests: string[] = [];
+  await using github = await githubServer((url) => {
+    requests.push(url.pathname);
+    return Response.json({
+      sha: "head",
+      parents: [{ sha: "parent" }],
+      files: [{ filename: "specs/new.spec.ts" }],
     });
-    expect(plan).toMatchObject({ action: "inherit", result: { commit: base, conclusion } });
-    expect(lookedUp.at(-1)).toBe(base);
-  },
-);
+  });
+  expect(
+    await planPreview(new CommitHistory(github.client, "iterate/iterate", "head", "main"), {
+      findPreviewResult: async () => {
+        throw new Error("New tests cannot inherit old results");
+      },
+      findPreviewDeployment: async (commit) => ({ commit, slot: "preview-2" }),
+    }),
+  ).toMatchObject({ action: "reuse", deployment: { commit: "head", slot: "preview-2" } });
+  expect(requests).toEqual(["/repos/iterate/iterate/commits/head"]);
+});
 
 test.each(["apps/os/index.ts", "specs/new.spec.ts"])(
-  "docs cannot hide an untested change to %s behind an older green",
+  "docs cannot skip an untested change to %s",
   async (path) => {
-    using repo = repository();
-    const base = repo.commit({ "apps/os/index.ts": "main" });
-    repo.git("switch", "-c", "feature");
-    const untested = repo.commit({ [path]: "untested" });
-    repo.commit({ "README.md": "docs" });
     const resultLookups: string[] = [];
-    const plan = await planPreview(repo.history(), {
-      findPreviewResult: async (commit) => {
-        resultLookups.push(commit);
-        return commit === base
-          ? { commit, conclusion: "success", url: "https://depot.dev/main-preview" }
-          : null;
-      },
-      findPreviewDeployment: async (commit) =>
-        commit === base ? { commit, slot: "preview-3" } : null,
+    const requests: string[] = [];
+    await using github = await githubServer((url) => {
+      requests.push(url.pathname);
+      if (url.pathname.includes("/compare/"))
+        return Response.json({ merge_base_commit: { sha: "base" } });
+      const sha = url.pathname.split("/").at(-1)!;
+      const commit = {
+        head: { parents: [{ sha: "untested" }], files: [{ filename: "README.md" }] },
+        untested: { parents: [{ sha: "base" }], files: [{ filename: path }] },
+        base: { parents: [{ sha: "older" }], files: [{ filename: "apps/os/index.ts" }] },
+      }[sha];
+      return commit ? Response.json({ sha, ...commit }) : new Response("Too far", { status: 404 });
     });
-    expect(resultLookups).not.toContain(base);
-    expect(resultLookups.at(-1)).toBe(untested);
-    expect(plan.action).toBe(path.startsWith("specs/") ? "reuse" : "deploy");
+    expect(
+      await planPreview(new CommitHistory(github.client, "iterate/iterate", "head", "main"), {
+        findPreviewResult: async (commit) => {
+          resultLookups.push(commit);
+          return commit === "base"
+            ? { commit, conclusion: "success", url: "https://depot.dev/preview" }
+            : null;
+        },
+        findPreviewDeployment: async (commit) =>
+          commit === "base" ? { commit, slot: "preview-2" } : null,
+      }),
+    ).toMatchObject({ action: path.startsWith("specs/") ? "reuse" : "deploy" });
+    expect(resultLookups).toEqual(["untested"]);
+    // The deployment search restarts at head, but reuses the already-read metadata.
+    expect(requests.length).toBe(new Set(requests).size);
   },
 );
 
-test("tests reuse the nearest live deployment before inspecting that commit's product changes", async () => {
-  using repo = repository();
-  repo.commit({ "apps/os/index.ts": "main" });
-  repo.git("switch", "-c", "feature");
-  const product = repo.commit({ "apps/os/index.ts": "deployed" });
-  const docs = repo.commit({ "README.md": "docs" });
-  const head = repo.commit({ "specs/new.spec.ts": "head test code" });
-  const lookedUp: string[] = [];
-  const plan = await planPreview(repo.history(), {
-    findPreviewResult: async () => {
-      throw new Error("New tests cannot inherit old outcomes");
-    },
-    findPreviewDeployment: async (commit) => {
-      lookedUp.push(commit);
-      return commit === product ? { commit, slot: "preview-2" } : null;
-    },
+test("untested ancestor tests can reuse a newer docs deployment", async () => {
+  const requests: string[] = [];
+  await using github = await githubServer((url) => {
+    requests.push(url.pathname);
+    if (url.pathname.includes("/compare/"))
+      return Response.json({ merge_base_commit: { sha: "base" } });
+    const sha = url.pathname.split("/").at(-1)!;
+    return Response.json({
+      sha,
+      parents: [{ sha: "tests" }],
+      files: [{ filename: sha === "head" ? "README.md" : "specs/new.spec.ts" }],
+    });
   });
-  expect(plan).toMatchObject({
-    action: "reuse",
-    deployment: { commit: product, slot: "preview-2" },
-  });
-  expect(lookedUp).toEqual([head, docs, product]);
-});
-
-test("untested ancestor tests can reuse a newer docs commit's deployment", async () => {
-  using repo = repository();
-  repo.commit({ "apps/os/index.ts": "product" });
-  repo.git("switch", "-c", "feature");
-  repo.commit({ "specs/new.spec.ts": "untested tests" });
-  const head = repo.commit({ "README.md": "docs" });
-
-  const plan = await planPreview(repo.history(), {
-    findPreviewResult: async (commit) =>
-      commit === head
-        ? { commit, conclusion: "success", url: "https://depot.dev/previous-head-preview" }
-        : null,
-    findPreviewDeployment: async (commit) =>
-      commit === head ? { commit, slot: "preview-2" } : null,
-  });
-
-  expect(plan).toMatchObject({
-    action: "reuse",
-    changes: { Docs: ["README.md"] },
-    deployment: { commit: head, slot: "preview-2" },
-  });
-});
-
-test("tests stop at an undeployed product commit rather than use an older backend", async () => {
-  using repo = repository();
-  const main = repo.commit({ "apps/os/index.ts": "main" });
-  repo.git("switch", "-c", "feature");
-  const product = repo.commit({ "apps/os/index.ts": "not deployed" });
-  repo.commit({ "specs/new.spec.ts": "head test code" });
-  const lookedUp: string[] = [];
-  const plan = await planPreview(repo.history(), {
-    findPreviewResult: async () => null,
-    findPreviewDeployment: async (commit) => {
-      lookedUp.push(commit);
-      return commit === main ? { commit, slot: "preview-2" } : null;
-    },
-  });
-  expect(plan).toMatchObject({ action: "deploy", reason: expect.stringContaining(product) });
-  expect(lookedUp).not.toContain(main);
-});
-
-test("new tests cannot inherit an older green when no deployment remains usable", async () => {
-  using repo = repository();
-  repo.commit({ "apps/os/index.ts": "product" });
-  const main = repo.commit({ "README.md": "tested documentation change" });
-  repo.git("switch", "-c", "feature");
-  repo.commit({ "specs/new.spec.ts": "new tests" });
-
-  const plan = await planPreview(repo.history(), {
-    findPreviewResult: async (commit) =>
-      commit === main
-        ? { commit, conclusion: "success", url: "https://depot.dev/older-green-preview" }
-        : null,
-    findPreviewDeployment: async () => null,
-  });
-
-  expect(plan).toMatchObject({ action: "deploy" });
+  expect(
+    await planPreview(new CommitHistory(github.client, "iterate/iterate", "head", "main"), {
+      ...noEvidence,
+      findPreviewDeployment: async (commit) =>
+        commit === "head" ? { commit, slot: "preview-2" } : null,
+    }),
+  ).toMatchObject({ action: "reuse", deployment: { commit: "head", slot: "preview-2" } });
+  expect(requests).toEqual([
+    "/repos/iterate/iterate/commits/head",
+    "/repos/iterate/iterate/compare/main...head",
+    "/repos/iterate/iterate/commits/tests",
+  ]);
 });
 
 test.each([true, false])(
   "the merge-base is the last deployment candidate (available=%s)",
   async (available) => {
-    using repo = repository();
-    repo.commit({ "README.md": "older" });
-    const main = repo.commit({ "README.md": "main" });
-    repo.git("switch", "-c", "feature");
-    const head = repo.commit({ "specs/new.spec.ts": "test" });
     const lookedUp: string[] = [];
-    const plan = await planPreview(repo.history(), {
-      findPreviewResult: async () => null,
-      findPreviewDeployment: async (commit) => {
-        lookedUp.push(commit);
-        return available && commit === main ? { commit, slot: "preview-2" } : null;
-      },
+    await using github = await githubServer((url) => {
+      if (url.pathname.includes("/compare/"))
+        return Response.json({ merge_base_commit: { sha: "base" } });
+      const sha = url.pathname.split("/").at(-1)!;
+      if (sha === "older") return new Response("Walked past merge-base", { status: 400 });
+      return Response.json({
+        sha,
+        parents: [{ sha: sha === "head" ? "base" : "older" }],
+        files: [{ filename: "specs/test.spec.ts" }],
+      });
     });
-    expect(plan.action).toBe(available ? "reuse" : "deploy");
-    expect(lookedUp).toEqual([head, main]);
+    expect(
+      await planPreview(new CommitHistory(github.client, "iterate/iterate", "head", "main"), {
+        findPreviewResult: async () => {
+          throw new Error("Tests must run");
+        },
+        findPreviewDeployment: async (commit) => {
+          lookedUp.push(commit);
+          return available && commit === "base" ? { commit, slot: "preview-2" } : null;
+        },
+      }),
+    ).toMatchObject({ action: available ? "reuse" : "deploy" });
+    expect(lookedUp).toEqual(["head", "base"]);
   },
 );
 
-test("an empty head inherits, while a product-to-doc rename still deploys", async () => {
-  using repo = repository();
-  const main = repo.commit({ "apps/os/index.ts": "product" });
-  repo.git("switch", "-c", "feature");
-  repo.commit({});
-  const evidence = {
-    findPreviewResult: async (commit: string) =>
-      commit === main
-        ? { commit, conclusion: "failure" as const, url: "https://depot.dev/failed-preview" }
-        : null,
-    findPreviewDeployment: async () => null,
-  };
-  expect(await planPreview(repo.history(), evidence)).toMatchObject({
-    action: "inherit",
-    result: { conclusion: "failure" },
+test("tests cannot reuse a deployment older than an undeployed product change", async () => {
+  const lookedUp: string[] = [];
+  await using github = await githubServer((url) => {
+    if (url.pathname.includes("/compare/"))
+      return Response.json({ merge_base_commit: { sha: "base" } });
+    const sha = url.pathname.split("/").at(-1)!;
+    return Response.json({
+      sha,
+      parents: [{ sha: sha === "head" ? "product" : "base" }],
+      files: [{ filename: sha === "head" ? "specs/new.spec.ts" : "apps/os/index.ts" }],
+    });
   });
-  repo.git("mv", "apps/os/index.ts", "README.md");
-  repo.commit({});
-  expect(await planPreview(repo.history(), evidence)).toMatchObject({
-    action: "deploy",
-    changes: { Product: ["apps/os/index.ts"], Docs: ["README.md"] },
-  });
+  expect(
+    await planPreview(new CommitHistory(github.client, "iterate/iterate", "head", "main"), {
+      ...noEvidence,
+      findPreviewDeployment: async (commit) => {
+        lookedUp.push(commit);
+        return commit === "base" ? { commit, slot: "preview-2" } : null;
+      },
+    }),
+  ).toMatchObject({ action: "deploy", reason: expect.stringContaining("product") });
+  expect(lookedUp).toEqual(["head", "product"]);
 });
 
-test.each([false, true])(
-  "a side-branch merge-base cannot substitute main for unmerged feature code (shallow=%s)",
-  async (shallow) => {
-    using repo = repository();
-    repo.commit({ "README.md": "base" });
-    repo.git("switch", "-c", "feature");
-    repo.commit({ "apps/os/index.ts": "feature product" });
-    repo.git("switch", "main");
-    const main = repo.commit({ "docs/main.md": "main documentation" });
-    repo.git("switch", "feature");
-    repo.git("merge", "--no-ff", "main", "-m", "merge main");
-    const merge = repo.git("rev-parse", "HEAD");
-    const head = repo.commit({ "specs/new.spec.ts": "test" });
-    const lookedUp: string[] = [];
+test.each(["root", "merge-base"])(
+  "a docs head at %s cannot inherit older results",
+  async (boundary) => {
+    await using github = await githubServer((url) => {
+      if (url.pathname.includes("/compare/"))
+        return Response.json({ merge_base_commit: { sha: "head" } });
+      return Response.json({
+        sha: "head",
+        parents: boundary === "root" ? [] : [{ sha: "older" }],
+        files: [],
+      });
+    });
     expect(
-      await planPreview(shallow ? repo.shallowCheckout().history : repo.history(), {
-        findPreviewResult: async () => null,
-        findPreviewDeployment: async (commit) => {
-          lookedUp.push(commit);
-          return commit === main ? { commit, slot: "preview-1" } : null;
+      await planPreview(new CommitHistory(github.client, "iterate/iterate", "head", "main"), {
+        ...noEvidence,
+        findPreviewResult: async () => {
+          throw new Error("No older candidates");
         },
       }),
     ).toMatchObject({ action: "deploy" });
-    expect(lookedUp).toEqual([head, merge]);
   },
 );
 
-test("lookup errors are not missing deployments", async () => {
-  using repo = repository();
-  repo.commit({ "README.md": "base" });
-  repo.git("switch", "-c", "feature");
-  repo.commit({ "specs/new.spec.ts": "test" });
+test.each(["commit", "comparison"])(
+  "GitHub %s failures remain visible errors",
+  async (operation) => {
+    await using github = await githubServer((url) => {
+      if (operation === "commit" || url.pathname.includes("/compare/")) {
+        return Response.json({ message: "API unavailable" }, { status: 503 });
+      }
+      return Response.json({ sha: "head", parents: [{ sha: "base" }], files: [] });
+    });
+    await expect(
+      planPreview(new CommitHistory(github.client, "iterate/iterate", "head", "main"), noEvidence),
+    ).rejects.toThrow("API unavailable");
+  },
+);
+
+test("missing file metadata is an error rather than an empty docs change", async () => {
+  await using github = await githubServer(() => Response.json({ sha: "head", parents: [] }));
   await expect(
-    planPreview(repo.history(), {
-      findPreviewResult: async () => null,
+    planPreview(new CommitHistory(github.client, "iterate/iterate", "head", "main"), noEvidence),
+  ).rejects.toThrow("omitted files");
+});
+
+test("a pagination header prevents inheritance even when the first page is short", async () => {
+  await using github = await githubServer(() =>
+    Response.json(
+      { sha: "head", parents: [], files: [] },
+      {
+        headers: { link: '</repos/iterate/iterate/commits/head?page=2>; rel="next"' },
+      },
+    ),
+  );
+  expect(
+    await planPreview(
+      new CommitHistory(github.client, "iterate/iterate", "head", "main"),
+      noEvidence,
+    ),
+  ).toMatchObject({ action: "deploy", reason: expect.stringContaining("file limit") });
+});
+
+test("a failed deployment lookup is not a missing deployment", async () => {
+  await using github = await githubServer(() =>
+    Response.json({ sha: "head", parents: [], files: [{ filename: "specs/test.spec.ts" }] }),
+  );
+  await expect(
+    planPreview(new CommitHistory(github.client, "iterate/iterate", "head", "main"), {
+      ...noEvidence,
       findPreviewDeployment: async () => {
         throw new Error("Inventory unavailable");
       },
@@ -484,78 +409,25 @@ test("lookup errors are not missing deployments", async () => {
   ).rejects.toThrow("Inventory unavailable");
 });
 
-test.each([false, true])(
-  "docs inherit a tested merge even when main is its second parent (shallow=%s)",
-  async (shallow) => {
-    using repo = repository();
-    repo.commit({ "README.md": "base" });
-    repo.git("switch", "-c", "feature");
-    repo.commit({ "apps/os/index.ts": "feature product" });
-    repo.git("switch", "main");
-    repo.commit({ "docs/main.md": "main doc" });
-    repo.git("switch", "feature");
-    repo.git("merge", "--no-ff", "main", "-m", "merge main");
-    const merge = repo.git("rev-parse", "HEAD");
-    repo.commit({ "docs/review.md": "docs after green merge" });
-    expect(
-      await planPreview(shallow ? repo.shallowCheckout().history : repo.history(), {
-        findPreviewResult: async (commit) =>
-          commit === merge
-            ? { commit, conclusion: "success", url: "https://depot.dev/merged-preview" }
-            : null,
-        findPreviewDeployment: async () => null,
-      }),
-    ).toMatchObject({ action: "inherit", result: { commit: merge } });
-  },
-);
+const noEvidence = {
+  findPreviewResult: async () => null,
+  findPreviewDeployment: async () => null,
+};
 
-function repository() {
-  const directory = mkdtempSync(join(tmpdir(), "preview-change-plan-"));
-  const git = (...args: string[]) =>
-    execFileSync("git", args, {
-      cwd: directory,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-  git("init", "--initial-branch=main");
-  git("config", "user.email", "ci-test@iterate.com");
-  git("config", "user.name", "CI planner test");
-  git("config", "commit.gpgsign", "false");
-  git("config", "uploadpack.allowFilter", "true");
+async function githubServer(handle: (url: URL) => Response | Promise<Response>) {
+  const server = createServer(async (request, response) => {
+    const result = await handle(new URL(request.url!, `http://${request.headers.host}`));
+    response.writeHead(result.status, Object.fromEntries(result.headers));
+    response.end(await result.text());
+  });
+  const port = await listenOnFetchSafePort(server);
   return {
-    directory,
-    git,
-    commit(files: Record<string, string>) {
-      for (const [path, content] of Object.entries(files)) {
-        const absolute = join(directory, path);
-        mkdirSync(dirname(absolute), { recursive: true });
-        writeFileSync(absolute, content);
-      }
-      git("add", ".");
-      git("commit", "--allow-empty", "-m", "change");
-      return git("rev-parse", "HEAD");
-    },
-    history: () => new CommitHistory(directory, "HEAD", "main"),
-    shallowCheckout() {
-      const checkout = join(directory, "checkout.ignoreme");
-      git(
-        "clone",
-        "--depth=1",
-        "--single-branch",
-        "--branch=feature",
-        `file://${directory}`,
-        checkout,
+    client: new Octokit({ baseUrl: `http://127.0.0.1:${port}` }),
+    async [Symbol.asyncDispose]() {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
       );
-      const checkoutGit = (...args: string[]) =>
-        execFileSync("git", args, {
-          cwd: checkout,
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"],
-        }).trim();
-      return { history: new CommitHistory(checkout, "HEAD", "origin/main"), git: checkoutGit };
-    },
-    [Symbol.dispose]() {
-      rmSync(directory, { recursive: true, force: true });
     },
   };
 }

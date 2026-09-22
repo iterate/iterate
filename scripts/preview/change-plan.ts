@@ -7,42 +7,44 @@ export async function planPreview(
   history: CommitHistory,
   evidence: PreviewEvidence,
 ): Promise<PreviewDecision> {
-  const changes = classifyChanges(history.changedFiles(history.head));
+  let changes: Partial<Record<ChangeType, string[]>> = {};
 
-  for (const commit of history.throughMergeBase()) {
-    const result = commit === history.head ? null : await evidence.findPreviewResult(commit);
+  for await (const commit of history.throughMergeBase()) {
+    if (commit.sha === history.head) changes = classifyChanges(commit.files);
+    const result =
+      commit.sha === history.head ? null : await evidence.findPreviewResult(commit.sha);
     if (result) {
       // hooray, we landed on a commit with a result we can just inherit, no need to deploy or test.
-      const reason = `Inherit ${result.conclusion} from ${commit}.`;
+      const reason = `Inherit ${result.conclusion} from ${commit.sha}.`;
       return { action: "inherit", changes, result, reason };
     }
 
     const actionsNeeded = getActionsNeeded(
-      commit === history.head ? changes : classifyChanges(history.changedFiles(commit)),
+      commit.sha === history.head ? changes : classifyChanges(commit.files),
     );
 
     if (actionsNeeded.deploy) {
-      return { action: "deploy", changes, reason: `${commit} changed product behavior.` };
+      return { action: "deploy", changes, reason: `${commit.sha} changed product behavior.` };
     }
 
     if (actionsNeeded.test) {
       // Tests must run. Search from head: a newer commit may have a usable
       // deployment, even though we have already passed it while looking for results.
-      for (const candidate of history.throughMergeBase()) {
-        const deployment = await evidence.findPreviewDeployment(candidate);
+      for await (const candidate of history.throughMergeBase()) {
+        const deployment = await evidence.findPreviewDeployment(candidate.sha);
         // We found a usable deployment before hitting a change that requires a newer one.
         if (deployment)
           return {
             action: "reuse",
             changes,
             deployment,
-            reason: `Run head tests against the preview at ${candidate}.`,
+            reason: `Run head tests against the preview at ${candidate.sha}.`,
           };
-        if (getActionsNeeded(classifyChanges(history.changedFiles(candidate))).deploy) {
+        if (getActionsNeeded(classifyChanges(candidate.files)).deploy) {
           return {
             action: "deploy",
             changes,
-            reason: `${candidate} needs deployment but has no usable preview.`,
+            reason: `${candidate.sha} needs deployment but has no usable preview.`,
           };
         }
       }
