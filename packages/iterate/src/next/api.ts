@@ -254,6 +254,7 @@ export interface GrantRecord {
   id: string;
   clientId?: string;
   logoUri?: string;
+  clientDomain?: string;
   name: string;
   kind: string;
   createdAt: number;

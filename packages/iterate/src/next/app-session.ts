@@ -8,7 +8,13 @@ import { OAuthScopes } from "./oauth-scopes.ts";
 import { isLocalOrigin } from "./lib.ts";
 import type { IterateApi } from "./api.ts";
 
-export type BrowserHost = { origin: string; issuer: string; resource: string; scopes: string[] };
+export type BrowserHost = {
+  origin: string;
+  issuer: string;
+  resource: string;
+  scopes: string[];
+  client?: { name: string; logoUri: string };
+};
 type Base = BrowserHost & { clientId: string; next: string; until: number };
 type Pending = Base & { phase: "pending"; state: string; verifier: string };
 type Active = Base & {
@@ -35,7 +41,9 @@ export class BrowserSession extends DurableObject {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            client_name: origin.host,
+            client_name: host.client?.name || origin.host,
+            client_uri: host.origin,
+            logo_uri: host.client?.logoUri,
             redirect_uris: [`${host.origin}/.auth/callback`],
             token_endpoint_auth_method: "none",
             grant_types: ["authorization_code", "refresh_token"],

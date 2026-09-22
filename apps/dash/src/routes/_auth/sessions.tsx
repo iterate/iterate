@@ -7,6 +7,7 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useRef, useState, type FormEvent } from "react";
 import { z } from "zod";
+import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button, buttonVariants } from "@iterate-com/ui/components/button";
 import {
@@ -151,20 +152,37 @@ function SessionsPage() {
             {items.map((item) => (
               <TableRow key={item.id}>
                 <TableCell className="font-medium">
-                  {item.logoUri && (
-                    <img
-                      src={item.logoUri}
-                      alt=""
-                      referrerPolicy="no-referrer"
-                      className="mr-2 inline-block size-7 object-contain"
-                    />
-                  )}
-                  {item.name}
-                  {item.current && (
-                    <Badge variant="secondary" className="ml-2">
-                      this browser
-                    </Badge>
-                  )}
+                  <div className="flex items-center gap-3">
+                    <Avatar className="rounded-md after:rounded-md" aria-hidden="true">
+                      <AvatarImage
+                        src={item.logoUri}
+                        alt=""
+                        referrerPolicy="no-referrer"
+                        className="rounded-md object-contain"
+                      />
+                      <AvatarFallback className="rounded-md text-xs">
+                        {item.name.slice(0, 2).toUpperCase()}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="flex flex-col gap-0.5">
+                      <span>
+                        {item.name}
+                        {item.current && (
+                          <Badge variant="secondary" className="ml-2">
+                            this browser
+                          </Badge>
+                        )}
+                      </span>
+                      {item.clientDomain && (
+                        <span
+                          className="max-w-64 truncate text-xs font-normal text-muted-foreground"
+                          title={item.clientDomain}
+                        >
+                          {item.clientDomain}
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 </TableCell>
                 <TableCell>{item.kind}</TableCell>
                 <TableCell className="text-muted-foreground">

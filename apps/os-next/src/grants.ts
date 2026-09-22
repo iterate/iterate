@@ -21,12 +21,14 @@ import {
   type GrantProps,
   type Authorization,
 } from "./oauth.ts";
+import { ClientDisplayUrl, clientDisplay } from "./client-display.ts";
 import { publishGlobalFact } from "./session.ts";
 
 const DisplayMetadata = z.object({
   clientName: z.string().optional(),
   tokenKind: z.string().optional(),
-  logoUri: z.url({ protocol: /^https$/ }).optional(),
+  logoUri: ClientDisplayUrl.optional().catch(undefined),
+  clientDomain: z.string().optional(),
 });
 const MintInput = z.object({
   name: z.string().trim().min(1).max(100),
@@ -128,6 +130,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
           name: metadata.clientName || grant.clientId,
           clientId: grant.clientId,
           logoUri: metadata.logoUri,
+          clientDomain: metadata.clientDomain,
           kind: !grant.expiresAt
             ? "Pending sign-in"
             : metadata.tokenKind === "device"
@@ -152,6 +155,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
         name: "Revoked session",
         clientId: undefined,
         logoUri: undefined,
+        clientDomain: undefined,
         kind: "Session",
         createdAt: 0,
         expiresAt: null,
@@ -271,16 +275,15 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
     );
     if (expiresAt < Date.now() + 60_000)
       throw codedError("INVALID_INPUT", "expiresAt must be at least a minute away.");
-    const logoUri = z.url({ protocol: /^https$/ }).safeParse(client?.logoUri);
     const approved = await helpers.completeAuthorization({
       request: auth,
       userId: session.sub,
       scope: ["iterate"],
       revokeExistingGrants: false,
       metadata: {
+        ...clientDisplay(client, clientId),
         clientName: data.name,
         tokenKind: data.clientId ? "device" : "personal",
-        ...(logoUri.success && { logoUri: logoUri.data }),
       },
       props: {
         kind: "personal",

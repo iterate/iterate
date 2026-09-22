@@ -150,7 +150,13 @@ test("first consent creates organization and project through the ordinary sessio
   expect(selectedBody).toContain(projectId);
   const unselectedBody = await (await runTool(excludedId)).text();
   expect(unselectedBody).toContain("outside this token");
-  expect((await api.grants.list()).items).toHaveLength(2);
+  const grants = (await api.grants.list()).items;
+  expect(grants).toHaveLength(2);
+  expect(grants.find((grant) => grant.clientId === client.clientId)).toMatchObject({
+    name: "Claude fixture",
+    logoUri: "https://images.example/studio.svg",
+    clientDomain: "studio.example",
+  });
   await api.logout();
   // These calls land before the 30s live lease refresh: issuance still reads D1 now.
   await expect(api.consent.approve({ query: flow.url.search, projects: ["*"] })).rejects.toThrow(
@@ -448,8 +454,8 @@ test("consent omits missing, insecure and credential-bearing branding URLs", asy
     });
     const view = await issuer.consent.describe(flow.url.search);
     expect(view.kind).toBe("consent");
-    expect(view).not.toHaveProperty("clientLogoUri");
-    expect(view).not.toHaveProperty("clientDomain");
+    expect(view.kind === "consent" && view.clientLogoUri).toBeUndefined();
+    expect(view.kind === "consent" && view.clientDomain).toBeUndefined();
   }
 });
 

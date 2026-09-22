@@ -25,14 +25,8 @@ import {
   type AccessGrant,
   type GrantProps,
 } from "./oauth.ts";
+import { clientDisplay } from "./client-display.ts";
 import { publishGlobalFact } from "./session.ts";
-
-// Client branding is supplied by the app, not a publisher-verification assertion.
-const ClientDisplayUrl = z.url({ protocol: /^https$/ }).refine((value) => {
-  if (!URL.canParse(value)) return false;
-  const url = new URL(value);
-  return !url.username && !url.password;
-});
 
 export type ConsentView =
   | {
@@ -137,10 +131,7 @@ export class Consent extends RpcTarget {
     try {
       const request = await this.#request(query);
       const client = await oauthHelpers(env, this.#addresses).lookupClient(request.clientId);
-      const logo = ClientDisplayUrl.safeParse(client?.logoUri);
-      const website = ClientDisplayUrl.safeParse(client?.clientUri);
-      const metadata = ClientDisplayUrl.safeParse(request.clientId);
-      const domainUrl = metadata.success ? metadata.data : website.success ? website.data : null;
+      const display = clientDisplay(client, request.clientId);
       const denied = new URL(request.redirectUri);
       denied.searchParams.set("error", "access_denied");
       denied.searchParams.set("error_description", "The user declined access.");
@@ -150,10 +141,10 @@ export class Consent extends RpcTarget {
         kind: "consent",
         query,
         denyLocation: denied.href,
-        clientName: client?.clientName ?? request.clientId,
+        clientName: display.clientName,
         clientId: request.clientId,
-        ...(logo.success && { clientLogoUri: logo.data }),
-        ...(domainUrl && { clientDomain: new URL(domainUrl).host }),
+        clientLogoUri: display.logoUri,
+        clientDomain: display.clientDomain,
         email: this.#grant.email,
         picture: this.#grant.picture,
         // parseAuthorization admitted only known scopes
@@ -219,7 +210,7 @@ export class Consent extends RpcTarget {
       const approved = await oauthHelpers(env, this.#addresses).completeAuthorization({
         request,
         userId: this.#grant.userId,
-        metadata: { clientName },
+        metadata: clientDisplay(client, request.clientId),
         scope,
         revokeExistingGrants: false,
         props: {
