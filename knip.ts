@@ -219,9 +219,14 @@ function makeOsNextWorkspace(): WorkspaceConfig {
       "playwright.config.ts",
       "specs/**/*.ts",
       "src/**/*.test.ts",
+      // the node programs: build/dev/deploy/preview and the voice operator tools
+      "scripts/*.ts",
+      "examples/**/*.ts",
     ],
     project: [
       "src/**/*.{ts,tsx}!",
+      "scripts/**/*.ts",
+      "examples/**/*.ts",
       "e2e/**/*.ts",
       "__workers-tests__/**/*.ts",
       "bench/**/*.ts",

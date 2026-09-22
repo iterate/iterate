@@ -12,7 +12,7 @@
 //   ConsumedEvent<typeof OrganizationContract>                         what the reduce sees
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
-import { SecretContract } from "../secret/contract.ts";
+import { SecretCatalog, SecretContract } from "../secret/contract.ts";
 
 export const OrganizationContract = defineProcessorContract({
   slug: "organization",
@@ -30,19 +30,8 @@ export const OrganizationContract = defineProcessorContract({
     projects: z
       .record(z.string(), z.object({ slug: z.string(), createdAt: z.string() }))
       .default({}),
-    /** Every secret set under this owner, by its path (`/secrets/<name>`, what the placeholder
-     *  spells; the context lives under this root): the pin, the refresh strategy's kind, and when
-     *  it was first set — never a value. What `itx.secrets.list()` reads here. */
-    secrets: z
-      .record(
-        z.string(),
-        z.object({
-          urls: z.array(z.string()),
-          refresh: z.enum(["oauth-refresh-token", "waitrose-session"]).optional(),
-          createdAt: z.string(),
-        }),
-      )
-      .default({}),
+    /** Every secret set under this owner (src/secret/contract.ts): what `itx.secrets.list()` reads here. */
+    secrets: SecretCatalog.default({}),
   }),
   events: {
     "events.iterate.com/organization/created": {

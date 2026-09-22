@@ -20,7 +20,7 @@ export type EncryptedMaterial = {
 
 /** Where a ciphertext is allowed to open: the secret's context (its Durable Object name), the pin,
  *  and the write. */
-export type MaterialBinding = { context: string; urls: string[]; revision: number };
+type MaterialBinding = { context: string; urls: string[]; revision: number };
 
 /** The deployment's keys: any strings — the AES key is the SHA-256 of each. `previous` is set only
  *  while rotating. */
