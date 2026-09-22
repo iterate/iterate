@@ -1,10 +1,13 @@
 // /projects/<slug>/secrets — the project's secrets as `itx.secrets.list()` shows them: each one's
 // path, the origins it may be sent to, its refresh strategy's kind and when it was first set — never
-// a value — with a delete per row, and the form that sets one: a name (the path `/secrets/<name>` an
-// outbound request's `getSecret("/secrets/<name>")` placeholder spells), a value (a string, or a
-// JSON object whose fields the placeholder's `{ field }` picks) and the origins the value may be
-// sent to. The list is the route's loader; a set or a delete invalidates the router, which reloads it.
-import { useState, type FormEvent } from "react";
+// a value — with an update and a delete per row, and the one form that sets a secret: a name (the
+// path `/secrets/<name>` an outbound request's `getSecret("/secrets/<name>")` placeholder spells), a
+// value (a string, or a JSON object whose fields the placeholder's `{ field }` picks) and the origins
+// the value may be sent to. UPDATE is the same form on an existing row: the name locked, the pin
+// pre-filled, the value pasted again — the current one is never shown, and a pin only ever enters
+// together with the value it guards (the platform has no verb that changes a pin alone). The list is
+// the route's loader; a set or a delete invalidates the router, which reloads it.
+import { useRef, useState, type FormEvent } from "react";
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import {
   AlertDialog,
@@ -49,6 +52,7 @@ export const Route = createFileRoute("/_auth/projects/$slug/secrets")({
 /** The name's grammar (os-next secrets.ts `assertSecretPath`): what `getSecret("/secrets/<name>")`
  *  can spell. The input's `pattern`, so the browser says so before the platform has to. */
 const SECRET_NAME_PATTERN = "[a-zA-Z0-9._\\-]+";
+const SECRETS_PREFIX = "/secrets/";
 
 function ProjectSecrets() {
   const { api, project } = Route.useRouteContext();
@@ -57,15 +61,38 @@ function ProjectSecrets() {
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
   const [urls, setUrls] = useState("");
+  /** The row the form is updating (its path), or null while it sets a new one. */
+  const [updating, setUpdating] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const valueField = useRef<HTMLTextAreaElement>(null);
   const origins = urls.split(/[\s,]+/).filter(Boolean);
+  const path = `${SECRETS_PREFIX}${name.trim()}`;
+  const existing = secrets.find((secret) => secret.path === path);
+
+  const clearForm = () => {
+    setUpdating(null);
+    setName("");
+    setValue("");
+    setUrls("");
+  };
+
+  /** Update = the form on this row: its name, its pin as listed, and a value to paste again. */
+  const startUpdate = (secret: (typeof secrets)[number]) => {
+    setError(null);
+    setStatus(null);
+    setUpdating(secret.path);
+    setName(secret.path.slice(SECRETS_PREFIX.length));
+    setUrls(secret.urls.join(" "));
+    setValue("");
+    valueField.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    valueField.current?.focus({ preventScroll: true });
+  };
 
   const setSecret = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const path = `/secrets/${name.trim()}`;
     setError(null);
     setStatus(null);
     // the platform pins ORIGINS, so each entry must be a whole URL — said here, where it was typed
@@ -77,10 +104,10 @@ function ProjectSecrets() {
     setSaving(true);
     try {
       await api.projects.get(project.id).secrets.set(path, value, { urls: origins });
-      setStatus(`${path} is set. The value is stored encrypted and is not shown again.`);
-      setName("");
-      setValue("");
-      setUrls("");
+      setStatus(
+        `${path} is ${existing ? "updated" : "set"}. The value is stored encrypted and is not shown again.`,
+      );
+      clearForm();
       await router.invalidate();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -89,13 +116,14 @@ function ProjectSecrets() {
     }
   };
 
-  const deleteSecret = async (path: string) => {
+  const deleteSecret = async (secretPath: string) => {
     setError(null);
     setStatus(null);
-    setDeleting(path);
+    setDeleting(secretPath);
     try {
-      await api.projects.get(project.id).secrets.delete(path);
-      setStatus(`${path} is deleted.`);
+      await api.projects.get(project.id).secrets.delete(secretPath);
+      setStatus(`${secretPath} is deleted.`);
+      if (updating === secretPath) clearForm();
       await router.invalidate();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -136,12 +164,12 @@ function ProjectSecrets() {
                 <TableHead>Sent to</TableHead>
                 <TableHead>Refresh</TableHead>
                 <TableHead>Set</TableHead>
-                <TableHead>Action</TableHead>
+                <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {secrets.map((secret) => (
-                <TableRow key={secret.path}>
+                <TableRow key={secret.path} data-updating={updating === secret.path || undefined}>
                   <TableCell>
                     <Identifier value={secret.path} />
                   </TableCell>
@@ -157,29 +185,42 @@ function ProjectSecrets() {
                     {new Date(secret.createdAt).toISOString()}
                   </TableCell>
                   <TableCell>
-                    <AlertDialog>
-                      <AlertDialogTrigger
-                        render={<Button variant="outline" size="sm" />}
-                        disabled={deleting === secret.path}
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        aria-label={`Update ${secret.path}`}
+                        disabled={updating === secret.path}
+                        onClick={() => startUpdate(secret)}
                       >
-                        {deleting === secret.path ? "Deleting…" : "Delete"}
-                      </AlertDialogTrigger>
-                      <AlertDialogContent>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Delete {secret.path}?</AlertDialogTitle>
-                          <AlertDialogDescription>
-                            The value is forgotten and requests that spell this placeholder fail
-                            until it is set again. There is no undo.
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>Cancel</AlertDialogCancel>
-                          <AlertDialogAction onClick={() => void deleteSecret(secret.path)}>
-                            Delete
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
+                        {updating === secret.path ? "Updating…" : "Update"}
+                      </Button>
+                      <AlertDialog>
+                        <AlertDialogTrigger
+                          render={<Button variant="outline" size="sm" />}
+                          aria-label={`Delete ${secret.path}`}
+                          disabled={deleting === secret.path}
+                        >
+                          {deleting === secret.path ? "Deleting…" : "Delete"}
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Delete {secret.path}?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              The value is forgotten and requests that spell this placeholder fail
+                              until it is set again. There is no undo.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction onClick={() => void deleteSecret(secret.path)}>
+                              Delete
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -187,12 +228,13 @@ function ProjectSecrets() {
           </Table>
         </div>
       )}
-      <Card>
+      <Card data-testid="secret-form">
         <CardHeader>
-          <CardTitle>Set a secret</CardTitle>
+          <CardTitle>{updating ? `Update ${updating}` : "Set a secret"}</CardTitle>
           <CardDescription>
-            Setting a name that exists replaces its value. The value is stored encrypted and never
-            shown again; the log records who set what and when, never the value.
+            {updating
+              ? "Paste the value again — the current one is never shown — and check the origins: a pin only ever changes together with the value it guards."
+              : "Setting a name that exists replaces its value. The value is stored encrypted and never shown again; the log records who set what and when, never the value."}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -201,7 +243,7 @@ function ProjectSecrets() {
               <Field>
                 <FieldLabel htmlFor="secret-name">Name</FieldLabel>
                 <div className="flex items-center gap-1">
-                  <span className="font-mono text-sm text-muted-foreground">/secrets/</span>
+                  <span className="font-mono text-sm text-muted-foreground">{SECRETS_PREFIX}</span>
                   <Input
                     id="secret-name"
                     value={name}
@@ -212,18 +254,21 @@ function ProjectSecrets() {
                     autoComplete="off"
                     spellCheck={false}
                     required
-                    className="max-w-xs font-mono"
+                    readOnly={Boolean(updating)}
+                    className="max-w-xs font-mono read-only:bg-muted read-only:text-muted-foreground"
                   />
                 </div>
                 <FieldDescription>
-                  Letters, digits, dots, underscores and dashes — the path is what the placeholder
-                  spells.
+                  {updating
+                    ? "A secret is its path; to move it, set a new name and delete this one."
+                    : "Letters, digits, dots, underscores and dashes — the path is what the placeholder spells."}
                 </FieldDescription>
               </Field>
               <Field>
-                <FieldLabel htmlFor="secret-value">Value</FieldLabel>
+                <FieldLabel htmlFor="secret-value">{updating ? "New value" : "Value"}</FieldLabel>
                 <Textarea
                   id="secret-value"
+                  ref={valueField}
                   value={value}
                   onChange={(event) => setValue(event.target.value)}
                   placeholder="sk_live_…"
@@ -259,13 +304,24 @@ function ProjectSecrets() {
                 </FieldDescription>
               </Field>
             </FieldGroup>
-            <div>
+            {updating && existing?.refresh && (
+              <p role="note" className="text-sm text-muted-foreground">
+                This secret refreshes itself ({existing.refresh}). A value set from here has no
+                refresh strategy — to keep one, set it from code with <code>refresh</code>.
+              </p>
+            )}
+            <div className="flex items-center gap-3">
               <Button
                 type="submit"
                 disabled={saving || !name.trim() || !value || origins.length === 0}
               >
-                {saving ? "Setting…" : "Set secret"}
+                {saving ? "Saving…" : existing ? "Update secret" : "Set secret"}
               </Button>
+              {updating && (
+                <Button type="button" variant="ghost" onClick={clearForm}>
+                  Cancel
+                </Button>
+              )}
             </div>
           </form>
         </CardContent>
