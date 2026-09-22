@@ -1,5 +1,7 @@
 # os-next — the clean-room platform, ONE worker
 
+For selected-project backups and recovery after an erase, see [Project seeds](docs/project-seeds.md).
+
 One Cloudflare Worker, one package: `src/worker.ts` is the stateless edge (capnweb at `/api`;
 project-host ingress — `<app>--<project>.<base>`, `<app>.<project>.<base>`, the apex
 `<project>.<base>` — the one HTTP way into a project) with

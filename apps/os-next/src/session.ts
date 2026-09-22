@@ -28,6 +28,7 @@ import { describeReach, type Directory, type Project, type Reach } from "./direc
 import type { AppConfig } from "./app-config.ts";
 import type { AuthenticationFact } from "./account/contract.ts";
 import type { ProjectState } from "./project/contract.ts";
+import { assertSecretPath } from "./secrets.ts";
 
 /** What `IterateRpcTarget.authenticate` accepts. `from-server-cookie` is the browser and `bearer` is
  *  a device or script whose token rode the upgrade: the OAuth gate already resolved the session
@@ -251,6 +252,22 @@ export class SessionRpcTarget extends RpcTarget {
   /** Attribution comes from the admission gate, never from the caller. */
   whoami(): Principal {
     return this.#authority.principal;
+  }
+
+  /** The operator's project-seed CLI. User sessions, including impersonated users, cannot
+   * export secret cells. Address the native context directly, outside project rewrites. */
+  async exportProjectSecretForSeed(projectRef: string, path: string): Promise<unknown> {
+    if (this.#authority.principal.actor !== "admin" || this.#authority.reach !== "every")
+      throw codedError("FORBIDDEN", "Project-seed exports require operator authority.");
+    const project = await this.#input.directory.getProject(z.string().min(1).parse(projectRef));
+    if (!project) throw codedError("INVALID_INPUT", "Project not found.");
+    const name = DurableObjectNameCodec.stringify({
+      projectId: project.id,
+      path: assertSecretPath(z.string().parse(path)),
+    });
+    return this.#input.contextNamespace
+      .getByName(name)
+      .exportSecretForProjectSeed(this.#input.appConfig.secrets.adminBearer.exposeSecret());
   }
 
   /** Safe bootstrap data for every app, regardless of which host serves it. */

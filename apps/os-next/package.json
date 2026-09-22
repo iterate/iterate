@@ -16,7 +16,8 @@
     "gen:wrangler": "tsx scripts/generate-wrangler-config.ts",
     "preview": "tsx scripts/preview.ts",
     "ensure-resources": "tsx scripts/ensure-resources.ts",
-    "erase-data": "tsx scripts/erase-data.ts"
+    "erase-data": "tsx scripts/erase-data.ts",
+    "project-seed": "tsx scripts/project-seed.ts"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "0.10.3",

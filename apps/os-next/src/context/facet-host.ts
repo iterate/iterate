@@ -487,7 +487,10 @@ export class FacetHost {
       result = await withTimeout(
         call,
         FACET_CALL_WATCHDOG_MS,
-        () => `facet "${name}" ${print(itxExpressionSteps)}`,
+        // Secret calls can carry material or operator credentials. Never include their arguments
+        // in a timeout message, which is observable through both logs and rejected RPCs.
+        () =>
+          name === "secret" ? 'facet "secret"' : `facet "${name}" ${print(itxExpressionSteps)}`,
       );
     } catch (error) {
       if (errorCode(error) === "TIMEOUT") {

@@ -5,6 +5,13 @@ description: Capture or restore a selected OS project after a deliberate proof-o
 
 # Recreate production
 
+For **OS-Next**, use `pnpm --dir apps/os-next project-seed capture|check|apply` with
+an explicit `--env`. Read [OS-Next project seeds](../../../apps/os-next/docs/project-seeds.md).
+Its archives preserve the original secret encryption binding and restore through
+normal commands into fresh project IDs. Do not run the legacy OS CLI against OS-Next.
+
+The commands below apply to **legacy apps/os**.
+
 Use the project-seed CLI. A seed is a small semantic snapshot, not a database
 dump and not a stream export. Read
 [Project seeds](../../../apps/os/docs/project-seeds.md) before operating.
