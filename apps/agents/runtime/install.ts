@@ -27,7 +27,6 @@ export async function installAgents(
   });
   await itx.append({
     type: "events.iterate.com/itx/rewrite-rule-configured",
-    idempotencyKey: `agents/install:${cacheKey}`,
     payload: {
       match: "itx.agents",
       target: ["itx", "facets", ["get", "agents", spec]],

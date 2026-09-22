@@ -7,8 +7,10 @@ import { ScriptedAi, assistantWords, onWorkersAi } from "./fixtures.ts";
 test("install and reinstall preserve existing agents, sandbox grants and conversation history", async () => {
   const itx = openItx(freshCtx("agents-install"));
   const source = await buildAgentRuntime();
+  const oldSource = source + "\n// previous release\n";
   expect((await itx.rewriteRules.get("itx.agents"))?.target).toBeFalsy();
-  await installAgents(itx, source + "\n// previous release\n");
+  await installAgents(itx, oldSource);
+  const oldRule = await itx.rewriteRules.get("itx.agents");
   await itx.agents.create("/agents/support");
   const context = itx.cd("/agents/support");
   const sandbox = context.cd("sandbox");
@@ -39,4 +41,20 @@ test("install and reinstall preserve existing agents, sandbox grants and convers
   await installAgents(itx, source);
   expect(await context.processors.list()).toEqual(installedRows);
   expect(await sandbox.rewriteRules.list()).toEqual(grants);
+  await installAgents(itx, oldSource);
+  expect(await itx.rewriteRules.get("itx.agents")).toEqual(oldRule);
+});
+
+test("a removed agents rewrite can be installed again with the same runtime", async () => {
+  const itx = openItx(freshCtx("agents-reinstall"));
+  const source = await buildAgentRuntime();
+  await installAgents(itx, source);
+  const installed = await itx.rewriteRules.get("itx.agents");
+  await itx.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx.agents", target: null },
+  });
+  await installAgents(itx, source);
+  expect(await itx.rewriteRules.get("itx.agents")).toEqual(installed);
+  expect(await itx.agents.list()).toEqual([]);
 });
