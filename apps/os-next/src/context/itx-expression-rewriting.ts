@@ -38,6 +38,7 @@ import { codedError, jsonEqual, resolveContextPath } from "iterate/next/lib";
 import type { RewriteRuleConfigured } from "iterate/next/api";
 import {
   callOn,
+  InvokeHandle,
   walkSteps,
   normalizedItxExpression,
   containsItxExpressionHole,
@@ -642,6 +643,19 @@ export class ItxExpressionResolver {
         "NO_ITX_EXPRESSION_MATCH",
         `no built-in ${JSON.stringify(rootName)} under itx.builtins (${roots()})`,
       );
+    // Forward the whole remaining expression through cd. Walking a factory call such as
+    // workers.get(spec) here would return its handle over RPC first, making the later fetch
+    // an RPC call too and losing a socket-bearing Response before cd can select native fetch.
+    if (rootName === "cd" && Array.isArray(rewritten[2]) && rewritten.length > 3) {
+      const { value } = await walkSteps(
+        { value: this.#builtIns, receiver: undefined },
+        rewritten.slice(2, 3),
+      );
+      if (!(value instanceof InvokeHandle))
+        throw new Error("builtins.cd must return an InvokeHandle");
+      const result = await value.invoke(rewritten.slice(3));
+      return extraArgs.length > 0 ? await callOn(result, undefined, extraArgs) : result;
+    }
     const { value, receiver } = await walkSteps(
       { value: this.#builtIns, receiver: undefined },
       rewritten.slice(2),
