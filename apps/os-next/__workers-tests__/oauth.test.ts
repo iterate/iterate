@@ -3,6 +3,7 @@ import { newWebSocketRpcSession, RpcTarget, RpcStub } from "capnweb";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { appSession } from "iterate/next/app-server";
+import { platformAddressesOf } from "../src/app-config.ts";
 import { directory } from "../src/directory.ts";
 import { browserAuthorization } from "../src/browser-client.ts";
 import { oauthHelpers } from "../src/oauth.ts";
@@ -20,7 +21,8 @@ const call = (path: string, init?: RequestInit) => {
   if (path === "/login") headers.set("Authorization", `Bearer ${adminSecret}`);
   return SELF.fetch(new Request(`${ORIGIN}${path}`, { redirect: "manual", ...init, headers }));
 };
-const helpers = () => oauthHelpers(bindings, "https://control.test");
+const helpers = () =>
+  oauthHelpers(bindings, platformAddressesOf(bindings, new Request(`${ORIGIN}/`)));
 
 beforeAll(async () => {
   await bindings.DB.batch(
@@ -588,7 +590,8 @@ test("console and project browsers use the same CIMD flow and independent grants
     expect((await personalApi.projects.list()).map((p: { id: string }) => p.id)).toEqual([
       browserA.id,
     ]);
-    // A device says `bearer` for the same act: the token rode the upgrade, hand me that session.
+    // A device says `bearer` for the same act (Kit firmware, itx_mount.c): the token rode the
+    // upgrade, hand me that session.
     const { root: bearerApi } = await rpc(personal.token, "bearer");
     expect((await bearerApi.projects.list()).map((p: { id: string }) => p.id)).toEqual([
       browserA.id,

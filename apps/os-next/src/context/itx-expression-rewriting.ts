@@ -524,6 +524,24 @@ export function refuseSelfLoopRow(
     );
 }
 
+/** The `get` step of a RESOLVED target that addresses a registry's entry —
+ *  `itx.builtins.<registry>.get(name, …)`: `[1]` is the name, `[2]` a hosting spec when one rides
+ *  it. Undefined when the target is anything else. */
+export function builtInsGetStep(
+  resolved: ItxExpression,
+  registry: "facets" | "rpcStubs",
+): [method: "get", name: string, ...args: unknown[]] | undefined {
+  const getStep = resolved[3];
+  return resolved[1] === "builtins" &&
+    resolved[2] === registry &&
+    Array.isArray(getStep) &&
+    getStep[0] === "get" &&
+    typeof getStep[1] === "string"
+    ? // the checks above are exactly this tuple's shape; a call step's args are `unknown[]`
+      (getStep as [method: "get", name: string, ...args: unknown[]])
+    : undefined;
+}
+
 /** Every rpc-stub key some row (a rule, a subscription) currently names, resolved through the
  *  whole table — the census a `stream/resumed` commit compares against the registry's presence. */
 export function rpcStubKeysNamed(args: {
@@ -540,15 +558,8 @@ export function rpcStubKeysNamed(args: {
   for (const target of targets) {
     try {
       const resolved = resolveItxExpression(() => rules, target, implicitRoots).at(-1)!;
-      const getStep = resolved[3];
-      if (
-        resolved[1] === "builtins" &&
-        resolved[2] === "rpcStubs" &&
-        Array.isArray(getStep) &&
-        getStep[0] === "get" &&
-        typeof getStep[1] === "string"
-      )
-        keys.add(getStep[1]);
+      const getStep = builtInsGetStep(resolved, "rpcStubs");
+      if (getStep) keys.add(getStep[1]);
     } catch {
       /* an unresolvable target names no key */
     }

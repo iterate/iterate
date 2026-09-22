@@ -61,7 +61,9 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run -- pnpm preview deploy --name soak --apps none
       # The preview inherits the parent's secrets (APP_CONFIG in Doppler project-worker/preview), so the
-      # admin bearer and the sign-in password come from the same object the preview deploy uploads.
+      # admin bearer and the sign-in password come from the same object the preview deploy uploads —
+      # apps/os-next/e2e/support/global-setup.ts reads them out of it, and the routing out of the
+      # parent's envs.ts entry.
       - name: Soak
         working-directory: apps/os-next
         env:
@@ -70,13 +72,7 @@ jobs:
           WORKER_BASE_URL: ${{ inputs.worker-base-url }}
           RUNS: ${{ inputs.runs }}
           FILTER: ${{ inputs.filter }}
-        run: |
-          doppler run -- sh -c '
-            export DEMO_BASE_URL="$WORKER_BASE_URL" MCP_BASE_URL="$WORKER_BASE_URL/mcp" PROJECT_INGRESS_ROUTING="{\"type\":\"paths\"}"
-            export ADMIN_API_SECRET="$(node -p "JSON.parse(process.env.APP_CONFIG).secrets.adminBearer")"
-            export LOGIN_PASSWORD="$(node -p "JSON.parse(process.env.APP_CONFIG).login.password")"
-            pnpm e2e:soak --runs "$RUNS" ${FILTER:+--filter "$FILTER"}
-          '
+        run: doppler run -- pnpm e2e:soak --runs "$RUNS" ${FILTER:+--filter "$FILTER"}
       - name: Upload the per-run reports and the summary
         if: always()
         uses: actions/upload-artifact@v4

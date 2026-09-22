@@ -29,7 +29,7 @@ import {
   InvokeHandle,
   RpcStubHandle,
 } from "iterate/next/expression";
-import type { RewriteRuleListEntry } from "iterate/next/api";
+import type { RewriteRuleListEntry, StreamPage, WaitForEventFilter } from "iterate/next/api";
 import { projectUrlOf, type IngressRouting } from "iterate/next/project-ingress";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
@@ -38,7 +38,7 @@ import {
   type ScheduledAppendInput,
   type ScheduledAppend,
 } from "../stream/scheduled-appends.ts";
-import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
+import type { ReachableContext } from "../stream/stream.ts";
 import type { LibraryRoots } from "../library.ts";
 import {
   assertSecretPath,

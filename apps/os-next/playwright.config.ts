@@ -7,9 +7,22 @@
 // interface E2Es and not workerd-internal tests.
 
 import { defineConfig, devices } from "@playwright/test";
+import { deployedTarget } from "./e2e/support/deployed-target.ts";
 
 const PORT = Number(process.env.DEMO_PORT || 8788);
 const baseURL = process.env.DEMO_BASE_URL || `http://localhost:${PORT}`;
+
+// A deployment under `doppler run`: the specs read the deployed target out of the environment
+// (auth.spec.ts, mini-app.spec.ts, issuer-pages.spec.ts), and the worker processes inherit what is
+// set here — the credentials out of the deployment's APP_CONFIG, the routing out of its envs.ts
+// entry, the way e2e/support/global-setup.ts hands them to the vitest suite.
+if (process.env.DEMO_BASE_URL && process.env.APP_CONFIG) {
+  const target = deployedTarget(process.env.DEMO_BASE_URL);
+  process.env.ADMIN_API_SECRET = target.adminApiSecret;
+  process.env.LOGIN_PASSWORD = target.loginPassword;
+  process.env.PROJECT_INGRESS_ROUTING = target.ingressRouting;
+  process.env.MCP_BASE_URL = target.mcpBaseUrl;
+}
 
 export default defineConfig({
   testDir: "specs",

@@ -323,10 +323,7 @@ export class FacetHost {
       return (
         await walkSteps(
           {
-            value: {
-              snapshot: () => this.#deps.stream.coreReducedStateSnapshot(),
-              liveSnapshot: () => this.#deps.stream.coreLiveStateSnapshot(),
-            },
+            value: { snapshot: () => this.#deps.stream.coreReducedStateSnapshot() },
             receiver: undefined,
           },
           itxExpressionSteps,

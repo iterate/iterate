@@ -23,6 +23,11 @@
 // BreakerProcessor is that pattern. created/woken come from the stream's birth record and the first
 // request or alarm of each incarnation (Stream.appendBirthRecord / appendWakeRecord); the pause exemptions are Stream.append's.
 //   subscriptions — a literal `subscription-configured` event, THE SUBSCRIPTIONS TABLE's one command (the rows are core state)
+//
+// ONE VALIDATION BOUNDARY: every append the DO commits passes `normalizeControlEvent` (below), which
+// zod-parses each control event's payload and stores the normalized form, so the fold CASTS what it
+// reads and never re-parses. The stream's own records (birth, wake, the halted fact, the alarm trace)
+// are well-formed by construction. No stored row predates its event's normalization.
 
 import {
   itxExpressionStepName,
@@ -36,10 +41,10 @@ import { jsonEqual } from "iterate/next/lib";
 import { z } from "zod";
 import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/next/stream/processor";
 import type { RewriteRuleConfigured } from "iterate/next/api";
-import { normalizeIngressConfigured } from "../context/ingress.ts";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
   BUILT_IN_ROOTS,
+  builtInsGetStep,
   implicitRootsAt,
   isBuiltInsRooted,
   normalizeRewriteRuleConfigured,
@@ -56,7 +61,7 @@ import {
 } from "./scheduled-appends.ts";
 
 /** A hosting spec, read off a RESOLVED target. */
-export type HostingFacetSpec = {
+type HostingFacetSpec = {
   name: string;
   /** Absent for a first-party facet: its class is this worker's own (first-party-facets.ts). */
   source?: unknown;
@@ -72,15 +77,8 @@ export type HostingFacetSpec = {
 export function facetSpecFromHostingTarget(
   resolvedTarget: ItxExpression,
 ): HostingFacetSpec | undefined {
-  const getStep = resolvedTarget[3];
-  if (
-    resolvedTarget[1] !== "builtins" ||
-    resolvedTarget[2] !== "facets" ||
-    !Array.isArray(getStep) ||
-    getStep[0] !== "get" ||
-    typeof getStep[1] !== "string"
-  )
-    return undefined;
+  const getStep = builtInsGetStep(resolvedTarget, "facets");
+  if (!getStep) return undefined;
   // A FIRST-PARTY facet hosts this worker's own class: the target names it and carries no spec.
   const firstPartyClassName = firstPartyFacetClassOf(getStep[1]);
   if (getStep.length === 2 && firstPartyClassName)
@@ -126,6 +124,8 @@ function elideHostedFacetSource(
 } {
   const spec = resolvedTarget && facetSpecFromHostingTarget(resolvedTarget);
   if (!spec) return { target };
+  // The marker is the spec minus its source (a 100 KB processor must not ride the checkpoint).
+  const { source: _source, ...hostedFacet } = spec;
   // The spec rides the ORIGINAL target's `get` call step, wherever a rule of the caller's put it.
   const specStepIndex = target.findIndex(
     (step) =>
@@ -146,26 +146,8 @@ function elideHostedFacetSource(
             ["get", (target[specStepIndex] as [string, string])[1]],
             ...target.slice(specStepIndex + 1),
           ],
-    hostedFacet: {
-      name: spec.name,
-      className: spec.className,
-      // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical hostedFacet marker: it round-trips the JSON checkpoint and is compared with jsonEqual (which counts keys), so an absent cacheKey must stay absent, not `cacheKey: undefined`
-      ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
-    },
+    hostedFacet,
   };
-}
-
-/** The facet a resolved target merely ADDRESSES (`itx.builtins.facets.get(name)…`, no spec) — or
- *  undefined when it is not the facets door at all. */
-function facetAddressedBy(resolvedTarget: ItxExpression): string | undefined {
-  const getStep = resolvedTarget[3];
-  return resolvedTarget[1] === "builtins" &&
-    resolvedTarget[2] === "facets" &&
-    Array.isArray(getStep) &&
-    getStep[0] === "get" &&
-    typeof getStep[1] === "string"
-    ? getStep[1]
-    : undefined;
 }
 
 /** Does a row's target OWN ITS PROGRESS — a facet (its own checkpoint) or a lent rpc stub (a live
@@ -177,14 +159,7 @@ function facetAddressedBy(resolvedTarget: ItxExpression): string | undefined {
 export function targetOwnsProgress(state: CoreState, row: Subscription): boolean {
   const resolved = resolveThroughState(state, row.target);
   if (!resolved) return false;
-  const getStep = resolved[3];
-  return (
-    resolved[1] === "builtins" &&
-    (resolved[2] === "facets" || resolved[2] === "rpcStubs") &&
-    Array.isArray(getStep) &&
-    getStep[0] === "get" &&
-    typeof getStep[1] === "string"
-  );
+  return !!(builtInsGetStep(resolved, "facets") || builtInsGetStep(resolved, "rpcStubs"));
 }
 
 /** THE DRAFT TABLES OF ONE BATCH: a table is copied ONCE per batch, on its first touch, and mutated
@@ -216,16 +191,13 @@ function withHostedFacetMarkersFollowingRules(
     const resolved = resolveThroughState(state, row.target);
     if (!resolved) continue;
     const spec = facetSpecFromHostingTarget(resolved);
-    const next = spec
-      ? {
-          name: spec.name,
-          className: spec.className,
-          // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical hostedFacet marker: it round-trips the JSON checkpoint and is compared with jsonEqual (which counts keys), so an absent cacheKey must stay absent, not `cacheKey: undefined`
-          ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
-        }
-      : facetAddressedBy(resolved) === row.hostedFacet?.name
-        ? row.hostedFacet
-        : undefined;
+    let next: Subscription["hostedFacet"];
+    if (spec) {
+      const { source: _source, ...hostedFacet } = spec;
+      next = hostedFacet;
+    } else if (builtInsGetStep(resolved, "facets")?.[1] === row.hostedFacet?.name) {
+      next = row.hostedFacet; // an ADDRESS of the facet it is marked with: its own spec was elided
+    }
     if (jsonEqual(next || null, row.hostedFacet || null)) continue;
     subscriptions ||= draftOf(state.subscriptions, draftTables);
     const { hostedFacet: _previous, ...rest } = row;
@@ -256,9 +228,9 @@ export type Subscription = {
   resumed?: { afterOffset?: number; atOffset: number };
 };
 
-/** THE CORE STATE — the context's own state, reduced inline at the commit point. HAND-WRITTEN, no
- *  zod on the edge/DO script: these events are the platform's own, trusted, so the 310 KB runtime
- *  validator earned its removal. */
+/** THE CORE STATE — the context's own state, reduced inline at the commit point. A hand-written
+ *  type, not a schema-derived one: the fold runs synchronously inside every commit and casts what
+ *  the append boundary already parsed (the header). */
 export type CoreState = {
   /** From the birth certificate (stream/created, offset 1). */
   projectId?: string;
@@ -287,7 +259,7 @@ export type CoreState = {
 };
 
 /** One open script run: when it was asked for (its identity is its key, the request's offset). */
-export type OpenScriptRun = { requestedAt: string };
+type OpenScriptRun = { requestedAt: string };
 
 // ── the run events ── THE CONTEXT'S OWN VOCABULARY beyond its control events, owned by this
 // contract (`CoreContract.events`): the one place their schemas live. A processor that consumes
@@ -296,6 +268,7 @@ export type OpenScriptRun = { requestedAt: string };
 /** `events.iterate.com/context/run-requested`: the whole script — the text of `async (itx) => …`.
  *  The event's own OFFSET is the run's identity: the settlement names it back. */
 export const RunRequested = z.object({ code: z.string().min(1) });
+export type RunRequested = z.infer<typeof RunRequested>;
 /** `events.iterate.com/context/run-settled`: `requestOffset` names the request; `settlement` is
  *  what the script returned (JSON — a round trip drops what JSON cannot carry) or how it failed —
  *  `runtime` (the script threw, or returned what the log refuses) or `interrupted` (the context
@@ -314,15 +287,21 @@ export const RunSettled = z.object({
 export type RunSettled = z.infer<typeof RunSettled>;
 export type RunSettlement = RunSettled["settlement"];
 
-/** A subscription name is ONE segment, [A-Za-z0-9_-] — and never a key of `Object.prototype`: the
+/** A subscription name is ONE segment, [A-Za-z0-9_-] — never a key of `Object.prototype` (the
  *  tables are plain records indexed by name, so such a name would read or write the prototype
- *  instead of a row. Refused here and at the append door (stream.ts, beside `core`). */
+ *  instead of a row) and never `core`: the always-on reduce is addressable as a facet but not a
+ *  configurable subscription — a row named `core` would be undeliverable and climb the retry ladder
+ *  to a halt. */
 const SUBSCRIPTION_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 function parseSubscriptionName(name: string): string {
   // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of a name carried in an untrusted event payload (the `: string` type is a claim); the typeof guards the pattern test and prototype-pollution check below
   if (typeof name !== "string" || !SUBSCRIPTION_NAME_PATTERN.test(name) || name in Object.prototype)
     throw new Error(
       `a subscription name is one segment: [A-Za-z0-9_-]+, never a key of Object.prototype (got ${JSON.stringify(name)})`,
+    );
+  if (name === CoreContract.slug)
+    throw new Error(
+      `"${CoreContract.slug}" is reserved as a subscription name: it is the core reduce, never a configurable subscription`,
     );
   return name;
 }
@@ -380,8 +359,9 @@ export function reduceCoreEventBatch(
 
 /** THE CORE REDUCE of one event — a pure fold, `undefined` = keep the state (identity is the host's
  *  change signal). Without `draftTables` (the tests' single-event fold) every touch copies.
- *  Ephemeral control events are IGNORED (they would vanish from any rebuild). A malformed payload
- *  THROWS here like any reduce would — BEFORE any draft is touched — and the batch door contains it. */
+ *  Ephemeral control events are IGNORED (they would vanish from any rebuild). Payloads are read as
+ *  the boundary stored them (the header); a target the codec still refuses THROWS here like any
+ *  reduce would — BEFORE any draft is touched — and the batch door contains it. */
 export function reduceCoreEvent(
   { event, state }: ReduceArgs<CoreState>,
   draftTables?: DraftTables,
@@ -397,7 +377,7 @@ export function reduceCoreEvent(
   };
   switch (event.type) {
     case "events.iterate.com/project/ingress-configured": {
-      const { target } = normalizeIngressConfigured(event.payload);
+      const target = payload.target as ItxExpression | null;
       return jsonEqual(state.ingressTarget, target)
         ? undefined
         : { ...state, ingressTarget: target };
@@ -410,14 +390,14 @@ export function reduceCoreEvent(
       return schedules === state.schedules ? undefined : { ...state, schedules };
     }
     case "events.iterate.com/context/run-requested": {
-      RunRequested.parse(payload); // the code is the event's to keep; the row is its offset's
+      // the code is the event's to keep; the row is its offset's
       if (state.scriptRuns[event.offset]) return undefined;
       const scriptRuns = draftOf(state.scriptRuns, draftTables);
       scriptRuns[event.offset] = { requestedAt: event.createdAt };
       return { ...state, scriptRuns };
     }
     case "events.iterate.com/context/run-settled": {
-      const { requestOffset } = RunSettled.parse(payload);
+      const requestOffset = payload.requestOffset as number;
       if (!state.scriptRuns[requestOffset]) return undefined; // settled twice, or never requested
       const scriptRuns = draftOf(state.scriptRuns, draftTables);
       delete scriptRuns[requestOffset];
@@ -617,6 +597,23 @@ function normalizeSubscriptionConfigured(input: {
         ifConfiguredAtOffset: input.ifConfiguredAtOffset,
       }),
   };
+}
+
+const IngressConfigured = z.object({
+  // The expression codec below validates every step after this outer shape check.
+  target: z
+    .custom<ItxExpressionInput>((value) => typeof value === "string" || Array.isArray(value))
+    .nullable(),
+});
+
+/** Apex routing stores the complete capability expression, independently of rewrite aliases. */
+function normalizeIngressConfigured(input: unknown): { target: ItxExpression | null } {
+  const { target } = IngressConfigured.parse(input);
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- null disables ingress; an empty expression must be rejected by the codec
+  if (target === null) return { target: null };
+  const expression = normalizedItxExpression(target);
+  if (expression[0] !== "itx") throw new Error("ingress target must be rooted at itx");
+  return { target: expression };
 }
 
 /** THE APPEND BOUNDARY for core CONTROL events: validate + normalize a LITERAL control event so call

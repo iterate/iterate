@@ -3,7 +3,7 @@ import { z } from "zod";
 import { errorCode, sameOriginPath } from "iterate/next/lib";
 import { cookieValueOf, signClaims, verifyClaims } from "iterate/next/principal";
 import type { Env } from "./control-plane.ts";
-import { appConfigOf, platformOriginOf, sessionSigningSecretOf } from "./app-config.ts";
+import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-config.ts";
 import { startIssuerSession } from "./issuer-session.ts";
 import { directory } from "./directory.ts";
 
@@ -40,7 +40,7 @@ export async function identityDoor(request: Request, env: Env) {
     .discoveryRequest(issuer)
     .then((response) => oauth.processDiscoveryResponse(issuer, response));
   const client = { client_id: google.clientId };
-  const platformOrigin = platformOriginOf(config, request);
+  const { platformOrigin } = platformAddressesOf(env, request);
   const redirectUri = `${platformOrigin}/.auth/identity/callback`;
   const signingSecret = await sessionSigningSecretOf(config);
   const headers = new Headers({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });

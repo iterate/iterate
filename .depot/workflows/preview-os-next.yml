@@ -19,7 +19,7 @@
 #
 # Concurrency per PR, never cancelled: a half-applied preview is worse than a slow one (their words).
 # The only Depot secret is DOPPLER_TOKEN; Doppler project-worker/preview supplies the Cloudflare
-# credentials and the three APP_CONFIG secrets the preview inherits.
+# credentials and the two secrets the preview inherits (APP_CONFIG, APP_CONFIG_SECRETS__KEY).
 
 name: Preview OS-Next
 

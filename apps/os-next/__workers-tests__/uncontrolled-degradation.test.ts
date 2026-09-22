@@ -223,15 +223,15 @@ test("A2 — CONTROL: the refused configure leaves memory and the log consistent
   };
   expect(Object.keys(core.state.itxExpressionRewriteRules)).toEqual(["itx.bigA"]);
   expect(core.offset).toBe(a); // reduced through rule A, not a phantom B
-  // The refused batch's offset was never burnt: A's live-state delta took a+1, so the next durable
-  // event lands at a+2 — exactly where B would have.
+  // The refused batch's offset was never burnt: the next durable event lands at a+1 — exactly
+  // where B would have.
   const c = offsetOf(
     await s.append({
       type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: { match: "itx.small", target: "itx.whoami" },
     }),
   );
-  expect(c).toBe(a + 2);
+  expect(c).toBe(a + 1);
   const page = (await s.invoke(["itx", ["readEvents", 0, 500]])) as {
     events: { offset: number }[];
   };
