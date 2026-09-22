@@ -84,7 +84,7 @@ test("renders, searches, and views seeded media", async ({ page, helpers }) => {
 test("captures through the live vision pipeline", async ({ page, helpers }) => {
   test.skip(
     process.env.MOBILE_MEDIA_SPECS !== "1",
-    "parked: AI-dependent (real toMarkdown + vision calls), so never CI-deterministic — likely becomes an eval; run with MOBILE_MEDIA_SPECS=1 — revisit by 2026-09-21",
+    "parked: AI-dependent (real toMarkdown + vision calls), so never CI-deterministic; no eval harness exists yet to move it to, so it stays a manual run with MOBILE_MEDIA_SPECS=1 — revisit by 2026-10-21",
   );
   await using _fixture = await helpers.createMobileFixture("mobile-media-ai");
   await page.getByLabel("Open project menu").filter({ visible: true }).click();
