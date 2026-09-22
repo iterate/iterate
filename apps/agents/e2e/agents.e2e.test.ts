@@ -27,6 +27,42 @@ import {
   short,
 } from "./fixtures.ts";
 
+test("a fully masked visitor sandbox can receive a prose reply without gaining tools", async () => {
+  const itx = await openAgentItx(freshCtx("agent-no-tools"));
+  const path = "/agents/visitor";
+  const support = itx.cd(path);
+  await support.provide("itx.ai", new ScriptedAi(["Here is a domain from the catalogue."]));
+  await itx.agents.create(path);
+  await itx.cd(`${path}/sandbox`).append(
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx", target: null },
+    },
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.agents", target: null },
+    },
+  );
+  await onWorkersAi(support);
+  await itx.agents.get(path).message("Suggest a name in prose.");
+  const log = await until("prose reply with no sandbox capabilities", async () => {
+    const events = await readAll(support);
+    return events.some((event) => event.type === "events.iterate.com/agent/web-message-sent")
+      ? events
+      : undefined;
+  });
+  expect(assistantWords(log)).toContain("Here is a domain from the catalogue.");
+  expect(log.some((event) => event.type === "events.iterate.com/context/run-requested")).toBe(
+    false,
+  );
+  await expect(itx.cd(`${path}/sandbox`).kv.get("anything")).rejects.toMatchObject({
+    code: "NO_ITX_EXPRESSION_MATCH",
+  });
+  await expect(itx.cd(`${path}/sandbox`).agents.list()).rejects.toMatchObject({
+    code: "NO_ITX_EXPRESSION_MATCH",
+  });
+});
+
 test("itx.agents.create(path) births the agent — the processor row, the request, the certificate on / and on its path with the default prompt; an operator's prompt is its own append; the catalog lists it; an agent not created refuses message()", async () => {
   const itx = await openAgentItx(freshCtx("agent"));
   expect(await itx.agents.list()).toEqual([]);

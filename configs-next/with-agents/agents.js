@@ -4,6 +4,25 @@ import { StreamProcessorDurableObject } from "./processor.js";
 
 // runtime/processor.ts
 import { z as z2 } from "./processor.js";
+
+// ../../packages/iterate/src/next/lib.ts
+function codedError(code, message, data) {
+  return Object.assign(new Error(message), data === void 0 ? { code } : { code, data });
+}
+function errorCode(error) {
+  return typeof error === "object" && error && "code" in error ? error.code : void 0;
+}
+function resolveContextPath(basePath, contextPath) {
+  const segments = [];
+  for (const seg of `${contextPath.startsWith("/") ? "" : basePath}/${contextPath}`.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") segments.pop();
+    else segments.push(seg);
+  }
+  return `/${segments.join("/")}`;
+}
+
+// runtime/processor.ts
 import {
   StreamProcessor
 } from "./processor.js";
@@ -890,7 +909,10 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`
     );
     try {
       const { path } = await this.#identity();
-      const tree = await this.deps.withItx((itx) => itx.cd(`${path}/sandbox`).rewriteRules.list());
+      const tree = await this.deps.withItx((itx) => itx.cd(`${path}/sandbox`).rewriteRules.list()).catch((error) => {
+        if (errorCode(error) === "NO_ITX_EXPRESSION_MATCH") return [];
+        throw error;
+      });
       const items = state.contextItems.filter((item) => item.offset < open.requestedAtOffset);
       const images = /* @__PURE__ */ new Map();
       for (const item of items)
@@ -1186,22 +1208,6 @@ import { StreamProcessorDurableObject as StreamProcessorDurableObject2 } from ".
 
 // runtime/collection.ts
 import { RpcTarget } from "cloudflare:workers";
-
-// ../../packages/iterate/src/next/lib.ts
-function codedError(code, message, data) {
-  return Object.assign(new Error(message), data === void 0 ? { code } : { code, data });
-}
-function resolveContextPath(basePath, contextPath) {
-  const segments = [];
-  for (const seg of `${contextPath.startsWith("/") ? "" : basePath}/${contextPath}`.split("/")) {
-    if (seg === "" || seg === ".") continue;
-    if (seg === "..") segments.pop();
-    else segments.push(seg);
-  }
-  return `/${segments.join("/")}`;
-}
-
-// runtime/collection.ts
 var AgentCollectionRpcTarget = class extends RpcTarget {
   constructor(withItx, catalog, spec, base = "/") {
     super();
