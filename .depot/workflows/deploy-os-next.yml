@@ -19,7 +19,13 @@ on:
       - packages/iterate/**
       - envs.ts
       - scripts/lib/**
+      - scripts/depot-ci/**
       - packages/shared/**
+      # A root dependency resolution can change the Worker bundle even when no
+      # application source path moved.
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
   workflow_dispatch:
     inputs:
       ref:

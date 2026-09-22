@@ -21,6 +21,9 @@ on:
       # the dash renders packages/ui (the context view, the app shell); a change there is a dash change
       - packages/ui/**
       - packages/shared/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
   workflow_dispatch:
     inputs:
       ref:

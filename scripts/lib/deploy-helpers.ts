@@ -1,6 +1,6 @@
 /**
  * Shared primitives for the per-app deploy/ensure-resources/erase-data
- * scripts (apps/{os,auth,semaphore,tunnels,streams-example-app,dummy-petshop}/scripts).
+ * scripts under apps/ and apps/os-next.
  *
  * Each script stays an imperative top-to-bottom program; these are the
  * handful of moves they all make (spawn-and-fail-fast, smoke probes, the
@@ -136,9 +136,11 @@ async function runStreamingCaptured(
       env: { ...process.env, ...opts.env },
     });
     let output = "";
-    const relay = (destination: NodeJS.WriteStream) => (chunk: Buffer) => {
+    const relay = (destination: NodeJS.WriteStream) => (chunk: Uint8Array) => {
       destination.write(chunk);
-      output = `${output}${chunk.toString("utf8")}`.slice(-CAPTURED_COMMAND_OUTPUT_LIMIT);
+      output = `${output}${Buffer.from(chunk).toString("utf8")}`.slice(
+        -CAPTURED_COMMAND_OUTPUT_LIMIT,
+      );
     };
     child.stdout.on("data", relay(process.stdout));
     child.stderr.on("data", relay(process.stderr));

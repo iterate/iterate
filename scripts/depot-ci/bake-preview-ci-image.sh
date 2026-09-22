@@ -63,7 +63,6 @@ echo "==> Reporting baked cache size"
 echo "pnpm-store=$(pnpm store path)"
 du -sh "$(pnpm store path)" || true
 du -sh node_modules || true
-du -sh apps/streams-example-app/node_modules || true
 du -sh /home/runner/.cache/ms-playwright || true
 
 # Seal only after every setup step succeeds. This receipt travels with the tree.

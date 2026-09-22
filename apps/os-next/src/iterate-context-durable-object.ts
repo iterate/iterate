@@ -139,8 +139,8 @@ export type AlarmTrace = {
 
 /** The bindings THE DO reads (wrangler.jsonc): the DO namespace, the Worker Loader, the kv namespaces,
  *  Workers AI, Browser Run, Artifacts — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
- *  vars worker.ts's `parseAppConfig` parses. control-plane.ts's `Env` extends this with the
- *  in-process control plane's own (D1, OAuth KV, …): the one worker's env. */
+ *  vars worker.ts's `parseAppConfig` parses, plus the in-process control plane's own D1 and OAuth
+ *  KV bindings. */
 export interface Env extends AppConfigEnv {
   ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
   LOADER: WorkerLoader;
@@ -157,7 +157,7 @@ export interface Env extends AppConfigEnv {
   ARTIFACTS: ArtifactsNamespace;
 }
 
-/** The app label an app sees — apps/os's header. Written at the fetch lane alone (`fetch` below),
+/** The app label an app sees. Written only by `fetch` below,
  *  from the expression: the label of `itx.apps.<label>…`, deleted for any other expression — so
  *  neither a visitor on a project host nor loaded code on `env.ITX.fetch` can pick an app the
  *  expression did not. */
@@ -995,7 +995,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         const headers = new Headers(request.headers);
         headers.delete(ITX_EXPRESSION_FETCH_HEADER);
         headers.delete(ITX_APP_HEADER);
-        // THE APP LABEL the app sees (`x-iterate-app`, apps/os's header) is derived HERE, from the
+        // THE APP LABEL the app sees (`x-iterate-app`) is derived HERE from the
         // expression, on every fetch-lane Request — a project host's, a session's terminal fetch, a
         // loaded worker's `env.ITX.fetch` — so whatever a visitor or loaded code wrote is overwritten
         // (set to the label of `itx.apps.<label>…`, deleted for any other expression).

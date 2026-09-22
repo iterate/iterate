@@ -1,0 +1,53 @@
+name: Build Kit Firmware
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .depot/workflows/kit-firmware.yml
+      - apps/kit/firmware/**
+      - apps/kit/package.json
+      - packages/iterate/**
+      - packages/shared/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+  pull_request:
+    paths:
+      - .depot/workflows/kit-firmware.yml
+      - apps/kit/firmware/**
+      - apps/kit/package.json
+      - packages/iterate/**
+      - packages/shared/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+  workflow_dispatch: {}
+
+concurrency:
+  group: kit-firmware-${{ github.head_ref || github.ref_name || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+
+jobs:
+  build-host-firmware:
+    name: Build host firmware
+    runs-on:
+      size: 4x16
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+      # This is a build-only, host-native check. It does not download ESP-IDF,
+      # contact Cloudflare, use Doppler, or publish firmware artifacts.
+      - name: Build Kit firmware host targets
+        run: pnpm --dir apps/kit firmware:build:host

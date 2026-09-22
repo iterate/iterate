@@ -10,7 +10,7 @@ Identified on 2026-09-21. Use the ROM MAC / USB serial number as identity;
 
 Waveshare ESP32-S3 RLCD 4.2 has USB serial `94:A9:90:CD:51:B8`.
 Factory boot reported `03_Fac`, ES8311/ES7210 and the vendor's RLCD wiring;
-Jonas confirmed the Hello World display and KEY-button test on this unit.
+Jonas confirmed the display and KEY-button path on this unit.
 See its [board notes](devices/waveshare_s3_rlcd/README.md).
 
 ZECTRIX NOTE4 has USB serial `80:45:6B:38:60:84`. Factory boot identifies

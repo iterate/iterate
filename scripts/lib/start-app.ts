@@ -177,7 +177,7 @@ async function eraseData(app: StartApp, options: { env: string }) {
 
 /**
  * Regenerates src/routeTree.gen.ts with the same generator + config that @tanstack/react-start's vite
- * plugin uses (apps/auth/scripts/generate-route-tree.ts, verbatim but for the paths). `check` fails
+ * plugin uses. `check` fails
  * (and restores the original file) when the checked-in tree is stale, so route files added or renamed
  * without regenerating are caught.
  */

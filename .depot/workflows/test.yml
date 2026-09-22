@@ -36,7 +36,7 @@ jobs:
       # THIS JOB INSTALLS. Reusing the baked node_modules (scripts/depot-ci/dependencies.mjs) skips a
       # ~55 s no-op install, but the image is loaded lazily and that install was what paged the tree
       # in: with the reuse, the first packages' tests ran 1.5–2× slower and 5 s rows timed out in
-      # three of three runs (2026-09-22: apps/mobile/website worker.test, scripts change-plan.test);
+      # three of three runs (2026-09-22: historical test and script failures);
       # a parallel stat walk after the reuse did not help (metadata, not contents). The other
       # workflows import little and keep the reuse; the test job pays the install.
       - name: Install dependencies (pages the baked tree in)

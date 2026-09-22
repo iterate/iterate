@@ -4,12 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-catalogs:
-  cloudflare:
-    '@cloudflare/workers-types':
-      specifier: ^4.20260621.1
-      version: 4.20260621.1
-
 overrides:
   '@iterate-com/agents>wrangler': 4.131.1
   '@babel/parser': ^7.28.0
@@ -36,9 +30,6 @@ overrides:
 packageExtensionsChecksum: sha256-83x+/wXT84IWypAXvA+sfOu0Divsx2XgpRXJsK5kZ3k=
 
 patchedDependencies:
-  '@cloudflare/workers-types@4.20260621.1':
-    hash: ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2
-    path: patches/@cloudflare__workers-types@4.20260621.1.patch
   zod@4.5.4:
     hash: bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5
     path: patches/zod@4.5.4.patch
@@ -95,6 +86,9 @@ importers:
       lint-staged:
         specifier: ^16.2.7
         version: 16.3.2
+      middlewright:
+        specifier: https://pkg.pr.new/middlewright@e3f2374
+        version: https://pkg.pr.new/middlewright@e3f2374(@playwright/test@1.60.0)
       oxfmt:
         specifier: ^0.35.0
         version: 0.35.0
@@ -301,10 +295,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: 1.54.8
-        version: 1.54.8(@types/node@24.12.4)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0))(wrangler@4.131.1(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@types/node@24.12.4))
+        version: 1.54.8(@types/node@24.12.4)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0))(wrangler@4.131.1(@cloudflare/workers-types@5.20260911.1)(@types/node@24.12.4))
       '@cloudflare/workers-types':
-        specifier: catalog:cloudflare
-        version: 4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)
+        specifier: ^5.20260831.1
+        version: 5.20260911.1
       '@tailwindcss/vite':
         specifier: ^4.3.2
         version: 4.3.2(vite@8.0.16(@types/node@24.12.4)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0))
@@ -343,7 +337,7 @@ importers:
         version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0))
       wrangler:
         specifier: 4.131.1
-        version: 4.131.1(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@types/node@24.12.4)
+        version: 4.131.1(@cloudflare/workers-types@5.20260911.1)(@types/node@24.12.4)
 
   apps/notes:
     dependencies:
@@ -445,6 +439,9 @@ importers:
       esbuild:
         specifier: ^0.27.4
         version: 0.27.4
+      middlewright:
+        specifier: https://pkg.pr.new/middlewright@e3f2374
+        version: https://pkg.pr.new/middlewright@e3f2374(@playwright/test@1.60.0)
       trpc-cli:
         specifier: 0.15.1
         version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5))
@@ -1155,9 +1152,6 @@ packages:
 
   '@cloudflare/workers-oauth-provider@0.10.3':
     resolution: {integrity: sha512-25ufMONJir9PllqVpK4GwOOoSFgpYm3+bM6NBedj7ufMCIfNf5jk4OI0LPuTJBaJgLl2lGCLqFqEPJXcSuPopQ==}
-
-  '@cloudflare/workers-types@4.20260621.1':
-    resolution: {integrity: sha512-c4xrf4shZdDOK1ihh1UKzlS/3MDYiGThT/Oqr4Y3qR9NLCSNzHB7rt+Vk/LOp0ZSNjA+7WNJEQsOhpiQtpT2GA==}
 
   '@cloudflare/workers-types@5.20260911.1':
     resolution: {integrity: sha512-yiAvknjulcU85B3yB4aKOn9+l+garWP+AbHgsdCFckeRYDdhZ1rPULi64BDf52R3VTaKqxi47kF+o9ZbjsCt5g==}
@@ -4663,6 +4657,10 @@ packages:
   electron-to-chromium@1.5.362:
     resolution: {integrity: sha512-PUY2DrLvkjkUuWqq+KPL2iWshrJsZOcIojzRQ7eXFacc9dWga7MGMJAa15VbiejSZB1PAXaRLAiKgruHP8LB1w==}
 
+  emittery@1.2.1:
+    resolution: {integrity: sha512-sFz64DCRjirhwHLxofFqxYQm6DCp6o0Ix7jwKQvuCHPn4GMRZNuBZyLPu9Ccmk/QSCAMZt6FOUqA8JZCQvA9fw==}
+    engines: {node: '>=14.16'}
+
   emoji-regex@10.6.0:
     resolution: {integrity: sha512-toUI84YS5YmxW219erniWD0CIVOo46xGKColeNQRgOzDorgBi1v4D71/OFzgD9GO2UGKIv1C3Sp8DAn0+j5w7A==}
 
@@ -5910,6 +5908,13 @@ packages:
   micromatch@4.0.8:
     resolution: {integrity: sha512-PXwfBhYu0hBCPw8Dn0E+WDYb7af3dSLVWKi3HGv84IdF4TyFoC0ysxFd0Goxw7nSv4T/PzEJQxsYsEiFCKo2BA==}
     engines: {node: '>=8.6'}
+
+  middlewright@https://pkg.pr.new/middlewright@e3f2374:
+    resolution: {tarball: https://pkg.pr.new/middlewright@e3f2374}
+    version: 0.1.0
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@playwright/test': '>=1.49.0'
 
   mime-db@1.52.0:
     resolution: {integrity: sha512-sPU4uV7dYlvtWJxwwxHD0PuihVNiE7TyAbQ5SWxDCB9mUYvOgroQOwYQQOKPJ8CIbE+1ETVlOoK1UC2nU3gYvg==}
@@ -7909,14 +7914,14 @@ snapshots:
     optionalDependencies:
       workerd: 1.20260911.1
 
-  '@cloudflare/vite-plugin@1.54.8(@types/node@24.12.4)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0))(wrangler@4.131.1(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@types/node@24.12.4))':
+  '@cloudflare/vite-plugin@1.54.8(@types/node@24.12.4)(vite@8.0.16(@types/node@24.12.4)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0))(wrangler@4.131.1(@cloudflare/workers-types@5.20260911.1)(@types/node@24.12.4))':
     dependencies:
       '@cloudflare/unenv-preset': 2.16.1(unenv@2.0.0-rc.24)(workerd@1.20260911.1)
       miniflare: 5.20260911.0-alpha(@types/node@24.12.4)
       unenv: 2.0.0-rc.24
       vite: 8.0.16(@types/node@24.12.4)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0)
       workerd: 1.20260911.1
-      wrangler: 4.131.1(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@types/node@24.12.4)
+      wrangler: 4.131.1(@cloudflare/workers-types@5.20260911.1)(@types/node@24.12.4)
       ws: 8.19.0
     transitivePeerDependencies:
       - '@types/node'
@@ -8013,8 +8018,6 @@ snapshots:
     optional: true
 
   '@cloudflare/workers-oauth-provider@0.10.3': {}
-
-  '@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)': {}
 
   '@cloudflare/workers-types@5.20260911.1': {}
 
@@ -11733,6 +11736,8 @@ snapshots:
 
   electron-to-chromium@1.5.362: {}
 
+  emittery@1.2.1: {}
+
   emoji-regex@10.6.0: {}
 
   emoji-regex@8.0.0: {}
@@ -13450,6 +13455,14 @@ snapshots:
     dependencies:
       braces: 3.0.3
       picomatch: 2.3.1
+
+  middlewright@https://pkg.pr.new/middlewright@e3f2374(@playwright/test@1.60.0):
+    dependencies:
+      '@playwright/test': 1.60.0
+      dedent: 1.7.2
+      emittery: 1.2.1
+    transitivePeerDependencies:
+      - babel-plugin-macros
 
   mime-db@1.52.0: {}
 
@@ -15616,7 +15629,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  wrangler@4.131.1(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@types/node@24.12.4):
+  wrangler@4.131.1(@cloudflare/workers-types@5.20260911.1)(@types/node@24.12.4):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.5.0
       '@cloudflare/unenv-preset': 2.16.1(unenv@2.0.0-rc.24)(workerd@1.20260911.1)
@@ -15627,7 +15640,7 @@ snapshots:
       unenv: 2.0.0-rc.24
       workerd: 1.20260911.1
     optionalDependencies:
-      '@cloudflare/workers-types': 4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)
+      '@cloudflare/workers-types': 5.20260911.1
       fsevents: 2.3.3
     transitivePeerDependencies:
       - '@types/node'

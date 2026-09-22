@@ -1,4 +1,4 @@
-// playwright.config.ts — the BROWSER E2E, apps/os-shaped. Playwright boots a real local worker
+// playwright.config.ts — the BROWSER E2E. Playwright boots a real local worker
 // (`wrangler dev`) and drives the issuer's pages (the consent flow) and a project host's mini-app
 // through Chromium: a real browser → the capnweb fork → a real worker.
 //

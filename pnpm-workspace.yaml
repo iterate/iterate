@@ -86,5 +86,4 @@ packageExtensions:
     peerDependencies:
       "@types/react": "*"
 patchedDependencies:
-  "@cloudflare/workers-types@4.20260621.1": patches/@cloudflare__workers-types@4.20260621.1.patch
   zod@4.5.4: patches/zod@4.5.4.patch

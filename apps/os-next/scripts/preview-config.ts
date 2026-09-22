@@ -33,7 +33,16 @@ export const MAX_PREVIEW_NAME_LENGTH = 28;
 export const APPS: StartApp[] = [dash, agents, notes, voice];
 /** A path that changes every app: the SDK they are built on, the shared UI, the shared deploy
  *  scripts, the env map. An app's own paths are `apps/<name>/`. */
-export const SHARED_APP_PATHS = ["packages/iterate/", "packages/ui/", "scripts/lib/", "envs.ts"];
+export const SHARED_APP_PATHS = [
+  "packages/iterate/",
+  "packages/shared/",
+  "packages/ui/",
+  "scripts/lib/",
+  "envs.ts",
+  "package.json",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+];
 
 // ── naming ─────────────────────────────────────────────────────────────────────────────────────
 

@@ -154,18 +154,16 @@ static void mount_to_ready(struct fixture *fixture) {
 }
 
 /*
- * THE WHOLE HANDSHAKE, LITERALLY. os-next splits what apps/os did in two calls
- * into three, and every one of them changed shape: `authenticate` asks for the
- * session the bearer on the upgrade resolved and carries no secret, `projects.get`
- * is pure addressing with one bare string argument, and lending this device
- * back is `provide(match, stub)` — one front door instead of a `capabilities`
- * field inside `connect`.
+ * The handshake has three calls: `authenticate` asks for the session the bearer
+ * on the upgrade resolved and carries no secret, `projects.get` is pure
+ * addressing with one bare string argument, and lending this device back is
+ * `provide(match, stub)`.
  *
  * Retaining every intermediate remote handle was rejected because fixed Cap'n
  * Web tables would slowly exhaust and obsolete authority would survive longer
  * than needed. This proves each temporary PROMISE is released as ownership
- * advances, that READY retains the SESSION (what the liveness probe asks — a
- * `whoami()` the edge answers without waking the project's context), the
+ * advances, that READY retains the SESSION (what the liveness probe asks —
+ * `whoami()` without waking the project's context), the
  * project root AND the rule handle that is the live provision, and that a
  * clean close revokes the rule, then the project, then the session.
  */

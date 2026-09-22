@@ -15,7 +15,9 @@
     "src/next/expression.ts",
     "src/next/principal.ts",
     "src/next/stream/processor.ts",
+    "src/next/stream/run.ts",
     "src/next/oauth-scopes.ts",
+    "src/next/project-ingress.ts",
     "src/next/client/oauth.ts"
   ],
   "compilerOptions": {

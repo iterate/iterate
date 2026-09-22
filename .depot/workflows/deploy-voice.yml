@@ -20,6 +20,9 @@ on:
       - packages/iterate/**
       - packages/ui/**
       - packages/shared/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
   workflow_dispatch:
     inputs:
       ref:
