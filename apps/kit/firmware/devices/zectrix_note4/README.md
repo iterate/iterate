@@ -57,7 +57,7 @@ as busy. Status reports pending/shown/failed; `shown: true` acknowledges the
 controller, not optical output. A panel failure stops refreshes until reboot.
 Status updates coalesce; mono uses a full refresh every twentieth update and
 after grayscale. Uploaded images remain until cleared. Drawing instructions:
-[screen-context.md](../../../../os-next/examples/voice-agent/screen-context.md).
+[screen-context.md](../../../../agents/voice/screen-context.md).
 
 The driver retains five 535-byte vendor calibration tables and shade mapping,
 verified against the reference. Mono uses controller OTP waveforms; unused
