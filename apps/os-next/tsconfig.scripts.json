@@ -16,6 +16,7 @@
     "scripts/deploy.ts",
     "scripts/ensure-resources.ts",
     "scripts/erase-data.ts",
+    "scripts/erase-data.test.ts",
     "scripts/generate-wrangler-config.ts",
     "scripts/preview.ts",
     "scripts/preview-config.ts",
