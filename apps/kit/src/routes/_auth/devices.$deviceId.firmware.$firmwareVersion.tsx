@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute, redirect, Link } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Field,
@@ -19,7 +19,7 @@ import {
 } from "@iterate-com/ui/components/select";
 import { LogOutIcon, UsbIcon } from "lucide-react";
 import { ensureVoiceAgent, VoiceInstall } from "../../voice/install.ts";
-import { dashEnvs, kitEnvs } from "../../../../../envs.ts";
+import { dashEnvs } from "../../../../../envs.ts";
 import { FirmwareInstallButton } from "../../components/firmware-install-button.tsx";
 import {
   DEFAULT_DEVICE_ID,
@@ -60,17 +60,13 @@ export const Route = createFileRoute("/_auth/devices/$deviceId/firmware/$firmwar
   component: KitPage,
 });
 
-const deviceItems = firmwareCatalog.map((device) => ({
-  label: device.name,
-  value: device.id,
-}));
 const horizontalFieldClassName =
   "grid gap-2 sm:grid-cols-[8.5rem_minmax(0,1fr)] sm:items-start sm:gap-4";
 
 function KitPage() {
   const params = Route.useParams();
   const navigate = Route.useNavigate();
-  const { api, info } = Route.useRouteContext();
+  const { api, info, deviceSession } = Route.useRouteContext();
   const { projects } = Route.useLoaderData();
   const formRef = useRef<HTMLFormElement>(null);
   const [wifiSsid, setWifiSsid] = useState("");
@@ -134,7 +130,7 @@ function KitPage() {
         <div className="flex flex-col gap-3 text-sm leading-relaxed text-muted-foreground">
           <p>
             Open this page in Chrome or Edge on a computer. Connect your device with a USB data
-            cable, choose its model, and enter your Wi-Fi.
+            cable and enter your Wi-Fi.
           </p>
           <p>
             Choose the project the device belongs to. Prepare device installs a voice agent if your
@@ -161,33 +157,16 @@ function KitPage() {
               Device
             </FieldLabel>
             <FieldContent>
-              <Select
-                items={deviceItems}
-                value={device.id}
-                onValueChange={(value) => {
-                  if (!value) return;
-                  void navigate({
-                    to: "/devices/$deviceId/firmware/$firmwareVersion",
-                    params: {
-                      deviceId: value,
-                      firmwareVersion: DEFAULT_FIRMWARE_VERSION,
-                    },
-                  });
-                }}
-              >
-                <SelectTrigger id="device" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {deviceItems.map((item) => (
-                      <SelectItem key={item.value} value={item.value}>
-                        {item.label}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
+              <div className="flex flex-wrap items-center justify-between gap-2 sm:pt-2">
+                <span id="device">{device.name}</span>
+                <Link
+                  to="/"
+                  search={{ device: device.id }}
+                  className="text-xs underline underline-offset-4"
+                >
+                  Set up another device
+                </Link>
+              </div>
               <FieldDescription className="flex items-center gap-2">
                 <img
                   src={`/vendors/${deviceVendors[device.id]!.icon}`}
@@ -378,8 +357,8 @@ function KitPage() {
                       const { token } = await api.grants.mint({
                         name: `Kit ${device.name} ${new Date().toISOString().slice(0, 10)}`,
                         projects: [projectId],
-                        // The issuer must fetch public HTTPS metadata, including during local development.
-                        clientId: `${kitEnvs.prd.baseUrl}/devices/${device.id}/clients/${crypto.randomUUID()}.json`,
+                        // The same identity the person saw and authorized, chosen before login.
+                        clientId: deviceSession.clientId,
                         // The device can neither refresh nor reflash itself: it is retired by
                         // revocation from the sessions list, not by expiry.
                         expiresAt: Date.now() + 10 * 365 * 24 * 3600_000,
