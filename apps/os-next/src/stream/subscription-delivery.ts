@@ -64,8 +64,9 @@ const DELIVERY_IN_FLIGHT_BUDGET_CHARS = 8 * 1024 * 1024;
  *  MORE, so a full catch-up page OVERFILLS it: the read branch holds the whole budget from before the
  *  read and only ever RELEASES (the overshoot stays charged as the page), so big catch-up serializes
  *  and the next cursor read WAITS; a small batch is trimmed to its real size and frees the reserve so
- *  small cursor deliveries stay concurrent and no call head-of-line-blocks the lane. A row AT the
- *  mark reads nothing but the stream's recent-ephemerals ring and reserves that ring's size instead. */
+ *  small cursor deliveries stay concurrent and no call head-of-line-blocks the other cursor rows.
+ *  A row AT the mark reads nothing but the stream's recent-ephemerals ring and reserves that ring's
+ *  size instead. */
 const CURSOR_READ_BUDGET_CHARS = 8 * 1024 * 1024;
 /** THE PENDING-PUSH BUDGET, per context: the most serialized event chars ALL rows together may hold
  *  back while their deliveries are in flight. Past it the OLDEST events are dropped from the LARGEST
@@ -759,6 +760,12 @@ export class SubscriptionDelivery {
             : RECENT_EPHEMERALS_BUDGET_CHARS;
           await this.#cursorReadCharsInFlight.acquire(reserveChars);
           inFlightRoomHeld = reserveChars;
+          // A durable that landed while an at-mark row waited for room put it behind the mark: this
+          // attempt holds no claim and a ring-sized reserve, neither of which covers a page of
+          // durables — start the iteration over (the finally releases the room), and the next turn
+          // claims and reserves a page's worth before it reads.
+          if (!behindTheDurableMark && cursor.confirmedOffset < this.#stream.highestDurableOffset())
+            continue;
           let page: StreamPage;
           try {
             page = this.#stream.read(cursor.confirmedOffset, 100, { includeEphemeral: true });

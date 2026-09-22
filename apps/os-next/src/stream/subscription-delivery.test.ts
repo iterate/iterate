@@ -1032,6 +1032,71 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): exactly t
     await rig.release();
   });
 
+  test("a durable that lands while an at-mark row WAITS for cursor-read room is delivered under a claim, not on the ring-sized reserve the wait began with", async () => {
+    // Row `big` (consumes blob) reads a 7.5 MiB page and parks its call, holding most of the
+    // cursor-read budget; row `small` (consumes demo/ping) is at the mark when an ephemeral kicks it,
+    // so it reserves the ring's size and waits behind `big`. A durable it consumes lands meanwhile.
+    // Woken, `small` is behind the mark: it must start over — a claim in the table, a page's worth
+    // of room — before it reads, or an isolate death mid-call would leave that durable with no wake.
+    const parked: Record<string, (() => void)[]> = { big: [], small: [] };
+    const pushes: Record<string, number[][]> = { big: [], small: [] };
+    const rig = incarnation((printed) => {
+      const name = printed === "itx.big" ? "big" : printed === "itx.small" ? "small" : undefined;
+      return (
+        name && {
+          push: (events: { payload?: { n?: number } }[]) => {
+            pushes[name].push(ns(events));
+            return new Promise<void>((resolve) => parked[name].push(resolve));
+          },
+        }
+      );
+    });
+    const release = async (name: string) => {
+      parked[name].splice(0).forEach((resolve) => resolve());
+      await settled();
+    };
+    for (const [name, consumes] of [
+      ["small", "demo/ping"],
+      ["big", "blob"],
+    ] as const)
+      rig.stream.append(
+        normalizeControlEvent(
+          {
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: { name, target: `itx.${name}.push`, consumes: [consumes] },
+          },
+          "/",
+        ),
+      );
+    await settled();
+    rig.stream.append({ type: "blob", payload: { n: 0, blob: "x".repeat(7.5 * MiB) } });
+    await settled(); // `big` parks its call holding ~7.5 MiB; `small` was moved along: at the mark
+    expect(pushes.big).toEqual([[0]]);
+    rig.stream.append({ type: "demo/ping", ephemeral: true, payload: { n: 1 } });
+    await settled(); // `small` reserved the ring's size and is waiting for room
+    expect(pushes.small).toEqual([]);
+    const [durable] = rig.stream.append({ type: "demo/ping", payload: { n: 2 } });
+    await settled();
+    expect(pushes.small).toEqual([]); // still waiting; no claim yet — the row was at the mark when it began
+    expect(rig.delivery.cursor("small")?.nextAttemptAtMs).toBeUndefined();
+    await release("big");
+    // Woken behind the mark: the claim is written before the read, and the call is in flight.
+    expect(pushes.small).toEqual([[1, 2]]);
+    expect(rig.delivery.cursor("small")).toMatchObject({ attempt: 1 });
+    expect(rig.delivery.cursor("small")?.nextAttemptAtMs).toBeGreaterThan(Date.now());
+    expect(rig.stream.storage.listSubscriptionCursors()).toContainEqual([
+      "small",
+      expect.objectContaining({ attempt: 1 }),
+    ]);
+    expect(rig.delivery.deadlines()).toMatchObject([{ name: "small", attempt: 1 }]);
+    await release("small");
+    expect(rig.delivery.cursor("small")).toMatchObject({
+      confirmedOffset: durable.offset,
+      attempt: 0,
+    });
+    expect(rig.delivery.deadlines()).toEqual([]);
+  });
+
   test("two ephemeral batches that land during ONE in-flight cursor call BOTH reach the target, in one delivery, from the ring", async () => {
     const rig = parkedSinkRig();
     const [durable] = rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
