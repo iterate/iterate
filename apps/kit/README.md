@@ -10,21 +10,27 @@ then flashes a checked source-built release and its private configuration direct
 
 ## What a person needs
 
-Sign in with your Iterate account (the page sends you through OS's OAuth and
-back), choose a board release, enter Wi-Fi, pick one of your projects, then click
-**Prepare device** and **Flash device**. The prepare step installs the voice agent when missing and asks for an OpenAI API
-key if the project has none. It verifies voice health before minting a ten-year
-token scoped to that project. Existing voice services and secrets are preserved.
-The installer bundles the voice sources at build time, uploads immutable files
-under `kit/voice/` in project KV, and publishes only the `itx.voice` mount after
-all uploads succeed. Project websites and other apps are unchanged. Each preparation gets a unique OAuth client, with public metadata
-at `k.iterate.com/devices/<model>/clients/<uuid>.json` and the vendor's icon.
-It appears as `Kit <board> <date>` with kind **Device** in your sessions list.
-The token is written to the board and revoked individually from that list,
-never refreshed. Previously provisioned tokens retain their existing identity
-until the device is prepared again.
+Choose your board at `k.iterate.com`, then click **Log in with iterate**. Consent
+shows that board's name and vendor icon; choose its project and authorize access.
+Each setup starts a unique OAuth client before consent, including two boards of
+the same model. After sign-in, enter Wi-Fi, click **Prepare device**, then **Flash
+device**. **Set up another device** returns to the public selector and starts fresh
+consent; it never silently changes the authorized model.
 
-Use **Log out** beside your account name to return to the sign-in page.
+Prepare installs voice when missing and asks for an OpenAI API key if the project
+has none. It verifies voice health before minting a ten-year token scoped to the
+chosen project, under the same OAuth client that was authorized. Existing voice
+services, secrets and project websites are preserved. Immutable voice files live
+under `kit/voice/` in project KV; the `itx.voice` mount is published only after all
+uploads succeed.
+
+Client metadata lives at `k.iterate.com/devices/<model>/clients/<uuid>.json`. The
+flashed token appears as `Kit <board> <date>` with kind **Device** in your sessions
+list and can be revoked individually. **Log out** ends only the browser's setup
+session and returns to device selection; already flashed tokens keep working.
+Previously provisioned tokens retain their existing identity until prepared again.
+Local HTTP development uses the issuer's dynamic client registration with the same
+branding; hosted previews exercise the actual metadata client and consent path.
 
 Wi-Fi and the token stay in browser memory until they are written to the
 connected board's `iterate_kit` partition. Neither goes to the Kit worker or a
