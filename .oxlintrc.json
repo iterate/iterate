@@ -37,6 +37,7 @@
     "**/evalite-export/**",
     ".tmp-ci-build*",
     "**/*ignoreme*",
+    "apps/browser-extension/capnweb.js",
     "apps/os-next/public/capnweb.js",
     "configs-next/with-agents/agents.js"
   ],

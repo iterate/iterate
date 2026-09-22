@@ -36,7 +36,6 @@
     "@fsegurai/codemirror-theme-bundle": "^6.3.1",
     "@iterate-com/shared": "workspace:*",
     "@tailwindcss/postcss": "^4.3.2",
-    "ai": "^5.0.145",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "codemirror": "^6.0.2",

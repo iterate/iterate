@@ -38,6 +38,7 @@
     "**/.iterate/",
     "**/components/ui/",
     "**/components/ai-elements/",
+    "apps/browser-extension/capnweb.js",
     "apps/os-next/public/capnweb.js",
     "configs-next/with-agents/agents.js"
   ]
