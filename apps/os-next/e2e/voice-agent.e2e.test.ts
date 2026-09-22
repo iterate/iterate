@@ -47,7 +47,7 @@ export default class extends WorkerEntrypoint {
     if (request.method === "POST") {
       const {input} = await request.json();
       const result = input.findLast(message => message.content.startsWith("Script result:\\n"));
-      const text = result ? result.content : '<codemode status="Checking the clock">\\nreturn {time: new Date().toISOString(), identity: await itx.whoami()};\\n</codemode>';
+      const text = result ? result.content : '<codemode status="Checking the clock">\\nreturn {time: new Date().toISOString(), identity: await itx.whoami()};\\n</codemode>\\n\\nI could not verify the time.';
       return Response.json({output: [{type: "message", content: [{type: "output_text", text}]}]});
     }
     const [client, server] = Object.values(new WebSocketPair());
@@ -163,6 +163,11 @@ export default class extends WorkerEntrypoint {
           (event) => event.type === `${T}commentary` && event.payload.delegationId === "clock",
         ),
       );
+      expect(
+        received
+          .filter((event) => event.type === `${T}thinking`)
+          .map((event) => event.payload.content),
+      ).toEqual(["Checking the clock"]);
       const content = String(commentary.payload.content);
       expect(content).not.toContain("ERROR:");
       const clock = JSON.parse(content.replace("Script result:\n", ""));
