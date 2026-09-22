@@ -25,6 +25,7 @@ import {
   type AccessGrant,
   type GrantProps,
 } from "./oauth.ts";
+import { clientDisplay } from "./client-display.ts";
 import { publishGlobalFact } from "./session.ts";
 
 export type ConsentView =
@@ -32,8 +33,11 @@ export type ConsentView =
       kind: "consent";
       query: string;
       clientName: string;
-      /** the OAuth client id (the consent hero shows the client by its initials) */
+      /** The OAuth client id, independently of the app-supplied display name and logo. */
       clientId: string;
+      clientLogoUri?: string;
+      /** CIMD's metadata host, otherwise the registered client's self-declared website host. */
+      clientDomain?: string;
       email: string;
       /** the identity provider's picture of the signed-in person, when the sign-in brought one */
       picture?: string;
@@ -127,6 +131,7 @@ export class Consent extends RpcTarget {
     try {
       const request = await this.#request(query);
       const client = await oauthHelpers(env, this.#addresses).lookupClient(request.clientId);
+      const display = clientDisplay(client, request.clientId);
       const denied = new URL(request.redirectUri);
       denied.searchParams.set("error", "access_denied");
       denied.searchParams.set("error_description", "The user declined access.");
@@ -136,8 +141,10 @@ export class Consent extends RpcTarget {
         kind: "consent",
         query,
         denyLocation: denied.href,
-        clientName: client?.clientName ?? request.clientId,
+        clientName: display.clientName,
         clientId: request.clientId,
+        clientLogoUri: display.logoUri,
+        clientDomain: display.clientDomain,
         email: this.#grant.email,
         picture: this.#grant.picture,
         // parseAuthorization admitted only known scopes
@@ -203,7 +210,7 @@ export class Consent extends RpcTarget {
       const approved = await oauthHelpers(env, this.#addresses).completeAuthorization({
         request,
         userId: this.#grant.userId,
-        metadata: { clientName },
+        metadata: clientDisplay(client, request.clientId),
         scope,
         revokeExistingGrants: false,
         props: {

@@ -22,7 +22,7 @@ const el = (tag, props, ...children) => {
 };
 /** A picture over a fallback: the tile keeps its text until — unless — the image has loaded. */
 const pictured = (tile, src) => {
-  const image = el("img", { src, alt: "" });
+  const image = el("img", { src, alt: "", referrerpolicy: "no-referrer" });
   image.addEventListener("load", () => tile.replaceChildren(image), { once: true });
   return tile;
 };
@@ -269,7 +269,18 @@ function render() {
     return;
   }
   if (view.kind === "invalid") return renderInvalid(view);
-  const { clientName, email, picture, projects, orgs, projectBound, scopes, denyLocation } = view;
+  const {
+    clientName,
+    clientLogoUri,
+    clientDomain,
+    email,
+    picture,
+    projects,
+    orgs,
+    projectBound,
+    scopes,
+    denyLocation,
+  } = view;
   document.title = `Authorize ${clientName} — iterate`;
   const onboarding = !projectBound && !projects.length;
   const reviewing = state.step === "permissions" && !onboarding;
@@ -481,6 +492,10 @@ function render() {
     else add?.focus();
     return;
   }
+  const clientTile = el("span", {
+    class: "consent-tile consent-client-tile",
+    text: clientName.slice(0, 2).toUpperCase(),
+  });
   card.replaceChildren(
     el(
       "header",
@@ -490,9 +505,10 @@ function render() {
         { class: "consent-hero", "aria-hidden": "true" },
         el("span", { class: "consent-tile" }, el("img", { src: "/iterate-logo.svg", alt: "" })),
         el("span", { class: "consent-arrow", text: "⇄" }),
-        el("span", { class: "consent-tile", text: clientName.slice(0, 2).toUpperCase() }),
+        clientLogoUri ? pictured(clientTile, clientLogoUri) : clientTile,
       ),
       el("h1", { text: `${clientName} wants to access your account` }),
+      clientDomain && el("p", { class: "muted consent-client-domain", text: clientDomain }),
     ),
     panel,
   );
