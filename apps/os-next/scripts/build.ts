@@ -20,7 +20,7 @@
 //      pages' CSP loads script from this origin alone). The workspace's capnweb is what the worker
 //      speaks, so the copy is the same version by construction.
 //
-// The issuer's pages need no build at all: they are files in public/ (login.html, authorize.html,
+// The issuer's pages need no build at all: they are files in public/ (login.html, oauth2/auth.html,
 // their stylesheet and scripts), served by the assets binding. The two generated modules have
 // committed `.d.ts` siblings, so `tsc` and knip resolve the imports without a build; every runtime
 // path runs this first (vitest.global-setup.ts, scripts/dev.ts, scripts/deploy.ts).

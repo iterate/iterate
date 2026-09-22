@@ -107,7 +107,7 @@ test("first consent creates organization and project through the ordinary sessio
   const callback = new URL(approval.redirectTo);
   expect(callback.searchParams.get("state")).toBe(flow.state);
   expect(callback.searchParams.get("iss")).toBe(origin);
-  const exchange = await SELF.fetch(`${origin}/oauth/token`, {
+  const exchange = await SELF.fetch(`${origin}/oauth2/token`, {
     method: "POST",
     body: new URLSearchParams({
       grant_type: "authorization_code",
@@ -176,7 +176,7 @@ test("copied issuer client metadata and every scope confer app permissions but n
   const approved = await issuer.consent.approve({ query: flow.url.search, projects: ["*"] });
   if ("error" in approved) throw new Error(approved.error);
   const callback = new URL(approved.redirectTo);
-  const exchange = await SELF.fetch(`${origin}/oauth/token`, {
+  const exchange = await SELF.fetch(`${origin}/oauth2/token`, {
     method: "POST",
     body: new URLSearchParams({
       grant_type: "authorization_code",
@@ -315,7 +315,7 @@ test("consent grants only the scopes left ticked; organizations:write, not proje
     });
     if ("error" in approved) throw new Error(approved.error);
     const callback = new URL(approved.redirectTo);
-    const exchange = await SELF.fetch(`${origin}/oauth/token`, {
+    const exchange = await SELF.fetch(`${origin}/oauth2/token`, {
       method: "POST",
       body: new URLSearchParams({
         grant_type: "authorization_code",
@@ -380,7 +380,7 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
   expect(invalid.kind).toBe("redirect");
   if (invalid.kind !== "redirect") throw new Error("Expected validated redirect");
   expect(new URL(invalid.location).searchParams.get("error_description")).toMatch(/must use PKCE/);
-  const page = await SELF.fetch(`${origin}/authorize`);
+  const page = await SELF.fetch(`${origin}/oauth2/auth`);
   expect(page.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
   expect(page.headers.get("X-Frame-Options")).toBe("DENY");
   // The page is a capnweb client of /api: its bundle is a file beside it, open to anyone; there is
@@ -391,7 +391,7 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
   expect(sibling.status).toBe(302);
   expect(sibling.headers.get("location")).toMatch(/^\/\.auth\/login\?/);
   expect(
-    (await SELF.fetch(`${origin}/authorize`, { method: "POST", headers: { Origin: origin } }))
+    (await SELF.fetch(`${origin}/oauth2/auth`, { method: "POST", headers: { Origin: origin } }))
       .status,
   ).toBe(404);
   // Force the client to refresh through the real public token endpoint.

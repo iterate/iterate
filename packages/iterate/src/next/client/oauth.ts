@@ -12,7 +12,7 @@ export async function authorizationCodeRequest(input: {
   const verifier = oauth.generateRandomCodeVerifier();
   const challenge = await oauth.calculatePKCECodeChallenge(verifier);
   const state = oauth.generateRandomState();
-  const url = new URL("/authorize", input.issuer);
+  const url = new URL("/oauth2/auth", input.issuer);
   url.search = new URLSearchParams({
     response_type: "code",
     client_id: input.clientId,

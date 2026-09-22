@@ -31,7 +31,7 @@ export class BrowserSession extends DurableObject {
       if (origin.protocol !== "https:" && !local) throw new Error("Browser login requires HTTPS");
       let clientId = `${host.origin}/.auth/client.json`;
       if (local) {
-        const response = await fetch(`${host.issuer}/oauth/register`, {
+        const response = await fetch(`${host.issuer}/oauth2/register`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -82,7 +82,7 @@ export class BrowserSession extends DurableObject {
         };
       const as: oauth.AuthorizationServer = {
         issuer: data.issuer,
-        token_endpoint: `${data.issuer}/oauth/token`,
+        token_endpoint: `${data.issuer}/oauth2/token`,
         authorization_response_iss_parameter_supported: true,
       };
       const client: oauth.Client = { client_id: data.clientId };
@@ -200,7 +200,7 @@ export class BrowserSession extends DurableObject {
     if (data.expiresAt > Date.now() + 30_000) return data.accessToken;
     const as: oauth.AuthorizationServer = {
       issuer: data.issuer,
-      token_endpoint: `${data.issuer}/oauth/token`,
+      token_endpoint: `${data.issuer}/oauth2/token`,
     };
     const client: oauth.Client = { client_id: data.clientId };
     const started = Date.now();

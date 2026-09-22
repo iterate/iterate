@@ -613,25 +613,25 @@ any project. Who signs in is the issuer's (`/login`, the OAuth AS); the ingress 
 is not `/api` or `/version` is its catch-all — one worker,
 one front door).
 An OAuth 2.1 Authorization Server (`@cloudflare/workers-oauth-provider`, built per request from the
-request's origin: `/authorize` app-owned, `/oauth/token`, `/oauth/register` (DCR; CIMD on, with the
+request's origin: `/oauth2/auth` app-owned, `/oauth2/token`, `/oauth2/register` (DCR; CIMD on, with the
 `global_fetch_strictly_public` flag), `/.well-known/*`; `/mcp` its ONLY protected route and its ONE
 pinned resource, `<origin>/mcp`, this origin the authorization server — every token bound to it, a
 foreign one refused), a D1 directory (`control-plane.sql`: users → orgs via `org_members` →
-projects; access is org membership), THE ISSUER'S PAGES (`/login` and the `/authorize` consent, files in `public/` the assets
+projects; access is org membership), THE ISSUER'S PAGES (`/login` and the `/oauth2/auth` consent, files in `public/` the assets
 binding serves, each asking its JSON sibling here what to show): `/login`
 (the email form; "continue as / switch account" with a session), the `_auth` layout (no session ⇒
 `/login?next=`), the account page at `/` (orgs; projects — a project's hosts, the APEX (the config
 worker's `fetch`, the bundled default's 404 for a project with none of its own) and one per app it
 serves, `<label>--<project>`, sign a visitor in through their own `/.auth/*` adapter, never through a
-token in a link; a create-project form; log out) and the `/authorize` consent — every route reading and acting through its own
+token in a link; a create-project form; log out) and the `/oauth2/auth` consent — every route reading and acting through its own
 `createServerFn`s, which call this file's console half (`consoleSessionOf` · `signIn` · `signOut` ·
 `accountOf` · `createProjectFor` · `consentOf` · `approveConsent`) with the worker's env and the
 request as `context` (`src/routes/-console-context.ts`); beside them THE MACHINE DOORS
 (`consoleDoor`): the same actions as plain form POSTs, `POST /login`, `/logout`, `/projects`,
-`/authorize`, for a script, the lanes, a `page.request.post` and the console's own forms until the
+`/oauth2/auth`, for a script, the lanes, a `page.request.post` and the console's own forms until the
 page hydrates — every POST refused with 403 from a
 foreign `Origin`, every page `Cache-Control: no-store`; the session a signed cookie
-(`__Host-itx-control-plane-session`, `src/principal.ts` verifies it) — the `/authorize` consent
+(`__Host-itx-control-plane-session`, `src/principal.ts` verifies it) — the `/oauth2/auth` consent
 being THE PROJECT SELECTION (the user's
 projects as checkboxes, all checked; the grant's `props: { actor, email, projects }` — `projects`
 absent when there was nothing to choose from ⇒ every project of the user's orgs, per call; a
@@ -910,7 +910,7 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
 ### Decided on 2026-09-09, done (ONE MCP server — `docs/plan-auth-one-lane-2026-09-09.md` §5, step 3)
 
 - `/mcp` on the platform host is the ONE MCP server for every project (section 10): the provider's
-  one pinned resource (`<origin>/mcp`), `/oauth/token` + `/oauth/register`, CIMD on, PKCE S256 only;
+  one pinned resource (`<origin>/mcp`), `/oauth2/token` + `/oauth2/register`, CIMD on, PKCE S256 only;
   project selection at consent narrows `props.projects`; `itx.invoke({ project?, expression, args? })`
   runs through the named project's context under the bearer's principal; the admin secret is a
   bearer through `resolveExternalToken` (the project-secret bearer of that day was deleted on

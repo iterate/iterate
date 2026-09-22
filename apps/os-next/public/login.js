@@ -23,11 +23,21 @@
     if (!response.ok) throw new Error(`Sign-in is unavailable (${response.status}).`);
     state = await response.json();
   } catch (error) {
-    show(el("p", { role: "alert", text: error instanceof Error ? error.message : String(error) }));
+    show(
+      el("p", {
+        role: "alert",
+        "data-type": "error",
+        text: error instanceof Error ? error.message : String(error),
+      }),
+    );
     return;
   }
-  const alert = state.error ? el("p", { role: "alert", text: state.error }) : null;
+  const alert = state.error
+    ? el("p", { role: "alert", "data-type": "error", text: state.error })
+    : null;
+  const heading = document.querySelector("h1");
   if (state.signedInAs) {
+    heading.textContent = "You’re signed in";
     // where to go: on to `next`, or — this page being its own destination — to the dash, where a
     // person's projects, organizations and sessions are (a deployment without one offers nothing)
     const onward =
@@ -49,6 +59,7 @@
   }
   const next = () => el("input", { type: "hidden", name: "next", value: state.next });
   if (state.codeSentTo) {
+    heading.textContent = "Check your inbox";
     show(
       alert,
       el("p", {}, "We sent a code to ", el("strong", { text: state.codeSentTo }), "."),
@@ -141,10 +152,22 @@
       ),
     );
   }
-  if (state.google)
+  if (state.google) {
+    if (state.password || state.emailSignIn)
+      options.push(el("div", { class: "login-divider", text: "or" }));
     options.push(
-      el("p", {}, el("a", { class: "button", href: state.google, text: "Continue with Google" })),
+      el(
+        "p",
+        {},
+        el(
+          "a",
+          { class: "button google-login", href: state.google },
+          el("img", { src: "/google-logo.svg", alt: "", width: "20", height: "20" }),
+          "Continue with Google",
+        ),
+      ),
     );
+  }
   if (!state.password && !state.emailSignIn && !state.google)
     options.push(el("p", { text: "Sign-in is not configured for this deployment." }));
   show(...options);

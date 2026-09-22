@@ -167,7 +167,7 @@ async function grant(resources: string[], projects: string[] = ["oauth-a"]) {
       oauthA,
       oauthB,
     };
-  const tokenResponse = await call("/oauth/token", {
+  const tokenResponse = await call("/oauth2/token", {
     method: "POST",
     body: new URLSearchParams({
       grant_type: "authorization_code",
@@ -191,8 +191,10 @@ test("discovery advertises CIMD AND DCR: the registration endpoint is published 
   expect(metadata.client_id_metadata_document_supported).toBe(true);
   expect(metadata.token_endpoint_auth_methods_supported).toContain("none");
   expect(metadata.code_challenge_methods_supported).toEqual(["S256"]);
-  expect(metadata.registration_endpoint).toBe(`${ORIGIN}/oauth/register`);
-  const registered = await call("/oauth/register", {
+  expect(metadata.authorization_endpoint).toBe(`${ORIGIN}/oauth2/auth`);
+  expect(metadata.token_endpoint).toBe(`${ORIGIN}/oauth2/token`);
+  expect(metadata.registration_endpoint).toBe(`${ORIGIN}/oauth2/register`);
+  const registered = await call("/oauth2/register", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -275,7 +277,7 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
   expect(
     (await call("/api", { headers: { Authorization: `Bearer ${token.access_token}` } })).status,
   ).toBe(401);
-  const broaden = await call("/oauth/token", {
+  const broaden = await call("/oauth2/token", {
     method: "POST",
     body: new URLSearchParams({
       grant_type: "refresh_token",
@@ -285,7 +287,7 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
     }),
   });
   expect(broaden.status).toBe(400);
-  const refresh = await call("/oauth/token", {
+  const refresh = await call("/oauth2/token", {
     method: "POST",
     body: new URLSearchParams({
       grant_type: "refresh_token",
@@ -299,7 +301,7 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
   // explicitly keeps that token usable until the client uses a newer one.
   expect(
     (
-      await call("/oauth/token", {
+      await call("/oauth2/token", {
         method: "POST",
         body: new URLSearchParams({
           grant_type: "refresh_token",
@@ -321,7 +323,7 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
   ).toBe(401);
   expect(
     (
-      await call("/oauth/token", {
+      await call("/oauth2/token", {
         method: "POST",
         body: new URLSearchParams({
           grant_type: "refresh_token",
@@ -460,7 +462,7 @@ test("console and project browsers use the same CIMD flow and independent grants
         grant_types: ["authorization_code"],
         response_types: ["code"],
       });
-    if (!["/.auth/client.json", "/oauth/token", "/api"].includes(url.pathname))
+    if (!["/.auth/client.json", "/oauth2/token", "/api"].includes(url.pathname))
       throw new Error(`Unexpected external fetch: ${url}`);
     if (logoutUnavailable && url.pathname === "/api")
       return new Response("Unavailable", { status: 503 });
@@ -647,7 +649,7 @@ test("console and project browsers use the same CIMD flow and independent grants
     ).rejects.toThrow(/at least a minute/);
     expect(
       (
-        await call("/oauth/token", {
+        await call("/oauth2/token", {
           method: "POST",
           body: new URLSearchParams({
             grant_type: "refresh_token",

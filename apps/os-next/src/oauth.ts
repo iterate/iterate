@@ -156,12 +156,12 @@ export function providerOptions(
   return {
     apiHandlers: { [api]: apiHandler, [mcp]: apiHandler },
     defaultHandler,
-    authorizeEndpoint: `${issuer}/authorize`,
-    tokenEndpoint: `${issuer}/oauth/token`,
+    authorizeEndpoint: `${issuer}/oauth2/auth`,
+    tokenEndpoint: `${issuer}/oauth2/token`,
     // DCR is served on every deployment (not just local http): CIMD stays the console's own path
     // (browser-session.ts uses a client-id metadata document), but standard MCP clients (the MCP
     // Inspector, Claude's connector) require dynamic registration, so the endpoint is always published.
-    clientRegistrationEndpoint: `${issuer}/oauth/register`,
+    clientRegistrationEndpoint: `${issuer}/oauth2/register`,
     scopesSupported: OAuthScope.options,
     resourceMetadata: {
       ...(issuer.startsWith("https:") && { authorization_servers: [issuer] }),
