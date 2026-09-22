@@ -7,6 +7,14 @@
   "compilerOptions": {
     "types": ["@cloudflare/workers-types", "node", "@cloudflare/vitest-plugin/types"]
   },
-  "include": ["e2e", "specs", "__workers-tests__", "examples/voice-agent", "src/sql.d.ts"],
+  "include": [
+    "e2e",
+    "specs",
+    "__workers-tests__",
+    "examples/voice-agent",
+    "scripts/voice-*.ts",
+    "scripts/inspect-context.ts",
+    "src/sql.d.ts"
+  ],
   "exclude": []
 }
