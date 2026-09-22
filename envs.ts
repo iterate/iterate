@@ -30,6 +30,8 @@
  * deploy. Deploys refuse to ship UNPROVISIONED IDs.
  */
 
+import type { IngressRouting } from "./packages/iterate/src/next/project-ingress.ts";
+
 /** Cloudflare account names, IDs, and shared credentials for account-wide tooling.
  * dev/preview shares one account; use its preview credentials, not a preview slot. */
 export const cloudflareAccounts = {
@@ -621,8 +623,8 @@ export interface OsNextEnv {
   /** How projects are reached over HTTP (`APP_CONFIG urls.ingressRouting`): `subdomains` hangs
    *  `<app>--<project>.<hostname>` and the apex `<project>.<hostname>` under a wildcard route the
    *  generator adds on `hostname`'s zone (ensure-resources creates the wildcard DNS record); `paths`
-   *  serves `<baseUrl>/<project>/<app>/…` from the one origin. Unset ⇒ no ingress. */
-  ingressRouting?: { type: "subdomains"; hostname: string } | { type: "paths" };
+   *  serves `<baseUrl>/projects/<project>/<app>/…` from the one origin. Unset ⇒ no ingress. */
+  ingressRouting?: NonNullable<IngressRouting>;
   artifactsNamespace: string;
   /** The name the Cloudflare resources were CREATED under (D1 `<prefix>-directory`, KV `<prefix>-oauth|-itx`) —
    *  pinned apart from `workerName` because the worker was renamed after they existed; `ensure-resources` and

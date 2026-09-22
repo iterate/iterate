@@ -338,9 +338,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
    *  iterate-context-durable-object.ts `#executeRun`), so the facet's own calls and the scripts'
    *  never share a table. The sandbox's one row: everything a script does not claim, this agent
    *  answers (its own chain up to the root). A jail is the owner replacing THAT row with `null` and
-   *  appending its grants beside it. The redirect is idempotent on its key; the link is the DEFAULT
-   *  the creator supplies where the owner has said nothing — written only while the sandbox has no
-   *  bare `itx` row, so an owner's row, a jail's `null` included, is never overwritten. */
+   *  appending its grants beside it. The redirect and default parent link are
+   *  written with stable idempotency keys during agent creation, before the birth certificate.
+   *  A retry does not reapply them over an owner's later policy, including a jail's `null`. */
   async #assertSandbox(path: string): Promise<void> {
     // The rows are the PLATFORM's table rows, not this entity's events (the contract declares none
     // of them), so they go through the context's own fixed point, not the engine's typed `append`.

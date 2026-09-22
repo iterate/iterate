@@ -14,6 +14,7 @@
     "examples/voice-agent",
     "scripts/voice-*.ts",
     "scripts/inspect-context.ts",
+    "scripts/memory-budget-scenarios.ts",
     "src/sql.d.ts"
   ],
   "exclude": []

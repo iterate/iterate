@@ -105,9 +105,9 @@ test("a core-snapshot probe materializes only created and woken, without subscri
           .value,
       ),
     ).toBe(1);
-    // A plain append follows created, woken and the ephemeral core delta.
+    // A plain append follows created and woken.
     const [mark] = (await instance.append({ type: "mark" })) as unknown as { offset: number }[];
-    expect(mark.offset).toBe(4);
+    expect(mark.offset).toBe(3);
     // With no subscriptions, the mark creates no delivery claim.
     await until("no alarm after the ack", async () => (await state.storage.getAlarm()) === null);
   });

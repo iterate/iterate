@@ -3,11 +3,12 @@ import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { appSession, startAppSession } from "iterate/next/app-server";
 import { authorizationCodeRequest } from "iterate/next/oauth";
+import { platformAddressesOf } from "../src/app-config.ts";
 import type { Env } from "../src/control-plane.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { directory } from "../src/directory.ts";
 import { startIssuerSession } from "../src/issuer-session.ts";
-import { oauthAddresses, oauthHelpers, parseAuthorization } from "../src/oauth.ts";
+import { oauthHelpers, parseAuthorization } from "../src/oauth.ts";
 import { applyDirectorySchema } from "./support.ts";
 
 const bindings = env as unknown as Env;
@@ -43,7 +44,7 @@ test("first consent creates organization and project through the ordinary sessio
     "1357924680",
     "bootstrap@example.com",
   );
-  const helpers = oauthHelpers(bindings, "https://control.test");
+  const helpers = oauthHelpers(bindings, platformAddressesOf(bindings, new Request(`${origin}/`)));
   const client = await helpers.createClient({
     clientName: "Claude fixture",
     redirectUris: ["http://127.0.0.1/callback"],
@@ -207,9 +208,9 @@ test("copied issuer client metadata and every scope confer app permissions but n
 test("an issuer session minted before a scope existed still holds every scope â€” its list is not a consent", async () => {
   // the shape of startIssuerSession, with the two scopes an older cookie was minted with
   const user = await directory(bindings.DB).upsertUser("old-issuer-cookie@example.com");
-  const { issuer: issuerOrigin, api: apiResource } = oauthAddresses(
+  const { platformOrigin: issuerOrigin, api: apiResource } = platformAddressesOf(
     bindings,
-    "https://control.test",
+    new Request("https://control.test/"),
   );
   const flow = await startAppSession(
     bindings.BROWSER_SESSION,
@@ -222,7 +223,10 @@ test("an issuer session minted before a scope existed still holds every scope â€
     "/",
   );
   const request = await parseAuthorization(bindings, new Request(flow.location));
-  const approved = await oauthHelpers(bindings, "https://control.test").completeAuthorization({
+  const approved = await oauthHelpers(
+    bindings,
+    platformAddressesOf(bindings, new Request(`${origin}/`)),
+  ).completeAuthorization({
     request,
     userId: user.id,
     scope: request.scope,

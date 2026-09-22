@@ -16,10 +16,15 @@ import { isSecretOAuthState, SECRET_OAUTH_CALLBACK_PATH } from "./secret-oauth.t
 import type { Reach } from "./directory.ts";
 import { oauthResponse } from "./api.ts";
 import { issuerHandler, issuerPagePaths } from "./control-plane.ts";
-import { appConfigOf, sessionSigningSecretOf, platformOriginOf } from "./app-config.ts";
+import {
+  appConfigOf,
+  platformAddressesOf,
+  sessionSigningSecretOf,
+  type PlatformAddresses,
+} from "./app-config.ts";
 import { FILES_APP_LABEL, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
-import { directory, ensureDirectorySchema } from "./directory.ts";
+import { directory, ensureDirectorySchema, type Directory } from "./directory.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
 import { DurableObjectNameCodec, ITX_PLATFORM_ORIGIN_HEADER } from "./iterate-context.ts";
 import { GLOBAL_PROJECT_ID, resourceScope } from "./context/paths.ts";
@@ -90,7 +95,7 @@ function projectHostRequestTo(
     identity: ProjectHostIdentity;
     /** paths ingress: the prefix stripped from the URL and said in `x-iterate-base-path` */
     basePath: string;
-    /** the platform origin this request reached the platform on (app-config.ts `platformOriginOf`) */
+    /** the platform origin this request reached the platform on (app-config.ts `platformAddressesOf`) */
     platformOrigin: string;
   },
 ): Request {
@@ -134,7 +139,7 @@ function secretOwnerOf(context: string): {
  *  member; the admin reaches every one. A project-bound bearer reaches no user's or organization's
  *  own secrets; nothing but the admin reaches the global root's. */
 async function reachesSecretOwner(
-  directory: SessionInput["directory"],
+  directory: Directory,
   reach: Reach,
   owner: ReturnType<typeof secretOwnerOf>,
 ): Promise<boolean> {
@@ -157,7 +162,7 @@ async function secretOAuthCallback(
   request: Request,
   env: WorkerEnv,
   ctx: ExecutionContext,
-  sessionInput: SessionInput,
+  addresses: PlatformAddresses,
 ): Promise<Response> {
   const url = new URL(request.url);
   const answer = (status: number, text: string) =>
@@ -167,13 +172,13 @@ async function secretOAuthCallback(
     });
   const claims = await verifyClaims(
     url.searchParams.get("state") ?? "",
-    await sessionSigningSecretOf(sessionInput.appConfig),
+    await sessionSigningSecretOf(appConfigOf(env)),
   );
   if (!isSecretOAuthState(claims) || claims.exp <= Date.now())
     return answer(400, "This link is not one the platform issued, or it has expired.");
   const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
   const authorization = bearer
-    ? await authorizationForToken(env, ctx, bearer, sessionInput.platformOrigin)
+    ? await authorizationForToken(env, ctx, bearer, addresses)
     : await browserAuthorization(env, request, ctx);
   if (!authorization)
     return answer(
@@ -186,7 +191,7 @@ async function secretOAuthCallback(
   } catch (error) {
     return answer(400, error instanceof Error ? error.message : String(error));
   }
-  if (!(await reachesSecretOwner(sessionInput.directory, authorization.reach, owner)))
+  if (!(await reachesSecretOwner(directory(env.DB), authorization.reach, owner)))
     return answer(403, `Your session cannot access the secrets of ${owner.kind} ${owner.id}.`);
   const denied = url.searchParams.get("error");
   if (denied) return answer(400, `The provider declined: ${denied}`);
@@ -275,9 +280,10 @@ export default {
         return new Response("Not found", { status: 404 });
       return oauthResponse(request, env, ctx);
     }
-    // THE PLATFORM ORIGIN (app-config.ts `platformOriginOf`): `urls.os`, else this request's own —
-    // stamped on every caller from here on.
-    const platformOrigin = platformOriginOf(appConfig, request);
+    // THE PLATFORM ADDRESSES (app-config.ts `platformAddressesOf`): the origin — `urls.os`, else
+    // this request's own — stamped on every caller from here on, and the two resource identifiers.
+    const addresses = platformAddressesOf(env, request);
+    const { platformOrigin } = addresses;
     /** What every session and every lane's identity is built from — ONE object per request. */
     const sessionInput: SessionInput = {
       contextNamespace: env.ITERATE_CONTEXT,
@@ -330,7 +336,7 @@ export default {
       }
       const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
       const authorization = bearer
-        ? await authorizationForToken(env, ctx, bearer, platformOrigin)
+        ? await authorizationForToken(env, ctx, bearer, addresses)
         : await browserAuthorization(env, request, ctx);
       if (bearer && !authorization)
         return new Response("Invalid or revoked bearer", {
@@ -387,7 +393,7 @@ export default {
     // A project secret's OAuth callback (secret-oauth.ts): the provider sends the human back here
     // with the code. Its own reserved path, `/.secrets/`, beside `/version`.
     if (url.pathname === SECRET_OAUTH_CALLBACK_PATH)
-      return secretOAuthCallback(request, env, ctx, sessionInput);
+      return secretOAuthCallback(request, env, ctx, addresses);
     const identity = await identityResponse(request, env);
     if (identity) return identity;
     if (url.pathname === "/mcp") {

@@ -1,5 +1,5 @@
 // src/agent/codemode-format.ts — THE RESPONSE FORMAT: markdown prose the person sees, plus at most
-// one `<codemode status="…">` block on its own lines holding TypeScript statements to run. mmkal's
+// one `<codemode status="…">` block on its own lines holding JavaScript statements to run. mmkal's
 // codemode-tag grammar, vendored from configs/codemode-tag/codemode-format.ts on the
 // codemode-tag-rendering branch (PR #2568) — the settled parse only; its streaming partial parser
 // waits for a token stream this loop does not have. Line-anchored tags mean a mid-line mention
@@ -30,7 +30,7 @@ const STATUS_ATTR_RE = /\bstatus="([^"]*)"/;
 const ASYNC_FUNCTION_BODY_RE = /^(?:async\s*(?:function|\()|\(?async\s*\()/;
 
 const GRAMMAR_REMINDER =
-  'Format reminder — `<codemode status="...">` on its own line, TypeScript statements (top-level `await`/`return` allowed), then `</codemode>` on its own line. Markdown outside the tag is sent to the user; the status attribute is shown while the code runs.';
+  'Format reminder — `<codemode status="...">` on its own line, JavaScript statements (top-level `await`/`return` allowed), then `</codemode>` on its own line. Markdown outside the tag is sent to the user; the status attribute is shown while the code runs.';
 
 export function parseCodemodeResponse(content: string): CodemodeParseOutcome {
   const lines = content.split("\n");

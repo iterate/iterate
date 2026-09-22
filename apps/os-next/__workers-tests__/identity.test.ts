@@ -1,6 +1,7 @@
 import { env, SELF, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { appSession } from "iterate/next/app-server";
+import { platformAddressesOf } from "../src/app-config.ts";
 import { authorizationForToken } from "../src/oauth.ts";
 import { directory } from "../src/directory.ts";
 import { cleanGrantActivity } from "../src/oauth.ts";
@@ -139,7 +140,7 @@ test("Google proves issuer identity; upstream credentials never become app token
     bindings,
     ctx,
     (await session.bearer())!,
-    "https://control.test",
+    platformAddressesOf(bindings, new Request(`${origin}/`)),
   );
   await waitOnExecutionContext(ctx);
   expect(auth?.principal).toEqual({
@@ -259,7 +260,12 @@ test("Cloudflare's verified ID token creates the same revocable issuer session, 
     bindings.BROWSER_SESSION,
     new Request(origin, { headers: { cookie: sessionCookie } }),
   )!;
-  const auth = await authorizationForToken(bindings, ctx, (await session.bearer())!, origin);
+  const auth = await authorizationForToken(
+    bindings,
+    ctx,
+    (await session.bearer())!,
+    platformAddressesOf(bindings, new Request(origin)),
+  );
   await waitOnExecutionContext(ctx);
   expect(auth?.principal).toEqual({
     actor: expect.stringMatching(/^user_cloudflare_/),

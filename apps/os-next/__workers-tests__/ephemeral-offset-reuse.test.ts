@@ -92,15 +92,15 @@ test("stream-kept cursor: an alarm pump with ephemerals at head leaves the curso
   // durable commit `dig` does not consume, so the cursor moved along past it without a call.
   expect(rowKv.cursor!.confirmedOffset).toBe(highestDurableOffset + 1);
 
-  await s.append({ type: "mark" }); // woken@mark+1 (the constructor's; its core delta took mark+2), mark@mark+3 — durable
+  await s.append({ type: "mark" }); // woken@mark+1 (the constructor's), mark@mark+2 — durable
   await sleep(600);
   const p1 = await page(ctx);
-  expect(p1.events.at(-1)!.offset).toBe(highestDurableOffset + 3);
+  expect(p1.events.at(-1)!.offset).toBe(highestDurableOffset + 2);
   const digested = JSON.parse(
     ((await s.invoke(["itx", "kv", ["get", "digested"]])) as string) ?? "[]",
   ) as string[];
   // at-least-once: the second mark, minted where a dead ephemeral sat, reaches the worker.
-  expect(digested).toContain(`mark@${highestDurableOffset + 3}`);
+  expect(digested).toContain(`mark@${highestDurableOffset + 2}`);
 });
 
 test("enable with a consumes filter: itx.facets.get(name) answers before the first consumed event (the facet is materialized at configure time)", async () => {
@@ -158,18 +158,18 @@ test("processor: a read-driven catch-up (snapshot after the release) with epheme
   await sleep(400);
   await releasePins(ctx);
   await evictDurableObject(s);
-  await s.append({ type: "tick" }); // woken@mark+1 (the constructor's; its core delta took mark+2), tick@mark+3 — durable, at the dead ephemerals' offsets
+  await s.append({ type: "tick" }); // woken@mark+1 (the constructor's), tick@mark+2 — durable, at the dead ephemerals' offsets
   await sleep(500);
   const p1 = await page(ctx);
   expect(p1.events.map((e) => e.offset).slice(-2)).toEqual([
     highestDurableOffset + 1,
-    highestDurableOffset + 3,
+    highestDurableOffset + 2,
   ]);
   const after = (await s.invoke(["itx", "facets", ["get", "counter"], ["snapshot"]])) as {
     offset: number;
     state: { n: number };
   };
-  // the pushed tick@mark+3 is reduced exactly once, and the new incarnation's woken@mark+1 — a
+  // the pushed tick@mark+2 is reduced exactly once, and the new incarnation's woken@mark+1 — a
   // durable event like any other, pushed to the "*" row — once → n grows by exactly 2.
   expect(after.state.n).toBe(mid.state.n + 2);
 });

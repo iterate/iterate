@@ -56,7 +56,7 @@ import {
   type Caller,
   type Principal,
 } from "iterate/next/principal";
-import type { RewriteRuleListEntry } from "iterate/next/api";
+import type { RewriteRuleListEntry, StreamPage } from "iterate/next/api";
 import { projectUrlOf } from "iterate/next/project-ingress";
 import {
   assertFacetSourceWithinCeiling,
@@ -84,12 +84,7 @@ import {
   type BorrowedRpcStub,
 } from "./context/rpc-stubs.ts";
 import { buildLibrary, executeScript, type LibraryItx } from "./library.ts";
-import {
-  STREAM_ALARM_TRACE_EVENT,
-  Stream,
-  type ReachableContext,
-  type StreamPage,
-} from "./stream/stream.ts";
+import { STREAM_ALARM_TRACE_EVENT, Stream, type ReachableContext } from "./stream/stream.ts";
 import { AlarmCoordinator } from "./alarm-coordinator.ts";
 import {
   DurableObjectNameCodec,
@@ -610,7 +605,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #startRequestedRuns(committedEvents: StreamEvent[]): void {
     for (const event of committedEvents) {
       if (event.type !== "events.iterate.com/context/run-requested") continue;
-      const { code } = RunRequested.parse(event.payload); // normalized at the append boundary
+      const { code } = event.payload as RunRequested; // parsed at the append boundary (normalizeControlEvent)
       if (
         this.#scriptRunsInFlight.has(event.offset) ||
         !this.#stream.coreReducedState.scriptRuns[event.offset]
@@ -712,7 +707,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       const project = z.object({ id: z.string(), slug: z.string().optional() }).parse(row);
       const projectSlug = project.slug || project.id;
       // the apex URL, when the caller carries the platform origin to compose it with
-      const platformOrigin = this.#platformOriginNow();
+      const platformOrigin = this.#platformOrigin;
       const url = platformOrigin
         ? projectUrlOf(this.#appConfig.urls.ingressRouting, platformOrigin, {
             project: projectSlug,
@@ -726,9 +721,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     env: this.env,
     deployId: this.#appConfig.deployId,
     ingressRouting: this.#appConfig.urls.ingressRouting,
-    platformOrigin: () => this.#platformOriginNow(),
+    platformOrigin: () => this.#platformOrigin,
     signFileUrl: async (input) => {
-      const platformOrigin = this.#platformOriginNow();
+      const platformOrigin = this.#platformOrigin;
       if (!platformOrigin)
         throw new Error(
           "files: a signed URL is composed from the platform origin the caller reached the platform on — this call carries none (call it from a session)",
@@ -1176,7 +1171,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           {
             value: {
               snapshot: () => this.#stream.coreReducedStateSnapshot(),
-              liveSnapshot: () => this.#stream.coreLiveStateSnapshot(),
             },
             receiver: undefined,
           },
@@ -1462,10 +1456,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       return caller;
     }
     return this.#platformOrigin ? { ...caller, platformOrigin: this.#platformOrigin } : caller;
-  }
-  /** The origin for THIS call: the caller's (the persisted one filled in above), else nothing yet. */
-  #platformOriginNow(): string | null {
-    return this.#callerStorage.getStore()?.platformOrigin || this.#platformOrigin;
   }
 
   // ── native fetch: the rpc-stub pager door, the fetch lane, egress ──
