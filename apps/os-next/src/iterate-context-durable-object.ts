@@ -164,6 +164,12 @@ export interface Env extends AppConfigEnv {
 const ITERATE_APP_HEADER = "x-iterate-app";
 
 export class IterateContextDurableObject extends DurableObject<Env> {
+  /** Native operator RPC only. Bypass every project rewrite so no project code can observe
+   * the admin credential. The first-party secret facet independently verifies it. */
+  async exportSecretForProjectSeed(adminSecret: string): Promise<unknown> {
+    return this.#facetHost.invoke("secret", undefined, [["exportForProjectSeed", adminSecret]]);
+  }
+
   /** WHO THIS DO IS: the DO name parsed ONCE into `{ name, projectId, path }`. A context is only
    *  ever reached `getByName`; an id-addressed instance fails right here, before it can touch anything. */
   readonly #durableObjectAddress = parseIterateContextDurableObjectName(this.ctx.id.name);

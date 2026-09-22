@@ -25,7 +25,8 @@
 
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
 import type { EventInput } from "iterate/next/stream/processor";
-import { signClaims } from "iterate/next/principal";
+import { signClaims, verifyAdminSecret } from "iterate/next/principal";
+import { codedError } from "iterate/next/lib";
 import {
   appConfigOf,
   atRestKeysOf,
@@ -146,6 +147,25 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
 
   #keys(): MaterialKeys {
     return atRestKeysOf(appConfigOf(this.env));
+  }
+
+  /** Operator recovery exports only the current encrypted value, with its original AAD.
+   * The credential arrives over native RPC, never through project-authored rewrites. Ordinary
+   * facet callers cannot export a cell, even if they own the project. */
+  async exportForProjectSeed(adminSecret: unknown) {
+    if (
+      typeof adminSecret !== "string" ||
+      !(await verifyAdminSecret(
+        adminSecret,
+        appConfigOf(this.env).secrets.adminBearer.exposeSecret(),
+      ))
+    )
+      throw codedError("FORBIDDEN", "Secret recovery exports require operator authority.");
+    const stored = await this.ctx.storage.get<Stored>("stored");
+    if (!stored)
+      throw codedError("INVALID_INPUT", "This secret has no current material to back up.");
+    const { context, path } = this.#address();
+    return { context, path, revision: stored.revision, ...stored.record };
   }
 
   /** The write counter, bumped: the number the write that follows is fenced by. */

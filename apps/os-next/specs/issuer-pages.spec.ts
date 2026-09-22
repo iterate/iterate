@@ -252,7 +252,7 @@ test("email-code entry preserves the destination and supports retrying another e
   });
   await page.goto("/login");
   await page.getByRole("heading", { name: "Check your inbox" }).waitFor();
-  await expect(page.getByRole("alert")).toContainText("That code was not accepted");
+  await page.getByRole("alert").filter({ hasText: "That code was not accepted" }).waitFor();
   await page.getByRole("textbox", { name: "Code", exact: true }).fill("123456");
   await page.screenshot({ path: test.info().outputPath("code-entry.png"), fullPage: true });
   await page.getByRole("button", { name: "Continue", exact: true }).click();

@@ -252,12 +252,14 @@ test("first Claude consent creates the organization and project on the consent p
     await otherChoice.waitFor();
     expect(await otherChoice.isChecked()).toBe(true);
     expect(await choice.isChecked()).toBe(false);
-    await expect(page.getByRole("group", { name: "Projects it may reach" })).toContainText(
-      firstOrg,
-    );
-    await expect(page.getByRole("group", { name: "Projects it may reach" })).toContainText(
-      "Second studio",
-    );
+    await page
+      .getByRole("group", { name: "Projects it may reach" })
+      .filter({ hasText: firstOrg })
+      .waitFor();
+    await page
+      .getByRole("group", { name: "Projects it may reach" })
+      .filter({ hasText: "Second studio" })
+      .waitFor();
     await choice.check();
     await otherChoice.uncheck();
     await future.check();
@@ -287,7 +289,10 @@ test("first Claude consent creates the organization and project on the consent p
     expect(new URL(page.url()).search).toBe(flow.url.search);
     await review.click();
     expect(await accountAccess.isChecked()).toBe(false);
-    await expect(page.getByRole("region", { name: "Selected projects" })).toContainText(project);
+    await page
+      .getByRole("region", { name: "Selected projects" })
+      .filter({ hasText: project })
+      .waitFor();
     await expect(page.getByRole("region", { name: "Selected projects" })).not.toContainText(
       otherProject,
     );

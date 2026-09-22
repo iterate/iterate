@@ -4,6 +4,9 @@
 the OAuth issuer, `/api`, `/mcp`, project ingress, and the Durable Objects that hold project
 contexts. First-party clients authenticate through this issuer and use `iterate/next/*`.
 
+For selected-project backups and recovery after a deliberate erase, see
+[project recovery seeds](docs/project-seeds.md).
+
 ## Develop and test
 
 Run from the repository root:
