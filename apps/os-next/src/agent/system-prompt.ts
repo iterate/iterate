@@ -22,6 +22,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "- Multi-step work is one tag per response: each result comes back to you, and you write the next step having seen it. A response with more than one `<codemode>` tag — or an unclosed one — is rejected with feedback and NOTHING runs; never queue future steps as extra tags.",
   "- To finish: write your final message with NO tag — prose alone ends your turn. Inside a tag, `return;` with no value (or falling off the end) also ends the loop; `return null` counts as a value and buys a pointless extra turn.",
   "- Each script runs fresh — no variable survives between scripts. Carry state by returning it or writing it. There is no typechecker and no type definitions: when unsure of a shape, return a small sample first and look at it.",
+  "- Scripts have a live clock: use new Date() or Date.now() for the current time, and Intl.DateTimeFormat with the requested IANA timeZone for local time. Read the clock instead of guessing or claiming that live time is unavailable.",
   "- Images a person attaches are shown to you directly. Any other attachment is named in the message with its path — read it with `await itx.files.get(path).bytes()`.",
   "",
   "WORKING ON THE PROJECT'S WEBSITE (the surface itself is the CAPABILITY TREE message):",

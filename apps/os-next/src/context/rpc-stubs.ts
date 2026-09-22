@@ -708,6 +708,15 @@ export async function lendRpcStubOverPager(
 
 export const ITX_EXPRESSION_FETCH_HEADER = "x-itx-expression";
 
+/** JSON in an HTTP header must be ASCII: inline worker source may contain any Unicode text.
+ * Keep ordinary JSON on the wire so existing expression readers can parse it unchanged. */
+export function encodeFetchExpression(expression: ItxExpression): string {
+  return JSON.stringify(expression).replace(
+    /[\u0080-\uffff]/g,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
 /** THE one reader of the terminal-fetch shape: the steps before a terminal `fetch` step and that
  *  step's expression args (`[]` for the property spelling `[..., "fetch"]`), or null when the
  *  expression does not end in `fetch`. */
@@ -783,7 +792,7 @@ export function terminalFetchOf(
 // sockets included — crossing the RPC legs.
 // ═════════════════════════════════════════════════════════════════════════════════════
 
-const FETCH_UPGRADE_SOCKET_HEADER = "x-itx-fetch-upgrade";
+export const FETCH_UPGRADE_SOCKET_HEADER = "x-itx-fetch-upgrade";
 
 /** One upgrade socket's attachment (survives hibernation — so the upgrade does too): which
  *  upgrade it belongs to and which SIDE it is (`eyeball` = the caller's pair half, `leg` = the

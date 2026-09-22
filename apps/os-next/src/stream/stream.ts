@@ -854,6 +854,7 @@ class StreamStorage {
  *  ZERO casts: the IterateContextDurableObject itself (its own path hands `this`), a sibling
  *  `DurableObjectStub<IterateContextDurableObject>`, an off-platform `RpcTarget` over capnweb. */
 export interface ReachableContext {
+  fetch(request: Request): Promise<Response>;
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   read(
     afterOffset?: number,

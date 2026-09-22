@@ -66,6 +66,18 @@ test.each([
   expect(result).toEqual({ content: "Three.", hangUp: false, scripts: 1 });
 });
 
+test("a speculative failure beside the clock script is not spoken before its successful result", async () => {
+  const { result, notes } = await turn(
+    [
+      '<codemode status="Checking London time">\nreturn new Intl.DateTimeFormat("en-GB", {timeZone:"Europe/London",hour:"2-digit",minute:"2-digit",hour12:false}).format(new Date());\n</codemode>\n\nI couldn’t verify the current time in London.',
+      "The current time in London is 12:00.",
+    ],
+    ['"12:00"'],
+  );
+  expect(notes).toEqual(["Checking London time"]);
+  expect(result.content).toBe("The current time in London is 12:00.");
+});
+
 test("the script bound reports unfinished work instead of claiming success", async () => {
   const { result, scripts } = await turn(Array(7).fill("<codemode>\nreturn 1\n</codemode>"));
   expect(scripts).toHaveLength(6);
