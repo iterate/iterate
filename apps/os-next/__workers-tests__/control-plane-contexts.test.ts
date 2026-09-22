@@ -12,7 +12,6 @@
 // — so a name is never shared across users. What remains open is the append type-gate, still a
 // `test.fails` here: the body asserts the SECURE outcome, so while the code is insecure the assertion
 // fails and the expected-fail passes; whoever wires the fix deletes the `.fails`.
-// See apps/os-next/docs/control-plane-context-resolved-design.md.
 import { runInDurableObject } from "cloudflare:test";
 import { beforeAll, describe, expect, test } from "vitest";
 import { AccountProcessor } from "../src/account/processor.ts";

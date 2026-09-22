@@ -10,6 +10,8 @@
 //   PROJECT=prj-voice pnpm exec tsx scripts/voice-install.ts
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { adminCredentials, disposeSessions, session } from "../e2e/support/client.ts";
 
@@ -17,14 +19,17 @@ const PROJECT = process.env.PROJECT || "prj-voice";
 const PRESERVE_PROJECT = process.env.VOICE_INSTALL_PRESERVE_PROJECT === "1";
 
 async function screenFontCss(): Promise<string> {
-  const assets = new URL("../examples/voice-agent/assets/", import.meta.url);
+  const assets = join(dirname(fileURLToPath(import.meta.url)), "../examples/voice-agent/assets");
   const [css, font] = await Promise.all([
-    readFile(new URL("pixel-font.css", assets), "utf8"),
-    readFile(new URL("press-start-2p-ascii.woff2", assets)),
+    readFile(join(assets, "pixel-font.css"), "utf8"),
+    readFile(join(assets, "press-start-2p-ascii.woff2")),
   ]);
   const source = 'url("./press-start-2p-ascii.woff2")';
   if (!css.includes(source)) throw new Error("screen font CSS has no local font URL to embed");
-  return css.replace(source, `url("data:font/woff2;base64,${font.toString("base64")}")`);
+  return css.replace(
+    source,
+    `url("data:font/woff2;base64,${Buffer.from(font).toString("base64")}")`,
+  );
 }
 
 async function bundle(file: string): Promise<string> {

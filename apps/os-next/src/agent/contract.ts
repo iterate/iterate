@@ -130,11 +130,6 @@ export const AgentContract = defineProcessorContract({
         /** apps/os's window: a request waits this long after its trigger for more content — a second
          *  message inside the window moves the trigger and ONE request answers both. */
         llmRequestDebounceMs: z.number().int().nonnegative().default(250),
-        /** THE PLAIN-RESPONSE HANDLER: an itx expression (a callable, dotted) invoked with a response
-         *  that carries no `<codemode>` block — the whole point being that the agent only ever writes
-         *  code, and a bare-prose reply is sugar for `<codemode>await <this>(<the prose>)</codemode>`.
-         *  The default sends the text to web chat; a Slack-connected agent points it at its Slack
-         *  reply instead. Blank drops a bare reply (an agent that only acts). */
         /** Consecutive model failures before the loop pauses; between attempts, apps/os's backoff —
          *  `backoffBaseMs · 2^(failures−1)`, capped at `backoffMaxMs` — folded into the debounce window. */
         llmRequestRetryPolicy: z

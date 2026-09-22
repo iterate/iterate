@@ -13,7 +13,6 @@
     "e2e:soak": "tsx scripts/e2e-soak.ts",
     "spec": "playwright test",
     "bench": "vitest bench --configLoader runner --run --project bench",
-    "db:schema:remote": "wrangler d1 execute control-plane-directory --remote --file src/control-plane.sql",
     "gen:wrangler": "tsx scripts/generate-wrangler-config.ts",
     "preview": "tsx scripts/preview.ts",
     "ensure-resources": "tsx scripts/ensure-resources.ts",

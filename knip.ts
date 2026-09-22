@@ -201,14 +201,12 @@ function makeWorkspaceDocumentsWorkspace(): WorkspaceConfig {
 }
 
 function makeOsNextWorkspace(): WorkspaceConfig {
-  // The clean-room platform worker (wip/kernel-wayfinder). Entries: the worker, the SDK bundle's
-  // source, the ONE vitest config (four projects) + its global setup, the Vite plugin that builds the
-  // injected SDK, and the Playwright specs.
+  // The os-next platform worker. Entries: the worker, the SDK bundle's source, the ONE vitest config
+  // + its global setup, and the Playwright specs.
   return {
     entry: [
       "src/worker.ts!",
       "src/client/**/*.{ts,tsx}",
-      "scripts/vite-plugin-processor-sdk.ts",
       "vitest.config.ts",
       "vitest.global-setup.ts",
       // the e2e lane's test files and the two vitest hooks are entries; e2e/support/** is project code,
@@ -221,9 +219,14 @@ function makeOsNextWorkspace(): WorkspaceConfig {
       "playwright.config.ts",
       "specs/**/*.ts",
       "src/**/*.test.ts",
+      // the node programs: build/dev/deploy/preview and the voice operator tools
+      "scripts/*.ts",
+      "examples/**/*.ts",
     ],
     project: [
       "src/**/*.{ts,tsx}!",
+      "scripts/**/*.ts",
+      "examples/**/*.ts",
       "e2e/**/*.ts",
       "__workers-tests__/**/*.ts",
       "bench/**/*.ts",

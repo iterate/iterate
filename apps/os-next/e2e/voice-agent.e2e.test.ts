@@ -5,6 +5,7 @@
 import { createHash } from "node:crypto";
 import { build } from "esbuild";
 import { expect } from "vitest";
+import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../src/agent/system-prompt.ts";
 import { openItx, readAll, runId, until } from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
 import {
@@ -25,6 +26,24 @@ deployedOnly(
     const root = openItx(projectId);
     const providerUrl = projectUrl({ project: slug, app: "provider" }).href;
     const { token } = await oauthSession(projectId, user);
+    const websiteUrl = projectUrl({ project: slug }).href;
+    const candidateSource =
+      'export default {fetch() { return new Response("Because it had bad stable manners!"); }};';
+    // Execute the exact candidate-probe example taught to the agent. A stale module
+    // name in that prompt consumed a recovery step in the real Satellite call.
+    const candidateProbe = DEFAULT_AGENT_SYSTEM_PROMPT.match(
+      /`(await itx\.workers\.get\(\{ source: .*?candidateSource.*?\}\)\.fetch\(new Request\(projectUrl\)\))`/,
+    )?.[1];
+    expect(candidateProbe).toBeTruthy();
+    const websiteScripts = [
+      "return await itx.whoami();",
+      'await itx.repos.create("/repos/config"); return await itx.repos.get("/repos/config").listFiles();',
+      'return await itx.repos.get("/repos/config").readFile("worker.ts");',
+      `const candidateSource = ${JSON.stringify(candidateSource)}; const projectUrl = ${JSON.stringify(websiteUrl)}; const response = ${candidateProbe}; const body = await response.text(); if (response.status !== 200 || !body.includes("bad stable manners")) throw new Error("candidate failed"); return body;`,
+      `return await itx.repos.get("/repos/config").writeFile("worker.ts", ${JSON.stringify(candidateSource)});`,
+      'return await itx.repos.get("/repos/config").readFile("worker.ts");',
+      `const response = await itx.fetch(new Request(${JSON.stringify(websiteUrl)})); return {status: response.status, body: await response.text()};`,
+    ];
     // The fixture uses a real project OAuth bearer as its provider credential. Ingress verifies
     // it before the fixture sees the principal; the loaded voice code only sees getSecret(...).
     await root.secrets.set("/secrets/openai", token, { urls: [providerUrl] });
@@ -46,6 +65,20 @@ export default class extends WorkerEntrypoint {
     if ("東京 🌍".length !== 5) throw new Error("corrupted worker source");
     if (request.method === "POST") {
       const {input} = await request.json();
+      const websiteRequest = input.findLastIndex(message => message.content === "Add a horse joke to the website and verify it is live.");
+      if (websiteRequest >= 0) {
+        const results = input.slice(websiteRequest + 1).filter(message => message.content.startsWith("Script result:\\n"));
+        if (results.some(message => message.content.includes("ERROR:"))) return new Response("website script failed: " + results.at(-1).content, {status: 500});
+        const scripts = ${JSON.stringify(websiteScripts)};
+        let text;
+        if (results.length < scripts.length) {
+          text = '<codemode status="Updating the website">\\n' + scripts[results.length] + '\\n</codemode>';
+        } else {
+          const published = JSON.parse(results.at(-1).content.slice("Script result:\\n".length));
+          text = published.status === 200 && published.body.includes("bad stable manners") ? "The horse joke is live on your website." : "The website did not publish the joke.";
+        }
+        return Response.json({output: [{type: "message", content: [{type: "output_text", text}]}]});
+      }
       const result = input.findLast(message => message.content.startsWith("Script result:\\n"));
       const text = result ? result.content : '<codemode status="Checking the clock">\\nreturn {time: new Date().toISOString(), identity: await itx.whoami()};\\n</codemode>\\n\\nI could not verify the time.';
       return Response.json({output: [{type: "message", content: [{type: "output_text", text}]}]});
@@ -189,6 +222,28 @@ export default class extends WorkerEntrypoint {
         { method: "POST", url: providerUrl, status: 200 },
         { method: "POST", url: providerUrl, status: 200 },
       ]);
+      // Seven real sandbox scripts: candidate probe, commit, then live verification.
+      // The former six-step cap discarded that last check after changing the site.
+      await call.append({
+        type: `${T}delegation-requested`,
+        payload: {
+          activation,
+          conversationId: `conv_${activation}`,
+          delegationId: "website",
+          transcript: [
+            { role: "listener", text: "Add a horse joke to the website and verify it is live." },
+          ],
+        },
+      });
+      const websiteAnswer = await until("verified website edit", () =>
+        received.find(
+          (event) => event.type === `${T}commentary` && event.payload.delegationId === "website",
+        ),
+      );
+      expect(websiteAnswer.payload.content).toBe("The horse joke is live on your website.");
+      const published = await fetch(websiteUrl);
+      expect(published.status).toBe(200);
+      expect(await published.text()).toContain("bad stable manners");
       const subscriptions = await call.subscriptions.list();
       for (const name of ["voice-agent", "voice-delegate"]) {
         expect(
