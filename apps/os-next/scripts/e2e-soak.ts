@@ -31,7 +31,12 @@ type Outcome = "passed" | "failed" | "skipped" | "todo" | "pending";
 type VitestJson = {
   testResults: {
     name: string;
-    assertionResults: { fullName: string; status: Outcome; duration?: number }[];
+    assertionResults: {
+      fullName: string;
+      status: Outcome;
+      duration?: number;
+      failureMessages?: string[];
+    }[];
   }[];
 };
 
@@ -50,7 +55,10 @@ for (let n = 1; n <= runs; n++) {
   const started = Date.now();
   const result = spawnSync(
     "pnpm",
-    ["e2e", "--reporter=json", `--outputFile=${file}`, ...(filter ? [filter] : [])],
+    // --retry=0: the e2e project retries once in CI, which is right for a gate and wrong for a soak —
+    // a row that failed its first attempt and passed its second is exactly what the soak exists to
+    // count (soak qx2jhwrrlk, 2026-09-22: the tally said 1/100 for a row that had failed 3 first attempts).
+    ["e2e", "--reporter=json", `--outputFile=${file}`, "--retry=0", ...(filter ? [filter] : [])],
     { cwd: ROOT, env: process.env, stdio: ["ignore", "ignore", "inherit"] },
   );
   wall.push(Date.now() - started);
@@ -68,7 +76,10 @@ for (let n = 1; n <= runs; n++) {
         skipped: 0,
         ms: [],
       };
-      if (row.status === "passed") entry.passed++;
+      // a passed row carrying failure messages passed on a retry — counted as a failure, the way a
+      // soak must count it (belt and braces beside --retry=0)
+      if (row.status === "passed" && (row.failureMessages?.length ?? 0) > 0) entry.failed++;
+      else if (row.status === "passed") entry.passed++;
       else if (row.status === "failed") entry.failed++;
       else entry.skipped++;
       if (row.duration) entry.ms.push(row.duration);
@@ -77,7 +88,7 @@ for (let n = 1; n <= runs; n++) {
   }
   const failedNow = report.testResults
     .flatMap((s) => s.assertionResults)
-    .filter((r) => r.status === "failed").length;
+    .filter((r) => r.status === "failed" || (r.failureMessages?.length ?? 0) > 0).length;
   console.log(`run ${n}/${runs}: ${(wall.at(-1)! / 1000).toFixed(0)} s, ${failedNow} failed`);
 }
 
