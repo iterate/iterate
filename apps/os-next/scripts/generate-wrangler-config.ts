@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import JSON5 from "json5";
 import { osNextEnvs, PREVIEW_AND_DEV_ACCOUNT_ID, type OsNextEnv } from "../../../envs.ts";
+import { registrableDomainOf } from "../../../scripts/lib/start-app.ts";
 import {
   OBSERVABILITY,
   writeGeneratedWranglerConfig,
@@ -20,10 +21,6 @@ function urlVars(env: OsNextEnv): Record<string, string> {
     vars.APP_CONFIG_URLS__TEMPORARY_CUSTOM_HOSTNAMES = JSON.stringify(env.temporaryCustomHostnames);
   return vars;
 }
-
-/** A hostname's registrable domain — its zone, for the two-label domains this deployment uses. */
-export const registrableDomainOf = (hostname: string): string =>
-  hostname.split(".").slice(-2).join(".");
 
 /** The zones a deployment owns: those of its own hostnames and its SaaS project-host zones. A custom
  *  hostname under one of these routes on that zone (and gets a DNS record); any other is a Cloudflare

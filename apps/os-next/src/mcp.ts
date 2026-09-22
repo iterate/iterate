@@ -1,7 +1,7 @@
 import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import { errorCode } from "iterate/next/lib";
-import { appConfigOf, platformOriginOf } from "./app-config.ts";
+import { platformAddressesOf } from "./app-config.ts";
 import type { Env } from "./control-plane.ts";
 import { directory, type Directory, type Reach } from "./directory.ts";
 import { DurableObjectNameCodec } from "./iterate-context.ts";
@@ -148,6 +148,6 @@ async function buildServer(
 /** The shared bearer gate has established this principal and reach. */
 export function mcpResponse(request: Request, env: Env, authorization: Authorization) {
   return createMcpHandler(() =>
-    buildServer(env, authorization, platformOriginOf(appConfigOf(env), request)),
+    buildServer(env, authorization, platformAddressesOf(env, request).platformOrigin),
   ).fetch(request);
 }

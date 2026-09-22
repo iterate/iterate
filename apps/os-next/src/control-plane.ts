@@ -14,14 +14,12 @@ import type { BrowserSession } from "iterate/next/app-session";
 import { startIssuerSession } from "./issuer-session.ts";
 import {
   clearLoginCookie,
-  emailSignInOffered,
   finishLoginCode,
   loginCodePending,
-  passwordSignInOffered,
   signInWithPassword,
   startLoginCode,
 } from "./login-code.ts";
-import { appConfigOf, platformOriginOf } from "./app-config.ts";
+import { appConfigOf, platformAddressesOf } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import type { User } from "./directory.ts";
 import type { Env as DurableObjectEnv } from "./iterate-context-durable-object.ts";
@@ -81,7 +79,7 @@ async function loginState(request: Request, env: Env, ctx: ExecutionContext): Pr
   const url = new URL(request.url);
   const next = sameOriginPath(
     url.searchParams.get("next") || "/login",
-    platformOriginOf(config, request),
+    platformAddressesOf(env, request).platformOrigin,
   );
   const session = await browserAuthorization(env, request, ctx);
   return Response.json(
@@ -93,9 +91,10 @@ async function loginState(request: Request, env: Env, ctx: ExecutionContext): Pr
       error: url.searchParams.get("error"),
       // the email the refused post carried, so the page keeps what was typed
       email: url.searchParams.get("email") || "",
-      // the mechanisms this deployment offers (app-config.ts `login`): the page renders each
-      password: passwordSignInOffered(env),
-      emailSignIn: emailSignInOffered(env),
+      // the mechanisms this deployment offers (app-config.ts `login`): the page renders each; a
+      // code needs the mailbox binding as well as its block
+      password: Boolean(config.login.password.exposeSecret()),
+      emailSignIn: Boolean(env.EMAIL && config.login.emailCode),
       google: config.login.google ? `/.auth/identity?next=${encodeURIComponent(next)}` : null,
       // where a signed-in person with nowhere else to go is sent (the landing page's pointer)
       dash: config.urls.dash || null,
@@ -175,7 +174,7 @@ async function authorizePage(request: Request, env: Env, ctx: ExecutionContext):
  *  a preview's, a self-hoster's — never a file's. */
 function landingPage(request: Request, env: Env): Response {
   const config = appConfigOf(env);
-  const issuer = platformOriginOf(config, request);
+  const issuer = platformAddressesOf(env, request).platformOrigin;
   const escape = (text: string) =>
     text.replace(
       /[&<>"]/g,
