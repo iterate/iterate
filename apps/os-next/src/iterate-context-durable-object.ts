@@ -33,6 +33,7 @@ import {
   InvokeHandle,
   RpcStubHandle,
   itxHandleReferenceOf,
+  normalizedItxExpression,
 } from "iterate/next/expression";
 import {
   ITX_APP_HEADER,
