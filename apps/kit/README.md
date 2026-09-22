@@ -12,15 +12,19 @@ then flashes a checked source-built release and its private configuration direct
 
 Sign in with your Iterate account (the page sends you through OS's OAuth and
 back), choose a board release, enter Wi-Fi, pick one of your projects, then click
-**Prepare device** and **Flash device**. The prepare step checks that the project
-has a voice agent installed (`apps/os-next/scripts/voice-install.ts` installs it;
-the project also needs `/secrets/openai`) and mints a ten-year token scoped to
-that project. Each preparation gets a unique OAuth client, with public metadata
+**Prepare device** and **Flash device**. The prepare step installs the voice agent when missing and asks for an OpenAI API
+key if the project has none. It verifies voice health before minting a ten-year
+token scoped to that project. Existing voice services and secrets are preserved.
+The installer bundles the voice sources at build time, uploads immutable files
+under `kit/voice/` in project KV, and publishes only the `itx.voice` mount after
+all uploads succeed. Project websites and other apps are unchanged. Each preparation gets a unique OAuth client, with public metadata
 at `k.iterate.com/devices/<model>/clients/<uuid>.json` and the vendor's icon.
 It appears as `Kit <board> <date>` with kind **Device** in your sessions list.
 The token is written to the board and revoked individually from that list,
 never refreshed. Previously provisioned tokens retain their existing identity
 until the device is prepared again.
+
+Use **Log out** beside your account name to return to the sign-in page.
 
 Wi-Fi and the token stay in browser memory until they are written to the
 connected board's `iterate_kit` partition. Neither goes to the Kit worker or a

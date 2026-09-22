@@ -17,8 +17,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@iterate-com/ui/components/select";
-import { UsbIcon } from "lucide-react";
-import { z } from "zod";
+import { LogOutIcon, UsbIcon } from "lucide-react";
+import { ensureVoiceAgent, VoiceInstall } from "../../voice/install.ts";
 import { dashEnvs, kitEnvs } from "../../../../../envs.ts";
 import { FirmwareInstallButton } from "../../components/firmware-install-button.tsx";
 import {
@@ -66,8 +66,6 @@ const deviceItems = firmwareCatalog.map((device) => ({
 }));
 const horizontalFieldClassName =
   "grid gap-2 sm:grid-cols-[8.5rem_minmax(0,1fr)] sm:items-start sm:gap-4";
-/** The project has no `voice` capability, so the voice agent's `health()` is unreachable. */
-const NoVoiceInstall = z.object({ code: z.literal("NO_ITX_EXPRESSION_MATCH") });
 
 function KitPage() {
   const params = Route.useParams();
@@ -95,6 +93,8 @@ function KitPage() {
   ];
   const projectItems = projects.map((project) => ({ label: project.slug, value: project.id }));
   const preparationKey = JSON.stringify([projectId, device.id]);
+  const [openaiKey, setOpenaiKey] = useState("");
+  const [needsOpenaiKey, setNeedsOpenaiKey] = useState<string>();
   const [preparing, setPreparing] = useState(false);
   const [prepared, setPrepared] = useState<{
     key: string;
@@ -122,12 +122,13 @@ function KitPage() {
           <IterateLogo className="size-9" />
           <h1 className="text-xl font-semibold tracking-tight">Set up your device</h1>
         </header>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
           <span>Signed in as {info.principal.email || info.principal.actor}.</span>
           <form method="post" action="/.auth/logout">
-            <button type="submit" className="underline underline-offset-2 hover:text-foreground">
-              Sign out
-            </button>
+            <Button type="submit" variant="outline" size="sm">
+              <LogOutIcon data-icon="inline-start" />
+              Log out
+            </Button>
           </form>
         </div>
         <div className="flex flex-col gap-3 text-sm leading-relaxed text-muted-foreground">
@@ -136,15 +137,11 @@ function KitPage() {
             cable, choose its model, and enter your Wi-Fi.
           </p>
           <p>
-            Choose the project the device belongs to. Prepare device checks that the project has a
-            voice agent, then creates an access token for it. The token is written to the device and
-            can be revoked any time from your sessions list in OS.
+            Choose the project the device belongs to. Prepare device installs a voice agent if your
+            project needs one, then creates an access token for the device. The token is written to
+            the device and can be revoked any time from your sessions list in OS.
           </p>
-          <p>
-            Your project needs an OpenAI key saved as{" "}
-            <span className="font-mono">/secrets/openai</span> and the voice install (
-            <span className="font-mono">apps/os-next/scripts/voice-install.ts</span>).
-          </p>
+          <p>If your project needs an OpenAI API key, we’ll ask for it during setup.</p>
           <p>
             Flash device opens the USB port chooser. Select your device and keep it connected until
             installation finishes. It will restart and join your project.
@@ -276,7 +273,10 @@ function KitPage() {
               <Select
                 items={projectItems}
                 value={projectId}
-                onValueChange={(value) => setProjectId(value || "")}
+                onValueChange={(value) => {
+                  setProjectId(value || "");
+                  setOpenaiKey("");
+                }}
               >
                 <SelectTrigger id="project" className="w-full" disabled={projects.length === 0}>
                   <SelectValue />
@@ -316,6 +316,25 @@ function KitPage() {
             </FieldContent>
           </Field>
 
+          {needsOpenaiKey === projectId && (
+            <Field className={horizontalFieldClassName}>
+              <FieldLabel htmlFor="openai-key">OpenAI API key</FieldLabel>
+              <FieldContent>
+                <Input
+                  id="openai-key"
+                  type="password"
+                  autoComplete="new-password"
+                  value={openaiKey}
+                  onChange={(event) => setOpenaiKey(event.target.value)}
+                  required
+                />
+                <FieldDescription>
+                  Your project needs an OpenAI key for voice calls. It is saved securely in your
+                  project and is never written to the device.
+                </FieldDescription>
+              </FieldContent>
+            </Field>
+          )}
           <div className="grid sm:grid-cols-[8.5rem_minmax(0,1fr)] sm:gap-4">
             <div className="flex flex-col gap-2 sm:col-start-2">
               {configuration ? (
@@ -337,10 +356,25 @@ function KitPage() {
                     setPreparing(true);
                     setPreparationError(undefined);
                     try {
-                      // The voice check runs before the mint, so a project without a
-                      // voice agent gets no ten-year grant.
                       using itx = await api.projects.get(projectId);
-                      await itx.invoke(["itx", "voice", ["health"]]);
+                      const voice = await ensureVoiceAgent(
+                        itx,
+                        async () => {
+                          const response = await fetch("/voice-install.json", {
+                            signal: AbortSignal.timeout(30_000),
+                          });
+                          if (!response.ok)
+                            throw new Error("Could not download voice setup. Please try again.");
+                          return VoiceInstall.parse(await response.json());
+                        },
+                        openaiKey,
+                      );
+                      if (voice === "needs-openai-key") {
+                        setNeedsOpenaiKey(projectId);
+                        return;
+                      }
+                      setOpenaiKey("");
+                      setNeedsOpenaiKey(undefined);
                       const { token } = await api.grants.mint({
                         name: `Kit ${device.name} ${new Date().toISOString().slice(0, 10)}`,
                         projects: [projectId],
@@ -359,11 +393,8 @@ function KitPage() {
                     } catch (error: unknown) {
                       setPreparationError({
                         key: preparationKey,
-                        message: NoVoiceInstall.safeParse(error).success
-                          ? "This project has no voice agent yet. Run apps/os-next/scripts/voice-install.ts for it, then try again."
-                          : error instanceof Error
-                            ? error.message
-                            : "Could not prepare your device.",
+                        message:
+                          error instanceof Error ? error.message : "Could not prepare your device.",
                       });
                     } finally {
                       setPreparing(false);

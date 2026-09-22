@@ -20,7 +20,7 @@ end and the relay's live state on screen.
   50 ms PCM16 frames, the playback worklet drains a queue of answer chunks (cleared when the relay
   says so). Modeled on the recorder and stream player of OpenAI's realtime console.
 
-The project needs the voice agent installed (`apps/os-next/scripts/voice-install.ts`); the page says
+The project needs the voice agent installed (prepare the project at [Kit](https://k.iterate.com)); the page says
 so if it is not.
 
 ## Run

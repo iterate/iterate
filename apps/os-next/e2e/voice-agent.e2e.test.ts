@@ -2,9 +2,10 @@
 // is replaced: a real deployed WebSocket fixture speaks the small GPT-Live audio protocol below.
 // This pins loaded-code admission, agent birth, inherited KV/egress, secret substitution,
 // delegated scripts and audio in both directions. It does not test the model, microphones or speakers.
-import { createHash } from "node:crypto";
 import { build } from "esbuild";
 import { expect } from "vitest";
+import { createVoiceInstall } from "../../kit/scripts/build-voice-install.ts";
+import { ensureVoiceAgent } from "../../kit/src/voice/install.ts";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../src/agent/system-prompt.ts";
 import { openItx, readAll, runId, until } from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
@@ -123,24 +124,13 @@ export default class extends WorkerEntrypoint {
     const responsesUrl = "https://api.openai.com/v1/responses";
     expect(delegate.split(responsesUrl)).toHaveLength(2);
     const fixtureDelegate = delegate.replace(responsesUrl, providerUrl);
-    const key = (source: string) => createHash("sha256").update(source).digest("hex");
-    const fixtureWorker = worker
-      .replace("voice-agent:dev", `voice-agent:${key(fixtureVoice)}`)
-      .replace("voice-delegate:dev", `voice-delegate:${key(fixtureDelegate)}`);
-    await root.kv.put("voice-agent.js", fixtureVoice);
-    await root.kv.put("voice-delegate.js", fixtureDelegate);
-    await root.kv.put("worker.js", fixtureWorker);
-    await root.provide("itx.voice", [
-      "itx",
-      "workers",
-      [
-        "get",
-        {
-          source: "itx.kv.get('worker.js')",
-          cacheKey: key(fixtureWorker),
-        },
-      ],
-    ]);
+    const install = createVoiceInstall({
+      voiceAgent: fixtureVoice,
+      voiceDelegate: fixtureDelegate,
+      worker,
+      fontCss: "/* fixture font */",
+    });
+    expect(await ensureVoiceAgent(root, async () => install)).toBe("ready");
 
     const streamPath = "/agents/voice/e2e";
     const activation = "voice-e2e";
