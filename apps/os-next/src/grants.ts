@@ -290,7 +290,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
       metadata: {
         clientName: data.name,
         tokenKind: data.clientId ? "device" : "personal",
-        ...(logoUri.success ? { logoUri: logoUri.data } : {}),
+        ...(logoUri.success && { logoUri: logoUri.data }),
       },
       props: {
         kind: "personal",
