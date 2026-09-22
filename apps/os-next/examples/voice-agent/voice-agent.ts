@@ -1270,10 +1270,8 @@ async function dialProviderSocket(): Promise<WebSocket | null> {
   });
   const socket = response.webSocket || null;
   if (!socket) {
-    const detail = await response.text().catch(() => "response body unavailable");
-    throw new Error(
-      `Voice provider upgrade returned HTTP ${response.status}: ${detail.slice(0, 500)}`,
-    );
+    // Provider error bodies can echo credential fragments; only the status belongs in the log.
+    throw new Error(`Voice provider upgrade returned HTTP ${response.status}`);
   }
   socket.binaryType = "arraybuffer"; // before accept(): the current default is Blob
   socket.accept();

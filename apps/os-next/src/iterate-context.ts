@@ -43,6 +43,7 @@ import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processo
 import type { IterateContextDurableObject, Env } from "./iterate-context-durable-object.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
+  encodeFetchExpression,
   terminalFetchOf,
   lendRpcStubOverPager,
   type ClientRpcStub,
@@ -202,7 +203,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     const terminalFetch = terminalFetchOf(itxExpression, args);
     if (terminalFetch) {
       const headers = new Headers(terminalFetch.request.headers);
-      headers.set(ITX_EXPRESSION_FETCH_HEADER, JSON.stringify(terminalFetch.steps)); // the lane parses a JSON ItxExpression
+      headers.set(ITX_EXPRESSION_FETCH_HEADER, encodeFetchExpression(terminalFetch.steps));
       headers.delete(ITX_PRINCIPAL_HEADER); // the stamp is this session's, never the Request's own
       headers.delete(ITX_GRANT_HEADER);
       headers.delete(ITX_PLATFORM_ORIGIN_HEADER); // likewise the platform origin: this holder's, never the Request's

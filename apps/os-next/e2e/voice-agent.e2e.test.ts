@@ -1,7 +1,7 @@
 // The shipped voice bundles, loaded exactly as the installer loads them. Only the provider URL
 // is replaced: a real deployed WebSocket fixture speaks the small GPT-Live audio protocol below.
-// This pins loaded-code admission, agent birth, inherited KV/egress, secret substitution and
-// audio in both directions. It does not test the model, microphones or speakers.
+// This pins loaded-code admission, agent birth, inherited KV/egress, secret substitution,
+// delegated scripts and audio in both directions. It does not test the model, microphones or speakers.
 import { createHash } from "node:crypto";
 import { build } from "esbuild";
 import { expect } from "vitest";
@@ -30,6 +30,9 @@ deployedOnly(
     await root.secrets.set("/secrets/openai", token, { urls: [providerUrl] });
     await root.provide("itx.apps.provider", [
       "itx",
+      "builtins",
+      ["cd", "/provider"],
+      "builtins",
       "workers",
       [
         "get",
@@ -38,7 +41,9 @@ deployedOnly(
             "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class extends WorkerEntrypoint {
   async fetch(request) {
-    if (!request.headers.get("x-itx-principal")) return new Response("missing provider credential", {status: 401});
+    if (!request.headers.get("x-itx-principal") || !request.headers.get("x-itx-grant")) return new Response("missing provider credential", {status: 401});
+    // Unicode source in a rule expanded after cd must survive the native fetch header.
+    if ("東京 🌍".length !== 5) throw new Error("corrupted worker source");
     if (request.method === "POST") {
       const {input} = await request.json();
       const result = input.findLast(message => message.content.startsWith("Script result:\\n"));

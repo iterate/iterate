@@ -50,7 +50,11 @@ import {
 } from "../secrets.ts";
 import type { SecretState } from "../secret/contract.ts";
 import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.ts";
-import { ITX_EXPRESSION_FETCH_HEADER, terminalFetchOf } from "./rpc-stubs.ts";
+import {
+  ITX_EXPRESSION_FETCH_HEADER,
+  encodeFetchExpression,
+  terminalFetchOf,
+} from "./rpc-stubs.ts";
 import { admitLoadedCodeRow, refuseSelfLoopRow } from "./itx-expression-rewriting.ts";
 import { GLOBAL_PROJECT_ID, resourceScope } from "./paths.ts";
 import {
@@ -811,9 +815,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             ITX_GRANT_HEADER,
             ITX_APP_HEADER,
             "x-itx-platform-origin",
+            "x-itx-rpc-stub-pager",
+            "x-itx-fetch-upgrade",
           ])
             headers.delete(name);
-          headers.set(ITX_EXPRESSION_FETCH_HEADER, JSON.stringify(terminalFetch.steps));
+          headers.set(ITX_EXPRESSION_FETCH_HEADER, encodeFetchExpression(terminalFetch.steps));
           headers.set(ITX_CALLER_PATH_HEADER, caller.path || path);
           if (caller.principal) headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(caller.principal));
           if (caller.grant) headers.set(ITX_GRANT_HEADER, caller.grant);
