@@ -39,7 +39,7 @@ const now = () => Date.now();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** 16 kHz mono PCM16 WAV → the PCM bytes (chunk-aware: `say` writes its fmt chunk after others). */
-function pcmFromWav(file: string): Uint8Array {
+function pcmFromWav(file: string) {
   const wav = new Uint8Array(readFileSync(file));
   const view = new DataView(wav.buffer, wav.byteOffset, wav.byteLength);
   const tag = (at: number) => new TextDecoder("ascii").decode(wav.subarray(at, at + 4));
