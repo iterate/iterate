@@ -56,3 +56,19 @@ test("THE CHAIN: a subagent two levels down resolves a capability provided at th
     /is masked/,
   );
 });
+
+test("an agent cannot create an ancestor and invert its parent capability chain", async () => {
+  const root = await openAgentItx(freshCtx("agent-ancestor"));
+  await root.agents.create("/agents/child");
+  const ancestor = root.cd("/agents");
+  const rules = await ancestor.rewriteRules.list();
+  const processors = await ancestor.processors.list();
+  await expect(
+    root.cd("/agents/child").run("async (itx) => itx.agents.create('/agents')"),
+  ).rejects.toThrow(/cannot create its own ancestor/);
+  expect(await ancestor.rewriteRules.list()).toEqual(rules);
+  expect(await ancestor.processors.list()).toEqual(processors);
+  expect(await root.agents.list()).toEqual([
+    { path: "/agents/child", createdAt: expect.any(String) },
+  ]);
+});

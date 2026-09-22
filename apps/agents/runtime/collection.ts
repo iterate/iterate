@@ -3,7 +3,7 @@ import { RpcTarget } from "cloudflare:workers";
 import type { WithItx } from "iterate/next/sdk";
 import type { StreamEvent } from "iterate/next/stream/processor";
 import type { ItxScope as ItxEntrypointScope } from "iterate/next/sdk";
-import { resolveContextPath } from "iterate/next/lib";
+import { codedError, resolveContextPath } from "iterate/next/lib";
 import type { FacetSpec } from "iterate/next/api";
 import type { AgentCatalogState } from "./catalog.ts";
 import type { AgentState } from "./contract.ts";
@@ -60,6 +60,11 @@ export class AgentCollectionRpcTarget extends RpcTarget {
     return this.withItx(async (itx) => {
       path = resolveContextPath(this.base, path);
       if (path === "/") throw new Error("An agent needs its own context path");
+      const creator = resolveContextPath("/", options.creator || this.base);
+      // Writing a parent link on an ancestor would point back down to its child.
+      // Refuse before loading a facet or changing any context rows.
+      if (creator.startsWith(`${path}/`))
+        throw codedError("FORBIDDEN", "An agent cannot create its own ancestor");
       const context = itx.cd(path);
       const spec = await this.spec();
       // The facet is this app's AgentDurableObject and `snapshot()` the engine's
@@ -86,11 +91,7 @@ export class AgentCollectionRpcTarget extends RpcTarget {
           payload: { match, target },
         });
         await context.append(
-          rule(
-            "itx",
-            `itx.cd(${JSON.stringify(options.creator || this.base)})`,
-            `agent-parent:${path}`,
-          ),
+          rule("itx", `itx.cd(${JSON.stringify(creator)})`, `agent-parent:${path}`),
           rule("itx.run", `itx.cd(${JSON.stringify(sandbox)}).run`, `agent-sandbox:${path}`),
           rule(
             "itx.agents",
@@ -112,7 +113,7 @@ export class AgentCollectionRpcTarget extends RpcTarget {
         // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
         const [requested] = (await context.append({
           type: "events.iterate.com/agent/create-requested",
-          payload: { creator: options.creator || this.base },
+          payload: { creator },
         })) as unknown as StreamEvent[];
         requestedAtOffset = requested!.offset;
       }

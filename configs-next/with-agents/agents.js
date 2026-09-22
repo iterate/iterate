@@ -1188,6 +1188,9 @@ import { StreamProcessorDurableObject as StreamProcessorDurableObject2 } from ".
 import { RpcTarget } from "cloudflare:workers";
 
 // ../../packages/iterate/src/next/lib.ts
+function codedError(code, message, data) {
+  return Object.assign(new Error(message), data === void 0 ? { code } : { code, data });
+}
 function resolveContextPath(basePath, contextPath) {
   const segments = [];
   for (const seg of `${contextPath.startsWith("/") ? "" : basePath}/${contextPath}`.split("/")) {
@@ -1245,6 +1248,9 @@ var AgentCollectionRpcTarget = class extends RpcTarget {
     return this.withItx(async (itx) => {
       path = resolveContextPath(this.base, path);
       if (path === "/") throw new Error("An agent needs its own context path");
+      const creator = resolveContextPath("/", options.creator || this.base);
+      if (creator.startsWith(`${path}/`))
+        throw codedError("FORBIDDEN", "An agent cannot create its own ancestor");
       const context = itx.cd(path);
       const spec = await this.spec();
       const { state } = await context.invoke([
@@ -1266,11 +1272,7 @@ var AgentCollectionRpcTarget = class extends RpcTarget {
           payload: { match, target }
         });
         await context.append(
-          rule(
-            "itx",
-            `itx.cd(${JSON.stringify(options.creator || this.base)})`,
-            `agent-parent:${path}`
-          ),
+          rule("itx", `itx.cd(${JSON.stringify(creator)})`, `agent-parent:${path}`),
           rule("itx.run", `itx.cd(${JSON.stringify(sandbox)}).run`, `agent-sandbox:${path}`),
           rule(
             "itx.agents",
@@ -1288,7 +1290,7 @@ var AgentCollectionRpcTarget = class extends RpcTarget {
         );
         const [requested] = await context.append({
           type: "events.iterate.com/agent/create-requested",
-          payload: { creator: options.creator || this.base }
+          payload: { creator }
         });
         requestedAtOffset = requested.offset;
       }
