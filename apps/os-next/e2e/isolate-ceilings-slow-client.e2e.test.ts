@@ -25,16 +25,23 @@ deployedOnly(
     const producer = openItx(ctx);
     let reset: any;
     // 160 × 1 MiB: past the 128 MiB isolate (the born-red version reset at ~125 MiB retained) with a
-    // quarter's margin — the row is pure upload time (~180 ms per MiB), so the count IS the row.
-    for (let i = 0; i < 160; i++) {
-      const r = await settle(
-        append(producer, { type: "chunk", ephemeral: true, payload: { i, blob: blob(1 * MiB) } }),
-      );
-      if (!r.ok) {
-        if (isDurableObjectReset(r.e)) reset = r.e;
-        break; // the DO is gone; stop flooding
+    // quarter's margin. The row is upload time, and one append at a time paid a round trip per MiB
+    // (~180 ms in CI, 25 s); eight in flight keep the wire full — 9.5–15 s measured 2026-09-22, the
+    // DO ingesting every MiB either way. A reset fails the append in hand and stops every lane.
+    let next = 0;
+    const flood = async () => {
+      while (next < 160 && !reset) {
+        const i = next++;
+        const r = await settle(
+          append(producer, { type: "chunk", ephemeral: true, payload: { i, blob: blob(1 * MiB) } }),
+        );
+        if (!r.ok) {
+          if (isDurableObjectReset(r.e)) reset = r.e;
+          return; // the DO is gone; stop flooding
+        }
       }
-    }
+    };
+    await Promise.all(Array.from({ length: 8 }, flood));
     // HEALTHY expectation: a stalled subscriber blocks nothing but itself, so the producer floods on.
     expect(
       reset,
