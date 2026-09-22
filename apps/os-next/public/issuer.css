@@ -1,19 +1,11 @@
-/* public/issuer.css — the one stylesheet of the issuer's pages (index.html, login.html,
- * authorize.html) and of the SDK's "Sign in again" page on every app's origin
- * (packages/iterate/src/next/app-server.ts links it: .issuer-card, .issuer-mark, .primary), a file
- * the assets binding serves: one centred column, phone-first, the same
- * controls on every page, light only like every os-next app. Plain 2026 CSS, written for Chrome
- * and degrading to nothing elsewhere: nesting, @starting-style for what appears, sibling-index()
- * for the list's stagger, corner-shape for the hero's squircles, color-mix() for every hover. The
- * consent page's own parts come after the shared ones. */
 :root {
   color-scheme: light;
-  --ink: oklch(21% 0.012 285);
-  --quiet: oklch(52% 0.02 285);
-  --line: oklch(91% 0.006 285);
-  --soft: oklch(97.5% 0.003 285);
+  --ink: #171717;
+  --quiet: #737373;
+  --line: #e5e5e5;
+  --soft: #fafafa;
   --paper: #fff;
-  --focus: oklch(62% 0.19 255);
+  --focus: #171717;
   --danger: oklch(52% 0.2 27);
 }
 body {
@@ -76,7 +68,7 @@ label {
 [hidden] {
   display: none !important;
 }
-input:is([type="email"], [type="text"]),
+input:is([type="email"], [type="text"], [type="password"]),
 select {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -85,7 +77,7 @@ select {
   font: inherit;
   /* never under 16px: iOS Safari zooms the page into any smaller field it focuses */
   font-size: max(1em, 16px);
-  padding: 0.55rem 0.65rem;
+  padding: 0.75rem 0.875rem;
   margin: 0.3rem 0 0;
   box-sizing: border-box;
   width: 100%;
@@ -111,7 +103,7 @@ button,
   text-align: center;
   font: inherit;
   font-weight: 500;
-  padding: 0.55rem 0.9rem;
+  padding: 0.75rem 1rem;
   box-sizing: border-box;
   cursor: pointer;
   touch-action: manipulation;
@@ -138,7 +130,7 @@ button,
     }
   }
 }
-:is(.quiet, .consent-quiet, .consent-add) {
+.quiet {
   border-color: transparent;
   padding: 0.4rem 0.5rem;
 }
@@ -154,7 +146,8 @@ button,
   form {
     margin: 0.75rem 0 0;
   }
-  form + form {
+  /* a form that is only a quiet action — Switch account, Use a different email — sits centred */
+  form:has(> .quiet) {
     margin-top: 0.5rem;
     text-align: center;
   }
@@ -175,32 +168,116 @@ button,
   margin: 0 auto 1rem;
 }
 
-/* The consent page: the hero (iterate ⇄ the client), the title, who is signed in (the one card),
-   the permissions, the projects as a flat list under the either/or, the two buttons. */
-.consent-card {
-  width: min(100%, 34rem);
-  font-size: 14px;
-  overflow-wrap: anywhere;
-  > :is(header, form, footer) {
-    padding: 0 0 1.5rem;
+/* Login has a little breathing room around every combination of sign-in options. */
+body:has(.login-card) {
+  align-items: center;
+  padding-block: 4rem;
+}
+.login-card {
+  width: min(100%, 26rem);
+  padding: 2.5rem;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  box-shadow: 0 8px 32px #00000004;
+  h1 {
+    margin-bottom: 2rem;
+    font-size: 1.5rem;
+    letter-spacing: -0.035em;
+  }
+  label {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 500;
+    text-align: left;
   }
   form {
+    display: grid;
+    gap: 1.25rem;
     margin: 0;
   }
-  footer {
-    padding-top: 1.5rem;
-    p {
-      margin: 0 0 1rem;
+  form:has(> .quiet) {
+    margin-top: 0;
+  }
+  form + form {
+    margin-top: 0.75rem;
+  }
+  :is(.primary, .button) {
+    margin: 0;
+  }
+  .google-login {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    img {
+      flex-shrink: 0;
     }
   }
+  .quiet {
+    width: 100%;
+    font-size: 14px;
+    padding: 0.625rem;
+  }
+  #login > p {
+    margin-bottom: 1.5rem;
+  }
+  #login > p:last-child {
+    margin-bottom: 0;
+  }
+  [name="code"] {
+    text-align: center;
+    letter-spacing: 0.45em;
+    font-size: 22px;
+    font-variant-numeric: tabular-nums;
+  }
+  [role="alert"] {
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 13px;
+  }
+  .login-divider {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    color: var(--quiet);
+    font-size: 12px;
+    margin: 1.5rem 0;
+  }
+  .login-divider::before,
+  .login-divider::after {
+    content: "";
+    height: 1px;
+    flex: 1;
+    background: var(--line);
+  }
+  @media (width <= 480px) {
+    padding: 2rem 1.5rem;
+  }
 }
-/* The hero: two squircles that slide in from either side, the arrow between them fading in last. */
+/* Two-step consent: selection or permissions on the left, identity and actions on the right. */
+.consent-card {
+  width: min(100%, 68rem);
+  overflow-wrap: anywhere;
+}
+.consent-header {
+  text-align: center;
+  margin: 0 auto 2.5rem;
+  max-width: 58rem;
+}
+.consent-header h1 {
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  letter-spacing: -0.035em;
+  line-height: 1.25;
+  margin-bottom: 0.75rem;
+}
 .consent-hero {
   display: flex;
-  align-items: center;
   justify-content: center;
+  align-items: center;
   gap: 1rem;
-  margin: 0 0 1.25rem;
+  margin: 0 0 1.5rem;
 }
 .consent-tile {
   display: grid;
@@ -212,8 +289,8 @@ button,
   border-radius: 22px;
   corner-shape: squircle;
   background: var(--soft);
-  font-weight: 600;
   font-size: 20px;
+  font-weight: 600;
   overflow: hidden;
   transition:
     translate 0.6s cubic-bezier(0.2, 0.8, 0.2, 1),
@@ -241,174 +318,240 @@ button,
     opacity: 0;
   }
 }
-/* Who is signed in: the one card — the person's picture (or initial), the address, switch. */
-.consent-account {
+.consent-panel {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 2rem;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  min-height: 25rem;
+  box-sizing: border-box;
+}
+#consent-form {
+  padding: 0.5rem 2rem 0.5rem 0;
+  min-width: 0;
+}
+.consent-sidebar {
+  padding: 0.5rem 0 0.5rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  min-width: 0;
+}
+.consent-section-heading {
   display: flex;
   align-items: center;
-  gap: 0.8rem;
-  margin: 0 0 1.5rem;
-  padding: 0.75rem;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.consent-section-heading button {
+  font-size: 13px;
+  padding: 0.4rem 0.75rem;
+}
+.consent-card h2 {
+  font-size: 16px;
+  font-weight: 600;
+}
+.consent-account {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 0.25rem 0.875rem;
+  padding: 1.125rem;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: var(--soft);
-  > div {
-    flex: 1;
-    min-width: 0;
-  }
-  strong {
-    display: block;
-  }
-  button {
-    font-size: 12px;
-  }
-  @media (width <= 420px) {
-    gap: 0.5rem;
-  }
+}
+.consent-account strong,
+.consent-account .muted {
+  display: block;
+}
+.consent-account strong {
+  font-size: 14px;
+}
+.consent-account form {
+  grid-column: 2;
+}
+.consent-account .quiet {
+  font-size: 12px;
+  color: var(--quiet);
+  padding: 0.25rem 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 .consent-avatar {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
-  border: 1px solid var(--line);
-  border-radius: 50%;
-  background: var(--paper);
-  font-weight: 600;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: #f0f0f0;
+  font-size: 18px;
+  color: var(--quiet);
   overflow: hidden;
-  img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
 }
-/* A tickable row — a permission, the either/or, a project: the box, then the words. */
-:is(.consent-scope, .consent-future, .consent-project) {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.7rem;
-  margin: 0.6rem 0 0;
-  cursor: pointer;
-  .muted {
-    display: block;
-    margin-top: 0.15rem;
-  }
-  input {
-    margin-top: 0.1rem;
-  }
-  input:disabled {
-    opacity: 0.6;
-  }
-}
-/* The permissions the app asked for: `iterate` fixed, every other scope tickable. */
-.consent-permissions {
-  margin: 0 0 1.25rem;
-}
-/* Projects: the heading with the count and "+ New project" (its plus turns into a cross while the
-   form is open), the either/or, the flat list — a rule between rows, never around them. */
-.consent-project-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-.consent-add {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 13px;
-  white-space: nowrap;
-  span {
-    font-size: 17px;
-    line-height: 1;
-    transition: rotate 0.2s;
-  }
-  &[aria-expanded="true"] span {
-    rotate: 45deg;
-  }
-}
-.consent-future {
-  margin: 0.75rem 0 0.25rem;
+.consent-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .consent-projects {
-  padding: 0;
-  margin: 0.25rem 0 0;
   border: 0;
+  padding: 0;
+  margin: 1.5rem 0 0;
   min-width: 0;
-  transition: opacity 0.2s;
-  &:disabled {
-    opacity: 0.5;
-  }
 }
-.consent-org h3 {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--quiet);
+.consent-project,
+.consent-scope {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  cursor: pointer;
+  font-size: 14px;
   margin: 0;
-  padding: 0.9rem 0 0.35rem;
 }
 .consent-project {
-  align-items: center;
-  padding: 0.65rem 0;
-  margin: 0;
-  & + & {
-    border-top: 1px solid var(--line);
-  }
-  /* the rows rise in, staggered, on the page's first form alone — a later render swaps the form
-     in place, and its rows had better stay put */
-  .consent-enter & {
-    animation: consent-rise 0.3s both;
-    animation-delay: calc(sibling-index() * 30ms);
-  }
+  padding: 0.625rem 0;
 }
-@keyframes consent-rise {
-  from {
-    opacity: 0;
-    translate: 0 4px;
-  }
+.consent-project:has(:disabled) {
+  cursor: default;
 }
-/* New project: no box — the fields side by side where there is room, the new organization's
-   field only once "New organization…" is chosen; under a list, a rule sets it apart. */
-.consent-create {
-  margin: 1rem 0 0;
-  transition:
-    opacity 0.25s,
-    translate 0.25s;
-  @starting-style {
-    opacity: 0;
-    translate: 0 -4px;
-  }
-  .consent-projects + & {
-    padding-top: 1rem;
-    border-top: 1px solid var(--line);
-  }
-  button {
-    margin-top: 0.75rem;
-  }
-}
-.consent-fields {
+.consent-project-name {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
-  gap: 0 1rem;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.consent-slug {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+.consent-project-name .muted {
+  font-size: 12px;
+}
+.consent-add {
+  width: 100%;
+  &:not(:disabled):hover {
+    background: transparent;
+    text-decoration: underline;
+  }
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+  font-weight: 400;
+  > span {
+    width: 18px;
+    flex-shrink: 0;
+    text-align: center;
+    font-size: 20px;
+    line-height: 1;
+    color: var(--quiet);
+  }
+}
+.consent-permissions {
+  margin-top: 1.5rem;
+}
+.consent-scope {
+  align-items: start;
+  padding: 1.25rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.consent-scope input {
+  margin-top: 0.15rem;
+}
+.consent-scope strong {
+  display: block;
+  font-weight: 500;
+}
+.consent-scope .muted {
+  display: block;
+  margin-top: 0.25rem;
+  line-height: 1.5;
+}
+.consent-scope:first-child {
+  padding-top: 0;
+}
+.consent-scope:last-child {
+  border-bottom: 0;
+}
+.consent-onboarding {
+  margin-top: 1.5rem;
+}
+.consent-create {
+  margin-top: 1rem;
+  padding: 1.25rem;
+  border-radius: 12px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+}
+.consent-fields,
+.consent-onboarding {
+  display: grid;
+  gap: 1rem;
+}
+.consent-create > button {
+  margin-top: 1rem;
 }
 .consent-host {
   display: block;
-  margin-top: 0.35rem;
+  margin-top: 0.5rem;
+  line-height: 1.5;
+}
+.consent-summary {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1.125rem;
+}
+.consent-summary h2 {
+  font-size: 14px;
+}
+.consent-selected {
+  display: grid;
+  gap: 0.15rem;
+  margin-top: 1rem;
+  font-size: 14px;
+}
+.consent-footer {
+  margin-top: auto;
+  padding-top: 1.5rem;
 }
 .consent-actions {
-  display: flex;
-  gap: 0.75rem;
-  > * {
-    flex: 1;
+  display: grid;
+  gap: 0.625rem;
+}
+.consent-actions > * {
+  width: 100%;
+}
+@media (width <= 700px) {
+  .consent-panel {
+    grid-template-columns: 1fr;
+    padding: 1.25rem;
+    min-height: 0;
+  }
+  #consent-form {
+    padding: 0 0 1.5rem;
+  }
+  .consent-sidebar {
+    padding: 1.5rem 0 0;
+    gap: 1rem;
+  }
+  .consent-header {
+    margin-bottom: 1.75rem;
+  }
+  .consent-hero {
+    margin-bottom: 1.5rem;
+    gap: 1rem;
+  }
+  .consent-tile {
+    width: 64px;
+    height: 64px;
+  }
+  .consent-footer {
+    padding-top: 0.5rem;
   }
 }
 @media (prefers-reduced-motion: reduce) {
   *,
-  ::before,
-  ::after {
-    animation: none !important;
+  *::before,
+  *::after {
     transition: none !important;
   }
 }

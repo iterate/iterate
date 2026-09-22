@@ -1,4 +1,3 @@
-// session-wire-frames-one-round-trip.e2e.test.ts — WIRE-LEVEL: EXACT capnweb frames (counts +
 // direction) against the real worker. The client's WebSocket is OURS (instrumented send + message
 // listeners record every frame with direction and order) and is handed to `newWebSocketRpcSession(ws)`.
 //
@@ -208,8 +207,8 @@ test("pipelining: subscribe({ target: fn }) + subscribe({ name: <its UNRESOLVED 
   });
   // Correctness under pipelining: the subscribe really lent the callback AND appended its row; the
   // removal (delivered after it) dropped THE row and recalled the stub — nothing left in either table
-  // beyond the config-worker funnel row (auto-subscribed at birth, always present).
-  expect((await subscriptions(itx)).map((r: { name: string }) => r.name)).toEqual(["config"]);
+  // after the explicitly registered row has been removed.
+  expect((await subscriptions(itx)).map((r: { name: string }) => r.name)).toEqual([]);
   await until("the callback recalled", async () => (await presence(itx)).length === 0);
 });
 

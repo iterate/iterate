@@ -28,7 +28,6 @@ type ErrorCode =
   | "EVENT_TOO_LARGE" // one event's serialized body is over the append ceiling (stream.ts EVENT_BODY_MAX_CHARS)
   | "REDUCE_CHECKPOINT_TOO_LARGE" // a reduce's state would not fit one storage cell (stream/processor.ts)
   | "EVENT_UNREADABLE" // a stored row's body is not JSON — `data.offset` names it (stream.ts read)
-  | "RESERVED_SUBSCRIPTION_NAME" // a raw subscription-configured named `core` (the always-on reduce) — refused at the append door
   | "STREAM_PAUSED"
   | "INVALID_CONTEXT" // a context name / project id the codec refuses (iterate-context.ts `DurableObjectNameCodec`) — coded, so it survives the hop
   | "EXPRESSION_TOO_LONG" // a STRING itx expression over ITX_EXPRESSION_STRING_MAX_CHARS — pass the parsed form
@@ -302,4 +301,18 @@ export function isLocalOrigin(origin: string) {
       url.hostname.endsWith(".localhost") ||
       url.hostname === "127.0.0.1")
   );
+}
+
+/** Resolve a `cd` target against a context's own path — the one resolver every `cd` (the edge
+ *  method, the built-in root, the library's relative handles) shares. Absolute ("/agents/x") stands alone; relative
+ *  ("agents/x", "../inbox", ".") joins onto `base`. `.` and `..` resolve; the root cannot be
+ *  escaped ("/.." is "/"). The result is canonical: leading slash, no trailing slash but for "/". */
+export function resolveContextPath(basePath: string, contextPath: string): string {
+  const segments: string[] = [];
+  for (const seg of `${contextPath.startsWith("/") ? "" : basePath}/${contextPath}`.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") segments.pop();
+    else segments.push(seg);
+  }
+  return `/${segments.join("/")}`;
 }

@@ -10,11 +10,13 @@ import {
   CardTitle,
 } from "@iterate-com/ui/components/card";
 import { Identifier } from "@iterate-com/ui/components/identifier";
+import { httpOriginOf } from "../../../../lib/origins.ts";
 
 const shell = getRouteApi("/_auth");
 const projectRoute = getRouteApi("/_auth/projects/$slug");
 
 export const Route = createFileRoute("/_auth/projects/$slug/mcp")({
+  head: ({ params }) => ({ meta: [{ title: `MCP · ${params.slug} · Dash` }] }),
   component: ProjectMcp,
 });
 
@@ -32,15 +34,27 @@ function Copyable({ value }: { value: string }) {
 function ProjectMcp() {
   const { project } = projectRoute.useRouteContext();
   const { info } = shell.useRouteContext();
-  // the MCP server: its own origin when the deployment has one, else `/mcp` on the platform's
-  const server = info.mcpOrigin ? `${info.mcpOrigin}/` : `${info.platformOrigin}/mcp`;
+  // the MCP server: its own origin when the deployment has one, else `/mcp` on the platform's — each
+  // parsed first (lib/origins.ts): what goes into a copyable command must be an http(s) origin
+  const mcpOrigin = httpOriginOf(info.mcpOrigin);
+  const platformOrigin = httpOriginOf(info.platformOrigin);
+  const server = mcpOrigin ? `${mcpOrigin}/` : platformOrigin ? `${platformOrigin}/mcp` : null;
+  if (!server)
+    return (
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-2 p-4 md:p-8">
+        <h1 className="text-2xl font-semibold tracking-tight">MCP</h1>
+        <p className="text-sm text-muted-foreground">
+          This deployment reports no usable MCP server address.
+        </p>
+      </div>
+    );
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">MCP</h1>
         <p className="text-sm text-muted-foreground">
-          One tool, <code>run</code>: a script evaluated in this project's context, under your
-          grant.
+          One tool, <code>run</code>: a script evaluated at this project's root (<code>/</code>),
+          under your grant. Every script you run is recorded on the project root's log.
         </p>
       </div>
       <Card>

@@ -3,13 +3,14 @@
 // incarnation (woken), the pause latch (paused/resumed), the itx-expression rewrite rules (a MAP by
 // match: configured sets or, with a null target, deletes), the subscriptions table (by name:
 // configured REPLACES or, with a null target, drops; delivery-halted marks, delivery-resumed clears
-// the halt and records the seek) and the secrets catalog (names + origins, never a value). No clock, no effects: the same log always reduces to the same state, an ephemeral
+// the halt and records the seek). No clock, no effects: the same log always reduces to the same state, an ephemeral
 // event never reduces (the checkpoint must rebuild from the durable log alone), and a malformed
 // hand-appended event THROWS at the reduce — the host contains it (stream.test.ts pins the skip). The DOORS that build these events are pinned beside their modules
 // (context/itx-expression-rewriting.test.ts, the subscriptions section below).
 import { describe, expect, test } from "vitest";
 import { parse, print, type ItxExpression, type ItxExpressionInput } from "iterate/next/expression";
 import type { StreamEvent } from "iterate/next/stream/processor";
+import { BUILT_IN_ROOTS, resolveItxExpression } from "../context/itx-expression-rewriting.ts";
 import {
   CoreContract,
   reduceCoreEvent,
@@ -32,16 +33,87 @@ const reduceAll = (events: StreamEvent[], initial = CoreContract.initialState())
   events.reduce((s, e) => reduceCoreEvent({ event: e, state: s }) ?? s, initial);
 
 describe("the contract", () => {
-  test("slug `core` v10.0.0; the every-field-defaulted initial state", () => {
+  test("slug `core` v13.0.0; the every-field-defaulted initial state", () => {
     expect(CoreContract.slug).toBe("core");
-    expect(CoreContract.version).toBe("10.0.0");
+    expect(CoreContract.version).toBe("13.0.0");
     expect(CoreContract.initialState()).toEqual({
       paused: null,
       itxExpressionRewriteRules: {},
       subscriptions: {},
+      ingressTarget: null,
       schedules: {},
-      secrets: {},
+      scriptRuns: {},
     });
+    // the events it OWNS beyond its control events: the run pair, schemas right here
+    expect(Object.keys(CoreContract.events)).toEqual([
+      "events.iterate.com/context/run-requested",
+      "events.iterate.com/context/run-settled",
+    ]);
+  });
+});
+
+describe("the scriptRuns table — by the request's offset: requested opens, settled closes, nothing else", () => {
+  const requested = (offset: number) =>
+    at(offset, "events.iterate.com/context/run-requested", { code: "async (itx) => 1" });
+  const settled = (offset: number, requestOffset: number) =>
+    at(offset, "events.iterate.com/context/run-settled", {
+      requestOffset,
+      settlement: { status: "succeeded", result: 1 },
+    });
+
+  test("requested → a row at its own offset { requestedAt } (the event's identity; the code stays on the event)", () => {
+    expect(reduceAll([requested(5)]).scriptRuns).toEqual({
+      5: { requestedAt: new Date(5000).toISOString() },
+    });
+  });
+  test("settled removes the row; settled twice, or for a request never made → undefined (keep the state)", () => {
+    const open = reduceAll([requested(5)]);
+    const closed = reduceAll([settled(7, 5)], open);
+    expect(closed.scriptRuns).toEqual({});
+    expect(reduceCoreEvent({ event: settled(8, 5), state: closed })).toBeUndefined();
+    expect(reduceCoreEvent({ event: settled(8, 99), state: open })).toBeUndefined();
+  });
+  test("two open runs are two rows; each settles on its own", () => {
+    const state = reduceAll([requested(5), requested(6), settled(7, 5)]);
+    expect(Object.keys(state.scriptRuns)).toEqual(["6"]);
+  });
+  test("a malformed payload (an empty code, a missing settlement) is refused at the append boundary, before it can reach the reduce", () => {
+    expect(() =>
+      normalizeControlEvent({
+        type: "events.iterate.com/context/run-requested",
+        payload: { code: "" },
+      }),
+    ).toThrow();
+    expect(() =>
+      normalizeControlEvent({
+        type: "events.iterate.com/context/run-settled",
+        payload: { requestOffset: 5 },
+      }),
+    ).toThrow();
+  });
+  test("the append boundary (normalizeControlEvent) parses both payloads against the contract's schemas and refuses an ephemeral one — the table is rebuilt from the durable log", () => {
+    expect(
+      normalizeControlEvent({
+        type: "events.iterate.com/context/run-requested",
+        payload: { code: "async (itx) => 1", extra: "dropped" },
+      }).payload,
+    ).toEqual({ code: "async (itx) => 1" });
+    expect(() =>
+      normalizeControlEvent({
+        type: "events.iterate.com/context/run-settled",
+        payload: {
+          requestOffset: 5,
+          settlement: { status: "failed", error: "x", failureKind: "expired" },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      normalizeControlEvent({
+        type: "events.iterate.com/context/run-requested",
+        ephemeral: true,
+        payload: { code: "async (itx) => 1" },
+      }),
+    ).toThrow(/durable/);
   });
 });
 
@@ -79,6 +151,54 @@ describe("identity, incarnation, the pause latch", () => {
     expect(reduceAll([at(1, "events.iterate.com/stream/paused", {})]).paused).toEqual({
       reason: "paused",
     });
+  });
+});
+
+describe("the ingress target — project/ingress-configured, normalized at the append boundary", () => {
+  const type = "events.iterate.com/project/ingress-configured";
+  const target: ItxExpression = ["itx", "workers", ["get", { source: { "cap.js": "source" } }]];
+
+  test("stores and replaces the full expression without creating any rewrite alias; null clears it; an unchanged or ephemeral event keeps the state", () => {
+    const event = {
+      ...normalizeControlEvent({ type, payload: { target } }),
+      offset: 1,
+      path: "/",
+      createdAt: "2026-09-21T00:00:00Z",
+    };
+    const state = reduceCoreEvent({ event, state: CoreContract.initialState() })!;
+    expect(state.ingressTarget).toEqual(target);
+    expect(state.itxExpressionRewriteRules).toEqual({});
+    expect(
+      reduceCoreEvent({ event: { ...event, payload: { target: null } }, state })?.ingressTarget,
+    ).toBeNull();
+    expect(reduceCoreEvent({ event, state })).toBeUndefined();
+    expect(
+      reduceCoreEvent({ event: { ...event, ephemeral: true }, state: CoreContract.initialState() }),
+    ).toBeUndefined();
+  });
+
+  test.each([{}, { target: 123 }, { target: "other.workers" }, { target: ["itx", null] }])(
+    "an invalid configuration is refused at the boundary, before append: %j",
+    (payload) => {
+      expect(() => normalizeControlEvent({ type, payload })).toThrow();
+    },
+  );
+
+  test("an ephemeral configuration cannot be published", () => {
+    expect(() => normalizeControlEvent({ type, payload: { target }, ephemeral: true })).toThrow(
+      "must be durable",
+    );
+  });
+
+  test("a singular worker name has no implicit platform resolution", () => {
+    expect(() =>
+      resolveItxExpression(() => [], ["itx", "worker", "fetch"], new Set(BUILT_IN_ROOTS)),
+    ).toThrow("no rewrite rule matches");
+    expect(resolveItxExpression(() => [], target, new Set(BUILT_IN_ROOTS)).at(-1)).toEqual([
+      "itx",
+      "builtins",
+      ...target.slice(1),
+    ]);
   });
 });
 
@@ -599,7 +719,8 @@ describe("the builtins root, as the reduce sees it: masks, the platform-equivale
         state: s,
       }),
     ).toBeUndefined();
-    // a pinned match's equivalent carries the pin
+    // a PINNED match's physical target is NOT the implicit row it sits under (`itx.ai`): it is a
+    // grant of exactly that call and is STORED (rule 8) — what re-opens a prefix beneath a mask
     const pinned = reduceAll([
       at(1, "events.iterate.com/itx/rewrite-rule-configured", {
         match: "itx.ai.run('gpt-5')",
@@ -610,7 +731,7 @@ describe("the builtins root, as the reduce sees it: masks, the platform-equivale
         target: "itx.builtins.ai.run('gpt-5')",
       }),
     ]);
-    expect(pinned.itxExpressionRewriteRules).toEqual({});
+    expect(Object.keys(pinned.itxExpressionRewriteRules)).toEqual(["itx.ai.run('gpt-5')"]);
   });
 
   test("HOSTING is decided on the RESOLVED target: the platform's spelling, a user's short spelling and a user's own rule naming the door all host; the source is elided from the ORIGINAL spelling", () => {
@@ -728,99 +849,12 @@ describe("the builtins root, as the reduce sees it: masks, the platform-equivale
     });
 });
 
-describe("the secrets catalog — by name, the origin only, never a value", () => {
-  const changed = (offset: number, payload: Record<string, unknown>) =>
-    at(offset, "events.iterate.com/secrets/changed", payload);
-  // `identity` is what the LAST event's reduce hands back: a new state, or `undefined` — the host's
-  // change signal (no checkpoint rewrite, no live delta) for a no-op.
-  const rows: {
-    title: string;
-    events: StreamEvent[];
-    becomes: CoreState["secrets"];
-    identity: "a new state" | "undefined (a no-op)";
-  }[] = [
-    {
-      title: "a set",
-      events: [changed(1, { name: "a" })],
-      becomes: { a: {} },
-      identity: "a new state",
-    },
-    {
-      title: "a set with a pin and a refresh strategy's kind",
-      events: [
-        changed(1, {
-          name: "a",
-          urls: ["https://api.example.com"],
-          refresh: "oauth-refresh-token",
-        }),
-      ],
-      becomes: { a: { urls: ["https://api.example.com"], refresh: "oauth-refresh-token" } },
-      identity: "a new state",
-    },
-    {
-      title: "a re-set REPLACES (the pin and the strategy can be dropped)",
-      events: [
-        changed(1, { name: "a", urls: ["https://api.example.com"], refresh: "waitrose-session" }),
-        changed(2, { name: "a" }),
-      ],
-      becomes: { a: {} },
-      identity: "a new state",
-    },
-    {
-      title: "a re-set with the SAME pin is a no-op",
-      events: [
-        changed(1, { name: "a", urls: ["https://api.example.com"] }),
-        changed(2, { name: "a", urls: ["https://api.example.com"] }),
-      ],
-      becomes: { a: { urls: ["https://api.example.com"] } },
-      identity: "undefined (a no-op)",
-    },
-    {
-      title: "a delete removes",
-      events: [changed(1, { name: "a" }), changed(2, { name: "a", deleted: true })],
-      becomes: {},
-      identity: "a new state",
-    },
-    {
-      title: "deleting what is not there is a no-op",
-      events: [
-        changed(1, { name: "a" }),
-        changed(2, { name: "a", deleted: true }),
-        changed(3, { name: "b", deleted: true }),
-      ],
-      becomes: {},
-      identity: "undefined (a no-op)",
-    },
-  ];
-  for (const { title, events, becomes, identity } of rows)
-    test(`${title} — the last reduce returns ${identity}`, () => {
-      const before = reduceAll(events.slice(0, -1));
-      const out = reduceCoreEvent({ event: events.at(-1)!, state: before });
-      expect(out ? "a new state" : "undefined (a no-op)").toBe(identity);
-      expect((out || before).secrets).toEqual(becomes);
-    });
-});
-
 describe("the platform rows a null MASKS (kept) vs a plain delete", () => {
   const configured = (offset: number, match: string, target: string | null) =>
     at(offset, "events.iterate.com/itx/rewrite-rule-configured", { match, target });
-  test("`itx.worker ⇒ null` is KEPT as a mask — the resolver's default config worker is a platform row, so a project that says no must not fall back to the no-op silently", () => {
-    const s = reduceAll([configured(1, "itx.worker", "itx.kv"), configured(2, "itx.worker", null)]);
-    expect(s.itxExpressionRewriteRules["itx.worker"]).toEqual({
-      match: ["itx", "worker"],
-      target: null,
-    });
-    // a name with no platform row beneath is simply deleted
-    const gone = reduceAll([configured(1, "itx.mine", "itx.kv"), configured(2, "itx.mine", null)]);
-    expect(gone.itxExpressionRewriteRules).toEqual({});
-  });
-
-  // RED (`test.fails` — a known defect, too costly to fix now): the platform-equivalent target
-  // `itx.<x…> ⇒ itx.builtins.<x…>` is DELETED whatever lies above it, so under a broader mask
-  // (`itx ⇒ null`, `itx.kv ⇒ null`) one prefix can never be re-opened — yet longest-match promises
-  // it. The fix stores the row when a shorter row claims the prefix and deletes only when nothing
-  // lies above — a table-aware delete.
-  test.fails("a platform-equivalent target beneath a broader mask re-opens exactly that prefix", () => {
+  // Rule 8 in the presence of a broader mask: the physical spelling beneath it is a GRANT through
+  // the wall and is stored, so exactly that prefix re-opens — what longest-match promises.
+  test("a platform-equivalent target beneath a broader mask re-opens exactly that prefix", () => {
     const s = reduceAll([
       configured(1, "itx.kv", null),
       configured(2, "itx.kv.get", "itx.builtins.kv.get"),
@@ -831,8 +865,8 @@ describe("the platform rows a null MASKS (kept) vs a plain delete", () => {
 
 // ── subscriptions ── the subscriptions table's one COMMAND (a literal `subscription-configured` event, normalized at the append boundary by `normalizeControlEvent`)
 // BUILDS the event the caller appends — a configure, a replace, or (target null) a removal; a refusal
-// (a dotted name, a target not rooted at itx) THROWS at the door, nothing appended (the reserved
-// `core` is the APPEND door's refusal — stream.test.ts). A subscription is PURE DATA — a name, a target expression stored as its printed string,
+// (a dotted name, the reserved `core`, a target not rooted at itx) THROWS at the door, nothing
+// appended. A subscription is PURE DATA — a name, a target expression stored as its printed string,
 // an optional `consumes` filter; nothing here knows HOW a target is served (subscription-delivery.ts
 // decides that by evaluating it). The rows THEMSELVES are `core` state, reduced here through
 // `reduceCoreEvent` exactly as the DO does; the reduce's own pins (replace / drop / halted /
@@ -977,7 +1011,7 @@ describe("configure — ONE event: set, replace, or remove", () => {
     expect(events).toHaveLength(0);
   });
 
-  test("a name is ONE segment, [A-Za-z0-9_-]+, never a key of Object.prototype — a dotted, spaced, `__proto__` or `constructor` name is refused at the door, nothing appended", () => {
+  test("a name is ONE segment, [A-Za-z0-9_-]+, never a key of Object.prototype and never `core` — a dotted, spaced, `__proto__`, `constructor` or `core` name is refused at the door, nothing appended", () => {
     const { configure, events } = setup();
     expect(() => configure({ name: "a.b", target: "itx.whoami" })).toThrow(/one segment/);
     expect(() => configure({ name: "has space", target: "itx.whoami" })).toThrow(/one segment/);
@@ -989,6 +1023,10 @@ describe("configure — ONE event: set, replace, or remove", () => {
     expect(() => configure({ name: "constructor", target: "itx.whoami" })).toThrow(
       /Object.prototype/,
     );
+    // the always-on core reduce is addressable as a facet, never a configurable subscription — a
+    // row named `core` would be undeliverable and climb the retry ladder to a halt
+    expect(() => configure({ name: "core", target: "itx.whoami" })).toThrow(/reserved/);
+    expect(() => configure({ name: "core", target: null })).toThrow(/reserved/);
     expect(events).toHaveLength(0);
   });
 
@@ -1003,5 +1041,64 @@ describe("configure — ONE event: set, replace, or remove", () => {
       expect((event.payload as { target: unknown }).target).toEqual(target);
       expect(rows()[`odd${i}`].target).toEqual(target);
     }
+  });
+});
+
+describe("rule 8 at a CHILD (nothing project-level implicit; the bare null; the grant through the wall)", () => {
+  const child = "/agents/a";
+  const atChild = (offset: number, payload: Record<string, unknown>) =>
+    ({
+      ...at(offset, "events.iterate.com/itx/rewrite-rule-configured", payload),
+      path: child,
+    }) as StreamEvent;
+  test("a project root's physical target at a child is a GRANT and is stored; a context root's is the default and deletes", () => {
+    const s = reduceAll([
+      atChild(1, { match: "itx.kv", target: "itx.builtins.kv" }),
+      atChild(2, { match: "itx.append", target: "itx.builtins.append" }),
+    ]);
+    expect(Object.keys(s.itxExpressionRewriteRules)).toEqual(["itx.kv"]);
+  });
+  test("`null` at a project root's name at a child deletes (nothing implicit beneath); at a context root's it masks; the bare null is kept", () => {
+    const s = reduceAll([
+      atChild(1, { match: "itx.kv", target: null }),
+      atChild(2, { match: "itx.append", target: null }),
+      atChild(3, { match: "itx", target: null }),
+    ]);
+    expect(Object.keys(s.itxExpressionRewriteRules).sort()).toEqual(["itx", "itx.append"]);
+  });
+  test("`null` at a name a stored SHORTER row with a target would answer — the parent link, a granted root — is KEPT as a mask (the chain is cut there); without that row it deletes", () => {
+    const linked = reduceAll([
+      atChild(1, { match: "itx", target: "itx.builtins.cd('/')" }),
+      atChild(2, { match: "itx.tool", target: null }),
+      atChild(3, { match: "itx.repos", target: "itx.builtins.cd('/').repos" }),
+      atChild(4, { match: "itx.repos.get('secret')", target: null }),
+    ]);
+    expect(Object.keys(linked.itxExpressionRewriteRules).sort()).toEqual([
+      "itx",
+      "itx.repos",
+      "itx.repos.get('secret')",
+      "itx.tool",
+    ]);
+    expect(linked.itxExpressionRewriteRules["itx.tool"]).toMatchObject({ target: null });
+    const unlinked = reduceAll([atChild(1, { match: "itx.tool", target: null })]);
+    expect(unlinked.itxExpressionRewriteRules).toEqual({});
+  });
+  test("behind a bare null the physical spelling of a context root is the grant through the wall and is STORED; a description rides the row", () => {
+    const s = reduceAll([
+      atChild(1, { match: "itx", target: null, description: "a jail" }),
+      atChild(2, {
+        match: "itx.readEvents",
+        target: "itx.builtins.readEvents",
+        description: "your history",
+      }),
+    ]);
+    expect(s.itxExpressionRewriteRules["itx.readEvents"]).toMatchObject({
+      target: ["itx", "builtins", "readEvents"],
+      description: "your history",
+    });
+    expect(s.itxExpressionRewriteRules["itx"]).toMatchObject({
+      target: null,
+      description: "a jail",
+    });
   });
 });

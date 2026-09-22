@@ -468,6 +468,7 @@ const freshDial = (conversationId: string, activation: string): Dial => ({
 
 /** What the host injects; every wait and every clock in this file comes from here. */
 export type VoiceAgentDeps = {
+  projectContext?: () => Promise<string>;
   nowAtFacetMs(): number;
   /** The only way this processor waits, injected so tests can use a fake clock. */
   sleep(ms: number): Promise<void>;
@@ -778,7 +779,7 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
 
       /* `session.start` is the first message, carrying the model, the audio format, the voice,
        * the policy and the seeded history; there is no `session.created` to wait for. */
-      this.#startSession(dial, state);
+      await this.#startSession(dial, state);
     });
 
     /* The idle countdown arms the moment the dial is decided, so a dial that never resolves is
@@ -804,7 +805,7 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
   }
 
   /** Start client delegation with the policy and the recap as history. */
-  #startSession(dial: Dial, state: VoiceArgs["state"]): void {
+  async #startSession(dial: Dial, state: VoiceArgs["state"]): Promise<void> {
     if (!dial.socket) return;
     const input = state.transcript.map((turn) =>
       turn.role === "listener"
@@ -825,7 +826,11 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
         event_id: `start_${dial.dialId}`,
         session: {
           model: LIVE.model,
-          instructions: LIVE_DELEGATION_POLICY,
+          instructions:
+            LIVE_DELEGATION_POLICY +
+            (this.deps.projectContext
+              ? `\nCURRENT PROJECT: ${await this.deps.projectContext()}. Ingress refers to this project website.`
+              : ""),
           ...(input.length > 0 && { input }),
           audio: {
             format: { type: "audio/pcm", rate: LIVE.rate },
@@ -1264,7 +1269,10 @@ async function dialProviderSocket(): Promise<WebSocket | null> {
     headers: { Upgrade: "websocket", Authorization: 'Bearer getSecret("/secrets/openai")' },
   });
   const socket = response.webSocket || null;
-  if (!socket) return null;
+  if (!socket) {
+    // Provider error bodies can echo credential fragments; only the status belongs in the log.
+    throw new Error(`Voice provider upgrade returned HTTP ${response.status}`);
+  }
   socket.binaryType = "arraybuffer"; // before accept(): the current default is Blob
   socket.accept();
   return socket;
@@ -1278,5 +1286,6 @@ export class VoiceAgentDurableObject extends StreamProcessorDurableObject<VoiceS
      * keeps alive. */
     sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
     dialProvider: dialProviderSocket,
+    projectContext: async () => JSON.stringify(await this.withItx((itx) => itx.whoami())),
   });
 }

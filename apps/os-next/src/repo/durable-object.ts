@@ -1,11 +1,13 @@
+import { z } from "zod";
 // src/repo/durable-object.ts — THE REPO: the facet a context at ANY path hosts under the name `repo`
 // (`itx.repos.get(path)`, library.ts; `/repos/<name>` is the convention, not a rule). A repo's files
 // live in git, in Cloudflare Artifacts, and THIS facet is the only thing that speaks git (git-wire.ts):
 // `itx.cfArtifacts.get(path)` — the binding proxy, addressed by this same path — hands it a token and
 // the remote URL, and every read and write here is git-over-HTTPS from inside the facet. It is also
-// what makes a repo a DOMAIN OBJECT: `create()` lands the creation facts on its path (the certificate
-// cross-posted to `/`, where the project catalog folds it), every commit through it is a
-// `repo/commit-completed` fact, and every other method refuses until it is created.
+// what makes a repo a DOMAIN OBJECT: it hosts the repo processor (processor.ts) — the creation saga
+// `itx.repos.create(path)` opens — every commit through it is a `repo/commit-completed` fact, and every
+// method refuses until the certificate has landed (`state.creation`) and again once deletion has been
+// asked for (`state.deletion`, the saga `itx.repos.delete(path)` opens).
 //
 // SCOPE, deliberately small: branch `main` only (REF); text content only. A read is ONE ls-refs, and
 // the tip's whole snapshot in one shallow fetch (`deepen: 1`) only when the tip moved — memoized in
@@ -14,6 +16,7 @@
 // Hosted from `ctx.exports` (first-party-facets.ts): ordinary bundled worker code, git-wire.ts and pako
 // with it, reached as `itx.facets.get("repo")` (library.ts).
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
+import type { EventInput } from "iterate/next/stream/processor";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import {
   AUTHOR,
@@ -33,7 +36,7 @@ import {
   type RepoLogEntry,
   type RepoManifest,
 } from "./git-wire.ts";
-import type { RepoIdentity, RepoView } from "./contract.ts";
+import { RepoContract, type RepoState } from "./contract.ts";
 import { RepoProcessor } from "./processor.ts";
 
 /** How long a minted git credential lives — and how long this facet reuses one before minting again. */
@@ -44,6 +47,8 @@ const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
 type Transport = ReturnType<typeof createGitWireTransport>;
+/** `repo/commit-completed`'s payload — what a push owes the logs (kept in storage until landed). */
+type CommitFact = { path: string; commitOid: string; message: string; changedPaths: string[] };
 type TipSnapshot = { manifest: RepoManifest; objects: Map<string, RawGitObject> };
 
 /** A repo-relative FILE path, `notes/log.md`: no leading slash, no empty, `.` or `..` segment. */
@@ -56,11 +61,11 @@ function filePath(path: string): string {
 }
 
 export class RepoDurableObject extends StreamProcessorDurableObject<
-  RepoView,
+  RepoState,
   { ITX?: ItxEntrypointService },
   ItxEntrypointScope
 > {
-  processor = new RepoProcessor();
+  processor = new RepoProcessor((call) => this.withItx(call));
 
   /** The context this facet is hosted on IS the repo: its path is the one name it goes by, here and
    *  at `itx.cfArtifacts` (which derives the Artifacts name from it). */
@@ -116,9 +121,9 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
   /** The tip's files under the tip they were read at — dropped by a commit through this facet,
    *  re-fetched when the remote's tip is not the memo's. */
   #snapshotMemo: { tip: string | null; files: Record<string, string> } | null = null;
-  async #fresh(): Promise<{ tip: string | null; files: Record<string, string> }> {
+  async #fresh(commitOid?: string): Promise<{ tip: string | null; files: Record<string, string> }> {
     const transport = await this.#transport("read");
-    const tip = (await transport.tipOf(REF)) || null;
+    const tip = commitOid || (await transport.tipOf(REF)) || null;
     if (this.#snapshotMemo && this.#snapshotMemo.tip === tip) return this.#snapshotMemo;
     const files: Record<string, string> = {};
     if (tip) {
@@ -134,51 +139,17 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     return (this.#snapshotMemo = { tip, files });
   }
 
-  /** Bring the repo into being: `repos/create-requested` on this path, the Artifacts repo
-   *  provisioned (one that exists is fine), then the certificate on `/` and on this path — or
-   *  `repos/create-failed`, thrown; a later `create()` is a new attempt. Idempotent: a created repo
-   *  answers at once. Every other method refuses until this has completed. */
-  async create(): Promise<RepoIdentity> {
-    const path = await this.#path();
-    if ((await this.snapshot()).state.creation === "created") return { path };
-    await this.withItx((itx) =>
-      itx.append({ type: "events.iterate.com/repos/create-requested", payload: { path } }),
-    );
-    try {
-      await this.withItx((itx) => itx.cfArtifacts.create(path));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await this.withItx((itx) =>
-        itx.append({
-          type: "events.iterate.com/repos/create-failed",
-          payload: { path, error: message },
-        }),
-      );
-      throw new Error(`repo ${path}: creation failed — ${message}`);
-    }
-    // `/` first, this path last: a cross-post that fails leaves the creation requested, so the next
-    // create() runs again (provisioning tolerates an existing repo; the certificate is keyed).
-    const certificate = {
-      type: "events.iterate.com/repos/created",
-      payload: { path },
-      idempotencyKey: `repos/created:${path}`,
-    };
-    await this.withItx((itx) => itx.cd("/").append(certificate));
-    await this.withItx((itx) => itx.append(certificate));
-    this.#confirmedCreated = true;
-    return { path };
-  }
-
-  /** Every method past `create()` starts here: a repo not yet created refuses. Creation is terminal,
-   *  so one confirming read per incarnation. */
-  #confirmedCreated = false;
+  /** Every verb starts here: a repo whose certificate has not landed refuses, and so does one whose
+   *  deletion has been asked for. Deletion can land at any moment, so the state is read on every
+   *  call (in memory once the facet is caught up). */
   async #created(): Promise<string> {
     const path = await this.#path();
-    if (!this.#confirmedCreated) {
-      if ((await this.snapshot()).state.creation !== "created")
-        throw new Error(`repo ${path}: not created — call create() first`);
-      this.#confirmedCreated = true;
-    }
+    const { state } = await this.snapshot();
+    if (state.deletion) throw new Error(`repo ${path}: deleted`);
+    if (state.creation?.status !== "created")
+      throw new Error(
+        `repo ${path}: not created — itx.repos.create(${JSON.stringify(path)}) first`,
+      );
     return path;
   }
 
@@ -188,12 +159,74 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     return (await this.#fresh()).tip;
   }
 
-  async readFile(path: string): Promise<string | null> {
+  async readFile(path: string, options?: { commitOid: string }): Promise<string | null> {
     await this.#created();
-    const { files } = await this.#fresh();
+    const revision = z
+      .object({ commitOid: z.string().regex(/^[a-f0-9]{40}$/) })
+      .optional()
+      .parse(options);
+    const { files } = await this.#fresh(revision?.commitOid);
     return Object.hasOwn(files, path) ? files[path]! : null;
   }
 
+  /** Several files at once, each under the name a loaded worker's module map wants for it —
+   *  `readModules({ 'cap.js': 'apps/site/worker.js', 'site.js': 'apps/site/site.js' })` is a
+   *  no-build app's whole `source`, one call (a source expression yields ONE value, and the loader
+   *  takes the module map). A path that does not exist is a refusal, never a silent hole. */
+  async readModules(
+    modules: Record<string, string>,
+    options?: { commitOid: string },
+  ): Promise<Record<string, string>> {
+    await this.#created();
+    const revision = z
+      .object({ commitOid: z.string().regex(/^[a-f0-9]{40}$/) })
+      .optional()
+      .parse(options);
+    const { files } = await this.#fresh(revision?.commitOid);
+    const out: Record<string, string> = {};
+    for (const [moduleName, path] of Object.entries(
+      z.record(z.string(), z.string()).parse(modules),
+    )) {
+      if (!Object.hasOwn(files, path))
+        throw new Error(`readModules: no file at ${JSON.stringify(path)}`);
+      out[moduleName] = files[path]!;
+    }
+    return out;
+  }
+
+  /** THE REPO AS A WORKER'S MODULES: every `.js` file at the commit under its own path, and `main`
+   *  (default `worker.ts`) as `cap.js`, the loader's main module — so a config repo's relative imports
+   *  resolve exactly as they do in the tree, with no module map to keep. THE apex target's source
+   *  (project/processor.ts: the seed's and every commit's). The loader takes a module's TEXT only
+   *  under a name ending in `.js` (Cloudflare's rule: "Module name must end with '.js'"), so `.js` is
+   *  the one extension a sibling module may have; `worker.ts` is a name — the platform's seed — and
+   *  it rides as `cap.js`. A `.md`, a `.css`, a `.json` is not a module: a worker that serves one
+   *  exports its text from a `.js` file. A commit with no `main` is a refusal, never an empty worker;
+   *  a repo file at `cap.js` is shadowed by `main` (the loader's name for it). */
+  async modules(options?: { main?: string; commitOid?: string }): Promise<Record<string, string>> {
+    await this.#created();
+    const { main = "worker.ts", commitOid } =
+      z
+        .object({
+          main: z.string().min(1).optional(),
+          commitOid: z
+            .string()
+            .regex(/^[a-f0-9]{40}$/)
+            .optional(),
+        })
+        .optional()
+        .parse(options) ?? {};
+    const { files } = await this.#fresh(commitOid);
+    if (!Object.hasOwn(files, main))
+      throw new Error(`modules: no file at ${JSON.stringify(main)} to be the main module`);
+    const out: Record<string, string> = {};
+    for (const [path, content] of Object.entries(files))
+      if (path.endsWith(".js")) out[path] = content;
+    // `cap.js` is the loader's name for the main module, set LAST: a repo file that happens to sit at
+    // `cap.js` is shadowed by `main`, never the other way round.
+    out["cap.js"] = files[main]!;
+    return out;
+  }
   async listFiles(): Promise<{ commitOid: string | null; paths: string[] }> {
     await this.#created();
     const { tip, files } = await this.#fresh();
@@ -217,6 +250,18 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     this.#snapshotMemo = null; // whatever the outcome, the next read re-fetches
     const transport = await this.#transport("write");
     const tip = (await transport.tipOf(REF)) || null;
+    // A fact still OWED from a push that landed without its facts (below: the caller saw the throw)
+    // is settled FIRST, word for word (an idempotency key names ONE event) — before this commit can
+    // overwrite the debt or land on top of an unpublished tip. The apex follows the fact
+    // (project/processor.ts), so a commit in git without it would sit unpublished; a root still
+    // refusing the fact refuses this commit too, loud. An owed fact for another commit than the tip
+    // never landed (a debt written before a push that was refused or died) or is stale (main moved
+    // since): dropped.
+    const owed = await this.ctx.storage.get<CommitFact>("commit-fact");
+    if (owed) {
+      if (owed.commitOid === tip) await this.#commitFact(owed);
+      else await this.ctx.storage.delete("commit-fact");
+    }
     // The tip's snapshot, or an unborn repo's empty one. (A tip whose commit or tree the pack omits
     // THROWS in #tipSnapshot — never a fresh root commit that would repoint `main` at an orphan.)
     const { manifest, objects }: TipSnapshot = tip
@@ -259,6 +304,10 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     });
     const commitOid = await hashObject("commit", commitBytes);
     toPush.push({ payload: commitBytes, type: "commit" });
+    // The fact this push will owe, kept in storage until it has landed on both logs — so a retry after
+    // a lost append lands the same event (above), never a different one under the same key.
+    const committed: CommitFact = { path, commitOid, message: input.message, changedPaths };
+    await this.ctx.storage.put("commit-fact", committed);
     const refused = await transport.push({
       newOid: commitOid,
       oldOid: tip || ZERO_OID,
@@ -268,15 +317,27 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     // The push is compare-and-swapped on the tip read above: `main` having moved in the meantime (a
     // concurrent push) is a refusal like any other — the server's words, and the caller retries.
     // oxlint-disable-next-line iterate/simple-truthiness-check -- push() returns null only on success; an empty-string refusal reason (an `ng <ref>` line with no message) is still a refusal and must throw
-    if (refused !== null) throw new Error(`repo ${path}: the commit was refused: ${refused}`);
-    await this.withItx((itx) =>
-      itx.append({
-        type: "events.iterate.com/repo/commit-completed",
-        payload: { commitOid, message: input.message, changedPaths },
-        idempotencyKey: `repo/commit-completed:${commitOid}`,
-      }),
-    );
+    if (refused !== null) {
+      await this.ctx.storage.delete("commit-fact"); // nothing landed, nothing owed
+      throw new Error(`repo ${path}: the commit was refused: ${refused}`);
+    }
+    await this.#commitFact(committed);
     return { commitOid, changedPaths };
+  }
+
+  /** THE COMMIT'S FACT: cross-posted to `/` FIRST — the project processor follows the config repo's
+   *  commits with the apex (project/processor.ts), so a commit whose own-path fact lost its answer is
+   *  published anyway — then on this path. Keyed by the commit on both, so landing it again (an owed
+   *  fact on a retry, above) lands nothing where it stands. Owed no more once both have landed. */
+  async #commitFact(payload: CommitFact): Promise<void> {
+    const committed: EventInput<typeof RepoContract> = {
+      type: "events.iterate.com/repo/commit-completed",
+      payload,
+      idempotencyKey: `repo/commit-completed:${payload.path}:${payload.commitOid}`,
+    };
+    await this.withItx((itx) => itx.cd("/").append(committed));
+    await this.withItx((itx) => itx.append(committed));
+    await this.ctx.storage.delete("commit-fact");
   }
 
   writeFile(

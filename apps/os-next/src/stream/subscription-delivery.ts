@@ -35,9 +35,10 @@ import {
   RpcStubHandle,
 } from "iterate/next/expression";
 import { errorCode, reportIssue, withTimeout } from "iterate/next/lib";
+import type { StreamPage } from "iterate/next/api";
 import { type StreamEvent, consumesEvent, type ScannedRange } from "iterate/next/stream/processor";
 import { type Subscription, targetOwnsProgress } from "./core-processor.ts";
-import type { Stream, StreamPage, SubscriptionCursor } from "./stream.ts";
+import type { Stream, SubscriptionCursor } from "./stream.ts";
 
 /** A cursor delivery's awaited call is bounded by this; it is also how far ahead a row behind the
  *  durable mark claims the alarm — by the time it fires the call has acked (the cursor row is
@@ -191,11 +192,9 @@ export class SubscriptionDelivery {
   /** The cursor lane's lock, per NAME and outside the record on purpose: one `#deliverFromCursor`
    *  loop drains a name at a time, and the loop that was draining a row when it was replaced goes on
    *  to deliver the replacement once its call returns — so the lock outlives `#forgetSubscription`.
-   *  Held and released by the loop itself, synchronously with its run, so `deadlines()` reads it true. */
-  readonly #cursorDeliveryRunning = new Set<string>();
-  /** Each running loop's promise, so a second kick JOINS it: the alarm's pass awaits a delivery
-   *  already in flight and derives its deadline after the ack. Read only under the lock above (a
-   *  settled entry may linger until its name is kicked again). */
+   *  The value is the running loop's promise, so a second kick JOINS it: the alarm's pass awaits a
+   *  delivery already in flight and derives its deadline after the ack. Written before the loop's
+   *  first turn and deleted by the loop itself, synchronously with its last act. */
   readonly #cursorDeliveryLoops = new Map<string, Promise<void>>();
   /** The stream's durable mark as of the previous commit — so that, inside `onCommit`, this is the
    *  mark BEFORE the batch: a cursor row at or past it was caught up when the batch landed. */
@@ -333,7 +332,7 @@ export class SubscriptionDelivery {
           attempt: 0,
         };
         if (
-          !this.#cursorDeliveryRunning.has(name) &&
+          !this.#cursorDeliveryLoops.has(name) &&
           !record.pushedEventBatch &&
           cursor.nextAttemptAtMs === undefined &&
           cursor.confirmedOffset >= this.#durableMarkBeforeCommit
@@ -533,8 +532,8 @@ export class SubscriptionDelivery {
           .finally(() => this.#deliveryCharsInFlight.release(chars));
         return;
       }
-      // A FACET owns its checkpoint: push, AWAITED, so this facet's batches stay in order and the
-      // quiesce never aborts it mid-reduce. The DO's facet watchdog (#invokeFacet, 60 s) bounds a
+      // A FACET owns its checkpoint: push, AWAITED, so this facet's batches stay in order and no
+      // release aborts it mid-reduce (`releasePins` waits for the in-flight count). The DO's facet watchdog (#invokeFacet, 60 s) bounds a
       // hung facet; its own gap repair covers a dropped push.
       try {
         const chars = serializedChars(events);
@@ -669,15 +668,25 @@ export class SubscriptionDelivery {
    *  resume and alarm pass kicks it, and it evaluates the target lazily — only once there is a
    *  batch to deliver, and inside the ladder. */
   #deliverFromCursor(name: string): Promise<void> {
-    if (this.#cursorDeliveryRunning.has(name))
-      return this.#cursorDeliveryLoops.get(name) ?? Promise.resolve();
-    const loop = this.#drainCursor(name);
+    const running = this.#cursorDeliveryLoops.get(name);
+    if (running) return running;
+    // The lock is written before the drain's first turn: a drain can end on that turn (no row, a
+    // halted row, a rung not yet due), and registering its promise afterwards would leave the
+    // settled promise as the lock. It is released by the drain's own `finally`, never by a `.then`
+    // on its promise: a release deferred to a microtask would let a kick landing in between join a
+    // loop that delivers nothing more.
+    let resolveLoop: (() => void) | undefined;
+    let rejectLoop: ((error: unknown) => void) | undefined;
+    const loop = new Promise<void>((resolve, reject) => {
+      resolveLoop = resolve;
+      rejectLoop = reject;
+    });
     this.#cursorDeliveryLoops.set(name, loop);
+    this.#drainCursor(name).then(resolveLoop, rejectLoop);
     return loop;
   }
 
   async #drainCursor(name: string): Promise<void> {
-    this.#cursorDeliveryRunning.add(name);
     try {
       for (;;) {
         const row = this.#stream.coreReducedState.subscriptions[name];
@@ -740,11 +749,16 @@ export class SubscriptionDelivery {
           };
           this.#adoptCursor(name, cursor, true);
         }
-        // The batch: the pushed one when contiguous (ephemerals ride it); else a page of the log, read
-        // only UP TO the pushed batch's start, so that once the durables before it are delivered the
-        // cursor IS contiguous with it and takes it. A pushed batch the cursor has already passed is
-        // stale and forgotten. Cursor-read room (CURSOR_READ_BUDGET_CHARS) is held from BEFORE the
-        // read — the READ is what allocates — THROUGH the awaited call, released once in the finally.
+        // The batch: the pushed one when contiguous (ephemerals ride it) — or whenever the cursor
+        // stands AT the durable mark, whatever the pushed batch's start: the log holds nothing past
+        // the mark, so the span between them was ephemeral and is gone. (An ephemeral push that FAILED
+        // leaves the cursor where it was while the row's watermark moves on; taken by contiguity
+        // alone, the row would be deaf to every ephemeral until a durable landed.) Else a page of the
+        // log, read only UP TO the pushed batch's start, so that once the durables before it are
+        // delivered the cursor IS contiguous with it and takes it. A pushed batch the cursor has
+        // already passed is stale and forgotten. Cursor-read room (CURSOR_READ_BUDGET_CHARS) is held
+        // from BEFORE the read — the READ is what allocates — THROUGH the awaited call, released once
+        // in the finally.
         let inFlightRoomHeld = 0;
         try {
           const record = this.#deliveryRecordFor(name); // the cursor above put it there
@@ -754,7 +768,11 @@ export class SubscriptionDelivery {
             pushedEventBatch = undefined;
           }
           let eventBatch: { events: StreamEvent[]; through: number };
-          if (pushedEventBatch && pushedEventBatch.after === cursor.confirmedOffset) {
+          if (
+            pushedEventBatch &&
+            (pushedEventBatch.after === cursor.confirmedOffset ||
+              cursor.confirmedOffset >= this.#stream.highestDurableOffset())
+          ) {
             record.pushedEventBatch = undefined;
             eventBatch = { events: pushedEventBatch.events, through: pushedEventBatch.through };
           } else {
@@ -897,7 +915,7 @@ export class SubscriptionDelivery {
         }
       }
     } finally {
-      this.#cursorDeliveryRunning.delete(name);
+      this.#cursorDeliveryLoops.delete(name);
       // Every way out reconciles ONCE, with the row released: what the row claims now — a rung, a
       // claim not yet due, nothing at all once caught up or halted — is the alarm's to arm.
       this.#reconcileAlarm();

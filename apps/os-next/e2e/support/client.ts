@@ -4,6 +4,8 @@
 // the handful of idioms every file used to copy (poll-until, must-reject, the delivery collector).
 // A project host — the one HTTP way into a project — is support/project-host.ts.
 
+import { AsyncLocalStorage } from "node:async_hooks";
+import crypto from "node:crypto";
 import { newWebSocketRpcSession } from "capnweb";
 import { WebSocket as UndiciWebSocket } from "undici";
 import type { IterateRpcTarget, SessionCredentials } from "../../src/session.ts";
@@ -14,11 +16,19 @@ const baseUrl = (): string => {
   return u;
 };
 
-/** The worker's admin secret (global-setup: the local worker's, or a deployed run's ADMIN_API_SECRET). */
+/** The worker's admin bearer (global-setup: the local worker's, or a deployed run's ADMIN_API_SECRET). */
 const adminApiSecret = (): string => {
   const secret = process.env.ADMIN_API_SECRET;
   if (!secret) throw new Error("ADMIN_API_SECRET unset — the e2e globalSetup/setup did not run");
   return secret;
+};
+
+/** The worker's sign-in password (global-setup: the local worker's, or a deployed run's
+ *  LOGIN_PASSWORD) — `POST /login` with an email and this mints a browser session (support/principal.ts). */
+export const loginPassword = (): string => {
+  const password = process.env.LOGIN_PASSWORD;
+  if (!password) throw new Error("LOGIN_PASSWORD unset — the e2e globalSetup/setup did not run");
+  return password;
 };
 
 /** THE lane's credentials (src/session.ts `SessionCredentials`): the admin secret — every project,
@@ -35,26 +45,62 @@ export const adminCredentials = (as?: {
 /** A URL on the one shared worker — for the raw HTTP doors that have no itx method (/version, /demo). */
 export const workerUrl = (path: string): string => new URL(path, baseUrl()).toString();
 
-let counter = 0;
-/** A unique project ctx per call, so tests never collide on a Durable Object (each ctx is its own). */
-export const freshCtx = (prefix: string): string =>
-  `prj_${prefix}_${Date.now().toString(36)}_${counter++}`;
+/** THE RUN'S ID — one value for the whole `pnpm e2e` run, minted by global-setup and handed to every
+ *  vitest worker process (support/setup.ts sets `E2E_RUN_ID` from it; a caller may pin it — a commit
+ *  sha in CI). Every identifier a test mints carries it, so no two runs against one deployment can
+ *  land on the same project, repo or account, however many run at once. */
+let memoRunId = "";
+export const runId = (): string =>
+  // Hashed, not truncated: CI pins `<run id>-<attempt>`, and two consecutive GitHub run ids share
+  // their leading digits — the first eight characters would name the same run twice.
+  (memoRunId ||= crypto
+    .createHash("sha1")
+    .update(process.env.E2E_RUN_ID || crypto.randomUUID())
+    .digest("hex")
+    .slice(0, 8));
 
+/** THIS vitest worker process, within the run. Files run in parallel in separate processes, each
+ *  with its own `counter` starting at 0, so the slot is what keeps two processes' ids apart. */
+export const workerSlot = (): string => process.env.VITEST_WORKER_ID || "0";
+
+let counter = 0;
+/** A unique project ctx per call, so tests never collide on a Durable Object (each ctx is its own):
+ *  `prj_<prefix>_<run>_<worker>_<n>` — unique across runs, across worker processes, and within one. */
+export const freshCtx = (prefix: string): string =>
+  `prj_${prefix}_${runId()}_${workerSlot()}_${counter++}`;
+
+/** `/api` opened BARE (no credential on the upgrade): the socket authenticates in-band with the
+ *  admin secret (src/api.ts, src/session.ts). */
 const wsApi = (): string => {
-  const u = new URL("/internal/rpc", baseUrl());
+  const u = new URL("/api", baseUrl());
   u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
   return u.toString();
 };
 
-const openSessions: any[] = [];
-const openSockets: WebSocket[] = [];
+/** What one owner — a test, or the file around it — has open on the wire. */
+type OpenTransports = { sessions: any[]; sockets: WebSocket[] };
+
+/** THE SESSIONS TO DISPOSE belong to the RUNNING TEST, not to the module: the tests in one file run
+ *  CONCURRENTLY (vitest.config.ts `sequence.concurrent`), so a module-level list would have the first
+ *  test to finish close its siblings' live sessions. support/setup.ts opens a fresh store per test
+ *  (`enterTestTransports` in `beforeEach` — vitest's runner carries the store into the test body and
+ *  into that test's own `afterEach`) and disposes THAT store alone. */
+const testTransports = new AsyncLocalStorage<OpenTransports>();
+/** The fallback owner: whatever opens a session with no test running — a file's `beforeAll`, the
+ *  bench lane — disposed once per file (`disposeFileSessions`, support/setup.ts `afterAll`). */
+const fileTransports: OpenTransports = { sessions: [], sockets: [] };
+const openTransports = (): OpenTransports => testTransports.getStore() ?? fileTransports;
+
+/** Own the sessions the current test opens — support/setup.ts calls this in `beforeEach`. */
+export const enterTestTransports = (): void =>
+  testTransports.enterWith({ sessions: [], sockets: [] });
 
 /** A raw capnweb session — an `IterateRpcTarget` stub: `authenticate(adminCredentials())
  *  .projects.get(ctx)` is the itx. For flows that need the session itself (its identity, its
  *  `[Symbol.dispose]`). */
 export function session(): any {
   const s = newWebSocketRpcSession(wsApi());
-  openSessions.push(s);
+  openTransports().sessions.push(s);
   return s;
 }
 
@@ -64,8 +110,9 @@ export function publicSession(token: string) {
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const ws = new UndiciWebSocket(url, { headers: { Authorization: `Bearer ${token}` } });
   const transport = newWebSocketRpcSession<IterateRpcTarget>(ws as unknown as WebSocket);
-  openSessions.push(transport);
-  openSockets.push(ws as unknown as WebSocket);
+  const open = openTransports();
+  open.sessions.push(transport);
+  open.sockets.push(ws as unknown as WebSocket);
   return transport.authenticate({ type: "from-server-cookie" });
 }
 
@@ -74,10 +121,11 @@ export function publicSession(token: string) {
  *  attaches, so a wrapped `send` / an early "message" listener sees every frame in wire order. */
 export function rawSession(prepare?: (ws: WebSocket) => void): { session: any; ws: WebSocket } {
   const ws = new WebSocket(wsApi());
-  openSockets.push(ws);
+  const open = openTransports();
+  open.sockets.push(ws);
   prepare?.(ws);
   const s = newWebSocketRpcSession(ws as any) as any;
-  openSessions.push(s);
+  open.sessions.push(s);
   return { session: s, ws };
 }
 
@@ -88,17 +136,15 @@ export function openItx(ctx: string): any {
   return session().authenticate(adminCredentials()).projects.get(ctx);
 }
 
-/** Dispose every session (and close every raw socket) opened since the last call — wired to
- *  afterEach in support/setup.ts. */
-export function disposeSessions(): void {
-  for (const s of openSessions.splice(0)) {
+function dispose(open: OpenTransports): void {
+  for (const s of open.sessions.splice(0)) {
     try {
       (s as Partial<Disposable>)[Symbol.dispose]?.();
     } catch {
       /* already broken */
     }
   }
-  for (const ws of openSockets.splice(0)) {
+  for (const ws of open.sockets.splice(0)) {
     try {
       ws.close();
     } catch {
@@ -106,6 +152,14 @@ export function disposeSessions(): void {
     }
   }
 }
+
+/** Dispose every session (and close every raw socket) THIS TEST opened — wired to afterEach in
+ *  support/setup.ts; a sibling test running at the same time keeps its own. */
+export const disposeSessions = (): void => dispose(openTransports());
+
+/** Dispose what the FILE opened outside any test (a `beforeAll`, the bench lane) — afterEach never
+ *  reaches those; support/setup.ts wires this to afterAll. */
+export const disposeFileSessions = (): void => dispose(fileTransports);
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 

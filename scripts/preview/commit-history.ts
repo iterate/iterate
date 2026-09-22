@@ -8,7 +8,7 @@ export class CommitHistory {
   private github: Octokit;
   private repository: { owner: string; repo: string };
   private main: string;
-  private mergeBase = "";
+  private comparison: { base: string; files: string[] | null } | null = null;
   private commits = new Map<string, { parents: string[]; files: string[]; limited: boolean }>();
 
   constructor(github: Octokit, repositoryFullName: string, head: string, main: string) {
@@ -33,23 +33,39 @@ export class CommitHistory {
       }
       yield { sha: commit, files: current.files };
       if (!current.parents.length) return;
-      if (!this.mergeBase) {
-        console.log(
-          `[preview-history] Reading merge-base ${this.main}...${this.head} from GitHub.`,
-        );
-        const { data } = await this.github.rest.repos.compareCommits({
-          ...this.repository,
-          base: this.main,
-          head: this.head,
-          per_page: 1,
-          request: { timeout: 15_000 },
-        });
-        this.mergeBase = data.merge_base_commit.sha;
-      }
-      if (commit === this.mergeBase) return;
+      if (commit === (await this.readComparison()).base) return;
       commit = current.parents[0];
     }
     this.stopReason = "No usable evidence within 20 commits; deploy head.";
+  }
+
+  /** A capped comparison cannot justify the os-next branch exemption. */
+  async changedSinceMergeBase() {
+    return (await this.readComparison()).files;
+  }
+
+  private async readComparison() {
+    if (this.comparison) return this.comparison;
+    console.log(`[preview-history] Comparing ${this.main}...${this.head} on GitHub.`);
+    const { data } = await this.github.rest.repos.compareCommits({
+      ...this.repository,
+      base: this.main,
+      head: this.head,
+      per_page: 1,
+      request: { timeout: 15_000 },
+    });
+    if (!data.files) throw new Error("GitHub omitted the branch comparison files.");
+    this.comparison = {
+      base: data.merge_base_commit.sha,
+      // GitHub caps comparison files at 300 even when commits are paginated.
+      files:
+        data.files.length >= 300
+          ? null
+          : data.files.flatMap((file) =>
+              file.previous_filename ? [file.previous_filename, file.filename] : [file.filename],
+            ),
+    };
+    return this.comparison;
   }
 
   private async readCommit(commit: string) {

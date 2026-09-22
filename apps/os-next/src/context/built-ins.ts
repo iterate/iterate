@@ -10,11 +10,17 @@
 // Dynamic code has two doors, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
-import { stampPrincipal, type Caller } from "iterate/next/principal";
-import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
-import { codedError } from "iterate/next/lib";
+import { codedError, jsonEqual, resolveContextPath } from "iterate/next/lib";
 import {
-  itxExpressionStepName,
+  ITX_APP_HEADER,
+  ITX_CALLER_PATH_HEADER,
+  ITX_GRANT_HEADER,
+  ITX_PRINCIPAL_HEADER,
+  stampCaller,
+  type Caller,
+} from "iterate/next/principal";
+import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
+import {
   print,
   type ItxExpression,
   type ItxExpressionInput,
@@ -23,6 +29,8 @@ import {
   InvokeHandle,
   RpcStubHandle,
 } from "iterate/next/expression";
+import type { RewriteRuleListEntry, StreamPage, WaitForEventFilter } from "iterate/next/api";
+import { projectUrlOf, type IngressRouting } from "iterate/next/project-ingress";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
   ScheduleKey,
@@ -30,23 +38,27 @@ import {
   type ScheduledAppendInput,
   type ScheduledAppend,
 } from "../stream/scheduled-appends.ts";
-import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
+import type { ReachableContext } from "../stream/stream.ts";
 import type { LibraryRoots } from "../library.ts";
 import {
-  DurableObjectNameCodec,
-  GLOBAL_PROJECT_ID,
-  resolveContextPath,
-  resourceScope,
-} from "../iterate-context.ts";
-import {
-  assertSecretName,
+  assertSecretPath,
   normalizeSecretRecord,
   type SecretCatalogEntry,
+  type SecretHmacVerification,
   type SecretMaterial,
   type SecretRefresh,
 } from "../secrets.ts";
-import type { SecretDurableObject } from "../secret-durable-object.ts";
+import type { SecretCatalog, SecretState } from "../secret/contract.ts";
 import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.ts";
+import {
+  ITX_EXPRESSION_FETCH_HEADER,
+  RPC_STUB_PAGER_WEBSOCKET_HEADER,
+  FETCH_UPGRADE_SOCKET_HEADER,
+  encodeFetchExpression,
+  terminalFetchOf,
+} from "./rpc-stubs.ts";
+import { admitLoadedCodeRow, refuseSelfLoopRow } from "./itx-expression-rewriting.ts";
+import { GLOBAL_PROJECT_ID, resourceScope } from "./paths.ts";
 import {
   assertFacetSourceWithinCeiling,
   facetSpecOf,
@@ -59,14 +71,6 @@ import type { BuiltInRoot } from "./itx-expression-rewriting.ts";
 import { cfBrowser } from "./browser.ts";
 import { projectScopedArtifacts, type ArtifactsNamespace, type ArtifactsScope } from "./repos.ts";
 
-/** One row of `itx.rewriteRules.list()`: a context row (`target` a string, or `null` for a mask) or an
- *  implicit platform row. */
-export type RewriteRuleListEntry = {
-  match: string;
-  target: string | null;
-  origin: "platform" | "context";
-};
-
 /** One row of `itx.subscriptions.list()`. */
 export type SubscriptionListEntry = {
   name: string;
@@ -77,7 +81,7 @@ export type SubscriptionListEntry = {
   afterOffset?: number;
   /** Set when this row HOSTS a facet (a processor): the facet's name, class and cacheKey (the source
    *  lives in the log + the facet's kv memo, never here — M1). Address-only rows have none. */
-  hostedFacet?: { name: string; className: string; cacheKey?: string };
+  hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };
   /** Present only when the STREAM keeps the cursor (a target that cannot own its progress). */
   cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
   halted?: { afterOffset: number; attempts: number; error?: string };
@@ -110,7 +114,16 @@ export interface BuiltInScope extends LibraryRoots {
    *  can spell `itx.builtins.append(…)`. */
   builtins: Omit<BuiltInScope, "builtins">;
   /** Identify this context. */
-  whoami(): { projectId: string; path: string };
+  whoami():
+    | { projectId: string; path: string; projectSlug?: string; projectUrl?: string }
+    | Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
+  /** THE PUBLIC URL of this project over HTTP — the apex (the config worker's `fetch`) or `app`'s
+   *  (`itx.apps.<app>`), at `path` (default "/") — composed from the deployment's ingress routing
+   *  (iterate/next/project-ingress: `<app>--<slug>.<hostname>/…` under subdomains,
+   *  `<origin>/<slug>/<app>/…` under paths). Refused on a deployment with no project ingress, and on
+   *  a call carrying no platform origin (a processor's own turn, a loaded worker: hold the URL a
+   *  session handed you instead). Only a project's context has one. */
+  url(target?: { app?: string; path?: string }): Promise<string>;
   /** Durable key/value prefixed with the RESOURCE OWNER's id (iterate-context.ts `resourceScope`:
    *  a project's id, or a global user's/organization's subtree) — the `${owner.id}:` prefix IS the
    *  isolation. */
@@ -162,42 +175,57 @@ export interface BuiltInScope extends LibraryRoots {
       expiresInSeconds?: number;
     }): Promise<{ url: string; expiresAt: string }>;
   };
-  /** The resource owner's secrets for egress (a project's; a global user's or organization's own —
-   *  never a catalog shared across users) — each one its own Durable Object (secrets.ts,
-   *  secret-durable-object.ts): a `getSecret("/secrets/NAME")` placeholder in an outbound request's
-   *  URL (path or query) or headers substitutes to the value at egress (`fetch`), and
-   *  `getSecret("/secrets/NAME", { field: "a.b" })` to one string field of a JSON material —
-   *  apps/os's placeholder grammar for a URL or a header (not its `Basic base64(user:getSecret(…))`
-   *  peeling nor its JSON-body template — the body is never scanned). The material is a string or a
-   *  JSON object; `urls` (required) pins it to those ORIGINS only — a mis-typed URL cannot mail a
-   *  credential to a stranger, nor can an app that forwards a visitor's headers; `refresh` names the
-   *  strategy the secret's object re-mints an expired credential with, in trusted code, on a 401 or
-   *  on first use (`oauth-refresh-token`, `waitrose-session`). WRITE-ONLY — `set`, `beginOAuth`,
-   *  `delete`, and a `list` of names, pins and strategy kinds, never a value. Every change appends
-   *  `events.iterate.com/secrets/changed` with the name, the pin and the strategy kind (or
-   *  `deleted`) — the value never enters the log — attributed like any append (`source.principal`);
-   *  a refresh's outcome is `secrets/refreshed { name, kind, ok, error? }`, appended by the object.
-   *  A name is what the placeholder can spell, `[a-zA-Z0-9._-]+`. */
+  /** THE SECRETS (src/secret/): a secret as a DOMAIN OBJECT — the context at `/secrets/<name>`
+   *  under the resource owner's root (a project's; a global user's or organization's own — never a
+   *  catalog shared across users), whose `secret` facet is the material's one keeper. A secret IS
+   *  its path, and the path is what the placeholder spells: `getSecret("/secrets/<name>")` in an
+   *  outbound request's URL (path or query) or headers substitutes to the value at egress
+   *  (`fetch`), and `getSecret("/secrets/<name>", { field: "a.b" })` to one string field of a JSON
+   *  material — apps/os's placeholder grammar for a URL or a header (not its `Basic
+   *  base64(user:getSecret(…))` peeling nor its JSON-body template — the body is never scanned).
+   *  The material is a string or a JSON object; `urls` (required) pins it to those ORIGINS only — a
+   *  mis-typed URL cannot mail a credential to a stranger, nor can an app that forwards a visitor's
+   *  headers; `refresh` names the strategy the facet re-mints an expired credential with, in trusted
+   *  code, on a 401 or on first use (`oauth-refresh-token`, `waitrose-session`). WRITE-ONLY — `set`,
+   *  `beginOAuth`, `delete`, and a `list` of paths, pins and strategy kinds, never a value. Every
+   *  verb runs ON THE SECRET'S PATH (so the log's order is the value's) and lands its fact there —
+   *  `secret/set { path, urls, refresh? }`, `secret/deleted { path }` — attributed like any append
+   *  (`source.principal`), and cross-posts it to the owner's root, whose catalog `list()` reads; the
+   *  value never enters a log. The facet's own facts: `secret/used` per dispatch, `secret/refreshed`
+   *  per refresh outcome. The secret's state (whether material is stored, by the offset of the fact
+   *  that says so) is `itx.cd(path).facets.get("secret").snapshot()`. */
   secrets: {
     set(
-      name: string,
+      path: string,
       material: SecretMaterial,
       options: { urls: string[]; refresh?: SecretRefresh },
-    ): Promise<{ ok: true }>;
+    ): Promise<{ path: string }>;
     /** OAUTH, THE FIRST TOKENS (secret-oauth.ts): hand back the provider's authorize URL for the
      *  project's own OAuth client — send a human there. The provider redirects the human to the
      *  platform's callback (`/.secrets/oauth/callback`; the human must be signed in to Iterate as
      *  someone who reaches the secret's owner — a project's member, the user themself for a user's
-     *  own secret), and the secret's own Durable Object exchanges the code, becomes an
-     *  `oauth-refresh-token` secret, and the catalog fact is appended. Until then nothing is stored
-     *  under `name` but the attempt. */
-    beginOAuth(name: string, options: SecretOAuthOptions): Promise<{ authorizationUrl: string }>;
+     *  own secret), and the secret's facet exchanges the code, becomes an `oauth-refresh-token`
+     *  secret, and `secret/set` lands. Until then nothing is stored at `path` but the attempt. */
+    beginOAuth(path: string, options: SecretOAuthOptions): Promise<{ authorizationUrl: string }>;
     /** The platform's callback completes the attempt through here — the exchange in the secret's
-     *  object, then the catalog fact, in the same per-name order as `set` and `delete`. You never
-     *  call this: the code and the nonce reach only the callback. */
-    completeOAuth(name: string, input: { code: string; nonce: string }): Promise<{ ok: true }>;
-    delete(name: string): Promise<{ ok: true }>;
+     *  facet, then the facts, on the secret's path like `set` and `delete`. You never call this:
+     *  the code and the nonce reach only the callback. */
+    completeOAuth(path: string, input: { code: string; nonce: string }): Promise<{ path: string }>;
+    /** Forget the value: the facet clears it, `secret/deleted` lands on the path and on the owner's
+     *  root, and the `secret` processor row goes (the facet's storage with it). A secret never set
+     *  has nothing to delete (thrown); one already deleted answers at once; a deleted secret can be
+     *  set again. */
+    delete(path: string): Promise<{ path: string }>;
     list(): Promise<SecretCatalogEntry[]>;
+    /** THE VERIFY LANE — a webhook's signature checked against a secret WITHOUT revealing it: is
+     *  `signature` (hex, either case) the HMAC-SHA256 of `payload` (a string is its UTF-8 bytes)
+     *  under the secret's material — the whole value, or the string at `field` of a JSON value?
+     *  Runs in the secret's facet on its own context; one bit comes back. Constant-time, and a
+     *  secret never set (or a material with no key at the field) answers false, never a description
+     *  — the candidate comes from an unauthenticated door. The caller assembles the signed bytes the
+     *  provider's scheme names (Stripe `${t}.${body}` with its own tolerance check on `t`, GitHub the
+     *  body, Slack `v0:${t}:${body}`) and strips the scheme's prefix (`sha256=`, `v0=`). */
+    verifyHmac(path: string, input: SecretHmacVerification): Promise<boolean>;
   };
   /** THE FIRST BINDINGS ROOT: Cloudflare's Workers AI binding, VERBATIM — `run(model, inputs,
    *  options?)`, `models()`, `gateway(id).run({ provider, endpoint, headers, query })`, `toMarkdown()`,
@@ -269,8 +297,8 @@ export interface BuiltInScope extends LibraryRoots {
    *  never a verb here. `resolve(call)` is the PURE half of `invoke`: the chain of rewrites, each
    *  printed, nothing dispatched — `invoke(call) ≡ invoke(resolve(call).at(-1))`. */
   rewriteRules: {
-    list(): RewriteRuleListEntry[];
-    get(match: string): RewriteRuleListEntry | null;
+    list(depth?: number): Promise<RewriteRuleListEntry[]>;
+    get(match: string): Promise<RewriteRuleListEntry | null>;
     resolve(call: ItxExpressionInput): string[];
   };
   /** The facets of this context. `get(name)` ADDRESSES one that is already running (a processor, a
@@ -360,6 +388,7 @@ function r2ObjectRecord(object: R2Object, prefix: string): R2ObjectRecord {
 
 /** What the CONTEXT (the DO) injects: identity, the bindings, and the seams only it can serve. */
 interface BuildBuiltInsDeps {
+  projectInfo?: () => Promise<{ projectSlug?: string; projectUrl?: string }>;
   projectId: string;
   path: string;
   /** The codec name of the context these roots belong to (loader cache keys). */
@@ -371,18 +400,18 @@ interface BuildBuiltInsDeps {
     ITX_KV: KVNamespace;
     /** The one R2 bucket, every owner's objects under its own prefix — the built-in root `itx.r2`. */
     FILES: R2Bucket;
-    /** The secrets' Durable Objects (secret-durable-object.ts): one per secret, `<owner.id>:<name>` — the
-     *  resource owner's id (iterate-context.ts `resourceScope`). */
-    SECRET: DurableObjectNamespace<SecretDurableObject>;
     AI: Ai;
     BROWSER: BrowserRun;
     ARTIFACTS: ArtifactsNamespace;
   };
   /** The deploy identity every loader cacheKey folds in (worker.ts `AppConfig`). */
   deployId: string;
-  /** The Artifacts account + namespace `itx.cfArtifacts` names git remotes with (worker.ts `AppConfig`). */
-  artifactsAccountId: string;
-  artifactsNamespace: string;
+  /** How projects are reached over HTTP (app-config.ts `urls.ingressRouting`) — `itx.url`. */
+  ingressRouting: IngressRouting;
+  /** THE PLATFORM ORIGIN the current call's caller reached the platform on (the DO's caller record)
+   *  — null when the call carries none: a processor's own turn, a loaded worker's `env.ITX`, the
+   *  delivery loop, an alarm. */
+  platformOrigin: () => string | null;
   /** A signed file URL on the project host (file-urls.ts `signedFileUrl`, closed over the app
    *  config's secret and hosts) — `itx.r2.presign`. */
   signFileUrl: (input: {
@@ -391,9 +420,6 @@ interface BuildBuiltInsDeps {
     method: "GET" | "PUT";
     expiresInSeconds?: number;
   }) => Promise<{ url: string; expiresAt: string }>;
-  /** The secrets catalog — names, pins and strategy kinds, from the core reduce (strongly
-   *  consistent; never a value). */
-  secrets: () => SecretCatalogEntry[];
   /** Evaluate a producer source expression through THIS context's dispatch (inside the loader's
    *  `getCode`, so only on a cold isolate). */
   invoke: (call: ItxExpression) => Promise<unknown>;
@@ -404,8 +430,7 @@ interface BuildBuiltInsDeps {
   egress: (request: Request) => Promise<Response>;
   /** WHO is calling right now — the `Caller` the DO runs this call under (the fetch lane's header,
    *  or the edge's stamp), `{ principal: null }` for an anonymous session, a processor, a loaded
-   *  worker and the KERNEL's own delivery loop. Carried across sibling `cd` hops; in the global
-   *  namespace `cd` reads it to tell the kernel's config funnel from a person's path. */
+   *  worker and the KERNEL's own delivery loop. Carried across permitted sibling `cd` hops. */
   caller: () => Caller;
   /** The rpcStubs view — closures over the DO's transport table (the pager sockets can never move). */
   rpcStubs: BuiltInScope["rpcStubs"];
@@ -422,9 +447,9 @@ interface BuildBuiltInsDeps {
   /** The DO's claim table for hosted processors (`processors.claim`). */
   claimFacetAlarm: (name: string, at: number | null) => void;
   /** The `ItxEntrypoint` stub a loaded worker gets as `env.ITX` and `globalOutbound` — the loopback
-   *  minted once for this context (the DO's `#itxEntrypoint`; iterate-context.ts's `ItxEntrypoint` for why it is never a
+   *  minted for this context at its current origin (the DO's `#itxEntrypoint`; iterate-context.ts's `ItxEntrypoint` for why it is never a
    *  raw getByName stub). */
-  itxEntrypoint: Fetcher;
+  itxEntrypoint: () => Fetcher;
   /** THE LIBRARY's roots (library.ts `buildLibrary(itx).roots`), built by the DO over its own
    *  `itx` handle so a library call's `itx.fetch(...)` resolves through THIS context's rules. */
   library: LibraryRoots;
@@ -442,55 +467,116 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const kvPrefix = `${owner.id}:`;
   const r2Prefix = `${owner.id}/`;
   const ownContext = () => deps.context(path);
-  // A secret's Durable Object is `<owner.id>:<name>` — the one the context DO's `#egress` forwards a
-  // placeholder-bearing request to, by the same derivation (an owner id never holds a `:`). The
-  // object appends its own facts (a refresh's outcome, an OAuth completion) to the owner's root log.
-  const secretStore = (name: string) =>
-    env.SECRET.getByName(`${owner.id}:${assertSecretName(name)}`);
-  const secretsCatalog = DurableObjectNameCodec.stringify({ projectId, path: owner.rootPath });
   /** THE append: every event appended through this scope carries WHO appended it — the DO's own
    *  stamp, never a client's (src/principal.ts): the session's verified principal, or none. */
-  const append = (...events: StreamEventInput[]) =>
-    ownContext().append(...events.map((event) => stampPrincipal(event, deps.caller().principal)));
-  /** Secrets are the RESOURCE OWNER's: the value's key is owner-scoped, so the catalog lives in ONE
-   *  log — the owner's root context (`owner.rootPath`: a project's `/`, a user's `/users/<id>`).
-   *  Each `secrets` verb runs `here` on that root, and on a context below it runs as the same call
-   *  on the root, over the DO hop. A user's context IS its own root: no hop, no shared catalog. */
+  const append = (...events: StreamEventInput[]) => {
+    const caller = deps.caller();
+    // LOADED CODE's rows are walled on their targets (itx-expression-rewriting.ts): the same wall its
+    // calls meet, applied where the row is written.
+    for (const event of events) {
+      refuseSelfLoopRow(event, path);
+      if (caller.app) admitLoadedCodeRow(event, path);
+    }
+    return ownContext().append(...events.map((event) => stampCaller(event, caller)));
+  };
+  /** Secrets are the RESOURCE OWNER's, and a secret IS its path under the owner's root
+   *  (`owner.rootPath`: a project's `/`, a user's `/users/<id>` — `resolveContextPath` joins
+   *  `/secrets/<name>` onto it). Each writing verb runs `here` on the SECRET'S OWN context — where
+   *  the `secret` facet keeps the value, so the log's order is the value's — and on any other
+   *  context runs as the same call there, over the DO hop, the caller carried (the fact stays
+   *  attributed). The catalog is the owner root's facet (`ownerRootFacet`). */
   // A context below the owner's root runs every secrets verb as the SAME call on that ROOT (one
   // catalog, in the root's log). Acquire the root context PER CALL: a stub cached across calls
   // stays broken after a root DO failure (Cloudflare's DO error-handling requires re-acquiring). And
   // forward `deps.caller()` so the durable change event keeps the child call's authenticated principal.
-  const onRootContext = <T>(call: ItxExpressionStep, here: () => Promise<T>): Promise<T> =>
-    path === owner.rootPath
-      ? here()
-      : // The owner root runs the SAME secrets verb `here` would run (the one built-in, the same
+  /** THE PLATFORM'S OWN HOP: the caller rides — principal and grant (the facts stay attributed),
+   *  path and origin — but never its `app`: the app wall (itx-expression-rewriting.ts `#admit`) is
+   *  for what LOADED CODE spells on its input, and the expressions below are the platform's, fixed
+   *  here, their arguments validated here. A script's `itx.secrets.set(…)` reaches this built-in
+   *  through its creator's link and is answered exactly as a session's would be. */
+  const hopCaller = (): Caller => {
+    const { app: _loadedCode, ...caller } = deps.caller();
+    return caller;
+  };
+  const onSecretContext = <T>(
+    secretPath: string,
+    call: ItxExpressionStep,
+    here: (secret: ReachableContext) => Promise<T>,
+  ): Promise<T> => {
+    const contextPath = resolveContextPath(owner.rootPath, `.${assertSecretPath(secretPath)}`);
+    return path === contextPath
+      ? here(ownContext())
+      : // The secret's context runs the SAME verb `here` would run (the one built-in, the same
         // arguments), so its answer has `here`'s type; `invoke` is untyped across the DO hop.
         (deps
-          .context(owner.rootPath)
-          .invoke(["itx", "builtins", "secrets", call], [], deps.caller()) as Promise<T>);
-
-  // A secret mutation is two awaits — the catalog fact and the object write; a concurrent set and
-  // delete of the SAME name could commit the log in one order while their object writes land in the
-  // other, leaving egress a value the catalog says is gone (or vice versa). Serialize per name — on
-  // the owner's root DO, where every verb runs (`onRootContext`) — so the log order IS the object's
-  // order. Different names never contend. (This is `#builtIns`, built ONCE per DO instance, so the
-  // chain persists across calls.) Within a mutation the two steps run in the order whose crash window
-  // fails loud (a row without material, never material without a row): `set` appends first, `delete`
-  // clears first, `completeOAuth` writes first and undoes on a refused append.
-  const secretMutations = new Map<string, Promise<unknown>>();
-  const serializeSecretMutation = <T>(name: string, work: () => Promise<T>): Promise<T> => {
-    const result = (secretMutations.get(name) ?? Promise.resolve()).then(work, work);
-    secretMutations.set(
-      name,
-      result.catch(() => {}),
-    );
-    return result;
+          .context(contextPath)
+          .invoke(["itx", "builtins", "secrets", call], [], hopCaller()) as Promise<T>);
   };
+  /** The owner root's facet — where the catalog is folded from the certificates cross-posted there
+   *  (src/project/contract.ts; src/account/contract.ts and src/organization/contract.ts for the
+   *  global owners). The global root itself owns no secrets. */
+  const ownerRootFacet = (): "project" | "account" | "organization" => {
+    if (projectId !== GLOBAL_PROJECT_ID) return "project";
+    if (owner.rootPath.startsWith("/users/")) return "account";
+    if (owner.rootPath.startsWith("/organizations/")) return "organization";
+    throw codedError(
+      "INVALID_CONTEXT",
+      "itx.secrets: the global root owns no secrets — a project's, a user's or an organization's context does",
+    );
+  };
+  /** The `secret` processor row on the secret's context — the facet hosted with a row, so the
+   *  engine pushes it every fact (idempotent at the door: a second enable of the same row is a no-op). */
+  const enableSecretRow = (secret: ReachableContext) =>
+    secret.invoke(["itx", "builtins", "processors", ["enable", "secret"]], [], hopCaller());
+  /** The secret's facet on its own context — `write`, `clear`, `beginOAuth`, `completeOAuth`
+   *  (secret/durable-object.ts) — reached through the facet door; hosted on its first call. */
+  const secretFacet = (secret: ReachableContext, call: ItxExpressionStep) =>
+    secret.invoke(["itx", "facets", ["get", "secret"], call], [], hopCaller());
+  /** The fact of a write or a deletion: on the secret's own path (`secret`), attributed to the
+   *  caller, then cross-posted to the owner's root for the catalog. */
+  const crossPostSecretFact = (event: StreamEventInput) =>
+    deps.context(owner.rootPath).invoke(["itx", "builtins", ["append", event]], [], hopCaller());
+  const secretFact = async (secret: ReachableContext, event: StreamEventInput): Promise<void> => {
+    await secret.append(stampCaller(event, deps.caller()));
+    await crossPostSecretFact(event);
+  };
+  /** The `secret` processor rows on the secret's context — one while the secret lives. */
+  const secretRows = (secret: ReachableContext) =>
+    secret.invoke(["itx", "builtins", "processors", ["list"]], [], hopCaller()) as Promise<
+      { name: string }[]
+    >;
 
   // Each root implements one member of `BuiltInScope` above (the canonical doc of the surface); the
   // comments here add only the WHY of a code branch.
   return {
-    whoami: () => ({ projectId, path }),
+    whoami: () =>
+      deps.projectInfo
+        ? deps.projectInfo().then((project) => ({ projectId, path, ...project }))
+        : { projectId, path },
+    url: async (target: { app?: string; path?: string } = {}) => {
+      const platformOrigin = deps.platformOrigin();
+      if (!platformOrigin)
+        throw codedError(
+          "INVALID_INPUT",
+          "itx.url: this call carries no platform origin to compose a URL with — call it from a session, or hold the URL a session handed you",
+        );
+      const slug = (await deps.projectInfo?.())?.projectSlug;
+      if (!slug)
+        throw codedError("INVALID_INPUT", "itx.url: only a project's context has a public URL");
+      const url = projectUrlOf(deps.ingressRouting, platformOrigin, {
+        project: slug,
+        app: target.app || null,
+        path: target.path,
+      });
+      if (!url)
+        throw codedError(
+          "INVALID_INPUT",
+          deps.ingressRouting
+            ? `itx.url: ${JSON.stringify(target)} is not an address in this project (an app label is [a-z][a-z0-9-]*; a path starts with "/")`
+            : "itx.url: this deployment has no project ingress (APP_CONFIG urls.ingressRouting is unset) — nothing serves a project over HTTP",
+        );
+      return url.href;
+    },
     kv: {
       get: (k: string) => env.ITX_KV.get(kvPrefix + k),
       put: async (k: string, v: string) => {
@@ -557,83 +643,119 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         }),
     },
     secrets: {
-      set: (name, material, options) =>
-        onRootContext(["set", name, material, options], () =>
-          serializeSecretMutation(name, async () => {
-            const store = secretStore(name);
-            const record = normalizeSecretRecord(material, options);
-            // The change is appended FIRST: a refused append (a paused stream) leaves the value
-            // untouched; an object failure after it leaves a catalog row whose value egress cannot
-            // find — loud, not silent. The fact carries the pin and the strategy KIND, never the material.
-            await append({
-              type: "events.iterate.com/secrets/changed",
-              payload: {
-                name,
-                urls: record.urls,
-                ...(record.refresh && { refresh: record.refresh.kind }),
-              },
-            });
-            await store.set(record, secretsCatalog);
-            return { ok: true as const };
-          }),
+      // The fact is appended FIRST: a refused append (a paused stream) leaves no value behind; a
+      // facet failure after it leaves a fact whose value egress cannot find — loud ("no stored
+      // project secret"), not silent. The facts carry the pin and the strategy KIND, never the material.
+      set: (secretPath, material, options) =>
+        onSecretContext(secretPath, ["set", secretPath, material, options], async (secret) => {
+          const record = normalizeSecretRecord(material, options);
+          await enableSecretRow(secret);
+          await secretFact(secret, {
+            type: "events.iterate.com/secret/set",
+            payload: {
+              path: secretPath,
+              urls: record.urls,
+              ...(record.refresh && { refresh: record.refresh.kind }),
+            },
+          });
+          await secretFacet(secret, ["write", record]);
+          return { path: secretPath };
+        }),
+      // No fact here: the log learns of the secret when the exchange succeeds, so an abandoned
+      // attempt leaves no row that advertises a pin and a strategy the facet does not hold.
+      beginOAuth: (secretPath, options) => {
+        // the provider's callback hangs under the platform origin — the caller's, not a DO's
+        const platformOrigin = deps.platformOrigin();
+        if (!platformOrigin)
+          throw codedError(
+            "INVALID_INPUT",
+            "itx.secrets.beginOAuth: this call carries no platform origin for the callback URL — call it from a session",
+          );
+        return onSecretContext(secretPath, ["beginOAuth", secretPath, options], async (secret) => {
+          await enableSecretRow(secret);
+          return (await secretFacet(secret, [
+            "beginOAuth",
+            normalizeSecretOAuth(options),
+            platformOrigin,
+          ])) as { authorizationUrl: string };
+        });
+      },
+      // The facet FIRST here (the exchange most often fails on the provider's side — a junk code, a
+      // stale attempt — and must leave no fact), then the facts. A refused fact (a paused stream, a
+      // lost cross-post) is the OAuth exception to "fail loud, never a live secret without its
+      // row": the tokens stay — the person's consent cannot be re-obtained by a retry, and the code
+      // was spent — the callback answers the error, and its replay (a refreshed tab; the facet
+      // completes the attempt it completed idempotently, no second exchange) lands the facts and
+      // catches the log up. Until then `list()` does not show the secret while egress already honours it.
+      completeOAuth: (secretPath, input) =>
+        onSecretContext(secretPath, ["completeOAuth", secretPath, input], async (secret) => {
+          const { urls } = (await secretFacet(secret, ["completeOAuth", input])) as {
+            urls: string[];
+            exchanged: boolean;
+          };
+          await secretFact(secret, {
+            type: "events.iterate.com/secret/set",
+            payload: { path: secretPath, urls, refresh: "oauth-refresh-token" },
+          });
+          return { path: secretPath };
+        }),
+      // The facet FIRST here, the reverse of `set`: each verb runs its steps in the order whose
+      // crash window fails LOUD. A clear not yet followed by its fact leaves a log that says set
+      // while egress answers 502 ("no stored project secret") until the delete is retried; the
+      // other order would leave live material behind a log that says it is gone — silent. The
+      // `secret` processor row goes LAST, so the row standing IS the mark of a delete not finished:
+      // a retry (a call that lost its answer after its own-path fact — before the cross-post, or
+      // before the disable) cross-posts the certificate again (the catalog drops the entry once; a
+      // second root fact is harmless) and takes the row; a delete that finished answers at once
+      // and appends nothing.
+      delete: (secretPath) =>
+        onSecretContext(secretPath, ["delete", secretPath], async (secret) => {
+          // The facet is the platform's own SecretDurableObject and `snapshot()` the engine's
+          // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted.
+          const { state } = (await secret.invoke(
+            ["itx", "facets", ["get", "secret"], ["snapshot"]],
+            [],
+            hopCaller(),
+          )) as { state: SecretState };
+          if (!state.material && !state.deletion)
+            throw new Error(`secret ${secretPath}: never set — nothing to delete`);
+          const deleted: StreamEventInput = {
+            type: "events.iterate.com/secret/deleted",
+            payload: { path: secretPath },
+          };
+          const rowStands = (await secretRows(secret)).some((row) => row.name === "secret");
+          if (state.material) {
+            await secretFacet(secret, ["clear"]);
+            await secretFact(secret, deleted);
+          } else if (rowStands) await crossPostSecretFact(deleted);
+          if (rowStands)
+            await secret.invoke(
+              ["itx", "builtins", "processors", ["disable", "secret"]],
+              [],
+              hopCaller(),
+            );
+          return { path: secretPath };
+        }),
+      // The owner root's catalog — strongly consistent with `set` and `delete`, which cross-post
+      // their facts there before they answer.
+      list: async () => {
+        const { state } = (await deps
+          .context(owner.rootPath)
+          .invoke(["itx", "facets", ["get", ownerRootFacet()], ["snapshot"]], [], hopCaller())) as {
+          state: { secrets: SecretCatalog };
+        };
+        return Object.entries(state.secrets).map(([path, row]) => ({ path, ...row }));
+      },
+      verifyHmac: (secretPath, input) =>
+        onSecretContext(
+          secretPath,
+          ["verifyHmac", secretPath, input],
+          (secret) => secretFacet(secret, ["verifyHmac", input]) as Promise<boolean>,
         ),
-      // No append here: the catalog learns of the secret when the exchange succeeds, so an
-      // abandoned attempt leaves no row that advertises a pin and a strategy the object does not hold.
-      beginOAuth: (name, options) =>
-        onRootContext(["beginOAuth", name, options], () =>
-          secretStore(name).beginOAuth(normalizeSecretOAuth(options), secretsCatalog),
-        ),
-      // The object FIRST here (the exchange most often fails on the provider's side — a junk code,
-      // a stale attempt — and must leave no row), then the fact. A refused append undoes the write
-      // THIS call made (`exchanged`), so what `list()` says and what egress finds never disagree; a
-      // replayed callback (the object answers it idempotently) undoes nothing — the catalog may
-      // already advertise the secret, and a failed re-append must not erase live material — so a
-      // retried callback after a lost fact catches the catalog up. Serialized per name with `set`
-      // and `delete`, like every catalog write.
-      completeOAuth: (name, input) =>
-        onRootContext(["completeOAuth", name, input], () =>
-          serializeSecretMutation(name, async () => {
-            const store = secretStore(name);
-            const { urls, exchanged } = await store.completeOAuth(input);
-            try {
-              await append({
-                type: "events.iterate.com/secrets/changed",
-                payload: { name, urls, refresh: "oauth-refresh-token" },
-              });
-            } catch (error) {
-              if (exchanged) await store.clear();
-              throw error;
-            }
-            return { ok: true as const };
-          }),
-        ),
-      // The object FIRST here, the reverse of `set`: each verb runs its two steps in the order
-      // whose crash window fails LOUD. A delete cleared but not yet appended leaves a row egress
-      // answers 502 for ("no stored project secret") until the delete is retried; the other order
-      // would leave live material behind a catalog that says it is gone — silent, and the sweep that
-      // would have found it is not needed.
-      delete: (name) =>
-        onRootContext(["delete", name], () =>
-          serializeSecretMutation(name, async () => {
-            const store = secretStore(name);
-            await store.clear();
-            await append({
-              type: "events.iterate.com/secrets/changed",
-              payload: { name, deleted: true },
-            });
-            return { ok: true as const };
-          }),
-        ),
-      list: () => onRootContext(["list"], async () => deps.secrets()),
     },
     ai: env.AI, // the binding object itself — dispatch walks its methods
     browser: cfBrowser(env.BROWSER),
-    cfArtifacts: projectScopedArtifacts({
-      namespace: env.ARTIFACTS,
-      projectId: owner.id,
-      accountId: deps.artifactsAccountId,
-      namespaceName: deps.artifactsNamespace,
-    }),
+    cfArtifacts: projectScopedArtifacts({ namespace: env.ARTIFACTS, projectId: owner.id }),
     append,
     schedules: {
       ...deps.schedules,
@@ -664,24 +786,17 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     waitForEvent: deps.waitForEvent,
     // WHO crosses with the call: a sibling context runs it under the caller's principal (a Workers-RPC
     // hop, where the ambient store does not reach), so an event appended there is attributed too.
-    cd: (contextPath: string) =>
-      new InvokeHandle((itxExpressionSteps) => {
-        const siblingPath = resolveContextPath(path, contextPath);
-        // THE GLOBAL NAMESPACE IS NOT NAVIGABLE (iterate-context.ts `cd`): a person's expression —
-        // a rule or subscription written into their own context, run under their principal — may
-        // not name another global path. The ONE hop that exists here is the kernel's config funnel,
-        // `itx.cd('/').worker…` (the birth row every context carries), which the delivery loop runs
-        // under NO principal — so a user's row that spells the same hop can only feed the funnel.
-        // Stamped `retryable: false`: a subscription row naming another path can only repeat this
-        // refusal, so the delivery loop halts it at once instead of climbing its ladder.
-        if (
-          projectId === GLOBAL_PROJECT_ID &&
-          !(
-            deps.caller().principal === null &&
-            siblingPath === "/" &&
-            itxExpressionStepName(itxExpressionSteps[0]) === "worker"
-          )
-        )
+    cd: (contextPath: string) => {
+      // Captured when the handle is MADE: a handle held by loaded code and called later runs as that
+      // code, never as whoever holds the store then. A relative path resolves against the caller's
+      // ORIGINATING context when the call rode a hop here (`repos.get('./x')` answered at the root is
+      // the caller's `./x`); a row's target should spell an absolute path.
+      const caller = deps.caller();
+      const base = caller.path || path;
+      return new InvokeHandle((itxExpressionSteps) => {
+        const siblingPath = resolveContextPath(base, contextPath);
+        // Global contexts are addressed by identity, never navigated through cd.
+        if (projectId === GLOBAL_PROJECT_ID)
           throw Object.assign(
             codedError(
               "FORBIDDEN",
@@ -690,10 +805,36 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             { retryable: false },
           );
         const context = deps.context(siblingPath); // a ReachableContext
-        // The caller crosses with the call: the sibling runs it under the same Caller, so an event
-        // appended there is attributed too.
-        return context.invoke(["itx", ...itxExpressionSteps], [], deps.caller());
-      }),
+        // The caller crosses with the call — the sibling runs it under the same Caller, so an event
+        // appended there is attributed too — stamped with the context it originated at (once, at the
+        // first hop) so a relative path there still means the caller's.
+        const terminalFetch = terminalFetchOf(["itx", ...itxExpressionSteps], []);
+        if (terminalFetch) {
+          // A socket-bearing Response must cross a native fetch, never Workers RPC.
+          const headers = new Headers(terminalFetch.request.headers);
+          for (const name of [
+            ITX_PRINCIPAL_HEADER,
+            ITX_GRANT_HEADER,
+            ITX_APP_HEADER,
+            "x-itx-platform-origin",
+            RPC_STUB_PAGER_WEBSOCKET_HEADER,
+            FETCH_UPGRADE_SOCKET_HEADER,
+          ])
+            headers.delete(name);
+          headers.set(ITX_EXPRESSION_FETCH_HEADER, encodeFetchExpression(terminalFetch.steps));
+          headers.set(ITX_CALLER_PATH_HEADER, caller.path || path);
+          if (caller.principal) headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(caller.principal));
+          if (caller.grant) headers.set(ITX_GRANT_HEADER, caller.grant);
+          if (caller.app) headers.set(ITX_APP_HEADER, "1");
+          if (caller.platformOrigin) headers.set("x-itx-platform-origin", caller.platformOrigin);
+          return context.fetch(new Request(terminalFetch.request, { headers }));
+        }
+        return context.invoke(["itx", ...itxExpressionSteps], [], {
+          ...caller,
+          path: caller.path || path,
+        });
+      });
+    },
     fetch: (request: Request) => deps.egress(request),
     rpcStubs: deps.rpcStubs,
     facets: deps.facets,
@@ -718,6 +859,18 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             );
           assertFacetSourceWithinCeiling(loaded, `processors.enable("${name}")`);
         }
+        // IDEMPOTENT AT THE DOOR (the rule `provide` follows): a row already hosting this facet under
+        // the same spec appends nothing — every entity's `create()` enables its row on every call.
+        const existing = deps.subscriptions.get(name)?.hostedFacet;
+        if (
+          existing &&
+          existing.name === name &&
+          (firstPartyClassName
+            ? existing.className === firstPartyClassName
+            : existing.className === loaded!.className && existing.cacheKey === loaded!.cacheKey) &&
+          jsonEqual(deps.subscriptions.get(name)?.consumes ?? null, spec?.consumes ?? null)
+        )
+          return { name };
         await append({
           type: "events.iterate.com/stream/subscription-configured",
           payload: {
@@ -766,7 +919,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           const { load } = await prepareConfinedWorker({
             env,
             deployId: deps.deployId,
-            itxEntrypoint: deps.itxEntrypoint,
+            platformOrigin: deps.platformOrigin(),
+            itxEntrypoint: deps.itxEntrypoint(),
             kind: "worker",
             owner: iterateContextName,
             source: spec.source,

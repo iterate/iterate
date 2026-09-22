@@ -15,7 +15,7 @@ import {
   adminCredentials,
   applyDirectorySchema,
   openSession,
-  quiesce,
+  releasePins,
   stub,
   until,
 } from "./support.ts";
@@ -49,8 +49,8 @@ test("KILLED MID-CALL, THE REQUEST CONTINUES: the context dies with the model ca
   const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(PROJECT);
   const support = itx.cd("/agents/support");
   await support.provide("itx.ai", model);
+  await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.create({ systemPrompt: "Be terse." });
   await support.append({
     type: "events.iterate.com/agent/configured",
     payload: { config: { llm: { model: "@cf/meta/llama-4-scout-17b-16e-instruct" } } },
@@ -73,7 +73,7 @@ test("KILLED MID-CALL, THE REQUEST CONTINUES: the context dies with the model ca
   // does on the edge) and returns its borrowed model; the first answer then arrives at a facet that
   // no longer exists, which ends the call the context still had in flight, and the dormant context
   // is evicted. Nothing touches the context afterwards: a request would be a wake of its own.
-  await quiesce(AGENT);
+  await releasePins(AGENT);
   model.answerFirst({ response: "an answer nobody is left to hear" });
   await evictDurableObject(s);
   await new Promise((r) => setTimeout(r, 300));

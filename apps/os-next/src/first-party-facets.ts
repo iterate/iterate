@@ -10,8 +10,10 @@
 export const FIRST_PARTY_FACET_CLASSES = {
   account: "AccountDurableObject",
   agent: "AgentDurableObject",
+  organization: "OrganizationDurableObject",
   project: "ProjectDurableObject",
   repo: "RepoDurableObject",
+  secret: "SecretDurableObject",
   workspace: "WorkspaceDurableObject",
 } as const;
 

@@ -11,7 +11,7 @@ import { OAuthScope, OAuthScopes } from "iterate/next/oauth-scopes";
 import { verifyAdminSecret, type Principal } from "iterate/next/principal";
 import type { Env, Handler } from "./control-plane.ts";
 import { type Reach } from "./directory.ts";
-import { appConfigOf } from "./app-config.ts";
+import { appConfigOf, platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
 
 /** Encrypted by the provider. Every grant is created through parseAuthorization,
  * so this version also proves the grant has a nonempty, allowed resource audience. */
@@ -31,6 +31,7 @@ export const GrantProps = z.object({
 export type GrantProps = z.infer<typeof GrantProps>;
 
 const AccessGrant = GrantProps.extend({
+  /** The provider mints it (16 url-safe characters); MCP stamps it on project-root run requests. */
   grantId: z.string().min(1),
   scope: z.array(z.string()),
   expiresAt: z.number().int().positive(),
@@ -48,22 +49,12 @@ export type Authorization = {
   grant: AccessGrant | null;
 };
 
-/** Canonical resource identifiers, including the MCP root's explicit slash. */
-export function oauthAddresses(env: Env) {
-  const config = appConfigOf(env);
-  const issuer = config.platformOrigin;
-  return {
-    issuer,
-    api: `${issuer}/api`,
-    mcp: config.mcpOrigin ? `${config.mcpOrigin}/` : `${issuer}/mcp`,
-  };
-}
-
 /** The provider validates clients, redirects and PKCE. We own the finite set of
  * resources this authorization server may grant; omission never creates an unbound token. */
 export async function parseAuthorization(env: Env, request: Request): Promise<AuthRequest> {
-  const auth = await oauthHelpers(env).parseAuthRequest(request);
-  const { api, mcp } = oauthAddresses(env);
+  const addresses = platformAddressesOf(env, request);
+  const auth = await oauthHelpers(env, addresses).parseAuthRequest(request);
+  const { api, mcp } = addresses;
   const resources = [...new Set(auth.resource ? [auth.resource].flat() : [])];
   if (
     !resources.length ||
@@ -143,19 +134,19 @@ WHERE oauth_activity.last_used_at IS NULL OR oauth_activity.last_used_at < ?`)
  * parseAuthorization is the only public consent path and requires allowed resources. */
 export function providerOptions(
   env: Env,
+  { platformOrigin: issuer, api, mcp }: PlatformAddresses,
   apiHandler: Handler = notFound,
   defaultHandler: Handler = notFound,
 ): OAuthProviderOptions<Env> {
-  const { issuer, api, mcp } = oauthAddresses(env);
   return {
     apiHandlers: { [api]: apiHandler, [mcp]: apiHandler },
     defaultHandler,
-    authorizeEndpoint: `${issuer}/authorize`,
-    tokenEndpoint: `${issuer}/oauth/token`,
+    authorizeEndpoint: `${issuer}/oauth2/auth`,
+    tokenEndpoint: `${issuer}/oauth2/token`,
     // DCR is served on every deployment (not just local http): CIMD stays the console's own path
     // (browser-session.ts uses a client-id metadata document), but standard MCP clients (the MCP
     // Inspector, Claude's connector) require dynamic registration, so the endpoint is always published.
-    clientRegistrationEndpoint: `${issuer}/oauth/register`,
+    clientRegistrationEndpoint: `${issuer}/oauth2/register`,
     scopesSupported: OAuthScope.options,
     resourceMetadata: {
       ...(issuer.startsWith("https:") && { authorization_servers: [issuer] }),
@@ -165,7 +156,7 @@ export function providerOptions(
     clientIdMetadataDocumentEnabled: true,
     allowPlainPKCE: false,
     async resolveExternalToken({ token }) {
-      if (!(await verifyAdminSecret(token, appConfigOf(env).adminApiSecret.exposeSecret())))
+      if (!(await verifyAdminSecret(token, appConfigOf(env).secrets.adminBearer.exposeSecret())))
         return null;
       return { props: { kind: "admin" }, audience: [api, mcp] };
     },
@@ -204,13 +195,18 @@ export function providerOptions(
   };
 }
 
-export function oauthHelpers(env: Env) {
-  return getOAuthApi(providerOptions(env), env);
+export function oauthHelpers(env: Env, addresses: PlatformAddresses) {
+  return getOAuthApi(providerOptions(env, addresses), env);
 }
 
 /** The browser adapter asks the same provider gate to admit its server-held token
  * at the API resource. No public validation endpoint or second token verifier. */
-export async function authorizationForToken(env: Env, ctx: ExecutionContext, token: string) {
+export async function authorizationForToken(
+  env: Env,
+  ctx: ExecutionContext,
+  token: string,
+  addresses: PlatformAddresses,
+) {
   let authorization: Authorization | null = null;
   const admission: Handler = {
     async fetch(_request, bindings, context) {
@@ -218,10 +214,10 @@ export async function authorizationForToken(env: Env, ctx: ExecutionContext, tok
       return new Response(null, { status: authorization ? 204 : 401 });
     },
   };
-  const apiRequest = new Request(oauthAddresses(env).api, {
+  const apiRequest = new Request(addresses.api, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  const response = await new OAuthProvider(providerOptions(env, admission)).fetch(
+  const response = await new OAuthProvider(providerOptions(env, addresses, admission)).fetch(
     apiRequest,
     env,
     ctx,
@@ -233,14 +229,18 @@ export async function authorizationForToken(env: Env, ctx: ExecutionContext, tok
 
 /** The caller must already own this grant: a checked provider inventory row or
  * the authenticated request's grant. The D1 marker precedes KV cleanup. */
-export async function revokeGrant(env: Env, grant: { userId: string; grantId: string }) {
+export async function revokeGrant(
+  env: Env,
+  addresses: PlatformAddresses,
+  grant: { userId: string; grantId: string },
+) {
   await env.DB.prepare(`INSERT INTO oauth_activity (user_id, grant_id, revoked_at, cleanup_pending)
 VALUES (?, ?, ?, 1) ON CONFLICT(user_id, grant_id) DO UPDATE
 SET revoked_at = COALESCE(oauth_activity.revoked_at, excluded.revoked_at), cleanup_pending = 1`)
     .bind(grant.userId, grant.grantId, Date.now())
     .run();
   try {
-    await oauthHelpers(env).revokeGrant(grant.grantId, grant.userId);
+    await oauthHelpers(env, addresses).revokeGrant(grant.grantId, grant.userId);
   } catch (error) {
     console.error("oauth.revoke_cleanup_failed", {
       userId: grant.userId,

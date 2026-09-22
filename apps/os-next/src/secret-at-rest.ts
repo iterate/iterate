@@ -1,15 +1,15 @@
 // secret-at-rest.ts — a project secret's material AT REST: AES-256-GCM under the deployment's key
 // (`APP_CONFIG_SECRETS_KEY`, app-config.ts), the ciphertext BOUND to the one place it may be read
-// back from — the object's owner and name, the pin it was stored with, and the revision it was
-// written at (the additional authenticated data). apps/os's ADR 0005 binding (project, path, pin,
-// offset) carried over: a ciphertext copied into another object, under another pin, or back over a
-// later write does not open. Rotation: `previous` opens what `current` cannot; the caller re-encrypts
+// back from — the secret's context (its Durable Object name: the project and the path), the pin it
+// was stored with, and the revision it was written at (the additional authenticated data). apps/os's
+// ADR 0005 binding (project, path, pin, offset) carried over: a ciphertext copied into another
+// context, under another pin, or back over a later write does not open. Rotation: `previous` opens what `current` cannot; the caller re-encrypts
 // under `current` when told it happened, so a rotation completes one read at a time and the old key
 // can be dropped once every record has been touched.
 
 import type { SecretMaterial } from "./secrets.ts";
 
-/** What the object stores in place of the material. */
+/** What the facet stores in place of the material. */
 export type EncryptedMaterial = {
   algorithm: "AES-256-GCM+SECRET-V1";
   /** base64, 12 bytes */
@@ -18,8 +18,9 @@ export type EncryptedMaterial = {
   ciphertext: string;
 };
 
-/** Where a ciphertext is allowed to open: the object (`owner`, `name`), the pin, and the write. */
-export type MaterialBinding = { owner: string; name: string; urls: string[]; revision: number };
+/** Where a ciphertext is allowed to open: the secret's context (its Durable Object name), the pin,
+ *  and the write. */
+type MaterialBinding = { context: string; urls: string[]; revision: number };
 
 /** The deployment's keys: any strings — the AES key is the SHA-256 of each. `previous` is set only
  *  while rotating. */
@@ -83,8 +84,7 @@ function additionalDataOf(binding: MaterialBinding): Uint8Array<ArrayBuffer> {
       JSON.stringify([
         "iterate-secret",
         1,
-        binding.owner,
-        binding.name,
+        binding.context,
         [...new Set(binding.urls)].sort(),
         binding.revision,
       ]),

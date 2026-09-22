@@ -61,6 +61,7 @@ async function main(): Promise<void> {
   await root.invoke(["itx", ["whoami"]]);
   const kit = root.clients[DEVICE];
   const before = await healthWithRetry(kit);
+  if (before.callActive) throw new Error(`Device ${DEVICE} is already in a call; leave it alone.`);
   console.log(
     `before: ${JSON.stringify({ framesSent: before.framesSent, spkWrites: before.spkWrites, uptimeMs: before.uptimeMs, callActive: before.callActive })}`,
   );
@@ -90,6 +91,7 @@ async function main(): Promise<void> {
   let heardUs = "";
   let saidBack = "";
   let answers = 0;
+  let ending = false;
   const errors: string[] = [];
   await call.subscribe({
     name: `voice-board-${askedAt}`,
@@ -111,7 +113,8 @@ async function main(): Promise<void> {
         else if (kind === "answer-transcript") saidBack += ` ${p.text}`;
         else if (kind === "provider-error" || kind === "provider-disconnected")
           errors.push(`${kind}: ${JSON.stringify(p).slice(0, 200)}`);
-        else if (kind === "conversation-ended") errors.push(`ended: ${String(p.reason)}`);
+        else if (kind === "conversation-ended" && !ending)
+          errors.push(`ended: ${String(p.reason)}`);
       }
     },
   });
@@ -121,25 +124,35 @@ async function main(): Promise<void> {
   await run("say", ["-r", "170", PROMPT]);
 
   let after: Health = before;
+  let framesSent = 0;
+  let spkWrites = 0;
   for (let attempt = 0; attempt < 40; attempt++) {
     after = await healthWithRetry(kit);
+    if (after.conversation === streamPath) {
+      framesSent = Math.max(framesSent, Number(after.framesSent ?? 0));
+      spkWrites = Math.max(spkWrites, Number(after.spkWrites ?? 0));
+    }
     if (EXPECT.test(saidBack) && answers > 0) break;
     await sleep(1000);
   }
   await sleep(1500);
+  ending = true;
   try {
     await kit.conversation.end();
   } catch (error) {
     errors.push(`end: ${String(error).slice(0, 100)}`);
   }
 
-  // The words are the verdict. The board's frame and speaker counters are per call and the
-  // last health read may land in the next one, so they are reported, not judged.
-  const framesSent = Number(after.framesSent ?? 0);
-  const spkWrites = Number(after.spkWrites ?? 0);
-  const verdict = EXPECT.test(saidBack)
-    ? "PASS"
-    : `FAIL: heard "${heardUs.trim()}", said "${saidBack.trim()}" (expected /${EXPECT.source}/i)`;
+  // A transcript alone does not prove playback. Only count health observations from this call.
+  const failures = [
+    ...errors,
+    ...(!heardUs.trim() ? ["no microphone transcript"] : []),
+    ...(!EXPECT.test(saidBack) ? [`reply did not match /${EXPECT.source}/i`] : []),
+    ...(!framesSent ? ["no microphone frames sent"] : []),
+    ...(!spkWrites ? ["no speaker writes"] : []),
+    ...(!answers ? ["no completed speaker answer"] : []),
+  ];
+  const verdict = failures.length ? `FAIL: ${failures.join("; ")}` : "PASS";
   console.log(
     JSON.stringify(
       {

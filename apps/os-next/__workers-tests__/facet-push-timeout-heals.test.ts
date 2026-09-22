@@ -21,7 +21,7 @@ const WATCHDOG_MS = 60_000;
 /** The slow push outlives the watchdog by 5 s. */
 const SLOW_MS = WATCHDOG_MS + 5_000;
 
-/** A userspace processor (alarm-quiesce.test.ts's counter) whose SECOND pushed batch — the first
+/** A userspace processor (alarm-and-pins.test.ts's counter) whose SECOND pushed batch — the first
  *  appended event's; the first is the configure batch — sleeps past the watchdog BEFORE the
  *  checkpoint write, the position of a slow `blockProcessorWhile`. Every
  *  batch that reaches `processEventBatch` is recorded in the facet's own SQLite (`seen`) before the
@@ -80,7 +80,7 @@ test(
     const ctx = "prj_facet_push_timeout_heals";
     const name = "slowcounter";
     // `itx.processors.enable(name, { source, className })` spelled raw at the DO's `append` method
-    // (alarm-quiesce.test.ts): ONE subscription-configured whose target is the facet's
+    // (alarm-and-pins.test.ts): ONE subscription-configured whose target is the facet's
     // processEventBatch through the load chain.
     await stub(ctx).append({
       type: "events.iterate.com/stream/subscription-configured",

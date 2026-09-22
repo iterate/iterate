@@ -1,8 +1,9 @@
 import { startAppSession } from "iterate/next/app-server";
 import { sameOriginPath } from "iterate/next/lib";
+import { platformAddressesOf } from "./app-config.ts";
 import type { Env } from "./control-plane.ts";
 import type { User } from "./directory.ts";
-import { oauthAddresses, oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
+import { oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
 
 /** Verified Google login and explicitly enabled test/administrator login call this tail.
  * Its grant is the issuer's sole browser identity: ordinary storage, public token
@@ -10,30 +11,33 @@ import { oauthAddresses, oauthHelpers, parseAuthorization, type GrantProps } fro
  * identity provider's picture of the person, when it gave one (Google does). */
 export async function startIssuerSession(
   env: Env,
+  /** the sign-in request — its origin is the issuer on a deployment that named no `urls.os` */
+  request: Request,
   user: User,
   next: string,
   /** what the identity provider said about the person (Google's profile); an email sign-in has none */
   profile: { picture?: string; name?: string } = {},
 ) {
-  const { issuer, api } = oauthAddresses(env);
+  const addresses = platformAddressesOf(env, request);
+  const { platformOrigin, api } = addresses;
   // The issuer's own session holds every scope: it is the person at the issuer, and the consent
   // page creates organizations and projects through it.
   const flow = await startAppSession(
     env.BROWSER_SESSION,
     {
-      origin: issuer,
-      issuer,
+      origin: platformOrigin,
+      issuer: platformOrigin,
       resource: api,
       scopes: ["iterate", "account", "organizations:write"],
     },
-    sameOriginPath(next, issuer),
+    sameOriginPath(next, platformOrigin),
   );
-  const helpers = oauthHelpers(env);
-  const request = await parseAuthorization(env, new Request(flow.location));
+  const helpers = oauthHelpers(env, addresses);
+  const authorization = await parseAuthorization(env, new Request(flow.location));
   const approved = await helpers.completeAuthorization({
-    request,
+    request: authorization,
     userId: user.id,
-    scope: request.scope,
+    scope: authorization.scope,
     metadata: { clientName: "iterate" },
     revokeExistingGrants: false,
     props: {

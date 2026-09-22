@@ -1,4 +1,3 @@
-// push-delivery.e2e.test.ts — PUSH delivery: a live callback (`subscribe({ target: fn })`, a stub lent
 // to `itx.rpcStubs` under `subscription:<name>`) OWNS ITS PROGRESS, so the one delivery loop pushes it
 // `(events, { after, through })` fire-and-forget — no cursor row, no retry, no ack. (`consumes` is the
 // ONE filter rule, consumesEvent — src/stream/processor.test.ts; the pins that read the worker's
@@ -214,7 +213,9 @@ test("200 push subscribers — one append fans out to all 200 in under 2s, exact
   // warm ping: pages all 200 stubs in (cold materialization is not the fan-out cost)
   const tWarm = Date.now();
   await append(itx, { type: "ping", payload: { round: 1 } });
-  await until("warm round complete", () => received >= 200, 30_000);
+  // setup, not the claim: paging 200 lent stubs in took over 30 s once in a hundred soak runs
+  // (2026-09-22, run 55) — the measured rounds below keep their own budgets
+  await until("warm round complete", () => received >= 200, 60_000);
   const coldWallMs = Date.now() - tWarm;
   // the measured round: steady-state fan-out of ONE append across 200 subscribers
   const t0 = Date.now();

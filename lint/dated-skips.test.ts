@@ -56,6 +56,11 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     note: "env-gated: the authenticated seeded app proof requires a real signup",
   },
   {
+    file: "apps/os-next/specs/mini-app.spec.ts",
+    match: "the deployment routes projects by paths or not at all; this spec dials a subdomain",
+    note: "env-gated: a preview routes projects by paths on its workers.dev origin; the mini-app spec dials `<project>.<hostname>`",
+  },
+  {
     file: "specs/mobile/expected-backend-signin.spec.ts",
     match: "needs APP_CONFIG_BASE_URL pointing at a deployed preview slot",
     note: "env-gated: the bundle stamp must name an envs.ts preview preset and prd keeps the fixed test OTP off",

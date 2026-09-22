@@ -301,7 +301,7 @@ function stepGet(value: object, key: string): unknown {
  * ON that receiver (detaching a method from a Workers-RPC receiver breaks it); an ordinary promise
  * is awaited between steps, a branded one (PIPELINED_RPC_BRANDS, above) is not.
  *
- * ⚠️  DataCloneError LEARNING (a full investigation — docs/history/2026-08-05-facet-rpc-investigation.md):
+ * ⚠️  DataCloneError LEARNING:
  * invoke facet/RPC-stub methods with `Reflect.apply(fn, receiver, args)`, NEVER `stub[m].apply(stub,
  * args)`. Reading `.apply` off an RPC stub's method proxy is a capnweb PIPELINED REMOTE PATH;
  * calling it passes the stub as an argument, so workerd serializes it — and a Worker-Loader facet

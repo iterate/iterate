@@ -2,7 +2,8 @@
 // organization → its settings, its site) in the organizations page's layout, and the one way to
 // make one: the "New project" sheet (`?new=1`, so the switcher and a shared link open it too) —
 // "New organization…" inside it when the grant holds `organizations:write`, a step-up link in its
-// place otherwise.
+// place otherwise. A created project's page is where the sheet leads: `projects.create` returns as
+// soon as the request is on the project's log, and that page renders the creation's progress live.
 import { useState, type FormEvent } from "react";
 import { createFileRoute, getRouteApi, Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { ArrowUpRight, Plus } from "lucide-react";
@@ -32,13 +33,14 @@ import {
 } from "@iterate-com/ui/components/table";
 import { AllowOrganizations } from "../../../components/allow-organizations.tsx";
 import { ListPage } from "../../../components/list-page.tsx";
+import { projectHostOf } from "../../../lib/origins.ts";
 import type { Org } from "../../../lib/projects.ts";
-import { projectHostOf } from "../../_auth.tsx";
 
 const shell = getRouteApi("/_auth");
 
 export const Route = createFileRoute("/_auth/projects/")({
-  validateSearch: z.object({ new: z.literal(1).optional() }),
+  validateSearch: z.object({ new: z.literal(1).optional().catch(undefined) }),
+  head: () => ({ meta: [{ title: "Projects · Dash" }] }),
   component: ProjectsPage,
 });
 
@@ -48,7 +50,6 @@ function ProjectsPage() {
   const search = Route.useSearch();
   const navigate = useNavigate();
   const [pending, setPending] = useState(false);
-  const closeSheet = () => navigate({ to: "/projects", search: {}, replace: true });
   return (
     <>
       <ListPage
@@ -126,7 +127,7 @@ function ProjectsPage() {
         open={search.new === 1}
         onOpenChange={(open) => {
           if (open || pending) return;
-          void closeSheet();
+          void navigate({ to: "/projects", search: {}, replace: true });
         }}
       >
         <SheetContent
@@ -139,7 +140,8 @@ function ProjectsPage() {
             canCreateOrg={info.scopes.includes("organizations:write")}
             pending={pending}
             setPending={setPending}
-            onCreated={closeSheet}
+            // the new project's overview — leaving /projects closes the sheet with the page
+            onCreated={(project) => navigate({ to: "/projects/$slug", params: { slug: project } })}
           />
         </SheetContent>
       </Sheet>
@@ -159,7 +161,8 @@ function NewProjectForm({
   canCreateOrg: boolean;
   pending: boolean;
   setPending: (pending: boolean) => void;
-  onCreated: () => Promise<void>;
+  /** The project is made: its slug (its id, where the platform answers none — the URL takes either). */
+  onCreated: (project: string) => Promise<void>;
 }) {
   const { api, info } = shell.useRouteContext();
   const router = useRouter();
@@ -188,12 +191,14 @@ function NewProjectForm({
         setOrgId(created.id);
         await router.invalidate();
       }
-      using _created = await api.projects.create({
+      using created = await api.projects.create({
         project: name.trim(),
         orgId: chosenOrgId || undefined,
       });
+      // the slug as the platform slugged it, off the root context handed back
+      const { projectId, projectSlug } = await created.whoami();
       await router.invalidate();
-      await onCreated();
+      await onCreated(projectSlug || projectId);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {

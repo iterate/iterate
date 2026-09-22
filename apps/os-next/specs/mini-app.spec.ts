@@ -2,7 +2,7 @@
 // served by a clean-room PROJECT. Proves the "super simple mini-app" path end to end: install the app
 // worker on a project with ONE itx.provide, open its project host, and a note round-trips through the
 // app's OWN capnweb API (backed by the project's itx.kv). SWAPPABLE via DEMO_BASE_URL like the other
-// specs; sign-in uses the admin-secret bearer fixture so it works local and deployed.
+// specs; sign-in is the page's password post, so it works local and deployed.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, test } from "@playwright/test";
@@ -12,6 +12,8 @@ import { newHttpBatchRpcSession } from "capnweb";
 import type { IterateRpcTarget } from "../src/session.ts";
 
 const adminSecret = process.env.ADMIN_API_SECRET || "dev-admin-api-secret";
+/** The deployment's sign-in password: the local worker's (scripts/dev.ts), else the run's. */
+const loginPassword = process.env.LOGIN_PASSWORD || "dev";
 const stamp = () => `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}`;
 
 test("a no-build mini-app served by a project persists a note through its own capnweb API", async ({
@@ -22,29 +24,41 @@ test("a no-build mini-app served by a project persists a note through its own ca
   const email = `mini-${stamp()}@example.com`;
   const project = `mini-${stamp()}`;
 
-  // Sign in — the admin bearer sets the session cookie (works local and deployed).
+  // Sign in — the page's own password post sets the session cookie (works local and deployed).
   const login = await page.request.post(`${origin}/login`, {
-    headers: { Authorization: `Bearer ${adminSecret}` },
-    form: { email, next: "/" },
+    headers: { Origin: origin },
+    form: { email, password: loginPassword, next: "/" },
     maxRedirects: 0,
   });
   expect(login.status(), await login.text().catch(() => "")).toBe(302);
 
-  // Create the project as that user, over the platform's operator endpoint (/internal/rpc) (the platform has no
+  // Create the project as that user, over /api with the admin bearer on the POST (the platform has no
   // dashboard: creating a project is the OS app's or a script's — here the fixture's).
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
-  using owner = newHttpBatchRpcSession<IterateRpcTarget>(`${origin}/internal/rpc`);
+  using owner = newHttpBatchRpcSession<IterateRpcTarget>(
+    new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminSecret}` } }),
+  );
   // one pipelined round trip (an HTTP batch session ends with its first): create the project and
   // read its minted id — the project is addressed by it; `project` is its slug, its hosts' label
   const { projectId } = await owner
     .authenticate({ type: "admin-secret", secret: adminSecret, as: { email } })
     .projects.create({ project })
     .whoami();
-  // The project's host: `<project>.<base>` — `localhost` under the local worker (scripts/dev.ts), the
-  // deployment's base otherwise (PROJECT_HOSTNAME_BASE, as the e2e suite spells it).
-  const base =
-    new URL(origin).hostname === "localhost" ? "localhost" : process.env.PROJECT_HOSTNAME_BASE;
-  if (!base) throw new Error("PROJECT_HOSTNAME_BASE is required against a deployed worker");
+  // The project's host: `<project>.<hostname>` — `localhost` under the local worker (scripts/dev.ts),
+  // the deployment's subdomain routing otherwise (PROJECT_INGRESS_ROUTING, as the e2e suite spells it).
+  const routing =
+    new URL(origin).hostname === "localhost"
+      ? { type: "subdomains", hostname: "localhost" }
+      : (JSON.parse(process.env.PROJECT_INGRESS_ROUTING || "null") as {
+          type: string;
+          hostname?: string;
+        } | null);
+  const base = routing?.type === "subdomains" ? routing.hostname : undefined;
+  test.skip(
+    !base,
+    "the deployment routes projects by paths or not at all; this spec dials a subdomain",
+  );
+  if (!base) return;
   const projectOrigin = new URL(origin);
   projectOrigin.hostname = `${project}.${base}`;
 
@@ -55,7 +69,9 @@ test("a no-build mini-app served by a project persists a note through its own ca
     { loader: "ts", format: "esm" },
   ).code;
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
-  using operator = newHttpBatchRpcSession<IterateRpcTarget>(`${origin}/internal/rpc`);
+  using operator = newHttpBatchRpcSession<IterateRpcTarget>(
+    new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminSecret}` } }),
+  );
   await operator
     .authenticate({ type: "admin-secret", secret: adminSecret })
     .projects.get(projectId)

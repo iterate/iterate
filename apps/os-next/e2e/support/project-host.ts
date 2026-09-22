@@ -6,7 +6,8 @@
 // wildcard DNS is real and the default dispatcher does. One test runs both ways.
 import { Agent, buildConnector, fetch as undiciFetch, WebSocket as UndiciWebSocket } from "undici";
 import { test } from "vitest";
-import { adminCredentials, session, workerUrl } from "./client.ts";
+import { projectUrlOf, type IngressRouting } from "iterate/next/project-ingress";
+import { adminCredentials, runId, session, workerSlot, workerUrl } from "./client.ts";
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);
 const worker = (): URL => new URL(workerUrl("/"));
@@ -20,16 +21,66 @@ export const deployedOnly = test.skipIf(projectHostsAreLocal());
  *  (support/fake-git-server.ts, listening on THIS machine's 127.0.0.1): the repo facet fetches its
  *  remote over the worker's egress, and a deployed worker cannot reach a loopback address (the
  *  platform answers 403). Rows that only touch the proxy (create, its failure) still run deployed —
- *  the fake proxy is called back over the WebSocket — and the real binding's rows run `deployedOnly`. */
+ *  the fake proxy is called back over the WebSocket; the real binding's rows run in every lane, the
+ *  local worker binding Artifacts too. */
 export const localOnly = test.skipIf(!projectHostsAreLocal());
 
-/** The base project hosts hang under: `localhost` for the local worker (worker-config.ts), the
- *  deployed worker's `APP_CONFIG_PROJECT_HOSTNAME_BASE` (wrangler.jsonc) otherwise. */
-export function projectHostnameBase(): string {
-  if (projectHostsAreLocal()) return "localhost";
-  const base = process.env.PROJECT_HOSTNAME_BASE;
-  if (!base) throw new Error("PROJECT_HOSTNAME_BASE is required for deployed ingress tests");
-  return base;
+/** `deployedOnly` AND `subdomainsOnly`: a row only a real deployment can prove, on a host only a
+ *  deployment routing by subdomain owns. A per-PR preview routes by paths on its workers.dev origin,
+ *  so such a row has nowhere to dial there and skips. */
+export const deployedSubdomainsOnly = test.skipIf(
+  projectHostsAreLocal() || ingressRouting()?.type !== "subdomains",
+);
+
+/** How the worker under test reaches projects (src/app-config.ts `urls.ingressRouting`): subdomains
+ *  under `localhost` for the local worker (worker-config.ts), the deployed worker's routing
+ *  (global-setup: envs.ts, or PROJECT_INGRESS_ROUTING) otherwise. */
+export function ingressRouting(): IngressRouting {
+  const routing = process.env.PROJECT_INGRESS_ROUTING;
+  if (!routing)
+    throw new Error("PROJECT_INGRESS_ROUTING unset — the e2e globalSetup/setup did not run");
+  return JSON.parse(routing) as IngressRouting;
+}
+
+/** `test`, skipped where the worker under test does not route projects by SUBDOMAIN — for what only a
+ *  hostname can say: a host label outside the DNS grammar, the dotted `<app>.<project>` shape, an
+ *  app's own `/.auth/*` doors (under paths an app shares the platform's origin, whose doors are the
+ *  issuer's). Everything else composes its address with `projectUrl` and runs under both routings. */
+export const subdomainsOnly = test.skipIf(ingressRouting()?.type !== "subdomains");
+
+/** THE ONE COMPOSER a row addresses a project with — `projectUrlOf` (iterate/next/project-ingress)
+ *  under the worker's routing and origin: `<app>--<project>.<hostname>` (the apex `<project>.<hostname>`)
+ *  under subdomains, `<worker>/projects/<project>[/<app>]<path>` under paths. The rows never spell a
+ *  host; the platform's own `whoami().projectUrl`, a signed file URL and `itx.url` compose the same way. */
+export function projectUrl(target: { project: string; app?: string | null; path?: string }): URL {
+  const url = projectUrlOf(ingressRouting(), worker().origin, target);
+  if (!url)
+    throw new Error(
+      `the worker under test has no project ingress — nothing addresses ${JSON.stringify(target)}`,
+    );
+  return url;
+}
+
+/** The URL the APP receives for `target`: the URL itself under subdomains; under paths the edge strips
+ *  the `/projects/<project>[/<app>]` prefix before the app sees it (and says it in
+ *  `x-iterate-base-path`), so the app sees `path` on the platform's own origin. */
+export function appSeesUrl(target: { project: string; app?: string | null; path?: string }): URL {
+  const url = projectUrl(target);
+  if (ingressRouting()?.type !== "paths") return url;
+  const base = `/projects/${target.project}${target.app ? `/${target.app}` : ""}`;
+  return new URL(`${url.pathname.slice(base.length) || "/"}${url.search}`, url.origin);
+}
+
+/** The hostname project hosts hang under — `<app>--<project>.<hostname>`, the apex
+ *  `<project>.<hostname>` — where the worker under test routes projects by subdomain. Only a
+ *  `subdomainsOnly` row spells a host with it; every other row composes through `projectUrl`. */
+export function ingressHostname(): string {
+  const routing = ingressRouting();
+  if (routing?.type !== "subdomains")
+    throw new Error(
+      `the worker under test routes projects ${routing ? "by paths" : "not at all"} — this row needs subdomain routing`,
+    );
+  return routing.hostname;
 }
 
 /** The Agent every project-host request goes through against the local worker: its connector dials
@@ -67,10 +118,35 @@ export async function registerProject(slug: string, as?: { email: string }): Pro
 /** A fresh project slug — a DNS label, the one the project's hosts carry (`freshCtx` names carry
  *  `_`, which no hostname may). `registerProject(slug)` turns it into a project and hands back the id. */
 let counter = 0;
-export const freshDnsSafeProjectSlug = (prefix: string): string =>
-  `prj-${prefix}-${Date.now().toString(36)}-${counter++}`;
+/** `prj-<prefix>-<run>-<worker>-<n>`: the run's id and the worker process's slot (client.ts) keep two
+ *  processes' restarted counters, and two runs, apart — a DNS label, lowercase, at most 63 chars. */
+export const freshDnsSafeProjectSlug = (prefix: string): string => {
+  const slug = `prj-${prefix}-${runId()}-${workerSlot()}-${counter++}`.toLowerCase();
+  if (slug.length > 63) throw new Error(`project slug ${slug} exceeds a DNS label (63)`);
+  return slug;
+};
 
-/** `path` on `host` — a GET, or `init`'s method and body — through `projectHostDispatcher`. */
+/** `url` — a project address from `projectUrl`, a signed file URL — a GET, or `init`'s method and
+ *  body, through `projectHostDispatcher`. */
+export async function fetchProjectUrl(
+  url: string | URL,
+  headers: Record<string, string> = {},
+  init: { method?: string; body?: string } = {},
+): Promise<{ status: number; headers: Record<string, string>; text: string }> {
+  const { method = "GET", body } = init;
+  const res = await undiciFetch(String(url), {
+    method,
+    headers,
+    body,
+    redirect: "manual",
+    dispatcher: projectHostDispatcher(),
+  });
+  return { status: res.status, headers: Object.fromEntries(res.headers), text: await res.text() };
+}
+
+/** `path` on `host` — a GET, or `init`'s method and body — through `projectHostDispatcher`. For a
+ *  host a row spells itself (a custom hostname, a `subdomainsOnly` row); a project address is
+ *  `fetchProjectUrl(projectUrl(…))`. */
 export async function fetchProjectHost(
   host: string,
   path: string,
@@ -89,24 +165,24 @@ export async function fetchProjectHost(
 }
 
 /** What one eyeball WebSocket round trip saw: `opened` (the 101), the first message, the close code. */
-export type WebSocketRoundTrip = {
+type WebSocketRoundTrip = {
   opened: boolean;
   echo?: string;
   closeCode?: number;
   error?: string;
 };
 
-/** One full eyeball WebSocket round trip on a project host — open → send → first message → close
- *  (1000) — through `projectHostDispatcher`. Never throws: the caller asserts on the outcome. */
-export function wsRoundTripOnProjectHost(
-  host: string,
-  path: string,
+/** One full eyeball WebSocket round trip on a project address (`projectUrl`, its scheme turned to
+ *  ws/wss) — open → send → first message → close (1000) — through `projectHostDispatcher`. Never
+ *  throws: the caller asserts on the outcome. */
+export function wsRoundTripOnProjectUrl(
+  url: URL,
   send: string,
   timeoutMs = 10_000,
 ): Promise<WebSocketRoundTrip> {
   return new Promise((resolve) => {
     const out: WebSocketRoundTrip = { opened: false };
-    const ws = new UndiciWebSocket(projectHostUrl("ws", host, path), {
+    const ws = new UndiciWebSocket(url.href.replace(/^http/, "ws"), {
       dispatcher: projectHostDispatcher(),
     });
     const timer = setTimeout(() => {

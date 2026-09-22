@@ -3,16 +3,34 @@
 // Bundles examples/voice-agent/{voice-agent,voice-delegate,worker}.ts (esbuild; the SDK stays the injected
 // "./processor.js"), writes the three bundles to the project's KV (edge-cached: a fresh
 // conversation's facets load without a git read), mounts worker.js at `itx.voice` (the project's
-// own root worker, `itx.worker`, is untouched), sets /secrets/openai, and runs one throwaway
+// own ingress configuration is untouched), sets /secrets/openai, and runs one throwaway
 // conversation so the loader has both facet isolates warm before the first real press.
 //
 //   OPENAI_API_KEY=… WORKER_BASE_URL=https://os.iterate2.com ADMIN_API_SECRET=… \
 //   PROJECT=prj-voice pnpm exec tsx scripts/voice-install.ts
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { adminCredentials, disposeSessions, session } from "../e2e/support/client.ts";
 
 const PROJECT = process.env.PROJECT || "prj-voice";
+const PRESERVE_PROJECT = process.env.VOICE_INSTALL_PRESERVE_PROJECT === "1";
+
+async function screenFontCss(): Promise<string> {
+  const assets = join(dirname(fileURLToPath(import.meta.url)), "../examples/voice-agent/assets");
+  const [css, font] = await Promise.all([
+    readFile(join(assets, "pixel-font.css"), "utf8"),
+    readFile(join(assets, "press-start-2p-ascii.woff2")),
+  ]);
+  const source = 'url("./press-start-2p-ascii.woff2")';
+  if (!css.includes(source)) throw new Error("screen font CSS has no local font URL to embed");
+  return css.replace(
+    source,
+    `url("data:font/woff2;base64,${Buffer.from(font).toString("base64")}")`,
+  );
+}
 
 async function bundle(file: string): Promise<string> {
   const result = await build({
@@ -22,6 +40,7 @@ async function bundle(file: string): Promise<string> {
     format: "esm",
     platform: "neutral",
     target: "es2022",
+    loader: { ".md": "text" },
     external: ["./processor.js", "cloudflare:workers"],
     logLevel: "silent",
   });
@@ -40,7 +59,7 @@ const rule = (match: string, target: unknown) => ({
 
 async function main(): Promise<void> {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY unset");
+  if (!PRESERVE_PROJECT && !apiKey) throw new Error("OPENAI_API_KEY unset");
   const voiceAgent = await bundle("voice-agent.ts");
   const voiceAgentKey = `voice-agent:${hash8(voiceAgent)}`;
   const voiceDelegate = await bundle("voice-delegate.ts");
@@ -51,14 +70,18 @@ async function main(): Promise<void> {
   if (!worker.includes(voiceAgentKey) || !worker.includes(voiceDelegateKey))
     throw new Error("a facet cache key was not substituted into the worker");
   const workerKey = `voice-worker:${hash8(worker)}`;
+  const fontCss = await screenFontCss();
 
   const root = session().authenticate(adminCredentials()).projects.get(PROJECT);
   await root.invoke(["itx", ["whoami"]]);
-  await root.secrets.set("openai", apiKey, { urls: ["https://api.openai.com"] });
+  if (!PRESERVE_PROJECT) {
+    await root.secrets.set("/secrets/openai", apiKey!, { urls: ["https://api.openai.com"] });
+  }
   await root.kv.put("voice-agent.js", voiceAgent);
   await root.kv.put("voice-delegate.js", voiceDelegate);
   await root.kv.put("worker.js", worker);
-  // `itx.voice` is its own mount: the project's root worker (`itx.worker`, its repo's worker.ts)
+  await root.kv.put("screen-font.css", fontCss);
+  // `itx.voice` is its own mount: the project's ingress target
   // stays whatever it was, so a real project keeps its website and apps.
   await root.append(
     rule("itx.voice", [
@@ -72,14 +95,17 @@ async function main(): Promise<void> {
   // Warm both facet isolates under their new cache keys with ONE throwaway conversation, so the
   // first real press does not pay the cold load (measured 2.3s vs 1.3s to accepted). Install-time
   // only; the dial fails without a mic, which is fine — the isolates are what we are warming.
-  const warmPath = `/agents/voice/warm-${hash8(worker)}`;
-  const warmStartedAt = Date.now();
-  await root.voice.setupVoiceAgent({ streamPath: warmPath, activation: `warm-${hash8(worker)}` });
-  const warmupMs = Date.now() - warmStartedAt;
-  await root.cd(warmPath).append({
-    type: "events.iterate.com/voice-agent/conversation-ended",
-    payload: { activation: `warm-${hash8(worker)}`, reason: "install warm-up" },
-  });
+  let warmupMs: number | null = null;
+  if (!PRESERVE_PROJECT) {
+    const warmPath = `/agents/voice/warm-${hash8(worker)}`;
+    const warmStartedAt = Date.now();
+    await root.voice.setupVoiceAgent({ streamPath: warmPath, activation: `warm-${hash8(worker)}` });
+    warmupMs = Date.now() - warmStartedAt;
+    await root.cd(warmPath).append({
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      payload: { activation: `warm-${hash8(worker)}`, reason: "install warm-up" },
+    });
+  }
   console.log(
     JSON.stringify(
       {
@@ -90,6 +116,7 @@ async function main(): Promise<void> {
         voiceAgentKey,
         voiceDelegateKey,
         workerKey,
+        preserveProject: PRESERVE_PROJECT,
         warmupMs,
         health,
       },

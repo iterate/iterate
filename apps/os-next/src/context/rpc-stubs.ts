@@ -189,7 +189,7 @@ export class RpcStubDirectory {
     return this.#borrowedRpcStubs.size > 0;
   }
 
-  /** THE IDLE RETURN (call from the DO's quiesce alarm): give every borrowed stub back so the DO
+  /** THE IDLE RETURN (the DO's pins' release, on its timer): give every borrowed stub back so the DO
    *  can hibernate. Losing them costs exactly one page on the next call — that is the deal. */
   returnBorrowedRpcStubs(): void {
     for (const [rpcStubKey, borrowed] of this.#borrowedRpcStubs) {
@@ -702,11 +702,20 @@ export async function lendRpcStubOverPager(
 
 // ── THE ITX-EXPRESSION FETCH LANE (the `x-itx-expression` door) ──
 // A fetch-shaped capability is reached over HTTP by naming an itx expression in this header — the
-// edge sets it for a project host (`itx.apps.<app>`, `itx.worker`), a session's terminal fetch and a
+// edge sets it for a project host (`itx.apps.<app>` or the configured ingress target), a session's terminal fetch and a
 // loaded worker's `env.ITX.fetch` set it themselves. The DO rewrites the expression through its
 // rules and the provider's Response — 101s included — flows back out natively.
 
 export const ITX_EXPRESSION_FETCH_HEADER = "x-itx-expression";
+
+/** JSON in an HTTP header must be ASCII: inline worker source may contain any Unicode text.
+ * Keep ordinary JSON on the wire so existing expression readers can parse it unchanged. */
+export function encodeFetchExpression(expression: ItxExpression): string {
+  return JSON.stringify(expression).replace(
+    /[\u0080-\uffff]/g,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
 
 /** THE one reader of the terminal-fetch shape: the steps before a terminal `fetch` step and that
  *  step's expression args (`[]` for the property spelling `[..., "fetch"]`), or null when the
@@ -783,7 +792,7 @@ export function terminalFetchOf(
 // sockets included — crossing the RPC legs.
 // ═════════════════════════════════════════════════════════════════════════════════════
 
-const FETCH_UPGRADE_SOCKET_HEADER = "x-itx-fetch-upgrade";
+export const FETCH_UPGRADE_SOCKET_HEADER = "x-itx-fetch-upgrade";
 
 /** One upgrade socket's attachment (survives hibernation — so the upgrade does too): which
  *  upgrade it belongs to and which SIDE it is (`eyeball` = the caller's pair half, `leg` = the

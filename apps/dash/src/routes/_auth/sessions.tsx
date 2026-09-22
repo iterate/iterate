@@ -31,13 +31,14 @@ import {
 } from "@iterate-com/ui/components/table";
 
 export const Route = createFileRoute("/_auth/sessions")({
-  validateSearch: z.object({ cursor: z.string().optional() }),
+  validateSearch: z.object({ cursor: z.string().optional().catch(undefined) }),
   loaderDeps: ({ search }) => ({ cursor: search.cursor }),
   staticData: { page: "Sessions" },
   // `account` is optional at consent: without it there is no list to load — the page offers the
   // step-up instead of the error the API would answer with.
   loader: async ({ context, deps }) =>
     context.info.scopes.includes("account") ? await context.api.grants.list(deps.cursor) : null,
+  head: () => ({ meta: [{ title: "Sessions · Dash" }] }),
   component: SessionsPage,
 });
 
@@ -150,6 +151,14 @@ function SessionsPage() {
             {items.map((item) => (
               <TableRow key={item.id}>
                 <TableCell className="font-medium">
+                  {item.logoUri && (
+                    <img
+                      src={item.logoUri}
+                      alt=""
+                      referrerPolicy="no-referrer"
+                      className="mr-2 inline-block size-7 object-contain"
+                    />
+                  )}
                   {item.name}
                   {item.current && (
                     <Badge variant="secondary" className="ml-2">
@@ -190,7 +199,7 @@ function SessionsPage() {
                       ? "Retry cleanup"
                       : item.expired
                         ? "Remove"
-                        : item.kind === "Personal access token"
+                        : item.kind === "Personal access token" || item.kind === "Device"
                           ? "Revoke"
                           : "Log out"}
                   </Button>

@@ -9,6 +9,13 @@ on:
 concurrency:
   group: test-${{ github.head_ref || github.ref_name || github.run_id }}
   cancel-in-progress: true
+env:
+  # THE STORE THE IMAGE WAS BAKED WITH. scripts/depot-ci/dependencies.mjs hashes every pnpm_config_*
+  # variable into its fingerprint (the store dir decides where node_modules links point), and the bake
+  # job sets this one — so a workflow without it computes a different fingerprint on identical sources
+  # and never reuses the baked node_modules (every os-next job, 2026-09-22, ~55 s of paging each).
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+
 jobs:
   test:
     # Measured on main (run w301hvp2xr): peak ~37% CPU / ~8% memory on 8x32
@@ -26,7 +33,13 @@ jobs:
         with:
           clean: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Reconcile dependencies (baked)
+      # THIS JOB INSTALLS. Reusing the baked node_modules (scripts/depot-ci/dependencies.mjs) skips a
+      # ~55 s no-op install, but the image is loaded lazily and that install was what paged the tree
+      # in: with the reuse, the first packages' tests ran 1.5–2× slower and 5 s rows timed out in
+      # three of three runs (2026-09-22: apps/mobile/website worker.test, scripts change-plan.test);
+      # a parallel stat walk after the reuse did not help (metadata, not contents). The other
+      # workflows import little and keep the reuse; the test job pays the install.
+      - name: Install dependencies (pages the baked tree in)
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Setup Doppler (baked CLI)
         run: doppler setup --config dev --project test
@@ -48,7 +61,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           TEST_TELEMETRY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          TEST_TELEMETRY_EXPECTED_WORKSPACES: "@iterate-com/auth,@iterate-com/docs,@iterate-com/dummy-petshop,@iterate-com/kit,@iterate-com/mobile,@iterate-com/mobile-website,@iterate-com/os,@iterate-com/semaphore,@iterate/lint,iterate,@iterate-com/shared,@iterate-com/typm,@iterate-com/scripts,@iterate-com/workspace-documents,@iterate-com/voice-agent,@iterate-com/voice,@iterate-com/ui,os-next"
+          TEST_TELEMETRY_EXPECTED_WORKSPACES: "@iterate-com/auth,@iterate-com/docs,@iterate-com/dummy-petshop,@iterate-com/kit,@iterate-com/mobile,@iterate-com/mobile-website,@iterate-com/os,@iterate-com/semaphore,@iterate/lint,iterate,@iterate-com/shared,@iterate-com/typm,@iterate-com/scripts,@iterate-com/workspace-documents,@iterate-com/voice-agent,@iterate-com/voice,@iterate-com/agents,@iterate-com/ui,os-next"
         # A superseded run still normalizes and uploads its raw evidence, but
         # GitHub's job telemetry owns the cancelled outcome; do not turn killed
         # runner sentinels into test failures.

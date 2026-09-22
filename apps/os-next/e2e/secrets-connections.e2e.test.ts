@@ -13,8 +13,11 @@
 //   • the same with a PUBLIC client — dynamically registered (RFC 7591), no secret, PKCE alone at the
 //     exchange, `client_id` in the body on refresh: the MCP-client shape.
 // The OAuth rows run in a DIRECTORY-REGISTERED project — a row on the console, not an ad-hoc
-// context — exactly what a person would do. The material never leaves: the catalog fact and the log
-// carry the pin and the strategy kind, never a value.
+// context — exactly what a person would do. A SECRET IS ITS PATH (secrets.e2e.test.ts): every verb
+// is keyed by `/secrets/<name>` and runs on that context, whose `secret` facet is the Durable Object
+// below; its facts are on that path's log — `secret/set` (cross-posted to the root for the catalog)
+// and `secret/refreshed { kind, ok, error? }`, one per strategy run. The material never leaves: the
+// catalog, the facts and the logs carry the pin and the strategy kind, never a value.
 
 import { expect, test } from "vitest";
 import { adminCredentials, freshCtx, openItx, readAll, workerUrl } from "./support/client.ts";
@@ -29,16 +32,24 @@ import {
 } from "./support/petshop.ts";
 import { freshDnsSafeProjectSlug, registerProject } from "./support/project-host.ts";
 
-/** A bearer call on the pets API through egress, the secret's `accessToken` as the placeholder
- *  (`itx` is the untyped capnweb stub `openItx` hands out). */
-const bearerCall = async (itx: ReturnType<typeof openItx>, name: string, path: string) => {
+/** A bearer call on the pets API through egress, the secret's `accessToken` as the placeholder —
+ *  `secret` is the secret's path, what the placeholder spells (`itx` is the untyped capnweb stub
+ *  `openItx` hands out). */
+const bearerCall = async (itx: ReturnType<typeof openItx>, secret: string, path: string) => {
   const res = await itx.fetch(
     new Request(`${petshopBaseUrl()}${path}`, {
-      headers: { authorization: `Bearer getSecret("/secrets/${name}", { field: "accessToken" })` },
+      headers: { authorization: `Bearer getSecret("${secret}", { field: "accessToken" })` },
     }),
   );
   return { status: res.status, body: (await res.json().catch(() => null)) as any };
 };
+
+/** The `secret/refreshed` facts on a SECRET's log (`itx.cd("/secrets/<name>")`), oldest first — the
+ *  facet appends one per strategy run, before it answers the request that ran it. */
+const refreshedFacts = async (secret: ReturnType<typeof openItx>): Promise<unknown[]> =>
+  (await readAll(secret))
+    .filter((e: any) => e.type === "events.iterate.com/secret/refreshed")
+    .map((e: any) => e.payload);
 
 test("waitrose-session: a username/password secret mints its session on first use, re-mints on 401, and the session works on the API — the password never leaves its Durable Object", async () => {
   const itx = openItx(freshCtx("secrets-waitrose"));
@@ -47,36 +58,55 @@ test("waitrose-session: a username/password secret mints its session on first us
   // The secret: the account credential and NOTHING token-shaped. "correct-horse" is the fixture's
   // one accepted password (apps/dummy-petshop/src/graphql-login.ts).
   await itx.secrets.set(
-    "waitrose",
+    "/secrets/waitrose",
     { username, password: "correct-horse" },
     { urls: [petshop], refresh: { kind: "waitrose-session", graphqlUrl: `${petshop}/graphql` } },
   );
   expect(await itx.secrets.list()).toEqual([
-    { name: "waitrose", urls: [petshop], refresh: "waitrose-session" },
+    {
+      path: "/secrets/waitrose",
+      urls: [petshop],
+      refresh: "waitrose-session",
+      createdAt: expect.any(String),
+    },
   ]);
 
   // First use: the material has no accessToken, so substitution misses, the secret's Durable Object
   // runs the NewSession login, and the retried request lands on the pets API as the logged-in account.
-  expect(await bearerCall(itx, "waitrose", "/api/me")).toMatchObject({
+  expect(await bearerCall(itx, "/secrets/waitrose", "/api/me")).toMatchObject({
     status: 200,
     body: { sub: username, clientId: "graphql-session-login" },
   });
 
   // Force a real 401 (the epoch bump kills the stored session) and call again: re-login IS the
-  // refresh — the object logs in again and the retry wins.
+  // refresh — the object logs in again and the retry wins. `graphql-session-login` is the shop's ONE
+  // client for its login door (apps/dummy-petshop/src/worker.ts), so this bump is deployment-wide:
+  // safe because the account above is this run's alone and no other row in the suite logs in there.
   await petshopExpireTokens("graphql-session-login");
-  const pets = await bearerCall(itx, "waitrose", "/api/pets");
+  const pets = await bearerCall(itx, "/secrets/waitrose", "/api/pets");
   expect(pets.status).toBe(200);
   expect(Array.isArray(pets.body.pets ?? pets.body)).toBe(true);
 
-  // Confinement: the log carries the pin and the strategy's kind, never the password.
-  const changes = (await readAll(itx)).filter(
-    (e: any) => e.type === "events.iterate.com/secrets/changed",
-  );
-  expect(changes.map((e: any) => e.payload)).toEqual([
-    { name: "waitrose", urls: [petshop], refresh: "waitrose-session" },
+  // The two logins are two `secret/refreshed` facts on the secret's path — the first-use mint and
+  // the re-mint on 401 — each the strategy's kind and the outcome.
+  const secret = itx.cd("/secrets/waitrose");
+  expect(await refreshedFacts(secret)).toEqual([
+    { kind: "waitrose-session", ok: true },
+    { kind: "waitrose-session", ok: true },
   ]);
-  expect(JSON.stringify(changes)).not.toContain("correct-horse");
+
+  // Confinement: the fact on the secret's path and its cross-post on the root carry the pin and
+  // the strategy's kind, never the password — and neither log holds it anywhere.
+  const changePayload = { path: "/secrets/waitrose", urls: [petshop], refresh: "waitrose-session" };
+  const setsOf = async (ctx: ReturnType<typeof openItx>) =>
+    (await readAll(ctx))
+      .filter((e: any) => e.type === "events.iterate.com/secret/set")
+      .map((e: any) => e.payload);
+  expect(await setsOf(secret)).toEqual([changePayload]);
+  expect(await setsOf(itx)).toEqual([changePayload]);
+  expect(JSON.stringify([await readAll(itx), await readAll(secret)])).not.toContain(
+    "correct-horse",
+  );
 });
 
 // AN OAUTH-PROTECTED API, END TO END. The petshop is a real OAuth 2.0 provider (RFC 8414 discovery,
@@ -112,32 +142,40 @@ test("oauth-refresh-token, end to end against the petshop: discovery, consent, t
 
   // 3. the secret
   await itx.secrets.set(
-    "petshop",
+    "/secrets/petshop",
     { ...client, ...first },
     { urls: [petshop], refresh: { kind: "oauth-refresh-token", tokenEndpoint } },
   );
   expect(await itx.secrets.list()).toEqual([
-    { name: "petshop", urls: [petshop], refresh: "oauth-refresh-token" },
+    {
+      path: "/secrets/petshop",
+      urls: [petshop],
+      refresh: "oauth-refresh-token",
+      createdAt: expect.any(String),
+    },
   ]);
 
-  // 4. a call
-  expect(await bearerCall(itx, "petshop", "/api/me")).toMatchObject({
+  // 4. a call — the token is there, so no strategy runs
+  expect(await bearerCall(itx, "/secrets/petshop", "/api/me")).toMatchObject({
     status: 200,
     body: { clientId: client.clientId },
   });
+  const secret = itx.cd("/secrets/petshop");
+  expect(await refreshedFacts(secret)).toEqual([]);
 
-  // 5. expiry → refresh inside the DO → the retried call succeeds
+  // 5. expiry → refresh inside the DO → the retried call succeeds; the run is a fact on the path
   await petshopExpireTokens(client.clientId);
-  expect(await bearerCall(itx, "petshop", "/api/me")).toMatchObject({
+  expect(await bearerCall(itx, "/secrets/petshop", "/api/me")).toMatchObject({
     status: 200,
     body: { clientId: client.clientId },
   });
+  expect(await refreshedFacts(secret)).toEqual([{ kind: "oauth-refresh-token", ok: true }]);
 
   // 6. rotation: the refresh in step 5 handed the DO a NEW refresh token, and it kept that one — so
   //    revoking the original changes nothing for the next expiry
   await petshopRevokeRefreshToken(first.refreshToken);
   await petshopExpireTokens(client.clientId);
-  expect((await bearerCall(itx, "petshop", "/api/pets")).status).toBe(200);
+  expect((await bearerCall(itx, "/secrets/petshop", "/api/pets")).status).toBe(200);
 
   // 7. revocation of the CURRENT refresh token: the next refresh grant is invalid_grant, and the
   //    caller gets the provider's 401 — the reason stays inside the DO. The current token is not
@@ -145,17 +183,24 @@ test("oauth-refresh-token, end to end against the petshop: discovery, consent, t
   //    a re-set with a refresh token the provider never issued is the same failure the provider
   //    would give a revoked one.
   await itx.secrets.set(
-    "petshop",
+    "/secrets/petshop",
     { ...client, accessToken: "expired-anyway", refreshToken: "revoked-or-never-issued" },
     { urls: [petshop], refresh: { kind: "oauth-refresh-token", tokenEndpoint } },
   );
-  expect((await bearerCall(itx, "petshop", "/api/me")).status).toBe(401);
+  expect((await bearerCall(itx, "/secrets/petshop", "/api/me")).status).toBe(401);
+  // the failed run is a fact too — the outcome and the provider's reason, never a token
+  expect(await refreshedFacts(secret)).toEqual([
+    { kind: "oauth-refresh-token", ok: true },
+    { kind: "oauth-refresh-token", ok: true },
+    { kind: "oauth-refresh-token", ok: false, error: expect.any(String) },
+  ]);
 
-  // 8. confinement
-  const log = JSON.stringify(await readAll(itx));
+  // 8. confinement — the root's log and the secret's
+  const log = JSON.stringify([await readAll(itx), await readAll(secret)]);
   expect(log).not.toContain(first.accessToken);
   expect(log).not.toContain(first.refreshToken);
   expect(log).not.toContain(client.clientSecret);
+  expect(log).not.toContain("revoked-or-never-issued");
   const elsewhere = await itx.fetch(
     new Request("https://example.com/", {
       headers: { authorization: 'Bearer getSecret("/secrets/petshop", { field: "accessToken" })' },
@@ -182,7 +227,7 @@ test("beginOAuth, confidential client, in a directory-registered project: author
     await petshopAuthorizationServer();
   const client = await petshopMintClient();
 
-  const { authorizationUrl } = await itx.secrets.beginOAuth("petshop", {
+  const { authorizationUrl } = await itx.secrets.beginOAuth("/secrets/petshop", {
     authorizationEndpoint,
     tokenEndpoint,
     ...client,
@@ -192,7 +237,7 @@ test("beginOAuth, confidential client, in a directory-registered project: author
   // nothing is on the catalog until the exchange succeeds — an abandoned attempt leaves no row
   expect(await itx.secrets.list()).toEqual([]);
   // a use before the callback is a clean 502: nothing to substitute, nothing to refresh with yet
-  expect((await bearerCall(itx, "petshop", "/api/me")).status).toBe(502);
+  expect((await bearerCall(itx, "/secrets/petshop", "/api/me")).status).toBe(502);
 
   // the human's consent: the URL names the platform's callback and carries PKCE
   const authorize = new URL(authorizationUrl);
@@ -214,35 +259,54 @@ test("beginOAuth, confidential client, in a directory-registered project: author
   const forged = new URL(back);
   forged.searchParams.set("state", "not-signed-by-us");
   expect((await fetch(forged)).status).toBe(400);
-  // the member's callback: the exchange happens inside the secret's Durable Object, and the catalog
-  // learns of the secret now
+  // the member's callback: the exchange happens inside the secret's facet — and when the fact that
+  // follows it is REFUSED (the secret's stream paused), the tokens stay: the code is spent and the
+  // consent cannot be re-obtained by a retry, so the callback answers the error and its replay
+  // lands the facts (the facet completes the attempt it completed idempotently — no second exchange)
   const member = { headers: { authorization: `Bearer ${adminCredentials().secret}` } };
+  const secret = itx.cd("/secrets/petshop");
+  await secret.append({ type: "events.iterate.com/stream/paused" });
+  const refused = await fetch(back, member);
+  expect(refused.status, await refused.text()).toBe(400);
+  expect(await itx.secrets.list()).toEqual([]); // no fact yet — the tokens are in the facet
+  await secret.append({ type: "events.iterate.com/stream/resumed" });
   const done = await fetch(back, member);
   const said = await done.text();
   expect(done.status, said).toBe(200);
-  expect(said).toContain('the secret "petshop"');
-  expect(await itx.secrets.list()).toEqual([
-    { name: "petshop", urls: [petshop], refresh: "oauth-refresh-token" },
+  expect(said).toContain("the secret /secrets/petshop of project");
+  const row = {
+    path: "/secrets/petshop",
+    urls: [petshop],
+    refresh: "oauth-refresh-token",
+    createdAt: expect.any(String),
+  };
+  expect(await itx.secrets.list()).toEqual([row]);
+  // the exchange's `secret/set` is on the secret's path — the platform's own write, no principal —
+  // ONCE: the refused callback landed nothing, the replay landed it
+  const sets = (await readAll(secret)).filter(
+    (e: any) => e.type === "events.iterate.com/secret/set",
+  );
+  expect(sets.map((e: any) => e.payload)).toEqual([
+    { path: "/secrets/petshop", urls: [petshop], refresh: "oauth-refresh-token" },
   ]);
   // a replayed callback (a refreshed tab) completes idempotently: no second exchange, the same
   // one catalog row — never a 400 for a secret that is live
   expect((await fetch(back, member)).status).toBe(200);
-  expect(await itx.secrets.list()).toEqual([
-    { name: "petshop", urls: [petshop], refresh: "oauth-refresh-token" },
-  ]);
+  expect(await itx.secrets.list()).toEqual([row]);
 
   // now an ordinary oauth-refresh-token secret: a call, expiry, transparent refresh
-  expect(await bearerCall(itx, "petshop", "/api/me")).toMatchObject({
+  expect(await bearerCall(itx, "/secrets/petshop", "/api/me")).toMatchObject({
     status: 200,
     body: { clientId: client.clientId },
   });
   await petshopExpireTokens(client.clientId);
-  expect(await bearerCall(itx, "petshop", "/api/me")).toMatchObject({
+  expect(await bearerCall(itx, "/secrets/petshop", "/api/me")).toMatchObject({
     status: 200,
     body: { clientId: client.clientId },
   });
-  // and nothing token-shaped on the log
-  const log = JSON.stringify(await readAll(itx));
+  expect(await refreshedFacts(secret)).toEqual([{ kind: "oauth-refresh-token", ok: true }]);
+  // and nothing token-shaped on either log
+  const log = JSON.stringify([await readAll(itx), await readAll(secret)]);
   expect(log).not.toContain(client.clientSecret);
   expect(log).not.toContain("access_token");
 });
@@ -258,7 +322,7 @@ test("beginOAuth, public client (RFC 7591 registration, PKCE alone, client_id in
   const callback = workerUrl("/.secrets/oauth/callback");
   const { clientId } = await petshopRegisterPublicClient(callback);
 
-  const { authorizationUrl } = await itx.secrets.beginOAuth("petshop-public", {
+  const { authorizationUrl } = await itx.secrets.beginOAuth("/secrets/petshop-public", {
     authorizationEndpoint,
     tokenEndpoint,
     clientId,
@@ -278,14 +342,25 @@ test("beginOAuth, public client (RFC 7591 registration, PKCE alone, client_id in
   });
   expect(done.status, await done.text()).toBe(200);
 
-  expect(await bearerCall(itx, "petshop-public", "/api/me")).toMatchObject({
+  expect(await itx.secrets.list()).toEqual([
+    {
+      path: "/secrets/petshop-public",
+      urls: [petshop],
+      refresh: "oauth-refresh-token",
+      createdAt: expect.any(String),
+    },
+  ]);
+  expect(await bearerCall(itx, "/secrets/petshop-public", "/api/me")).toMatchObject({
     status: 200,
     body: { clientId },
   });
   // expiry → the refresh grant with client_id in the body (no Basic header to send) → 200
   await petshopExpireTokens(clientId);
-  expect(await bearerCall(itx, "petshop-public", "/api/me")).toMatchObject({
+  expect(await bearerCall(itx, "/secrets/petshop-public", "/api/me")).toMatchObject({
     status: 200,
     body: { clientId },
   });
+  expect(await refreshedFacts(itx.cd("/secrets/petshop-public"))).toEqual([
+    { kind: "oauth-refresh-token", ok: true },
+  ]);
 });

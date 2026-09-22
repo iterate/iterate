@@ -1,7 +1,10 @@
-// secrets.test.ts — a project secret's pure half (secrets.ts + secret-oauth.ts + secret-at-rest.ts):
-// the placeholder substitution as a table, the record normalization, the two refresh strategies
-// against a scripted fetch, the OAuth first-token flow's two halves, and the material at rest.
+// secrets.test.ts — a project secret's pure half (secrets.ts + secret-oauth.ts + secret-at-rest.ts).
+// A secret IS its path `/secrets/<name>`: the placeholder substitution as a table (`resolve` is handed
+// the PATH), the record normalization, the two refresh strategies against a scripted fetch, the OAuth
+// first-token flow's two halves (the signed state names the secret's CONTEXT), and the material at
+// rest (bound to the context, the pin and the revision).
 
+import { createHmac } from "node:crypto";
 import { expect, test } from "vitest";
 import {
   beginSecretOAuth,
@@ -11,12 +14,16 @@ import {
 } from "./secret-oauth.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "./secret-at-rest.ts";
 import {
+  constantTimeEquals,
+  hmacSha256Hex,
   normalizeSecretRecord,
   originPinned,
   ProjectSecretRefused,
   refreshSecretMaterial,
-  secretNamesReferenced,
+  secretMaterialStringOf,
+  secretPathsReferenced,
   substituteProjectSecrets,
+  verifySecretHmac,
   type SecretMaterial,
 } from "./secrets.ts";
 
@@ -30,18 +37,19 @@ import {
 // `becomes` is what came back: the rebuilt Request's URL and headers (a subset), "unchanged" (the
 // ORIGINAL Request — no rebuild), or `{ refused }` — the `ProjectSecretRefused` message.
 
+// The stored secrets by PATH — what `resolve(path)` is handed (`"/secrets/a"`, never the bare name).
 const secrets: Record<string, SecretMaterial> = {
-  a: "alpha",
-  b: "bravo",
-  "api.key_v-2": "REAL",
-  tg: JSON.stringify({ bot: { token: "123:abc", id: 7 }, plain: "p" }),
-  obj: { accessToken: "AT", nested: { deep: "D" } },
+  "/secrets/a": "alpha",
+  "/secrets/b": "bravo",
+  "/secrets/api.key_v-2": "REAL",
+  "/secrets/tg": JSON.stringify({ bot: { token: "123:abc", id: 7 }, plain: "p" }),
+  "/secrets/obj": { accessToken: "AT", nested: { deep: "D" } },
 };
 const rows: {
   name: string;
   url?: string;
   headers?: Record<string, string>;
-  resolve?: (name: string) => SecretMaterial | null;
+  resolve?: (path: string) => SecretMaterial | null;
   becomes: { url?: string; headers?: Record<string, string> } | "unchanged" | { refused: string };
 }[] = [
   {
@@ -65,7 +73,7 @@ const rows: {
   {
     name: "substitution never rescans substituted VALUES (no placeholder injection through a secret)",
     headers: { "x-auth": 'getSecret("/secrets/outer")' },
-    resolve: (name) => (name === "outer" ? 'getSecret("/secrets/inner")' : "INNER-LEAKED"),
+    resolve: (path) => (path === "/secrets/outer" ? 'getSecret("/secrets/inner")' : "INNER-LEAKED"),
     becomes: { headers: { "x-auth": 'getSecret("/secrets/inner")' } }, // literal, not re-resolved
   },
   {
@@ -157,7 +165,7 @@ for (const row of rows)
     const request = new Request(row.url || "https://api.example.com/", { headers: row.headers });
     const became = await substituteProjectSecrets(
       request,
-      row.resolve || ((name) => secrets[name] ?? null),
+      row.resolve || ((path) => secrets[path] ?? null),
     ).then(
       (out) =>
         out === request ? "unchanged" : { url: out.url, headers: Object.fromEntries(out.headers) },
@@ -169,7 +177,7 @@ for (const row of rows)
   });
 
 test("a mintable miss (no material, a missing field) is marked so the Durable Object knows a strategy may fill it; the other refusals are not", async () => {
-  const miss = (resolve: (name: string) => SecretMaterial | null, header: string) =>
+  const miss = (resolve: (path: string) => SecretMaterial | null, header: string) =>
     substituteProjectSecrets(
       new Request("https://api.example.com/", { headers: { authorization: header } }),
       resolve,
@@ -187,9 +195,9 @@ test("a mintable miss (no material, a missing field) is marked so the Durable Ob
   expect(await miss(() => ({ a: 1 }), 'getSecret("/secrets/x")')).toBe(false);
 });
 
-test("secretNamesReferenced: the distinct names a request's URL and headers name", () => {
+test("secretPathsReferenced: the distinct secret PATHS a request's URL and headers name", () => {
   expect(
-    secretNamesReferenced(
+    secretPathsReferenced(
       new Request('https://api.example.com/?k=getSecret("/secrets/q")', {
         headers: {
           authorization: 'Bearer getSecret("/secrets/tok", { field: "accessToken" })',
@@ -197,18 +205,78 @@ test("secretNamesReferenced: the distinct names a request's URL and headers name
         },
       }),
     ),
-  ).toEqual(["q", "tok"]);
-  expect(secretNamesReferenced(new Request("https://api.example.com/"))).toEqual([]);
+  ).toEqual(["/secrets/q", "/secrets/tok"]);
+  expect(secretPathsReferenced(new Request("https://api.example.com/"))).toEqual([]);
 });
 
 // ── the pin ── never empty: a secret goes to its origins and nowhere else.
+// ── the verify lane ── `verifySecretHmac(material, { payload, signature, field? })`: one bit out.
+test("hmacSha256Hex agrees with node's HMAC over a string and over bytes; constantTimeEquals compares whole strings", async () => {
+  const oracle = (key: string, payload: string | Uint8Array) =>
+    createHmac("sha256", key).update(payload).digest("hex");
+  expect(await hmacSha256Hex("whsec_k", "1700000000.{}")).toBe(oracle("whsec_k", "1700000000.{}"));
+  const bytes = new TextEncoder().encode("raw body ☃");
+  expect(await hmacSha256Hex("k", bytes)).toBe(oracle("k", bytes));
+  expect(await constantTimeEquals("abc", "abc")).toBe(true);
+  expect(await constantTimeEquals("abc", "abd")).toBe(false);
+  expect(await constantTimeEquals("abc", "ab")).toBe(false);
+  expect(await constantTimeEquals("", "")).toBe(true);
+});
+
+test("secretMaterialStringOf: the whole string, or one string field of a JSON value (object or JSON string); an object with no field, a non-string field, an empty string and unparseable JSON are no key", () => {
+  expect(secretMaterialStringOf("whsec_k")).toBe("whsec_k");
+  expect(secretMaterialStringOf({ signing: "s" })).toBeNull();
+  expect(secretMaterialStringOf({ signing: "s", n: 1 }, "signing")).toBe("s");
+  expect(secretMaterialStringOf({ a: { b: "deep" } }, "a.b")).toBe("deep");
+  expect(secretMaterialStringOf(JSON.stringify({ signing: "s" }), "signing")).toBe("s");
+  expect(secretMaterialStringOf({ n: 1 }, "n")).toBeNull();
+  expect(secretMaterialStringOf({ signing: "" }, "signing")).toBeNull();
+  expect(secretMaterialStringOf("not json", "signing")).toBeNull();
+  expect(secretMaterialStringOf({ signing: "s" }, "missing")).toBeNull();
+});
+
+test("verifySecretHmac: true for the right key, payload and hex (either case); false for a tampered payload, a wrong or malformed signature, a wrong field, or a material with no key", async () => {
+  const payload =
+    "1700000000." + JSON.stringify({ id: "evt_1", type: "checkout.session.completed" });
+  const signature = createHmac("sha256", "whsec_k").update(payload).digest("hex");
+  expect(await verifySecretHmac("whsec_k", { payload, signature })).toBe(true);
+  expect(
+    await verifySecretHmac("whsec_k", { payload, signature: ` ${signature.toUpperCase()} ` }),
+  ).toBe(true);
+  expect(
+    await verifySecretHmac("whsec_k", { payload: new TextEncoder().encode(payload), signature }),
+  ).toBe(true);
+  expect(
+    await verifySecretHmac(
+      { signing: "whsec_k", other: 1 },
+      { payload, signature, field: "signing" },
+    ),
+  ).toBe(true);
+  expect(await verifySecretHmac("whsec_k", { payload: payload + " ", signature })).toBe(false);
+  expect(await verifySecretHmac("whsec_other", { payload, signature })).toBe(false);
+  expect(await verifySecretHmac("whsec_k", { payload, signature: "00".repeat(32) })).toBe(false);
+  expect(await verifySecretHmac("whsec_k", { payload, signature: "sha256=" + signature })).toBe(
+    false,
+  ); // the scheme prefix is the caller's to strip
+  expect(await verifySecretHmac("whsec_k", { payload, signature: signature.slice(0, 63) })).toBe(
+    false,
+  );
+  expect(await verifySecretHmac({ signing: "whsec_k" }, { payload, signature })).toBe(false); // an object needs a field
+  expect(
+    await verifySecretHmac(
+      { signing: "whsec_k", other: 1 },
+      { payload, signature, field: "other" },
+    ),
+  ).toBe(false);
+});
+
 test("originPinned: only a pinned origin passes; an empty pin passes nothing", () => {
   expect(originPinned("https://api.example.com/v1/x", ["https://api.example.com"])).toBe(true);
   expect(originPinned("https://evil.example/", ["https://api.example.com"])).toBe(false);
   expect(originPinned("https://api.example.com/", [])).toBe(false);
 });
 
-// ── the record ── `normalizeSecretRecord`: what `itx.secrets.set(name, material, options)` stores.
+// ── the record ── `normalizeSecretRecord`: what `itx.secrets.set(path, material, options)` stores.
 test("normalizeSecretRecord: the pin is required and stored as origins (deduped); a strategy is named, lies within the pin, and names its client-auth method from the registry", () => {
   expect(
     normalizeSecretRecord("v", {
@@ -573,11 +641,15 @@ test("client_secret_post puts client_id + client_secret in the form for both gra
   expect(publicExchange.exchanges[0]!.body).not.toContain("client_secret");
 });
 
-test("isSecretOAuthState: the signed claims must carry the kind and every field with its type — another claim set signed by the same key is not a state", () => {
-  const state = { kind: "secret-oauth", owner: "p", name: "n", nonce: "x", exp: 1 };
+test("isSecretOAuthState: the signed claims must carry the kind, the secret's context and every field with its type — another claim set signed by the same key is not a state, nor is the old owner + name shape", () => {
+  const state = { kind: "secret-oauth", context: "prj_x.iterate/secrets/shop", nonce: "x", exp: 1 };
   expect(isSecretOAuthState(state)).toBe(true);
   expect(isSecretOAuthState({ ...state, kind: "google-login" })).toBe(false);
   expect(isSecretOAuthState({ ...state, exp: "1" })).toBe(false);
+  expect(isSecretOAuthState({ ...state, context: 7 })).toBe(false);
+  expect(
+    isSecretOAuthState({ kind: "secret-oauth", owner: "p", name: "n", nonce: "x", exp: 1 }),
+  ).toBe(false);
   expect(isSecretOAuthState([state])).toBe(false);
   expect(isSecretOAuthState(null)).toBe(false);
 });
@@ -585,8 +657,7 @@ test("isSecretOAuthState: the signed claims must carry the kind and every field 
 // ── at rest (secret-at-rest.ts) ── the material never sits in storage in the clear, and a ciphertext
 // opens only at the binding it was written for.
 const binding = {
-  owner: "prj_1",
-  name: "tok",
+  context: "prj_1.iterate/secrets/tok",
   urls: ["https://a.example", "https://b.example"],
   revision: 3,
 };
@@ -611,11 +682,11 @@ test("encryptSecretMaterial / decryptSecretMaterial: a string and an object roun
   }
 });
 
-test("the binding: another object, another name, another pin or another revision does not open it; the pin's spelling order does not matter", async () => {
+test("the binding: another context (another owner's, or another name's, Durable Object), another pin or another revision does not open it; the pin's spelling order does not matter", async () => {
   const encrypted = await encryptSecretMaterial("v", binding, keys);
   for (const elsewhere of [
-    { ...binding, owner: "prj_2" },
-    { ...binding, name: "other" },
+    { ...binding, context: "prj_2.iterate/secrets/tok" },
+    { ...binding, context: "prj_1.iterate/secrets/other" },
     { ...binding, urls: ["https://a.example"] },
     { ...binding, revision: 4 },
   ])

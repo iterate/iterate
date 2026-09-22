@@ -1,13 +1,15 @@
 // The dash's own navigation inside the shared shell (`AppShell`, packages/ui): inside a project its
-// overview and its site; outside one the projects, organizations and sessions pages and the other
+// overview, MCP, secrets and its site; outside one the projects, organizations and sessions pages and the other
 // first-party apps.
 import { Link, useMatchRoute } from "@tanstack/react-router";
 import {
+  Activity,
   Building2,
   ExternalLink,
   FolderKanban,
   KeyRound,
   LayoutDashboard,
+  LockKeyhole,
   Plug,
 } from "lucide-react";
 import {
@@ -31,7 +33,7 @@ export function DashNav({
   return project ? <ProjectNav project={project} host={host} /> : <TopLevelNav />;
 }
 
-/** Inside a project: its overview, how to connect over MCP, its own site, and the first-party apps
+/** Inside a project: its overview, how to connect over MCP, its secrets, its own site, and the first-party apps
  *  opened on it — every app
  *  serves `/projects/<slug>`, so the links are the convention, and a signed-out click proves the
  *  apps' OAuth returns to the deep link. */
@@ -77,6 +79,22 @@ function ProjectNav({
             >
               <Plug />
               <span>MCP</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="Secrets"
+              isActive={Boolean(
+                matchRoute({
+                  to: "/projects/$slug/secrets",
+                  params: { slug: project.slug },
+                  fuzzy: false,
+                }),
+              )}
+              render={<Link to="/projects/$slug/secrets" params={{ slug: project.slug }} />}
+            >
+              <LockKeyhole />
+              <span>Secrets</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
           {host ? (
@@ -158,6 +176,16 @@ function TopLevelNav() {
               >
                 <KeyRound />
                 <span>Sessions</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                tooltip="Activity"
+                isActive={Boolean(matchRoute({ to: "/activity", fuzzy: false }))}
+                render={<Link to="/activity" />}
+              >
+                <Activity />
+                <span>Activity</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>

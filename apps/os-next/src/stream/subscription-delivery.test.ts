@@ -171,12 +171,13 @@ describe("the pending push is bounded", () => {
   test("control: under the budget, commits behind an in-flight delivery fold into ONE push, in order, ranging from the first commit", async () => {
     const rig = stuckFacetRig();
     await settle(); // the materialization (catchUpFromLog) parks — the chain's head
+    rig.stream.append({ type: "noise", ephemeral: true }); // not consumed: a gap between the row's configuration and its first blob
     const offsets = rig.commitBlobs(4);
     await rig.release();
     expect(rig.pushes).toHaveLength(1);
     expect(blobIndexes(rig.pushes[0])).toEqual([0, 1, 2, 3]);
     // A row's first push ranges from its first commit's afterOffset (the span since the row's
-    // configuration — here one ephemeral core delta — is the facet's own gap repair to read).
+    // configuration — here the ephemeral it does not consume — is the facet's own gap repair to read).
     expect(rig.pushes[0].range).toEqual({ after: offsets[0] - 1, through: offsets[3] });
     expect(rig.pushes[0].range.after).toBeGreaterThan(rig.configuredAtOffset);
   });
@@ -765,6 +766,110 @@ describe("a superseded evaluation can neither classify nor invoke its replacemen
     rig.stream.append({ type: "blob", payload: { n: 3 } });
     await settled();
     expect(sink).toEqual([[1], [3]]);
+  });
+});
+
+describe("an ephemeral push that FAILS leaves the row deliverable: the next ephemeral reaches a caught-up cursor row before any durable lands", () => {
+  test("durable n=1 acked; ephemeral n=2 refused (the ladder arms); the rung spent by a pass; ephemeral n=3 is DELIVERED now, not held until the next durable", async () => {
+    let mode: "deliver" | "throw" = "deliver";
+    const pushes: { events: number[]; range: ScannedRange }[] = [];
+    const rig = incarnation((printed) =>
+      printed === "itx.sink"
+        ? {
+            push: (events: { payload?: { n?: number } }[], range: ScannedRange) => {
+              if (mode === "throw") throw new Error("sink down");
+              pushes.push({ events: ns(events), range });
+            },
+          }
+        : undefined,
+    );
+    rig.stream.append(
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
+      }),
+    );
+    const [durable] = rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+    await settled();
+    expect(pushes.map((push) => push.events)).toEqual([[1]]);
+    expect(rig.delivery.cursor("s")).toMatchObject({ confirmedOffset: durable.offset, attempt: 0 });
+    mode = "throw";
+    rig.stream.append({ type: "demo/ping", ephemeral: true, payload: { n: 2 } });
+    await settled();
+    const failed = rig.delivery.cursor("s")!;
+    // The refusal climbed the ladder; the cursor stayed at the durable mark (nothing was acked).
+    expect(failed).toMatchObject({ confirmedOffset: durable.offset, attempt: 1 });
+    expect(failed.nextAttemptAtMs).toBeGreaterThan(Date.now());
+    mode = "deliver";
+    vi.useFakeTimers({ now: failed.nextAttemptAtMs! + 1, toFake: ["Date"] });
+    try {
+      // The retry finds nothing owed (the refused ephemeral is gone; the log holds nothing past the
+      // mark) and spends the rung: the row is caught up and claims nothing.
+      await rig.pass();
+      expect(rig.delivery.cursor("s")).toMatchObject({
+        confirmedOffset: durable.offset,
+        attempt: 0,
+      });
+      expect(rig.delivery.cursor("s")?.nextAttemptAtMs).toBeUndefined();
+      expect(rig.delivery.deadlines()).toEqual([]);
+      // THE PIN: the next ephemeral reaches the row NOW. Its range starts at the cursor — the lost
+      // ephemeral rides inside it, as a skipped batch does — and the cursor moves on in memory.
+      const [third] = rig.stream.append({ type: "demo/ping", ephemeral: true, payload: { n: 3 } });
+      await settled();
+      expect(pushes.map((push) => push.events)).toEqual([[1], [3]]);
+      expect(pushes.at(-1)!.range).toEqual({ after: durable.offset, through: third.offset });
+      expect(rig.delivery.cursor("s")).toMatchObject({ confirmedOffset: third.offset, attempt: 0 });
+      // The one after it rides the ordinary contiguous path.
+      const [fourth] = rig.stream.append({ type: "demo/ping", ephemeral: true, payload: { n: 4 } });
+      await settled();
+      expect(pushes.map((push) => push.events)).toEqual([[1], [3], [4]]);
+      expect(pushes.at(-1)!.range).toEqual({ after: third.offset, through: fourth.offset });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("the other side of the same rule: durable n=1 refused; ephemerals n=2 and n=3 land during the rung (latest wins); the retry delivers n=1 from the log and n=3 from the pushed batch on the same pass", async () => {
+    let mode: "deliver" | "throw" = "throw";
+    const pushes: { events: number[]; range: ScannedRange }[] = [];
+    const rig = incarnation((printed) =>
+      printed === "itx.sink"
+        ? {
+            push: (events: { payload?: { n?: number } }[], range: ScannedRange) => {
+              if (mode === "throw") throw new Error("sink down");
+              pushes.push({ events: ns(events), range });
+            },
+          }
+        : undefined,
+    );
+    const [configured] = rig.stream.append(
+      normalizeControlEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
+      }),
+    );
+    const [durable] = rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+    await settled();
+    const failed = rig.delivery.cursor("s")!;
+    expect(failed).toMatchObject({ confirmedOffset: configured.offset, attempt: 1 });
+    rig.stream.append({ type: "demo/ping", ephemeral: true, payload: { n: 2 } });
+    const [third] = rig.stream.append({ type: "demo/ping", ephemeral: true, payload: { n: 3 } });
+    await settled();
+    expect(pushes).toEqual([]); // the rung is not due: nothing was called
+    mode = "deliver";
+    vi.useFakeTimers({ now: failed.nextAttemptAtMs! + 1, toFake: ["Date"] });
+    try {
+      await rig.pass();
+      expect(pushes.map((push) => push.events)).toEqual([[1], [3]]);
+      expect(pushes.map((push) => push.range)).toEqual([
+        { after: configured.offset, through: durable.offset },
+        { after: durable.offset, through: third.offset },
+      ]);
+      expect(rig.delivery.cursor("s")).toMatchObject({ confirmedOffset: third.offset, attempt: 0 });
+      expect(rig.delivery.deadlines()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

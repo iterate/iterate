@@ -2,7 +2,9 @@
 // (wrangler.jsonc `main: src/worker.ts` — `wrangler dev`, `wrangler deploy`, the test harness), so
 // this writes only what the worker cannot import from source:
 //
-//   1. wrangler.jsonc from the root envs.ts (scripts/generate-wrangler-config.ts).
+//   1. wrangler.jsonc from the root envs.ts, and wrangler.self-host.jsonc — the same bindings with no
+//      ids, for a deployment into someone else's account (SELF-HOSTING.md) — both from
+//      scripts/generate-wrangler-config.ts.
 //   2. src/generated/processor-sdk.js — the text of `iterate/next/sdk` bundled for a LOADED isolate:
 //      what context/worker-loader.ts injects into every loaded worker as "processor.js" (zod, the
 //      capnweb fork and json5 inlined; cloudflare:workers is the isolate's own). A neutral platform
@@ -13,22 +15,28 @@
 //   3. src/generated/presence-processor-source.js — the presence facet (src/client/presence/), the e2e
 //      fixtures' demo processor, bundled the way an author's tooling would: its SDK imports left
 //      external as "./processor.js", the module the host injects.
+//   4. public/capnweb.js — the capnweb fork's browser bundle, copied verbatim beside the consent page
+//      (public/authorize.js imports it: the page is a capnweb client of /api like any app, and the
+//      pages' CSP loads script from this origin alone). The workspace's capnweb is what the worker
+//      speaks, so the copy is the same version by construction.
 //
-// The issuer's pages need no build at all: they are files in public/ (login.html, authorize.html,
+// The issuer's pages need no build at all: they are files in public/ (login.html, oauth2/auth.html,
 // their stylesheet and scripts), served by the assets binding. The two generated modules have
 // committed `.d.ts` siblings, so `tsc` and knip resolve the imports without a build; every runtime
 // path runs this first (vitest.global-setup.ts, scripts/dev.ts, scripts/deploy.ts).
-import { mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import process from "node:process";
 import { build as esbuild, type Plugin } from "esbuild";
-import { writeWranglerConfig } from "./generate-wrangler-config.ts";
+import { writeSelfHostWranglerConfig, writeWranglerConfig } from "./generate-wrangler-config.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
 const SDK_ENTRY = require.resolve("iterate/next/sdk");
 const PRESENCE_ENTRY = path.join(root, "src/client/presence/durable-object.ts");
+/** capnweb's package entry resolves to its CommonJS build; the ESM browser bundle sits beside it. */
+const CAPNWEB_BROWSER_BUNDLE = require.resolve("capnweb").replace(/index\.cjs$/, "index.js");
 
 async function processorSdkModule(): Promise<string> {
   const bundled = await esbuild({
@@ -75,6 +83,7 @@ async function presenceProcessorSource(): Promise<{ "cap.js": string }> {
 /** Everything above, written. */
 export async function build(): Promise<void> {
   writeWranglerConfig();
+  writeSelfHostWranglerConfig();
   mkdirSync(path.join(root, "src/generated"), { recursive: true });
   writeFileSync(
     path.join(root, "src/generated/processor-sdk.js"),
@@ -84,6 +93,7 @@ export async function build(): Promise<void> {
     path.join(root, "src/generated/presence-processor-source.js"),
     `export default ${JSON.stringify(await presenceProcessorSource())};\n`,
   );
+  copyFileSync(CAPNWEB_BROWSER_BUNDLE, path.join(root, "public/capnweb.js"));
 }
 
 if (process.argv[1]?.endsWith("build.ts")) await build();

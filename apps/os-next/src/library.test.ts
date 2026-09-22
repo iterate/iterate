@@ -1,21 +1,23 @@
 // library.test.ts — the library's executable spec, one describe per concept (each over its own fake `itx`),
-// plus THE LIBRARY RULE pinned over the file's imports (the last block).
+// plus THE LIBRARY RULE pinned over the library files' imports (the last block).
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { RpcTarget, newHttpBatchRpcResponse } from "capnweb";
 import { describe, expect, test } from "vitest";
+import { codedError } from "iterate/next/lib";
+import type { WaitForEventFilter } from "iterate/next/api";
+import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
 import {
   buildLibrary,
   type LibraryItx,
   type LibraryRoots,
-  type OpenApiDocument,
-  connectToCapnweb,
-  connectToMcp,
-  type McpConnection,
-  connectToOpenApi,
+  executeScript,
   runScript,
   runScriptModule,
 } from "./library.ts";
+import { connectToCapnweb } from "./library/capnweb.ts";
+import { connectToMcp, type McpConnectionRpcTarget } from "./library/mcp.ts";
+import { connectToOpenApi, type OpenApiDocument } from "./library/openapi.ts";
 
 // ── the library ── the memo `buildLibrary` keeps over the three verbs: a connect with the same
 // (verb, url, options) is ONE live connection for the context's life; `releaseConnections()` (the
@@ -101,7 +103,7 @@ describe("the library", () => {
     for (const { verb, connect, handshake } of verbs)
       test(`${verb}: two connects with the same arguments are ONE connection — the same object back, one handshake`, async () => {
         const { itx, seen } = remotes();
-        const { roots } = buildLibrary(itx);
+        const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" });
         const a = await connect(roots);
         const b = await connect(roots);
         expect(b).toBe(a);
@@ -110,7 +112,10 @@ describe("the library", () => {
 
     test("releaseConnections closes what it holds (MCP: the session's DELETE) and forgets it; the next connect is a fresh handshake, a new object, and works", async () => {
       const { itx, seen } = remotes();
-      const { roots, releaseConnections } = buildLibrary(itx);
+      const { roots, releaseConnections } = buildLibrary(itx, {
+        caller: () => ({ principal: null }),
+        path: "/",
+      });
       const a = await roots.connectToMcp("https://mcp.example/");
       releaseConnections();
       await new Promise((r) => setTimeout(r, 10)); // the close rides a `.then` off the memoized promise
@@ -162,7 +167,10 @@ describe("the library", () => {
           return json({ jsonrpc: "2.0", id: body.id, result });
         },
       } as unknown as LibraryItx;
-      const { roots, releaseConnections } = buildLibrary(itx);
+      const { roots, releaseConnections } = buildLibrary(itx, {
+        caller: () => ({ principal: null }),
+        path: "/",
+      });
       const conn = await roots.connectToMcp("https://mcp.example/");
       releaseConnections();
       await new Promise((r) => setTimeout(r, 10)); // the close rides a `.then` off the memoized promise
@@ -207,7 +215,10 @@ describe("the library", () => {
           return json({ jsonrpc: "2.0", id: body.id, result });
         },
       } as unknown as LibraryItx;
-      const { roots, releaseConnections } = buildLibrary(itx);
+      const { roots, releaseConnections } = buildLibrary(itx, {
+        caller: () => ({ principal: null }),
+        path: "/",
+      });
       const conn = await roots.connectToMcp("https://mcp.example/"); // establishes s-1
       releaseConnections();
       await new Promise((r) => setTimeout(r, 10)); // closes s-1 (DELETE s-1)
@@ -243,7 +254,10 @@ describe("the library", () => {
         removeEventListener() {},
       };
       const itx = { fetch: async () => ({ status: 101, webSocket }) } as unknown as LibraryItx;
-      const { roots, releaseConnections } = buildLibrary(itx);
+      const { roots, releaseConnections } = buildLibrary(itx, {
+        caller: () => ({ principal: null }),
+        path: "/",
+      });
       await roots.connectToCapnweb("wss://ws.example/rpc");
       releaseConnections();
       await new Promise((r) => setTimeout(r, 10));
@@ -262,7 +276,7 @@ describe("the library", () => {
           return new Response("down", { status: 503 });
         },
       } as unknown as LibraryItx;
-      const { roots } = buildLibrary(itx);
+      const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" });
       await expect(roots.connectToMcp("https://mcp.example/")).rejects.toThrow(/503/);
       await expect(roots.connectToMcp("https://mcp.example/")).rejects.toThrow(/503/);
       expect(attempts).toBe(2);
@@ -270,7 +284,7 @@ describe("the library", () => {
 
     test("the memo is keyed by the options too, and two spellings of one options object are one key", async () => {
       const { itx, seen } = remotes();
-      const { roots } = buildLibrary(itx);
+      const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" });
       const a = await roots.connectToMcp("https://mcp.example/", { headers: { a: "1", b: "2" } });
       const b = await roots.connectToMcp("https://mcp.example/", { headers: { b: "2", a: "1" } });
       const c = await roots.connectToMcp("https://mcp.example/", { headers: { a: "other" } });
@@ -286,31 +300,71 @@ describe("the library", () => {
 // handle's dotted sugar, an explicit invoke, and a pipelined chain in one batch. The WebSocket
 // transport needs workerd's WebSocketPair and is proved in e2e.
 
-// ── run ── `itx.run(script)` over a fake `itx.workers.get`: the module the loader would get (the
-// script spliced verbatim, the smallest WorkerEntrypoint around it), run with NO arguments (a script
-// bakes its own values in), the same text ⇒ the same module (the loader's content hash reuses the
-// isolate), a blank script refused.
+// ── run ── `itx.run(script)` over a fake itx: `run` is a REQUEST on the log (`itx.append`) and a
+// wait for ITS settlement (`itx.waitForEvent`), the execution being the context's runner's
+// (`executeScript`, over `itx.workers.get`): the module the loader would get (the script spliced
+// verbatim, the smallest WorkerEntrypoint around it), run with NO arguments (a script bakes its own
+// values in), the same text ⇒ the same module (the loader's content hash reuses the isolate), a
+// blank script refused.
 
 describe("run", () => {
-  function host(): { itx: LibraryItx; loaded: unknown[]; runs: () => number } {
+  /** A fake itx: `append` lands at offsets from 10, `waitForEvent` answers `settlements` in order
+   *  (an event, or "timeout" = a WAIT_TIMEOUT rejection). */
+  function host(settlements: (StreamEvent | "timeout")[] = []): {
+    itx: LibraryItx;
+    loaded: unknown[];
+    appended: StreamEventInput[];
+    waits: WaitForEventFilter[];
+    runs: () => number;
+  } {
     const loaded: unknown[] = [];
+    const appended: StreamEventInput[] = [];
+    const waits: WaitForEventFilter[] = [];
     let ran = 0;
+    // The host is minted at the FIXED POINT (`itx.builtins.workers.get`), and the request and the wait
+    // are spelled there too (`itx.builtins.append` / `waitForEvent`): the runner's plumbing is the
+    // kernel's act, never subject to the context's table (a jail's bare null).
+    const workers = {
+      get: (spec: unknown) => {
+        loaded.push(spec);
+        return {
+          run: async (...args: unknown[]) => {
+            ran += 1;
+            return { calledWith: args.length }; // run() is called with NO arguments
+          },
+        };
+      },
+    };
+    const append = async (...events: StreamEventInput[]) => {
+      appended.push(...events);
+      const firstOffset = 10 + appended.length - events.length;
+      return events.map((event, i) => ({
+        ...event,
+        offset: firstOffset + i,
+        createdAt: "t",
+        path: "/",
+      }));
+    };
+    const waitForEvent = async (filter: WaitForEventFilter) => {
+      waits.push(filter);
+      const next = settlements.shift();
+      if (next === "timeout") throw codedError("WAIT_TIMEOUT", "no event");
+      if (!next) throw new Error("the test scripted no more settlements");
+      return next;
+    };
     const itx = {
       fetch: async () => new Response(null),
-      workers: {
-        get: (spec: unknown) => {
-          loaded.push(spec);
-          return {
-            run: async (...args: unknown[]) => {
-              ran += 1;
-              return { calledWith: args.length }; // run() is called with NO arguments
-            },
-          };
-        },
-      },
+      builtins: { workers, append, waitForEvent },
     } as unknown as LibraryItx;
-    return { itx, loaded, runs: () => ran };
+    return { itx, loaded, appended, waits, runs: () => ran };
   }
+  const settledAt = (offset: number, requestOffset: number, settlement: unknown): StreamEvent => ({
+    type: "events.iterate.com/context/run-settled",
+    payload: { requestOffset, settlement },
+    offset,
+    createdAt: "t",
+    path: "/",
+  });
 
   test("the module: the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it env.ITX.get() and disposes it", () => {
     const module = runScriptModule("async (itx) => (await itx.whoami()).path");
@@ -325,23 +379,59 @@ describe("run", () => {
     expect(module["cap.js"]).toContain("itx[Symbol.dispose]?.();");
   });
 
-  test("run(script) loads that module through itx.workers.get and calls run() with no arguments", async () => {
+  test("executeScript (the runner's call) loads that module through itx.workers.get and calls run() with no arguments", async () => {
     const { itx, loaded, runs } = host();
-    const { roots } = buildLibrary(itx);
-    await expect(roots.run("async (itx) => 1")).resolves.toEqual({ calledWith: 0 });
+    await expect(executeScript(itx, "async (itx) => 1")).resolves.toEqual({ calledWith: 0 });
     expect(loaded).toEqual([{ source: runScriptModule("async (itx) => 1") }]);
     expect(runs()).toBe(1);
   });
 
-  test("the same text is the same module (byte-equal: the loader's content hash keys ONE isolate); a blank script is refused before any load", async () => {
+  test("run(script) appends run-requested { code } — the request's offset IS the run — and waits for ITS run-settled after it: another run's settlement is skipped, a WAIT_TIMEOUT re-arms from the last event seen; resolves with the result; it loads nothing itself", async () => {
+    const script = "async (itx) => 1";
+    const { itx, loaded, appended, waits, runs } = host([
+      settledAt(11, 9, { status: "succeeded", result: 0 }), // another run's (its request at 9)
+      "timeout",
+      settledAt(13, 10, { status: "succeeded", result: { n: 1 } }), // ours: the request landed at 10
+    ]);
+    await expect(
+      buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" }).roots.run(script),
+    ).resolves.toEqual({ n: 1 });
+    expect(appended).toEqual([
+      { type: "events.iterate.com/context/run-requested", payload: { code: script } },
+    ]);
+    expect(waits.map((w) => [w.type, w.afterOffset])).toEqual([
+      ["events.iterate.com/context/run-settled", 10], // after the request (offset 10)
+      ["events.iterate.com/context/run-settled", 11], // the other run's was the last seen
+      ["events.iterate.com/context/run-settled", 11], // a timeout re-arms from the same place
+    ]);
+    expect(loaded).toEqual([]); // the execution is the runner's, never the caller's
+    expect(runs()).toBe(0);
+  });
+
+  test("a failed settlement rejects with its error, the failure kind on the rejection", async () => {
+    const { itx } = host([
+      settledAt(11, 10, { status: "failed", error: "boom", failureKind: "interrupted" }),
+    ]);
+    await expect(
+      buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" }).roots.run(
+        "async () => 1",
+      ),
+    ).rejects.toMatchObject({
+      message: "boom",
+      failureKind: "interrupted",
+    });
+  });
+
+  test("the same text is the same module (byte-equal: the loader's content hash keys ONE isolate); a blank script is refused before any request", async () => {
     expect(runScriptModule("async (itx) => 1")).toEqual(runScriptModule("async (itx) => 1"));
-    const { itx, loaded } = host();
-    expect(() => runScript(itx, "   ")).toThrow(/itx\.run\(script/);
+    const { itx, loaded, appended } = host();
+    await expect(runScript(itx, "   ")).rejects.toThrow(/itx\.run\(script/);
     // wire-fed: a non-string (the array-form expression carries no argument validation) is refused
     // with the same usage error, never a TypeError from `.trim`
-    expect(() => runScript(itx, 42)).toThrow(/itx\.run\(script/);
-    expect(() => runScript(itx, undefined)).toThrow(/itx\.run\(script/);
+    await expect(runScript(itx, 42)).rejects.toThrow(/itx\.run\(script/);
+    await expect(runScript(itx, undefined)).rejects.toThrow(/itx\.run\(script/);
     expect(loaded).toEqual([]);
+    expect(appended).toEqual([]);
   });
 });
 
@@ -535,7 +625,7 @@ describe("mcp", () => {
     });
 
     const rows: Array<{
-      call: (c: McpConnection) => Promise<unknown>;
+      call: (c: McpConnectionRpcTarget) => Promise<unknown>;
       becomes?: unknown;
       throws?: RegExp;
       sse?: boolean;
@@ -1071,25 +1161,46 @@ describe("openapi", () => {
 // so at runtime it may import only npm packages a userspace worker could bundle too (capnweb,
 // cloudflare:workers) and the one platform primitive that is pure data or a handle
 // (context/expression.ts — the codec, for an expression carried as data, and the pipelinable
-// handle). Type-only imports are free (they erase). Anything else — the stream, the DO, the rest of
-// context/ — would make the library un-movable to userspace, which is the whole point of the tier.
+// handle), and the library's own files. Type-only imports are free (they erase). Anything else — the
+// stream, the DO, the rest of context/ — would make the library un-movable to userspace, which is
+// the whole point of the tier.
 const ALLOWED_RUNTIME_IMPORTS = new Set([
   "capnweb",
   "cloudflare:workers",
   "zod", // an npm package a userspace worker could bundle too — used to PARSE untrusted MCP responses
   "iterate/next/expression", // the codec — the package's, as a userspace worker would import it
+  "iterate/next/lib", // the package's pure helpers (error codes, resolveContextPath) — in the SDK bundle every userspace worker gets
+  // The entities' CONTRACTS — pure zod over `defineProcessorContract` (the SDK's), no stream, DO or
+  // context runtime: the vocabulary a handle's typed `append` validates against, which a userspace
+  // worker would import from the SDK just the same.
+  "./agent/contract.ts",
+  "./repo/contract.ts",
+  "./workspace/contract.ts",
 ]);
 
 describe("the library boundary", () => {
-  test("library.ts imports only npm packages, the codec, and types", () => {
-    const source = readFileSync(new URL("./library.ts", import.meta.url).pathname, "utf8");
+  test("library.ts and library/*.ts import only npm packages, the codec, each other, and types", () => {
+    const sourceDirectory = new URL("./", import.meta.url);
+    const libraryDirectory = new URL("./library/", import.meta.url);
+    const libraryFiles = [
+      new URL("./library.ts", import.meta.url),
+      ...readdirSync(libraryDirectory.pathname)
+        .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
+        .map((name) => new URL(name, libraryDirectory)),
+    ];
+    const libraryPaths = new Set(libraryFiles.map((file) => file.pathname));
     const offenders: string[] = [];
-    for (const match of source.matchAll(
-      /^import\s+(type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']/gm,
-    )) {
-      const [, typeOnly, specifier] = match;
-      if (typeOnly) continue;
-      if (!ALLOWED_RUNTIME_IMPORTS.has(specifier)) offenders.push(specifier);
+    for (const file of libraryFiles) {
+      const source = readFileSync(file.pathname, "utf8");
+      for (const match of source.matchAll(
+        /^import\s+(type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']/gm,
+      )) {
+        const [, typeOnly, specifier] = match;
+        if (typeOnly || ALLOWED_RUNTIME_IMPORTS.has(specifier)) continue;
+        if (specifier.startsWith(".") && libraryPaths.has(new URL(specifier, file).pathname))
+          continue;
+        offenders.push(`${file.pathname.slice(sourceDirectory.pathname.length)}: ${specifier}`);
+      }
     }
     expect(offenders).toEqual([]);
   });

@@ -1,10 +1,15 @@
-// ── the email code sign-in ── /login's email step (control-plane.ts `loginFormPost` calls these):
-// a six-digit code mailed through the Email Sending binding, good for ten minutes and five tries.
-// The browser holds only the challenge's id (a cookie); the challenge — the address, the code's
-// hash, the tries — is a KV record that expires on its own. A test deployment (`testEmailLogin`)
-// also accepts 424242, so the specs sign in without a mailbox; the reserved test domains
-// (example.com, .test, …) are never mailed, on any deployment — mail to them bounces, and a bounce
-// costs the sender's reputation.
+// ── the sign-in mechanisms without an identity provider ── /login's form posts (control-plane.ts
+// `loginFormPost` calls these):
+//
+//   THE PASSWORD (`login.password`): one global password — anyone who knows it signs in as the email
+//   they type; the membership is the password, the email is the name tag. The self-host default,
+//   and how the specs sign in. Wrong attempts are counted, per email and per client.
+//
+//   THE MAILED CODE (`login.emailCode`): a six-digit code mailed through the Email Sending binding,
+//   good for ten minutes and five tries. The browser holds only the challenge's id (a cookie); the
+//   challenge — the address, the code's hash, the tries — is a KV record that expires on its own.
+//   The reserved test domains (example.com, .test, …) are never mailed, on any deployment — mail to
+//   them bounces, and a bounce costs the sender's reputation.
 import { z } from "zod";
 import { codedError } from "iterate/next/lib";
 import { cookieValueOf } from "iterate/next/principal";
@@ -15,8 +20,6 @@ import { directory, type User } from "./directory.ts";
 const cookieName = "__Host-itx-login";
 const cookieAttributes = "HttpOnly; Secure; SameSite=Lax; Path=/";
 const LIFETIME_MS = 10 * 60_000;
-/** The code every test deployment accepts (`testEmailLogin`), beside the mailed one. */
-const TEST_LOGIN_CODE = "424242";
 
 const Challenge = z.object({
   email: z.string(),
@@ -31,10 +34,77 @@ const key = (id: string) => `login-code:${id}`;
 /** RFC 2606 / 6761 names — no mailbox there ever exists. */
 const reservedDomain = /@(example\.(com|net|org)|[^@]+\.(test|example|invalid|localhost))$/i;
 
-async function hashOf(id: string, code: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${id}:${code}`));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+async function sha256(text: string): Promise<Uint8Array> {
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
 }
+
+async function hashOf(id: string, code: string): Promise<string> {
+  return Array.from(await sha256(`${id}:${code}`), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+/** Whether two secrets are the same, in time that does not depend on where they differ: both are
+ *  hashed (fixed length) and the digests compared byte by byte, every byte. */
+async function secretsEqual(candidate: string, secret: string): Promise<boolean> {
+  const [a, b] = await Promise.all([sha256(candidate), sha256(secret)]);
+  let difference = 0;
+  for (let i = 0; i < a.length; i += 1) difference |= a[i]! ^ b[i]!;
+  return difference === 0;
+}
+
+/** The address as the directory knows it: trimmed, lowercased, and an email at all. */
+function addressOf(email: string): string {
+  const address = email.trim().toLowerCase();
+  if (!z.email().safeParse(address).success) throw codedError("INVALID_INPUT", "Enter an email.");
+  return address;
+}
+
+/** A counter per subject that expires with the window (ten minutes). KV counts are eventually
+ *  consistent, so a burst at two edges may pass a cap by a little; what the caps protect is an inbox
+ *  from a flood, the account's daily sending quota from one abuser, and the password from a guess. */
+async function countersOf(env: Env, keys: readonly string[]): Promise<number[]> {
+  return (await Promise.all(keys.map((key) => env.OAUTH_KV.get(key)))).map(
+    (count) => Number(count) || 0,
+  );
+}
+async function charge(env: Env, keys: readonly string[], counts: number[]): Promise<void> {
+  await Promise.all(
+    keys.map((key, i) =>
+      env.OAUTH_KV.put(key, String(counts[i]! + 1), { expirationTtl: LIFETIME_MS / 1000 }),
+    ),
+  );
+}
+
+// ── the password ──
+
+/** `password` for `email`: right → the user (created on first sign-in); wrong → `{ error }`, one
+ *  more wrong attempt on the books. Five wrong attempts per email, twenty per client (`client` is the
+ *  caller's address, `cf-connecting-ip`), in ten minutes; over either cap the attempt is refused
+ *  before the password is even looked at. */
+export async function signInWithPassword(
+  env: Env,
+  email: string,
+  password: string,
+  client: string | null = null,
+): Promise<{ user: User } | { error: string }> {
+  const secret = appConfigOf(env).login.password.exposeSecret();
+  if (!secret) throw codedError("UNAUTHENTICATED", "Password sign-in is not offered here.");
+  const address = addressOf(email);
+  const keys = [
+    `login-password-rate:address:${address}`,
+    `login-password-rate:client:${client || "unknown"}`,
+  ] as const;
+  const counts = await countersOf(env, keys);
+  if (counts[0]! >= 5 || counts[1]! >= 20) return { error: "Too many tries. Wait a few minutes." };
+  if (!(await secretsEqual(password, secret))) {
+    await charge(env, keys, counts);
+    return { error: "That password is not right." };
+  }
+  return { user: await directory(env.DB).upsertUser(address) };
+}
+
+// ── the mailed code ──
 
 async function putChallenge(env: Env, id: string, challenge: Challenge): Promise<void> {
   await env.OAUTH_KV.put(key(id), JSON.stringify(challenge), {
@@ -55,33 +125,16 @@ async function challengeOf(
     : null;
 }
 
-/** Whether this deployment signs people in by email at all: a mailbox to send from (the binding and
- *  a from address), or the test flag. */
-export function emailSignInOffered(env: Env): boolean {
-  const config = appConfigOf(env);
-  return Boolean(env.EMAIL && config.loginEmailFrom) || config.testEmailLogin;
-}
-
-/** How often a code may go OUT: three to one address, and twenty from one client, in ten minutes —
- *  a counter per subject that expires with the window. KV counts are eventually consistent, so a
- *  burst at two edges may pass the cap by a little; what it protects is an inbox from a flood and
- *  the account's daily sending quota from one abuser. Only a mailed code counts (a reserved-domain
- *  address, or a deployment without a mailbox, sends nothing). */
+/** How often a code may go OUT: three to one address, and twenty from one client, in ten minutes. */
 async function mailAllowed(env: Env, address: string, client: string | null): Promise<boolean> {
-  const caps = [
-    [`login-code-rate:address:${address}`, 3],
-    [`login-code-rate:client:${client || "unknown"}`, 20],
+  const keys = [
+    `login-code-rate:address:${address}`,
+    `login-code-rate:client:${client || "unknown"}`,
   ] as const;
   // both counters are read before either is charged: a refusal costs nothing
-  const counts = await Promise.all(caps.map(([key]) => env.OAUTH_KV.get(key)));
-  if (caps.some(([, limit], i) => (Number(counts[i]) || 0) >= limit)) return false;
-  await Promise.all(
-    caps.map(([key], i) =>
-      env.OAUTH_KV.put(key, String((Number(counts[i]) || 0) + 1), {
-        expirationTtl: LIFETIME_MS / 1000,
-      }),
-    ),
-  );
+  const counts = await countersOf(env, keys);
+  if (counts[0]! >= 3 || counts[1]! >= 20) return false;
+  await charge(env, keys, counts);
   return true;
 }
 
@@ -93,11 +146,12 @@ export async function startLoginCode(
   client: string | null = null,
 ): Promise<{ setCookie: string }> {
   const config = appConfigOf(env);
-  if (!emailSignInOffered(env)) throw codedError("UNAUTHENTICATED", "Sign in with Google.");
-  const address = email.trim().toLowerCase();
-  if (!z.email().safeParse(address).success) throw codedError("INVALID_INPUT", "Enter an email.");
-  const mailing = Boolean(env.EMAIL && config.loginEmailFrom && !reservedDomain.test(address));
-  if (mailing && !(await mailAllowed(env, address, client)))
+  if (!(env.EMAIL && config.login.emailCode))
+    throw codedError("UNAUTHENTICATED", "Email sign-in is not offered here.");
+  const address = addressOf(email);
+  if (reservedDomain.test(address))
+    throw codedError("INVALID_INPUT", "Enter an email that can receive mail.");
+  if (!(await mailAllowed(env, address, client)))
     throw codedError(
       "INVALID_INPUT",
       "Too many codes were sent for that address just now. Wait a few minutes and try again.",
@@ -110,24 +164,21 @@ export async function startLoginCode(
     tries: 0,
     expiresAt: Date.now() + LIFETIME_MS,
   });
-  if (mailing) {
-    try {
-      const sent = await env.EMAIL!.send({
-        to: address,
-        from: config.loginEmailFrom,
-        subject: `${code} is your iterate sign-in code`,
-        text: `${code}\n\nEnter this code to sign in to iterate. It expires in 10 minutes.\n\nIf you did not try to sign in, ignore this email.`,
-        html: `<p style="font:15px/1.5 ui-sans-serif,system-ui,sans-serif;color:#18181b;margin:0 0 8px">Enter this code to sign in to iterate:</p><p style="font:600 32px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.2em;color:#18181b;margin:0 0 16px">${code}</p><p style="font:13px/1.5 ui-sans-serif,system-ui,sans-serif;color:#71717a;margin:0">It expires in 10 minutes. If you did not try to sign in, ignore this email.</p>`,
-      });
-      console.log(
-        JSON.stringify({ event: "login-code.sent", to: address, messageId: sent.messageId }),
-      );
-    } catch (error) {
-      // a test deployment still has its test code; anywhere else the person must hear about it
-      console.error("login-code.send-failed", error);
-      if (!config.testEmailLogin)
-        throw codedError("INVALID_INPUT", "The code could not be sent. Try again.");
-    }
+  try {
+    const sent = await env.EMAIL.send({
+      to: address,
+      from: config.login.emailCode.from,
+      subject: `${code} is your iterate sign-in code`,
+      text: `${code}\n\nEnter this code to sign in to iterate. It expires in 10 minutes.\n\nIf you did not try to sign in, ignore this email.`,
+      html: `<p style="font:15px/1.5 ui-sans-serif,system-ui,sans-serif;color:#18181b;margin:0 0 8px">Enter this code to sign in to iterate:</p><p style="font:600 32px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.2em;color:#18181b;margin:0 0 16px">${code}</p><p style="font:13px/1.5 ui-sans-serif,system-ui,sans-serif;color:#71717a;margin:0">It expires in 10 minutes. If you did not try to sign in, ignore this email.</p>`,
+    });
+    console.log(
+      JSON.stringify({ event: "login-code.sent", to: address, messageId: sent.messageId }),
+    );
+  } catch (error) {
+    console.error("login-code.send-failed", error);
+    await env.OAUTH_KV.delete(key(id));
+    throw codedError("INVALID_INPUT", "The code could not be sent. Try again.");
   }
   return { setCookie: `${cookieName}=${id}; ${cookieAttributes}; Max-Age=${LIFETIME_MS / 1000}` };
 }
@@ -149,9 +200,7 @@ export async function finishLoginCode(
   if (!found) return { error: "That code has expired. Enter your email again.", restart: true };
   const { id, challenge } = found;
   const entered = code.replace(/\D/g, "");
-  const right =
-    (appConfigOf(env).testEmailLogin && entered === TEST_LOGIN_CODE) ||
-    (entered.length === 6 && (await hashOf(id, entered)) === challenge.hash);
+  const right = entered.length === 6 && (await hashOf(id, entered)) === challenge.hash;
   if (!right) {
     // the fifth wrong try ends the challenge
     if (challenge.tries + 1 >= 5) {

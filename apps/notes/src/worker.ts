@@ -12,6 +12,8 @@ export default {
       ASSETS: Fetcher;
       BROWSER_SESSION: DurableObjectNamespace<BrowserSession>;
       ITERATE_ORIGIN: string;
+      /** zones a connectable issuer may not live under (the SDK's `issuerOriginOf`) — this deployment's own, comma-separated */
+      ITERATE_DENY_ZONES: string;
     },
   ) {
     const url = new URL(request.url);
@@ -20,16 +22,18 @@ export default {
       sessions: env.BROWSER_SESSION,
       issuer: env.ITERATE_ORIGIN,
       resource: `${env.ITERATE_ORIGIN}/api`,
+      denyZones: env.ITERATE_DENY_ZONES.split(",").filter(Boolean),
       api: (request) => fetch(request),
     });
     if (auth) return auth;
-    // A signed-in browser landing on `/` goes to its notes; the landing page is for signing in.
+    // A signed-in browser landing on `/` goes to its notes (routes/_auth/projects.index.tsx: the first
+    // project's page); the landing page is for signing in.
     if (url.pathname === "/" && request.method === "GET") {
       const bearer = await appSession(env.BROWSER_SESSION, request)?.bearer();
       if (bearer)
         return new Response(null, {
           status: 302,
-          headers: { Location: "/notes", "Cache-Control": "no-store" },
+          headers: { Location: "/projects", "Cache-Control": "no-store" },
         });
     }
     const asset = await env.ASSETS.fetch(request);

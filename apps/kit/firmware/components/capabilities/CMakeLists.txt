@@ -4,6 +4,7 @@ set(ITERATE_KIT_CAPABILITIES_SOURCES
   src/health.c
   src/speaker.c
   src/camera.c
+  src/screen.c
   src/system_update.c
   src/rpc_internal.c)
 

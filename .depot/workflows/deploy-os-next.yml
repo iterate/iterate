@@ -26,6 +26,13 @@ on:
         required: false
         type: string
         default: ""
+env:
+  # THE STORE THE IMAGE WAS BAKED WITH. scripts/depot-ci/dependencies.mjs hashes every pnpm_config_*
+  # variable into its fingerprint (the store dir decides where node_modules links point), and the bake
+  # job sets this one — so a workflow without it computes a different fingerprint on identical sources
+  # and never reuses the baked node_modules (every os-next job, 2026-09-22, ~55 s of paging each).
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+
 jobs:
   deploy:
     runs-on:
@@ -41,7 +48,7 @@ jobs:
           clean: false
           ref: ${{ inputs.ref || github.sha }}
       - name: Reconcile dependencies (baked)
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: node scripts/depot-ci/dependencies.mjs install
       # The Doppler project slug is still `project-worker` (the secrets bucket
       # predates the os-next rename; renaming a Doppler project slug is a
       # separate migration). The deployed Cloudflare Worker is os-next-prd.
@@ -75,19 +82,22 @@ jobs:
           clean: false
           ref: ${{ inputs.ref || github.sha }}
       - name: Reconcile dependencies (baked)
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)
         run: doppler setup --config prd --project project-worker
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       # Deployed-target mode (apps/os-next/e2e/support/global-setup.ts): WORKER_BASE_URL selects
-      # the deployed worker, ADMIN_API_SECRET is the config's APP_CONFIG_ADMIN_API_SECRET.
+      # the deployed worker; the admin bearer and the sign-in password are read out of the
+      # deployment's `APP_CONFIG` object, which `doppler run` puts in the environment
+      # (secrets.adminBearer, login.password — src/app-config.ts), its routing out of envs.ts. Files
+      # run in parallel (vitest.config.ts): every test mints its own project.
       - name: Run e2e against os.iterate2.com
         working-directory: apps/os-next
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           WORKER_BASE_URL: ${{ needs.deploy.outputs.public_url }}
-        run: doppler run -- sh -c 'ADMIN_API_SECRET="$APP_CONFIG_ADMIN_API_SECRET" pnpm e2e --no-file-parallelism'
+        run: doppler run -- pnpm e2e
   notify:
     needs:
       - deploy
@@ -105,7 +115,7 @@ jobs:
         with:
           clean: false
       - name: Reconcile dependencies (baked)
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: node scripts/depot-ci/dependencies.mjs install
       - name: Notify Slack
         env:
           APP_DISPLAY_NAME: OS-Next

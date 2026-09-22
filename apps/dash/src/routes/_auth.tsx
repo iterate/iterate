@@ -13,6 +13,7 @@ import {
   useRouterState,
 } from "@tanstack/react-router";
 import { ArrowLeft, KeyRound, Plus } from "lucide-react";
+import { z } from "zod";
 import { createIterateClient } from "iterate/next/app";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import {
@@ -23,6 +24,7 @@ import {
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { DashBreadcrumbs } from "../components/dash-breadcrumbs.tsx";
 import { DashNav } from "../components/dash-nav.tsx";
+import { projectHostOf } from "../lib/origins.ts";
 import { projectsByOrg } from "../lib/projects.ts";
 
 const iterate = createIterateClient({ scopes: ["iterate", "account", "organizations:write"] });
@@ -31,26 +33,31 @@ export const Route = createFileRoute("/_auth")({
   ssr: false,
   beforeLoad: ({ location }) => iterate.authenticate(location.href),
   loader: async ({ context }) => {
-    const [orgs, projects] = await Promise.all([context.api.orgs(), context.api.projects.list()]);
-    return { orgs, projects };
+    const [orgs, projects, issuerHost] = await Promise.all([
+      context.api.orgs(),
+      context.api.projects.list(),
+      // which issuer this browser is connected to (the gate's `/.auth/session.json`): the shell says
+      // so whenever it is not the deployment's own, so a person can tell their self-host from ours;
+      // a gate that does not answer leaves the label off
+      fetch("/.auth/session.json", { headers: { accept: "application/json" } })
+        .then(async (response) => {
+          if (!response.ok) return null;
+          const session = z
+            .object({ issuer: z.string().nullable(), defaultIssuer: z.string() })
+            .parse(await response.json());
+          return session.issuer && session.issuer !== session.defaultIssuer
+            ? new URL(session.issuer).host
+            : null;
+        })
+        .catch(() => null),
+    ]);
+    return { orgs, projects, issuerHost };
   },
   component: Shell,
 });
 
-/** A project's own site: `<slug>.<base>` on the platform's scheme and port — null when the
- *  deployment serves no project hosts. The slug, never the id: the id is how a project is addressed,
- *  the slug is its hostname's label. */
-export function projectHostOf(
-  info: { platformOrigin: string; projectHostnameBase: string | null | undefined },
-  slug: string,
-) {
-  if (!info.projectHostnameBase) return null;
-  const origin = new URL(info.platformOrigin);
-  return `${origin.protocol}//${slug}.${info.projectHostnameBase}${origin.port ? `:${origin.port}` : ""}/`;
-}
-
 function Shell() {
-  const { orgs, projects } = Route.useLoaderData();
+  const { orgs, projects, issuerHost } = Route.useLoaderData();
   const { info } = Route.useRouteContext();
   const router = useRouter();
   const href = useRouterState({ select: (state) => state.location.href });
@@ -96,7 +103,14 @@ function Shell() {
       nav={
         <DashNav project={active || null} host={active ? projectHostOf(info, active.slug) : null} />
       }
-      header={<DashBreadcrumbs orgs={orgs} projects={projects} page={page} />}
+      header={
+        <>
+          <DashBreadcrumbs orgs={orgs} projects={projects} page={page} />
+          {issuerHost && (
+            <span className="ml-auto text-xs text-muted-foreground">Connected to {issuerHost}</span>
+          )}
+        </>
+      }
       account={{ email: info.principal.email || info.principal.actor }}
       accountActions={
         <>

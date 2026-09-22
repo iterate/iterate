@@ -1,84 +1,69 @@
 // e2e/agents.e2e.test.ts — AN AGENT IS A DOMAIN OBJECT (src/agent/): a conversation on the context at
-// any path, driven by a model that acts by writing scripts against that context's `itx`. `create()`
-// births it — the processor row, then `agent/created` on `/` (the catalog `itx.agents.list()` reads) and
-// on its path with the system prompt; `message(text)` is a person's words. Everything the loop does is
-// an event on the path, so the stories read the log: request → settled + assistant → script requested →
+// any path, driven by a model that acts by writing scripts against that context's `itx`.
+// `itx.agents.create(path)` births it — the processor row, `agent/create-requested`, then the saga
+// lands `agent/created` on `/` (the catalog `itx.agents.list()` reads) and on its path with the
+// default system prompt; an operator's instructions are their own `agent/context-added` through the
+// handle's typed `append`; `message(text)` is a person's words. Everything the loop does is an event
+// on the path, so the stories read the log: request → settled + assistant → script requested →
 // script settled → developer result → request → settled + assistant prose → idle. The model is `itx.ai`
 // under the agent's rules, so a test LENDS a scripted fake there (Misha's shadow, ai-root-shadow); the
 // deployed lane runs ONE real turn through Workers AI.
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { collector, freshCtx, openItx, readAll, sleep, until } from "./support/client.ts";
-import { deployedOnly } from "./support/project-host.ts";
+import { freshCtx, openItx, processorNames, readAll, sleep, until } from "./support/client.ts";
+import {
+  RED_PNG_BASE64,
+  ScriptedAi,
+  WORKERS_AI_MODEL,
+  assistantWords,
+  onWorkersAi,
+  short,
+} from "./support/agents.ts";
 
-/** A model that answers from a script of replies, in order, recording what it was asked. A reply
- *  may take its time (`{ text, afterMs }`): the request stays in flight that long — what an
- *  interruption needs to have something to cut short. The fake answers WHOLE (a lent stub carries
- *  no stream), so the loop journals its one chunk window; streaming proper is the deployed story. */
-class ScriptedAi extends RpcTarget {
-  readonly calls: { model: string; messages: { role: string; content: string }[] }[] = [];
-  constructor(private readonly replies: (string | Error | { text: string; afterMs: number })[]) {
-    super();
-  }
-  async run(model: string, inputs: { messages: { role: string; content: string }[] }) {
-    this.calls.push({ model, messages: inputs.messages });
-    const reply = this.replies[Math.min(this.calls.length, this.replies.length) - 1];
-    if (reply instanceof Error) throw reply;
-    if (typeof reply === "string") return { response: reply };
-    await sleep(reply.afterMs);
-    return { response: reply.text };
-  }
-}
-
-const short = (log: { type: string }[]) =>
-  log
-    .filter((e) => /agent|context-added|script-run/.test(e.type) && !/subscription/.test(e.type))
-    .map((e) => e.type.replace("events.iterate.com/", ""));
-/** The default model is OpenAI's astra; a local story pins Workers AI so the fake `itx.ai` answers. */
-const WORKERS_AI_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
-const onWorkersAi = (
-  support: { append: (event: unknown) => Promise<unknown> },
-  model = WORKERS_AI_MODEL,
-) =>
-  support.append({
-    type: "events.iterate.com/agent/configured",
-    payload: { config: { llm: { model } } },
-  });
-
-const assistantWords = (log: { type: string; payload?: unknown }[]) =>
-  log
-    .filter((e) => e.type === "events.iterate.com/agents/context-added")
-    .map((e) => e.payload as { role: string; content: string })
-    .filter((p) => p.role === "assistant")
-    .map((p) => p.content);
-
-test("create() births the agent — the processor row, the certificate on / and on its path with the prompt — the catalog lists it, and an agent not created refuses message()", async () => {
+test("itx.agents.create(path) births the agent — the processor row, the request, the certificate on / and on its path with the default prompt; an operator's prompt is its own append; the catalog lists it; an agent not created refuses message()", async () => {
   const itx = openItx(freshCtx("agent"));
   expect(await itx.agents.list()).toEqual([]);
   const agent = itx.agents.get("/agents/support");
-  await expect(agent.message("hi")).rejects.toThrow(/not created — call create\(\) first/);
-  expect(await agent.create({ systemPrompt: "Be terse." })).toEqual({ path: "/agents/support" });
+  await expect(agent.message("hi")).rejects.toThrow(
+    /not created — itx\.agents\.create\("\/agents\/support"\) first/,
+  );
+  expect(await itx.agents.create("/agents/support")).toEqual({ path: "/agents/support" });
+  // The operator's instructions ADD to the platform's rules — their own keyed item after the
+  // birth, through the handle's typed append; a system item raises no turn.
+  await agent.append({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "system", content: "Be terse." },
+    idempotencyKey: "operator-prompt:v1",
+  });
   const own = await readAll(itx.cd("/agents/support"));
-  expect(short(own)).toEqual(["agent/created", "agents/context-added"]);
-  // The caller's prompt is ADDED to the platform's rules — an agent told only "be terse" still
-  // knows the codemode format and the itx surface.
-  const systemItem = own.filter((e) => e.type === "events.iterate.com/agents/context-added")[0]
-    .payload as { role: string; content: string };
-  expect(systemItem.role).toBe("system");
-  expect(systemItem.content).toMatch(/^You are an agent on the iterate platform/);
-  expect(systemItem.content).toMatch(/<codemode/);
-  expect(systemItem.content).toMatch(/INSTRUCTIONS FROM THE OPERATOR[^\n]*\nBe terse\.$/);
-  // ONE processor row for the agent (the other row on any context is the project's config funnel).
+  expect(short(own)).toEqual([
+    "agent/create-requested",
+    "agent/created",
+    "agent/context-added", // the default prompt, beside the certificate
+    "agent/context-added", // the operator's
+  ]);
+  const [defaultPrompt, operatorPrompt] = own
+    .filter((e) => e.type === "events.iterate.com/agent/context-added")
+    .map((e) => e.payload as { role: string; content: string });
+  // The default prompt: the codemode format, the itx surface, and which project this is.
+  expect(defaultPrompt!.role).toBe("system");
+  expect(defaultPrompt!.content).toMatch(/^You are an agent on the iterate platform/);
+  expect(defaultPrompt!.content).toMatch(/<codemode/);
+  expect(defaultPrompt!.content).toContain(
+    `\nCURRENT PROJECT: ${JSON.stringify(await itx.cd("/agents/support").whoami())}`,
+  );
+  expect(operatorPrompt).toEqual({ role: "system", content: "Be terse." });
+  // One explicit processor row for the agent; no automatic config subscription.
   expect(
     own
       .filter((e) => e.type === "events.iterate.com/stream/subscription-configured")
       .map((e) => e.payload.name),
-  ).toEqual(["config", "agent"]);
+  ).toEqual(["agent"]);
   expect(short(await readAll(itx))).toEqual(["agent/created"]); // only the certificate crosses to /
   expect(await itx.agents.list()).toEqual([
     { path: "/agents/support", createdAt: expect.any(String) },
   ]);
-  await agent.create(); // created once: answers at once, appends nothing
+  await itx.agents.create("/agents/support"); // created once: answers at once, appends nothing
   expect(await readAll(itx.cd("/agents/support"))).toHaveLength(own.length);
   expect(await itx.repos.list()).toEqual([]);
 });
@@ -91,24 +76,28 @@ test("the loop: a person's words → the model → a script run against itx → 
     "Stored 42 under answer.",
   ]);
   await support.provide("itx.ai", ai);
+  await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.create({ systemPrompt: "Be terse." });
+  await agent.append({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "system", content: "Be terse." },
+    idempotencyKey: "operator-prompt:v1",
+  });
   await onWorkersAi(support);
   const asked = await agent.message("Store 42 under the key answer and tell me when done.");
   expect(asked).toMatchObject({
-    type: "events.iterate.com/agents/context-added",
+    type: "events.iterate.com/agent/context-added",
     offset: expect.any(Number),
   });
 
-  // Wait for the LAST derived fact: the plain-response handler's script-run-settled, appended a
-  // beat after the prose's web-message-sent it follows — reading at the prose raced it on the
-  // deployed worker (17 of the 18 events, twice on main).
+  // Wait for the LAST derived fact: the bare reply's web-message-sent (appended directly, no script),
+  // a beat after the script's run-settled — reading at the prose raced it on the deployed worker
+  // (17 of the 18 events, twice on main).
   const log = await until("the settle that ends the turn", async () => {
     const all = await readAll(support);
     const count = (type: string) =>
       all.filter((e) => e.type === `events.iterate.com/${type}`).length;
-    return count("agents/web-message-sent") === 2 &&
-      count("capability-host/script-run-settled") === 2
+    return count("agent/web-message-sent") === 2 && count("context/run-settled") === 1
       ? all
       : undefined;
   }).catch(async (error: unknown) => {
@@ -124,60 +113,58 @@ test("the loop: a person's words → the model → a script run against itx → 
     throw error;
   });
   expect(short(log)).toEqual([
+    "agent/create-requested",
     "agent/created",
-    "agents/context-added", // the system prompt
+    "agent/context-added", // the default system prompt
+    "agent/context-added", // the operator's
     "agent/configured", // the story pins Workers AI
-    "agents/context-added", // the person
+    "agent/context-added", // the person
     "agent/llm-request-requested",
     "agent/llm-request-settled",
-    "agents/context-added", // the assistant's raw answer: prose + a tag
+    "agent/context-added", // the assistant's raw answer: prose + a tag
     "agent/summary-updated", // the tag's status
-    "capability-host/script-run-requested", // the tag's body
-    "agents/web-message-sent", // the prose outside the tag
-    "capability-host/script-run-settled",
-    "agents/context-added", // the developer: the script's result
+    "context/run-requested", // the tag's body
+    "agent/web-message-sent", // the prose outside the tag
+    "context/run-settled",
+    "agent/context-added", // the developer: the script's result
     "agent/llm-request-requested",
     "agent/llm-request-settled",
-    "agents/context-added", // the assistant: a bare reply (no tag)
-    "capability-host/script-run-requested", // the plain-response handler (itx.chat.sendMessage)
-    "agents/web-message-sent", // its sendMessage
-    "capability-host/script-run-settled",
+    "agent/context-added", // the assistant: a bare reply (no tag)
+    "agent/web-message-sent", // appended directly — the reply is an event, not a script
   ]);
   const said = (type: string) => log.filter((e) => e.type === type).map((e) => e.payload);
-  expect(said("events.iterate.com/agents/web-message-sent")).toEqual([
-    // The tag's prose is sent directly (with the request it came from); the bare reply is sent by
-    // the plain-response handler's sendMessage — a plain message, no request offset.
+  expect(said("events.iterate.com/agent/web-message-sent")).toEqual([
+    // The tag's prose and the bare reply alike are appended directly, each with the request it came from.
     { message: "Let me store that.", llmRequestOffset: expect.any(Number) },
-    { message: "Stored 42 under answer." },
+    { message: "Stored 42 under answer.", llmRequestOffset: expect.any(Number) },
   ]);
   expect(said("events.iterate.com/agent/summary-updated")).toEqual([
     { activity: "Storing the answer" },
   ]);
-  expect(said("events.iterate.com/capability-host/script-run-requested")[0]).toMatchObject({
+  expect(said("events.iterate.com/context/run-requested")[0]).toMatchObject({
     code: 'async (itx) => {\nawait itx.kv.put("answer", "42")\nreturn { stored: true }\n}',
   });
   expect(await itx.kv.get("answer")).toBe("42"); // the script ran against the project's itx
-  const settledScript = log.find(
-    (e) => e.type === "events.iterate.com/capability-host/script-run-settled",
-  );
+  const settledScript = log.find((e) => e.type === "events.iterate.com/context/run-settled");
   expect(settledScript.payload.settlement).toEqual({
     status: "succeeded",
     result: { stored: true },
   });
-  // The second call saw the whole conversation: prompt, person, its own script, the result.
+  // The second call saw the whole conversation: both prompts, person, its own script, the result.
   expect(ai.calls).toHaveLength(2);
   expect(ai.calls[1]!.model).toBe(WORKERS_AI_MODEL);
   expect(ai.calls[1]!.messages.map((m) => m.role)).toEqual([
-    "system",
+    "system", // the journaled default prompt
+    "system", // the operator's
+    "system", // the capability tree, rendered this turn
     "user",
     "assistant",
     "system",
   ]);
-  expect(ai.calls[1]!.messages[3]!.content).toContain('"stored": true');
+  expect(ai.calls[1]!.messages[5]!.content).toContain('"stored": true');
   // Idle: no obligation open, one autonomous turn counted, nothing paused.
   expect((await support.facets.get("agent").snapshot()).state).toMatchObject({
     openRequest: null,
-    activeScriptExecutions: {},
     pendingLlmRequestTrigger: null,
     autonomousTurnCount: 1,
     paused: null,
@@ -190,8 +177,13 @@ test("debounced: two messages inside the window are answered by ONE request that
   const support = itx.cd("/agents/support");
   const ai = new ScriptedAi(["Both noted.", "Third noted."]);
   await support.provide("itx.ai", ai);
+  await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.create({ systemPrompt: "Be terse." });
+  await agent.append({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "system", content: "Be terse." },
+    idempotencyKey: "operator-prompt:v1",
+  });
   await support.append({
     type: "events.iterate.com/agent/configured",
     payload: { config: { llm: { model: WORKERS_AI_MODEL }, llmRequestDebounceMs: 1_500 } },
@@ -208,12 +200,18 @@ test("debounced: two messages inside the window are answered by ONE request that
   expect(short(first).filter((t) => t === "agent/llm-request-settled")).toHaveLength(1);
   expect(ai.calls).toHaveLength(1);
   // The one call saw both messages — the prompt is built from the log at run time.
-  expect(ai.calls[0]!.messages.map((m) => m.role)).toEqual(["system", "user", "user"]);
+  expect(ai.calls[0]!.messages.map((m) => m.role)).toEqual([
+    "system", // the default prompt
+    "system", // the operator's
+    "system", // the capability tree
+    "user",
+    "user",
+  ]);
   // The window, not a coincidence: the request landed at least the window after the FIRST words
-  // (said[0] is the system prompt).
-  const said = first.filter((e) => e.type === "events.iterate.com/agents/context-added");
+  // (said[0] and said[1] are the two system prompts).
+  const said = first.filter((e) => e.type === "events.iterate.com/agent/context-added");
   const requested = first.find((e) => e.type === "events.iterate.com/agent/llm-request-requested");
-  expect(Date.parse(requested.createdAt) - Date.parse(said[1].createdAt)).toBeGreaterThanOrEqual(
+  expect(Date.parse(requested.createdAt) - Date.parse(said[2].createdAt)).toBeGreaterThanOrEqual(
     1_400,
   );
   // Words after the answer are a new trigger: a second window, a second request.
@@ -234,13 +232,18 @@ test("a script that returns nothing ends the turn: no result item, no further re
     "SHOULD NEVER BE ASKED",
   ]);
   await support.provide("itx.ai", ai);
+  await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.create({ systemPrompt: "Be terse." });
+  await agent.append({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "system", content: "Be terse." },
+    idempotencyKey: "operator-prompt:v1",
+  });
   await onWorkersAi(support);
   await agent.message("Write the note.");
   const settled = await until("the script's settlement", async () => {
     const all = await readAll(support);
-    return all.find((e) => e.type === "events.iterate.com/capability-host/script-run-settled");
+    return all.find((e) => e.type === "events.iterate.com/context/run-settled");
   });
   expect(settled.payload.settlement).toEqual({ status: "succeeded" }); // no result — undefined, not null
   expect(await itx.kv.get("note")).toBe("written");
@@ -250,13 +253,12 @@ test("a script that returns nothing ends the turn: no result item, no further re
   expect(short(log).filter((t) => t === "agent/llm-request-requested")).toHaveLength(1);
   expect(
     log
-      .filter((e) => e.type === "events.iterate.com/agents/context-added")
+      .filter((e) => e.type === "events.iterate.com/agent/context-added")
       .map((e) => e.payload.role),
-  ).toEqual(["system", "user", "assistant"]);
+  ).toEqual(["system", "system", "user", "assistant"]);
   expect((await support.facets.get("agent").snapshot()).state).toMatchObject({
     pendingLlmRequestTrigger: null,
     openRequest: null,
-    activeScriptExecutions: {},
   });
 });
 
@@ -269,8 +271,13 @@ test("bounded: a model that never stops scripting trips the autonomous-turn brea
     "itx.ai",
     new ScriptedAi([script, script, script, new Error("model down")]),
   );
+  await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.create({ systemPrompt: "Be terse." });
+  await agent.append({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "system", content: "Be terse." },
+    idempotencyKey: "operator-prompt:v1",
+  });
   await support.append({
     type: "events.iterate.com/agent/configured",
     payload: {
@@ -330,7 +337,6 @@ test("bounded: a model that never stops scripting trips the autonomous-turn brea
     consecutiveLlmFailures: 2,
     openRequest: null,
     pendingLlmRequestTrigger: null, // the pause dropped the retry that tripped it
-    activeScriptExecutions: {},
   });
   // A PAUSE MAKES NO LOOP: nothing the loop parked can resume it — the log stays as it is.
   const quietFrom = (await readAll(support)).length;
@@ -338,17 +344,18 @@ test("bounded: a model that never stops scripting trips the autonomous-turn brea
   expect(await readAll(support)).toHaveLength(quietFrom);
 });
 
-/** A 2×2 solid red PNG — what a vision model is asked about. */
-const RED_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR42mP4z8AARAwQCgAf7gP9Y167WwAAAABJRU5ErkJggg==";
-
 test("an attached image is stored under the agent's path and SHOWN to the model as an image part; a non-image is named", async () => {
   const itx = openItx(freshCtx("agent-vision"));
   const support = itx.cd("/agents/support");
   const ai = new ScriptedAi(["A red square and a note."]);
   await support.provide("itx.ai", ai);
+  await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.create({ systemPrompt: "Be terse." });
+  await agent.append({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "system", content: "Be terse." },
+    idempotencyKey: "operator-prompt:v1",
+  });
   await onWorkersAi(support);
   const asked = await agent.message({
     message: "What do you see?",
@@ -384,7 +391,8 @@ test("an attached image is stored under the agent's path and SHOWN to the model 
   expect(assistantWords(log)).toEqual(["A red square and a note."]);
   // The model saw the pixels (a data: URL of the stored bytes) and was told about the note.
   const [call] = ai.calls;
-  const message = call!.messages[1] as unknown as {
+  // the default prompt, the operator's, the capability tree, then the person's words with their attachments
+  const message = call!.messages[3] as unknown as {
     role: string;
     content: { type: string; text?: string; image_url?: { url: string } }[];
   };
@@ -399,52 +407,19 @@ test("an attached image is stored under the agent's path and SHOWN to the model 
   });
 });
 
-test("streamed: the answer reaches a live subscriber as ephemeral chunk windows before it settles — never a stored row", async () => {
-  const itx = openItx(freshCtx("agent-chunks"));
-  const support = itx.cd("/agents/support");
-  const ai = new ScriptedAi(["Four words, no code."]);
-  await support.provide("itx.ai", ai);
-  const windows = collector();
-  await support.subscribe({
-    name: "chunks",
-    consumes: ["events.iterate.com/agent/llm-response-chunks"],
-    target: windows.fn,
-  });
-  const agent = itx.agents.get("/agents/support");
-  await agent.create();
-  await onWorkersAi(support);
-  await agent.message("Say four words.");
-  const log = await until("the settled request", async () => {
-    const all = await readAll(support);
-    return all.some((e) => e.type === "events.iterate.com/agent/llm-request-settled")
-      ? all
-      : undefined;
-  });
-  const requested = log.find((e) => e.type === "events.iterate.com/agent/llm-request-requested");
-  await until("the chunk window", () => windows.invocations.length >= 1);
-  // The fake answers whole, so its answer is ONE window: the request it belongs to, the provider's
-  // chunk verbatim (Workers AI's `{ response }`), the first sequence number.
-  expect(windows.types()).toEqual(["events.iterate.com/agent/llm-response-chunks"]);
-  expect(windows.invocations[0]!.events[0]!.payload).toEqual({
-    llmRequestOffset: requested.offset,
-    chunks: [{ response: "Four words, no code." }],
-    sequence: 0,
-  });
-  // Ephemeral: the durable log holds no chunk row, and the settlement carries the text.
-  expect(log.filter((e) => e.type === "events.iterate.com/agent/llm-response-chunks")).toEqual([]);
-  expect(
-    log.find((e) => e.type === "events.iterate.com/agent/llm-request-settled")!.payload.result,
-  ).toEqual({ status: "succeeded", text: "Four words, no code." });
-});
-
 test("interrupted: the person's next words cut the running answer short — settled cancelled, and those words start the next turn", async () => {
   const itx = openItx(freshCtx("agent-interrupt"));
   const support = itx.cd("/agents/support");
   // The first answer takes long enough to be cut short; the second is what the person gets.
   const ai = new ScriptedAi([{ text: "A long answer that never lands.", afterMs: 8_000 }, "Sure."]);
   await support.provide("itx.ai", ai);
+  await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await agent.create({ systemPrompt: "Be terse." });
+  await agent.append({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "system", content: "Be terse." },
+    idempotencyKey: "operator-prompt:v1",
+  });
   await onWorkersAi(support);
   await agent.message("Tell me everything.");
   await until("the request is in flight", async () =>
@@ -455,7 +430,7 @@ test("interrupted: the person's next words cut the running answer short — sett
   await sleep(500); // the runner has dialed the model
   // apps/os's interrupt: a developer item from the person, its policy the cancellation.
   await support.append({
-    type: "events.iterate.com/agents/context-added",
+    type: "events.iterate.com/agent/context-added",
     payload: {
       role: "developer",
       content: "The user interrupted the in-progress response from the web chat.",
@@ -494,101 +469,222 @@ test("interrupted: the person's next words cut the running answer short — sett
   });
 });
 
-deployedOnly(
-  "DEPLOYED: one real turn through the default model, OpenAI's astra streamed from the Responses API on Cloudflare's billing — chunk windows fly, the settlement carries the usage",
-  async () => {
-    const itx = openItx(freshCtx("agent-real"));
-    const support = itx.cd("/agents/support");
-    const windows = collector();
-    await support.subscribe({
-      name: "chunks",
-      consumes: ["events.iterate.com/agent/llm-response-chunks"],
-      target: windows.fn,
-    });
-    const agent = itx.agents.get("/agents/support");
-    await agent.create();
-    await agent.message(
-      "Reply with the single word: pong, then one sentence about what a pong is. No code block.",
-    );
-    const log = await until(
-      "the assistant's prose",
-      async () => {
-        const all = await readAll(support);
-        return assistantWords(all).length > 0 ? all : undefined;
-      },
-      120_000,
-    );
-    expect(assistantWords(log).join("\n")).toMatch(/pong/i);
-    // The stream: at least one window of Responses API events, in order, for this request.
-    const requested = log.find((e) => e.type === "events.iterate.com/agent/llm-request-requested");
-    await until("the chunk windows", () => windows.invocations.length >= 1);
-    const chunkEvents = windows.invocations.flatMap((i) => i.events);
-    expect(chunkEvents.every((e) => e.payload.llmRequestOffset === requested.offset)).toBe(true);
-    expect(chunkEvents.map((e) => e.payload.sequence)).toEqual(
-      chunkEvents.map((_, index) => index),
-    );
-    const deltas = chunkEvents.flatMap((e) =>
-      e.payload.chunks.filter((c: { type?: string }) => c.type === "response.output_text.delta"),
-    );
-    expect(deltas.length).toBeGreaterThan(0);
-    expect(deltas.map((c: { delta: string }) => c.delta).join("")).toMatch(/pong/i);
-    // The cost, twice: on the settlement and as the report a feed shows the context's fullness by.
-    const settled = log.find((e) => e.type === "events.iterate.com/agent/llm-request-settled");
-    expect(settled.payload.result).toMatchObject({
-      status: "succeeded",
-      usage: { inputTokens: expect.any(Number), outputTokens: expect.any(Number) },
-    });
-    expect(
-      log.find((e) => e.type === "events.iterate.com/agent/token-usage-reported")?.payload,
-    ).toMatchObject({ model: "gpt-6-astra", maxContextTokens: 272_000 });
-  },
-  150_000,
-);
+// ── the tree the model reads, and the sandbox the scripts run in ──
 
-deployedOnly(
-  "DEPLOYED: the default model SEES an attached image — a red square is called red",
-  async () => {
-    const itx = openItx(freshCtx("agent-vision-real"));
-    const agent = itx.agents.get("/agents/support");
-    await agent.create();
-    await agent.message({
-      message: "What colour is this image? Answer with one word, no code block.",
-      files: [{ contentType: "image/png", filename: "square.png", data: RED_PNG_BASE64 }],
-    });
-    const words = await until(
-      "the assistant's answer",
-      async () => {
-        const said = assistantWords(await readAll(itx.cd("/agents/support")));
-        return said.length > 0 ? said : undefined;
-      },
-      120_000,
-    );
-    expect(words.join("\n")).toMatch(/red/i);
-  },
-  150_000,
-);
+test("the model is shown the SANDBOX's rewriteRules.list() every turn: a capability provided at the root with a description reaches the prompt, tagged with the context it came from", async () => {
+  const itx = openItx(freshCtx("agent-tree"));
+  const support = itx.cd("/agents/support");
+  const ai = new ScriptedAi(["Nothing to do."]);
+  await support.provide("itx.ai", ai);
+  await itx.provide({
+    match: "itx.tool",
+    target: "itx.whoami",
+    description: "who this project is, really: itx.tool()",
+  });
+  const agent = itx.agents.get("/agents/support");
+  await itx.agents.create("/agents/support");
+  await agent.append({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "system", content: "Be terse." },
+    idempotencyKey: "operator-prompt:v1",
+  });
+  await onWorkersAi(support);
+  await agent.message("hello");
+  await until("the model was asked", () => (ai.calls.length > 0 ? true : undefined));
+  const system = ai.calls[0]!.messages.filter((m) => m.role === "system").map((m) => m.content);
+  const tree = system.find((content) =>
+    content.includes("CAPABILITY TREE (`await itx.rewriteRules.list()`)"),
+  );
+  expect(tree).toBeDefined();
+  expect(tree).toContain("itx.tool — who this project is, really: itx.tool()");
+  expect(tree).toContain("from /:"); // rows are grouped by the context they came from
+  expect(tree).toContain("itx.kv — "); // the root's implicit rows, described
+});
 
-deployedOnly(
-  "DEPLOYED: a Workers AI model, pinned by agent/configured, sees the image too — no OpenAI key needed",
-  async () => {
-    const itx = openItx(freshCtx("agent-vision-cf"));
-    const support = itx.cd("/agents/support");
-    const agent = itx.agents.get("/agents/support");
-    await agent.create();
-    await onWorkersAi(support);
-    await agent.message({
-      message: "What colour is this image? Answer with one word, no code block.",
-      files: [{ contentType: "image/png", filename: "square.png", data: RED_PNG_BASE64 }],
-    });
-    const words = await until(
-      "the assistant's answer",
-      async () => {
-        const said = assistantWords(await readAll(support));
-        return said.length > 0 ? said : undefined;
+test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injected script reaches nothing but the grant, and the tables are untouched afterwards", async () => {
+  const ctx = freshCtx("agent-jail");
+  const itx = openItx(ctx);
+  const agentPath = "/agents/web/v1";
+  const support = itx.cd(agentPath);
+  const catalogue = new (class extends RpcTarget {
+    search(input: { q: string }) {
+      return [{ name: `${input.q}.com`, price: 42 }];
+    }
+  })();
+  await itx.provide({
+    match: "itx.catalogue",
+    target: catalogue,
+    description: "search the catalogue",
+  });
+  const scripts = [
+    "return await itx.kv.list()",
+    "return await itx.cd('/').whoami()",
+    "return await itx.builtins.whoami()",
+    "const r = await fetch('https://example.com/'); return r.status",
+    "await itx.append({ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match: 'itx', target: \"itx.builtins.cd('/')\" } }); return 'granted myself'",
+    "await itx.schedules.set({ key: 'later', when: { afterMs: 10 }, events: [{ type: 't' }] }); return 'scheduled'",
+    "await itx.provide('itx.catalogue', () => 'mine now'); return 'lent over the grant'",
+    "await itx.subscribe({ target: () => {} }); return 'subscribed'",
+    "return await itx.catalogue.search({ q: 'ship' })",
+    "return await itx.repos.list()",
+  ];
+  const ai = new ScriptedAi([
+    ...scripts.map((code) => `<codemode status="probing">\n${code}\n</codemode>`),
+    "Done probing.",
+  ]);
+  await support.provide("itx.ai", ai);
+  const agent = itx.agents.get(agentPath);
+  await itx.agents.create(agentPath);
+  await onWorkersAi(support);
+  // THE OWNER's jail, in ONE batch: the mask replaces the sandbox's link, the grant sits beside it
+  // (the append itself resolves before the mask lands; afterwards the owner writes through
+  // `builtins`, which a session may spell and loaded code may not)
+  await itx.cd(`${agentPath}/sandbox`).append(
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: {
+        match: "itx",
+        target: null,
+        description: "this agent's scripts get only the rows below",
       },
-      120_000,
-    );
-    expect(words.join("\n")).toMatch(/red/i);
-  },
-  150_000,
-);
+    },
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: {
+        match: "itx.catalogue",
+        target: "itx.builtins.cd('/').catalogue",
+        description: "search the catalogue: itx.catalogue.search({ q })",
+      },
+    },
+    {
+      // a PHYSICAL grant to a library root: the verb runs HERE, its hops at the fixed point
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: {
+        match: "itx.repos",
+        target: "itx.builtins.repos",
+        description: "the project's repos: itx.repos.list()",
+      },
+    },
+  );
+  const rootRulesBefore = await itx.rewriteRules.list();
+  await agent.message("Probe everything.");
+  await until(
+    "every script settled",
+    async () =>
+      (await readAll(support)).filter((e) => e.type === "events.iterate.com/context/run-settled")
+        .length >= scripts.length
+        ? true
+        : undefined,
+    60_000,
+  );
+  const settled = (await readAll(support))
+    .filter((e) => e.type === "events.iterate.com/context/run-settled")
+    .map((e) => e.payload.settlement as { status: string; result?: unknown; error?: string });
+  expect(settled.map((s) => s.status)).toEqual([
+    "failed",
+    "failed",
+    "failed",
+    "succeeded",
+    "failed",
+    "failed",
+    "failed",
+    "failed",
+    "succeeded",
+    "succeeded",
+  ]);
+  expect(settled[0]!.error).toMatch(/is masked/); // kv: the bare null
+  expect(settled[1]!.error).toMatch(/masked|goes down only/); // cd('/'): the wall, or the app rule
+  expect(settled[2]!.error).toMatch(/not a loaded worker's word/); // itx.builtins
+  expect(settled[3]!.result).toBe(404); // raw fetch: the lane found no `itx.fetch` row
+  expect(settled[4]!.error).toMatch(/is masked/); // the self-grant: append is masked
+  expect(settled[5]!.error).toMatch(/is masked/); // schedules: masked
+  expect(settled[6]!.error).toMatch(/is masked/); // a live lend over the grant: its row is an append, masked
+  expect(settled[7]!.error).toMatch(/is masked/); // a live subscription: its row likewise
+  expect(settled[8]!.result).toEqual([{ name: "ship.com", price: 42 }]); // the one grant, still the owner's
+  expect(settled[9]!.result).toEqual([]); // the library root granted physically: its hops are the platform's
+  // nothing moved: the root's table and the sandbox's are what the owner wrote
+  expect(await itx.rewriteRules.list()).toEqual(rootRulesBefore);
+  expect(await itx.cd(`${agentPath}/sandbox`).builtins.rewriteRules.list()).toEqual([
+    {
+      match: "itx",
+      target: null,
+      description: "this agent's scripts get only the rows below",
+      context: `${agentPath}/sandbox`,
+    },
+    {
+      match: "itx.catalogue",
+      target: "itx.builtins.cd('/').catalogue",
+      description: "search the catalogue: itx.catalogue.search({ q })",
+      context: `${agentPath}/sandbox`,
+    },
+    {
+      match: "itx.repos",
+      target: "itx.builtins.repos",
+      description: "the project's repos: itx.repos.list()",
+      context: `${agentPath}/sandbox`,
+    },
+  ]);
+});
+
+test("itx.agents.delete(path) lands the request and the death certificate on the agent's path AND on /, drops the processor row; message() refuses and the loop runs no more turns; a second delete answers at once; never created, nothing to delete; deleted, not re-creatable", async () => {
+  const itx = openItx(freshCtx("agent-delete"));
+  const agent = itx.agents.get("/agents/gone");
+
+  await expect(itx.agents.delete("/agents/gone")).rejects.toThrow(
+    /agent \/agents\/gone: not created — nothing to delete/,
+  );
+  expect(await itx.agents.create("/agents/gone")).toEqual({ path: "/agents/gone" });
+  expect(await processorNames(itx.cd("/agents/gone"))).toEqual(["agent"]);
+
+  expect(await itx.agents.delete("/agents/gone")).toEqual({ path: "/agents/gone" });
+  const own = await readAll(itx.cd("/agents/gone"));
+  expect(short(own)).toEqual([
+    "agent/create-requested",
+    "agent/created",
+    "agent/context-added", // the default prompt, beside the birth certificate
+    "agent/delete-requested",
+    "agent/deleted",
+  ]);
+  expect(
+    own.filter((e) => e.type === "events.iterate.com/agent/deleted").map((e) => e.payload),
+  ).toEqual([{ path: "/agents/gone" }]);
+  expect(short(await readAll(itx))).toEqual(["agent/created", "agent/deleted"]); // both certificates cross to /
+  expect(await processorNames(itx.cd("/agents/gone"))).toEqual([]); // the row went
+
+  // A person's words refuse — nothing lands, nothing is triggered.
+  await expect(agent.message("anyone there?")).rejects.toThrow(/agent \/agents\/gone: deleted/);
+  expect(await readAll(itx.cd("/agents/gone"))).toHaveLength(own.length);
+  // Words appended PAST the verb (the handle's typed append lands under the caller's principal, no
+  // guard) reach the fold — a read hosts the facet anew and it folds the whole log, these words'
+  // trigger included — and still raise no turn: the loop is gated on the deletion, so no request is
+  // recorded long after the debounce window (250 ms) would have closed.
+  await agent.append({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "user", content: "anyone there?", actor: { type: "user" } },
+  });
+  expect(await itx.cd("/agents/gone").facets.get("agent").snapshot()).toMatchObject({
+    state: {
+      creation: { status: "created" },
+      deletion: {
+        status: "deleted",
+        offset: own.find((e) => e.type === "events.iterate.com/agent/deleted").offset,
+      },
+      pendingLlmRequestTrigger: { source: "external" },
+    },
+  });
+  await sleep(1_000);
+  expect(short(await readAll(itx.cd("/agents/gone")))).toEqual([
+    ...short(own),
+    "agent/context-added",
+  ]);
+
+  // Dies once: a second delete answers at once and appends nothing; not re-creatable.
+  expect(await itx.agents.delete("/agents/gone")).toEqual({ path: "/agents/gone" });
+  expect(short(await readAll(itx.cd("/agents/gone")))).toEqual([
+    ...short(own),
+    "agent/context-added",
+  ]);
+  await expect(itx.agents.create("/agents/gone")).rejects.toThrow(
+    /agent \/agents\/gone: deleted — not re-creatable/,
+  );
+});

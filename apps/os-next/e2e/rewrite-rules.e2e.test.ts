@@ -1,4 +1,3 @@
-// rewrite-rules.e2e.test.ts — the REWRITE-RULE TABLE end to end (context/itx-expression-rewriting.ts
 // through the real DO). `itx.builtins.<root>` is the physical scope and the fixed point of rewriting;
 // every short name `itx.<root>` is the implicit platform row `itx.<root> ⇒ itx.builtins.<root>`,
 // consulted only after the context's own rows. (The resolver's own rows — the depth budget, longest
@@ -9,12 +8,12 @@
 //     dead stub's un-set leaves a user's alias to the shadowed root alone, in either configuration order
 //   • `provide(match, null)` at a built-in's name is a MASK the handle's dispose lifts; the physical
 //     door still answers; the platform-equivalent target deletes the row
-//   • `rewriteRules.list()` is the EFFECTIVE table with each row's origin (no platform rows under a
-//     whole-context override); `get(match)` canonicalizes the caller's spelling; `resolve(call)` is the
+//   • `rewriteRules.list()` is the EFFECTIVE table, described, each row with the context it came from
+//     (a bare null lists only the context's own rows); `get(match)` canonicalizes the caller's spelling; `resolve(call)` is the
 //     pure chain and `invoke(call) ≡ invoke(resolve(call).at(-1))`; `invoke(call, ...args)` applies
 //     live args
-//   • THE WHOLE-CONTEXT OVERRIDE: a bare `itx` row sends every short-named call to a live capability,
-//     `cd(p).builtins.append(…)` still reaching its log; it may not name its OWN context
+//   • A BARE `itx` ROW with a target answers every name no implicit row claims (at a child: every
+//     project root; the context's own log stays its own); it may not name its OWN context
 //   • the door refuses a match at `itx.builtins` or at a proxy verb; the platform never spells a short
 //     name, so a row at `itx.rpcStubs` or `itx.facets` redirects nothing the platform relies on
 //   • an EXPRESSION handle's dispose removes the row it wrote (compare-and-set on the printed target);
@@ -47,11 +46,11 @@ import {
  *  be an RpcTarget or a bare function). */
 class Override extends RpcTarget {
   readonly seen: unknown[] = [];
-  append(...events: unknown[]) {
+  anything(...events: unknown[]) {
     this.seen.push(...events);
     return "captured";
   }
-  whoami() {
+  kv() {
     return "the override";
   }
 }
@@ -74,12 +73,12 @@ for (const order of ["alias first", "stub first"] as const)
     stubSession[Symbol.dispose]();
     await until("the real whoami is back", async () => {
       const row = await itx.rewriteRules.get("itx.whoami");
-      return row?.origin === "platform" ? row : undefined;
+      return row?.target === "itx.builtins.whoami" ? row : undefined; // the implicit row shows again
     });
     expect(await itx.rewriteRules.get("itx.me")).toEqual({
       match: "itx.me",
       target: "itx.whoami",
-      origin: "context",
+      context: "/",
     });
     expect((await itx.rewriteRules.resolve("itx.me()")).at(-1)).toBe("itx.builtins.whoami()");
     expect(await itx.me()).toEqual(real);
@@ -97,59 +96,75 @@ test("a DENY: provide(match, null) at a built-in's name masks it; the physical d
   expect(await itx.rewriteRules.get("itx.kv")).toEqual({
     match: "itx.kv",
     target: null,
-    origin: "context",
+    context: "/",
   });
   // a partial mask under the root refuses only what it claims
   await itx.provide("itx.kv.put", null);
   expect(await itx.builtins.kv.get("k")).toBe("v"); // the physical door still answers
   deny[Symbol.dispose]();
   await until("the deny lifted", async () =>
-    (await itx.rewriteRules.get("itx.kv"))?.origin === "platform" ? true : undefined,
+    (await itx.rewriteRules.get("itx.kv"))?.target === "itx.builtins.kv" ? true : undefined,
   );
   expect(await itx.kv.get("k")).toBe("v");
   expect(codeOf(await rejection(itx.kv.put("k", "w")))).toBe("NO_ITX_EXPRESSION_MATCH"); // the partial mask stands
-  // the explicit restore: the platform-equivalent target deletes the row
+  // a pinned physical target under the root is a GRANT of exactly that call (rule 8): the row is
+  // stored — and re-opens the prefix the partial mask closed
   await itx.provide("itx.kv.put", "itx.builtins.kv.put");
-  expect(await itx.rewriteRules.get("itx.kv.put")).toBeNull();
+  expect(await itx.rewriteRules.get("itx.kv.put")).toMatchObject({ target: "itx.builtins.kv.put" });
   expect(await itx.kv.put("k", "w")).toEqual({ ok: true });
 });
 
-test("rewriteRules.list() is the EFFECTIVE table: platform rows with their origin, a re-set root shown once as the context's row", async () => {
+test("rewriteRules.list() is the EFFECTIVE table, DESCRIBED: every implicit row at the root with the platform's one-liner and the context it belongs to; a re-set root shown once as the context's row", async () => {
   const ctx = freshCtx("list");
   const itx = openItx(ctx);
-  const before = await itx.rewriteRules.list();
-  expect(before).toContainEqual({ match: "itx.kv", target: "itx.builtins.kv", origin: "platform" });
-  expect(before).toContainEqual({
-    match: "itx.append",
+  const before = (await itx.rewriteRules.list()) as {
+    match: string;
+    target: string | null;
+    description?: string;
+    context: string;
+  }[];
+  expect(before.find((row) => row.match === "itx.kv")).toEqual({
+    match: "itx.kv",
+    target: "itx.builtins.kv",
+    description: expect.stringContaining("key-value"),
+    context: "/",
+  });
+  expect(before.find((row) => row.match === "itx.append")).toMatchObject({
     target: "itx.builtins.append",
-    origin: "platform",
+    description: expect.any(String),
   });
-  expect(before.every((row: { origin: string }) => row.origin === "platform")).toBe(true);
-  // the config worker's default is a platform row too — listed, and a `null` at it MASKS it
-  expect(before).toContainEqual({
-    match: "itx.worker",
-    target: expect.stringMatching(/^itx\.workers\.get\(/),
-    origin: "platform",
+  expect(before.every((row) => row.context === "/" && row.description)).toBe(true);
+
+  await itx.provide({
+    match: "itx.kv",
+    target: "itx.builtins.whoami",
+    description: "who, not what",
   });
-  await itx.provide("itx.kv", "itx.builtins.whoami");
-  const after = await itx.rewriteRules.list();
-  expect(after.filter((row: { match: string }) => row.match === "itx.kv")).toEqual([
-    { match: "itx.kv", target: "itx.builtins.whoami", origin: "context" },
+  const after = (await itx.rewriteRules.list()) as typeof before;
+  expect(after.filter((row) => row.match === "itx.kv")).toEqual([
+    { match: "itx.kv", target: "itx.builtins.whoami", description: "who, not what", context: "/" },
   ]);
-  expect(after.length).toBe(before.length); // the context row REPLACED the platform row in the listing
+  expect(after.length).toBe(before.length); // the context row REPLACED the implicit row in the listing
 });
 
-test("rewriteRules.list() under a whole-context override shows NO platform rows (a bare `itx` row claims every call before one could); the platform-equivalent target `itx ⇒ itx.builtins` brings them back", async () => {
+test("rewriteRules.list() under a bare row WITH a target still shows every implicit row (they outrank it) plus the row itself; a bare NULL lists only the context's own rows; `itx ⇒ itx.builtins` at the root restates the default and deletes", async () => {
   const itx = openItx(freshCtx("list-under-override"));
-  const list = () =>
-    itx.builtins.rewriteRules.list() as Promise<{ match: string; origin: string }[]>; // the physical door: the override never swallows the read
-  expect((await list()).some((row) => row.origin === "platform")).toBe(true);
+  const list = () => itx.rewriteRules.list() as Promise<{ match: string; target: string | null }[]>;
+  const implicit = (await list()).length;
+  expect(implicit).toBeGreaterThan(10);
   await itx.provide("itx", "itx.builtins.rpcStubs.get('x')");
   const rows = await list();
-  expect(rows.filter((row) => row.origin === "platform")).toEqual([]);
-  expect(rows.map((row) => row.match)).toEqual(["itx"]);
-  await itx.provide("itx", "itx.builtins"); // the removal spelling deletes the row
-  expect((await list()).some((row) => row.origin === "platform")).toBe(true);
+  expect(rows).toHaveLength(implicit + 1);
+  expect(rows.find((row) => row.match === "itx")).toMatchObject({
+    target: "itx.builtins.rpcStubs.get('x')",
+  });
+  await itx.provide("itx", "itx.builtins"); // at the owner root this restates the default: the row is gone
+  expect(await list()).toHaveLength(implicit);
+  await itx.provide("itx", null); // one row denies all: nothing implicit is listed, nothing resolves
+  expect(await itx.builtins.rewriteRules.list()).toEqual([
+    { match: "itx", target: null, context: "/" },
+  ]);
+  expect(codeOf(await rejection(itx.whoami()))).toBe("NO_ITX_EXPRESSION_MATCH");
 });
 
 // An EXPRESSION handle's undo is compare-and-set on the row's target: `#removeRuleInBackground`
@@ -161,12 +176,13 @@ test("disposing an EXPRESSION provide handle removes the rule it wrote — the p
   const handle = await itx.provide("itx.kv", "itx.builtins.whoami");
   expect(await itx.rewriteRules.get("itx.kv")).toMatchObject({
     target: "itx.builtins.whoami",
-    origin: "context",
+    context: "/",
   });
   handle[Symbol.dispose]();
   await until(
-    "the platform row back",
-    async () => ((await itx.rewriteRules.get("itx.kv"))?.origin === "platform" ? true : undefined),
+    "the implicit row back",
+    async () =>
+      (await itx.rewriteRules.get("itx.kv"))?.target === "itx.builtins.kv" ? true : undefined,
     5_000,
   );
 });
@@ -212,35 +228,31 @@ test("resolve(call) is the pure chain, and THE LAW holds: invoke(call) ≡ invok
   expect(await itx.invoke("itx.whoami()")).toMatchObject({ projectId: ctx }); // no args: the call as spelled
 });
 
-test("THE WHOLE-CONTEXT OVERRIDE: a bare `itx` row at a context sends every short-named call to a live capability; `builtins` still reaches its log", async () => {
+test("A BARE `itx` ROW WITH A TARGET at a child: a live capability answers every name no implicit row claims — the context's own log stays its own; `builtins` is the physical door", async () => {
   const ctx = freshCtx("override");
   const root = openItx(ctx);
   const live = new Override();
   const override = await root.cd("/x").provide("itx", live);
-  expect(await root.cd("/x").append({ type: "t", payload: { n: 1 } })).toBe("captured");
-  expect(await root.cd("/x").whoami()).toBe("the override");
-  expect(live.seen).toEqual([{ type: "t", payload: { n: 1 } }]);
-  // the physical door at /x is the fixed point: its log, not the stub
-  const [landed] = await root.cd("/x").builtins.append({ type: "t", payload: { n: 2 } });
-  expect(landed).toMatchObject({ type: "t", payload: { n: 2 } });
-  expect(await root.cd("/x").builtins.whoami()).toEqual({ projectId: ctx, path: "/x" });
-  const log = (await root.cd("/x").builtins.readEvents(0, 500)).events as {
-    type: string;
-    payload: unknown;
-  }[];
-  expect(log.filter((e) => e.type === "t").map((e) => e.payload)).toEqual([{ n: 2 }]); // n:1 went to the stub
-  // an EXPRESSION-side cd from the root goes through /x's rows too (the fast path is gone)
-  expect(await root.invoke("itx.cd('/x').whoami()")).toBe("the override");
+  // the context roots are implicit at a child and OUTRANK the bare row: append lands in /x's log
+  const [landed] = await root.cd("/x").append({ type: "t", payload: { n: 1 } });
+  expect(landed).toMatchObject({ type: "t", payload: { n: 1 } });
+  expect(await root.cd("/x").whoami()).toEqual({ projectId: ctx, path: "/x" });
+  // a name nothing implicit claims goes to the stub — at a child that includes every project root
+  expect(await root.cd("/x").anything({ type: "t", payload: { n: 2 } })).toBe("captured");
+  expect(live.seen).toEqual([{ type: "t", payload: { n: 2 } }]);
+  expect(await root.cd("/x").kv()).toBe("the override"); // `kv` is no context root: the row answers
+  // an EXPRESSION-side cd from the root goes through /x's rows too
+  expect(await root.invoke("itx.cd('/x').anything(3)")).toBe("captured");
   expect(await root.invoke("itx.cd('/x').builtins.whoami()")).toEqual({
     projectId: ctx,
     path: "/x",
   });
   override[Symbol.dispose]();
   await until("the override gone", async () => {
-    const row = await root.cd("/x").builtins.rewriteRules.get("itx"); // through the physical door: the override is still in force
+    const row = await root.cd("/x").builtins.rewriteRules.get("itx");
     return row === null ? true : undefined;
   });
-  expect(await root.cd("/x").whoami()).toEqual({ projectId: ctx, path: "/x" });
+  expect(codeOf(await rejection(root.cd("/x").kv.get("k")))).toBe("NO_ITX_EXPRESSION_MATCH"); // nothing project-level is implicit at a child
 });
 
 test("the door: a match rooted at itx.builtins, or at a proxy verb, is refused; the platform never spells a short name", async () => {
@@ -252,9 +264,8 @@ test("the door: a match rooted at itx.builtins, or at a proxy verb, is refused; 
   expect(String((await rejection(itx.provide("itx.provide", "itx.whoami"))).message)).toMatch(
     /proxy's own verb "provide"/,
   );
-  expect(String((await rejection(itx.provide("itx.cd('/y')", "itx.whoami"))).message)).toMatch(
-    /proxy's own verb "cd"/,
-  );
+  // `cd` is a NAME: a row at it is legal (a null there is the wall a jail relies on)
+  (await itx.provide("itx.cd('/y')", "itx.whoami"))[Symbol.dispose]();
   // what the platform writes is builtins-rooted, so a row at `itx.rpcStubs` or `itx.facets`
   // redirects the caller's calls and nothing the platform relies on
   await itx.provide("itx.rpcStubs", null);
@@ -273,10 +284,10 @@ test("the door: a whole-context override may not name its OWN context (every cal
   const itx = openItx(freshCtx("own-context-override")).cd("/x");
   for (const target of ["itx.builtins.cd('/x')", "itx.builtins.cd('.')"])
     expect((await rejection(itx.provide("itx", target))).message).toMatch(/own context/);
-  // …and a whole-context override must target the PHYSICAL spelling at all — `itx.cd('/x')` would
-  // re-enter the table it just claimed, every call (the door refuses that before looking further)
+  // …spelled short as well: `cd` is implicit and outranks the bare row, so `itx.cd('/x')` resolves
+  // to the physical door and the same self-hop is refused
   for (const target of ["itx.cd('/x')", "itx.cd('../x')"])
-    expect((await rejection(itx.provide("itx", target))).message).toMatch(/physical spelling/);
+    expect((await rejection(itx.provide("itx", target))).message).toMatch(/own context/);
   const sibling = await itx.provide("itx", "itx.builtins.cd('/y')");
   sibling[Symbol.dispose]();
 });
@@ -353,7 +364,7 @@ test("the table is a MAP under concurrency: 5 concurrent re-sets of ONE match le
   expect(await itx.rewriteRules.get("itx.race")).toEqual({
     match: "itx.race",
     target: lastTarget,
-    origin: "context",
+    context: "/",
   });
   expect(
     (await itx.rewriteRules.list()).filter((r: { match: string }) => r.match === "itx.race"),

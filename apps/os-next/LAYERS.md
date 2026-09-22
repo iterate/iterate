@@ -20,15 +20,15 @@ canonical match and written by ONE event.
 
 Every callable thing is a live object plus a small piece of durable data that gets the object back.
 
-| Built-in / kind                                                                                                 | The durable data                                                                                                                                                                                                                                                                                          | Who restores it                                                                                         | Where                                                       |
-| --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| a context (`cd`, the DO)                                                                                        | its codec name (`prj_x.iterate/path`)                                                                                                                                                                                                                                                                     | Cloudflare (`getByName`)                                                                                | `iterate-context.ts`, `iterate-context-durable-object.ts`   |
-| `env.ITX` (a loaded worker's world)                                                                             | the props `{ iterateContextName }`                                                                                                                                                                                                                                                                        | Cloudflare (`ctx.exports`, persistent stubs)                                                            | `iterate-context.ts`                                        |
-| `workers.get({ source, cacheKey?, className?, props? })` / `facets.get(name, { source, cacheKey?, className })` | cacheKey + source; a facet's `props { iterateContextName, name }` and startup memo                                                                                                                                                                                                                        | Cloudflare (Worker Loader, `ctx.facets`)                                                                | `context/worker-loader.ts`, the DO's `#invokeFacet`         |
-| **`rpcStubs`** (a lent rpc stub)                                                                                | a pager WebSocket attachment `{ transportId, rpcStubKey }`                                                                                                                                                                                                                                                | **us** — `{type:"page"}` pages the edge worker, which lends a fresh Workers-RPC stub over `lendRpcStub` | `context/rpc-stubs.ts`, `context/rpc-stubs.ts`              |
-| the stream (`append` / `readEvents` / `waitForEvent`)                                                           | the log (SQLite)                                                                                                                                                                                                                                                                                          | —                                                                                                       | `stream/stream.ts`                                          |
-| `kv`, `secrets`, `whoami`, `fetch`                                                                              | KV / a secret's own DO: material (encrypted at rest, `secret-at-rest.ts`) + a required pin + a refresh strategy, write-only, plus a pending OAuth attempt (`secret-durable-object.ts`, `secret-oauth.ts`) / the address / the terminal `fetch` (a secret-naming request is forwarded to that secret's DO) | —                                                                                                       | `context/built-ins.ts`, `iterate-context-durable-object.ts` |
-| `rewriteRules`, `subscriptions` (read views)                                                                    | slices of the core reduce (layer 1)                                                                                                                                                                                                                                                                       | —                                                                                                       | `context/built-ins.ts`, the DO                              |
+| Built-in / kind                                                                                                 | The durable data                                                                                                                                                                                                                                                                                                                                                                                                | Who restores it                                                                                         | Where                                                       |
+| --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| a context (`cd`, the DO)                                                                                        | its codec name (`prj_x.iterate/path`)                                                                                                                                                                                                                                                                                                                                                                           | Cloudflare (`getByName`)                                                                                | `iterate-context.ts`, `iterate-context-durable-object.ts`   |
+| `env.ITX` (a loaded worker's world)                                                                             | the props `{ iterateContextName }`                                                                                                                                                                                                                                                                                                                                                                              | Cloudflare (`ctx.exports`, persistent stubs)                                                            | `iterate-context.ts`                                        |
+| `workers.get({ source, cacheKey?, className?, props? })` / `facets.get(name, { source, cacheKey?, className })` | cacheKey + source; a facet's `props { iterateContextName, name }` and startup memo                                                                                                                                                                                                                                                                                                                              | Cloudflare (Worker Loader, `ctx.facets`)                                                                | `context/worker-loader.ts`, the DO's `#invokeFacet`         |
+| **`rpcStubs`** (a lent rpc stub)                                                                                | a pager WebSocket attachment `{ transportId, rpcStubKey }`                                                                                                                                                                                                                                                                                                                                                      | **us** — `{type:"page"}` pages the edge worker, which lends a fresh Workers-RPC stub over `lendRpcStub` | `context/rpc-stubs.ts`, `context/rpc-stubs.ts`              |
+| the stream (`append` / `readEvents` / `waitForEvent`)                                                           | the log (SQLite)                                                                                                                                                                                                                                                                                                                                                                                                | —                                                                                                       | `stream/stream.ts`                                          |
+| `kv`, `secrets`, `whoami`, `fetch`                                                                              | KV / the `secret` facet on the context at the secret's path (`src/secret/`, the entity pattern): material (encrypted at rest, `secret-at-rest.ts`) + a required pin + a refresh strategy, write-only, plus a pending OAuth attempt (`secret-oauth.ts`) / the address / the terminal `fetch` (a secret-naming request is forwarded to the context at that path, whose `secret` facet substitutes and dispatches) | —                                                                                                       | `context/built-ins.ts`, `iterate-context-durable-object.ts` |
+| `rewriteRules`, `subscriptions` (read views)                                                                    | slices of the core reduce (layer 1)                                                                                                                                                                                                                                                                                                                                                                             | —                                                                                                       | `context/built-ins.ts`, the DO                              |
 
 The first three rows are Cloudflare features. `rpcStubs` is ours — a poor-man's sturdy ref whose
 restore hook must route through whichever stateless worker holds the client's capnweb socket. Its
@@ -62,39 +62,48 @@ log-derived where there is one: a subscription's id is the offset of its subscri
 fact; a rewrite rule has no identity beyond its `match` (one map entry per match).
 
 ONE reduce runs INLINE at the commit point: `reduceCoreEventBatch` (core-processor.ts)
-(`stream/core-processor.ts`, slug `core`, contract 8.0.0), owned by the `Stream` itself (`#coreReducedState`) with
+(`stream/core-processor.ts`, slug `core`, contract 13.0.0), owned by the `Stream` itself (`#coreReducedState`) with
 zero runner apparatus. It reduces a whole batch at once (each table copied ONCE per batch,
 on first touch, then mutated in place) — the context's own control events into
-`{ projectId, path, createdAt, incarnation, paused, itxExpressionRewriteRules, subscriptions, secrets }`
-(`secrets` is the catalog `itx.secrets.list()` reads — names, pins and strategy kinds from `secrets/changed`, never
-a value) — layer 2's rules and layer 3's rows are slices of that one state, each layer keeping its OWN
-event family. Runtime state IS reduced state: `itx.facets.get('core').snapshot().state`. Policy is not
+`{ projectId, path, createdAt, incarnation, paused, itxExpressionRewriteRules, subscriptions }`
+(the secrets catalog is NOT a slice here: it is the owner root facet's `secrets` — the `project` facet's on `/`,
+folded from the `secret/set` / `secret/deleted` cross-posted there; paths, pins and strategy kinds, never a value —
+what `itx.secrets.list()` reads) — layer 2's rules and layer 3's rows are slices of that one state, each layer
+keeping its OWN event family. Runtime state IS reduced state: `itx.facets.get('core').snapshot().state`. Policy is not
 in core: a token-bucket breaker is a facet processor that appends `stream/paused { reason }` (layer 4).
 
 ## Layer 2 — itx-expression rewrite rules
 
-`context/itx-expression-rewriting.ts` is ONE concept in one file: the five matching rules (its
-header), the ONE command that builds `itx/rewrite-rule-configured { match, target | null }`
+`context/itx-expression-rewriting.ts` is ONE concept in one file: the matching rules (its
+header), the ONE command that builds `itx/rewrite-rule-configured { match, target | null, description? }`
 (`rewriteRuleConfiguredEvent` — string at rest, both halves canonicalized through the codec), and
 the READER (`ItxExpressionResolver`, which rewrites a call through the current rules and runs it).
 The core reduce reduces the event into `state.itxExpressionRewriteRules`, a MAP by canonical match:
-a configured target REPLACES the entry, `null` DELETES it — no shadow stack, no removal by identity,
-no offset on a row. That is the WHOLE event — no policies, no flags.
+a configured target REPLACES the entry, `null` DELETES it — kept as a mask only where an implicit
+row lies beneath at that path, and at bare `itx` a denial of all — no shadow stack, no removal by
+identity, no offset on a row. A row is `match`, `target` and one line of `description` a model
+reads: the WHOLE event — no policies, no flags.
 
-One dispatch path: parse → a built-in root resolves DIRECTLY (built-ins first) → else the most
-SPECIFIC matching rule (longest match, then most pinned args; a match step may pin literal args —
-`itx.ai.run('gpt-5')` — which are CONSUMED) rewrites the call, and rewriting repeats until the root
-is a built-in (32 rewrites is the budget; a call no rule matches is `NO_ITX_EXPRESSION_MATCH`,
-default-deny). A target must be rooted at `itx`, so a bare root is unspellable and the built-ins
-are unshadowable. A lent rpc stub is no exception: `itx.provide(match, stub)` lends
+One dispatch path: parse → RULES FIRST: the most SPECIFIC matching row — the context's own, and
+the implicit rows `itx.<root> ⇒ itx.builtins.<root>` (every root at the owner root; only the
+fourteen context roots — `CONTEXT_ROOTS` in src/context/itx-expression-rewriting.ts — everywhere
+else) — rewrites the call (longest match, then most pinned args; a match step may pin
+literal args — `itx.ai.run('gpt-5')` — which are CONSUMED; a bare `itx` row with a target claims
+what no implicit row claims, which is how a child reaches its creator: `itx ⇒
+itx.builtins.cd('<creator>')`, one hop into that context's table), and rewriting repeats until the
+call is rooted at `itx.builtins`, the fixed point (32 rewrites is the budget; a call no row matches
+is `NO_ITX_EXPRESSION_MATCH`, default-deny). A match must be rooted at `itx`, never at
+`itx.builtins`; a target may name `itx.builtins` (the owner's grant of the real thing), and loaded
+code may not call it. A lent rpc stub is no exception: `itx.provide(match, stub)` lends
 `stub` to `rpcStubs` under the key = the canonical match and configures the pure-data rule
-`match ⇒ itx.rpcStubs.get('<match>')` — the log records the rule, never the socket. The rule dies
+`match ⇒ itx.builtins.rpcStubs.get('<match>')` — the log records the rule, never the socket. The rule dies
 with the stub: the handle's dispose recalls the stub, and when the key's LAST pager closes the DO
 un-sets every rule and subscription whose target is that stub (a reconnect replaces the pager and
 is not a close).
 
-THE ONE FRONT DOOR is `itx.provide(match, target)`: a live stub (the lend above plus its rule), an
-EXPRESSION (the rule alone — literally "build the event, append it"), or `null` (un-set). It hands
+THE ONE FRONT DOOR is `itx.provide({ match, target, description? })` — `(match, target)` for
+short: a live stub (the lend above plus its rule), an EXPRESSION (the rule alone — literally "build
+the event, append it"), or `null` (a mask where an implicit row lies beneath, a deletion elsewhere). It hands
 back a DISPOSABLE `RewriteRuleHandle` (`subscribe`'s is a `SubscriptionHandle`): disposing it — or
 the session ending, when capnweb disposes every exported handle — un-sets the rule. So a rule made through the verb is
 SESSION-SCOPED; a rule that must outlive its session is the raw event,

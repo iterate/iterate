@@ -13,7 +13,7 @@ The Plan job should use the ordinary actions/checkout defaults to get the checke
 
 - [x] Use ordinary checkout defaults to get the checked-in scripts. *Plan has no `fetch-depth` override.*
 - [x] Read commit metadata lazily through the GitHub API, with no synchronous subprocess or constructor I/O. *`CommitHistory.throughMergeBase` is an async generator; both planner searches use `for await`.*
-- [x] Keep head decisions cheap and cache metadata across replayed searches. *Product heads use one commit request; head deployment reuse does not compare main.*
+- [x] Keep head decisions cheap and cache metadata across replayed searches. *Head decisions use one commit request and one cached comparison for main's os-next exemption, without reading ancestors.*
 - [x] Preserve green/red docs inheritance, test-only deployment reuse, rename paths and the merge-base boundary for supported histories. *HTTP integration tests drive the real Octokit client and planner.*
 - [x] Prefer full deployment over reconstructing unsupported history. *Merge commits, pagination/full 100-file pages and exhaustion of 20 commits carry explicit stop reasons.*
 - [x] Keep API failures visible and preserve checkout identity validation. *15-second request timeouts; checkout SHA is read with the existing async command runner.*
@@ -41,3 +41,5 @@ The Plan job should use the ordinary actions/checkout defaults to get the checke
 - Final code at `e36843a25` passed unit/lint CI. Its first preview attempt hit a transient npm 404 for the newly published `@tanstack/query-core@5.103.2` tarball; cleanup succeeded. Once the tarball returned 200, a fresh [full preview run](https://depot.dev/orgs/0p91s0lz49/workflows/th655r5qwt) passed readiness, app tests, all six browser shards and restoration, publishing `tests=success; deployment=restored; check=106287271519`. No dependency versions or timeouts changed. This subsequent docs-only commit exercises real inheritance after settlement.
 
 - 2026-09-22: Replaced Git history reconstruction with cached asynchronous commit reads and a lazy merge-base request. Red/green tests covered one-request product decisions, inherited failures, conservative merge/size/history limits and rename paths. Migrated the remaining selection coverage to HTTP tests; the initial 47 focused tests and scripts typecheck pass.
+
+- Merged current main to pick up its expired mobile-spec skip correction and preserve the newly merged os-next branch exemption. The exemption needs a comparison even for head decisions; the same cached response supplies the merge-base for later traversal. Tests cover reverted apps/os changes, mixed branches, a capped comparison and both rename paths.

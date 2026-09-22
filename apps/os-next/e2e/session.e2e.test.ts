@@ -10,18 +10,19 @@ import {
   freshCtx,
   publicSession,
   openItx,
+  processorNames,
   readAll,
   rejection,
   session,
   sleep,
+  until,
   workerUrl,
 } from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
 import {
-  fetchProjectHost,
+  fetchProjectUrl,
   freshDnsSafeProjectSlug,
-  projectHostnameBase,
-  projectHostsAreLocal,
+  projectUrl,
   registerProject,
 } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
@@ -161,6 +162,56 @@ test("revoking a grant closes its live public socket and held capability within 
   }
 }, 75_000);
 
+test("projects.create({ project }) is a saga on /: the directory row, the `project` processor row, `project/create-requested` under the caller, then the processor seeds /repos/config, publishes it and lands `project/created` — the catalog and the apex say so; the same slug again appends nothing new", async () => {
+  const slug = freshDnsSafeProjectSlug("create-saga");
+  const api = session().authenticate(adminCredentials());
+  // returns AT ONCE — the request is on the log, the certificate is the processor's to land
+  using itx = await api.projects.create({ project: slug });
+  const { projectId, projectSlug } = await itx.whoami();
+  expect(projectSlug).toBe(slug);
+  const projectFacts = async () =>
+    (await readAll(itx)).filter((e) => e.type.startsWith("events.iterate.com/project/"));
+  const created = await until("project/created on /", async () =>
+    (await projectFacts()).find((e) => e.type === "events.iterate.com/project/created"),
+  );
+  const [requested, ...rest] = await projectFacts();
+  // the saga's own facts on /: the request, the apex pointed at the seeded commit, the certificate
+  expect([requested, ...rest].map((e) => e.type)).toEqual([
+    "events.iterate.com/project/create-requested",
+    "events.iterate.com/project/ingress-configured",
+    "events.iterate.com/project/created",
+  ]);
+  expect(requested.payload).toEqual({ slug, orgId: expect.any(String) }); // the directory row's facts
+  expect(requested.source?.principal).toEqual({ actor: "admin" }); // the caller's, not the platform's
+  expect(created.payload).toEqual({}); // existence only
+  expect(await processorNames(itx)).toContain("project");
+  // the seed: the config repo in the catalog (its certificate crossed to /), its two files on main
+  expect((await itx.repos.list()).map((r: { path: string }) => r.path)).toEqual(["/repos/config"]);
+  expect((await itx.repos.get("/repos/config").listFiles()).paths).toEqual([
+    "AGENTS.md",
+    "worker.ts",
+  ]);
+  // published: the apex answers the seeded homepage worker (subdomain routing under the test's base)
+  expect((await fetchProjectUrl(projectUrl({ project: slug, path: "/" }))).text.trim()).toBe(
+    `Homepage of project ${slug}`,
+  );
+  // the facet reduces its own certificate: the state the dash renders
+  expect(await itx.facets.get("project").liveSnapshot()).toMatchObject({
+    state: { creation: { status: "created", offset: created.offset } },
+  });
+  // the same slug again: the directory row is the same project, the processor row is already
+  // there (idempotent at the door), the request is keyed — nothing new lands on / (the wake record
+  // and the alarm trace are the platform's own, not the create's, so they are left out)
+  const rows = async () =>
+    (await readAll(itx))
+      .filter((e) => !/\/stream\/(woken|trace\/)/.test(e.type))
+      .map((e) => `${e.offset} ${e.type}`);
+  const before = await rows();
+  using again = await api.projects.create({ project: slug });
+  expect((await again.whoami()).projectId).toBe(projectId);
+  expect(await rows()).toEqual(before);
+});
+
 test("the built-in cd carries the OAuth principal to a sibling context", async () => {
   const slug = freshDnsSafeProjectSlug("cd-who");
   const member = { email: `${slug}@example.com` };
@@ -237,12 +288,12 @@ test("a personal access token — one OAuth grant the account mints — is the u
 
   // a project host: the covered project's app sees the stamped principal and no bearer; a project
   // the token does not cover is refused before any Durable Object is dialled
-  const base = projectHostnameBase();
+  const echoOf = (project: string) => projectUrl({ project, app: "echo", path: "/" });
   const bearer = { Authorization: `Bearer ${token}` };
-  const covered = await fetchProjectHost(`echo--${slug}.${base}`, "/", bearer);
+  const covered = await fetchProjectUrl(echoOf(slug), bearer);
   expect(covered.status, covered.text).toBe(200);
   expect(JSON.parse(covered.text)).toEqual({ principal, authorization: null });
-  expect((await fetchProjectHost(`echo--${otherSlug}.${base}`, "/", bearer)).status).toBe(403);
+  expect((await fetchProjectUrl(echoOf(otherSlug), bearer)).status).toBe(403);
 
   // the account lists it as what it is …
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory read on the account session.
@@ -252,6 +303,49 @@ test("a personal access token — one OAuth grant the account mints — is the u
   expect(grant?.kind).toBe("Personal access token");
   // the provider keeps its deadline in seconds; the list shows that, the mint the millisecond one
   expect(Math.abs((grant?.expiresAt ?? 0) - expiresAt)).toBeLessThan(2000);
+  // MCP runs on the project root, with the user and grant stamped on the request.
+  const runPair = (await readAll(api.projects.get(projectId))).filter((e) =>
+    e.type.startsWith("events.iterate.com/context/run-"),
+  );
+  expect(runPair.map((e) => e.type)).toEqual([
+    "events.iterate.com/context/run-requested",
+    "events.iterate.com/context/run-settled",
+  ]);
+  expect(runPair[0].source).toEqual({ principal, grant: grant!.id });
+  expect(runPair[1].payload).toEqual({
+    requestOffset: runPair[0].offset,
+    settlement: {
+      status: "succeeded",
+      result: expect.objectContaining({ projectId, path: "/" }), // whoami: the slug and url ride along
+    },
+  });
+  expect(
+    (await readAll(api.projects.get(projectId))).some(
+      (e) => e.type === "events.iterate.com/project/mcp-connection-created",
+    ),
+  ).toBe(false);
+  // THE ACCOUNT'S RECORD: the mint is a fact on the person's own context, stamped with them and
+  // the issuer session it was minted through (best-effort and async: wait for it)
+  const accountEvents = async () => {
+    // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded read of the account context per attempt.
+    using reader = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
+    return (await reader.authenticate({ type: "from-server-cookie" }).user.readEvents(0, 500))
+      .events as { type: string; payload: Record<string, unknown>; source?: unknown }[];
+  };
+  const minted = await until("the mint is on the account context", async () =>
+    (await accountEvents()).find(
+      (e) =>
+        e.type === "events.iterate.com/account/grant-minted" && e.payload.grantId === grant!.id,
+    ),
+  );
+  expect(minted.payload).toEqual({
+    grantId: grant!.id,
+    name: "E2E personal access token",
+    projects: [projectId],
+    expiresAt,
+  });
+  // stamped with the CONNECTION that minted it — the browser session's grant, the provider's 16 characters
+  expect(minted.source).toEqual({ principal, grant: expect.stringMatching(/^[A-Za-z0-9_-]{16}$/) });
   // … and ends it: the same bearer is refused on /api, /mcp and the project host at once
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded revocation on the account session.
   using ender = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
@@ -264,7 +358,14 @@ test("a personal access token — one OAuth grant the account mints — is the u
   const endedMcp = await fetch(mcp, { method: "POST", headers: mcpHeaders, body: "{}" });
   expect(endedMcp.status).toBe(401);
   await endedMcp.body?.cancel();
-  expect((await fetchProjectHost(`echo--${slug}.${base}`, "/", bearer)).status).toBe(401);
+  expect((await fetchProjectUrl(echoOf(slug), bearer)).status).toBe(401);
+  // … and the end is the account's fact too
+  const ended = await until("the end is on the account context", async () =>
+    (await accountEvents()).find(
+      (e) => e.type === "events.iterate.com/account/grant-ended" && e.payload.grantId === grant!.id,
+    ),
+  );
+  expect(ended.source).toEqual({ principal, grant: expect.stringMatching(/^[A-Za-z0-9_-]{16}$/) });
 });
 
 // ── the doors ──
@@ -317,17 +418,17 @@ export default class Mine extends WorkerEntrypoint {
   expect(html).toContain("dynamic web capability");
 });
 
-test("/version answers `<deployId> <environmentName>` — the deploy stamp a smoke waits for", async () => {
+test("/version answers `<deployId> <platformOrigin>` — the deploy stamp a smoke waits for", async () => {
   // The deploy id is Cloudflare's version id of the deploy (what `wrangler deploy` prints) — local
-  // workerd mints one too — or "unversioned" where the binding is absent; then the configuration
-  // (src/worker.ts `parseAppConfig`): the e2e lane names itself "e2e", a deployed worker names its environment.
+  // workerd mints one too — or "unversioned" where the binding is absent; then the platform origin:
+  // the issuer (src/app-config.ts `urls.os`, or the request's own origin where a deployment leaves
+  // it blank) — the one thing that names a deployment, local or deployed.
   const versionRes = await fetch(workerUrl("/version"));
   expect(versionRes.status).toBe(200);
-  const [deployId, environmentName, ...rest] = (await versionRes.text()).trim().split(" ");
+  const [deployId, platformOrigin, ...rest] = (await versionRes.text()).trim().split(" ");
   expect(rest).toEqual([]);
   expect(deployId).toMatch(/^(?:[0-9a-f-]{36}|unversioned)$/);
-  if (projectHostsAreLocal()) expect(environmentName).toBe("e2e");
-  else expect(environmentName).toMatch(/^[a-z][a-z0-9_-]*$/);
+  expect(platformOrigin).toBe(new URL(workerUrl("/")).origin);
 });
 
 // ── THE CROSS-CONTEXT LEND PIN — the reviewer's exact probe: root provides a live fn under `itx.clash`,

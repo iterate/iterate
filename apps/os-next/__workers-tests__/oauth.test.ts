@@ -3,23 +3,26 @@ import { newWebSocketRpcSession, RpcTarget, RpcStub } from "capnweb";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { appSession } from "iterate/next/app-server";
+import { platformAddressesOf } from "../src/app-config.ts";
 import { directory } from "../src/directory.ts";
 import { browserAuthorization } from "../src/browser-client.ts";
 import { oauthHelpers } from "../src/oauth.ts";
 import type { Env } from "../src/control-plane.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import definitions from "../src/control-plane.sql?raw";
+import { loginPassword } from "./support.ts";
 
 const bindings = env as unknown as Env;
 const ORIGIN = "https://control.test";
-const adminSecret = bindings.APP_CONFIG_ADMIN_API_SECRET!;
+const adminSecret = bindings.APP_CONFIG_SECRETS__ADMIN_BEARER!;
 const sessions: Disposable[] = [];
 const call = (path: string, init?: RequestInit) => {
   const headers = new Headers(init?.headers);
   if (path === "/login") headers.set("Authorization", `Bearer ${adminSecret}`);
   return SELF.fetch(new Request(`${ORIGIN}${path}`, { redirect: "manual", ...init, headers }));
 };
-const helpers = () => oauthHelpers(bindings);
+const helpers = () =>
+  oauthHelpers(bindings, platformAddressesOf(bindings, new Request(`${ORIGIN}/`)));
 
 beforeAll(async () => {
   await bindings.DB.batch(
@@ -50,12 +53,21 @@ async function rpc(
   });
   expect(response.status, await (response.status === 101 ? "" : response.text())).toBe(101);
   response.webSocket!.accept();
+  // The server's close, as the client sees it: what a row awaits before asserting that every stub
+  // is dead — a call sent while the close is in flight surfaces capnweb's `'' is not a function`,
+  // not the close reason (2 of 8 Test jobs, 2026-09-22).
+  const closed = new Promise<void>((resolve) =>
+    response.webSocket!.addEventListener("close", () => resolve(), { once: true }),
+  );
   const transport = newWebSocketRpcSession<IterateRpcTarget>(
     response.webSocket! as unknown as WebSocket,
   );
   sessions.push(transport);
+  // The guard's 30 s timer is armed when the socket binds its grant — here, for an upgrade's bearer
+  // — so a row that measures the interval measures from this instant, not from its own later revoke.
+  const boundAt = Date.now();
   const root = transport.authenticate({ type: credential });
-  return { root };
+  return { root, closed, boundAt };
 }
 
 async function tool(token: string, name: string, args: object = {}) {
@@ -97,7 +109,11 @@ async function tool(token: string, name: string, args: object = {}) {
 async function grant(resources: string[], projects: string[] = ["oauth-a"]) {
   const login = await call("/login", {
     method: "POST",
-    body: new URLSearchParams({ email: "oauth-new@example.com", next: "/" }),
+    body: new URLSearchParams({
+      email: "oauth-new@example.com",
+      password: loginPassword(),
+      next: "/",
+    }),
   });
   const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
   const user = await directory(bindings.DB).upsertUser("oauth-new@example.com");
@@ -153,7 +169,7 @@ async function grant(resources: string[], projects: string[] = ["oauth-a"]) {
       oauthA,
       oauthB,
     };
-  const tokenResponse = await call("/oauth/token", {
+  const tokenResponse = await call("/oauth2/token", {
     method: "POST",
     body: new URLSearchParams({
       grant_type: "authorization_code",
@@ -177,8 +193,10 @@ test("discovery advertises CIMD AND DCR: the registration endpoint is published 
   expect(metadata.client_id_metadata_document_supported).toBe(true);
   expect(metadata.token_endpoint_auth_methods_supported).toContain("none");
   expect(metadata.code_challenge_methods_supported).toEqual(["S256"]);
-  expect(metadata.registration_endpoint).toBe(`${ORIGIN}/oauth/register`);
-  const registered = await call("/oauth/register", {
+  expect(metadata.authorization_endpoint).toBe(`${ORIGIN}/oauth2/auth`);
+  expect(metadata.token_endpoint).toBe(`${ORIGIN}/oauth2/token`);
+  expect(metadata.registration_endpoint).toBe(`${ORIGIN}/oauth2/register`);
+  const registered = await call("/oauth2/register", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -218,7 +236,7 @@ test("the configured header bearer is the same administrator at both protocols",
         })
       ).body.result.content[0].text,
     ),
-  ).toEqual({ projectId: "admin-probe", path: "/" });
+  ).toEqual({ projectId: "admin-probe", path: "/" }); // MCP executes on the authorized project root.
   expect((await call("/api", { headers: { Authorization: "Bearer wrong" } })).status).toBe(401);
   expect((await tool("wrong", "run", { project: "x", script: "async () => 1" })).status).toBe(401);
 });
@@ -261,7 +279,7 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
   expect(
     (await call("/api", { headers: { Authorization: `Bearer ${token.access_token}` } })).status,
   ).toBe(401);
-  const broaden = await call("/oauth/token", {
+  const broaden = await call("/oauth2/token", {
     method: "POST",
     body: new URLSearchParams({
       grant_type: "refresh_token",
@@ -271,7 +289,7 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
     }),
   });
   expect(broaden.status).toBe(400);
-  const refresh = await call("/oauth/token", {
+  const refresh = await call("/oauth2/token", {
     method: "POST",
     body: new URLSearchParams({
       grant_type: "refresh_token",
@@ -285,7 +303,7 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
   // explicitly keeps that token usable until the client uses a newer one.
   expect(
     (
-      await call("/oauth/token", {
+      await call("/oauth2/token", {
         method: "POST",
         body: new URLSearchParams({
           grant_type: "refresh_token",
@@ -307,7 +325,7 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
   ).toBe(401);
   expect(
     (
-      await call("/oauth/token", {
+      await call("/oauth2/token", {
         method: "POST",
         body: new URLSearchParams({
           grant_type: "refresh_token",
@@ -346,7 +364,7 @@ test.each(["revoked", "membership"])(
   "a live session loses held capabilities after %s within 60 seconds",
   async (reason) => {
     const flow = await grant([`${ORIGIN}/api`]);
-    const { root } = await rpc(flow.token!.access_token);
+    const { root, closed, boundAt } = await rpc(flow.token!.access_token);
     using context = await root.projects.get(flow.oauthA.id);
     const native = (await context.invoke(
       `itx.workers.get({source: {"cap.js": "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class extends WorkerEntrypoint { ping() { return 'pong'; } }"}})`,
@@ -381,8 +399,20 @@ test.each(["revoked", "membership"])(
         .run();
     }
     try {
-      // Real elapsed time: this proves the deployed timer interval, not a test-only configuration.
-      await new Promise((resolve) => setTimeout(resolve, 31_000));
+      // Real elapsed time: the guard's own timer closes the socket — no sooner than 30 s after the
+      // bind (less a second of timer slack), within its 60 s hard bound — and only then are the
+      // stubs asserted dead, so no call races the close.
+      let bound: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        closed,
+        new Promise<never>((_, reject) => {
+          bound = setTimeout(
+            () => reject(new Error("the guard did not close the socket within 60 s")),
+            60_000,
+          );
+        }),
+      ]).finally(() => clearTimeout(bound));
+      expect(Date.now() - boundAt).toBeGreaterThanOrEqual(29_000);
       await expect(root.whoami()).rejects.toThrow(/Session|closed|RPC|revoked/i);
       await expect(context.invoke("itx.kv.get('live-auth-probe')")).rejects.toThrow(
         /Session|closed|RPC|revoked/i,
@@ -400,12 +430,41 @@ test.each(["revoked", "membership"])(
   },
 );
 
+test("a socket holding no project re-checks its grant every thirty seconds and reads no membership", async () => {
+  const flow = await grant([`${ORIGIN}/api`]);
+  const { root } = await rpc(flow.token!.access_token);
+  expect((await root.whoami()).actor).toBe(flow.user.id);
+  // The worker under test runs in this isolate on these bindings: its D1 statements pass this spy.
+  const prepare = vi.spyOn(bindings.DB, "prepare");
+  // Real elapsed time: one tick of the deployed 30 s interval, nothing test-only.
+  await new Promise((resolve) => setTimeout(resolve, 31_000));
+  const statements = prepare.mock.calls.map(([sql]) => sql);
+  prepare.mockRestore();
+  // Every socket in this test holds no project (this one, and `grant()`'s issuer session that
+  // approved the consent): each tick reads its grant's revocation row and nothing else.
+  expect(statements.filter((sql) => sql.includes("FROM oauth_activity"))).not.toEqual([]);
+  expect(statements.filter((sql) => sql.includes("JOIN org_members"))).toEqual([]);
+  expect((await root.whoami()).actor).toBe(flow.user.id); // still live: it holds nothing to lose
+});
+
 test("console and project browsers use the same CIMD flow and independent grants", async () => {
   let logoutUnavailable = false;
   const metadataFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
-    if (!["/.auth/client.json", "/oauth/token", "/api"].includes(url.pathname))
+    if (url.href === "https://kit.test/devices/missing.json")
+      return new Response("Not found", { status: 404 });
+    if (url.origin === "https://kit.test" && url.pathname.startsWith("/devices/"))
+      return Response.json({
+        client_id: url.href,
+        client_name: "Home Assistant Voice Preview Edition",
+        logo_uri: "https://kit.test/vendors/home-assistant.png",
+        redirect_uris: ["https://kit.test/.auth/callback"],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code"],
+        response_types: ["code"],
+      });
+    if (!["/.auth/client.json", "/oauth2/token", "/api"].includes(url.pathname))
       throw new Error(`Unexpected external fetch: ${url}`);
     if (logoutUnavailable && url.pathname === "/api")
       return new Response("Unavailable", { status: 503 });
@@ -413,7 +472,11 @@ test("console and project browsers use the same CIMD flow and independent grants
   });
   const issuerLogin = await call("/login", {
     method: "POST",
-    body: new URLSearchParams({ email: "browser@example.com", next: "/" }),
+    body: new URLSearchParams({
+      email: "browser@example.com",
+      password: loginPassword(),
+      next: "/",
+    }),
   });
   const issuerCookie = issuerLogin.headers.get("set-cookie")!.split(";")[0]!;
   const user = await directory(bindings.DB).upsertUser("browser@example.com");
@@ -517,12 +580,18 @@ test("console and project browsers use the same CIMD flow and independent grants
         (await tool(personal.token, "run", { script: "async (itx) => itx.whoami()" })).body.result
           .content[0].text,
       ),
-    ).toEqual({ projectId: browserA.id, path: "/" });
+    ).toEqual({
+      projectId: browserA.id,
+      path: "/", // the token's own connection context, named by its grant (mcp.ts)
+      projectSlug: "browser-a",
+      projectUrl: "https://browser-a.projects.test/",
+    });
     const { root: personalApi } = await rpc(personal.token);
     expect((await personalApi.projects.list()).map((p: { id: string }) => p.id)).toEqual([
       browserA.id,
     ]);
-    // A device says `bearer` for the same act: the token rode the upgrade, hand me that session.
+    // A device says `bearer` for the same act (Kit firmware, itx_mount.c): the token rode the
+    // upgrade, hand me that session.
     const { root: bearerApi } = await rpc(personal.token, "bearer");
     expect((await bearerApi.projects.list()).map((p: { id: string }) => p.id)).toEqual([
       browserA.id,
@@ -531,9 +600,20 @@ test("console and project browsers use the same CIMD flow and independent grants
     await expect(Promise.resolve().then(() => personalApi.user.whoami())).rejects.toThrow(
       /bound to projects/,
     );
+    await expect(
+      consoleLogin.root.grants.mint({
+        name: "Unavailable device",
+        projects: [browserA.id],
+        clientId: "https://kit.test/devices/missing.json",
+      }),
+    ).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      message: "The device's OAuth metadata could not be loaded. Try preparing the device again.",
+    });
     // A device's token: `expiresAt` asks for years, capped at ten; the provider's token agrees.
     const device = await consoleLogin.root.grants.mint({
       name: "Kit HAVPE",
+      clientId: "https://kit.test/devices/havpe/clients/unit-one.json",
       projects: [browserA.id],
       expiresAt: Date.now() + 20 * 365 * 24 * 3600_000,
     });
@@ -541,12 +621,38 @@ test("console and project browsers use the same CIMD flow and independent grants
     expect(device.expiresAt - Date.now()).toBeLessThan(11 * 365 * 24 * 3600_000);
     const storedDevice = await helpers().unwrapToken(device.token);
     expect(Math.abs(storedDevice!.expiresAt * 1000 - device.expiresAt)).toBeLessThan(2000);
+    const secondDevice = await consoleLogin.root.grants.mint({
+      name: "Kit HAVPE two",
+      projects: [browserA.id],
+      clientId: "https://kit.test/devices/havpe/clients/unit-two.json",
+    });
+    const [, firstDeviceId] = device.token.split(":");
+    const [, secondDeviceId] = secondDevice.token.split(":");
+    const deviceInventory = await consoleLogin.root.grants.list();
+    expect(deviceInventory.items.find((item) => item.id === firstDeviceId)).toMatchObject({
+      name: "Kit HAVPE",
+      kind: "Device",
+      clientId: "https://kit.test/devices/havpe/clients/unit-one.json",
+      logoUri: "https://kit.test/vendors/home-assistant.png",
+    });
+    expect(deviceInventory.items.find((item) => item.id === secondDeviceId)?.clientId).toBe(
+      "https://kit.test/devices/havpe/clients/unit-two.json",
+    );
+    const { root: deviceApi } = await rpc(device.token, "bearer");
+    expect((await deviceApi.projects.list()).map((p) => p.id)).toEqual([browserA.id]);
+    await expect(deviceApi.grants.list()).rejects.toThrow(/Account permission/);
+    await consoleLogin.root.grants.end(firstDeviceId!);
+    expect(
+      (await call("/api", { headers: { Authorization: `Bearer ${device.token}` } })).status,
+    ).toBe(401);
+    const { root: secondDeviceApi } = await rpc(secondDevice.token, "bearer");
+    expect((await secondDeviceApi.projects.list()).map((p) => p.id)).toEqual([browserA.id]);
     await expect(
       consoleLogin.root.grants.mint({ name: "Stale", projects: [browserA.id], expiresAt: 1 }),
     ).rejects.toThrow(/at least a minute/);
     expect(
       (
-        await call("/oauth/token", {
+        await call("/oauth2/token", {
           method: "POST",
           body: new URLSearchParams({
             grant_type: "refresh_token",

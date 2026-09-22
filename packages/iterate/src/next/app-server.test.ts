@@ -14,7 +14,11 @@ const ISSUER = "https://os.example";
  *  port so it fails at once and the page degrades. */
 function login(path: string, scopes: string[]) {
   const sessions = {
-    getByName: () => ({ bearer: async () => "token", scopes: async () => scopes }),
+    getByName: () => ({
+      bearer: async () => "token",
+      scopes: async () => scopes,
+      host: async () => ({ issuer: ISSUER, resource: "http://127.0.0.1:1/api" }),
+    }),
   } as unknown as DurableObjectNamespace<never>;
   return appAuth(
     new Request(`https://notes.example${path}`, {
@@ -74,5 +78,81 @@ describe("/.auth/login with a session the platform honours", () => {
     const html = await response!.text();
     expect(html).not.toContain("<b>x</b>");
     expect(html).toContain("&#60;b&#62;x&#60;/b&#62;");
+  });
+});
+
+describe("a browser CONNECTED to another issuer stays there", () => {
+  const CONNECTED = "https://iterate.someorg.example";
+  /** A session bound to `CONNECTED` whose grant the platform no longer honours (the probe is 401):
+   *  what `/.auth/login` starts next, and where `/.auth/logout` sends the person. */
+  function connected(path: string, init?: RequestInit) {
+    const calls: string[] = [];
+    const sessions = {
+      getByName: () => ({
+        bearer: async () => "stale",
+        scopes: async () => ["iterate"],
+        host: async () => ({ issuer: CONNECTED, resource: `${CONNECTED}/api` }),
+        discard: async () => calls.push("discard"),
+        end: async () => calls.push("end"),
+        begin: async (host: { issuer: string }) => {
+          calls.push(`begin ${host.issuer}`);
+          return `${host.issuer}/oauth2/auth?state=x`;
+        },
+      }),
+    } as unknown as DurableObjectNamespace<never>;
+    const response = appAuth(
+      new Request(`https://notes.example${path}`, {
+        ...init,
+        headers: {
+          cookie: "__Host-itx-session=0c9a1c4e-7d2b-4d7e-9a4a-1f3c5e7b9d21",
+          ...(init?.headers as Record<string, string>),
+        },
+      }),
+      {
+        sessions,
+        issuer: ISSUER,
+        resource: `${ISSUER}/api`,
+        api: () => new Response("", { status: 401 }),
+      },
+    );
+    return { response, calls };
+  }
+
+  test("an expired grant signs in again AT THE CONNECTED ISSUER, not the deployment's own", async () => {
+    const { response, calls } = connected("/.auth/login?next=%2Fprojects%2Facme&scope=iterate");
+    const answer = await response;
+    expect(answer?.status).toBe(302);
+    expect(answer?.headers.get("location")).toBe(`${CONNECTED}/oauth2/auth?state=x`);
+    expect(calls).toEqual(["discard", `begin ${CONNECTED}`]);
+  });
+
+  test("a sign-out from a connected issuer returns through that issuer's connect page, the scopes the login asked for kept", async () => {
+    // the Sign-in-again form's `next` is the login URL that showed it, scopes and all
+    const loginUrl =
+      "/.auth/login?next=%2Fprojects%2Facme&scope=iterate+account+organizations%3Awrite";
+    const { response, calls } = connected(`/.auth/logout?next=${encodeURIComponent(loginUrl)}`, {
+      method: "POST",
+      headers: { origin: "https://notes.example" },
+    });
+    const answer = await response;
+    expect(answer?.status).toBe(303);
+    expect(answer?.headers.get("location")).toBe(
+      `/.auth/connect?${new URLSearchParams({
+        issuer: CONNECTED,
+        next: loginUrl,
+        scope: "iterate account organizations:write",
+      })}`,
+    );
+    expect(calls).toEqual(["end"]);
+  });
+
+  test("a sign-out from a connected issuer bound for an ordinary page carries no scope", async () => {
+    const { response } = connected("/.auth/logout?next=%2Fprojects%2Facme", {
+      method: "POST",
+      headers: { origin: "https://notes.example" },
+    });
+    expect((await response)?.headers.get("location")).toBe(
+      `/.auth/connect?${new URLSearchParams({ issuer: CONNECTED, next: "/projects/acme", scope: "" })}`,
+    );
   });
 });

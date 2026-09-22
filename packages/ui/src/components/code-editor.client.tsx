@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useEffectEvent, useRef } from "react";
 import { basicSetup } from "codemirror";
 import { json } from "@codemirror/lang-json";
 import { yaml } from "@codemirror/lang-yaml";
@@ -22,9 +22,9 @@ export interface CodeEditorProps {
 /**
  * The editable sibling of `SerializedObjectCodeBlock`: a controlled CodeMirror
  * surface used as a composer input. The editor instance is created once and
- * kept alive — callbacks live in refs so a parent re-render never tears it
- * down, and external `value` changes (e.g. loading an example) are dispatched
- * as edits rather than remounting the view.
+ * kept alive — the callbacks reach it as Effect Events, so a parent re-render
+ * never tears it down, and external `value` changes (e.g. loading an example)
+ * are dispatched as edits rather than remounting the view.
  */
 export function CodeEditor({
   value,
@@ -37,10 +37,9 @@ export function CodeEditor({
 }: CodeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  const onValueChangeRef = useRef(onValueChange);
-  const onSubmitRef = useRef(onSubmit);
-  onValueChangeRef.current = onValueChange;
-  onSubmitRef.current = onSubmit;
+  // Effect Events: the view below calls whatever the latest render passed, without being rebuilt
+  const emitValueChange = useEffectEvent(onValueChange);
+  const emitSubmit = useEffectEvent(() => onSubmit?.());
 
   // Recreate only when the structural config (language, placeholder) changes —
   // not on every value/callback change, which would steal focus mid-edit.
@@ -59,13 +58,13 @@ export function CodeEditor({
           {
             key: "Mod-Enter",
             run: () => {
-              onSubmitRef.current?.();
+              emitSubmit();
               return true;
             },
           },
         ]),
         EditorView.updateListener.of((update) => {
-          if (update.docChanged) onValueChangeRef.current(update.state.doc.toString());
+          if (update.docChanged) emitValueChange(update.state.doc.toString());
         }),
         EditorView.theme({
           "&": { backgroundColor: "transparent", maxHeight: "12rem" },
@@ -85,7 +84,7 @@ export function CodeEditor({
       view.destroy();
       viewRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- created once per config; value and callbacks sync via refs / a separate effect
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- created once per config; the value syncs via a separate effect, the callbacks are Effect Events
   }, [language, placeholder, focusOnMount]);
 
   // Keep the document in sync when the value is driven from outside.

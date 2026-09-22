@@ -17,7 +17,7 @@
 // again". A bare `test.fails` cannot tell a fix from a different breakage; the guard can. To flip a
 // fixed row to `test`, delete its guard line and keep its assertions.
 //
-// Two cell-cap facts these rows lean on (scratchpad/platform-facts.md §5): a SQLite-backed DO's
+// Two cell-cap facts these rows lean on: a SQLite-backed DO's
 // storage cell — a kv value, a TEXT column — is capped by SQLITE_LIMIT_LENGTH: 4 MiB in local
 // workerd, 2 MB in production (docs). The append ceiling (stream.ts EVENT_BODY_MAX_CHARS) is 8 MiB,
 // so a body can be small enough to append and too big to checkpoint or memo.
@@ -109,7 +109,7 @@ const untilIssue = (failureSite: string, pattern: RegExp, timeoutMs = 10_000): P
 
 /** What `itx.enableProcessorByEvent(name, { source, className })` appends, spelled RAW on the DO's `append`:
  *  ONE subscription-configured row whose target hosts the class as the facet `name`
- *  (alarm-quiesce.test.ts spells it the same way). */
+ *  (alarm-and-pins.test.ts spells it the same way). */
 const hostingTarget = (name: string, source: string, className: string): ItxExpression => [
   "itx",
   "facets",
@@ -223,19 +223,19 @@ test("A2 — CONTROL: the refused configure leaves memory and the log consistent
   };
   expect(Object.keys(core.state.itxExpressionRewriteRules)).toEqual(["itx.bigA"]);
   expect(core.offset).toBe(a); // reduced through rule A, not a phantom B
-  // The refused batch's offset was never burnt: A's live-state delta took a+1, so the next durable
-  // event lands at a+2 — exactly where B would have.
+  // The refused batch's offset was never burnt: the next durable event lands at a+1 — exactly
+  // where B would have.
   const c = offsetOf(
     await s.append({
       type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: { match: "itx.small", target: "itx.whoami" },
     }),
   );
-  expect(c).toBe(a + 2);
+  expect(c).toBe(a + 1);
   const page = (await s.invoke(["itx", ["readEvents", 0, 500]])) as {
     events: { offset: number }[];
   };
-  expect(page.events.map((e) => e.offset)).toEqual([1, 2, 4, a, c]); // 4 = the config subscription (birth)
+  expect(page.events.map((e) => e.offset)).toEqual([1, 2, a, c]);
   expect(drainIssues()).toEqual([]);
 });
 
@@ -585,7 +585,7 @@ async function uncallableCursorRow(ctx: string): Promise<SubscriptionRow> {
   });
 }
 /** Fire the DO's alarm up to `fires` times with Date faked 40 minutes further each time (past the
- *  ladder's 30-minute ceiling plus its 20% jitter; sockets and real timers stay real — support.ts's quiesce shape), and
+ *  ladder's 30-minute ceiling plus its 20% jitter; sockets and real timers stay real — support.ts's releasePins shape), and
  *  return how many alarms actually ran and the row after the last. Stops early when `halted`. */
 async function walkLadder(
   ctx: string,

@@ -5,10 +5,15 @@ import { listenOnFetchSafePort } from "../../packages/shared/src/test-support/fe
 import { classifyChanges, planPreview } from "./change-plan.ts";
 import { CommitHistory } from "./commit-history.ts";
 
-test("a product head decides from one GitHub request without inspecting main", async () => {
+test("a product head reads only its commit and the branch exemption comparison", async () => {
   const requests: string[] = [];
   await using github = await githubServer((url) => {
     requests.push(url.pathname);
+    if (url.pathname.includes("/compare/"))
+      return Response.json({
+        merge_base_commit: { sha: "base" },
+        files: [{ filename: "apps/os/index.ts" }],
+      });
     if (url.pathname === "/repos/iterate/iterate/commits/head") {
       return Response.json({
         sha: "head",
@@ -23,7 +28,10 @@ test("a product head decides from one GitHub request without inspecting main", a
     action: "deploy",
     changes: { Product: ["apps/os/index.ts"] },
   });
-  expect(requests).toEqual(["/repos/iterate/iterate/commits/head"]);
+  expect(requests).toEqual([
+    "/repos/iterate/iterate/commits/head",
+    "/repos/iterate/iterate/compare/main...head",
+  ]);
 });
 
 test.each(["success", "failure"] as const)(
@@ -33,7 +41,10 @@ test.each(["success", "failure"] as const)(
     await using github = await githubServer((url) => {
       requests.push(url.pathname);
       if (url.pathname.includes("/compare/")) {
-        return Response.json({ merge_base_commit: { sha: "base" } });
+        return Response.json({
+          merge_base_commit: { sha: "base" },
+          files: [{ filename: "apps/os/index.ts" }],
+        });
       }
       const sha = url.pathname.split("/").at(-1)!;
       const parents = { head: ["docs"], docs: ["base"], base: ["older"] }[sha];
@@ -65,7 +76,10 @@ test.each(["head", "parent"])(
   async (merge) => {
     await using github = await githubServer((url) => {
       if (url.pathname.includes("/compare/"))
-        return Response.json({ merge_base_commit: { sha: "base" } });
+        return Response.json({
+          merge_base_commit: { sha: "base" },
+          files: [{ filename: "apps/os/index.ts" }],
+        });
       const sha = url.pathname.split("/").at(-1)!;
       return Response.json({
         sha,
@@ -92,7 +106,10 @@ test("a full page of docs files deploys because later files could change product
   await using github = await githubServer((url) => {
     requests.push(url.pathname);
     if (url.pathname.includes("/compare/"))
-      return Response.json({ merge_base_commit: { sha: "parent" } });
+      return Response.json({
+        merge_base_commit: { sha: "parent" },
+        files: [{ filename: "apps/os/index.ts" }],
+      });
     const sha = url.pathname.split("/").at(-1)!;
     return Response.json({
       sha,
@@ -117,7 +134,10 @@ test("an unproven history stops after twenty commits and deploys", async () => {
   let reads = 0;
   await using github = await githubServer((url) => {
     if (url.pathname.includes("/compare/"))
-      return Response.json({ merge_base_commit: { sha: "base" } });
+      return Response.json({
+        merge_base_commit: { sha: "base" },
+        files: [{ filename: "apps/os/index.ts" }],
+      });
     if (++reads > 20) return new Response("Exceeded history budget", { status: 400 });
     const sha = url.pathname.split("/").at(-1)!;
     return Response.json({
@@ -138,7 +158,10 @@ test("an unproven history stops after twenty commits and deploys", async () => {
 test("a product-to-doc rename includes both paths, including newlines", async () => {
   await using github = await githubServer((url) => {
     if (url.pathname.includes("/compare/"))
-      return Response.json({ merge_base_commit: { sha: "head" } });
+      return Response.json({
+        merge_base_commit: { sha: "head" },
+        files: [{ filename: "apps/os/index.ts" }],
+      });
     return Response.json({
       sha: "head",
       parents: [{ sha: "parent" }],
@@ -196,10 +219,15 @@ test("Docs is an explicit allowlist; shipped markdown remains product work", () 
   });
 });
 
-test("new tests can reuse head's deployment without asking about main or old outcomes", async () => {
+test("new tests can reuse head's deployment without reading ancestors or old outcomes", async () => {
   const requests: string[] = [];
   await using github = await githubServer((url) => {
     requests.push(url.pathname);
+    if (url.pathname.includes("/compare/"))
+      return Response.json({
+        merge_base_commit: { sha: "base" },
+        files: [{ filename: "specs/new.spec.ts" }],
+      });
     return Response.json({
       sha: "head",
       parents: [{ sha: "parent" }],
@@ -214,7 +242,10 @@ test("new tests can reuse head's deployment without asking about main or old out
       findPreviewDeployment: async (commit) => ({ commit, slot: "preview-2" }),
     }),
   ).toMatchObject({ action: "reuse", deployment: { commit: "head", slot: "preview-2" } });
-  expect(requests).toEqual(["/repos/iterate/iterate/commits/head"]);
+  expect(requests).toEqual([
+    "/repos/iterate/iterate/commits/head",
+    "/repos/iterate/iterate/compare/main...head",
+  ]);
 });
 
 test.each(["apps/os/index.ts", "specs/new.spec.ts"])(
@@ -225,7 +256,10 @@ test.each(["apps/os/index.ts", "specs/new.spec.ts"])(
     await using github = await githubServer((url) => {
       requests.push(url.pathname);
       if (url.pathname.includes("/compare/"))
-        return Response.json({ merge_base_commit: { sha: "base" } });
+        return Response.json({
+          merge_base_commit: { sha: "base" },
+          files: [{ filename: "apps/os/index.ts" }],
+        });
       const sha = url.pathname.split("/").at(-1)!;
       const commit = {
         head: { parents: [{ sha: "untested" }], files: [{ filename: "README.md" }] },
@@ -257,7 +291,10 @@ test("untested ancestor tests can reuse a newer docs deployment", async () => {
   await using github = await githubServer((url) => {
     requests.push(url.pathname);
     if (url.pathname.includes("/compare/"))
-      return Response.json({ merge_base_commit: { sha: "base" } });
+      return Response.json({
+        merge_base_commit: { sha: "base" },
+        files: [{ filename: "apps/os/index.ts" }],
+      });
     const sha = url.pathname.split("/").at(-1)!;
     return Response.json({
       sha,
@@ -285,7 +322,10 @@ test.each([true, false])(
     const lookedUp: string[] = [];
     await using github = await githubServer((url) => {
       if (url.pathname.includes("/compare/"))
-        return Response.json({ merge_base_commit: { sha: "base" } });
+        return Response.json({
+          merge_base_commit: { sha: "base" },
+          files: [{ filename: "apps/os/index.ts" }],
+        });
       const sha = url.pathname.split("/").at(-1)!;
       if (sha === "older") return new Response("Walked past merge-base", { status: 400 });
       return Response.json({
@@ -313,7 +353,10 @@ test("tests cannot reuse a deployment older than an undeployed product change", 
   const lookedUp: string[] = [];
   await using github = await githubServer((url) => {
     if (url.pathname.includes("/compare/"))
-      return Response.json({ merge_base_commit: { sha: "base" } });
+      return Response.json({
+        merge_base_commit: { sha: "base" },
+        files: [{ filename: "apps/os/index.ts" }],
+      });
     const sha = url.pathname.split("/").at(-1)!;
     return Response.json({
       sha,
@@ -338,7 +381,10 @@ test.each(["root", "merge-base"])(
   async (boundary) => {
     await using github = await githubServer((url) => {
       if (url.pathname.includes("/compare/"))
-        return Response.json({ merge_base_commit: { sha: "head" } });
+        return Response.json({
+          merge_base_commit: { sha: "head" },
+          files: [{ filename: "apps/os/index.ts" }],
+        });
       return Response.json({
         sha: "head",
         parents: boundary === "root" ? [] : [{ sha: "older" }],
@@ -396,8 +442,10 @@ test("a pagination header prevents inheritance even when the first page is short
 });
 
 test("a failed deployment lookup is not a missing deployment", async () => {
-  await using github = await githubServer(() =>
-    Response.json({ sha: "head", parents: [], files: [{ filename: "specs/test.spec.ts" }] }),
+  await using github = await githubServer((url) =>
+    url.pathname.includes("/compare/")
+      ? Response.json({ merge_base_commit: { sha: "head" }, files: [] })
+      : Response.json({ sha: "head", parents: [], files: [{ filename: "specs/test.spec.ts" }] }),
   );
   await expect(
     planPreview(new CommitHistory(github.client, "iterate/iterate", "head", "main"), {
@@ -408,6 +456,161 @@ test("a failed deployment lookup is not a missing deployment", async () => {
     }),
   ).rejects.toThrow("Inventory unavailable");
 });
+
+test("os-next owns every path inside it, whatever else that path looks like", () => {
+  expect(
+    classifyChanges([
+      "apps/os-next/scripts/x.ts",
+      "apps/os-next/foo.tsx",
+      "apps/os-next/e2e/x.e2e.test.ts",
+      "apps/os-next/src/components/thing.tsx",
+      "apps/os-next/README.md",
+      "apps/os-next/src/routes.generated.ts",
+      ".depot/workflows/preview-os-next.yml",
+      "apps/os/index.ts",
+      ".depot/workflows/preview.yml",
+      "envs.ts",
+      "packages/shared/src/index.ts",
+      "scripts/lib/thing.ts",
+    ]),
+  ).toEqual({
+    OsNext: [
+      "apps/os-next/scripts/x.ts",
+      "apps/os-next/foo.tsx",
+      "apps/os-next/e2e/x.e2e.test.ts",
+      "apps/os-next/src/components/thing.tsx",
+      "apps/os-next/README.md",
+      "apps/os-next/src/routes.generated.ts",
+      ".depot/workflows/preview-os-next.yml",
+    ],
+    Product: ["apps/os/index.ts"],
+    CI: [".depot/workflows/preview.yml"],
+    // apps/os depends on these, so they keep deploying and testing the fleet.
+    Default: ["envs.ts", "packages/shared/src/index.ts"],
+    Scripts: ["scripts/lib/thing.ts"],
+  });
+});
+
+test.each([
+  {
+    name: "runtime",
+    headFiles: ["apps/os-next/src/runtime.ts"],
+    branchFiles: ["apps/os-next/src/runtime.ts"],
+    action: "skip",
+  },
+  {
+    name: "tests",
+    headFiles: ["apps/os-next/e2e/boot.test.ts"],
+    branchFiles: ["apps/os-next/e2e/boot.test.ts"],
+    action: "skip",
+  },
+  {
+    name: "workflow",
+    headFiles: [".depot/workflows/preview-os-next.yml"],
+    branchFiles: [".depot/workflows/preview-os-next.yml"],
+    action: "skip",
+  },
+  {
+    name: "mixed head",
+    headFiles: ["apps/os-next/src/runtime.ts", "packages/shared/src/index.ts"],
+    branchFiles: ["apps/os-next/src/runtime.ts", "packages/shared/src/index.ts"],
+    action: "deploy",
+  },
+  {
+    name: "untested product ancestor",
+    headFiles: ["apps/os-next/src/runtime.ts"],
+    branchFiles: ["apps/os-next/src/runtime.ts", "apps/os/index.ts"],
+    action: "deploy",
+  },
+  {
+    name: "reverted apps/os change",
+    headFiles: ["apps/os/index.ts"],
+    branchFiles: ["apps/os-next/src/runtime.ts"],
+    action: "skip",
+  },
+])("os-next exemption: $name", async ({ headFiles, branchFiles, action }) => {
+  const lookups: string[] = [];
+  await using github = await githubServer((url) => {
+    if (url.pathname.includes("/compare/"))
+      return Response.json({
+        merge_base_commit: { sha: "base" },
+        files: branchFiles.map((filename) => ({ filename })),
+      });
+    const sha = url.pathname.split("/").at(-1)!;
+    return Response.json({
+      sha,
+      parents: [{ sha: sha === "head" ? "product" : "base" }],
+      files: (sha === "head" ? headFiles : ["apps/os/index.ts"]).map((filename) => ({ filename })),
+    });
+  });
+  expect(
+    await planPreview(new CommitHistory(github.client, "iterate/iterate", "head", "main"), {
+      ...noEvidence,
+      findPreviewResult: async (commit) => {
+        lookups.push(commit);
+        return null;
+      },
+    }),
+  ).toMatchObject({ action });
+  expect(lookups).toEqual(action === "deploy" && headFiles.length === 1 ? ["product"] : []);
+});
+
+test.each([true, false])(
+  "docs alongside os-next keep inheritance behavior (settled=%s)",
+  async (settled) => {
+    await using github = await githubServer((url) => {
+      if (url.pathname.includes("/compare/"))
+        return Response.json({
+          merge_base_commit: { sha: "base" },
+          files: [{ filename: "docs/os-next.md" }, { filename: "apps/os-next/src/runtime.ts" }],
+        });
+      const sha = url.pathname.split("/").at(-1)!;
+      const commit = {
+        head: { parents: [{ sha: "next" }], files: [{ filename: "docs/os-next.md" }] },
+        next: { parents: [{ sha: "base" }], files: [{ filename: "apps/os-next/src/runtime.ts" }] },
+        base: { parents: [], files: [{ filename: "apps/os/index.ts" }] },
+      }[sha];
+      return Response.json({ sha, ...commit });
+    });
+    expect(
+      await planPreview(new CommitHistory(github.client, "iterate/iterate", "head", "main"), {
+        ...noEvidence,
+        findPreviewResult: async (commit) =>
+          settled && commit === "base"
+            ? { commit, conclusion: "success", url: "https://depot.dev/preview" }
+            : null,
+      }),
+    ).toMatchObject({ action: settled ? "inherit" : "deploy" });
+  },
+);
+
+test.each(["capped comparison", "rename from apps/os"])(
+  "%s cannot justify an os-next exemption",
+  async (scenario) => {
+    await using github = await githubServer((url) => {
+      if (url.pathname.includes("/compare/"))
+        return Response.json({
+          merge_base_commit: { sha: "base" },
+          files:
+            scenario === "capped comparison"
+              ? Array.from({ length: 300 }, (_, i) => ({ filename: `apps/os-next/${i}.ts` }))
+              : [{ filename: "apps/os-next/index.ts", previous_filename: "apps/os/index.ts" }],
+        });
+      const sha = url.pathname.split("/").at(-1)!;
+      return Response.json({
+        sha,
+        parents: [{ sha: "base" }],
+        files: [{ filename: sha === "head" ? "apps/os-next/index.ts" : "apps/os/index.ts" }],
+      });
+    });
+    expect(
+      await planPreview(
+        new CommitHistory(github.client, "iterate/iterate", "head", "main"),
+        noEvidence,
+      ),
+    ).toMatchObject({ action: "deploy", reason: expect.stringContaining("base") });
+  },
+);
 
 const noEvidence = {
   findPreviewResult: async () => null,

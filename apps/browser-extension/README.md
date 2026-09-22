@@ -1,61 +1,45 @@
 # Iterate browser extension
 
-A deliberately small internal Chrome extension. It opens as a side panel,
-connects to one Iterate project, shows that project's live processor state, and
-provides the project with a capability for opening an HTTP(S) page in Chrome.
+A Chrome side panel that lends this Chrome to an iterate project — the [static SPA archetype](../spa/README.md)
+as an extension: four finished files, no build, no package.
 
-This extension is not published in the Chrome Web Store. Install its unpacked
-build from this repository.
+- `manifest.json` — MV3; `debugger`, `identity`, `sidePanel`, `storage`; no host permissions.
+- `index.html` — the panel page (its styles inline).
+- `panel.js` — everything: the OAuth dance through Chrome's identity window (dynamic public-client
+  registration, PKCE S256, scope `iterate`, `resource` `<issuer>/api`, rotating refresh; tokens in
+  `chrome.storage.local`), one bare WebSocket to the platform's `/api` with the token IN
+  `authenticate`, and the lend: `itx.provide("itx.chrome", new ChromeBrowser())` on the chosen
+  project's root context — an `RpcTarget` with `openPage({ url })` (a new tab, answered once loaded),
+  `cdp(tabId, method, params)` (one raw Chrome DevTools Protocol command, commands only — no event
+  channel; `Runtime.evaluate`, `Page.captureScreenshot`, `Accessibility.getFullAXTree`, `Page.navigate`,
+  `Input.dispatchMouseEvent` cover most of what an agent wants) and `detach(tabId)`.
+- `capnweb.js` — the capnweb browser bundle, copied verbatim. Chrome loads no remote code from an
+  extension, so this is the one thing the SPA's CDN import map cannot give us. Refresh it from the
+  version os-next speaks: `cp "$(cd apps/os-next && node -p "require.resolve('capnweb').replace(/index\.cjs$/, 'index.js')")" apps/browser-extension/capnweb.js`.
+
+**Which tabs.** The project drives the tabs it opened through `openPage` and the tabs the person
+lent it with the panel's **Lend the current tab** button; `cdp` on any other tab is refused. The
+debugger attaches on the first `cdp` (Chrome shows its "is debugging this browser" bar on the tab)
+and lets go on `detach`, or on sign-out for every tab.
+
+**What reaches the stream.** The CDP wire stays a wire, but the browser's facts go to the project's
+root stream as ephemeral events: `events.iterate.com/chrome/attached { tabId, url }`,
+`chrome/navigated { tabId, url }` (main-frame navigations of attached tabs) and
+`chrome/detached { tabId, reason }` — live subscribers see them, and `readEvents` with
+`includeEphemeral` reads the recent ones. Nothing about a tab is written durably.
+
+The lend is a rewrite rule of the project's root context, `/`: anything calling
+`itx.chrome.openPage(...)` there runs it in the panel for as long as the panel is open; from another
+context of the project (an agent's script runs in its own) the spelling is
+`itx.cd('/').chrome.openPage(...)`, which is the prompt the panel shows to paste.
 
 ## Install
 
-Chrome 114 or newer and Node.js 22.15 or newer are required.
-
-1. From the repository root, install dependencies and build the extension:
-
-   ```bash
-   pnpm install
-   pnpm --dir apps/browser-extension build
-   ```
-
-2. Open `chrome://extensions` in Chrome.
-3. Enable **Developer mode**.
-4. Click **Load unpacked** and select `apps/browser-extension/dist` from this
-   checkout. Select `dist`, not `apps/browser-extension`.
-5. Open **Iterate** from Chrome's Extensions menu. Its toolbar action opens the
-   side panel beside the current page.
-6. Sign in, approve project access, and enter the project slug (for example,
-   `voice-test`).
-
-After rebuilding, click **Reload** on the extension's `chrome://extensions`
-card. During development, `pnpm --dir apps/browser-extension dev` rebuilds on
-file changes; Chrome still needs that reload to pick up each build.
-
-## What it does
-
-- Authenticates with `auth.iterate.com` using authorization code + PKCE and the
-  WebExtension Identity API. The service worker owns the interactive flow so it
-  can finish independently of the panel UI.
-- Uses `configureIterateSession`, `useItx`, and `useLiveState` from the published
-  `iterate` SDK to connect to `os.iterate.com` with the resulting bearer token.
-- Mounts `itx.chrome.openPage({ url })` at the selected project's root and shows
-  a ready-to-post agent prompt that exercises it.
-- Renders `itx.liveState.reduced` in a read-only text area.
-
-The manifest asks only for `identity`, `sidePanel`, and `storage`. Opening a new
-tab through `chrome.tabs.create()` does not require the broad `tabs` permission.
-All executable code is bundled into the extension; no code is loaded remotely.
-
-## Stable production identity
-
-The production OAuth client is public: there is intentionally no client secret
-inside a browser extension. It is registered with `auth.iterate.com` for the
-callback returned by `chrome.identity.getRedirectURL()`:
-
-- extension ID: `miplldbnkopaghnkiebdkefnmokobeco`
-- OAuth client ID: `kOlPgrOieTduTzepGDCODpHDeLIZJDyo`
-- callback: `https://miplldbnkopaghnkiebdkefnmokobeco.chromiumapp.org/`
-
-The manifest's public `key` preserves the legacy extension ID. Changing that
-key changes both the extension origin and OAuth callback, so the auth origin
-allowlist and OAuth client registration must be updated in the same release.
+Chrome 114 or newer. Open `chrome://extensions`, enable **Developer mode**, **Load unpacked**, select
+this folder. Open the panel once from Chrome's side panel menu (from then on the toolbar action opens
+it). Sign in — the platform's own login and consent pages open in a Chrome identity window; tick the
+project — then enter the project's slug or `prj_…` id and click **Open a page through the project**:
+the panel calls `itx.chrome.openPage` and then `itx.chrome.cdp(tabId, "Runtime.evaluate", …)`
+through the platform, which calls back into the panel, which opens the tab and reads its title. After editing a file, click **Reload** on the extension's card. Against a local
+os-next (`pnpm --dir apps/os-next dev -- --port 8797`), enter `http://localhost:8797` as the platform
+before signing in.

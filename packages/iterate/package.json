@@ -64,6 +64,7 @@
     "./next/principal": "./src/next/principal.ts",
     "./next/stream/processor": "./src/next/stream/processor.ts",
     "./next/oauth-scopes": "./src/next/oauth-scopes.ts",
+    "./next/project-ingress": "./src/next/project-ingress.ts",
     "./next/oauth": "./src/next/client/oauth.ts"
   },
   "publishConfig": {
@@ -251,6 +252,10 @@
       "./next/oauth-scopes": {
         "types": "./dist/next/oauth-scopes.d.ts",
         "import": "./dist/next/oauth-scopes.mjs"
+      },
+      "./next/project-ingress": {
+        "types": "./dist/next/project-ingress.d.ts",
+        "import": "./dist/next/project-ingress.mjs"
       },
       "./next/oauth": {
         "types": "./dist/next/client/oauth.d.ts",

@@ -3,26 +3,36 @@ import { RpcTarget } from "capnweb";
 import { z } from "zod";
 import { suggestOrganizationName } from "@iterate-com/shared/name-suggestions";
 import { codedError } from "iterate/next/lib";
-import { OAuthScope, OAuthScopes } from "iterate/next/oauth-scopes";
+import {
+  OAuthScope,
+  OAuthScopeDescriptions,
+  OAuthScopes,
+  type ConsentScope,
+} from "iterate/next/oauth-scopes";
+import {
+  customProjectHostOf,
+  projectAddressOf,
+  type IngressRouting,
+} from "iterate/next/project-ingress";
+import { type ConsentApproved } from "./account/contract.ts";
 import type { Env } from "./control-plane.ts";
 import { directory, type Org, type Project } from "./directory.ts";
-import { customProjectHostOf, projectHostOf } from "./hosts.ts";
-import { appConfigOf } from "./app-config.ts";
+import { appConfigOf, type PlatformAddresses } from "./app-config.ts";
 import {
   authorizationOf,
-  oauthAddresses,
   oauthHelpers,
   parseAuthorization,
   type AccessGrant,
   type GrantProps,
 } from "./oauth.ts";
+import { publishGlobalFact } from "./session.ts";
 
 export type ConsentView =
   | {
       kind: "consent";
       query: string;
       clientName: string;
-      /** the OAuth client id — what the page asks `/client-icon` for the client's picture by */
+      /** the OAuth client id (the consent hero shows the client by its initials) */
       clientId: string;
       email: string;
       /** the identity provider's picture of the signed-in person, when the sign-in brought one */
@@ -30,11 +40,13 @@ export type ConsentView =
       projects: Project[];
       orgs: Org[];
       projectBound: boolean;
-      scopes: string[];
+      /** the scopes the request asked for, each with the page's copy (oauth-scopes.ts) */
+      scopes: ConsentScope[];
       denyLocation: string;
-      /** where a project's own site lives — `<slug>.<base>` — for the New project form's hint;
-       *  blank when the deployment serves no project hosts */
-      projectHostnameBase: string;
+      /** how projects are reached over HTTP (project-ingress.ts) — the New project form's hint
+       *  composes `<slug>.<hostname>` or `<origin>/<slug>/` from it; null when this deployment
+       *  serves no project ingress */
+      ingressRouting: IngressRouting;
       /** the onboarding step's first draft of an organization name (apps/auth's heuristic): from
        *  the person's display name, else their email's company domain or local part */
       suggestedOrganizationName: string;
@@ -45,14 +57,19 @@ export type ConsentView =
 /** A platform-served project CIMD client can receive only that project's authority — on a host
  *  under the project hostname base or on a project's custom apex (the same two hostname checks
  *  worker.ts admits a project host with). */
-async function projectsForClient(env: Env, clientId: string, userId: string) {
+async function projectsForClient(
+  env: Env,
+  platformOrigin: string,
+  clientId: string,
+  userId: string,
+) {
   const projects = await directory(env.DB).listProjects(userId);
   const url = URL.canParse(clientId) ? new URL(clientId) : null;
   const config = appConfigOf(env);
   const host =
     url?.pathname === "/.auth/client.json"
-      ? (projectHostOf(url.hostname, config.projectHostnameBase) ??
-        customProjectHostOf(url.hostname, config.projectCustomHostnames))
+      ? (projectAddressOf(config.urls.ingressRouting, url, platformOrigin) ??
+        customProjectHostOf(url.hostname, config.urls.temporaryCustomHostnames))
       : null;
   if (!host) return { projects, projectBound: false };
   const project = await directory(env.DB).getProject(host.project);
@@ -82,13 +99,18 @@ function authorizationFailure(
  * Account scope and a copied issuer client ID never confer approval authority. */
 export class Consent extends RpcTarget {
   readonly #env: Env;
+  readonly #ctx: ExecutionContext;
   readonly #grant: AccessGrant;
-  constructor(env: Env, grant: AccessGrant) {
+  /** where this session reached the platform (app-config.ts `platformAddressesOf`) */
+  readonly #addresses: PlatformAddresses;
+  constructor(env: Env, ctx: ExecutionContext, grant: AccessGrant, addresses: PlatformAddresses) {
     super();
     if (grant.kind !== "issuer")
       throw codedError("FORBIDDEN", "Sign in to iterate to approve access.");
     this.#env = env;
+    this.#ctx = ctx;
     this.#grant = grant;
+    this.#addresses = addresses;
   }
   async #request(query: unknown) {
     // Issuing a new grant must not spend the live transport's revocation grace.
@@ -97,14 +119,14 @@ export class Consent extends RpcTarget {
     const search = z.string().parse(query).replace(/^\?/, "");
     return parseAuthorization(
       this.#env,
-      new Request(`${oauthAddresses(this.#env).issuer}/authorize?${search}`),
+      new Request(`${this.#addresses.platformOrigin}/oauth2/auth?${search}`),
     );
   }
   async describe(query: string): Promise<ConsentView> {
     const env = this.#env;
     try {
       const request = await this.#request(query);
-      const client = await oauthHelpers(env).lookupClient(request.clientId);
+      const client = await oauthHelpers(env, this.#addresses).lookupClient(request.clientId);
       const denied = new URL(request.redirectUri);
       denied.searchParams.set("error", "access_denied");
       denied.searchParams.set("error_description", "The user declined access.");
@@ -118,14 +140,23 @@ export class Consent extends RpcTarget {
         clientId: request.clientId,
         email: this.#grant.email,
         picture: this.#grant.picture,
-        scopes: request.scope,
+        // parseAuthorization admitted only known scopes
+        scopes: request.scope.map((scope) => {
+          const name = OAuthScope.parse(scope);
+          return { name, ...OAuthScopeDescriptions[name] };
+        }),
         orgs: await directory(env.DB).listOrgs(this.#grant.userId),
-        projectHostnameBase: appConfigOf(env).projectHostnameBase,
+        ingressRouting: appConfigOf(env).urls.ingressRouting,
         suggestedOrganizationName: suggestOrganizationName({
           name: this.#grant.name,
           email: this.#grant.email,
         }),
-        ...(await projectsForClient(env, request.clientId, this.#grant.userId)),
+        ...(await projectsForClient(
+          env,
+          this.#addresses.platformOrigin,
+          request.clientId,
+          this.#grant.userId,
+        )),
       };
     } catch (error) {
       return authorizationFailure(error);
@@ -150,9 +181,10 @@ export class Consent extends RpcTarget {
       .parse(input);
     try {
       const request = await this.#request(data.query);
-      const client = await oauthHelpers(env).lookupClient(request.clientId);
+      const client = await oauthHelpers(env, this.#addresses).lookupClient(request.clientId);
       const { projects, projectBound } = await projectsForClient(
         env,
+        this.#addresses.platformOrigin,
         request.clientId,
         this.#grant.userId,
       );
@@ -167,10 +199,11 @@ export class Consent extends RpcTarget {
             request.scope.includes(candidate) && OAuthScope.safeParse(candidate).success,
         ),
       );
-      return await oauthHelpers(env).completeAuthorization({
+      const clientName = client?.clientName ?? request.clientId;
+      const approved = await oauthHelpers(env, this.#addresses).completeAuthorization({
         request,
         userId: this.#grant.userId,
-        metadata: { clientName: client?.clientName ?? request.clientId },
+        metadata: { clientName },
         scope,
         revokeExistingGrants: false,
         props: {
@@ -182,6 +215,30 @@ export class Consent extends RpcTarget {
           deadline: Date.now() + 30 * 24 * 3600_000,
         } satisfies GrantProps,
       });
+      // The fact of the approval, on the person's account context, stamped with them and the
+      // issuer grant they approved through.
+      publishGlobalFact(
+        {
+          contextNamespace: env.ITERATE_CONTEXT,
+          waitUntil: (promise) => this.#ctx.waitUntil(promise),
+        },
+        `/users/${this.#grant.userId}`,
+        "account",
+        {
+          type: "events.iterate.com/account/consent-approved",
+          payload: {
+            clientId: request.clientId,
+            clientName,
+            projects: allProjects ? null : granted,
+            scopes: scope,
+          } satisfies ConsentApproved,
+        },
+        {
+          principal: { actor: this.#grant.userId, email: this.#grant.email },
+          grant: this.#grant.grantId,
+        },
+      );
+      return approved;
     } catch (error) {
       const failure = authorizationFailure(error);
       return failure.kind === "redirect"

@@ -1,7 +1,8 @@
 import { appAuth, appSession } from "iterate/next/app-server";
+import { platformAddressesOf } from "./app-config.ts";
 import { oauthResponse } from "./api.ts";
 import type { Env } from "./control-plane.ts";
-import { authorizationForToken, oauthAddresses } from "./oauth.ts";
+import { authorizationForToken } from "./oauth.ts";
 
 /** Platform cookies never enter userspace or its outgoing requests. */
 export function appCookies(cookie: string | null) {
@@ -17,18 +18,23 @@ export async function browserAuthorization(env: Env, request: Request, ctx: Exec
   const session = appSession(env.BROWSER_SESSION, request);
   const token = await session?.bearer();
   if (!token) return null;
-  const authorization = await authorizationForToken(env, ctx, token);
+  const authorization = await authorizationForToken(
+    env,
+    ctx,
+    token,
+    platformAddressesOf(env, request),
+  );
   if (!authorization) await session!.discard();
   return authorization;
 }
 
 export function browserClient(request: Request, env: Env, ctx: ExecutionContext) {
-  const { issuer, api } = oauthAddresses(env);
+  const { platformOrigin, api } = platformAddressesOf(env, request);
   return appAuth(request, {
     sessions: env.BROWSER_SESSION,
-    issuer,
+    issuer: platformOrigin,
     resource: api,
     api: (request) => oauthResponse(request, env, ctx),
-    ...(new URL(request.url).origin === issuer && { loginPage: "/login" }),
+    ...(new URL(request.url).origin === platformOrigin && { loginPage: "/login" }),
   });
 }

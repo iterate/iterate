@@ -10,9 +10,26 @@ selection and an explicit settlement signal.
 
 | Head changes                  | Work                                                                   |
 | ----------------------------- | ---------------------------------------------------------------------- |
+| Only os-next, branch-wide     | Skip: no deployment, no tests, no settled receipt.                     |
 | Docs only, or an empty commit | Find a conclusive ancestor result; inherit its green **or red**.       |
 | Tests, optionally with docs   | Run head's tests against a usable ancestor deployment, or deploy head. |
 | Anything else                 | Deploy the full preview fleet and run tests.                           |
+
+## os-next is not in this pipeline
+
+`apps/os-next/**/*` and `.depot/workflows/preview-os-next.yml` are the `OsNext`
+type, listed last so it wins over Scripts, Frontend, Tests, Docs, CI and
+Generated for every path inside os-next. When the whole branch diff against the
+merge-base is os-next — checked before any evidence lookup, so a red or missing
+main result cannot drag an os-next PR into a deploy — the plan is `skip`:
+`tests=false`, `deploy=false`, every downstream job skipped, and, because the
+finalizer never runs, **no `preview-settled` receipt**. A later commit that does
+touch apps/os therefore cannot inherit a green from a run that deployed and
+tested nothing. os-next proves itself in its own per-PR Worker Previews
+workflow, [`.depot/workflows/preview-os-next.yml`](../.depot/workflows/preview-os-next.yml),
+cribbed from cloudflare-os. Anything else in the branch diff — apps/os,
+`packages/shared`, `envs.ts`, `scripts/lib` or plain docs — keeps today's
+behavior.
 
 [`change-types.ts`](../scripts/preview/change-types.ts) assigns each changed
 path one type: **last match wins**. Changes mean head versus its first parent,
@@ -28,12 +45,14 @@ database. The constructor does no I/O; the planner uses `for await` to inspect
 one commit at a time. Responses are cached when a deployment search restarts.
 The only local Git operation in planning is an asynchronous checkout-SHA check.
 
-A product head needs one commit request and can decide deployment immediately.
-A test head can reuse its own verified deployment without looking up main.
-Only a search for older evidence asks GitHub for the merge-base with main, once,
-then follows first parents through that boundary, inclusive. The comparison's
-file list is never used for classification. Commit file lists include both old
-and new paths for renames.
+An ordinary head decision needs two API requests: its commit and one comparison
+with main. The comparison preserves the branch-wide os-next exemption, including
+reverted apps/os changes; its merge-base is also the later walk's stopping point.
+Its file list is used only for that exemption, never for per-commit classification.
+A full comparison page of 300 files cannot justify skipping. A product head then
+deploys without reading older commits; a test head can reuse its own verified
+deployment. Older searches follow first parents through the cached merge-base,
+inclusive. Both commit and comparison readers retain both paths of renames.
 
 This is deliberately conservative: encountering a merge commit, a pagination
 link, or a full page of 100 files selects deployment. The reader does not try to
@@ -141,6 +160,7 @@ for inheritance or `slot` for reuse. For example:
 action=inherit; conclusion=success; commit=<ancestor SHA>; tests=false; deploy=false
 action=reuse; commit=<deployment SHA>; slot=preview-16; tests=true; deploy=false
 action=deploy; commit=<head SHA>; tests=true; deploy=true
+action=skip; commit=<head SHA>; tests=false; deploy=false
 ```
 
 The planner writes these values as one JSON step output; the workflow publishes

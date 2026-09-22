@@ -4,7 +4,7 @@
 // URL-backed by the route's search params, so any trace is a shareable link. The Events view is
 // the raw log: one row per event, click to inspect.
 import { useState } from "react";
-import { CheckIcon, ChevronLeftIcon, ChevronRightIcon, CopyIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon, CopyIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { MessageResponse } from "@iterate-com/ui/components/ai-elements/message";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
@@ -27,13 +27,11 @@ import type {
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { sliceText, type StreamText } from "@iterate-com/shared/chunked-text";
 import {
-  formatClockTime,
   formatDateTime,
   formatSeconds,
   isRecord,
   llmTrace,
   scriptTrace,
-  shortEventType,
   type LlmTrace,
 } from "../lib/agent-events.ts";
 import { StreamingCursor, StreamingText } from "./streaming-text.tsx";
@@ -42,7 +40,6 @@ import { StreamingCursor, StreamingText } from "./streaming-text.tsx";
 export type Inspected =
   | { kind: "llmRequest"; llmRequestOffset: number }
   | { kind: "scriptExecution"; executionId: string }
-  | { kind: "event"; offset: number }
   | null;
 
 export function InspectorSheet({
@@ -83,8 +80,6 @@ export function InspectorSheet({
           />
         ) : inspected?.kind === "scriptExecution" ? (
           <ScriptTraceContent events={events} executionId={inspected.executionId} />
-        ) : inspected?.kind === "event" ? (
-          <RawEventContent events={events} offset={inspected.offset} onInspect={onInspect} />
         ) : null}
       </SheetContent>
     </Sheet>
@@ -253,8 +248,8 @@ function ResponseView({
   outcome: LlmTrace["outcome"];
   onInspect: (next: Inspected) => void;
   scriptExecutionId: string | undefined;
-  /** The script the loop ran from this response — a codemode action, or the plain-response handler
-   *  (`itx.chat.sendMessage(...)`) for a bare reply. Shown when the raw text carries no tag of its own. */
+  /** The script the loop ran from this response — a codemode action. Shown when the raw text carries
+   *  no tag of its own (a bare reply is appended directly by the loop and runs nothing). */
   derivedScriptCode: string | undefined;
 }) {
   const streaming = Boolean(liveStep);
@@ -482,114 +477,5 @@ function ScriptTraceContent({
         </TabsContent>
       </Tabs>
     </>
-  );
-}
-
-// ── one raw event, with Prev/Next through the log ──
-
-function RawEventContent({
-  events,
-  offset,
-  onInspect,
-}: {
-  events: readonly Event[];
-  offset: number;
-  onInspect: (next: Inspected) => void;
-}) {
-  const index = events.findIndex((event) => event.offset === offset);
-  const event = events[index];
-  const previous = index > 0 ? events[index - 1] : undefined;
-  const next = index >= 0 ? events[index + 1] : undefined;
-  if (!event)
-    return (
-      <SheetHeader>
-        <SheetTitle>Event #{offset}</SheetTitle>
-        <SheetDescription>No event at that offset on this path.</SheetDescription>
-      </SheetHeader>
-    );
-  // Signal first: type and payload, then the rest of the envelope as the wire carried it.
-  const { streamPath: _path, type, payload, offset: at, createdAt, ...rest } = event;
-  const ordered = { type, payload, ...rest, offset: at, createdAt };
-  return (
-    <>
-      <SheetHeader className="shrink-0 pr-12">
-        <SheetTitle className="truncate font-mono text-base">
-          #{event.offset} {shortEventType(event.type)}
-        </SheetTitle>
-        <SheetDescription>
-          {formatDateTime(Date.parse(event.createdAt))}
-          {previous
-            ? ` · +${formatSeconds(Date.parse(event.createdAt) - Date.parse(previous.createdAt))} after #${String(previous.offset)}`
-            : ""}
-        </SheetDescription>
-      </SheetHeader>
-      <div className="flex shrink-0 items-center gap-2 px-4 pb-3">
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!previous}
-          onClick={() => previous && onInspect({ kind: "event", offset: previous.offset })}
-        >
-          <ChevronLeftIcon data-icon="inline-start" /> Prev
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!next}
-          onClick={() => next && onInspect({ kind: "event", offset: next.offset })}
-        >
-          Next <ChevronRightIcon data-icon="inline-end" />
-        </Button>
-        <span className="ml-auto font-mono text-[10px] text-muted-foreground/70">
-          {index + 1} of {events.length}
-        </span>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto border-t p-4">
-        <SerializedObjectCodeBlock data={ordered} initialFormat="yaml" showToggle showCopyButton />
-      </div>
-    </>
-  );
-}
-
-// ── the raw log ──
-
-function deltaColorClass(deltaMs: number): string {
-  if (deltaMs < 1_000) return "text-muted-foreground/60";
-  if (deltaMs < 5_000) return "text-emerald-600 dark:text-emerald-500";
-  if (deltaMs < 30_000) return "text-amber-600 dark:text-amber-500";
-  return "text-destructive";
-}
-
-export function EventsList({
-  events,
-  onOpen,
-}: {
-  events: readonly Event[];
-  onOpen: (offset: number) => void;
-}) {
-  return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col px-4 py-2 md:px-6">
-      {events.map((event, index) => {
-        const previous = events[index - 1];
-        const delta = previous ? Date.parse(event.createdAt) - Date.parse(previous.createdAt) : 0;
-        return (
-          <button
-            key={event.offset}
-            type="button"
-            onClick={() => onOpen(event.offset)}
-            className="flex w-full items-baseline gap-3 rounded-md px-2 py-1 text-left font-mono text-xs hover:bg-muted/60"
-          >
-            <span className="w-12 shrink-0 text-muted-foreground/60">#{event.offset}</span>
-            <span className="min-w-0 flex-1 truncate">{shortEventType(event.type)}</span>
-            <span className={cn("w-16 shrink-0 text-right tabular-nums", deltaColorClass(delta))}>
-              {previous ? `+${formatSeconds(delta)}` : ""}
-            </span>
-            <span className="w-20 shrink-0 text-right text-muted-foreground/60">
-              {formatClockTime(Date.parse(event.createdAt))}
-            </span>
-          </button>
-        );
-      })}
-    </div>
   );
 }

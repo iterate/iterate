@@ -15,7 +15,7 @@ import {
   type SessionAuthority,
   type SessionInput,
 } from "./session.ts";
-import { appConfigOf } from "./app-config.ts";
+import { appConfigOf, platformAddressesOf } from "./app-config.ts";
 
 /** Cap’n Web always terminates at /api in the stateless edge. Its root is an
  * already-authorized session — or, on a socket opened BARE (api.ts: no credential on the upgrade),
@@ -28,15 +28,20 @@ export async function rpcResponse(
   ctx: ExecutionContext,
   auth: Authorization | null,
 ) {
+  // THE PLATFORM ADDRESSES this transport reached the platform at (app-config.ts): every address
+  // and every caller stamp downstream is at them.
+  const addresses = platformAddressesOf(env, request);
+  const { platformOrigin } = addresses;
   const projects = new Set<string>();
   const teardown = new SessionTeardown();
   const authorityOf = (authorization: Authorization): SessionAuthority => ({
     principal: authorization.principal,
+    grant: authorization.grant?.grantId,
     reach: authorization.reach,
-    grants: new Grants(env, ctx, authorization),
+    grants: new Grants(env, ctx, authorization, addresses),
     scopes: authorization.grant?.scope,
     ...(authorization.grant?.kind === "issuer" && {
-      consent: new Consent(env, authorization.grant),
+      consent: new Consent(env, ctx, authorization.grant, addresses),
     }),
   });
   // THE GRANT THIS TRANSPORT CARRIES: the upgrade's (resolved by the gate before this call), or the
@@ -50,13 +55,14 @@ export async function rpcResponse(
     waitUntil: (promise) => ctx.waitUntil(promise),
     directory: directory(env.DB),
     appConfig: appConfigOf(env),
+    platformOrigin,
     onProjectAccess: (projectId) => projects.add(projectId),
     resolveBearer: async (token) => {
       // Claimed BEFORE the gate is awaited: two tokens racing on one socket cannot both bind.
       if (bound || binding) throw new Error("This transport already carries a session");
       binding = true;
       try {
-        const authorization = await authorizationForToken(env, ctx, token);
+        const authorization = await authorizationForToken(env, ctx, token, addresses);
         if (!authorization) return null;
         if (authorization.grant) ctx.waitUntil(recordGrantUse(env, authorization.grant));
         bound = authorization;
@@ -122,12 +128,19 @@ export async function rpcResponse(
     );
     renewal = setTimeout(async () => {
       const started = Date.now();
+      // THE PROJECTS THIS SOCKET HOLDS at this tick. One admitted while the reads are in flight
+      // passed `reachesProject` itself and is the next tick's to re-check — measured against a list
+      // read before it existed, it would close a live socket for nothing. The grant read and the
+      // membership read are independent (both take the bind-time grant), so they run together; a
+      // socket holding no project has no membership to re-check and reads none.
+      const held = [...projects];
       try {
-        const current = await authorizationOf(env, grant);
-        const reachable = new Set(
-          (await input.directory.reachableProjects(authorization.reach)).map((p) => p.id),
-        );
-        if (!current || [...projects].some((id) => !reachable.has(id))) {
+        const [current, reachable] = await Promise.all([
+          authorizationOf(env, grant),
+          held.length ? input.directory.reachableProjects(authorization.reach) : [],
+        ]);
+        const reachableIds = new Set(reachable.map((project) => project.id));
+        if (!current || held.some((id) => !reachableIds.has(id))) {
           stop(new Error("Session revoked or project membership removed"));
           return;
         }

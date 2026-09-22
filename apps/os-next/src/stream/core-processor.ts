@@ -6,9 +6,11 @@
 //   who this context is       stream/created { projectId, path }            → projectId · path · createdAt
 //   which incarnation runs    stream/woken { incarnation }                  → incarnation
 //   may appends land          stream/paused { reason } · stream/resumed     → paused        (one `if` in Stream.append)
+//   where the project apex goes project/ingress-configured { target|null } → ingressTarget
 //   how calls rewrite         itx/rewrite-rule-configured { match, target|null, ifTarget? } → itxExpressionRewriteRules (every invoke)
 //   who is sent each commit   stream/subscription-configured { name, target|null, ifConfiguredAtOffset? }|
 //                             -delivery-halted|-delivery-resumed            → subscriptions (the delivery loop)
+//   which scripts are running context/run-requested { code } · run-settled { requestOffset, settlement } → scriptRuns, by the request's offset (the DO's runner; the wake record settles what a restart interrupted)
 //
 // ONE reduce, no effects, no verbs — a pure fold (`reduceCoreEvent`) with a batch door
 // (`reduceCoreEventBatch`), NOT a hosted `StreamProcessor`: owned by the Stream itself and reduced
@@ -21,22 +23,29 @@
 // BreakerProcessor is that pattern. created/woken come from the stream's birth record and the first
 // request or alarm of each incarnation (Stream.appendBirthRecord / appendWakeRecord); the pause exemptions are Stream.append's.
 //   subscriptions — a literal `subscription-configured` event, THE SUBSCRIPTIONS TABLE's one command (the rows are core state)
+//
+// ONE VALIDATION BOUNDARY: every append the DO commits passes `normalizeControlEvent` (below), which
+// zod-parses each control event's payload and stores the normalized form, so the fold CASTS what it
+// reads and never re-parses. The stream's own records (birth, wake, the halted fact, the alarm trace)
+// are well-formed by construction. No stored row predates its event's normalization.
 
 import {
+  itxExpressionStepName,
   normalizedItxExpression,
   type ItxExpressionInput,
-  itxExpressionStepName,
   parseItxExpressionPrefix,
   type ItxExpression,
-  type ItxExpressionPrefix,
   print,
 } from "iterate/next/expression";
 import { jsonEqual } from "iterate/next/lib";
+import { z } from "zod";
 import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/next/stream/processor";
+import type { RewriteRuleConfigured } from "iterate/next/api";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
-import { isRefreshKind, type SecretCatalogEntry } from "../secrets.ts";
 import {
-  isBuiltInRoot,
+  BUILT_IN_ROOTS,
+  builtInsGetStep,
+  implicitRootsAt,
   isBuiltInsRooted,
   normalizeRewriteRuleConfigured,
   resolveItxExpression,
@@ -51,7 +60,7 @@ import {
 } from "./scheduled-appends.ts";
 
 /** A hosting spec, read off a RESOLVED target. */
-export type HostingFacetSpec = {
+type HostingFacetSpec = {
   name: string;
   /** Absent for a first-party facet: its class is this worker's own (first-party-facets.ts). */
   source?: unknown;
@@ -67,15 +76,8 @@ export type HostingFacetSpec = {
 export function facetSpecFromHostingTarget(
   resolvedTarget: ItxExpression,
 ): HostingFacetSpec | undefined {
-  const getStep = resolvedTarget[3];
-  if (
-    resolvedTarget[1] !== "builtins" ||
-    resolvedTarget[2] !== "facets" ||
-    !Array.isArray(getStep) ||
-    getStep[0] !== "get" ||
-    typeof getStep[1] !== "string"
-  )
-    return undefined;
+  const getStep = builtInsGetStep(resolvedTarget, "facets");
+  if (!getStep) return undefined;
   // A FIRST-PARTY facet hosts this worker's own class: the target names it and carries no spec.
   const firstPartyClassName = firstPartyFacetClassOf(getStep[1]);
   if (getStep.length === 2 && firstPartyClassName)
@@ -98,9 +100,11 @@ export function facetSpecFromHostingTarget(
  *  as given and hosts nothing until it can. */
 function resolveThroughState(state: CoreState, target: ItxExpression): ItxExpression | undefined {
   try {
-    return resolveItxExpression(() => Object.values(state.itxExpressionRewriteRules), target).at(
-      -1,
-    );
+    return resolveItxExpression(
+      () => Object.values(state.itxExpressionRewriteRules),
+      target,
+      implicitRootsAt(state.projectId || "", state.path || "/"),
+    ).at(-1);
   } catch {
     return undefined;
   }
@@ -119,6 +123,8 @@ function elideHostedFacetSource(
 } {
   const spec = resolvedTarget && facetSpecFromHostingTarget(resolvedTarget);
   if (!spec) return { target };
+  // The marker is the spec minus its source (a 100 KB processor must not ride the checkpoint).
+  const { source: _source, ...hostedFacet } = spec;
   // The spec rides the ORIGINAL target's `get` call step, wherever a rule of the caller's put it.
   const specStepIndex = target.findIndex(
     (step) =>
@@ -139,26 +145,8 @@ function elideHostedFacetSource(
             ["get", (target[specStepIndex] as [string, string])[1]],
             ...target.slice(specStepIndex + 1),
           ],
-    hostedFacet: {
-      name: spec.name,
-      className: spec.className,
-      // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical hostedFacet marker: it round-trips the JSON checkpoint and is compared with jsonEqual (which counts keys), so an absent cacheKey must stay absent, not `cacheKey: undefined`
-      ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
-    },
+    hostedFacet,
   };
-}
-
-/** The facet a resolved target merely ADDRESSES (`itx.builtins.facets.get(name)…`, no spec) — or
- *  undefined when it is not the facets door at all. */
-function facetAddressedBy(resolvedTarget: ItxExpression): string | undefined {
-  const getStep = resolvedTarget[3];
-  return resolvedTarget[1] === "builtins" &&
-    resolvedTarget[2] === "facets" &&
-    Array.isArray(getStep) &&
-    getStep[0] === "get" &&
-    typeof getStep[1] === "string"
-    ? getStep[1]
-    : undefined;
 }
 
 /** Does a row's target OWN ITS PROGRESS — a facet (its own checkpoint) or a lent rpc stub (a live
@@ -170,14 +158,7 @@ function facetAddressedBy(resolvedTarget: ItxExpression): string | undefined {
 export function targetOwnsProgress(state: CoreState, row: Subscription): boolean {
   const resolved = resolveThroughState(state, row.target);
   if (!resolved) return false;
-  const getStep = resolved[3];
-  return (
-    resolved[1] === "builtins" &&
-    (resolved[2] === "facets" || resolved[2] === "rpcStubs") &&
-    Array.isArray(getStep) &&
-    getStep[0] === "get" &&
-    typeof getStep[1] === "string"
-  );
+  return !!(builtInsGetStep(resolved, "facets") || builtInsGetStep(resolved, "rpcStubs"));
 }
 
 /** THE DRAFT TABLES OF ONE BATCH: a table is copied ONCE per batch, on its first touch, and mutated
@@ -209,32 +190,19 @@ function withHostedFacetMarkersFollowingRules(
     const resolved = resolveThroughState(state, row.target);
     if (!resolved) continue;
     const spec = facetSpecFromHostingTarget(resolved);
-    const next = spec
-      ? {
-          name: spec.name,
-          className: spec.className,
-          // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical hostedFacet marker: it round-trips the JSON checkpoint and is compared with jsonEqual (which counts keys), so an absent cacheKey must stay absent, not `cacheKey: undefined`
-          ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
-        }
-      : facetAddressedBy(resolved) === row.hostedFacet?.name
-        ? row.hostedFacet
-        : undefined;
+    let next: Subscription["hostedFacet"];
+    if (spec) {
+      const { source: _source, ...hostedFacet } = spec;
+      next = hostedFacet;
+    } else if (builtInsGetStep(resolved, "facets")?.[1] === row.hostedFacet?.name) {
+      next = row.hostedFacet; // an ADDRESS of the facet it is marked with: its own spec was elided
+    }
     if (jsonEqual(next || null, row.hostedFacet || null)) continue;
     subscriptions ||= draftOf(state.subscriptions, draftTables);
     const { hostedFacet: _previous, ...rest } = row;
     subscriptions[name] = next ? { ...rest, hostedFacet: next } : rest;
   }
   return subscriptions ? { ...state, subscriptions } : state;
-}
-
-/** Does a `null` at `match` MASK a platform row (kept as a row) or merely delete (nothing beneath)?
- *  A bare `itx` masks everything; a match under a built-in root masks that root's calls it claims. */
-function matchShadowsAPlatformRow(match: ItxExpressionPrefix): boolean {
-  if (match.length === 1) return true;
-  const name = itxExpressionStepName(match[1]);
-  // `itx.worker` is a platform row too — the resolver's default config worker (itx-expression-
-  // rewriting.ts); a `null` there MASKS it, else the project falls back to the no-op silently.
-  return isBuiltInRoot(name) || name === "worker";
 }
 
 /** One subscription row (by name; a same-named configure REPLACES). */
@@ -259,9 +227,9 @@ export type Subscription = {
   resumed?: { afterOffset?: number; atOffset: number };
 };
 
-/** THE CORE STATE — the context's own state, reduced inline at the commit point. HAND-WRITTEN, no
- *  zod on the edge/DO script: these events are the platform's own, trusted, so the 310 KB runtime
- *  validator earned its removal. */
+/** THE CORE STATE — the context's own state, reduced inline at the commit point. A hand-written
+ *  type, not a schema-derived one: the fold runs synchronously inside every commit and casts what
+ *  the append boundary already parsed (the header). */
 export type CoreState = {
   /** From the birth certificate (stream/created, offset 1). */
   projectId?: string;
@@ -271,28 +239,68 @@ export type CoreState = {
   incarnation?: number;
   paused: { reason: string } | null;
   /** THE REWRITE-RULE TABLE, by canonical match (a map — no stack, no identity beyond the match): a
-   *  configured target REPLACES; `null` is kept as a MASK when the match shadows a platform row
-   *  (`itx.kv`, `itx.ai.run('gpt-5')`, bare `itx`) and DELETES otherwise; the platform-equivalent
-   *  target `itx.builtins.<match…>` DELETES the row (back to the platform row). */
+   *  configured target REPLACES; `null` is kept as a MASK where something beneath would answer the
+   *  match HERE (an implicit row: `itx.kv` and `itx.ai.run('gpt-5')` at the owner root, `itx.append`
+   *  anywhere, the bare `itx` — one row denies all; or a stored shorter row with a target: `itx.tool`
+   *  behind the parent link) and DELETES otherwise; `null` with `ifTarget` is a handle's
+   *  compare-and-set DELETE; a target equal to the implicit row it would restate deletes (the
+   *  default said as much), the same spelling elsewhere is a grant and is stored (rule 8). */
   itxExpressionRewriteRules: Record<string, ItxExpressionRewriteRule>;
   /** THE SUBSCRIPTIONS TABLE, by name. */
   subscriptions: Record<string, Subscription>;
+  /** Explicit fetch target for the project apex; null until configured. */
+  ingressTarget: ItxExpression | null;
   schedules: Record<string, ScheduledAppend>;
-  /** THE SECRETS CATALOG, by name — the origins a secret is pinned to and its refresh strategy's
-   *  kind, never a value (the value is physical, in the secret's own Durable Object):
-   *  `itx.secrets.list()` reads this, strongly consistent. */
-  secrets: Record<string, Omit<SecretCatalogEntry, "name">>;
+  /** THE OPEN SCRIPT RUNS, by the request's offset: a script requested (`context/run-requested`)
+   *  and not yet settled — what is running right now, or what a restart left open (never re-run:
+   *  the wake record settles it `interrupted`, stream.ts). The code stays on the request event. */
+  scriptRuns: Record<number, OpenScriptRun>;
 };
 
-/** A subscription name is ONE segment, [A-Za-z0-9_-] — and never a key of `Object.prototype`: the
+/** One open script run: when it was asked for (its identity is its key, the request's offset). */
+type OpenScriptRun = { requestedAt: string };
+
+// ── the run events ── THE CONTEXT'S OWN VOCABULARY beyond its control events, owned by this
+// contract (`CoreContract.events`): the one place their schemas live. A processor that consumes
+// them names the contract in its `processorDeps` (the agent); the runner and `itx.run` read them here.
+
+/** `events.iterate.com/context/run-requested`: the whole script — the text of `async (itx) => …`.
+ *  The event's own OFFSET is the run's identity: the settlement names it back. */
+export const RunRequested = z.object({ code: z.string().min(1) });
+export type RunRequested = z.infer<typeof RunRequested>;
+/** `events.iterate.com/context/run-settled`: `requestOffset` names the request; `settlement` is
+ *  what the script returned (JSON — a round trip drops what JSON cannot carry) or how it failed —
+ *  `runtime` (the script threw, or returned what the log refuses) or `interrupted` (the context
+ *  restarted before it finished; it is not run again). */
+export const RunSettled = z.object({
+  requestOffset: z.number().int().positive(),
+  settlement: z.discriminatedUnion("status", [
+    z.object({ status: z.literal("succeeded"), result: z.unknown().optional() }),
+    z.object({
+      status: z.literal("failed"),
+      error: z.string(),
+      failureKind: z.enum(["runtime", "interrupted"]),
+    }),
+  ]),
+});
+export type RunSettled = z.infer<typeof RunSettled>;
+export type RunSettlement = RunSettled["settlement"];
+
+/** A subscription name is ONE segment, [A-Za-z0-9_-] — never a key of `Object.prototype` (the
  *  tables are plain records indexed by name, so such a name would read or write the prototype
- *  instead of a row. Refused here and at the append door (stream.ts, beside `core`). */
+ *  instead of a row) and never `core`: the always-on reduce is addressable as a facet but not a
+ *  configurable subscription — a row named `core` would be undeliverable and climb the retry ladder
+ *  to a halt. */
 const SUBSCRIPTION_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 function parseSubscriptionName(name: string): string {
   // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of a name carried in an untrusted event payload (the `: string` type is a claim); the typeof guards the pattern test and prototype-pollution check below
   if (typeof name !== "string" || !SUBSCRIPTION_NAME_PATTERN.test(name) || name in Object.prototype)
     throw new Error(
       `a subscription name is one segment: [A-Za-z0-9_-]+, never a key of Object.prototype (got ${JSON.stringify(name)})`,
+    );
+  if (name === CoreContract.slug)
+    throw new Error(
+      `"${CoreContract.slug}" is reserved as a subscription name: it is the core reduce, never a configurable subscription`,
     );
   return name;
 }
@@ -302,13 +310,29 @@ function parseSubscriptionName(name: string): string {
  *  state. The reduce below is the one list of the types it consumes. */
 export const CoreContract = {
   slug: "core",
-  version: "10.0.0",
+  // 11: the ingress target; 12: the scriptRuns table (`context/run-requested` / `run-settled`).
+  // 13: rule 8 — a null with `ifTarget` deletes; a physical target restates only an implicit row in effect.
+  version: "13.0.0",
+  /** THE EVENTS THIS CONTRACT OWNS beyond its control events (the run events section above). */
+  events: {
+    "events.iterate.com/context/run-requested": {
+      description:
+        "A script this context is asked to run once, against its own itx, by whoever appended it (source.principal); the event's offset is the run.",
+      payloadSchema: RunRequested,
+    },
+    "events.iterate.com/context/run-settled": {
+      description:
+        "What the requested script returned, or how it failed; a run the context's restart interrupted is settled here too, never re-run.",
+      payloadSchema: RunSettled,
+    },
+  },
   initialState: (): CoreState => ({
     paused: null,
     itxExpressionRewriteRules: {},
     subscriptions: {},
+    ingressTarget: null,
     schedules: {},
-    secrets: {},
+    scriptRuns: {},
   }),
 };
 
@@ -334,8 +358,9 @@ export function reduceCoreEventBatch(
 
 /** THE CORE REDUCE of one event — a pure fold, `undefined` = keep the state (identity is the host's
  *  change signal). Without `draftTables` (the tests' single-event fold) every touch copies.
- *  Ephemeral control events are IGNORED (they would vanish from any rebuild). A malformed payload
- *  THROWS here like any reduce would — BEFORE any draft is touched — and the batch door contains it. */
+ *  Ephemeral control events are IGNORED (they would vanish from any rebuild). Payloads are read as
+ *  the boundary stored them (the header); a target the codec still refuses THROWS here like any
+ *  reduce would — BEFORE any draft is touched — and the batch door contains it. */
 export function reduceCoreEvent(
   { event, state }: ReduceArgs<CoreState>,
   draftTables?: DraftTables,
@@ -350,6 +375,12 @@ export function reduceCoreEvent(
     return { ...state, subscriptions };
   };
   switch (event.type) {
+    case "events.iterate.com/project/ingress-configured": {
+      const target = payload.target as ItxExpression | null;
+      return jsonEqual(state.ingressTarget, target)
+        ? undefined
+        : { ...state, ingressTarget: target };
+    }
     case "events.iterate.com/stream/append-scheduled":
     case "events.iterate.com/stream/append-schedule-cancelled":
     case "events.iterate.com/stream/append-schedule-completed":
@@ -357,27 +388,19 @@ export function reduceCoreEvent(
       const schedules = reduceScheduledAppends(state.schedules, event);
       return schedules === state.schedules ? undefined : { ...state, schedules };
     }
-    case "events.iterate.com/secrets/changed": {
-      const name = payload.name as string;
-      const next = payload.deleted
-        ? undefined
-        : {
-            // The fact is appended by the `secrets` built-in (context/built-ins.ts) from a normalized
-            // record, so a well-formed payload carries strings and a known kind; a hand-appended one
-            // is read the same way and anything else in it is dropped, never trusted.
-            ...(Array.isArray(payload.urls) &&
-              payload.urls.length > 0 && {
-                urls: payload.urls.filter((url): url is string => typeof url === "string"),
-              }),
-            ...(isRefreshKind(payload.refresh) && { refresh: payload.refresh }),
-          };
-      // A no-op is `undefined`, not a fresh object (the rules case says why).
-      if (next ? jsonEqual(state.secrets[name], next) : state.secrets[name] === undefined)
-        return undefined;
-      const secrets = draftOf(state.secrets, draftTables);
-      if (next) secrets[name] = next;
-      else delete secrets[name];
-      return { ...state, secrets };
+    case "events.iterate.com/context/run-requested": {
+      // the code is the event's to keep; the row is its offset's
+      if (state.scriptRuns[event.offset]) return undefined;
+      const scriptRuns = draftOf(state.scriptRuns, draftTables);
+      scriptRuns[event.offset] = { requestedAt: event.createdAt };
+      return { ...state, scriptRuns };
+    }
+    case "events.iterate.com/context/run-settled": {
+      const requestOffset = payload.requestOffset as number;
+      if (!state.scriptRuns[requestOffset]) return undefined; // settled twice, or never requested
+      const scriptRuns = draftOf(state.scriptRuns, draftTables);
+      delete scriptRuns[requestOffset];
+      return { ...state, scriptRuns };
     }
     case "events.iterate.com/stream/created":
       return {
@@ -403,11 +426,9 @@ export function reduceCoreEvent(
       const matchPrefix = parseItxExpressionPrefix(payload.match as ItxExpressionInput);
       const matchString = print(matchPrefix);
       const existing = state.itxExpressionRewriteRules[matchString];
-      // THE COMPARE-AND-SET of a handle's undo (`ifTarget`): the removal applies only while the row's
-      // target is still the one the handle wrote — a replacement owns the match now and a stale undo
-      // is a no-op. Decided inside the commit, so there is no read-then-append window.
-      if ("ifTarget" in payload && (!existing || !jsonEqual(existing.target, payload.ifTarget)))
-        return undefined;
+      // What has an implicit row HERE (rule 3) decides what a null and a platform-equivalent target
+      // mean (rule 8). The event carries the path; the state has it only after the birth record.
+      const implicitRoots = implicitRootsAt(state.projectId || "", event.path || state.path || "/");
       // Every change to the rules table re-derives the subscriptions' hosting markers through it.
       const withRule = (rule: ItxExpressionRewriteRule | undefined): CoreState => {
         const rules = draftOf(state.itxExpressionRewriteRules, draftTables);
@@ -419,21 +440,56 @@ export function reduceCoreEvent(
           draftTables,
         );
       };
+      // THE COMPARE-AND-SET of a handle's undo and a dead stub's census (`ifTarget`): a DELETE that
+      // applies only while the row's target is still the one the handle wrote — a replacement owns
+      // the match now and a stale undo is a no-op. Decided inside the commit, so there is no
+      // read-then-append window. Never a mask: a disposed session row leaves nothing behind.
+      if ("ifTarget" in payload)
+        return existing && jsonEqual(existing.target, payload.ifTarget)
+          ? withRule(undefined)
+          : undefined;
+      const description =
+        typeof payload.description === "string" ? { description: payload.description } : {};
       if (payload.target === null) {
-        // A MASK where a platform row lies beneath (rule 5: the call is refused, not defaulted);
-        // a plain deletion anywhere else (a mask there would equal a deletion and only grow the table).
-        if (!matchShadowsAPlatformRow(matchPrefix))
-          return existing ? withRule(undefined) : undefined;
-        if (existing && !existing.target) return undefined;
-        return withRule({ match: matchPrefix, target: null });
+        // A MASK where something beneath would answer the match — an implicit row, or a stored
+        // SHORTER row with a target (the parent link `itx ⇒ itx.builtins.cd('/agents/a')`, a granted
+        // root `itx.repos ⇒ …`): the call is refused, not answered. A plain deletion anywhere else
+        // (a mask there would equal a deletion and only grow the table).
+        const root = matchPrefix.length === 1 ? undefined : itxExpressionStepName(matchPrefix[1]);
+        const answeredBeneath =
+          matchPrefix.length === 1 || // beneath the bare `itx`: every implicit row here
+          (!!root && implicitRoots.has(root)) ||
+          Object.values(state.itxExpressionRewriteRules).some(
+            (row) =>
+              !!row.target &&
+              row.match.length < matchPrefix.length &&
+              row.match.every((step, i) => jsonEqual(step, matchPrefix[i])),
+          );
+        if (!answeredBeneath) return existing ? withRule(undefined) : undefined;
+        if (existing && !existing.target && jsonEqual(existing.description, payload.description))
+          return undefined;
+        return withRule({ match: matchPrefix, target: null, ...description });
       }
       const target = normalizedItxExpression(payload.target as ItxExpressionInput, { holes: true }); // a target may hold `@` (rule 7); stored as the parsed form
-      // THE PLATFORM-EQUIVALENT TARGET (`itx.kv ⇒ itx.builtins.kv`, `itx ⇒ itx.builtins`) is "back to
-      // the platform row": the row is deleted, never stored — so an un-mask is one ordinary event and
-      // the table never carries a row that only restates the default.
-      if (jsonEqual(target, ["itx", "builtins", ...matchPrefix.slice(1)]))
+      // A target that restates THE implicit row of its match (`itx.kv ⇒ itx.builtins.kv` at the owner
+      // root, `itx ⇒ itx.builtins` there, `itx.append ⇒ itx.builtins.append` anywhere) is "back to
+      // the default": the row is deleted, never stored, so the table never carries a row that only
+      // repeats it — UNLESS a bare null stands, which took that default away: then the same spelling
+      // is the grant through the wall and is stored (so a jail writes its mask first, its grants
+      // after). At a child, a project root's physical target is a grant either way.
+      const wall =
+        matchPrefix.length > 1 && state.itxExpressionRewriteRules["itx"]?.target === null;
+      // The implicit row of THIS match: `itx.<root>` with `root` implicit here, or the bare `itx`
+      // where every root is (the owner root) — nothing longer, nothing pinned.
+      const isImplicitRow =
+        matchPrefix.length === 1
+          ? implicitRoots.size === BUILT_IN_ROOTS.length
+          : matchPrefix.length === 2 &&
+            typeof matchPrefix[1] === "string" &&
+            implicitRoots.has(matchPrefix[1]);
+      if (!wall && isImplicitRow && jsonEqual(target, ["itx", "builtins", ...matchPrefix.slice(1)]))
         return existing ? withRule(undefined) : undefined;
-      return withRule({ match: matchPrefix, target });
+      return withRule({ match: matchPrefix, target, ...description });
     }
 
     case "events.iterate.com/stream/subscription-configured": {
@@ -542,6 +598,23 @@ function normalizeSubscriptionConfigured(input: {
   };
 }
 
+const IngressConfigured = z.object({
+  // The expression codec below validates every step after this outer shape check.
+  target: z
+    .custom<ItxExpressionInput>((value) => typeof value === "string" || Array.isArray(value))
+    .nullable(),
+});
+
+/** Apex routing stores the complete capability expression, independently of rewrite aliases. */
+function normalizeIngressConfigured(input: unknown): { target: ItxExpression | null } {
+  const { target } = IngressConfigured.parse(input);
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- null disables ingress; an empty expression must be rejected by the codec
+  if (target === null) return { target: null };
+  const expression = normalizedItxExpression(target);
+  if (expression[0] !== "itx") throw new Error("ingress target must be rooted at itx");
+  return { target: expression };
+}
+
 /** THE APPEND BOUNDARY for core CONTROL events: validate + normalize a LITERAL control event so call
  *  sites write `itx.append({ type, payload })` with NO event-builder helper. A subscription/rewrite
  *  target is validated and normalized STRING→array before storage (the reduce must never string-parse
@@ -549,6 +622,10 @@ function normalizeSubscriptionConfigured(input: {
  *  committing a durable no-op. Every other event passes through untouched. The DO runs this on every
  *  append (iterate-context-durable-object.ts). */
 export function normalizeControlEvent(event: StreamEventInput): StreamEventInput {
+  if (event.type === "events.iterate.com/project/ingress-configured") {
+    if (event.ephemeral) throw new Error("ingress configuration must be durable");
+    return { ...event, payload: normalizeIngressConfigured(event.payload) };
+  }
   // `String(…)`: a non-string type (a client's `{ type: 12345 }`) is Stream.append's to refuse, with
   // its own message — this prefix check runs first and must not throw a TypeError of its own.
   if (String(event.type).startsWith("events.iterate.com/stream/append-schedule")) {
@@ -569,6 +646,18 @@ export function normalizeControlEvent(event: StreamEventInput): StreamEventInput
       return { ...event, payload: ScheduledAppendSettled.parse(event.payload) };
     throw new Error(`unknown scheduled append control event: ${event.type}`);
   }
+  if (event.type === "events.iterate.com/context/run-requested") {
+    if (event.ephemeral)
+      throw new Error("a run's request is durable: the scriptRuns table is rebuilt from the log");
+    return { ...event, payload: RunRequested.parse(event.payload) };
+  }
+  if (event.type === "events.iterate.com/context/run-settled") {
+    if (event.ephemeral)
+      throw new Error(
+        "a run's settlement is durable: the scriptRuns table is rebuilt from the log",
+      );
+    return { ...event, payload: RunSettled.parse(event.payload) };
+  }
   if (event.type === "events.iterate.com/stream/subscription-configured")
     return {
       ...event,
@@ -577,9 +666,10 @@ export function normalizeControlEvent(event: StreamEventInput): StreamEventInput
       ),
     };
   if (event.type === "events.iterate.com/itx/rewrite-rule-configured") {
-    const payload = event.payload as {
-      match: ItxExpressionInput;
-      target: ItxExpressionInput | null;
+    // A literal event's payload is wire-fed JSON (`unknown`); `normalizeRewriteRuleConfigured` parses
+    // `match`, `target` and `ifTarget` and shape-checks `description`, throwing on anything else — the
+    // assertion only names the shape it is about to check.
+    const payload = event.payload as RewriteRuleConfigured & {
       ifTarget?: ItxExpressionInput | null;
     };
     // normalizeRewriteRuleConfigured parses match, target AND ifTarget into the stored (parsed)

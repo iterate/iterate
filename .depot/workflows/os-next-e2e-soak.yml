@@ -1,0 +1,82 @@
+# THE FLAKE HUNT for apps/os-next: run the e2e suite N times against one deployed worker (a preview of
+# main by default, `pnpm preview deploy --name soak`) and tally every row that did not pass every time
+# (apps/os-next/scripts/e2e-soak.ts). Dispatch only — this is a measurement, not a gate:
+#   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-next-e2e-soak.yml \
+#     --ref <branch> --input runs=100 --input worker-base-url=https://soak-os-next-preview.iterate-dev-preview.workers.dev
+# Runs from CI on purpose: from a laptop the OAuth-cookie rows answer 401 (an unexplained laptop-side
+# difference), and CI is the environment whose flakes matter.
+name: OS-Next e2e soak
+permissions:
+  contents: read
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: How many times to run the suite
+        required: false
+        type: string
+        default: "100"
+      worker-base-url:
+        description: The deployed worker to run against (a preview of main; never prd by default)
+        required: false
+        type: string
+        default: https://soak-os-next-preview.iterate-dev-preview.workers.dev
+      filter:
+        description: Optional vitest filter (a file or title fragment) to soak a subset
+        required: false
+        type: string
+        default: ""
+env:
+  # THE STORE THE IMAGE WAS BAKED WITH. scripts/depot-ci/dependencies.mjs hashes every pnpm_config_*
+  # variable into its fingerprint (the store dir decides where node_modules links point), and the bake
+  # job sets this one — so a workflow without it computes a different fingerprint on identical sources
+  # and never reuses the baked node_modules (every os-next job, 2026-09-22, ~55 s of paging each).
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+
+jobs:
+  soak:
+    runs-on:
+      size: 4x16
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 600
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config preview --project project-worker
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      # THE WORKER IS THIS REF'S: the default target, the `soak` preview, is redeployed from the checkout
+      # before the suite runs, so the tests and the worker never skew (2026-09-22: a soak of main's
+      # tests against a `soak` worker three merges older failed one row in every run of a hundred).
+      # An explicit worker-base-url is soaked as given.
+      - name: Deploy the soak preview from this ref
+        if: inputs.worker-base-url == 'https://soak-os-next-preview.iterate-dev-preview.workers.dev'
+        working-directory: apps/os-next
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run -- pnpm preview deploy --name soak --apps none
+      # The preview inherits the parent's secrets (APP_CONFIG in Doppler project-worker/preview), so the
+      # admin bearer and the sign-in password come from the same object the preview deploy uploads —
+      # apps/os-next/e2e/support/global-setup.ts reads them out of it, and the routing out of the
+      # parent's envs.ts entry.
+      - name: Soak
+        working-directory: apps/os-next
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          CI: "1"
+          WORKER_BASE_URL: ${{ inputs.worker-base-url }}
+          RUNS: ${{ inputs.runs }}
+          FILTER: ${{ inputs.filter }}
+        run: doppler run -- pnpm e2e:soak --runs "$RUNS" ${FILTER:+--filter "$FILTER"}
+      - name: Upload the per-run reports and the summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: os-next-e2e-soak
+          path: apps/os-next/output/soak
+          if-no-files-found: warn

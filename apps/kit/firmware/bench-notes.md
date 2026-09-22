@@ -16,11 +16,23 @@ measurement below into a cross-board default.
 - Satellite volume buttons are active-low while physical mute is active-high.
   Treat their polarities separately or boot can report `micMuted` and reject
   every call.
-- Gain and output volume are one acoustic measurement. Gain 16 lost prompt
+- Historical echo measurements: gain 16 lost prompt
   prefixes; gains 64, 65 and 70 failed repeated barge transcription. The
-  current recorded candidate was NS slot 1, Q31 gain 32 before PCM16 and output
+  recorded candidate was NS slot 1, Q31 gain 32 before PCM16 and output
   cap 60. It passed short wake/barge tests but a 62-second run self-transcribed,
   so it is evidence to repeat rather than a release verdict.
+- That output cap was an echo experiment, not the speaker's power rating:
+  volume 60 is DVC -40 dB. Satellite1 now starts at 80 and permits 100. The
+  FUSB302B requests fixed supplies up to 20 V, 3 A and 30 W; TAS2780 keeps the
+  manufacturer's 15 dBV output gain unless a >=30 W contract and measured
+  PVDD >=18 V permit 20 dBV (25 W into 4 ohms). No high-power claim should be
+  inferred from the requested voltage alone: inspect `pdState`,
+  `pdMilliVolts`, `pdMilliAmps`, `ampPvddCentiVolts` and `ampOutputLevel`.
+- On 2026-09-21, the new firmware passed all 65 host tests and the spoken and
+  interruption checks at volume 80 on the computer hub. The USB-only path
+  reported 5 V / 3 A advertised, measured PVDD 4.53 V, power mode 0 and output
+  level 8. A real PD-charger / 20 V / full-output proof is still pending;
+  successful protocol simulations are not that hardware evidence.
 
 Judge echo behavior by unwanted replies and interruption of a human speaker,
 not only by ASR text.

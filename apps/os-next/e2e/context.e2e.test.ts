@@ -18,22 +18,27 @@
 
 import { expect, test } from "vitest";
 import { append, codeOf, freshCtx, openItx, readHead, rejection, until } from "./support/client.ts";
-import { fetchProjectHost, projectHostnameBase } from "./support/project-host.ts";
+import { fetchProjectHost, ingressHostname, subdomainsOnly } from "./support/project-host.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
 import { SlackReplayTarget, Tools } from "./support/targets.ts";
 
 // ── the built-in roots and the error grammar ──
 
-test("a project label outside the DNS grammar is not a project host: the edge names no DO for it — 421, never the control plane", async () => {
-  // A project host is the one HTTP way into a project, and `projectHostOf` (src/worker.ts) admits a
-  // DNS label only — `prj_evil` (an `_`, legal in a DO name) is no project host. Under the base there
-  // is nothing else, so the edge answers 421 (a fall-through to the control plane would be a working
-  // platform origin on a name the platform never chose) and no Durable Object is ever named or
-  // minted for it; the DO-name codec's own charset gate (`:` and the rest) is src/iterate-context.test.ts.
-  const answer = await fetchProjectHost(`site--prj_evil.${projectHostnameBase()}`, "/w?repo=x");
-  expect(answer.status, answer.text).toBe(421);
-  expect(answer.text).toContain("not a project host");
-});
+// SUBDOMAINS ONLY: the 421 is the wildcard's — under paths a label outside the grammar names no project
+// and the request is the platform's own (path-ingress.e2e.test.ts pins an unknown project there).
+subdomainsOnly(
+  "a project label outside the DNS grammar is not a project host: the edge names no DO for it — 421, never the control plane",
+  async () => {
+    // A project host is the one HTTP way into a project, and `projectHostOf` (src/worker.ts) admits a
+    // DNS label only — `prj_evil` (an `_`, legal in a DO name) is no project host. Under the base there
+    // is nothing else, so the edge answers 421 (a fall-through to the control plane would be a working
+    // platform origin on a name the platform never chose) and no Durable Object is ever named or
+    // minted for it; the DO-name codec's own charset gate (`:` and the rest) is src/iterate-context.test.ts.
+    const answer = await fetchProjectHost(`site--prj_evil.${ingressHostname()}`, "/w?repo=x");
+    expect(answer.status, answer.text).toBe(421);
+    expect(answer.text).toContain("not a project host");
+  },
+);
 
 test("kv list returns EVERY key, not silently the first 1000", async () => {
   // Cloudflare KV caps a list page at 1000 keys; `kv.list()` paginates on the cursor until
@@ -49,7 +54,18 @@ test("kv list returns EVERY key, not silently the first 1000", async () => {
     const writer = openItx(ctx);
     await Promise.all(names.slice(i, i + 100).map((n) => writer.kv.put(n, "1")));
   }
-  const listed = await openItx(ctx).invoke(["itx", "kv", ["list"]]);
+  // KV's list is eventually consistent: in two 100-run soaks (2026-09-21/22) one run in each saw 1000
+  // of the 1001 keys just written. The row proves pagination past the 1000-key page, not immediacy,
+  // so it waits — bounded — for the list to catch up with the writes.
+  const reader = openItx(ctx);
+  const listed = await until(
+    "kv.list sees every key",
+    async () => {
+      const page = await reader.invoke(["itx", "kv", ["list"]]);
+      return page.keys.length === total ? page : undefined;
+    },
+    15_000,
+  );
   expect(listed.keys).toHaveLength(total);
 }, 60_000);
 

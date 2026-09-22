@@ -1,37 +1,42 @@
-// src/workspace/durable-object.ts — THE WORKSPACE: the facet any context hosts under the name
-// `workspace` (`itx.workspaces.get(path)`, library.ts — at most one per path, nothing appended to
-// get it). ONE private overlay over the MOUNT TABLE — every repo in the project catalog at its own
+// src/workspace/durable-object.ts — THE WORKSPACE: the facet a context at ANY path hosts under the
+// name `workspace` (`itx.workspaces.get(path)`, library.ts; `/workspaces/<name>` is the convention,
+// not a rule). ONE private overlay over the MOUNT TABLE — every repo in the project catalog at its own
 // path (`itx.repos.list()`: the workspace is a view of the project's one path namespace): a read
 // tries the overlay, then falls through to the mounted repo's `main` at its tip (the repo facet); a
 // write shadows the repo's file until `gitCommit` lands ONE mount's changes as one commit on that
 // repo's `main` and clears them; a delete of a repo file is a WHITEOUT until then. A path under no
-// mount is scratch (`/workspace/…` by convention): writable, never committed. `create()` lands the
-// creation facts, the certificate cross-posted to `/` for the catalog `itx.workspaces.list()` reads.
+// mount is scratch (`/workspace/…` by convention): writable, never committed. It is also what makes a
+// workspace a DOMAIN OBJECT: it hosts the workspace processor (processor.ts) — the creation saga
+// `itx.workspaces.create(path)` opens, whose certificate is cross-posted to `/` for the catalog
+// `itx.workspaces.list()` reads — and every method refuses until the certificate has landed
+// (`state.creation`) and again once deletion has been asked for (`state.deletion`, the saga
+// `itx.workspaces.delete(path)` opens; the overlay goes with the facet when the row is dropped).
+//
 // Storage is this facet's own SQLite: one `files` table, a row per touched path — its content, or the
-// `deleted` flag that makes it a whiteout. Text only,
-// ONE writer, no policies. The repo facets speak git themselves (src/repo/git-wire.ts) and reach the
-// Artifacts binding — their token and remote — as `itx.cfArtifacts` through THEIR context's rules, so
-// a test lends a fake proxy there (`provide("itx.cfArtifacts", …)`, e2e/support/fake-artifacts.ts).
-// Hosted from `ctx.exports` (first-party-facets.ts): ordinary bundled worker code, reached as
-// `itx.facets.get("workspace")` (library.ts).
+// `deleted` flag that makes it a whiteout. Text only, ONE writer, no policies. The repo facets speak
+// git themselves (src/repo/git-wire.ts) and reach the Artifacts binding — their token and remote — as
+// `itx.cfArtifacts` through THEIR context's rules, so a test lends a fake proxy there
+// (`provide("itx.cfArtifacts", …)`, e2e/support/fake-artifacts.ts). Hosted from `ctx.exports`
+// (first-party-facets.ts): ordinary bundled worker code, reached as `itx.facets.get("workspace")`
+// (library.ts).
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/next/sdk";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { RepoFileChange, RepoLogEntry } from "../repo/git-wire.ts";
-import type { WorkspaceView } from "./contract.ts";
+import type { WorkspaceState } from "./contract.ts";
 import { WorkspaceProcessor } from "./processor.ts";
 
 /** One mount: the PATH of the project repo whose `main` shows through at the mount path (its own). */
-export type WorkspaceMount = { repo: string };
+type WorkspaceMount = { repo: string };
 
 /** One overlay entry as `gitStatus` reports it, against its mount at HEAD (scratch is "added"). */
-export type WorkspaceChange = { path: string; change: "added" | "deleted" | "modified" };
+type WorkspaceChange = { path: string; change: "added" | "deleted" | "modified" };
 
 /** One mount as `gitStatus` reports it: its path, its repo, and the overlay's changes under it. */
-export type WorkspaceMountStatus = { path: string; repo: string; changes: WorkspaceChange[] };
+type WorkspaceMountStatus = { path: string; repo: string; changes: WorkspaceChange[] };
 
 /** An absolute workspace path — the ONE spelling the overlay and the mount table are keyed by:
  *  starts with `/`, no empty, `.` or `..` segment. */
-export function absolutePath(path: string): string {
+function absolutePath(path: string): string {
   const segments = path.slice(1).split("/");
   const malformed =
     !path.startsWith("/") ||
@@ -43,7 +48,7 @@ export function absolutePath(path: string): string {
 /** The mount a FILE path falls under — the LONGEST mount path that is a proper ancestor of it (a
  *  repo may live at a path beneath another's) — with the repo-relative remainder; null under no
  *  mount, and null for a mount point itself: a mount point is a directory, never a file. */
-export function routeMount(
+function routeMount(
   mounts: Record<string, WorkspaceMount>,
   path: string,
 ): { mountPath: string; repo: string; relativePath: string } | null {
@@ -57,11 +62,11 @@ export function routeMount(
 }
 
 export class WorkspaceDurableObject extends StreamProcessorDurableObject<
-  WorkspaceView,
+  WorkspaceState,
   { ITX?: ItxEntrypointService },
   ItxEntrypointScope
 > {
-  processor = new WorkspaceProcessor();
+  processor = new WorkspaceProcessor((call) => this.withItx(call));
 
   #pathRead?: string;
   async #path(): Promise<string> {
@@ -97,36 +102,19 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
       .toArray();
   }
 
-  // ── creation ──
+  // ── the created guard ──
 
-  /** Bring the workspace into being: `workspace/create-requested` on this path, then the
-   *  certificate on `/` (the catalog) and on this path — nothing to provision, so nothing fails.
-   *  Idempotent: a created workspace answers at once. Every other method refuses until this has run. */
-  async create(): Promise<{ path: string }> {
-    const path = await this.#path();
-    if ((await this.snapshot()).state.creation === "created") return { path };
-    await this.withItx((itx) =>
-      itx.append({ type: "events.iterate.com/workspace/create-requested", payload: { path } }),
-    );
-    const certificate = {
-      type: "events.iterate.com/workspace/created",
-      payload: { path },
-      idempotencyKey: `workspace/created:${path}`,
-    };
-    await this.withItx((itx) => itx.cd("/").append(certificate));
-    await this.withItx((itx) => itx.append(certificate));
-    this.#confirmedCreated = true;
-    return { path };
-  }
-
-  /** Every method past `create()` starts here: a workspace not yet created refuses. Creation is
-   *  terminal, so one confirming read per incarnation. */
-  #confirmedCreated = false;
+  /** Every verb starts here: a workspace whose certificate has not landed refuses, and so does one
+   *  whose deletion has been asked for. Deletion can land at any moment, so the state is read on
+   *  every call (in memory once the facet is caught up). */
   async #created(): Promise<void> {
-    if (this.#confirmedCreated) return;
-    if ((await this.snapshot()).state.creation !== "created")
-      throw new Error(`workspace ${await this.#path()}: not created — call create() first`);
-    this.#confirmedCreated = true;
+    const path = await this.#path();
+    const { state } = await this.snapshot();
+    if (state.deletion) throw new Error(`workspace ${path}: deleted`);
+    if (state.creation?.status !== "created")
+      throw new Error(
+        `workspace ${path}: not created — itx.workspaces.create(${JSON.stringify(path)}) first`,
+      );
   }
 
   /** The mount table: every repo in the project catalog at its OWN path. */
@@ -142,6 +130,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
 
   /** The overlay's copy (a whiteout reads null), else the mounted repo's file at its tip; null when absent. */
   async readFile(path: string): Promise<string | null> {
+    await this.#created();
     const resolved = absolutePath(path);
     const row = this.#row(resolved);
     if (row) return row.deleted ? null : row.content;
@@ -150,6 +139,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
 
   /** The mounted repo's file at its tip whatever the overlay says — what uncommitted work diffs against. */
   async readBase(path: string): Promise<string | null> {
+    await this.#created();
     return this.#readMounted(absolutePath(path), await this.mounts());
   }
 
@@ -174,6 +164,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
   /** Delete from the merged view: the overlay row goes; a file the mount has is WHITED OUT until
    *  committed. False when the path was not a file of the view. */
   async deleteFile(path: string): Promise<boolean> {
+    await this.#created();
     const resolved = absolutePath(path);
     const row = this.#row(resolved);
     const route = routeMount(await this.mounts(), resolved);
@@ -193,6 +184,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
 
   /** Back to the mount's version: the overlay row — a shadowing write or a whiteout — goes. */
   async revert(path: string): Promise<void> {
+    await this.#created();
     this.#sql.exec("DELETE FROM files WHERE path = ?", absolutePath(path));
   }
 
@@ -200,6 +192,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
    *  sorted. A tip path is listed only where it ROUTES to that mount (a repo beneath another's path
    *  hides the parent's files under it), as `readFile` and a commit see them. */
   async listAllFiles(): Promise<string[]> {
+    await this.#created();
     const mounts = await this.mounts();
     const paths = new Set<string>();
     const whiteouts = new Set<string>();
@@ -222,6 +215,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
   /** The overlay's changes grouped by mount (every mount listed, dirty or not), plus the unmounted
    *  scratch — which is never committed. */
   async gitStatus(): Promise<{ mounts: WorkspaceMountStatus[]; unmounted: WorkspaceChange[] }> {
+    await this.#created();
     return this.#status(await this.mounts());
   }
 

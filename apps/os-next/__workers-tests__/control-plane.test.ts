@@ -8,16 +8,26 @@ import { directory } from "../src/directory.ts";
 import { applyDirectorySchema, SRC_ECHO_APP } from "./support.ts";
 
 const origin = "https://control.test";
-const secret = (env as unknown as Env).APP_CONFIG_ADMIN_API_SECRET!;
+const secret = (env as unknown as Env).APP_CONFIG_SECRETS__ADMIN_BEARER!;
+const password = (env as unknown as Env).APP_CONFIG_LOGIN__PASSWORD!;
 const sessions: Disposable[] = [];
+/** The sign-in page's own post — same-origin, a form — with or without a browser's cookie. */
+const postLogin = (form: Record<string, string>, cookie?: string) =>
+  SELF.fetch(`${origin}/login`, {
+    method: "POST",
+    redirect: "manual",
+    headers: cookie ? { Origin: origin, cookie } : { Origin: origin },
+    body: new URLSearchParams(form),
+  });
 beforeAll(applyDirectorySchema);
 afterEach(() => {
   for (const session of sessions.splice(0)) session[Symbol.dispose]();
   vi.restoreAllMocks();
 });
 
+/** A bare `/api` socket, authenticated in-band with the admin secret — every project, or `as` a user. */
 async function operator(email?: string) {
-  const response = await SELF.fetch(`${origin}/internal/rpc`, {
+  const response = await SELF.fetch(`${origin}/api`, {
     headers: { Upgrade: "websocket" },
   });
   expect(response.status).toBe(101);
@@ -41,14 +51,24 @@ test("the directory keeps creation, listing, membership and event attribution co
   using project = await ada.projects.create({ project: "adas-directory" });
   // the project's id is minted; its name is the slug — the list carries both
   const adasRoot = await project.whoami();
-  expect(adasRoot).toEqual({ projectId: expect.stringMatching(/^prj_[0-9a-f]{32}$/), path: "/" });
+  expect(adasRoot).toEqual({
+    projectId: expect.stringMatching(/^prj_[0-9a-f]{32}$/),
+    path: "/",
+    projectSlug: "adas-directory",
+    projectUrl: "https://adas-directory.projects.test/",
+  });
   const adasProjectId = adasRoot.projectId;
   expect((await ada.projects.list()).map(({ id, slug }) => ({ id, slug }))).toEqual([
     { id: adasProjectId, slug: "adas-directory" },
   ]);
   // the slug names the project too (a URL's /projects/<slug>): the directory resolves it to the id
   using bySlug = await ada.projects.get("adas-directory");
-  expect(await bySlug.whoami()).toEqual({ projectId: adasProjectId, path: "/" });
+  expect(await bySlug.whoami()).toEqual({
+    projectId: adasProjectId,
+    path: "/",
+    projectSlug: "adas-directory",
+    projectUrl: "https://adas-directory.projects.test/",
+  });
   const [event] = await project.append({
     type: "note",
     source: { principal: { actor: "forged" } },
@@ -74,7 +94,12 @@ test("the directory keeps creation, listing, membership and event attribution co
     ]),
   );
   using other = await admin.projects.get(adasProjectId);
-  expect(await other.whoami()).toEqual({ projectId: adasProjectId, path: "/" });
+  expect(await other.whoami()).toEqual({
+    projectId: adasProjectId,
+    path: "/",
+    projectSlug: "adas-directory",
+    projectUrl: "https://adas-directory.projects.test/",
+  });
 });
 
 test("onboarding creates owned organizations atomically and checks the selected organization", async () => {
@@ -124,19 +149,30 @@ test("onboarding creates owned organizations atomically and checks the selected 
   expect((await catalog.listOrgs(user.id)).map((org) => org.id)).toEqual([chosen.id]);
 });
 
-test("operator RPC accepts only its administrator credential; issuer login uses the public API", async () => {
+test("a bare /api socket carries no session until a credential is verified in-band; issuer login is the page's password post, never the bearer", async () => {
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
     SELF.fetch(new Request(input, init)),
   );
-  const login = await SELF.fetch(`${origin}/login`, {
+  // the bearer signs nobody in: the operator door is `/api` and `/mcp`, not the sign-in page
+  const bearerLogin = await SELF.fetch(`${origin}/login`, {
     method: "POST",
     redirect: "manual",
-    headers: { Authorization: `Bearer ${secret}` },
-    body: new URLSearchParams({ email: "fixture@directory.test", next: "https://elsewhere.test" }),
+    headers: { Authorization: `Bearer ${secret}`, Origin: origin },
+    body: new URLSearchParams({ email: "fixture@directory.test", next: "/" }),
+  });
+  expect(bearerLogin.status).not.toBe(302);
+  expect(bearerLogin.headers.get("set-cookie") ?? "").not.toMatch(/__Host-itx-session=/);
+  const login = await postLogin({
+    email: "fixture@directory.test",
+    password,
+    next: "https://elsewhere.test", // another origin is not a place to continue to: the page's own
   });
   expect(login.status).toBe(302);
   expect(login.headers.get("location")).toBe("/");
-  const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
+  const cookie = login.headers
+    .getSetCookie()
+    .find((value) => value.startsWith("__Host-itx-session="))!
+    .split(";")[0]!;
   expect(
     (
       await SELF.fetch(`${origin}/api`, {
@@ -146,9 +182,8 @@ test("operator RPC accepts only its administrator credential; issuer login uses 
       })
     ).status,
   ).toBe(200);
-  const response = await SELF.fetch(`${origin}/internal/rpc`, {
-    headers: { Upgrade: "websocket", cookie },
-  });
+  // a bare socket — no cookie, no bearer on the upgrade — holds nothing until a credential is verified
+  const response = await SELF.fetch(`${origin}/api`, { headers: { Upgrade: "websocket" } });
   response.webSocket!.accept();
   using api = newWebSocketRpcSession<IterateRpcTarget>(response.webSocket! as unknown as WebSocket);
   await expect(api.authenticate({ type: "from-server-cookie" })).rejects.toThrow(
@@ -179,49 +214,44 @@ test("operator RPC accepts only its administrator credential; issuer login uses 
   ).toBe(403);
 });
 
-test("email sign-in: the email, then the code (this config's test code), then an ordinary user session; without a mailbox or test mode there is no email sign-in", async () => {
+test("password sign-in: the email and the password make an ordinary user session; a wrong password is refused in place; without a mailbox there is no email sign-in", async () => {
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
     SELF.fetch(new Request(input, init)),
   );
   const bindings = env as unknown as Env;
-  // no mailbox binding and no test flag: the deployment offers no email sign-in at all
+  // no mailbox binding: the deployment offers no email sign-in at all (the password stays)
   await expect(
-    startLoginCode(
-      { ...bindings, EMAIL: undefined, APP_CONFIG_TEST_EMAIL_LOGIN: "false" },
-      "someone@directory.test",
-    ),
-  ).rejects.toThrow(/Sign in with Google/);
-  const post = (form: Record<string, string>, cookie?: string) =>
-    SELF.fetch(`${origin}/login`, {
-      method: "POST",
-      redirect: "manual",
-      headers: cookie ? { Origin: origin, cookie } : { Origin: origin },
-      body: new URLSearchParams(form),
-    });
-  const started = await post({ email: "Test-Login@directory.test", next: "/sessions" });
-  expect(started.status).toBe(303);
-  expect(started.headers.get("location")).toBe("/login?next=%2Fsessions");
-  const loginCookie = started.headers.get("set-cookie")!.split(";")[0]!;
-  expect(loginCookie).toMatch(/^__Host-itx-login=/);
-  // the page learns whom the code went to
+    startLoginCode({ ...bindings, EMAIL: undefined }, "someone@directory.test"),
+  ).rejects.toThrow();
+  // the page learns which sign-ins this deployment offers — this lane's config has all three
   const state = await (
-    await SELF.fetch(`${origin}/login.json?next=/sessions`, { headers: { cookie: loginCookie } })
-  ).json<{ codeSentTo: string | null; emailSignIn: boolean }>();
-  expect(state).toMatchObject({ codeSentTo: "test-login@directory.test", emailSignIn: true });
-  // a wrong code goes back to the code step with the reason, and makes no session
-  const wrong = await post({ code: "000000", next: "/sessions" }, loginCookie);
+    await SELF.fetch(`${origin}/login.json?next=/sessions`)
+  ).json<{ password: boolean; emailSignIn: boolean; google: string | null }>();
+  expect(state).toMatchObject({ password: true, emailSignIn: true });
+  expect(state.google).toMatch(/^\/\.auth\/identity/);
+  // a wrong password goes back to the page with the reason, and makes no session
+  const wrong = await postLogin({
+    email: "Test-Login@directory.test",
+    password: "not-the-password",
+    next: "/sessions",
+  });
   expect(wrong.status).toBe(303);
-  expect(new URL(wrong.headers.get("location")!, origin).searchParams.get("error")).toBe(
-    "That code is not right. Try again.",
-  );
-  expect(wrong.headers.get("set-cookie")).toBeNull();
-  // the right one (the test code, here) is the session; the login cookie ends with it
-  const login = await post({ code: "424242", next: "/sessions" }, loginCookie);
+  const bounced = new URL(wrong.headers.get("location")!, origin);
+  expect(bounced.pathname).toBe("/login");
+  expect(bounced.searchParams.get("next")).toBe("/sessions");
+  expect(bounced.searchParams.get("error")).toBeTruthy();
+  expect(wrong.headers.get("set-cookie") ?? "").not.toMatch(/__Host-itx-session=/);
+  // the right one is the session — the email lowercased, the user created on first sign-in
+  const login = await postLogin({
+    email: "Test-Login@directory.test",
+    password,
+    next: "/sessions",
+  });
   expect(login.status).toBe(302);
   expect(login.headers.get("location")).toBe("/sessions");
-  const cookies = login.headers.getSetCookie();
-  expect(cookies.some((cookie) => cookie.startsWith("__Host-itx-login=;"))).toBe(true);
-  const session = cookies.find((cookie) => cookie.startsWith("__Host-itx-session="))!;
+  const session = login.headers
+    .getSetCookie()
+    .find((cookie) => cookie.startsWith("__Host-itx-session="))!;
   const response = await SELF.fetch(`${origin}/api`, {
     headers: { Upgrade: "websocket", Origin: origin, Cookie: session.split(";")[0]! },
   });
@@ -235,6 +265,30 @@ test("email sign-in: the email, then the code (this config's test code), then an
     actor: expect.stringMatching(/^user_/),
     email: "test-login@directory.test",
   });
+});
+
+test("password sign-in rests an address after five wrong tries: the sixth is refused as too many, right or wrong", async () => {
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
+    SELF.fetch(new Request(input, init)),
+  );
+  const email = "limited@directory.test";
+  const errors: string[] = [];
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const refused = await postLogin({ email, password: "wrong", next: "/" });
+    expect(refused.status).toBe(303);
+    errors.push(new URL(refused.headers.get("location")!, origin).searchParams.get("error") ?? "");
+  }
+  expect(errors.slice(0, 5).every((error) => error && !/too many/i.test(error))).toBe(true);
+  expect(errors[5]).toMatch(/too many/i);
+  const late = await postLogin({ email, password, next: "/" });
+  expect(late.status).toBe(303);
+  expect(new URL(late.headers.get("location")!, origin).searchParams.get("error")).toMatch(
+    /too many/i,
+  );
+  // another address is untouched by that one's tries
+  expect((await postLogin({ email: "unlimited@directory.test", password, next: "/" })).status).toBe(
+    302,
+  );
 });
 
 test("project ingress strips forged internal authority and never exposes platform credentials", async () => {

@@ -372,7 +372,10 @@ export async function run(options: DeployCommandOptions = {}) {
   });
 }
 
-/** Select new work, or inherit a completed ancestor result without provisioning. */
+/**
+ * Select new work, inherit a completed ancestor result without provisioning,
+ * or skip a branch this fleet does not cover (os-next previews itself).
+ */
 export async function ciPlan(options: DeployCommandOptions = {}) {
   const { target, runtime } = await resolvePreviewCommandSetup({
     ...options,
@@ -416,7 +419,8 @@ export async function ciPlan(options: DeployCommandOptions = {}) {
       : decision.action === "reuse"
         ? { commit: decision.deployment.commit, slot: decision.deployment.slot }
         : { commit: history.head }),
-    tests: decision.action !== "inherit",
+    // "inherit" already has its answer; "skip" is not this pipeline's work.
+    tests: decision.action === "deploy" || decision.action === "reuse",
     deploy: decision.action === "deploy",
   };
   if (process.env.GITHUB_OUTPUT) {

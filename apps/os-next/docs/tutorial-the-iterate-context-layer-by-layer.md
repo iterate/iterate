@@ -25,7 +25,7 @@ Every snippet assumes this preamble — exactly how the lane opens a session. Th
 ```ts
 import { newWebSocketRpcSession } from "capnweb";
 
-const wsApi = new URL("/internal/rpc", WORKER_BASE_URL); // the operator door of the one worker under test (a local boot, or the deployed one); the public door is /api, behind the OAuth gate
+const wsApi = new URL("/api", WORKER_BASE_URL); // the one door of the worker under test (a local boot, or the deployed one) — opened bare, the socket authenticates in-band
 wsApi.protocol = "ws:";
 
 /** A fresh session — an IterateRpcTarget stub. Hold it with `using`: a capnweb stub is
@@ -80,7 +80,7 @@ DO and reaches it only over Workers RPC. Everything you hold is minted at the ed
 
 ### A client is a capnweb peer, and the door is `authenticate(credentials)`
 
-`/api` — and the operator door `/internal/rpc`, the e2e lane's — serves an `IterateRpcTarget` whose
+`/api` serves an `IterateRpcTarget` whose
 only door is `authenticate(credentials)`. It answers a `SessionRpcTarget`: a catalog that vends
 contexts, never a context itself. `session.projects.get(project)` and
 `session.projects.create({ project })` vend a project's ROOT context — the `IterateContext` you
@@ -176,7 +176,7 @@ expect(await itx.kv.get("k")).toBe("v");
 // e2e/context.e2e.test.ts
 ```
 
-`/version` answers `<deployId> <environmentName>`, the stamp a deploy smoke waits for
+`/version` answers `<deployId> <platformOrigin>`, the stamp a deploy smoke waits for
 (`e2e/session.e2e.test.ts`). One more door, supported and not front and center: capnweb's one-shot
 HTTP batch (`newHttpBatchRpcSession`) is served at the same `/api` for a cron or a script — one
 POST, every chained call flushed in it, reads and writes only, no live capability
@@ -357,21 +357,28 @@ expect(await b.invoke("itx.clash(1)")).toBe(101);
 // e2e/session.e2e.test.ts
 ```
 
-Contexts can still inherit from one another — through the rules, not the registry. A child's
-WHOLE-CONTEXT override, `provide("itx", "itx.builtins.cd('/')")`, sends every call no more specific
-row of the child claims — the built-in roots included — to the project root, resolved through the
-root's rules, so a lend on the root is reachable from every child that says so. The target must be
-the physical spelling `itx.builtins.cd('/')`: the door refuses `itx.cd('/')`, which would re-enter
-the table the row just claimed (chapter 3 has the rule):
+A child is born with its own log and nothing else. Whoever creates it writes one bare row — `itx`,
+the shortest legal match — whose target is the creator's own context; the library's
+`agents.create(path)`, `repos.create(path)` and `workspaces.create(path)` do
+(`src/library.ts`), and nothing writes it for a context you merely `cd` into. That row claims only
+what no implicit row claims (chapter 3): the child's `append`, `whoami`, `cd`, its rules and its
+facets stay the child's, and every other name walks one hop up to the creator's Durable Object and
+resolves through the creator's rules — so a lend on the root is reachable from every child whose
+row says so, and from that child's children through their rows. A context nobody linked is naked:
+fourteen roots and default-deny.
 
 ```ts
 using s = session();
 const root = s.authenticate(adminCredentials()).projects.get("acme-support");
 await root.provide("itx.tool", new Tools("root")); // lent at the root only
-await root.cd("/x").provide("itx", "itx.builtins.cd('/')"); // /x inherits: every unclaimed call goes to the root, through its rules
-expect(await root.cd("/x").invoke("itx.tool.hello()")).toBe("hello-from-root"); // (composed)
-expect(await root.cd("/x").builtins.whoami()).toEqual({ projectId: "acme-support", path: "/x" }); // the physical door at /x is still /x
-// e2e/rewrite-rules.e2e.test.ts — the whole-context override row (`root.cd("/x").provide("itx", live)`) and the door row (`itx.cd('/x')` refused, "physical spelling"; `itx.builtins.cd('/y')` accepted)
+await root.cd("/x").provide({
+  match: "itx",
+  target: "itx.builtins.cd('/')",
+  description: "everything this context does not claim, its creator answers",
+}); // the row a create path appends durably; here, session-scoped
+expect(await root.cd("/x").invoke("itx.tool.hello()")).toBe("hello-from-root"); // a miss: one hop to the root, through its rules
+expect(await root.cd("/x").whoami()).toEqual({ projectId: "acme-support", path: "/x" }); // implicit at /x: never a miss
+// e2e/rewrite-rules.e2e.test.ts — a linked child's append and whoami stay the child's; a bare row may not name its own context
 ```
 
 **What this brick leaves on the table:** the name you called the stub by was a string we never
@@ -421,7 +428,7 @@ canonically (whitespace, quotes and key order normalized), an array is shape-che
 (`e2e/rewrite-rules.e2e.test.ts`). One sizing rule follows: a STRING expression is
 capped at 2 KiB (`EXPRESSION_TOO_LONG`); anything bigger — a worker's source — rides the array half,
 plain data that never meets the JSON5 parser. Two reserved spellings belong to chapter 3: `@`, the
-caller's input, and the root `itx.builtins`, the physical scope.
+caller's input, and the root `itx.builtins`, the kernel's record — a target's word, never a call's.
 
 ### `cd(path)` is pure addressing
 
@@ -440,7 +447,10 @@ const [self] = await itx.invoke("itx.cd('').append({type:'self-ping'})"); // '' 
 There are two `cd` doors on purpose. The edge `IterateContext.cd(path)` returns an EDGE context, so
 a later `provide` on it lends in your session (`a.cd("/sub").provide(…)` in chapter 1); the built-in
 `itx.cd(path)` inside an expression is for expressions evaluated INSIDE the DO, where there is no
-edge — a subscription target `itx.cd('/archive').append`. Same resolver, two evaluation sites. A
+edge — a subscription target `itx.cd('/archive').append`. Same resolver, two evaluation sites. Loaded
+code (`env.ITX`) has a third: its `cd` goes through its own table, so a row can mask it, and goes
+DOWN only — itself and its descendants, never a parent or a sibling — the way `..` never escapes `/`
+here; what it reaches above itself, it reaches through its rows (chapter 3). A
 context's Durable Object name is `{projectId}.iterate{path}`, the project id gated to `[A-Za-z0-9_-]`
 at the one place every name is parsed — the isolation wall: a `:` can never be spelled, so a
 project-prefixed KV key can never alias another project's.
@@ -494,7 +504,7 @@ for (const call of ["itx.store.get('k')", "itx.whoami()", "itx.builtins.kv.get('
 // e2e/rewrite-rules.e2e.test.ts
 ```
 
-### The seven rules, in plain words
+### The eight rules, in plain words
 
 `src/context/itx-expression-rewriting.ts` is one file: the rules, the one event, the resolver.
 Every rule below is a row in its table test.
@@ -503,53 +513,83 @@ Every rule below is a row in its table test.
    `itx.ai.run('gpt-5')`.
 2. **A name step matches the same property** — or, as the final step, a call of that name. A call
    step matches a call whose leading args equal the pinned literals; pinned args are CONSUMED.
-3. **The most specific row wins:** longest match, then most pinned args. A bare `itx` row matches
-   every call — the whole-context override.
+3. **The most specific row wins:** longest match, then most pinned args. The implicit rows
+   (rule 5) compete as rows of length two, so a bare `itx` row WITH a target claims only what no
+   implicit row claims — `itx ⇒ itx.builtins.cd('/agents/x')` is how a child reaches its creator
+   (chapter 1), `itx ⇒ itx.builtins` is the whole local surface in one row — and a bare
+   `itx ⇒ null` claims everything: one row denies all.
 4. **The rewrite is the target, then the unpinned args, then the call's remaining steps.** Args
    fold into the target's final step when it is a name (`itx.grok ⇒ itx.openai.chat`, so
    `itx.grok(x)` becomes `itx.openai.chat(x)`); otherwise they become an anonymous call on the
    target's result (`itx.cam ⇒ itx.builtins.rpcStubs.get('cam')`, so `itx.cam(1)` becomes
    `itx.builtins.rpcStubs.get('cam')(1)`). A target denotes a VALUE; calling the match calls it.
-5. **The fixed point is `itx.builtins`.** A call rooted there runs as is and never reads the
-   table. Any other `itx.…` call: RULES FIRST — a matching row whose target is `null` is a MASK and
-   the call is refused; a matching row rewrites and the loop repeats; no matching row and a root
-   that is a built-in is the IMPLICIT PLATFORM ROW `itx.<root> ⇒ itx.builtins.<root>`, applied and
-   done; anything else is `NO_ITX_EXPRESSION_MATCH`, default-deny. 32 rewrites is the budget.
+5. **The fixed point is `itx.builtins`,** the kernel's record. A call rooted there runs as is and
+   never reads the table. Any other `itx.…` call: RULES FIRST — a matching row whose target is
+   `null` is a MASK and the call is refused; a matching row rewrites and the loop repeats; no
+   matching row and a root that is IMPLICIT HERE is the row `itx.<root> ⇒ itx.builtins.<root>`,
+   applied and done; anything else is `NO_ITX_EXPRESSION_MATCH`, default-deny. What is implicit
+   depends on where you stand: at the owner root — `/` for a project; `/users/<id>` or
+   `/organizations/<id>` in the global namespace — every built-in root; at every other context
+   only the fourteen context roots (`CONTEXT_ROOTS` in
+   `src/context/itx-expression-rewriting.ts`). `kv`, `secrets`, `ai`, `fetch`, `repos`, `agents` and the rest are the
+   project's, ambient nowhere below its root. 32 rewrites is the budget.
 6. **The door.** A match is rooted at `itx`, never at `itx.builtins`, never at a proxy verb
-   (`cd`, `invoke`, `provide`, `subscribe`). A target is
-   rooted at `itx`. A whole-context override must target the physical spelling `itx.builtins.…`
-   and may not name its own context.
+   (`invoke`, `provide`, `subscribe`; `itx.cd` is a legal match, so `itx.cd ⇒ null` is a row). A
+   target is rooted at `itx`; `itx.builtins.…` is a legal target — the owner's grant of the real
+   thing — and a bare row may not name its own context. Loaded code (`env.ITX` in a worker, a facet,
+   a script) never spells `itx.builtins` in a call — the door refuses it, as the codec refuses
+   `__proto__`; its `cd` goes down only, to itself and its descendants; `provide` and `subscribe`
+   are not on its handle, so a loaded worker writes rows with `itx.append` and lends nothing.
 7. **`@` is the caller's input.** A target whose final call step holds `@` is a template. As a
    top-level argument `@` is the unpinned argument list, spliced; nested inside an object or array
    literal it is THE one argument; `...@` as an object entry merges the one argument's fields under
    the template's own keys, the template winning.
+8. **Un-setting.** `target: null` deletes the row, kept as a MASK only where an implicit row lies
+   beneath the match here (a row must exist to deny). A handle's undo and a dead stub's census
+   send `null` with `ifTarget`: a compare-and-set delete, never a mask. There is no restore
+   spelling: at a child the target `itx.builtins.<x>` is a grant and is stored; at the owner root
+   it equals the implicit row and deletes.
 
 The resolver (`resolveItxExpression` in the same file) is rule 5 as a loop: while the call is not
-rooted at `itx.builtins`, pick the most specific context row and rewrite (a `null` target throws
-`NO_ITX_EXPRESSION_MATCH` "is masked"); with no row, a built-in root becomes `itx.builtins.<root>` and
-the loop ends; one more platform row, `itx.worker`, is chapter 7's; anything else is
-`NO_ITX_EXPRESSION_MATCH` "no rewrite rule matches … (default-deny; configure a rule first)".
+rooted at `itx.builtins`, pick the most specific row — the context's own and the implicit ones —
+and rewrite (a `null` target throws `NO_ITX_EXPRESSION_MATCH` "is masked"); no row is
+`NO_ITX_EXPRESSION_MATCH` "no rewrite rule matches … (default-deny; configure a rule first)". A
+rewrite onto `itx.builtins.cd('<path>')…` is one hop: the call goes on in that context, against its
+rows, with a fresh budget and the caller's path beside it (so the library's `repos.get('./x')` stays
+relative to whoever called) — which is why a bare row may not name its own context.
 
-### The implicit platform rows, and `itx.builtins`
+### The implicit rows, and `itx.builtins`
 
 The built-ins are a plain record (`src/context/built-ins.ts`, the `BuiltInScope` interface), and THE
-RECORD IS `itx.builtins`. `itx.builtins.kv.get('x')` runs against it directly and reads no rule. The
-short name `itx.kv.get('x')` reaches the same door through the implicit platform row — never stored,
-applied by the resolver when no context row matches. `itx.rewriteRules.list()` is the EFFECTIVE
-table, your rows plus the platform rows, each with its origin:
+RECORD IS `itx.builtins` — the kernel's word, spelled by the kernel's own appends and by a rule's
+target, never by a call an app makes. The short name `itx.kv.get('x')` reaches it through the
+implicit row `itx.kv ⇒ itx.builtins.kv` — never stored, applied by the resolver when no context row
+matches, present at the owner root only (rule 5). `itx.rewriteRules.list()` is the EFFECTIVE table:
+your rows, the implicit rows described by the platform, and, behind a bare row that hops, the rows
+of the context it names — each with the `context` it was read from and, when it has one, its
+`description`, one line a model reads (≤ 500 chars):
 
 ```ts
 const before = await itx.rewriteRules.list();
-expect(before).toContainEqual({ match: "itx.kv", target: "itx.builtins.kv", origin: "platform" });
 expect(before).toContainEqual({
-  match: "itx.worker",
-  target: expect.stringMatching(/^itx\.workers\.get\(/),
-  origin: "platform",
-}); // the config worker's default (chapter 7)
-await itx.provide("itx.kv", "itx.builtins.whoami");
+  match: "itx.kv",
+  target: "itx.builtins.kv",
+  description: expect.any(String),
+  context: "/",
+});
+await itx.provide({
+  match: "itx.kv",
+  target: "itx.builtins.whoami",
+  description: "kv answers whoami here",
+});
 const after = await itx.rewriteRules.list();
 expect(after.filter((row) => row.match === "itx.kv")).toEqual([
-  { match: "itx.kv", target: "itx.builtins.whoami", origin: "context" }, // replaced the platform row in the listing
+  {
+    match: "itx.kv",
+    target: "itx.builtins.whoami",
+    description: "kv answers whoami here",
+    context: "/",
+  }, // replaced the implicit row in the listing
 ]);
 // e2e/rewrite-rules.e2e.test.ts
 ```
@@ -557,31 +597,37 @@ expect(after.filter((row) => row.match === "itx.kv")).toEqual([
 The platform never spells a short name: every expression it writes — the proxy's own append, a lent
 stub's rule, a processor's row — is rooted at `itx.builtins`, so a row you put at `itx.rpcStubs`
 redirects YOUR calls and nothing the platform relies on. Mask `itx.rpcStubs` with `null`, and
-`provide("itx.tool", fn)` still lands and serves while `itx.builtins.rpcStubs.list()` still answers
+`provide("itx.tool", fn)` still lands and serves: the registry it lent to is the kernel's
 (`e2e/rewrite-rules.e2e.test.ts`).
 
-### Masks: `provide(match, null)`
+### Masks and deletions: `provide(match, null)`
 
-`null` is a deliberate DENY where a platform row lies beneath, and a plain deletion elsewhere. A mask
-refuses the short name; the physical door still answers; a partial mask refuses only what it claims;
-disposing the deny lifts it; the platform-equivalent target deletes the row explicitly:
+`null` is a deliberate DENY where an implicit row lies beneath — the row is kept, `{ match, target:
+null }`, and the short name is refused — and a plain deletion elsewhere; a bare `itx ⇒ null` denies
+all (rule 3). A partial mask refuses only what it claims; disposing the deny lifts it; a row that
+says what the implicit row beneath already says is no row at all:
 
 ```ts
 await itx.kv.put("k", "v");
 const deny = await itx.provide("itx.kv", null);
 expect((await rejection(itx.kv.get("k"))).code).toBe("NO_ITX_EXPRESSION_MATCH"); // "is masked"
-expect(await itx.builtins.kv.get("k")).toBe("v"); // the row: { match: "itx.kv", target: null, origin: "context" }
+expect(await itx.rewriteRules.get("itx.kv")).toEqual({
+  match: "itx.kv",
+  target: null,
+  context: "/",
+});
 await itx.provide("itx.kv.put", null); // a partial mask under the root
 deny[Symbol.dispose](); // lifts the mask at itx.kv…
 expect(await itx.kv.get("k")).toBe("v");
 expect((await rejection(itx.kv.put("k", "w"))).code).toBe("NO_ITX_EXPRESSION_MATCH"); // …the partial one stands
-await itx.provide("itx.kv.put", "itx.builtins.kv.put"); // the platform-equivalent target DELETES the row
-expect(await itx.rewriteRules.get("itx.kv.put")).toBeNull();
+await itx.provide("itx.kv.put", "itx.builtins.kv.put"); // what the implicit row already says: the mask is gone
+expect(await itx.kv.put("k", "w")).toEqual({ ok: true });
 // e2e/rewrite-rules.e2e.test.ts
 ```
 
-Under a name with nothing beneath, `null` simply deletes and the match is default-deny
-(`e2e/rewrite-rules.e2e.test.ts`).
+Under a name with nothing beneath, `null` simply deletes and the match is default-deny — at a child
+that is every project-level name, so `itx.kv ⇒ null` there is a deletion and `itx.kv.put ⇒
+itx.builtins.kv.put` there is a grant, stored (`e2e/rewrite-rules.e2e.test.ts`).
 
 ### Pinned arguments
 
@@ -601,7 +647,7 @@ expect(await itx.invoke("itx.llm.run('live', 7)")).toBe("live:[7]"); // the pinn
 
 ### `@`, the caller's input
 
-`itx.ai` is Cloudflare's Workers AI binding, verbatim, under the platform row. THE DREAM is one
+`itx.ai` is Cloudflare's Workers AI binding, verbatim, under its implicit row at the root. THE DREAM is one
 rule: `itx.fable ⇒ itx.ai.run('@cf/…', @)` pins the model and splices the caller's inputs and
 options into the call:
 
@@ -650,16 +696,16 @@ a string target is parsed at the reduce, and a malformed one is skipped without 
 
 ### Shadowing a root with a stub, and what dies with the stub
 
-Misha's test, on the real root: `provide("itx.ai", fake)` shadows the binding for the context;
-`itx.builtins.ai` stays the real one; disposing the handle restores the platform row — because the
-DO un-sets the rule when the stub's LAST pager closes, and a removal is spelled as the
-platform-equivalent target, never as `null` (which would mask):
+Misha's test, on the real root: `provide("itx.ai", fake)` shadows the binding for the context; the
+kernel's `itx.builtins.ai` stays the real one; disposing the handle gives the implicit row back —
+because the DO un-sets the rule when the stub's LAST pager closes, and an un-set is a deletion of
+the row the stub wrote, never a mask:
 
 ```ts
-expect(await itx.rewriteRules.get("itx.ai")).toEqual({
+expect(await itx.rewriteRules.get("itx.ai")).toMatchObject({
   match: "itx.ai",
   target: "itx.builtins.ai",
-  origin: "platform",
+  context: "/", // implicit here, described by the platform
 });
 const handle = await itx.provide("itx.ai", new FakeAi());
 expect(await itx.rewriteRules.resolve("itx.ai.run")).toEqual([
@@ -667,36 +713,30 @@ expect(await itx.rewriteRules.resolve("itx.ai.run")).toEqual([
   "itx.builtins.rpcStubs.get('itx.ai').run",
 ]);
 handle[Symbol.dispose]();
-await until(async () => (await itx.rewriteRules.get("itx.ai"))?.origin === "platform");
+await until(async () => (await itx.rewriteRules.get("itx.ai"))?.target === "itx.builtins.ai");
 // e2e/ai-root-shadow-and-fable.e2e.test.ts
 ```
 
 What names a dead stub is decided against one frozen table: every rule and every subscription whose
 target RESOLVES to `itx.builtins.rpcStubs.get('<key>')` goes. So a user's alias to a shadowed root
 (`itx.me ⇒ itx.whoami`, with a fake at `itx.whoami`) survives the fake dying in either configuration
-order and resolves to the platform row beneath (`e2e/rewrite-rules.e2e.test.ts`).
+order and resolves to the implicit row beneath (`e2e/rewrite-rules.e2e.test.ts`).
 
 ### The compare-and-set undo: a handle only ever removes the row it wrote
 
-An expression rule's handle appends the removal spelling when disposed — but only while the row is
-still its own. The removal carries the target this handle wrote (`ifTarget`), and the core reduce
-compares inside the commit:
+An expression rule's handle, disposed, appends a deletion — `{ match, target: null }` — but only
+while the row is still its own: the deletion carries the target this handle wrote as `ifTarget`,
+and the core reduce compares inside the commit:
 
 ```ts
-// context/itx-expression-rewriting.ts — abridged
-export function rewriteRuleRemovedEvent(match, ifTarget?) {
-  const matchPrefix = parseItxExpressionPrefix(match);
-  const event = rewriteRuleConfiguredEvent(matchPrefix, [
-    "itx",
-    "builtins",
-    ...matchPrefix.slice(1),
-  ]);
-  return ifTarget === undefined ? event : { ...event, payload: { ...event.payload, ifTarget } };
-}
 // stream/core-processor.ts — the reduce's one line for it
 if ("ifTarget" in payload && (!existing || !jsonEqual(existing.target, payload.ifTarget)))
   return undefined; // a replacement owns the match now; a stale undo is a no-op
 ```
+
+A `null` that carries `ifTarget` deletes and never masks: whatever lies beneath shows through — the
+implicit row at the owner root, nothing at a child — so a disposed session row cannot leave a grant
+behind where it stood.
 
 So a session that provided `itx.m ⇒ itx.kv` and let go after another session's live provider took
 the match over un-sets nothing (`e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts`). Two known reds sit
@@ -715,10 +755,10 @@ chapter appended went somewhere; the next brick is that somewhere.
 ### `append`, `readEvents`, `waitForEvent`
 
 Every context is one append-only event log. The three are built-ins under `itx.builtins`, like
-everything the platform implements: `itx.append` is the implicit platform row
-`itx.append ⇒ itx.builtins.append`, exactly as `itx.kv` is `itx.kv ⇒ itx.builtins.kv` (chapter 3) —
-so the short name rides the dotted hop with zero edge code, and the physical spelling
-`itx.builtins.append` always works and never reads the rules:
+everything the platform implements, and three of the fourteen roots implicit in EVERY context
+(chapter 3): `itx.append` is the row `itx.append ⇒ itx.builtins.append` wherever you stand — a
+child's log is its own, whoever created it — so the short name rides the dotted hop with zero edge
+code, and the kernel's own appends, spelled `itx.builtins.append`, never read the rules:
 
 ```ts
 const [committed] = await itx.append({ type: "mark", payload: { n: 1 } });
@@ -832,25 +872,24 @@ The DO's constructor appends the platform's own records before any door opens, s
 materializes a context — a bare read included. The first incarnation writes `stream/created {
 projectId, path }` at offset 1 and `stream/woken { incarnation, reason: "request" }` at 2 (a later
 incarnation's wake record is appended by the first door that opens on it — `"alarm"` when that door
-is the alarm handler); the config-worker funnel
-(chapter 7) subscribes `config` at 4; offsets 3 and 5 are ephemeral live-state deltas; the first user
-append lands at 6:
+is the alarm handler). Offset 3 is the ephemeral live-state delta; no subscription
+is installed automatically, and the first user append lands at 4:
 
 ```ts
 const page = await itx.invoke("itx.readEvents(0)");
 expect(page.events.map((e) => [e.type, e.offset])).toEqual([
   ["events.iterate.com/stream/created", 1],
   ["events.iterate.com/stream/woken", 2],
-  ["events.iterate.com/stream/subscription-configured", 4],
 ]);
 expect((await itx.invoke(`itx.append({ type: 'hello' })`))[0].offset).toBe(6);
 // e2e/stream.e2e.test.ts
 ```
 
 THE CORE REDUCE is the stream's own state, reduced inside every commit. One reduce-only processor
-(`src/stream/core-processor.ts`, slug `core`, contract 8.0.0) folds the context's control events
-into `{ projectId, path, createdAt, incarnation, paused, itxExpressionRewriteRules, subscriptions,
-secrets }` — the rule table of chapter 3 is one slice, the subscription rows of chapter 5 another.
+(`src/stream/core-processor.ts`, slug `core`, contract 13.0.0) folds the context's control events
+into `{ projectId, path, createdAt, incarnation, paused, itxExpressionRewriteRules, subscriptions }`
+— the rule table of chapter 3 is one slice, the subscription rows of chapter 5 another (the secrets
+catalog is not a slice here: it is the `project` facet's, chapter 8).
 Runtime state IS reduced state, and its snapshot is a facet-shaped door:
 
 ```ts
@@ -946,14 +985,14 @@ REPLACES — one row, one more event (`e2e/rpc-stubs-reconnect-and-attach.e2e.te
 
 ### The rows are a slice of core
 
-`itx.subscriptions.list()` is the read door, the table joined with the stream-kept cursors. Every
-context is born holding one row — the config-worker funnel of chapter 7 — so "nothing here" is `["config"]`:
+`itx.subscriptions.list()` joins explicitly configured rows with their delivery cursors.
+A new context has no subscriptions:
 
 ```ts
-expect((await itx.subscriptions.list()).map((r) => r.name)).toEqual(["config"]);
+expect((await itx.subscriptions.list()).map((r) => r.name)).toEqual([]);
 const subscription = await itx.subscribe({ target: () => undefined });
 const name = await subscription.name;
-expect((await itx.subscriptions.list()).map((r) => r.name)).toEqual(["config", name]);
+expect((await itx.subscriptions.list()).map((r) => r.name)).toEqual([name]);
 expect(await itx.rpcStubs.list()).toContain(`subscription:${name}`); // presence: the lent callback
 await itx.subscribe({ name, target: null }); // the row goes, the callback is recalled
 // e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts
@@ -1154,7 +1193,7 @@ const s1 = await itx.invoke("itx.facets.get('tally').snapshot()"); // { offset, 
 expect(s1.state.counts["events.iterate.com/itx/rewrite-rule-configured"]).toBe(1);
 const row = (await itx.subscriptions.list()).find((r) => r.name === "tally");
 expect(row.target).toBe("itx.builtins.facets.get('tally').processEventBatch"); // the platform's spelling, source elided
-expect(row.hostedFacet).toEqual({ name: "tally", className: "TallyDurableObject" });
+expect(row.hostedFacet).toEqual({ name: "tally", className: "TallyDurableObject", restarts: 0 });
 expect(row.cursor).toBeUndefined(); // a facet owns its checkpoint
 // e2e/processor-facets.e2e.test.ts
 ```
@@ -1165,8 +1204,9 @@ The host (`src/sdk/index.ts`) is one abstract field, `processor`, and four
 doors over a `ProcessorEngine`: `processEventBatch(events, range)` (the push door),
 `snapshot()` → `{ offset, state }` (caught up through the log first), `liveSnapshot()` → `{ rev,
 state }` (the live-state seed), and `waitUntilProcessed({ offset, timeoutMs? })` (the barrier,
-default 10 s). The engine appends and reads through `env.ITX.get().builtins.append(…)` /
-`.readEvents(…)` — the platform never spells a short name — and disposes both after each call
+default 10 s). The engine appends and reads through `env.ITX.get().append(…)` /
+`.readEvents(…)` — two of the fourteen roots implicit in every context, so a hosted processor's log
+is always its own — and disposes both after each call
 (chapter 11). It keeps the reduced state CHECKPOINTED with the offset and contract version it was
 reduced under; a push not contiguous with the checkpoint triggers GAP REPAIR from the log; bumping
 `contract.version` re-reduces from offset 0 through `reduce` only — side effects never re-run, and
@@ -1351,7 +1391,9 @@ the one prop `iterateContextName`. Two doors and nothing else:
 ```ts
 // iterate-context.ts — a loaded worker's WHOLE WORLD, abridged
 export class ItxEntrypoint extends WorkerEntrypoint<Env, { iterateContextName: string }> {
-  /** THE handoff: the genuine itx scope — the SAME `IterateContext` RpcTarget a capnweb client gets. */
+  /** THE handoff: the genuine itx scope — the same `IterateContext` class a capnweb client gets, under
+   *  `Caller.app`: the dotted lines are the same, but `itx.builtins` and a `cd` above this context are
+   *  refused, and `provide`/`subscribe` lend a live object only (a row is `itx.append`'s). */
   get(): IterateContext {
     return new IterateContext(
       this.env.ITERATE_CONTEXT,
@@ -1371,8 +1413,8 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, { iterateContextName: s
 }
 ```
 
-`await this.env.ITX.get()` is the real `IterateContext`; loaded code writes the same dotted lines a
-client does, and `waitForEvent`, `append`, `demo.timer.callLater(cb)` all work from inside
+`await this.env.ITX.get()` is the real `IterateContext`, marked as loaded code (`Caller.app`): the
+same dotted lines a client writes, minus the fixed point and any `cd` above its own context, and `waitForEvent`, `append`, `demo.timer.callLater(cb)` all work from inside
 (`e2e/stream.e2e.test.ts`, `e2e/rpc-stubs-values.e2e.test.ts`). The
 context it forwards to is a PROP of the stub, not a binding the loaded code could reach around.
 
@@ -1407,98 +1449,39 @@ The same for a facet: hosted from a producer, its state persists, the producer r
 memo keeps the key so a bare `facets.get(name)` re-materializes it. A producer that THREW does not
 poison its key: the next attempt re-runs the producer and loads under the id's next generation.
 
-### The config worker convention
+### Explicit config-worker targets
 
-A project has ONE event handler, and every context subscribes it at birth. Three things:
-
-1. **`itx.worker` is a platform row** — `itx.worker ⇒ itx.workers.get({ source: <the bundled
-no-op ConfigWorker>, cacheKey: 'config:default' })`, shown by `itx.rewriteRules.list()`. A project
-   OVERRIDES it with its own rule; a `null` at it MASKS (default-deny), never the no-op.
-2. **Every context subscribes `config` in its constructor**, cross-context, at-least-once:
+A `ConfigWorker` is a stateless worker loaded through `itx.workers.get({ source,
+cacheKey })`. It receives events only through explicit subscriptions. A fresh
+context has no config subscription, and loading a worker does not publish it.
 
 ```ts
-// iterate-context-durable-object.ts — the constructor, abridged
-this.ctx.blockConcurrencyWhile(async () => {
-  this.#alarms.restore(await this.ctx.storage.getAlarm()); // the dedupe seed only — null while an alarm is firing
-  this.#stream.appendBirthRecord(); // created + woken on a fresh store; a store with rows records its wake at its first door
-  this.#stream.append(
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: { name: "config", target: "itx.cd('/').worker.processEventBatch", consumes: ["*"] },
-      idempotencyKey: "config-subscription", // one row per context whatever the incarnation
-    }),
-  );
-});
-```
-
-3. **The author extends `ConfigWorker`** from the SDK and overrides `processEvent`; the platform calls
-   `processEventBatch`. Stateless by design — the SUBSCRIBING context keeps the cursor — so
-   `processEvent` must be idempotent. The same class answers the project's hosts through `fetch`
-   (chapter 8):
-
-```ts
-// sdk/index.ts — abridged
-export abstract class ConfigWorker<Env> extends WorkerEntrypoint<Env> {
-  async processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
-    const itx = this.env.ITX.get();
-    try {
-      for (const event of events) await this.processEvent({ event, range, itx });
-    } finally {
-      (itx as unknown as Disposable)[Symbol.dispose]?.();
-    }
-  }
-  processEvent(_args: ConfigEventArgs): void | Promise<void> {}
-}
-```
-
-The whole convention on one context, source in KV as the repo stand-in:
-
-```ts
-const CONFIG_WORKER_SRC = `import { ConfigWorker } from "./processor.js";
-export default class Config extends ConfigWorker {
-  async processEvent({ event, itx }) {
-    if (event.type === "events.iterate.com/config-ping")
-      await itx.builtins.append({
-        type: "events.iterate.com/config-pong",
-        payload: { pinged: event.offset },
-        idempotencyKey: "config-pong@" + event.offset, // an at-least-once redelivery is a no-op
-      });
-  }
-}`;
-await itx.kv.put("/repos/config/worker.ts", CONFIG_WORKER_SRC);
-await itx.provide("itx.worker", [
+const target = [
   "itx",
   "workers",
-  ["get", { source: `itx.kv.get('/repos/config/worker.ts')`, cacheKey: "config:v1" }],
-]);
+  [
+    "get",
+    {
+      source: "itx.kv.get('config.js')",
+      cacheKey: "config:v1",
+    },
+  ],
+];
 await itx.subscribe({
   name: "config",
-  target: "itx.worker.processEventBatch",
-  consumes: ["events.iterate.com/config-ping"],
+  target: [...target, "processEventBatch"],
+  consumes: ["ping"],
 });
-const [ping] = await itx.append({ type: "events.iterate.com/config-ping" });
-await until(async () =>
-  (await readAll(itx)).some(
-    (e) => e.type === "events.iterate.com/config-pong" && e.payload?.pinged === ping.offset,
-  ),
-);
-// e2e/config-worker.e2e.test.ts
+await itx.append({
+  type: "events.iterate.com/project/ingress-configured",
+  payload: { target },
+});
 ```
 
-And the FUNNEL: set the override at the root, and a fresh child context's ping reaches the root's
-config worker with no manual subscribe — the child's birth row did it:
-
-```ts
-const root = openItx(project); // the KV source and the `itx.worker` override as above, at the root
-const child = root.cd("/child"); // auto-subscribes itx.cd('/').worker.processEventBatch at birth
-const [ping] = await child.append({ type: "events.iterate.com/funnel-ping" });
-await until(async () =>
-  (await readAll(root)).some(
-    (e) => e.type === "events.iterate.com/funnel-pong" && e.payload?.at === ping.offset,
-  ),
-);
-// e2e/config-worker.e2e.test.ts
-```
+Apex ingress invokes the configured target's `fetch(request)`; without a target
+it returns 404. Changes are explicit configuration events. The planned project
+creation saga will own publication after verifying a candidate revision; see
+[project creation](project-creation.md). The SDK does not change routing on commits.
 
 ### `itx.repos` and `itx.cfArtifacts`: where code lives
 
@@ -1511,39 +1494,38 @@ Artifacts as a PROXY, project-scoped and by that same path — `create`, `get(pa
 whose `createToken` and `remote()` pipeline across `/api` (its `fork`, whose name escapes the wall,
 is withheld), `list` answering in paths, `delete`. Nothing else. The Artifacts repo NAME
 (`repos--config`, every name forced under `${projectId}.`) is derived inside `repos.ts` and spelled
-nowhere else. Artifacts has no local implementation, so locally a test lends a fake proxy to the
-repo's context whose `remote()` points at an in-memory git remote (`e2e/support/fake-git-server.ts`)
-— the real wire codec runs in both lanes; only the binding is deployed-only.
+nowhere else. The local worker binds Artifacts too (wrangler's local runtime serves it), so the
+real binding's stories run in every lane; a test that must see the wire, or inject a provisioning
+failure, lends a fake proxy to the repo's context whose `remote()` points at an in-memory git remote
+(`e2e/support/fake-git-server.ts`).
 
 ```ts
-const repo = itx.repos.get("/repos/config");
-await repo.create(); // repos/create-requested, then repos/created on its path and on /
+await itx.repos.create("/repos/config"); // the repo processor's row, repo/create-requested, then repo/created on / and on its path
+const repo = itx.repos.get("/repos/config"); // the handle: the facet's verbs, plus the typed append
 expect(await repo.readFile("worker.ts")).toBeNull(); // an unborn repo reads as null
 const first = await repo.writeFile("worker.ts", source); // one commit on main
 expect(first.commitOid).toMatch(/^[0-9a-f]{40}$/);
 expect(await repo.readFile("worker.ts")).toBe(source);
 await itx.cfArtifacts.delete("/repos/config"); // the proxy speaks the same path
-// e2e/repos.e2e.test.ts (deployed only)
+// e2e/repos.e2e.test.ts
 const tok = await a.cfArtifacts.get(path).createToken("read", 300); // pipelined server-side
-// e2e/cfartifacts.e2e.test.ts (deployed only)
+// e2e/cfartifacts.e2e.test.ts
 ```
 
-The payoff is the config worker with its source moved out of KV and into a real repo, nothing else
-changed — the `itx.worker` rewrite is what points at it, and a commit to that repo re-points it
-(the base `ConfigWorker` follows `repo/commit-completed` with a new `cacheKey`):
+To load code from the repository, pass the source producer and its revision explicitly:
 
 ```ts
-await itx.repos.get("/repos/config").writeFile("worker.ts", CONFIG_WORKER_SRC);
-await itx.provide("itx.worker", [
-  "itx",
-  "workers",
-  [
-    "get",
-    { source: `itx.repos.get('/repos/config').readFile('worker.ts')`, cacheKey: "config:repo:v1" },
-  ],
-]);
-// e2e/config-worker.e2e.test.ts
+const { commitOid } = await itx.repos
+  .get("/repos/config")
+  .writeFile("worker.ts", CONFIG_WORKER_SRC);
+const worker = itx.workers.get({
+  source: "itx.repos.get('/repos/config').readFile('worker.ts')",
+  cacheKey: commitOid,
+});
 ```
+
+Publication requires configuring the ingress target and desired subscriptions.
+A commit does not implicitly update either.
 
 **What this brick leaves on the table:** everything so far spoke capnweb or Workers RPC. The web
 speaks HTTP: a browser tab, a webhook, `curl`, a third-party API that wants a bearer token you must
@@ -1562,25 +1544,39 @@ context is what it adds. What it adds today is the secret substitution: a
 with a value the caller never sees, and `getSecret("/secrets/NAME", { field: "a.b" })` picks one
 field out of a JSON secret — apps/os's grammar for a URL or a header (the path and the query alike,
 `:` kept in a spliced value; NOT its `Basic base64(user:getSecret(…))` peeling nor its JSON-body
-template — the body is never scanned); `/secrets/NAME` is the name
-`itx.secrets.set(NAME, …)` stored. `itx.secrets` is the WRITE-ONLY surface for those values — `set`
-(material, a required pin of origins, an optional refresh strategy the secret's own Durable Object
-runs on a 401), `beginOAuth` (the provider's authorize URL; the platform's callback and the object
-obtain the first tokens), `delete`, and a `list` of names, pins and strategy kinds, never a value.
-Every change appends `events.iterate.com/secrets/changed` without the value:
+template — the body is never scanned). `/secrets/NAME` is not a name but a PATH: a secret is a
+domain object on the context at `/secrets/NAME` under the project's root (a user's own secret lives
+at `/users/<id>/secrets/NAME`; the placeholder still spells `/secrets/NAME`), hosted as the
+first-party facet `secret` (`src/secret/`: contract · processor · durable-object) the way a repo is
+(`itx.repos`, chapter 7), and the path is what `itx.secrets.set("/secrets/NAME", …)` stored.
+`itx.secrets` is the WRITE-ONLY surface for those values — `set(path, material, { urls, refresh? })`
+(a required pin of origins, an optional refresh strategy the facet runs on a 401), `beginOAuth(path,
+options)` (the provider's authorize URL; the platform's callback and the facet obtain the first
+tokens), `delete(path)`, and a `list()` of paths, pins, strategy kinds and `createdAt`, never a value.
+The one reading verb reveals nothing either: `verifyHmac(path, { payload, signature, field? })` answers
+whether a webhook's hex signature is the HMAC-SHA256 of the payload under the secret — computed in the
+facet, one bit out, false for a secret never set.
+Every writing verb runs on the secret's own context, so the log's order is the value's: it appends
+the fact on that path — `events.iterate.com/secret/set { path, urls, refresh? }`, `secret/deleted
+{ path }` — attributed to the caller, cross-posts the same fact to the project's root, and puts the
+value in the facet; the value never enters a log:
 
 ```ts
 expect(await itx.secrets.list()).toEqual([]);
-await itx.secrets.set("api.key_v-2", "hunter2", { urls: ["https://api.example.com"] });
-await itx.secrets.set("stripe", "sk_live", { urls: ["https://api.stripe.com/v1/x"] });
+await itx.secrets.set("/secrets/api.key_v-2", "hunter2", { urls: ["https://api.example.com"] });
+await itx.secrets.set("/secrets/stripe", "sk_live", { urls: ["https://api.stripe.com/v1/x"] });
 expect(await itx.secrets.list()).toEqual([
-  { name: "api.key_v-2", urls: ["https://api.example.com"] },
-  { name: "stripe", urls: ["https://api.stripe.com"] }, // the ORIGIN of the URL given, path dropped
+  {
+    path: "/secrets/api.key_v-2",
+    urls: ["https://api.example.com"],
+    createdAt: expect.any(String),
+  },
+  { path: "/secrets/stripe", urls: ["https://api.stripe.com"], createdAt: expect.any(String) }, // the ORIGIN of the URL given, path dropped
 ]);
-const changes = (await readAll(itx))
-  .filter((e) => e.type === "events.iterate.com/secrets/changed")
+const facts = (await readAll(itx))
+  .filter((e) => e.type === "events.iterate.com/secret/set")
   .map((e) => e.payload);
-expect(JSON.stringify(changes)).not.toContain("hunter2");
+expect(JSON.stringify(facts)).not.toContain("hunter2");
 // e2e/secrets.e2e.test.ts
 ```
 
@@ -1589,7 +1585,7 @@ stored secret, or a secret pinned to other origins, is a 502 to the CALLER, befo
 naming the placeholder and where it sat, never the value:
 
 ```ts
-await itx.secrets.set("bound", "v", { urls: ["https://api.example.com"] });
+await itx.secrets.set("/secrets/bound", "v", { urls: ["https://api.example.com"] });
 const res = await itx.fetch(
   new Request("https://egress.invalid/", {
     headers: { authorization: 'getSecret("/secrets/bound")' },
@@ -1607,12 +1603,22 @@ expect(await missing.text()).toContain('header "x-hunt-auth"'); // WHERE it sat,
 // e2e/secrets.e2e.test.ts · e2e/fetch-door.e2e.test.ts
 ```
 
-The door (`src/iterate-context-durable-object.ts`) scans the URL first, then every header — the
-placeholder as written, or as the URL parser percent-encodes it in a path or a query — splices a URL
-value as ONE component so a secret can never add a query parameter, and preserves method, `Upgrade`
-and body, so a 101 flows through it. A `{ field }` placeholder whose value is not JSON, or has no
-string at that path, is the same 502. The catalog is the PROJECT's: a
-secret set from `/a` is listed from `/b` and the root, and the change events live in the root's log.
+The door (`src/iterate-context-durable-object.ts`, `#egress`) finds the one path a request names —
+in the URL first, then every header; the placeholder as written, or as the URL parser
+percent-encodes it in a path or a query — and forwards the request to the context at that path (a
+DO hop; one request, one secret), whose `secret` facet substitutes: a URL value spliced as ONE
+component so a secret can never add a query parameter, method, `Upgrade` and body preserved, so a
+101 flows through it (the facet dials the socket and hands it back; it holds none). A `{ field }`
+placeholder whose value is not JSON, or has no string at that path, is the same 502. The facet's
+own facts land on the secret's path: `secret/used { method, url, status }` per dispatch — the request
+as received, never a value — and `secret/refreshed { kind, ok, error? }` per refresh outcome. The
+catalog is the PROJECT's: the `project` facet on `/` folds the cross-posted `secret/set` and
+`secret/deleted` into its `secrets`, so a secret set from `/a` is listed from `/b` and the root; the
+secret's own state is `itx.cd("/secrets/NAME").facets.get("secret").snapshot()` →
+`{ material: { offset } | null, deletion: { offset } | null }`. `delete(path)` clears the facet, lands
+`secret/deleted` on both logs and drops the `secret` row (the facet's storage with it); a never-set
+secret has nothing to delete (refused), a deleted one answers at once, and a deleted secret can be
+set again.
 Deployed, the value arrives at the bound origin — proven by fetching one of the project's own apps
 on its real host.
 
@@ -1632,9 +1638,8 @@ host-scoped cookies and WebSocket upgrades survive. There, at the DO's fetch lan
 for any other — so neither a visitor nor loaded code can pick an app the expression did not.
 
 An app host lands on `itx.apps.<app>.fetch(request)`: an app is one rule row and the log never names
-a hostname. A host naming no app lands on the project's config worker (chapter 7),
-`itx.worker.fetch(request)`: the bundled default answers 404, and a project that wants its own
-routing overrides `fetch` — the apex today, a custom hostname once the directory knows one:
+a hostname. A host naming no app invokes the explicit ingress target
+(chapter 7). Without a target it returns 404. A configured worker implements `fetch` — the apex today, a custom hostname once the directory knows one:
 
 ```ts
 // the config repo's worker.ts — routing by hostname, in the author's own `fetch`
@@ -1661,12 +1666,13 @@ expect(page.text).toContain(`<p>site--${projectId}.${base}/w?repo=x</p>`); // th
 expect((await fetchProjectHost(`site.${projectId}.${base}`, "/w")).status).toBe(200); // the second shape, the same row — locally: deployed, the wildcard certificate covers one label
 const seen = JSON.parse((await fetchProjectHost(host, "/echo", { "x-iterate-app": "other" })).text);
 expect(seen.app).toBe("site"); // what the app saw in x-iterate-app, whatever the visitor sent
-expect((await fetchProjectHost(`${projectId}.${base}`, "/")).status).toBe(404); // the apex: the bundled config worker's fetch
-await itx.provide("itx.worker", [
-  "itx",
-  "workers",
-  ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:ingress" }],
-]);
+expect((await fetchProjectHost(`${projectId}.${base}`, "/")).status).toBe(404); // no ingress target yet
+await itx.append({
+  type: "events.iterate.com/project/ingress-configured",
+  payload: {
+    target: ["itx", "workers", ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:ingress" }]],
+  },
+});
 expect((await fetchProjectHost(`${projectId}.${base}`, "/echo")).status).toBe(200); // the project's own fetch routes it to the site
 expect((await fetchProjectHost(`other--${projectId}.${base}`, "/")).status).toBe(404); // a label with no row: 404
 expect((await fetchProjectHost(`site--${unknown}.${base}`, "/")).status).toBe(421); // a project the directory does not know
@@ -1796,8 +1802,19 @@ the handle the library holds, so a rule on
 `itx.workers` applies to it like any other call. The same text is the same module, and the loader's
 content hash reuses the warm isolate across calls. The script's `itx` is THIS context — but with no
 principal: loaded code speaks for the project, never for a person, so an append inside carries no
-`source.principal`. A text that is not one function expression fails at load, in the loader's words,
-and does not poison the isolate id.
+`source.principal`. It is loaded code's handle (chapter 3): every call through this context's rows,
+`itx.builtins` refused, `cd` down only, no `provide` and no `subscribe`. A text that is not one
+function expression fails at load, in the loader's words, and does not poison the isolate id.
+
+An agent's scripts run this way in `<agent>/sandbox`: the agent's creation saga (`src/agent/processor.ts`
+`#assertSandbox`) writes `itx.run ⇒ itx.builtins.cd('<agent>/sandbox').builtins.run` on the agent —
+the runner resolves `itx.run` through the table — and the sandbox's one row, the bare row targeting
+the agent, both before the certificate. So a script sees the
+agent's tree — sandbox, agent, creator, root, one hop per row — and appends to the sandbox's own
+log. An owner who replaces that row with `null` and appends grants beside it, in one batch, has a
+jail: the scripts reach the granted rows and nothing else. The agent's prompt is that child's
+`itx.rewriteRules.list()`, rendered each turn (`src/agent/processor.ts` `buildChatMessages`):
+one line per row, `itx.<name> — <description>`, masks omitted.
 
 ```ts
 expect(await itx.run("async (itx) => itx.whoami()")).toEqual(await itx.whoami());
@@ -1811,11 +1828,11 @@ await itx.run("async (itx) => { await itx.append({ type: 'run/hello', payload: {
 Today one flat root holds both groups: the kernel roots, implemented against `ctx` and `env`, and
 the library, written against `itx` alone — `itx.builtins.kv` and `itx.builtins.connectToMcp` sit
 side by side, and nothing in the spelling says which is which. The alternative is two namespaces,
-`itx.builtins.kernel.*` and `itx.builtins.lib.*` (or two platform rows, `itx.kernel` and `itx.lib`).
+`itx.builtins.kernel.*` and `itx.builtins.lib.*` (or two implicit rows, `itx.kernel` and `itx.lib`).
 The trade: one root is one spelling and no level to learn; two make the litmus test visible in the
 name, and let the library move to userspace without a rename. Not decided.
 
-### Memoized per context, released at the quiesce
+### Memoized per context, released by the pins' timer
 
 A connector reached THROUGH a rule is a connect per call as an expression — a fresh MCP session, an
 open WebSocket that no intermediate holder disposes. So the library keeps every connection it opened,
@@ -1847,10 +1864,10 @@ secret that proves it — and every door reads the same two kinds:
   a same-origin request only (`isSameOriginBrowserRequest`, `src/lib.ts`: the `Origin` header is this
   origin, or absent), so a foreign site's socket is refused `UNAUTHENTICATED` — the one guard that
   makes an ambient cookie safe over RPC. Who the grant is comes from the issuer's login (`/login`:
-  Google, or an assumed email where `APP_CONFIG_TEST_EMAIL_LOGIN` is on). `projects.get` admits
+  Google, a mailed code, or the deployment's password — the `login` block of `APP_CONFIG`). `projects.get` admits
   members of the owning org only.
-- `admin-secret`: the deployment's `APP_CONFIG_ADMIN_API_SECRET` (a wrangler secret), verified
-  in-band on the operator door `/internal/rpc` — `{ actor: "admin" }`, every project, `list()` is
+- `admin-secret`: the deployment's `APP_CONFIG` `secrets.adminBearer`, verified
+  in-band on a bare `/api` socket (or a bearer on the upgrade) — `{ actor: "admin" }`, every project, `list()` is
   the whole directory, `create()` lands in `org_admin`. With `as: { email }` it is that user's
   session without a login (the row upserted like `/login` does), which is how a confinement test
   signs in. The e2e lane runs on it. On `/api`, `/mcp` and a project host the same secret is a
@@ -1935,7 +1952,7 @@ const revoked = await fetch(workerUrl("/api"), {
   headers: { Authorization: `Bearer ${token}` },
 });
 expect(revoked.status).toBe(401);
-using operator = session(); // the operator door, /internal/rpc
+using operator = session(); // a bare /api socket; the admin secret authenticates it in-band
 const admin = operator.authenticate(adminCredentials()); // { type: "admin-secret", secret }
 expect(await admin.whoami()).toEqual({ actor: "admin" });
 const ada = operator.authenticate(adminCredentials({ email: "ada@example.com" }));
@@ -1995,7 +2012,7 @@ overwritten — the admin session's with `{ actor: "admin" }` — and the platfo
 ```ts
 const itx = api.projects.get(projectId); // the OAuth grant's session, above
 await itx.append({ type: "note", payload: { n: 1 }, source: { principal: { actor: "forged" } } });
-await itx.provide("itx.demo", "itx.builtins.kv"); // the platform's own row, appended for this session
+await itx.provide("itx.demo", "itx.builtins.kv"); // a grant of the kernel's kv, appended for this session
 await openItx(projectId).append({
   type: "note",
   payload: { n: 2 },
@@ -2022,7 +2039,7 @@ expect(
 The stamp is `stampPrincipal` in `src/principal.ts`: drop whatever `source.principal` the client
 supplied, set the session's, and leave no empty `source` behind. A loaded worker's `env.ITX` carries
 NO principal: it speaks for the project, and the request's principal reaches an app as
-`x-itx-principal` for the app to attribute what it appends itself. A secret's change event is
+`x-itx-principal` for the app to attribute what it appends itself. A secret's `secret/set` is
 attributed the same way (`e2e/secrets.e2e.test.ts`).
 
 ### On a project host: the browser session and the bearer
@@ -2095,8 +2112,8 @@ durable obligations:
 ```ts
 // iterate-context-durable-object.ts — alarm(), abridged: one pass under the coordinator's hold
 async alarm(): Promise<void> {
-  const { armedAt: fired } = this.#alarms.snapshot();
-  await this.#alarms.pass(async () => {
+  const { armedAt: fired } = this.#alarmCoordinator.snapshot();
+  await this.#alarmCoordinator.pass(async () => {
     this.#stream.appendWakeRecord("alarm"); // 0. an alarm-woken incarnation names its wake here
     /* 1. the due schedules: up to 32, each appended with its append-schedule-completed in ONE commit */
     await this.#subscriptionDelivery.deliverEveryCursorSubscription(); // 2. every cursor row's owed delivery — AWAITED
@@ -2115,7 +2132,7 @@ A facet is never released at all: on the edge it is not a pin and dies with the 
 may be mid-attempt (an LLM call in its background). A facet the watchdog or a source change aborted
 re-materializes from its durable startup memo on the next call, its storage having
 survived. A facet's answer arrives as a Workers-RPC result carrying a disposer that holds a reference
-on the facet until disposed or GC'd — GC is too late for the quiesce — so the DO copies the data out
+on the facet until disposed or GC'd — GC is too late for the release — so the DO copies the data out
 and disposes the result at once; the SDK host releases its `env.ITX.get()` capability after every
 append and read for the same reason.
 
@@ -2136,9 +2153,9 @@ makes no loop because delivering it creates no reason to wake again.
 
 ### The watchdog on facet calls
 
-A facet call that never answers would hold the in-flight count, and with it the quiesce, and with
+A facet call that never answers would hold the in-flight count, and with it the pins' release, and with
 that the actor, forever. So `#invokeFacet` counts the call in (`#facetWorkInFlight++`, so a
-concurrent alarm's quiesce never aborts a facet mid-call), loads the class from the facet's startup
+release never aborts a facet mid-call), loads the class from the facet's startup
 memo (aborting a running facet whose loaded identity changed, so a new source restarts it in place
 with its storage surviving), runs the call under `withTimeout(call, FACET_CALL_WATCHDOG_MS = 60_000,
 …)`, and on `TIMEOUT` aborts the facet — the pending call rejects, the counter drains, the next call
@@ -2162,7 +2179,7 @@ has the model.
 The hibernation property at scale — hundreds of clients providing into one context, the DO evicted,
 every value still callable on wake — is deterministic inside workerd
 (`__workers-tests__/hibernation-at-scale.test.ts`); the alarm pass — the wake record, the cursor pump,
-the quiesce, and that a wake makes no loop — is `__workers-tests__/alarm-quiesce.test.ts`, its
+the pins' release, and that a wake makes no loop — is `__workers-tests__/alarm-and-pins.test.ts`, its
 schedules half `__workers-tests__/scheduled-appends.test.ts`. Both use `cloudflare:test`'s eviction,
 which times out on a warm DO exactly as production refuses to evict a pinned one. Isolate limits are
 measured deployed only, in `e2e/isolate-ceilings-deployed.e2e.test.ts`.
@@ -2178,7 +2195,7 @@ measured deployed only, in `e2e/isolate-ceilings-deployed.e2e.test.ts`.
 | 0       | the session, `/api`, `whoami`, the dotted hop                                  | `src/worker.ts`, `src/session.ts`, `src/iterate-context.ts`, `src/context/expression.ts` (the prototype hop)                       |
 | 1       | rpc stubs: lend, borrow, page, recall, presence                                | `src/context/rpc-stubs.ts`, `src/session.ts`                                                                                       |
 | 2       | itx expressions, the codec, `cd`                                               | `src/context/expression.ts`, `src/iterate-context.ts`                                                                              |
-| 3       | rewrite rules, the seven rules, `itx.builtins`, masks, `@`                     | `src/context/itx-expression-rewriting.ts`, `src/context/built-ins.ts`                                                              |
+| 3       | rewrite rules, the eight rules, `itx.builtins`, masks, `@`                     | `src/context/itx-expression-rewriting.ts`, `src/context/built-ins.ts`                                                              |
 | 4       | the stream, offsets, idempotency, ephemerals, the core reduce                  | `src/stream/stream.ts`, `packages/iterate/src/next/stream/processor.ts`, `src/stream/core-processor.ts`                            |
 | 5       | subscriptions, push vs cursor, the ladder, `consumes`                          | `src/stream/core-processor.ts`, `src/stream/subscription-delivery.ts`                                                              |
 | 6       | facets, processors, live state                                                 | the DO's `#invokeFacet`, `packages/iterate/src/next/stream/processor.ts`, `src/sdk/index.ts`, `src/client/`                        |
@@ -2186,7 +2203,7 @@ measured deployed only, in `e2e/isolate-ceilings-deployed.e2e.test.ts`.
 | 8       | fetch in the context of this project (secrets), project hosts, the upgrade leg | `src/iterate-context-durable-object.ts`, `src/context/rpc-stubs.ts`, `src/worker.ts`                                               |
 | 9       | the library                                                                    | `src/library.ts`                                                                                                                   |
 | 10      | identity, OAuth grants, personal access tokens, the control plane              | `src/principal.ts`, `src/session.ts`, `src/oauth.ts`, `src/grants.ts`, `src/control-plane.ts`                                      |
-| 11      | pagers, the quiesce, the one alarm, the watchdog                               | `src/iterate-context-durable-object.ts`, `src/alarm-coordinator.ts`, `src/stream/subscription-delivery.ts`, `src/stream/stream.ts` |
+| 11      | pagers, the pins' release, the one alarm, the watchdog                         | `src/iterate-context-durable-object.ts`, `src/alarm-coordinator.ts`, `src/stream/subscription-delivery.ts`, `src/stream/stream.ts` |
 
 The invariants a reader should now be able to state:
 
@@ -2195,13 +2212,16 @@ The invariants a reader should now be able to state:
 - **Two words, kept apart.** An rpc stub is physical, lives at the edge, and is borrowed, returned
   and paged for by the DO. A rewrite rule is data — `{ match, target }` in a map by canonical match,
   written by one event — and a lent stub is reached THROUGH a rule naming the physical registry.
-- **The platform never spells a short name.** Every expression it writes is rooted at
-  `itx.builtins`, the fixed point; rules resolve first, the platform rows are implicit, `null` masks
-  under a platform row and deletes elsewhere, the platform-equivalent target deletes.
+- **The platform never spells a short name; an app never spells `itx.builtins`.** Every expression
+  the kernel writes is rooted at `itx.builtins`, the fixed point; rules resolve first; the implicit
+  rows are every root at the owner root and the fourteen context roots everywhere else; a bare row
+  with a target claims what no implicit row claims, a bare `null` denies all; `null` masks under an
+  implicit row and deletes elsewhere; a row carries a `description` a model reads.
 - **Everything else is an event.** The DO has `append` and no configuration verbs; every verb builds
   an event and appends it, session-scoped through its handle, durable as the raw event.
-- **Runtime state is reduced state.** Rules, subscription rows, the pause and the secrets catalog are
-  slices of the core reduce, reduced inside the commit; `itx.facets.get('core').snapshot()` shows it.
+- **Runtime state is reduced state.** Rules, subscription rows and the pause are slices of the core
+  reduce, reduced inside the commit; `itx.facets.get('core').snapshot()` shows it. The secrets catalog
+  is the `project` facet's, folded from certificates cross-posted to `/` like every other entity's.
 - **Delivery is decided by the value, not declared.** A facet or a lent stub owns its progress and is
   pushed; anything else gets a stream-kept cursor, at-least-once, one ladder, a halt fact, a resume.
 - **A processor is a subscription whose target is a facet's `processEventBatch`.** Two classes, one
@@ -2213,7 +2233,7 @@ The invariants a reader should now be able to state:
   host, answered by the config worker's `fetch`.
 - **Identity is attribution.** The DO stamps `source.principal`; the session's reach is its grant's;
   membership is the directory's; loaded code speaks for the project.
-- **The DO holds nothing across idle.** Pagers, the quiesce, an alarm only while something is owed
+- **The DO holds nothing across idle.** Pagers, the pins' release, an alarm only while something is owed
   (derived, never requested), a watchdog on every facet call.
 
 ---
@@ -2237,7 +2257,7 @@ Every client snippet above is lifted from, or composed of calls made by, these f
 | 8        | `e2e/secrets.e2e.test.ts`, `e2e/fetch-door.e2e.test.ts`, `e2e/session.e2e.test.ts`, `e2e/ingress-project-host.e2e.test.ts`                                                                                                                                     |
 | 9        | `e2e/library-connectors.e2e.test.ts` (against the deployed pet shop; the WebSocket transports deployed only)                                                                                                                                                   |
 | 10       | `e2e/session.e2e.test.ts`, `e2e/support/principal.ts` (the OAuth login fixture), `e2e/secrets.e2e.test.ts`, `e2e/ingress-project-host.e2e.test.ts`, `__workers-tests__/control-plane.test.ts` (the `/mcp` rows)                                                |
-| 11       | `e2e/stream.e2e.test.ts` (opt-in, deployed only), `__workers-tests__/hibernation-at-scale.test.ts`, `__workers-tests__/alarm-quiesce.test.ts`                                                                                                                  |
+| 11       | `e2e/stream.e2e.test.ts` (opt-in, deployed only), `__workers-tests__/hibernation-at-scale.test.ts`, `__workers-tests__/alarm-and-pins.test.ts`                                                                                                                 |
 
 The server snippets are abridged from the files named in each code block's first comment. The rule
 table of chapter 3 was checked by running `src/context/itx-expression-rewriting.test.ts` and

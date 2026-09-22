@@ -1,13 +1,25 @@
 // context/rpc-stubs.test.ts — the rpc stubs' unit pins: the borrowed table's lifetime rule (the
 // directory) and the relay's one-registration rule. Node: the pager layer is never entered (no sockets).
 
+import type { ItxExpression } from "iterate/next/expression";
 import { describe, expect, test, afterEach, vi } from "vitest";
 import {
   type RpcStubFetchServer,
   RpcStubDirectory,
   type BorrowedRpcStub,
   lendRpcStubOverPager,
+  encodeFetchExpression,
 } from "./rpc-stubs.ts";
+
+test("fetch expression headers preserve Unicode worker source through the HTTP ByteString boundary", () => {
+  const expression: ItxExpression = [
+    "itx",
+    "workers",
+    ["get", { source: { "cap.js": 'return "東京 🌍 café";' } }],
+  ];
+  const headers = new Headers({ "x-itx-expression": encodeFetchExpression(expression) });
+  expect(JSON.parse(headers.get("x-itx-expression")!)).toEqual(expression);
+});
 
 // LentRpcStub extends RpcTarget from "cloudflare:workers", which node cannot resolve —
 // mock JUST the base class (a no-op shell); the relay's own logic runs unmodified.
@@ -167,7 +179,7 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
     () => {}, // waitUntil
   );
 
-  // A long-lived, active device: five page/quiesce cycles, each lending a fresh stub.
+  // A long-lived, active device: five page/release cycles, each lending a fresh stub.
   const PAGES = 5;
   for (let i = 0; i < PAGES; i++) pager.page();
 
@@ -334,7 +346,9 @@ test("a DO fetch that REJECTS releases the session's dup before the error propag
   const provider = { dup: () => lent };
   const context = {
     fetch: async () => {
-      throw new Error("APP_CONFIG_ENVIRONMENT_NAME: required, got nothing");
+      throw new Error(
+        "APP_CONFIG secrets.key (APP_CONFIG_SECRETS__KEY): required, but unset or blank",
+      );
     },
   };
   await expect(
@@ -345,6 +359,6 @@ test("a DO fetch that REJECTS releases the session's dup before the error propag
       [],
       () => {},
     ),
-  ).rejects.toThrow(/APP_CONFIG_ENVIRONMENT_NAME/);
+  ).rejects.toThrow(/APP_CONFIG_SECRETS__KEY/);
   expect(disposed).toBe(1);
 });

@@ -1,53 +1,57 @@
-// src/repo/contract.ts — a repo's vocabulary and view (the triplet's first: processor.ts is the pure
-// reduce, durable-object.ts the loadable host). A repo is a domain object with its OWN stream, the
-// context at any path (`/repos/<name>` by convention). Its creation is three facts on that path, landed
-// by the host's `create()`: `repos/create-requested`, then `repos/created` — the birth certificate,
-// cross-posted to `/` for the project catalog — or `repos/create-failed`. Every commit that lands
-// through the repo is `repo/commit-completed`. The bytes are not here — they are git, in Artifacts,
-// spoken by the host (durable-object.ts over git-wire.ts) with a token and remote from `itx.cfArtifacts`.
+// src/repo/contract.ts — A REPO: a domain object on the context at any path (`/repos/<name>` by
+// convention). Its git lives in Cloudflare Artifacts; its facts live on that path's log, and THIS
+// FILE is the only place they are spelled. The rest of the folder derives from it: processor.ts
+// reduces these events and runs the creation and deletion sagas, durable-object.ts speaks git behind
+// the `created` guard, src/project/collection.ts is `itx.repos` (`list`, `create`, `delete`), library.ts
+// hands out the handle (`itx.repos.get(path)`: the host's verbs plus the typed `append`). Deletion is the
+// creation's mirror: `delete-requested` opens it, the processor tears down the Artifacts repo and
+// lands `deleted` — cross-posted to `/` so the catalog drops the entry. Every type is derived here,
+// never hand-kept:
+//   RepoState                        = ProcessorState<typeof RepoContract>  the reduced state below
+//   ConsumedEvent<typeof RepoContract>                                       what reduce and processEvent see
+//   EventInput<typeof RepoContract>                                          what `itx.repos.get(path).append(…)` takes
 import { z } from "zod";
-import { defineProcessorContract } from "iterate/next/stream/processor";
-
-/** The repo's identity — the request's payload, the certificate's, and the failure's: its context
- *  PATH. Any path can host a repo; `/repos/<name>` is the convention, not a rule. A workspace mounts
- *  a repo at that same path. */
-const RepoIdentity = z.object({ path: z.string().min(1) });
-export type RepoIdentity = z.infer<typeof RepoIdentity>;
-
-export const RepoView = z.object({
-  /** The repo's context path, from the request; null before any request. */
-  path: z.string().nullable().default(null),
-  /** Where creation stands: null before any request; "requested" until a terminal fact; "created"
-   *  (the certificate reduced) or "failed" (what the newest attempt reported is in `error`). */
-  creation: z.enum(["requested", "created", "failed"]).nullable().default(null),
-  error: z.string().nullable().default(null),
-});
-/** The repo's reduced state: where its creation stands. */
-export type RepoView = z.infer<typeof RepoView>;
+import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
+import { EntityCreationAndDeletionState } from "../project/entity-state.ts";
 
 export const RepoContract = defineProcessorContract({
   slug: "repo",
-  version: "1",
-  description: "A repo's creation and the commits that landed through it.",
-  stateSchema: RepoView,
+  version: "2",
+  description: "A repo: its creation and deletion, and the commits that landed through it.",
+  /** THE REDUCED STATE — the one every entity keeps (src/project/entity-state.ts): where creation and
+   *  deletion stand, as the offsets of the events that say so; the guard every verb reads before it
+   *  speaks git. */
+  stateSchema: EntityCreationAndDeletionState,
   events: {
-    "events.iterate.com/repos/create-requested": {
+    "events.iterate.com/repo/create-requested": {
       description:
-        "create() opened the creation: the host provisions the Artifacts repo and lands repos/created or repos/create-failed. A request after a failure is a new attempt.",
-      payloadSchema: RepoIdentity,
+        "Someone asked for this repo (`itx.repos.create(path)`). The context it lands on IS the repo; `creator` is the context that asked — the saga writes the child's parent link `itx ⇒ itx.builtins.cd(creator)` before the certificate, so the link is part of the birth and nothing re-points a born context. The processor provisions the Artifacts repo and lands created or create-failed; a request after a failure is a new attempt, one after the certificate a harmless fact.",
+      payloadSchema: z.object({ creator: z.string().optional() }),
     },
-    "events.iterate.com/repos/created": {
+    "events.iterate.com/repo/created": {
       description:
-        "The repo's birth certificate, on its own path and cross-posted to / for the project catalog.",
-      payloadSchema: RepoIdentity,
+        "The birth certificate: on the repo's path, and cross-posted to / for the project catalog — hence it names the path.",
+      payloadSchema: z.object({ path: z.string().min(1) }),
     },
-    "events.iterate.com/repos/create-failed": {
-      description: "What provisioning reported. Fail-closed until a new request.",
-      payloadSchema: RepoIdentity.extend({ error: z.string() }),
+    "events.iterate.com/repo/create-failed": {
+      description: "What provisioning reported. Terminal until a new request.",
+      payloadSchema: z.object({ error: z.string() }),
+    },
+    "events.iterate.com/repo/delete-requested": {
+      description:
+        "Someone asked for this repo to go (`itx.repos.delete(path)`). No payload: the context it lands on IS the repo. The processor tears down the Artifacts repo it provisioned and lands deleted; a request after the certificate is a harmless fact.",
+      payloadSchema: z.object({}),
+    },
+    "events.iterate.com/repo/deleted": {
+      description:
+        "The death certificate: on the repo's path, and cross-posted to / for the project catalog, which drops the entry — hence it names the path. Terminal: a deleted repo is not re-creatable.",
+      payloadSchema: z.object({ path: z.string().min(1) }),
     },
     "events.iterate.com/repo/commit-completed": {
-      description: "A commit landed on the repo's main through the repo facet.",
+      description:
+        "A commit landed on the repo's main through the repo facet: on the repo's path, and cross-posted to / — hence it names the path — where the project processor follows the config repo's commits with the apex (a commit to /repos/config IS its publication).",
       payloadSchema: z.object({
+        path: z.string().min(1),
         commitOid: z.string().min(1),
         message: z.string(),
         changedPaths: z.array(z.string()),
@@ -55,9 +59,18 @@ export const RepoContract = defineProcessorContract({
     },
   },
   consumes: [
-    "events.iterate.com/repos/create-requested",
-    "events.iterate.com/repos/created",
-    "events.iterate.com/repos/create-failed",
+    "events.iterate.com/repo/create-requested",
+    "events.iterate.com/repo/created",
+    "events.iterate.com/repo/create-failed",
+    "events.iterate.com/repo/delete-requested",
+    "events.iterate.com/repo/deleted",
   ],
-  emits: [],
+  emits: [
+    "events.iterate.com/repo/created",
+    "events.iterate.com/repo/create-failed",
+    "events.iterate.com/repo/deleted",
+  ],
 });
+
+/** The repo's reduced state: where its creation and deletion stand (the contract's `stateSchema`). */
+export type RepoState = ProcessorState<typeof RepoContract>;

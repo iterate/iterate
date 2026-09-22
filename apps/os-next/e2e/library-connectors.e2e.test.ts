@@ -21,20 +21,21 @@
 //   • connectToCapnweb: a WebSocket session THROUGH EGRESS (deployed — the bearer rides the upgrade, a
 //     chain pipelines, held, disposed on close; refused 401 without it) and the batch transport (one
 //     POST per chain, the bearer on the POST, the shop's 401 as the batch's failure)
-//   • self-dial: a context calls ANOTHER project through this worker's own /internal/rpc operator door — batch everywhere,
+//   • self-dial: a context calls ANOTHER project through this worker's own /api — batch everywhere (the admin bearer on the POST),
 //     WebSocket on the deployed egress
 
 import { beforeAll, describe, expect, test } from "vitest";
-import { adminCredentials, freshCtx, openItx, workerUrl } from "./support/client.ts";
+import { adminCredentials, freshCtx, openItx, runId, workerUrl } from "./support/client.ts";
 import {
   deployedOnly,
+  deployedSubdomainsOnly,
   freshDnsSafeProjectSlug,
-  projectHostnameBase,
+  projectUrl,
   registerProject,
 } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
 
-deployedOnly(
+deployedSubdomainsOnly(
   "a loaded worker serves capnweb behind a project host, dialed with connectToCapnweb over the batch transport — the path arriving verbatim",
   async () => {
     const slug = freshDnsSafeProjectSlug("capnweb-host");
@@ -46,7 +47,7 @@ deployedOnly(
     ]);
     // the context dials its own project's host from inside — no credential: the app is public
     const connection = await itx.connectToCapnweb(
-      `https://rpc--${slug}.${projectHostnameBase()}/rpc/v1`,
+      projectUrl({ project: slug, app: "rpc", path: "/rpc/v1" }).href,
       { transport: "batch" },
     );
     expect(await connection.hello("host")).toBe("hello host");
@@ -66,6 +67,10 @@ describe("against the deployed pet shop", () => {
 
   /** The shop's pets as its API objects spell them. */
   type Pet = { id: string; name: string; species: string };
+
+  /** The account a row logs in as — carrying the run's id, so two runs at once never share one
+   *  shop account (the shop echoes the owner back on every answer, and the rows assert on it). */
+  const shopper = (who: string): string => `${who}-${runId()}@example.com`;
 
   /** A live bearer for `owner` (a legacy-login token: 120 s TTL, minted fresh for every test that needs one). */
   async function bearerFor(owner: string): Promise<{ authorization: string }> {
@@ -92,7 +97,7 @@ describe("against the deployed pet shop", () => {
   });
 
   test("connectToMcp: the pet shop's MCP server — initialize + tools/list at connect, a tool as a method, callTool, an isError tool call throws, held across calls", async () => {
-    const headers = await bearerFor("mcp@example.com");
+    const headers = await bearerFor(shopper("mcp"));
     const itx = openItx(freshCtx("lib-mcp"));
     const tools = await itx.invoke(
       `itx.connectToMcp(${JSON.stringify(`${PETSHOP}/mcp`)}, ${withHeaders(headers)}).listTools()`,
@@ -108,7 +113,7 @@ describe("against the deployed pet shop", () => {
     const conn = await itx.connectToMcp(`${PETSHOP}/mcp`, { headers });
     expect((await conn.serverInfo()).serverInfo).toMatchObject({ name: "dummy-petshop" });
     const listed = await conn.list_pets({});
-    expect(listed.owner).toBe("mcp@example.com");
+    expect(listed.owner).toBe(shopper("mcp"));
     expect(listed.pets.map((p: Pet) => p.name)).toContain("Biscuit");
     expect(await conn.create_pet({ name: "Rex", species: "terrier" })).toMatchObject({
       name: "Rex",
@@ -128,7 +133,7 @@ describe("against the deployed pet shop", () => {
   });
 
   test("rules composition: provide('itx.tools', \"itx.connectToMcp('<petshop>/mcp', { headers })\") then itx.tools.listTools() and itx.tools.get_pet(...) run through the table", async () => {
-    const headers = await bearerFor("mcp-rule@example.com");
+    const headers = await bearerFor(shopper("mcp-rule"));
     const itx = openItx(freshCtx("lib-mcp-rule"));
     await itx.provide(
       "itx.tools",
@@ -145,7 +150,7 @@ describe("against the deployed pet shop", () => {
   });
 
   test("connectToOpenApi: the shop's OpenAPI 3.1 document (bearer-protected, fetched over egress); operationIds become methods; path and body parameters ride to /api/v2", async () => {
-    const headers = await bearerFor("openapi@example.com");
+    const headers = await bearerFor(shopper("openapi"));
     const itx = openItx(freshCtx("lib-openapi"));
     const pets = await itx.connectToOpenApi(`${PETSHOP}/openapi.json`, { headers });
     expect((await pets.operations()).map((o: any) => o.operationId).sort()).toEqual([
@@ -154,7 +159,7 @@ describe("against the deployed pet shop", () => {
       "listPets",
     ]);
     const listed = await pets.listPets();
-    expect(listed.owner).toBe("openapi@example.com");
+    expect(listed.owner).toBe(shopper("openapi"));
     expect(listed.pets.map((p: Pet) => p.name)).toContain("Goldie");
     expect(await pets.getPet({ id: "pet-1" })).toMatchObject({
       id: "pet-1",
@@ -184,7 +189,7 @@ describe("against the deployed pet shop", () => {
   deployedOnly(
     "connectToCapnweb: the shop's /capnweb over a WebSocket session THROUGH EGRESS — the bearer rides the upgrade header; a chain pipelines; held; disposed on close",
     async () => {
-      const headers = await bearerFor("capnweb-ws@example.com");
+      const headers = await bearerFor(shopper("capnweb-ws"));
       const itx = openItx(freshCtx("lib-capnweb"));
       expect(
         await itx.invoke(
@@ -192,7 +197,7 @@ describe("against the deployed pet shop", () => {
         ),
       ).toMatchObject({ id: "pet-1", name: "Biscuit" });
       const conn = await itx.connectToCapnweb(`${PETSHOP_WS}/capnweb`, { headers });
-      expect((await conn.listPets()).owner).toBe("capnweb-ws@example.com");
+      expect((await conn.listPets()).owner).toBe(shopper("capnweb-ws"));
       const created = await conn.createPet({ name: "Ace", species: "parrot" });
       expect(await conn.getPet(created.id)).toMatchObject({ name: "Ace", species: "parrot" });
       await expect(conn.getPet("pet-nope")).rejects.toThrow(/No pet with id pet-nope/);
@@ -211,7 +216,7 @@ describe("against the deployed pet shop", () => {
   );
 
   test("connectToCapnweb, batch transport: one POST per chain to the shop's /capnweb, over egress, the bearer on the POST", async () => {
-    const headers = await bearerFor("capnweb-batch@example.com");
+    const headers = await bearerFor(shopper("capnweb-batch"));
     const itx = openItx(freshCtx("lib-capnweb-batch"));
     expect(
       await itx.invoke(
@@ -219,7 +224,7 @@ describe("against the deployed pet shop", () => {
       ),
     ).toMatchObject({ id: "pet-2", name: "Goldie" });
     const conn = await itx.connectToCapnweb(`${PETSHOP}/capnweb`, { transport: "batch", headers });
-    expect((await conn.listPets()).owner).toBe("capnweb-batch@example.com");
+    expect((await conn.listPets()).owner).toBe(shopper("capnweb-batch"));
     expect(await conn.createPet({ name: "Rex", species: "terrier" })).toMatchObject({
       name: "Rex",
     });
@@ -235,7 +240,7 @@ describe("against the deployed pet shop", () => {
     const other = freshCtx("lib-other");
     const itx = openItx(freshCtx("lib-self-dial"));
     const whoami = await itx.invoke(
-      `itx.connectToCapnweb(${JSON.stringify(workerUrl("/internal/rpc"))}, { transport: 'batch' }).authenticate(${JSON.stringify(adminCredentials())}).projects.get(${JSON.stringify(other)}).whoami()`,
+      `itx.connectToCapnweb(${JSON.stringify(workerUrl("/api"))}, { transport: 'batch', headers: { authorization: ${JSON.stringify(`Bearer ${adminCredentials().secret}`)} } }).authenticate(${JSON.stringify(adminCredentials())}).projects.get(${JSON.stringify(other)}).whoami()`,
     );
     expect(whoami).toEqual({ projectId: other, path: "/" });
   });
@@ -245,7 +250,7 @@ describe("against the deployed pet shop", () => {
     async () => {
       const other = freshCtx("lib-other-ws");
       const itx = openItx(freshCtx("lib-self-dial-ws"));
-      const api = workerUrl("/internal/rpc").replace(/^http/, "ws");
+      const api = workerUrl("/api").replace(/^http/, "ws");
       const whoami = await itx.invoke(
         `itx.connectToCapnweb(${JSON.stringify(api)}).authenticate(${JSON.stringify(adminCredentials())}).projects.get(${JSON.stringify(other)}).whoami()`,
       );
