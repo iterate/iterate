@@ -22,14 +22,7 @@ import { fileURLToPath } from "node:url";
 import { Generator, getConfig } from "@tanstack/router-generator";
 import { createCli, t } from "trpc-cli";
 import { z } from "zod";
-import {
-  agentsEnvs,
-  dashEnvs,
-  envs as osEnvs,
-  notesEnvs,
-  osNextEnvs,
-  voiceEnvs,
-} from "../../envs.ts";
+import { agentsEnvs, dashEnvs, notesEnvs, osNextEnvs, voiceEnvs } from "../../envs.ts";
 import { deployApp } from "./deploy-app.ts";
 import { ensureProxiedDnsRecord } from "./deploy-helpers.ts";
 import { resolveEnvContext, type DeployableEnv } from "./env-context.ts";
@@ -66,7 +59,12 @@ function registrableDomainOf(urlOrHostname: string): string {
  *  (`appAuth` `denyZones`) refuses to connect an app to an issuer under any of them: a project host
  *  or a custom apex is userspace and could serve a look-alike issuer. */
 function ownZones(): string[] {
-  const zones = new Set<string>();
+  // These existing userspace hosts remain untrusted issuers even after their deployment code is removed.
+  const zones = new Set([
+    "iterate.app",
+    "iterate.com",
+    ...Array.from({ length: 19 }, (_, i) => `iterate-preview-${i + 1}.app`),
+  ]);
   for (const env of Object.values(osNextEnvs)) {
     zones.add(registrableDomainOf(env.baseUrl));
     zones.add(registrableDomainOf(env.mcpBaseUrl));
@@ -77,12 +75,6 @@ function ownZones(): string[] {
   for (const envs of [dashEnvs, agentsEnvs, notesEnvs, voiceEnvs])
     for (const env of Object.values(envs) as { baseUrl: string }[])
       zones.add(registrableDomainOf(env.baseUrl));
-  // apps/os's project hosts (`<app>.<project>.iterate.app`, the preview zones) and its projects'
-  // custom apexes (`*.iterate.com` custom hostnames) are userspace too
-  for (const env of Object.values(osEnvs)) {
-    for (const base of env.projectHostnameBases) zones.add(base);
-    for (const apex of env.ownedProjectCustomApexes) zones.add(apex);
-  }
   return [...zones].sort();
 }
 

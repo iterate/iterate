@@ -45,9 +45,6 @@ admin secret is a bearer on `/mcp` too (it reaches every project, so `run` must 
 - `docs/clean-room-api-walkthrough.md` — the long-form walkthrough, module by module
 - `docs/design-onion-subscriptions-processors.md` — the design of record for subscriptions + processors
 - `LAYERS.md` — the layer map (the build log that used to sit beside it lives on the `backup/kernel-wayfinder-2026-07-30-presquash-*` branch)
-- [Archived experiments](../../../docs/archived-experiments.md) — the single backup of retired implementations and research
-- [Design research](docs/research/README.md) — OAuth research, implementation reviews, and deployment evidence
-- [Archived history](docs/history/README.md) — earlier plans, reviews, proposals, and logs on GitHub
 
 ## Configuration
 

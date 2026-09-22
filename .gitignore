@@ -17,17 +17,6 @@ dist
 .dev.vars*
 
 .dev-server
-# generated from the root envs.ts by each app's scripts/generate-wrangler-config.ts
-apps/os/wrangler.jsonc
-apps/os/wrangler.typechecker.jsonc
-apps/os/wrangler.worker-bundler.jsonc
-apps/os/.config-template-typecheck-*
-apps/auth/wrangler.jsonc
-apps/semaphore/wrangler.jsonc
-apps/streams-example-app/wrangler.jsonc
-apps/dummy-petshop/wrangler.jsonc
-apps/docs/wrangler.jsonc
-
 !.dev.vars.example
 .env*
 !.env.example
@@ -41,8 +30,6 @@ __pycache__/
 
 # Experiment artifacts
 experiments/*/disk-config.json
-ai-engineer-workshop/.codemode/
-ai-engineer-workshop/README.html
 
 # ad-hoc ignored files/paths
 *ignoreme*
@@ -96,3 +83,16 @@ iterate-kit-playback.wav
 
 # Whisper models: build-tool input, fetched on demand. 141MB — over GitHub's limit.
 apps/kit/firmware/tools/models/
+
+# Local artifacts left by retired apps.
+apps/docs/dist-package/
+apps/mobile/.expo/
+apps/mobile/expo-env.d.ts
+
+# Retired app directories may contain local build/development state.
+apps/*/wrangler.jsonc
+apps/os/
+apps/auth/
+apps/semaphore/
+apps/streams-example-app/
+apps/dummy-petshop/

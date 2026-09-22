@@ -49,7 +49,7 @@ routing side effect.
 
 ## Proposed events and ownership
 
-Follow the [OS project saga](../../os/src/domains/projects/project-processor-implementation.ts).
+Follow the OS project saga.
 Event names below omit `events.iterate.com/`.
 
 | Event                        | Stream                                                     | Meaning                                                                |

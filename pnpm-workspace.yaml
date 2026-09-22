@@ -1,125 +1,88 @@
 packages:
-  - apps/os
-  - apps/semaphore
-  - apps/*
-  - apps/mobile/website
-  - packages/*
+  - apps/os-next
+  - apps/dash
+  - apps/agents
+  - apps/notes
+  - apps/voice
+  - apps/kit
+  - packages/iterate
+  - packages/shared
+  - packages/ui
   - lint
   - scripts
-
 catalogs:
   cloudflare:
-    '@cloudflare/unenv-preset': ^2.16.0
-    '@cloudflare/vite-plugin': 1.43.0
-    '@cloudflare/workers-types': ^4.20260621.1
+    "@cloudflare/unenv-preset": ^2.16.0
+    "@cloudflare/vite-plugin": 1.43.0
+    "@cloudflare/workers-types": ^4.20260621.1
     miniflare: 4.20260701.0
     workerd: 1.20260701.0
     wrangler: 4.107.0
-
 minimumReleaseAge: 1440
-
 minimumReleaseAgeExclude:
-  - '@opentui/*'
+  - "@opentui/*"
   - miniflare
   - wrangler
   - workerd
-  - '@cloudflare/workerd-darwin-64'
-  - '@cloudflare/workerd-darwin-arm64'
-  - '@cloudflare/workerd-linux-64'
-  - '@cloudflare/workerd-linux-arm64'
-  - '@cloudflare/workerd-windows-64'
-  - '@cloudflare/unenv-preset'
-  - '@cloudflare/vite-plugin'
-  - '@cloudflare/workers-types'
-  - '@mmkal/jsonata'
-  - '@mmkal/json-schema-to-typescript'
-  - '@mariozechner/pi-ai'
-  - '@mariozechner/pi-coding-agent'
-  - '@mariozechner/pi-agent-core'
-  - '@mariozechner/pi-tui'
+  - "@cloudflare/workerd-darwin-64"
+  - "@cloudflare/workerd-darwin-arm64"
+  - "@cloudflare/workerd-linux-64"
+  - "@cloudflare/workerd-linux-arm64"
+  - "@cloudflare/workerd-windows-64"
+  - "@cloudflare/unenv-preset"
+  - "@cloudflare/vite-plugin"
+  - "@cloudflare/workers-types"
+  - "@mmkal/jsonata"
+  - "@mmkal/json-schema-to-typescript"
+  - "@mariozechner/pi-ai"
+  - "@mariozechner/pi-coding-agent"
+  - "@mariozechner/pi-agent-core"
+  - "@mariozechner/pi-tui"
   - middlewright
   - schematch
   - sqlfu
   - trpc-cli
   - hono
-  - '@hono/node-server'
-  - '@hono/node-ws'
+  - "@hono/node-server"
+  - "@hono/node-ws"
   - captun
-  - '@iterate-com/capnweb'
-
+  - "@iterate-com/capnweb"
 onlyBuiltDependencies:
-  - '@posthog/cli'
-  - '@tailwindcss/oxide'
+  - "@posthog/cli"
+  - "@tailwindcss/oxide"
   - esbuild
   - lightningcss
   - node-pty
   - sharp
   - workerd
-
 overrides:
-  '@babel/parser': ^7.28.0
-  '@cloudflare/vite-plugin@1.54.8>wrangler': 4.131.1
-  '@codemirror/state': ^6.7.1
-  '@codemirror/view': ^6.43.6
-  '@iterate-com/agents>wrangler': 4.131.1
-  '@iterate-com/dash>wrangler': 4.131.1
-  '@iterate-com/dummy-petshop>capnweb': npm:@iterate-com/capnweb@0.12.2
-  '@iterate-com/kit>wrangler': 4.131.1
-  '@iterate-com/notes>wrangler': 4.131.1
-  '@iterate-com/voice>wrangler': 4.131.1
-  '@material/web': 2.4.1
-  '@orpc/client': 1.13.14
-  '@orpc/contract': 1.13.14
-  '@orpc/json-schema': 1.13.14
-  '@orpc/openapi': 1.13.14
-  '@orpc/openapi-client': 1.13.14
-  '@orpc/otel': 1.13.14
-  '@orpc/react-query': 1.13.14
-  '@orpc/server': 1.13.14
-  '@orpc/shared': 1.13.14
-  '@orpc/tanstack-query': 1.13.14
-  '@orpc/zod': 1.13.14
-  '@tanstack/query-core': 5.101.2
-  '@tanstack/react-query': 5.101.2
-  agents>viem: '-'
-  agents>x402: '-'
+  "@iterate-com/agents>wrangler": 4.131.1
+  "@babel/parser": ^7.28.0
+  "@cloudflare/vite-plugin@1.54.8>wrangler": 4.131.1
+  "@codemirror/state": ^6.7.1
+  "@codemirror/view": ^6.43.6
+  "@iterate-com/dash>wrangler": 4.131.1
+  "@iterate-com/kit>wrangler": 4.131.1
+  "@iterate-com/notes>wrangler": 4.131.1
+  "@iterate-com/voice>wrangler": 4.131.1
+  "@material/web": 2.4.1
+  "@tanstack/query-core": 5.101.2
+  "@tanstack/react-query": 5.101.2
   axios: 1.13.6
   baseline-browser-mapping: ^2.9.14
-  capnweb: npm:@iterate-com/capnweb@0.10.0
   iterate>capnweb: npm:@iterate-com/capnweb@0.12.2
   os-next>capnweb: npm:@iterate-com/capnweb@0.12.2
   os-next>wrangler: 4.131.1
-  quicktype-core>readable-stream: npm:vite-compatible-readable-stream@3.6.1
-  roughdraft>@roughdraft/rfm: '-'
   srvx: 0.11.12
   wrangler: 4.107.0
   ws: 8.19.0
-
 packageExtensions:
-  '@valtown/codemirror-ts':
-    peerDependencies:
-      '@typescript/vfs': '*'
-      typescript: '*'
   lucide-react:
     peerDependencies:
-      '@types/react': '*'
-  roughdraft@0.1.10:
-    dependencies:
-      yaml: 2.9.0
+      "@types/react": "*"
   streamdown:
     peerDependencies:
-      '@types/react': '*'
-
+      "@types/react": "*"
 patchedDependencies:
-  '@atomic-editor/editor@0.6.2': patches/@atomic-editor__editor@0.6.2.patch
-  '@better-auth/oauth-provider@1.6.9': patches/@better-auth__oauth-provider@1.6.9.patch
-  '@cloudflare/sandbox@0.12.3': patches/@cloudflare__sandbox@0.12.3.patch
-  '@cloudflare/worker-bundler@0.2.1': patches/@cloudflare__worker-bundler@0.2.1.patch
-  '@cloudflare/workers-types@4.20260621.1': patches/@cloudflare__workers-types@4.20260621.1.patch
-  '@codemirror/merge@6.12.2': patches/@codemirror__merge@6.12.2.patch
-  '@journeyapps/wa-sqlite@1.7.0': patches/@journeyapps__wa-sqlite@1.7.0.patch
-  # Metro cannot parse its non-literal dynamic import() (a module-loader
-  # fallback the mobile filter pipeline never hits — it loads wasm via blob
-  # URLs). The patch turns that fallback into a thrown error.
-  '@mediapipe/tasks-vision@0.10.35': patches/@mediapipe__tasks-vision@0.10.35.patch
+  "@cloudflare/workers-types@4.20260621.1": patches/@cloudflare__workers-types@4.20260621.1.patch
   zod@4.5.4: patches/zod@4.5.4.patch

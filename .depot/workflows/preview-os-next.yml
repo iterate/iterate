@@ -4,12 +4,6 @@
 # of the parent worker os-next-preview, runs the e2e suite against it, writes the URL and the
 # operations into the PR body, deletes it when the PR closes, and sweeps nightly.
 #
-# This workflow runs INSTEAD of the apps/os preview fleet for a PR confined to os-next
-# (scripts/preview/change-types.ts classes those paths so the planner neither deploys nor tests
-# the fleet). The paths below are the union of what deploy-os-next.yml and the four app deploy
-# workflows (dash, agents, notes, voice) deploy prd for: the apps on top are previewed alongside,
-# each only when its own paths changed since the merge-base (scripts/preview.ts `changedApps`).
-#
 # Depot registers automatic triggers when this file is on the default branch. Test a branch with:
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
 #     --workflow preview-os-next.yml --ref <branch> \
@@ -44,6 +38,9 @@ on:
       - packages/iterate/**
       - packages/shared/**
       - packages/ui/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
       - envs.ts
       - scripts/lib/**
   schedule:

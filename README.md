@@ -1,174 +1,31 @@
-# iterate
+# Iterate
 
-Monorepo for Iterate's Cloudflare Workers platform. **`apps/os`** is the main app — the product dashboard at `os.iterate.com`.
+The Iterate context platform runs at **https://os.iterate2.com**. `apps/os-next` owns the Worker, OAuth issuer, project contexts, streams, and loaded code.
 
-Agent instructions: [AGENTS.md](AGENTS.md). Engineering requirements: [no deviant system behaviour](docs/engineering-invariants.md).
+| Path               | Purpose                                                       |
+| ------------------ | ------------------------------------------------------------- |
+| `apps/os-next`     | Platform, issuer pages, integration tests, preview tooling    |
+| `apps/dash`        | Projects, organizations, sessions, and personal access tokens |
+| `apps/agents`      | Agent conversations and inspection                            |
+| `apps/notes`       | Notes client                                                  |
+| `apps/voice`       | Voice client                                                  |
+| `apps/kit`         | Device installer and firmware using the platform              |
+| `packages/iterate` | `iterate/next/*` SDK                                          |
+| `packages/ui`      | Components used by the apps                                   |
+| `packages/shared`  | Shared configuration, events, and test telemetry              |
+| `scripts`          | Deployment helpers and CI support                             |
+| `lint`, `rules`    | Review and lint rules                                         |
 
-## Environments
-
-- The root `envs.ts` is the typed map of every deployed environment
-  (hostnames, worker names, accounts, resource IDs); Doppler supplies only
-  secrets, one config per env (`prd`, `preview_N`; `dev`/`dev_<you>` are
-  fully local and never deploy).
-- Each app deploys with its own small scripts: `pnpm run deploy --env <name>`
-  (build → wrangler deploy with atomic secrets → smoke), `ensure-resources`,
-  `erase-data`. Workers are never deleted.
-- Details: [DevOps: Cloudflare And Doppler](docs/devops-cloudflare-doppler.md).
-
-## Talking to OS
-
-Run these from `apps/os`. Plain `pnpm cli ...` uses your local Doppler setup
-for `apps/os`. Wrap in `doppler run --config <config> -- ...` to target a
-specific environment; the config supplies URLs and secrets. More on this script
-pattern: [Doppler-backed scripts](apps/os/docs/doppler-backed-scripts.md).
-
-### itx API
-
-OS exposes project capability handles through `/api`. The app CLI
-authenticates with the config's admin API secret and can run scripts against a
-project's itx surface:
-
-```bash
-# your local Doppler setup, normally shared dev
-pnpm cli itx --help
-
-# production
-doppler run --config prd -- pnpm cli itx --help
-
-# preview slot 3
-doppler run --config preview_3 -- pnpm cli itx --help
-
-# local dev server (while pnpm dev is running)
-doppler run --config dev -- pnpm cli itx --help
-```
-
-Use `pnpm cli itx run --help` to run a script against a project.
-
-### Claude + project MCP
-
-Open Claude Code against the OS MCP server for a deployment:
-
-```bash
-doppler run --config prd -- pnpm cli claude-mcp
-```
-
-The Doppler config picks the environment (prod, preview, or local dev). `APP_CONFIG_PROJECT_HOSTNAME_BASES` in the config sets the deployed project hostname base (e.g. `iterate.app`, `iterate-preview-3.app`); local dev project hosts use `<slug>.localhost:<port>`. Override with `--base-host` if needed.
-
-More: [apps/os README](apps/os/AGENTS.md).
-
-## Quick start
-
-```bash
+```sh
 pnpm install
-doppler setup --config dev --no-interactive   # once per worktree; doppler.yaml scopes every app dir
-pnpm dev                                      # attached local OS dev server (http://localhost:<port>)
+pnpm dev
+pnpm typecheck
+pnpm test
+pnpm spec
 ```
 
-Use `pnpm dev <action> [flags]` for dev server lifecycle controls (`status`,
-`start --detach`, `attach`, `restart`, `kill`). The shared `dev` config and
-personal `dev_<you>` configs are fully local and safe for parallel worktrees;
-use captun, preview, or production for public callbacks. Details:
-[Dev environments](docs/dev-environments.md).
+`pnpm dev` starts the platform locally. Run a client with `pnpm --dir apps/<name> dev`; its issuer configuration must point to the platform under test. See [platform configuration and development](apps/os-next/README.md), [self-hosting](apps/os-next/SELF-HOSTING.md), and [testing](docs/testing.md).
 
-Before PRs:
+`envs.ts` owns deployment names, URLs, and resource IDs. Doppler supplies secrets; `doppler.yaml` maps directories to projects. Deploy and resource commands live in each app. [Per-PR previews](apps/os-next/README.md#previews) run through `pnpm preview`.
 
-```bash
-pnpm install && pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test
-```
-
-How to open a PR (branch hygiene, body shape, **screenshots that actually
-render**, previews) — and **after open**: wait for Iterate Review /
-review bots, address **every** CI/review comment (fix or reply + resolve),
-**never leave threads standing**, **never merge on red CI** unless the human
-explicitly said so: **[Pull requests](docs/pull-requests.md)**.
-
-**Browser testing:** use **Playwriter** with an isolated headless session by default (or an authorized real-Chrome session when explicitly requested). Give every concurrent agent a unique Playwriter session id. See [Browser testing](docs/browser-testing.md). Keep the Playwriter CLI and skill current.
-
-## Repository map
-
-**Start here:** `apps/os/`
-
-| Path                | What                                                                               |
-| ------------------- | ---------------------------------------------------------------------------------- |
-| `apps/os/`          | **Main app** — product dashboard (`os.iterate.com`; local dev: `localhost:<port>`) |
-| `apps/kit/`         | Browser installer for supported devices (`k.iterate.com`)                          |
-| `packages/iterate/` | `iterate` CLI — delegates to local source when run inside this repo                |
-| `docs/`             | Detailed documentation                                                             |
-| `tasks/`            | Work tracking (markdown + frontmatter)                                             |
-
-Other Cloudflare apps (`semaphore`, …) are supporting services — see `docs/architecture.md`.
-
-## Common commands
-
-```bash
-doppler setup --config dev --no-interactive   # once per worktree (or --config dev_<you> for personal secrets)
-pnpm dev                      # attached local OS dev server at http://localhost:<port> (see docs/dev-environments.md)
-pnpm auth:mint                # mint a session as any user/admin (repo root; dev/preview; wrap in doppler run)
-pnpm --dir apps/auth dev      # auth app only (when working on auth itself)
-pnpm test && pnpm typecheck && pnpm lint && pnpm format
-```
-
-## Review rules
-
-Canonical code-review rules live in `rules/**/*.md`. Before changing or
-reviewing code, read the rules whose frontmatter `files` globs match the files
-in scope and honor their exclusions. The hosted GitHub linter reads these same
-files; keep shared review policy here, not in the config repo.
-
-How do I…? — **[Dev environments](docs/dev-environments.md)** answers: run
-local dev (fully local, random port, `localhost` plus project
-`<slug>.localhost` hosts), be any user or an admin (minting), point an isolated
-visible browser at local dev or a preview, create a preview environment
-from your machine, and when you need a public callback URL. Doppler/Cloudflare/deploy details:
-`docs/devops-cloudflare-doppler.md`.
-
-## Documentation
-
-### Platform & architecture
-
-- [Architecture](docs/architecture.md)
-- [DevOps: Cloudflare And Doppler](docs/devops-cloudflare-doppler.md)
-- [Brand & tone](docs/brand-and-tone-of-voice.md)
-
-### Development
-
-- [Pull requests](docs/pull-requests.md) — opening PRs, absolute screenshot URLs, previews, body hygiene; after open: wait for Iterate Review, address every thread, no merge on red CI
-- [Browser testing](docs/browser-testing.md) — isolated Playwriter sessions, and reusable test logins
-- [Dev environments](docs/dev-environments.md) — local dev, minting identities, opening project-scoped or platform-wide operator sessions, browsers for agents, preview-from-local
-- [Tunnels](docs/tunnels.md) — public HTTPS URLs for local dev, webhooks, OAuth callbacks, and CI/e2e fixtures
-- [Coding style](docs/coding-style.md)
-- [Depot CI](docs/depot-ci.md) — workflow editing, Depot CLI commands, monitoring/wait loops, logs, dispatch, metrics, secrets, and gotchas
-- [CLI scripts](docs/cli-scripts.md) — how to write normal TypeScript scripts and expose them as CLIs
-- [Preview CI performance](docs/ci-preview-performance.md) — how the preview deploy+e2e check stays ~2-3 min, the budget guardrail, and how to keep it fast without raising cost
-- [CI and test telemetry](docs/ci-test-telemetry.md) — one PostHog model and health-checked dashboards for Vitest/Playwright/Node tests, failures, retries, phases, GitHub Actions, Depot, and review bots
-- [TypeScript conventions](docs/typescript-conventions.md)
-- [Frontend development](docs/frontend-development.md) — the apps/os programming model: one capnweb capability tree over one WebSocket, the thin itx hooks (`useIterateSession`/`useItx`, `useItxQuery`/`useIterateSessionQuery`, `useLiveState`), and LiveView-style live state from Durable Objects
-- [Design system & React](docs/design-system.md)
-- [Slack testing](docs/slack-testing.md) — real Slack flows; **`SLACK_CI_BOT_TOKEN` trigger actor**; channel membership (`#slack-agent-e2e-test`); preview setup; duplicate-bot caveats
-- [GitHub production smoke testing](docs/github-smoke-testing.md) — post-recreation config sync, authenticated requests, and webhook routing
-- [Slack preview OAuth clients](docs/slack-preview-oauth-clients.md) — API-first creation and secret handoff for preview Slack apps
-- [Slack bot token migration](docs/slack-bot-token-migration.md) — per-app bot token fallback links and Doppler shape
-- [Testing](docs/testing.md) — test lanes, how to run them against any environment, the canonical env vars, and the retry/timeout policy (one retry layer, fail-fast watchdogs, retry telemetry)
-- [Vitest patterns](docs/vitest-patterns.md)
-- [Domain objects & stream processors](docs/domain-objects-and-stream-processors.md)
-- [Writing & testing stream processors](docs/writing-stream-processors.md) — side-effect guarantees, the obligation/reconciler pattern, eviction recovery, staleness policy, and the node test harness
-- [Playwright specs](./specs/AGENTS.md) - instructions for agents writing playwright tests
-
-### Tasks & agent docs
-
-- [Task system](docs/task-system.md)
-- [Task grooming](docs/tasks-grooming.md)
-- [Writing agent docs](docs/writing-agent-docs.md)
-- [Debugging the OS worker](.agents/skills/debug-os-worker/SKILL.md) — ITX, agents, scheduler alarms, dynamic workers, and error lookup
-
-### App-specific
-
-- [OS app](apps/os/AGENTS.md)
-- [Kit device installer](apps/kit/README.md)
-- [Auth app](apps/auth/README.md) — public OIDC/oRPC plus OS-only Workers RPC for the org/project directory
-- [itx](apps/os/src/README.md) — the `/api` surface and its public contract (`types.ts`)
-- [OS worker topology](apps/os/docs/worker-topology.md)
-- [OS architecture & operations](apps/os/docs/architecture-and-operations.md)
-- [Debugging deployed OS workers](apps/os/docs/debugging-deployed-os-workers.md)
-- [Doppler-backed scripts](apps/os/docs/doppler-backed-scripts.md)
-- [Project seeds](apps/os/docs/project-seeds.md) — capture and semantically restore selected projects across deliberate production erases
+The repository contains the current platform and its clients. Retired implementations and design history are available through Git history.

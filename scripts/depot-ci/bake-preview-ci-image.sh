@@ -57,7 +57,7 @@ curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager
 doppler --version
 
 echo "==> Installing preview browser"
-pnpm --dir apps/streams-example-app exec playwright install chromium
+pnpm exec playwright install chromium
 
 echo "==> Reporting baked cache size"
 echo "pnpm-store=$(pnpm store path)"

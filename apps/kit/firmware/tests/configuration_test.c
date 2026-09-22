@@ -38,7 +38,7 @@ static void decodes_the_typescript_golden_image(void) {
       "correct horse battery staple") == 0);
   CHECK(strcmp(
       configuration.os_base_url,
-      "https://os.iterate.com") == 0);
+      "https://os.iterate2.com") == 0);
   CHECK(strcmp(configuration.project_id, "prj_voice_lab") == 0);
   CHECK(strcmp(configuration.project_api_key, "itxk_secret") == 0);
   CHECK(sizeof(configuration) <= 424U);
@@ -109,9 +109,9 @@ static void builds_the_itx_websocket_endpoint_without_allocation(void) {
   char endpoint[ITERATE_KIT_ITX_WEBSOCKET_URL_CAPACITY];
 
   CHECK(iterate_kit_configuration_build_itx_websocket_url(
-      "https://os.iterate.com", endpoint, sizeof(endpoint)) ==
+      "https://os.iterate2.com", endpoint, sizeof(endpoint)) ==
       ITERATE_KIT_CONFIGURATION_OK);
-  CHECK(strcmp(endpoint, "wss://os.iterate.com/api") == 0);
+  CHECK(strcmp(endpoint, "wss://os.iterate2.com/api") == 0);
 
   CHECK(iterate_kit_configuration_build_itx_websocket_url(
       "http://localhost:8787", endpoint, sizeof(endpoint)) ==
@@ -130,13 +130,13 @@ static void rejects_invalid_or_truncated_itx_websocket_endpoints(void) {
   memset(endpoint, 0xa5, sizeof(endpoint));
 
   CHECK(iterate_kit_configuration_build_itx_websocket_url(
-      "https://os.iterate.com", endpoint, sizeof(endpoint)) ==
+      "https://os.iterate2.com", endpoint, sizeof(endpoint)) ==
       ITERATE_KIT_CONFIGURATION_FIELD_TOO_LONG);
   CHECK(endpoint[0] == '\0');
 
   endpoint[0] = 'x';
   CHECK(iterate_kit_configuration_build_itx_websocket_url(
-      "https://os.iterate.com/path", endpoint, sizeof(endpoint)) ==
+      "https://os.iterate2.com/path", endpoint, sizeof(endpoint)) ==
       ITERATE_KIT_CONFIGURATION_INVALID_VALUE);
   CHECK(endpoint[0] == '\0');
 }

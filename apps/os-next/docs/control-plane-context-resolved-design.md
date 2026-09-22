@@ -2,7 +2,6 @@
 
 Status: resolved direction, 2026-09-11, **after a four-way review** (three Claude
 agents + codex/astra xhigh). Supersedes the open questions in
-[control-plane-context-plan.md](control-plane-context-plan.md) for the isolation
 model, the RPC hierarchy, and the dispatch door. Clean-room: **no backwards
 compatibility**. All four reviews agree the architecture is viable; the security
 contract below is the revised, review-hardened version. `(verify)` = proven or

@@ -2,7 +2,7 @@
 
 Implementation snapshot, 2026-09-10. Clean-room deployment: `os.iterate2.com`,
 `mcp.iterate2.com`, `*.iterate2.app`; independent example: `notes.iterate2.com`.
-[Deployment and acceptance evidence](research/unified-oauth-deployment-proof.md).
+Deployment and acceptance evidence.
 
 ## One authenticated session model
 
@@ -62,7 +62,7 @@ for this permission through consent. Account scope does not grant issuer consent
 or future platform-admin powers. Project-host clients are constrained to their
 host's project by the authorization server.
 
-The [Cloudflare consent research](research/cloudflare-oauth-consent-and-project-permissions.md)
+The Cloudflare consent research
 covers richer project/operation scopes. They are not enforced or advertised yet;
 adding a checkbox without enforcing it at context capability construction would
 misrepresent delegated authority.

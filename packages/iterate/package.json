@@ -1,7 +1,7 @@
 {
   "name": "iterate",
   "version": "0.3.0",
-  "description": "CLI and SDK for iterate",
+  "description": "SDK for the Iterate context platform",
   "license": "Apache-2.0",
   "type": "module",
   "repository": {
@@ -15,43 +15,13 @@
   },
   "keywords": [
     "iterate",
-    "cli",
-    "orpc"
+    "sdk",
+    "capnweb"
   ],
   "engines": {
     "node": ">=22.15"
   },
-  "bin": {
-    "iterate": "./bin/iterate.js"
-  },
   "exports": {
-    ".": "./src/index.ts",
-    "./client": "./src/client.ts",
-    "./node": "./src/node.ts",
-    "./starter-apps/flake-dashboard": "./src/starter-apps/flake-dashboard/index.ts",
-    "./starter-apps/flake-dashboard/contract": "./src/starter-apps/flake-dashboard/contract.ts",
-    "./starter-apps/flake-dashboard/configured-worker": "./src/starter-apps/flake-dashboard/configured-worker.ts",
-    "./starter-apps/github-ai-linter": "./src/starter-apps/github-ai-linter/index.ts",
-    "./starter-apps/github-ai-linter/worker": "./src/starter-apps/github-ai-linter/worker.ts",
-    "./starter-apps/guestbook": "./src/starter-apps/guestbook/index.ts",
-    "./starter-apps/guestbook/client": "./src/starter-apps/guestbook/client.tsx",
-    "./starter-apps/guestbook/configured-worker": "./src/starter-apps/guestbook/configured-worker.ts",
-    "./starter-apps/media": "./src/starter-apps/media/index.ts",
-    "./starter-apps/media/configured-worker": "./src/starter-apps/media/configured-worker.ts",
-    "./starter-apps/media/ref": "./src/starter-apps/media/ref.ts",
-    "./starter-apps/notes": "./src/starter-apps/notes/index.ts",
-    "./starter-apps/notes/configured-worker": "./src/starter-apps/notes/configured-worker.ts",
-    "./starter-apps/notes/ref": "./src/starter-apps/notes/ref.ts",
-    "./starter-apps/todo": "./src/starter-apps/todo/index.ts",
-    "./processors": "./src/processors/index.ts",
-    "./processors/cloudflare": "./src/processors/cloudflare.ts",
-    "./processors/testing": "./src/processors/testing.ts",
-    "./sdk": "./src/sdk.ts",
-    "./sdk/capnweb": "./src/sdk/capnweb/index.ts",
-    "./sdk/capnweb/react": "./src/sdk/capnweb/react.tsx",
-    "./sdk/itx/react": "./src/sdk/itx/react.ts",
-    "./worker": "./src/worker.ts",
-    "./document-review": "./src/document-review/index.ts",
     "./next/sdk": "./src/next/sdk/index.ts",
     "./next/app": "./src/next/app.ts",
     "./next/app-server": "./src/next/app-server.ts",
@@ -70,141 +40,6 @@
   "publishConfig": {
     "access": "public",
     "exports": {
-      ".": {
-        "types": "./dist/index.d.mts",
-        "import": "./dist/index.mjs",
-        "default": "./dist/index.mjs"
-      },
-      "./client": {
-        "types": "./dist/client.d.ts",
-        "import": "./dist/client.mjs",
-        "default": "./dist/client.mjs"
-      },
-      "./node": {
-        "types": "./dist/node.d.ts",
-        "import": "./dist/node.mjs",
-        "default": "./dist/node.mjs"
-      },
-      "./starter-apps/flake-dashboard": {
-        "types": "./dist/starter-apps/flake-dashboard/index.d.ts",
-        "import": "./dist/starter-apps/flake-dashboard/index.mjs",
-        "default": "./dist/starter-apps/flake-dashboard/index.mjs"
-      },
-      "./starter-apps/flake-dashboard/contract": {
-        "types": "./dist/starter-apps/flake-dashboard/contract.d.ts",
-        "import": "./dist/starter-apps/flake-dashboard/contract.mjs",
-        "default": "./dist/starter-apps/flake-dashboard/contract.mjs"
-      },
-      "./starter-apps/flake-dashboard/configured-worker": {
-        "types": "./dist/starter-apps/flake-dashboard/worker.d.ts",
-        "import": "./dist/starter-apps/flake-dashboard/configured-worker.mjs",
-        "default": "./dist/starter-apps/flake-dashboard/configured-worker.mjs"
-      },
-      "./starter-apps/github-ai-linter": {
-        "types": "./dist/starter-apps/github-ai-linter/index.d.ts",
-        "import": "./dist/starter-apps/github-ai-linter/index.mjs",
-        "default": "./dist/starter-apps/github-ai-linter/index.mjs"
-      },
-      "./starter-apps/github-ai-linter/worker": {
-        "types": "./dist/starter-apps/github-ai-linter/worker.d.ts",
-        "import": "./dist/starter-apps/github-ai-linter/worker.mjs",
-        "default": "./dist/starter-apps/github-ai-linter/worker.mjs"
-      },
-      "./starter-apps/guestbook": {
-        "types": "./dist/starter-apps/guestbook/index.d.ts",
-        "import": "./dist/starter-apps/guestbook/index.mjs",
-        "default": "./dist/starter-apps/guestbook/index.mjs"
-      },
-      "./starter-apps/guestbook/client": {
-        "types": "./dist/starter-apps/guestbook/client.d.ts",
-        "import": "./dist/starter-apps/guestbook/client.mjs",
-        "default": "./dist/starter-apps/guestbook/client.mjs"
-      },
-      "./starter-apps/guestbook/configured-worker": {
-        "types": "./dist/starter-apps/guestbook/worker.d.ts",
-        "import": "./dist/starter-apps/guestbook/configured-worker.mjs",
-        "default": "./dist/starter-apps/guestbook/configured-worker.mjs"
-      },
-      "./starter-apps/media": {
-        "types": "./dist/starter-apps/media/index.d.ts",
-        "import": "./dist/starter-apps/media/index.mjs",
-        "default": "./dist/starter-apps/media/index.mjs"
-      },
-      "./starter-apps/media/configured-worker": {
-        "types": "./dist/starter-apps/media/worker.d.ts",
-        "import": "./dist/starter-apps/media/configured-worker.mjs",
-        "default": "./dist/starter-apps/media/configured-worker.mjs"
-      },
-      "./starter-apps/media/ref": {
-        "types": "./dist/starter-apps/media/ref.d.ts",
-        "import": "./dist/starter-apps/media/ref.mjs",
-        "default": "./dist/starter-apps/media/ref.mjs"
-      },
-      "./starter-apps/notes": {
-        "types": "./dist/starter-apps/notes/index.d.ts",
-        "import": "./dist/starter-apps/notes/index.mjs",
-        "default": "./dist/starter-apps/notes/index.mjs"
-      },
-      "./starter-apps/notes/configured-worker": {
-        "types": "./dist/starter-apps/notes/worker.d.ts",
-        "import": "./dist/starter-apps/notes/configured-worker.mjs",
-        "default": "./dist/starter-apps/notes/configured-worker.mjs"
-      },
-      "./starter-apps/notes/ref": {
-        "types": "./dist/starter-apps/notes/ref.d.ts",
-        "import": "./dist/starter-apps/notes/ref.mjs",
-        "default": "./dist/starter-apps/notes/ref.mjs"
-      },
-      "./starter-apps/todo": {
-        "types": "./dist/starter-apps/todo/index.d.ts",
-        "import": "./dist/starter-apps/todo/index.mjs",
-        "default": "./dist/starter-apps/todo/index.mjs"
-      },
-      "./processors": {
-        "types": "./dist/processors/index.d.ts",
-        "import": "./dist/processors.mjs",
-        "default": "./dist/processors.mjs"
-      },
-      "./processors/cloudflare": {
-        "types": "./dist/processors/cloudflare.d.ts",
-        "import": "./dist/processors-cloudflare.mjs",
-        "default": "./dist/processors-cloudflare.mjs"
-      },
-      "./processors/testing": {
-        "types": "./dist/processors/testing.d.ts",
-        "import": "./dist/processors-testing.mjs",
-        "default": "./dist/processors-testing.mjs"
-      },
-      "./sdk": {
-        "types": "./dist/sdk.d.ts",
-        "import": "./dist/sdk.mjs",
-        "default": "./dist/sdk.mjs"
-      },
-      "./sdk/capnweb": {
-        "types": "./dist/sdk/capnweb/index.d.ts",
-        "import": "./dist/sdk/capnweb.mjs",
-        "default": "./dist/sdk/capnweb.mjs"
-      },
-      "./sdk/capnweb/react": {
-        "types": "./dist/sdk/capnweb/react.d.ts",
-        "import": "./dist/sdk/capnweb/react.mjs",
-        "default": "./dist/sdk/capnweb/react.mjs"
-      },
-      "./sdk/itx/react": {
-        "types": "./dist/sdk/itx/react.d.ts",
-        "import": "./dist/sdk/itx/react.mjs",
-        "default": "./dist/sdk/itx/react.mjs"
-      },
-      "./worker": {
-        "types": "./dist/worker.d.mts",
-        "import": "./dist/worker.mjs",
-        "default": "./dist/worker.mjs"
-      },
-      "./document-review": {
-        "types": "./dist/document-review/index.d.ts",
-        "import": "./dist/document-review.mjs",
-        "default": "./dist/document-review.mjs"
-      },
       "./next/sdk": {
         "types": "./dist/next/sdk/index.d.ts",
         "import": "./dist/next/sdk.mjs"
@@ -264,62 +99,33 @@
     }
   },
   "files": [
-    "bin",
     "dist",
-    "menubar",
-    "README.md",
-    "THIRD_PARTY_NOTICES.md"
+    "README.md"
   ],
   "scripts": {
-    "build": "node scripts/build.ts",
-    "typecheck": "tsgo --noEmit && tsc --noEmit -p tsconfig.next.json",
+    "build": "tsdown && tsc -p tsconfig.next.json",
+    "typecheck": "tsc --noEmit -p tsconfig.next.json",
     "test": "vitest run --reporter=default --reporter=../shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "prepack": "pnpm build"
   },
   "dependencies": {
-    "@clack/prompts": "^1.0.0",
-    "@iterate-com/capnweb": "^0.10.0",
-    "@orpc/client": "1.13.14",
-    "@orpc/server": "1.13.14",
-    "@tanstack/react-query": "^5.101.2",
     "capnweb": "npm:@iterate-com/capnweb@0.12.2",
     "json5": "^2.2.3",
     "oauth4webapi": "^3.8.5",
     "react": "^19.2.7",
-    "sqlfu": "0.1.1",
-    "trpc-cli": "0.15.1",
-    "ws": "8.19.0",
-    "yaml": "^2.9.0",
     "zod": "4.5.4"
   },
-  "optionalDependencies": {
-    "@opentui/core": "0.4.5",
-    "@opentui/react": "0.4.5"
-  },
   "peerDependencies": {
-    "@tanstack/react-query": "^5",
-    "octokit": "^5.0.5",
     "react": "^19.1.0"
-  },
-  "peerDependenciesMeta": {
-    "octokit": {
-      "optional": true
-    }
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260831.1",
-    "@iterate-com/ui": "workspace:*",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@types/ws": "^8.18.1",
     "esbuild": "^0.27.4",
-    "fflate": "^0.8.3",
     "jsdom": "27.4.0",
-    "miniflare": "catalog:cloudflare",
-    "octokit": "^5.0.5",
     "react-dom": "^19.2.7",
-    "roughdraft": "0.1.10",
     "tsdown": "0.22.2",
     "typescript": "^5.9.3",
     "vitest": "4.0.15"

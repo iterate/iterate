@@ -12,13 +12,10 @@ import { spawn, spawnSync } from "node:child_process";
 import { globSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { z } from "zod";
-import { CloudflareApiError, type DeployableEnv, type EnvContext } from "./env-context.ts";
+import { type DeployableEnv, type EnvContext } from "./env-context.ts";
 
 /** The slice of EnvContext these helpers actually need: the Cloudflare API fetchers. */
 type CfContext = Pick<EnvContext<DeployableEnv>, "cf" | "cfV4">;
-
-const SecretBindings = z.array(z.object({ name: z.string(), type: z.string() }));
 // Wrangler does not expose Retry-After, but a direct API call in the same live
 // incident returned 120s. The final attempt therefore lands just beyond that
 // observed window instead of exhausting the budget at 110s.
@@ -238,103 +235,6 @@ export async function deployWithSecrets(input: {
 }
 
 /**
- * Remove an explicit allowlist of retired secrets from an existing Worker and
- * prove they are absent afterwards (fails if a deletion does not stick).
- *
- * `wrangler deploy --secrets-file` deliberately preserves omitted secrets
- * (https://developers.cloudflare.com/workers/configuration/secrets/#upload-secrets-alongside-code),
- * so removing a name from generated config is not enough. Deploy scripts are
- * the ONLY writers of Worker secrets, which is why normal deploys may run
- * this convergence rather than fail closed: a lingering retired name can
- * only mean the Worker was last deployed by older code. Doppler-side
- * retirement stays an assertion ({@link assertDopplerSecretAbsent}) because
- * Doppler is human-edited — a reappearance there is drift for a human.
- */
-export async function removeWorkerSecrets(
-  input: {
-    cf: (path: string, init?: RequestInit) => Promise<unknown>;
-    workerName: string;
-    secretNames: readonly string[];
-  },
-  options: {
-    /** Waits between re-lists while a deletion propagates; the last wait is the budget's end. */
-    backoffMs?: readonly number[];
-    sleep?: (ms: number) => Promise<void>;
-  } = {},
-): Promise<string[]> {
-  const scriptPath = `/workers/scripts/${encodeURIComponent(input.workerName)}/secrets`;
-  let current: z.infer<typeof SecretBindings>;
-  try {
-    current = SecretBindings.parse(await input.cf(scriptPath));
-  } catch (error) {
-    if (error instanceof CloudflareApiError && error.status === 404) {
-      console.log(`Worker not created; no retired secrets to remove: ${input.workerName}`);
-      return [];
-    }
-    throw error;
-  }
-
-  const retired = new Set(input.secretNames);
-  const present = current
-    .map((binding) => binding.name)
-    .filter((name) => retired.has(name))
-    .sort();
-  for (const secretName of present) {
-    await input.cf(`${scriptPath}/${encodeURIComponent(secretName)}`, { method: "DELETE" });
-    console.log(`removed retired Worker secret: ${input.workerName}/${secretName}`);
-  }
-
-  if (present.length === 0) {
-    console.log(`retired Worker secrets absent: ${input.workerName}`);
-    return [];
-  }
-
-  // The secret list is eventually consistent: a re-list right after the DELETE has answered the
-  // pre-deletion set (os-next-prd, 2026-09-14 — a deploy went red on a secret that was gone a
-  // second later). Re-list until the retired names are absent, within a bounded budget.
-  const backoffMs = options.backoffMs || [1_000, 2_000, 4_000, 8_000, 15_000];
-  const sleep =
-    options.sleep || ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  for (let attempt = 0; ; attempt++) {
-    const remaining = SecretBindings.parse(await input.cf(scriptPath));
-    const stale = remaining
-      .map((binding) => binding.name)
-      .filter((name) => retired.has(name))
-      .sort();
-    if (stale.length === 0) break;
-    if (attempt >= backoffMs.length) {
-      throw new Error(
-        `Retired Worker secrets remain after deletion: ${input.workerName}/${stale.join(", ")}`,
-      );
-    }
-    await sleep(backoffMs[attempt]!);
-  }
-  console.log(`verified retired Worker secrets absent: ${input.workerName}`);
-  return present;
-}
-
-/**
- * Refuse to deploy when the resolved Doppler config contains a forbidden
- * secret. Checking the already-resolved config catches direct and inherited
- * values without issuing a second download or exposing the value.
- */
-export function assertDopplerSecretAbsent(input: {
-  project: string;
-  config: string;
-  secretName: string;
-  secrets: Record<string, string>;
-}): void {
-  if (Object.hasOwn(input.secrets, input.secretName)) {
-    throw new Error(
-      `Forbidden Doppler secret is present: ${input.project}/${input.config}/${input.secretName}. Remove it explicitly before deploying.`,
-    );
-  }
-  console.log(
-    `forbidden Doppler secret absent: ${input.project}/${input.config}/${input.secretName}`,
-  );
-}
-
-/**
  * Find the single wrangler.json under dist/ a vite build produced and return
  * its absolute path — anything but exactly one match is a broken build.
  */
@@ -401,79 +301,6 @@ export async function ensureD1(
 }
 
 /**
- * One TTL to rule the preview fleet: a preview slot's disposable data (search
- * corpus, project files, sandbox backups) is expired 3 hours after it was last
- * written. Short because previews are synthetic and churn constantly, and the
- * whole point is cost — abandoned data should not linger. Prd keeps its own,
- * much longer retention (see `SANDBOX_BACKUP_TTL_SECONDS_PRD`); this constant
- * is never applied there. See docs/preview-resource-gc.md.
- */
-export const PREVIEW_DISPOSABLE_TTL_SECONDS = 3 * 60 * 60;
-
-/** Prd sandbox workspace backups: 90 days, matching the DO's SANDBOX_BACKUP_TTL_SECONDS. */
-export const SANDBOX_BACKUP_TTL_SECONDS_PRD = 90 * 24 * 60 * 60;
-
-/**
- * The sandbox workspace backup expiry rule — shared id + `backups/` prefix so
- * ensure-resources and erase-data install the SAME rule (the ttl differs: 3h on
- * preview, 90 days on prd). Sandboxes snapshot `/workspace` under `backups/`
- * and the DO only checks the ttl at restore time, so this rule is what actually
- * reaps them.
- */
-export const SANDBOX_BACKUP_EXPIRY_RULE = {
-  ruleId: "expire-sandbox-workspace-backups",
-  prefix: "backups/",
-} as const;
-
-/** Preview project-file storage (itx.files) expires after 3h. */
-export const PREVIEW_FILES_OBJECT_EXPIRY = {
-  ruleId: "expire-preview-files",
-  ttlSeconds: PREVIEW_DISPOSABLE_TTL_SECONDS,
-} as const;
-
-/**
- * Pure builder for a "delete every matching object `ttlSeconds` after it was
- * written" R2 lifecycle policy. `prefix` scopes the rule; an empty prefix (the
- * default) covers all objects/uploads, per the R2 lifecycle API. The Age
- * transition takes seconds.
- */
-export function buildR2ObjectExpiryLifecycleRules(input: {
-  ruleId: string;
-  ttlSeconds: number;
-  prefix?: string;
-}) {
-  return [
-    {
-      id: input.ruleId,
-      enabled: true,
-      conditions: { prefix: input.prefix ?? "" },
-      deleteObjectsTransition: { condition: { type: "Age", maxAge: input.ttlSeconds } },
-    },
-  ];
-}
-
-/**
- * Put a single "expire matching objects after `ttlSeconds`" lifecycle rule on
- * an R2 bucket, so Cloudflare garbage-collects the objects server-side instead
- * of erase-data walking the bucket with one rate-limited DELETE per object. PUT
- * replaces the bucket's lifecycle config wholesale — fine while this is the
- * only rule the target buckets carry.
- */
-export async function ensureR2ObjectExpiryLifecycle(
-  ctx: CfContext,
-  bucketName: string,
-  input: { ruleId: string; ttlSeconds: number; prefix?: string },
-): Promise<void> {
-  await ctx.cf(`/r2/buckets/${bucketName}/lifecycle`, {
-    method: "PUT",
-    body: JSON.stringify({ rules: buildR2ObjectExpiryLifecycleRules(input) }),
-  });
-  console.log(
-    `R2 bucket ${bucketName} lifecycle: objects under "${input.prefix ?? ""}" expire ${input.ttlSeconds}s after write (${input.ruleId})`,
-  );
-}
-
-/**
  * Create-only DNS ensure for a Worker-routed hostname: worker zone routes
  * only fire when a proxied DNS record answers the hostname, so create a
  * proxied originless AAAA (100::) when nothing exists. Any existing record
@@ -515,35 +342,4 @@ export async function ensureProxiedDnsRecord(
     }),
   });
   console.log(`created proxied DNS record for ${host}`);
-}
-
-/**
- * Delete every row of every user table in a D1 database (skipping sqlite
- * internals, `_cf_*` and `d1_migrations`), logging per-table row counts.
- * One request = one session, so the pragma and every DELETE share a
- * transaction — FK ordering can't bite and the wipe is atomic. Schema and
- * migration history stay intact (rows are deleted, tables kept).
- */
-export async function wipeD1Tables(ctx: CfContext, dbId: string) {
-  const d1 = (sql: string) =>
-    ctx.cf<{ results?: { name: string }[]; meta?: { changes?: number } }[]>(
-      `/d1/database/${dbId}/query`,
-      { method: "POST", body: JSON.stringify({ sql }) },
-    );
-
-  const tables = (
-    await d1(
-      `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name != 'd1_migrations'`,
-    )
-  )[0].results!;
-
-  const wiped = await d1(
-    [
-      "PRAGMA defer_foreign_keys = on",
-      ...tables.map((table) => `DELETE FROM "${table.name}"`),
-    ].join("; "),
-  );
-  tables.forEach((table, index) => {
-    console.log(`D1: cleared ${table.name} (${wiped[index + 1]?.meta?.changes ?? "?"} rows)`);
-  });
 }

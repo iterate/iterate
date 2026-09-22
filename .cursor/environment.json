@@ -1,9 +1,0 @@
-{
-  "agentCanUpdateSnapshot": true,
-  "install": "pnpm install",
-  "build": {
-    "dockerfile": "Dockerfile",
-    "context": "../scripts/setup-background-agent"
-  },
-  "terminals": []
-}

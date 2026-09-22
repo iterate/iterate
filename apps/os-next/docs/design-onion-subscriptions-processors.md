@@ -207,7 +207,7 @@ const remoteSource = { "cap.js": REMOTE_SRC };
 using os = await itx.provide("itx.os", [
   "itx",
   "workers",
-  ["get", { source: remoteSource, props: { url: "https://os.iterate.com/api" } }],
+  ["get", { source: remoteSource, props: { url: "https://os.iterate2.com/api" } }],
 ]);
 ```
 
