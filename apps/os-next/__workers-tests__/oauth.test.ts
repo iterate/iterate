@@ -51,12 +51,18 @@ async function rpc(
   });
   expect(response.status, await (response.status === 101 ? "" : response.text())).toBe(101);
   response.webSocket!.accept();
+  // The server's close, as the client sees it: what a row awaits before asserting that every stub
+  // is dead — a call sent while the close is in flight surfaces capnweb's `'' is not a function`,
+  // not the close reason (2 of 8 Test lanes, 2026-09-22).
+  const closed = new Promise<void>((resolve) =>
+    response.webSocket!.addEventListener("close", () => resolve(), { once: true }),
+  );
   const transport = newWebSocketRpcSession<IterateRpcTarget>(
     response.webSocket! as unknown as WebSocket,
   );
   sessions.push(transport);
   const root = transport.authenticate({ type: credential });
-  return { root };
+  return { root, closed };
 }
 
 async function tool(token: string, name: string, args: object = {}) {
@@ -351,7 +357,7 @@ test.each(["revoked", "membership"])(
   "a live session loses held capabilities after %s within 60 seconds",
   async (reason) => {
     const flow = await grant([`${ORIGIN}/api`]);
-    const { root } = await rpc(flow.token!.access_token);
+    const { root, closed } = await rpc(flow.token!.access_token);
     using context = await root.projects.get(flow.oauthA.id);
     const native = (await context.invoke(
       `itx.workers.get({source: {"cap.js": "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class extends WorkerEntrypoint { ping() { return 'pong'; } }"}})`,
@@ -385,9 +391,22 @@ test.each(["revoked", "membership"])(
         .bind(flow.user.id, org)
         .run();
     }
+    const revokedAt = Date.now();
     try {
-      // Real elapsed time: this proves the deployed timer interval, not a test-only configuration.
-      await new Promise((resolve) => setTimeout(resolve, 31_000));
+      // Real elapsed time: the guard's own timer closes the socket — no sooner than its 30 s
+      // interval (minus the tick already running), within its 60 s hard bound — and only then are
+      // the stubs asserted dead, so no call races the close.
+      let bound: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        closed,
+        new Promise<never>((_, reject) => {
+          bound = setTimeout(
+            () => reject(new Error("the guard did not close the socket within 60 s")),
+            60_000,
+          );
+        }),
+      ]).finally(() => clearTimeout(bound));
+      expect(Date.now() - revokedAt).toBeGreaterThanOrEqual(29_000);
       await expect(root.whoami()).rejects.toThrow(/Session|closed|RPC|revoked/i);
       await expect(context.invoke("itx.kv.get('live-auth-probe')")).rejects.toThrow(
         /Session|closed|RPC|revoked/i,
