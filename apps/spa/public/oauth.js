@@ -19,7 +19,7 @@ export function redirectUri() {
 
 /** A public client (no secret) registered once per issuer, dynamically — RFC 7591. */
 async function clientIdFor(issuer, metadata) {
-  const key = `iterate-spa:client:${issuer}`;
+  const key = `iterate-spa:client:v2:${issuer}`;
   const cached = localStorage.getItem(key);
   if (cached) return cached;
   const response = await fetch(metadata.registration_endpoint, {
@@ -27,6 +27,8 @@ async function clientIdFor(issuer, metadata) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       client_name: "Iterate static SPA",
+      client_uri: location.origin,
+      logo_uri: new URL("/client-logo.svg", location.origin).href,
       redirect_uris: [redirectUri()],
       token_endpoint_auth_method: "none",
       grant_types: ["authorization_code", "refresh_token"],

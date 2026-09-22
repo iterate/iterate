@@ -4,3 +4,4 @@ node_modules/
 public/firmware/
 wrangler.jsonc
 firmware/.build/
+public/voice-install.json

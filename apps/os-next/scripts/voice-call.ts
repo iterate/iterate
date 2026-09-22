@@ -3,7 +3,7 @@
 //
 // It makes the device's exact calls: `root.voice.setupVoiceAgent({ streamPath, activation })` (the
 // project's root worker puts the voice facet and `call-started` on the fresh context in one append;
-// run scripts/voice-install.ts once per build), a live subscription for what the device would hear,
+// prepare the project at https://k.iterate.com), a live subscription for what the device would hear,
 // microphone frames from a 16 kHz mono PCM16 WAV (or one silent frame plus a `commentary` fact
 // when there is nothing to say), the terminal. It writes what came back to a WAV and prints the
 // timeline from the press.

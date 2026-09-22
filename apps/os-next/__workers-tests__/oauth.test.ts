@@ -7,7 +7,7 @@ import { platformAddressesOf } from "../src/app-config.ts";
 import { directory } from "../src/directory.ts";
 import { browserAuthorization } from "../src/browser-client.ts";
 import { oauthHelpers } from "../src/oauth.ts";
-import type { Env } from "../src/control-plane.ts";
+import type { Env } from "../src/env.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import definitions from "../src/control-plane.sql?raw";
 import { loginPassword } from "./support.ts";

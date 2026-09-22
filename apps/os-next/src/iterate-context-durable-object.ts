@@ -32,6 +32,7 @@ import {
   type ItxExpressionInput,
   InvokeHandle,
   RpcStubHandle,
+  itxHandleReferenceOf,
 } from "iterate/next/expression";
 import {
   ITX_APP_HEADER,
@@ -410,7 +411,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // library's pin: the quiet period runs from the call's end.
     this.#pinCallStarted();
     const { app: _loadedCode, ...caller } = this.#caller;
-    return this.invoke(["itx", ...steps], [], caller).finally(() => this.#pinCallEnded());
+    return this.#invokeInProcess(["itx", ...steps], [], caller).finally(() => this.#pinCallEnded());
     // The handle's dotted surface IS the library's itx: `itx.append(...)`, `itx.workers.get(...)`
     // reduce into steps (the prototype fallback, iterate-context.ts) and land in the callback above.
   }) as unknown as LibraryItx;
@@ -578,7 +579,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         platformOrigin,
       });
     },
-    invoke: (call) => this.invoke(call),
+    invoke: (call) => this.#invokeInProcess(call, [], { principal: null }),
     // a sibling context by path; the own path is this DO itself — a ReachableContext structurally (stream.ts)
     context: (p) => (p === this.#durableObjectAddress.path ? this.#localContext : this.#sibling(p)),
     egress: (request) => this.#egress(request),
@@ -676,7 +677,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     iterateContextName: this.#durableObjectAddress.name,
     platformOrigin: () => this.#platformOrigin,
     itxEntrypoint: () => this.#itxEntrypoint,
-    invoke: (call) => this.invoke(call),
+    invoke: (call) => this.#invokeInProcess(call, [], { principal: null }),
     resolveItxExpression: (expression) => this.#itxExpressionResolver.resolve(expression),
     stream: this.#stream,
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
@@ -911,6 +912,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     caller: Caller = { principal: null },
   ): Promise<unknown> {
     this.#stream.appendWakeRecord("request");
+    const result = await this.#invokeInProcess(call, args, caller);
+    // A HANDLE LEAVES AS THE EXPRESSION THAT NAMES IT (expression.ts `itxHandleReferenceOf`): a live
+    // handle crossing this door would hold a Workers-RPC session — and this actor — open for as long as
+    // the caller kept it. The caller mints its own over the reference; every later verb is one whole
+    // call back through here. A lent client stub is the one handle that crosses as itself.
+    return itxHandleReferenceOf(result, normalizedItxExpression(call), args) ?? result;
+  }
+
+  /** The same call for THIS isolate's own callers — the library's itx, a facet's or a loaded worker's
+   *  deps — who hold a handle in process, where it pins nothing and its liveness is the point. */
+  #invokeInProcess(call: ItxExpressionInput, args: unknown[], caller: Caller): Promise<unknown> {
     return this.#callerStorage.run(this.#withPlatformOrigin(caller), () =>
       this.#itxExpressionResolver.invoke(call, ...args),
     );

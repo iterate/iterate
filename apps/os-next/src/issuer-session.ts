@@ -1,7 +1,8 @@
 import { startAppSession } from "iterate/next/app-server";
 import { sameOriginPath } from "iterate/next/lib";
+import { clientDisplay } from "./client-display.ts";
 import { platformAddressesOf } from "./app-config.ts";
-import type { Env } from "./control-plane.ts";
+import type { Env } from "./env.ts";
 import type { User } from "./directory.ts";
 import { oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
 
@@ -26,6 +27,7 @@ export async function startIssuerSession(
     env.BROWSER_SESSION,
     {
       origin: platformOrigin,
+      client: { name: "Iterate", logoUri: `${platformOrigin}/iterate-logo.svg` },
       issuer: platformOrigin,
       resource: api,
       scopes: ["iterate", "account", "organizations:write"],
@@ -38,7 +40,10 @@ export async function startIssuerSession(
     request: authorization,
     userId: user.id,
     scope: authorization.scope,
-    metadata: { clientName: "iterate" },
+    metadata: clientDisplay(
+      { clientName: "Iterate", logoUri: `${platformOrigin}/iterate-logo.svg` },
+      authorization.clientId,
+    ),
     revokeExistingGrants: false,
     props: {
       kind: "issuer",

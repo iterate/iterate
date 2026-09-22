@@ -157,10 +157,8 @@ and ends the process. Health carries `macCaptureFrames`, `macCaptureDropped`,
 
 ### Provisioning
 
-Kit Flasher's **Prepare device** step calls the chosen project's
-`itx.voice.health()` — a project without the voice agent
-(`apps/os-next/scripts/voice-install.ts` installs it, beside `/secrets/openai`)
-gets no grant — then mints a ten-year personal access token scoped to that
+Kit Flasher's **Prepare device** step installs the voice agent when missing,
+asks for an OpenAI key if needed, and verifies `itx.voice.health()` before it mints a ten-year personal access token scoped to that
 project, named `Kit <board> <date>` in the person's OS sessions list. The
 browser writes Wi-Fi, OS URL, project id and that token into the versioned
 `iterate_kit` partition on the connected board. Credentials never enter the Kit

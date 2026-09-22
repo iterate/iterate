@@ -64,7 +64,7 @@ export const AppConfig = z.object({
       os: optionalOrigin,
       /** A separate MCP origin. Blank ⇒ `/mcp` on `urls.os`. */
       mcp: optionalOrigin,
-      /** The dash (apps/dash) — where the landing page (`/`, control-plane.ts) sends a person, this
+      /** The dash (apps/dash) — where the landing page (`/`, issuer-pages.ts) sends a person, this
        *  origin being headless. Blank ⇒ the page names no dash. */
       dash: optionalOrigin,
       /** How projects are reached over HTTP (project-ingress.ts): `subdomains` hangs
@@ -93,7 +93,7 @@ export const AppConfig = z.object({
        *  the password, the email is the name tag. The self-host default; also how the specs sign in.
        *  Blank ⇒ off. */
       password: redacted(z.string().trim().default("")),
-      /** A six-digit code mailed through the `EMAIL` binding (login-code.ts) from `from`, an address on
+      /** A six-digit code mailed through the `EMAIL` binding (password-and-code-sign-in.ts) from `from`, an address on
        *  a domain onboarded for Email Sending in the deployment's account. */
       emailCode: z
         .object({ from: z.string({ error: REQUIRED }).trim().min(1, REQUIRED) })

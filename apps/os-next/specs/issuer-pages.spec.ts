@@ -222,3 +222,68 @@ test("email-code entry preserves the destination and supports retrying another e
   expect(submissions[1]?.get("restart")).toBe("1");
   expect(submissions[1]?.get("next")).toBe("/oauth2/auth?client_id=example");
 });
+
+// Real DCR and consent, with only the external logo response controlled by the browser.
+for (const loads of [true, false]) {
+  test(`consent client branding: ${loads ? "logo and domain" : "broken logo keeps initials"}`, async ({
+    page,
+    baseURL,
+  }) => {
+    const origin = new URL(baseURL!).origin;
+    const logoUri = "https://images.example/app.svg";
+    const logoRequests: { referer?: string }[] = [];
+    await page.route(logoUri, async (route) => {
+      logoRequests.push({ referer: route.request().headers().referer });
+      await route.fulfill({
+        contentType: "image/svg+xml",
+        body: loads
+          ? '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><path d="M32 8 38 26 56 32 38 38 32 56 26 38 8 32 26 26Z" fill="#171717"/></svg>'
+          : "not an image",
+      });
+    });
+    const registration = await page.request.post(`${origin}/oauth2/register`, {
+      data: {
+        client_name: "Example App",
+        client_uri: "https://example.com/about",
+        logo_uri: logoUri,
+        redirect_uris: ["http://127.0.0.1/callback"],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code"],
+        response_types: ["code"],
+      },
+    });
+    expect(registration.status()).toBe(201);
+    const { client_id: clientId } = (await registration.json()) as { client_id: string };
+    const flow = await authorizationCodeRequest({
+      issuer: origin,
+      clientId,
+      redirectUri: "http://127.0.0.1/callback",
+      resources: [process.env.MCP_BASE_URL || `${origin}/mcp`],
+    });
+    await signIn(
+      page,
+      origin,
+      `branding-${stamp()}@example.com`,
+      flow.url.pathname + flow.url.search,
+    );
+    await page.getByRole("heading", { name: "Example App wants to access your account" }).waitFor();
+    await page.getByText("example.com", { exact: true }).waitFor();
+    // A blocked CSP would never request the logo; a referrer would leak the authorization URL.
+    await expect.poll(() => logoRequests).toEqual([{ referer: undefined }]);
+    const tile = page.locator(".consent-client-tile");
+    if (loads) await expect(tile.locator("img")).toHaveJSProperty("naturalWidth", 64);
+    else await expect(tile).toHaveText("EX");
+    await page
+      .getByRole("textbox", { name: "Project slug", exact: true })
+      .fill(`branding-${stamp()}`);
+    await page.getByRole("button", { name: "Review permissions", exact: true }).click();
+    await page.getByRole("heading", { name: "Review permissions", exact: true }).waitFor();
+    await page.getByText("example.com", { exact: true }).waitFor();
+    if (loads) await expect(tile.locator("img")).toHaveJSProperty("naturalWidth", 64);
+    else await expect(tile).toHaveText("EX");
+    await page.getByRole("button", { name: "Edit selected projects", exact: true }).click();
+    await page.getByRole("heading", { name: "Select projects", exact: true }).waitFor();
+    await expect(page.locator("body")).toHaveJSProperty("scrollWidth", page.viewportSize()!.width);
+    await page.screenshot({ path: test.info().outputPath("client-branding.png"), fullPage: true });
+  });
+}

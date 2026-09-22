@@ -1,4 +1,4 @@
-// ── the sign-in mechanisms without an identity provider ── /login's form posts (control-plane.ts
+// ── the sign-in mechanisms without an identity provider ── /login's form posts (issuer-pages.ts
 // `loginFormPost` calls these):
 //
 //   THE PASSWORD (`login.password`): one global password — anyone who knows it signs in as the email
@@ -13,7 +13,7 @@
 import { z } from "zod";
 import { codedError } from "iterate/next/lib";
 import { cookieValueOf } from "iterate/next/principal";
-import type { Env } from "./control-plane.ts";
+import type { Env } from "./env.ts";
 import { appConfigOf } from "./app-config.ts";
 import { directory, type User } from "./directory.ts";
 

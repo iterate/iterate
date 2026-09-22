@@ -28,11 +28,7 @@ export const Route = createRootRoute({
 function RootComponent() {
   return (
     <RootDocument>
-      <div className="mx-auto flex min-h-svh w-full max-w-5xl px-5 py-10 sm:px-8 sm:py-16">
-        <main className="flex w-full items-start lg:items-center">
-          <Outlet />
-        </main>
-      </div>
+      <Outlet />
     </RootDocument>
   );
 }

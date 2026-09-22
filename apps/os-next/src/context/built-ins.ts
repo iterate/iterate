@@ -28,6 +28,7 @@ import {
   FacetHandle,
   InvokeHandle,
   RpcStubHandle,
+  materializeItxHandleReference,
 } from "iterate/next/expression";
 import type { RewriteRuleListEntry, StreamPage, WaitForEventFilter } from "iterate/next/api";
 import { projectUrlOf, type IngressRouting } from "iterate/next/project-ingress";
@@ -827,10 +828,15 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           if (caller.platformOrigin) headers.set("x-itx-platform-origin", caller.platformOrigin);
           return context.fetch(new Request(terminalFetch.request, { headers }));
         }
-        return context.invoke(["itx", ...itxExpressionSteps], [], {
-          ...caller,
-          path: caller.path || path,
-        });
+        const hopCaller = { ...caller, path: caller.path || path };
+        // The sibling names a handle by expression (expression.ts): this context mints its own over the
+        // sibling's stub, so a handle held here is one whole call per verb, never a session held open.
+        return Promise.resolve(context.invoke(["itx", ...itxExpressionSteps], [], hopCaller)).then(
+          (result) =>
+            materializeItxHandleReference(result, (expression) =>
+              context.invoke(expression, [], hopCaller),
+            ),
+        );
       });
     },
     fetch: (request: Request) => deps.egress(request),

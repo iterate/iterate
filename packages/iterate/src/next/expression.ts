@@ -279,7 +279,7 @@ export function canonicalItxExpressionPrefix(source: ItxExpressionInput): string
 
 // Promise brands the step walk threads UNAWAITED: property access and calls pipeline on them
 // natively, so the whole chain reduces into one round trip and the caller's terminal await is the
-// single flush. worker.ts registers the native cloudflare:workers brands and capnweb's at boot — that
+// single flush. os-next iterate-context.ts registers the native cloudflare:workers brands and capnweb's at boot — that
 // import can't live here because the unit lane runs this module in Node, where the list stays empty
 // and every step is simply awaited.
 const PIPELINED_RPC_BRANDS: (abstract new (...args: never[]) => unknown)[] = [];
@@ -551,5 +551,64 @@ export function walkStepsOnRpcStub(stub: unknown, steps: ItxExpression): unknown
 
 /** `itx.facets.get(name)` / `itx.facets.get(name, { source, className })` — a facet of this context. */
 export class FacetHandle extends InvokeHandle {}
+
+/** A HANDLE ON THE WIRE IS THE EXPRESSION THAT NAMES IT. An `InvokeHandle` a context mints (`repos.get(path)`,
+ *  `workspaces.get(path)`, `facets.get(name)`, `cd(path)`, `workers.get(spec)`) holds no state — it is a
+ *  dispatch closure over a path — yet as a Workers-RPC result it would cross a hop as a LIVE stub whose
+ *  session keeps the context's actor resident for as long as the holder keeps it (prd 2026-09-22: ~125
+ *  such sessions parked around the clock). So the context's RPC door answers with THIS instead: the
+ *  caller's own expression, which from the caller's root denotes the same handle; the caller mints its
+ *  own handle over it (`materializeItxHandleReference`), and every later verb is one whole call the
+ *  context resolves from scratch. Nothing outlives a call. A lent client stub (`RpcStubHandle`) is the
+ *  one handle that IS live and crosses as itself. */
+export const ITX_HANDLE_REFERENCE_KEY = "$itxHandleExpression";
+export type ItxHandleReference = { [ITX_HANDLE_REFERENCE_KEY]: ItxExpression };
+
+export const isItxHandleReference = (value: unknown): value is ItxHandleReference =>
+  Boolean(value) &&
+  typeof value === "object" &&
+  Array.isArray((value as Record<string, unknown>)[ITX_HANDLE_REFERENCE_KEY]);
+
+/** What a context's RPC door hands back for `expression`'s result: a reference when the result is a
+ *  path-shaped handle (an `InvokeHandle` that is not a lent stub) or a reference from a hop below —
+ *  re-rooted, since `expression` is how THIS caller reached it — else nothing (the result crosses as it
+ *  is). Runtime args that fold into a terminal NAME fold here exactly as the resolver folds them, so the
+ *  reference is the call the resolver ran; args left over apply to the value and never name a handle. */
+export function itxHandleReferenceOf(
+  result: unknown,
+  expression: ItxExpression,
+  args: unknown[] = [],
+): ItxHandleReference | undefined {
+  const last = expression.at(-1);
+  const folded =
+    args.length > 0 && typeof last === "string" && expression.length > 1
+      ? [...expression.slice(0, -1), [last, ...args] as ItxExpressionStep]
+      : args.length > 0
+        ? undefined
+        : expression;
+  if (!folded) return undefined;
+  const isPathShapedHandle = result instanceof InvokeHandle && !(result instanceof RpcStubHandle);
+  if (!isPathShapedHandle && !isItxHandleReference(result)) return undefined;
+  return { [ITX_HANDLE_REFERENCE_KEY]: folded };
+}
+
+/** The holder's side: a reference becomes a handle of the HOLDER's own whose every dotted call is one
+ *  whole expression through `invoke` — the reference's expression plus the steps. Anything else passes
+ *  through untouched. The proxy hands relative steps; a caller's own `.invoke("itx.whoami()")` is a
+ *  whole call, spelled from the root. */
+export function materializeItxHandleReference(
+  result: unknown,
+  invoke: (expression: ItxExpression) => unknown,
+): unknown {
+  if (!isItxHandleReference(result)) return result;
+  const expression = result[ITX_HANDLE_REFERENCE_KEY];
+  return new InvokeHandle((steps) =>
+    invoke(
+      typeof steps === "string" || steps[0] === "itx"
+        ? normalizedItxExpression(steps as ItxExpressionInput)
+        : [...expression, ...steps],
+    ),
+  );
+}
 /** `itx.rpcStubs.get(key)` — a live stub lent to the registry. */
 export class RpcStubHandle extends InvokeHandle {}
