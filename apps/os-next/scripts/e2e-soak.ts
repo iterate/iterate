@@ -2,7 +2,11 @@
 // tally every row that did not pass every time. A row that fails once in a hundred is a flake; a row
 // that fails every time is a bug; both are named by title, with the counts.
 //
-//   WORKER_BASE_URL=… ADMIN_API_SECRET=… LOGIN_PASSWORD=… pnpm e2e:soak --runs 100 [--filter <vitest filter>]
+//   WORKER_BASE_URL=… pnpm e2e:soak --runs 100 [--filter <vitest filter>]
+//
+// The credentials are the deployment's: under `doppler run` its APP_CONFIG is in the environment and
+// e2e/support/global-setup.ts reads them out of it; an explicit ADMIN_API_SECRET and LOGIN_PASSWORD
+// still win.
 //
 // Each run is `pnpm e2e` with vitest's JSON reporter written to output/soak/run-<n>.json; the tally is
 // output/soak/summary.json plus the table below. Runs are sequential — the point is to see the suite
