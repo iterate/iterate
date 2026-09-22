@@ -225,9 +225,6 @@ export function traceOffsetByMessage(events: readonly Event[]): Map<string, numb
   return map;
 }
 
-/** The event type without its `events.iterate.com/` prefix. */
-export const shortEventType = (type: string): string => type.replace(/^events\.iterate\.com\//, "");
-
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return Object.prototype.toString.call(value) === "[object Object]";
 }

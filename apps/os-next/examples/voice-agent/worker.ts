@@ -8,9 +8,6 @@
  * processors replace the default agent processor: one append installs their subscriptions and
  * starts the call, so the relay dials the provider before the first microphone frame arrives.
  * The device carries no source or class name; the bundles live in the project's KV.
- *
- * The funnel delivers every durable event of every context here too (`processEvent`); nothing
- * reacts today.
  */
 import { z } from "zod";
 import { ConfigWorker } from "./processor.js";

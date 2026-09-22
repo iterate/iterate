@@ -17,7 +17,7 @@
 // again". A bare `test.fails` cannot tell a fix from a different breakage; the guard can. To flip a
 // fixed row to `test`, delete its guard line and keep its assertions.
 //
-// Two cell-cap facts these rows lean on (scratchpad/platform-facts.md §5): a SQLite-backed DO's
+// Two cell-cap facts these rows lean on: a SQLite-backed DO's
 // storage cell — a kv value, a TEXT column — is capped by SQLITE_LIMIT_LENGTH: 4 MiB in local
 // workerd, 2 MB in production (docs). The append ceiling (stream.ts EVENT_BODY_MAX_CHARS) is 8 MiB,
 // so a body can be small enough to append and too big to checkpoint or memo.
