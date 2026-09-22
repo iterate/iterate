@@ -93,7 +93,7 @@ function KitPage() {
       value: candidate.version,
     })),
   ];
-  const projectItems = projects.map((project) => ({ label: project.id, value: project.id }));
+  const projectItems = projects.map((project) => ({ label: project.slug, value: project.id }));
   const preparationKey = JSON.stringify([projectId, device.id]);
   const [preparing, setPreparing] = useState(false);
   const [prepared, setPrepared] = useState<{
