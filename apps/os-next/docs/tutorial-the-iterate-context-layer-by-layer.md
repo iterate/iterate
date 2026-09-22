@@ -250,7 +250,7 @@ async provide(match, target) {
   const ruleEvent = rewriteRuleConfiguredEvent(matchString, ["itx", "builtins", "rpcStubs", ["get", matchString]]);
   const pager = await lendRpcStubOverPager(this.#durableObject, target, matchString, [ruleEvent], this.#waitUntil);
   const lease = this.#sessionTeardown.add(this.#sessionTeardownKey(matchString), pager);
-  return new RewriteRuleHandle(() => lease.dispose()); // the lease IS the handle
+  return new RewriteRuleHandleRpcTarget(() => lease.dispose()); // the lease IS the handle
 }
 ```
 
@@ -2154,7 +2154,7 @@ makes no loop because delivering it creates no reason to wake again.
 ### The watchdog on facet calls
 
 A facet call that never answers would hold the in-flight count, and with it the pins' release, and with
-that the actor, forever. So `#invokeFacet` counts the call in (`#facetWorkInFlight++`, so a
+that the actor, forever. So `FacetHost#invoke` counts the call in (`#facetWorkInFlight++`, so a
 release never aborts a facet mid-call), loads the class from the facet's startup
 memo (aborting a running facet whose loaded identity changed, so a new source restarts it in place
 with its storage surviving), runs the call under `withTimeout(call, FACET_CALL_WATCHDOG_MS = 60_000,
@@ -2198,7 +2198,7 @@ measured deployed only, in `e2e/isolate-ceilings-deployed.e2e.test.ts`.
 | 3       | rewrite rules, the eight rules, `itx.builtins`, masks, `@`                     | `src/context/itx-expression-rewriting.ts`, `src/context/built-ins.ts`                                                              |
 | 4       | the stream, offsets, idempotency, ephemerals, the core reduce                  | `src/stream/stream.ts`, `packages/iterate/src/next/stream/processor.ts`, `src/stream/core-processor.ts`                            |
 | 5       | subscriptions, push vs cursor, the ladder, `consumes`                          | `src/stream/core-processor.ts`, `src/stream/subscription-delivery.ts`                                                              |
-| 6       | facets, processors, live state                                                 | the DO's `#invokeFacet`, `packages/iterate/src/next/stream/processor.ts`, `src/sdk/index.ts`, `src/client/`                        |
+| 6       | facets, processors, live state                                                 | `context/facet-host.ts`, `packages/iterate/src/next/stream/processor.ts`, `src/sdk/index.ts`, `src/client/`                        |
 | 7       | loaded workers, `env.ITX`, the loader, the config worker, repos                | `src/context/worker-loader.ts`, `src/iterate-context.ts`, `src/sdk/index.ts`, `src/context/repos.ts`                               |
 | 8       | fetch in the context of this project (secrets), project hosts, the upgrade leg | `src/iterate-context-durable-object.ts`, `src/context/rpc-stubs.ts`, `src/worker.ts`                                               |
 | 9       | the library                                                                    | `src/library.ts`                                                                                                                   |

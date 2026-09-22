@@ -79,40 +79,55 @@ describe("the scriptRuns table — by the request's offset: requested opens, set
   });
   test("a malformed payload (an empty code, a missing settlement) is refused at the append boundary, before it can reach the reduce", () => {
     expect(() =>
-      normalizeControlEvent({
-        type: "events.iterate.com/context/run-requested",
-        payload: { code: "" },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/context/run-requested",
+          payload: { code: "" },
+        },
+        "/",
+      ),
     ).toThrow();
     expect(() =>
-      normalizeControlEvent({
-        type: "events.iterate.com/context/run-settled",
-        payload: { requestOffset: 5 },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/context/run-settled",
+          payload: { requestOffset: 5 },
+        },
+        "/",
+      ),
     ).toThrow();
   });
   test("the append boundary (normalizeControlEvent) parses both payloads against the contract's schemas and refuses an ephemeral one — the table is rebuilt from the durable log", () => {
     expect(
-      normalizeControlEvent({
-        type: "events.iterate.com/context/run-requested",
-        payload: { code: "async (itx) => 1", extra: "dropped" },
-      }).payload,
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/context/run-requested",
+          payload: { code: "async (itx) => 1", extra: "dropped" },
+        },
+        "/",
+      ).payload,
     ).toEqual({ code: "async (itx) => 1" });
     expect(() =>
-      normalizeControlEvent({
-        type: "events.iterate.com/context/run-settled",
-        payload: {
-          requestOffset: 5,
-          settlement: { status: "failed", error: "x", failureKind: "expired" },
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/context/run-settled",
+          payload: {
+            requestOffset: 5,
+            settlement: { status: "failed", error: "x", failureKind: "expired" },
+          },
         },
-      }),
+        "/",
+      ),
     ).toThrow();
     expect(() =>
-      normalizeControlEvent({
-        type: "events.iterate.com/context/run-requested",
-        ephemeral: true,
-        payload: { code: "async (itx) => 1" },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/context/run-requested",
+          ephemeral: true,
+          payload: { code: "async (itx) => 1" },
+        },
+        "/",
+      ),
     ).toThrow(/durable/);
   });
 });
@@ -160,7 +175,7 @@ describe("the ingress target — project/ingress-configured, normalized at the a
 
   test("stores and replaces the full expression without creating any rewrite alias; null clears it; an unchanged or ephemeral event keeps the state", () => {
     const event = {
-      ...normalizeControlEvent({ type, payload: { target } }),
+      ...normalizeControlEvent({ type, payload: { target } }, "/"),
       offset: 1,
       path: "/",
       createdAt: "2026-09-21T00:00:00Z",
@@ -180,14 +195,14 @@ describe("the ingress target — project/ingress-configured, normalized at the a
   test.each([{}, { target: 123 }, { target: "other.workers" }, { target: ["itx", null] }])(
     "an invalid configuration is refused at the boundary, before append: %j",
     (payload) => {
-      expect(() => normalizeControlEvent({ type, payload })).toThrow();
+      expect(() => normalizeControlEvent({ type, payload }, "/")).toThrow();
     },
   );
 
   test("an ephemeral configuration cannot be published", () => {
-    expect(() => normalizeControlEvent({ type, payload: { target }, ephemeral: true })).toThrow(
-      "must be durable",
-    );
+    expect(() =>
+      normalizeControlEvent({ type, payload: { target }, ephemeral: true }, "/"),
+    ).toThrow("must be durable");
   });
 
   test("a singular worker name has no implicit platform resolution", () => {
@@ -284,10 +299,13 @@ describe("the rewrite-rule table — a MAP by match", () => {
   // reduce now agree: the boundary accepts it, the reduce stores it.
   test("a well-formed match the boundary accepts reduces even when its canonical form crosses the codec cap", () => {
     const longMatch = "itx.foo(" + Array(400).fill("1e99").join(",") + ")";
-    const normalized = normalizeControlEvent({
-      type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: { match: longMatch, target: "itx.kv" },
-    });
+    const normalized = normalizeControlEvent(
+      {
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: longMatch, target: "itx.kv" },
+      },
+      "/",
+    );
     expect(Array.isArray((normalized.payload as { match: unknown }).match)).toBe(true); // parsed, not re-stringified
     const reduced = reduceCoreEvent({
       event: at(1, normalized.type, normalized.payload as Record<string, unknown>),
@@ -887,10 +905,13 @@ const setup = () => {
     consumes?: string[];
     afterOffset?: number;
   }) => {
-    const event = normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: input,
-    });
+    const event = normalizeControlEvent(
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: input,
+      },
+      "/",
+    );
     stream.append(event);
     return event;
   };

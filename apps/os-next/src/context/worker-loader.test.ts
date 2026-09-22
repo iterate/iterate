@@ -257,7 +257,7 @@ test("prepare resolves the identity without asking the loader; load() is the one
     invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
     where: 'facet "counter"',
   });
-  expect(keys).toEqual([]); // `IterateContextDurableObject#invokeFacet` stores this identity before any isolate exists
+  expect(keys).toEqual([]); // `FacetHost#invoke` stores this identity before any isolate exists
   prepared.load();
   expect(keys).toEqual([prepared.loaderId]);
   prepared.load();

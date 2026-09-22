@@ -240,7 +240,7 @@ test("A2 — CONTROL: the refused configure leaves memory and the log consistent
 });
 
 // WHAT IT DIES OF: the hosting row LANDS (a 4.5 MiB event is under the 8 MiB append ceiling), then
-// `#invokeFacet`'s startup memo `kv.put("facet:big", spec)` dies of `string or blob too big:
+// `FacetHost#invoke`'s startup memo `kv.put("facet:big", spec)` dies of `string or blob too big:
 // SQLITE_TOOBIG` — at the enable-time catch-up AND on every push after it. Worse than a refusal:
 // with no memo, every push takes the M1 recovery path (`read(configuredAtOffset - 1, 1)`), re-reads
 // and re-parses the 4.5 MiB event out of SQLite, and dies at the same put. `snapshot()` rejects with
@@ -327,7 +327,7 @@ async function facetThatCannotStart(
 }
 
 // WHAT IT DIES OF: `Error: internal error; reference = <opaque id>` — workerd's catch-all, one fresh
-// reference id per call, no class name, no hint. `#invokeFacet`'s own `if (!klass) throw new Error(
+// reference id per call, no class name, no hint. `FacetHost#invoke`'s own `if (!klass) throw new Error(
 // 'loaded worker does not export class …')` is DEAD CODE: `getDurableObjectClass` never returns
 // falsy — it hands back a handle that fails inside the runtime when the facet starts. Every push
 // (one `subscription-delivery.deliver` line per commit) and every read dies of it, until disabled.

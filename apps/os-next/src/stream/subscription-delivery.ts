@@ -533,7 +533,7 @@ export class SubscriptionDelivery {
         return;
       }
       // A FACET owns its checkpoint: push, AWAITED, so this facet's batches stay in order and no
-      // release aborts it mid-reduce (`releasePins` waits for the in-flight count). The DO's facet watchdog (#invokeFacet, 60 s) bounds a
+      // release aborts it mid-reduce (`releasePins` waits for the in-flight count). The DO's facet watchdog (FacetHost#invoke, 60 s) bounds a
       // hung facet; its own gap repair covers a dropped push.
       try {
         const chars = serializedChars(events);
@@ -551,7 +551,7 @@ export class SubscriptionDelivery {
           this.#haltRow(name, row.configuredAtOffset, range.after, 1, error);
           return;
         }
-        // A push the watchdog TIMED OUT aborted the facet (#invokeFacet): the batch was never
+        // A push the watchdog TIMED OUT aborted the facet (FacetHost#invoke): the batch was never
         // checkpointed and nothing else redelivers it, so the restarted facet CATCHES UP from the
         // log — queued behind whatever already waits on this row (a later push heals the same gap
         // on its own; the catch-up is then a no-op). ONE catch-up per timed-out push: a batch that

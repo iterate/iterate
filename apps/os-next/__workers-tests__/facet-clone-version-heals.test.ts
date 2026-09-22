@@ -2,7 +2,7 @@
 // way the platform's facet-start defect does (V8's clone-version text, or the bare "internal error;
 // reference = …") is made once more on a restarted facet under a fresh loaded identity, the pushed
 // batch is reduced exactly once, and the facet's row counts the restart. The condition is prd's
-// (never local workerd's: `iterate-context-durable-object.ts`, `isFacetStartPlatformFailure`), so the
+// (never local workerd's: `context/facet-host.ts`, `isFacetStartPlatformFailure`), so the
 // facet here THROWS the message itself on its first push — recorded in its own SQLite, which survives
 // the abort and the new isolate, so the second attempt goes through.
 import { runInDurableObject } from "cloudflare:test";

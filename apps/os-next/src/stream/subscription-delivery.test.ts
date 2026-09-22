@@ -132,14 +132,17 @@ function stuckFacetRig(previous?: { storage: DurableObjectStorageSlice }) {
   const configuredAtOffset = previous
     ? rig.stream.coreReducedState.subscriptions.slow.configuredAtOffset
     : rig.stream.append(
-        normalizeControlEvent({
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: {
-            name: "slow",
-            target: ["itx", "facets", ["get", "slow"], "processEventBatch"],
-            consumes: ["blob"],
+        normalizeControlEvent(
+          {
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: {
+              name: "slow",
+              target: ["itx", "facets", ["get", "slow"], "processEventBatch"],
+              consumes: ["blob"],
+            },
           },
-        }),
+          "/",
+        ),
       )[0].offset;
   /** `count` durable 1 MiB `blob` events, one commit each; returns their offsets. */
   const commitBlobs = (count: number): number[] =>
@@ -269,10 +272,13 @@ describe("halt once, for the right row", () => {
     // `consumes` absent = EVERY durable event: the configure and the resume are themselves pushed,
     // racing the catch-up each one triggers.
     rig.stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: { name: "poison", target: facetTarget("poison") },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "poison", target: facetTarget("poison") },
+        },
+        "/",
+      ),
     );
     await settled();
     expect(rig.stream.coreReducedState.subscriptions.poison.halted).toMatchObject({
@@ -308,10 +314,13 @@ describe("halt once, for the right row", () => {
         }),
     );
     rig.stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: { name: "laundered", target: facetTarget("laundered") },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "laundered", target: facetTarget("laundered") },
+        },
+        "/",
+      ),
     );
     await settled();
     expect(facetMethods).toEqual(["catchUpFromLog", "processEventBatch"]);
@@ -335,14 +344,17 @@ describe("halt once, for the right row", () => {
     );
     const configure = () =>
       rig.stream.append(
-        normalizeControlEvent({
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: {
-            name: "swap",
-            target: facetTarget("swap"),
-            consumes: ["blob"],
+        normalizeControlEvent(
+          {
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: {
+              name: "swap",
+              target: facetTarget("swap"),
+              consumes: ["blob"],
+            },
           },
-        }),
+          "/",
+        ),
       )[0].offset;
     configure();
     await settled();
@@ -376,21 +388,27 @@ describe("subscribe({ afterOffset }) — the cursor lane starts where the row as
     );
     for (const n of [1, 2, 3]) rig.stream.append({ type: "demo/ping", payload: { n } });
     rig.stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: { name: "now", target: "itx.now.push", consumes: ["demo/ping"] },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "now", target: "itx.now.push", consumes: ["demo/ping"] },
+        },
+        "/",
+      ),
     );
     rig.stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: {
-          name: "history",
-          target: "itx.history.push",
-          consumes: ["demo/ping"],
-          afterOffset: 0,
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            name: "history",
+            target: "itx.history.push",
+            consumes: ["demo/ping"],
+            afterOffset: 0,
+          },
         },
-      }),
+        "/",
+      ),
     );
     await settled();
     expect({ history, now }).toEqual({ history: [[1, 2, 3]], now: [] });
@@ -409,10 +427,13 @@ describe('a wake reaches every "*" row and leaves nothing armed', () => {
     };
     const first = incarnation((printed) => (printed === "itx.sink" ? sink : undefined));
     first.stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: { name: "config", target: "itx.sink.push", consumes: ["*"] },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "config", target: "itx.sink.push", consumes: ["*"] },
+        },
+        "/",
+      ),
     );
     first.stream.append({ type: "demo/ping", payload: {} });
     await settled();
@@ -440,14 +461,17 @@ describe('a wake reaches every "*" row and leaves nothing armed', () => {
     };
     const first = incarnation((printed) => (printed === "itx.sink" ? sink : undefined));
     first.stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: {
-          name: "wakes",
-          target: "itx.sink.push",
-          consumes: ["events.iterate.com/stream/woken"],
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            name: "wakes",
+            target: "itx.sink.push",
+            consumes: ["events.iterate.com/stream/woken"],
+          },
         },
-      }),
+        "/",
+      ),
     );
     incarnation((printed) => (printed === "itx.sink" ? sink : undefined), first.storage);
     await settled();
@@ -472,10 +496,13 @@ describe("the cursor lane across an eviction and a replace", () => {
         : undefined,
     );
     first.stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
+        },
+        "/",
+      ),
     );
     const armedBeforeAnyDelivery = first.alarms.length;
     first.stream.append({ type: "demo/ping", payload: { n: 1 } });
@@ -537,10 +564,13 @@ describe("the cursor lane across an eviction and a replace", () => {
       return undefined;
     });
     stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: { name: "s", target: "itx.sinkA.push", consumes: ["demo/ping"] },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "s", target: "itx.sinkA.push", consumes: ["demo/ping"] },
+        },
+        "/",
+      ),
     );
     stream.append({ type: "demo/ping", payload: { n: 1 } });
     await settled();
@@ -548,10 +578,13 @@ describe("the cursor lane across an eviction and a replace", () => {
 
     // The row is REPLACED while that delivery is parked, and a second batch lands behind it.
     stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: { name: "s", target: "itx.sinkB.push", consumes: ["demo/ping"] },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "s", target: "itx.sinkB.push", consumes: ["demo/ping"] },
+        },
+        "/",
+      ),
     );
     stream.append({ type: "demo/ping", payload: { n: 2 } });
     await settled();
@@ -569,10 +602,13 @@ describe("the cursor lane across an eviction and a replace", () => {
         : undefined,
     );
     stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: { name: "mirror", target: "itx.sink", consumes: ["demo/ping"] },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "mirror", target: "itx.sink", consumes: ["demo/ping"] },
+        },
+        "/",
+      ),
     );
     stream.append({ type: "demo/ping", payload: { n: 1 } });
     await settled();
@@ -617,21 +653,27 @@ describe("the cursor lane's read reservation is never re-acquired while held", (
     });
     // `history` must READ the page holding the big event (the whole log); `now` is "from now".
     rig.stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: {
-          name: "history",
-          target: "itx.history.push",
-          consumes: ["blob"],
-          afterOffset: 0,
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            name: "history",
+            target: "itx.history.push",
+            consumes: ["blob"],
+            afterOffset: 0,
+          },
         },
-      }),
+        "/",
+      ),
     );
     rig.stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: { name: "now", target: "itx.now.push", consumes: ["tick"] },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "now", target: "itx.now.push", consumes: ["tick"] },
+        },
+        "/",
+      ),
     );
     const [tick] = rig.stream.append({ type: "tick" });
     await settled();
@@ -661,10 +703,13 @@ describe("a rule re-point re-classifies a row", () => {
       payload: { match: "itx.proc", target: "itx.facets.get('proc')" },
     });
     rig.stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: { name: "s", target: "itx.proc", consumes: ["blob"] },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "s", target: "itx.proc", consumes: ["blob"] },
+        },
+        "/",
+      ),
     );
     await settled();
     rig.stream.append({ type: "blob" });
@@ -721,21 +766,27 @@ describe("a superseded evaluation can neither classify nor invoke its replacemen
     });
     const configureFacet = () =>
       rig.stream.append(
-        normalizeControlEvent({
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: {
-            name: "s",
-            target: "itx.proc.processEventBatch",
-            consumes: ["blob"],
+        normalizeControlEvent(
+          {
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: {
+              name: "s",
+              target: "itx.proc.processEventBatch",
+              consumes: ["blob"],
+            },
           },
-        }),
+          "/",
+        ),
       );
     const configureSink = () =>
       rig.stream.append(
-        normalizeControlEvent({
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: { name: "s", target: "itx.sink.push", consumes: ["blob"] },
-        }),
+        normalizeControlEvent(
+          {
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: { name: "s", target: "itx.sink.push", consumes: ["blob"] },
+          },
+          "/",
+        ),
       );
     // AT CONFIGURE: the facet row's catch-up parks on its evaluation; the row is replaced meanwhile.
     gate = new Promise((r) => (openGate = r));
@@ -784,10 +835,13 @@ describe("an ephemeral push that FAILS leaves the row deliverable: the next ephe
         : undefined,
     );
     rig.stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
+        },
+        "/",
+      ),
     );
     const [durable] = rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
     await settled();
@@ -843,10 +897,13 @@ describe("an ephemeral push that FAILS leaves the row deliverable: the next ephe
         : undefined,
     );
     const [configured] = rig.stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
+        },
+        "/",
+      ),
     );
     const [durable] = rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
     await settled();
@@ -893,10 +950,13 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): exactly t
     );
     if (!previous)
       rig.stream.append(
-        normalizeControlEvent({
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
-        }),
+        normalizeControlEvent(
+          {
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
+          },
+          "/",
+        ),
       );
     const release = async () => {
       parked.splice(0).forEach((resolve) => resolve());
@@ -1067,10 +1127,13 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): exactly t
           : undefined, // NO_ITX_EXPRESSION_MATCH, exactly as the resolver refuses a name nothing provides
     );
     rig.stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: { name: "s", target: "itx.later.push", consumes: ["demo/ping"] },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "s", target: "itx.later.push", consumes: ["demo/ping"] },
+        },
+        "/",
+      ),
     );
     rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
     await settled();
@@ -1102,10 +1165,13 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): exactly t
         : undefined,
     );
     rig.stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: { name: "s", target: "itx.far.push", consumes: ["demo/ping"] },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "s", target: "itx.far.push", consumes: ["demo/ping"] },
+        },
+        "/",
+      ),
     );
     rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
     await settled();
@@ -1145,10 +1211,13 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): exactly t
         : undefined,
     );
     first.stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
+        },
+        "/",
+      ),
     );
     first.stream.append({ type: "demo/ping", payload: { n: 1 } });
     await settled();
@@ -1178,10 +1247,13 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): exactly t
         : undefined,
     );
     rig.stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
+        },
+        "/",
+      ),
     );
     rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
     await settled();
@@ -1251,10 +1323,13 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): exactly t
   test("a HALTED row owes nothing — even one whose persisted cursor still carries the retry time that halted it", async () => {
     const first = incarnation(() => undefined);
     first.stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] },
+        },
+        "/",
+      ),
     );
     // A cursor as an earlier build persisted it at the halt: attempt 0, a past retry time kept.
     first.stream.storage.writeSubscriptionCursor("s", {

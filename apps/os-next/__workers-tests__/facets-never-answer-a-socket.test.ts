@@ -91,7 +91,7 @@ test("the DO's invoke method refuses the same upgrade, coded, on a facet it has 
     (error: unknown) => errorCode(error),
   );
   expect(bare).toBe("NO_FACET");
-  // A plain fetch through `#invokeFacet` hosts it and answers — the ordinary method walk.
+  // A plain fetch through `FacetHost#invoke` hosts it and answers — the ordinary method walk.
   const plain = (await stub(ctx).invoke([
     "itx",
     "facets",

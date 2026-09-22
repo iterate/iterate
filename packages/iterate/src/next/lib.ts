@@ -39,7 +39,7 @@ type ErrorCode =
   | "RPC_STUB_OFFLINE" // the rpc stub a row names is neither borrowed nor pager-backed right now — or its lend ended mid-call (recalled, returned, broken; the relay re-codes)
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
   | "NO_FACET" // no facet of that name has been loaded into this context
-  | "FACET_NO_UPGRADE" // a WebSocket upgrade aimed at a facet: a facet answers RPC and plain HTTP, never a socket — sockets terminate at the edge (iterate-context-durable-object.ts #invokeFacet)
+  | "FACET_NO_UPGRADE" // a WebSocket upgrade aimed at a facet: a facet answers RPC and plain HTTP, never a socket — sockets terminate at the edge (apps/os-next context/facet-host.ts)
   | "WAIT_TIMEOUT" // waitForEvent expired with no matching event committed
   | "TIMEOUT"; // lib.ts withTimeout: the call did not answer within its deadline
 // (There is no separate boundary-validation library: the append door's own runtime guards

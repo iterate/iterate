@@ -7,7 +7,7 @@ import {
   projectScopedArtifacts,
   repoArtifactName,
   repoPathOf,
-  ScopedArtifactRepo,
+  ScopedArtifactRepoRpcTarget,
   type ArtifactRepoHandle,
   type ArtifactsNamespace,
 } from "./repos.ts";
@@ -99,7 +99,7 @@ test("cfArtifacts speaks paths, prefixes the derived name with a '.' delimiter, 
   expect(calls.at(-1)).toEqual({ method: "get", name: "prj_a.repos--config" });
   // The handle is an RpcTarget wrapper (so `get(path).createToken(...)` pipelines across /api), and it
   // re-exposes ONLY createToken, acting on the already-prefixed repo…
-  expect(repo).toBeInstanceOf(ScopedArtifactRepo);
+  expect(repo).toBeInstanceOf(ScopedArtifactRepoRpcTarget);
   expect((await repo.createToken("read", 60)).plaintext).toBe("read-prj_a.repos--config-60");
   // …names the remote the facet's git client POSTs under (the platform knows account + namespace)…
   expect(repo.remote()).toBe(
