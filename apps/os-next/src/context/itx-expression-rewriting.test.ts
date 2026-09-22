@@ -1184,3 +1184,29 @@ describe("the app wall (`Caller.app`): on the INPUT expression only, `itx.builti
     expect(row("events.iterate.com/notes/added", "itx.builtins.cd('/')")).not.toThrow(); // not a row
   });
 });
+
+test("cd forwards a factory and terminal fetch together, without exporting an intermediate handle over RPC", async () => {
+  const request = new Request("https://provider.example/", { headers: { upgrade: "websocket" } });
+  const received: ItxExpression[] = [];
+  const resolver = new ItxExpressionResolver({
+    builtIns: {
+      cd: () =>
+        new InvokeHandle((steps) => {
+          received.push(steps);
+          return new Response("native fetch");
+        }),
+    },
+    rewriteRules: () =>
+      table([
+        "itx.provider ⇒ itx.builtins.cd('/provider').workers.get({source:{'cap.js':'source'}})",
+      ]),
+    implicitRoots: ROOT,
+    path: "/",
+    caller: () => ({ principal: null }),
+  });
+  const response = (await resolver.invoke("itx.provider.fetch", request)) as Response;
+  expect(await response.text()).toBe("native fetch");
+  expect(received).toEqual([
+    ["workers", ["get", { source: { "cap.js": "source" } }], ["fetch", request]],
+  ]);
+});

@@ -1269,7 +1269,10 @@ async function dialProviderSocket(): Promise<WebSocket | null> {
     headers: { Upgrade: "websocket", Authorization: 'Bearer getSecret("/secrets/openai")' },
   });
   const socket = response.webSocket || null;
-  if (!socket) return null;
+  if (!socket) {
+    // Provider error bodies can echo credential fragments; only the status belongs in the log.
+    throw new Error(`Voice provider upgrade returned HTTP ${response.status}`);
+  }
   socket.binaryType = "arraybuffer"; // before accept(): the current default is Blob
   socket.accept();
   return socket;

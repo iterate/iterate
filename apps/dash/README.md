@@ -1,7 +1,8 @@
 # Dash
 
 The account UI: where a person manages their sessions and personal access
-tokens, projects and organizations. It is an ordinary OAuth client of the
+tokens, projects and organizations, and a project's secrets (`/projects/<slug>/secrets`:
+set, list and delete — the platform's `itx.secrets`, whose values never come back out). It is an ordinary OAuth client of the
 headless platform at `https://os.iterate2.com` (which serves only sign-in and
 consent; everything else lives in apps like this one), asking for the `iterate`
 and `account` scopes. The browser connects to its own host's `/api`, using the

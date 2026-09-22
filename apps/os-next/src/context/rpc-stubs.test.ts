@@ -1,13 +1,25 @@
 // context/rpc-stubs.test.ts — the rpc stubs' unit pins: the borrowed table's lifetime rule (the
 // directory) and the relay's one-registration rule. Node: the pager layer is never entered (no sockets).
 
+import type { ItxExpression } from "iterate/next/expression";
 import { describe, expect, test, afterEach, vi } from "vitest";
 import {
   type RpcStubFetchServer,
   RpcStubDirectory,
   type BorrowedRpcStub,
   lendRpcStubOverPager,
+  encodeFetchExpression,
 } from "./rpc-stubs.ts";
+
+test("fetch expression headers preserve Unicode worker source through the HTTP ByteString boundary", () => {
+  const expression: ItxExpression = [
+    "itx",
+    "workers",
+    ["get", { source: { "cap.js": 'return "東京 🌍 café";' } }],
+  ];
+  const headers = new Headers({ "x-itx-expression": encodeFetchExpression(expression) });
+  expect(JSON.parse(headers.get("x-itx-expression")!)).toEqual(expression);
+});
 
 // LentRpcStub extends RpcTarget from "cloudflare:workers", which node cannot resolve —
 // mock JUST the base class (a no-op shell); the relay's own logic runs unmodified.

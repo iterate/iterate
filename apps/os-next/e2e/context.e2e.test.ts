@@ -54,7 +54,18 @@ test("kv list returns EVERY key, not silently the first 1000", async () => {
     const writer = openItx(ctx);
     await Promise.all(names.slice(i, i + 100).map((n) => writer.kv.put(n, "1")));
   }
-  const listed = await openItx(ctx).invoke(["itx", "kv", ["list"]]);
+  // KV's list is eventually consistent: in two 100-run soaks (2026-09-21/22) one run in each saw 1000
+  // of the 1001 keys just written. The row proves pagination past the 1000-key page, not immediacy,
+  // so it waits — bounded — for the list to catch up with the writes.
+  const reader = openItx(ctx);
+  const listed = await until(
+    "kv.list sees every key",
+    async () => {
+      const page = await reader.invoke(["itx", "kv", ["list"]]);
+      return page.keys.length === total ? page : undefined;
+    },
+    15_000,
+  );
   expect(listed.keys).toHaveLength(total);
 }, 60_000);
 

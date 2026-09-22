@@ -26,6 +26,13 @@ on:
         required: false
         type: string
         default: ""
+env:
+  # THE STORE THE IMAGE WAS BAKED WITH. scripts/depot-ci/dependencies.mjs hashes every pnpm_config_*
+  # variable into its fingerprint (the store dir decides where node_modules links point), and the bake
+  # job sets this one — so a workflow without it computes a different fingerprint on identical sources
+  # and never reuses the baked node_modules (every os-next job, 2026-09-22, ~55 s of paging each).
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+
 jobs:
   soak:
     runs-on:
@@ -43,6 +50,16 @@ jobs:
         run: doppler setup --config preview --project project-worker
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      # THE WORKER IS THIS REF'S: the default target, the `soak` preview, is redeployed from the checkout
+      # before the suite runs, so the tests and the worker never skew (2026-09-22: a soak of main's
+      # tests against a `soak` worker three merges older failed one row in every run of a hundred).
+      # An explicit worker-base-url is soaked as given.
+      - name: Deploy the soak preview from this ref
+        if: inputs.worker-base-url == 'https://soak-os-next-preview.iterate-dev-preview.workers.dev'
+        working-directory: apps/os-next
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run -- pnpm preview deploy --name soak --apps none
       # The preview inherits the parent's secrets (APP_CONFIG in Doppler project-worker/preview), so the
       # admin bearer and the sign-in password come from the same object the preview deploy uploads.
       - name: Soak

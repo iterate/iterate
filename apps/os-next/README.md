@@ -151,7 +151,7 @@ Every PR that touches os-next gets its own preview of the worker on Cloudflare W
 (`wrangler preview`, private beta), the way [cloudflare/cloudflare-os](https://github.com/cloudflare/cloudflare-os)
 previews itself: a preview named `pr<n>-<branch slug>` is a branch of the parent worker
 `os-next-preview` (`envs.ts` `osNextEnvs.preview`; nothing reads its data) with Durable Object namespaces,
-KV, R2, D1 and an Artifacts namespace of its own, at `https://pr<n>-<slug>-os-next-preview.iterate-dev-preview.workers.dev`.
+KV, R2, D1 and an Artifacts namespace of its own (all deleted with it), at `https://pr<n>-<slug>-os-next-preview.iterate-dev-preview.workers.dev`.
 `.depot/workflows/preview-os-next.yml` deploys it on every push, runs `pnpm e2e` against it, writes the
 URL and the operations below into the PR body, deletes it when the PR closes, and sweeps nightly.
 Previews live on workers.dev and have no project hosts; the e2e rows that need one skip.

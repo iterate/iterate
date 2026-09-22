@@ -5,6 +5,8 @@ import { readFileSync } from "node:fs";
 import { build } from "esbuild";
 import { beforeAll, expect, test, vi } from "vitest";
 
+import { admitLoadedCodeRow } from "../../src/context/itx-expression-rewriting.ts";
+
 let VoiceWorker: any;
 
 beforeAll(async () => {
@@ -105,11 +107,16 @@ function harness(image = png(3, 0), infoOverride = {}) {
   });
   const status = vi.fn(async () => ({ uploadId, state: "shown" }));
   const screen = { setImage, status, info: vi.fn(async () => info) };
-  const append = vi.fn(async (..._events: any[]) => []);
+  const append = vi.fn(async (...events: any[]) => {
+    for (const event of events) admitLoadedCodeRow(event, "/agents/voice/test");
+    return [];
+  });
+  const disable = vi.fn(async () => undefined);
   const itx = {
+    agents: { create: vi.fn(async () => ({})) },
     browser: { quickAction },
     clients: { waveshare_rlcd_4_2: { screen }, zectrix_note4: { screen }, tiny: { screen } },
-    cd: vi.fn(() => ({ append })),
+    cd: vi.fn(() => ({ append, processors: { disable } })),
   };
   return {
     worker: new VoiceWorker({ ITX: { get: () => itx } }),
@@ -117,6 +124,8 @@ function harness(image = png(3, 0), infoOverride = {}) {
     setImage,
     status,
     append,
+    create: itx.agents.create,
+    disable,
   };
 }
 
@@ -166,12 +175,16 @@ test("an incorrect device acknowledgment stops the upload", async () => {
 test.each(["waveshare-rlcd-4-2", "zectrix-note4", "havpe"])(
   "%s receives only its own screen context",
   async (device) => {
-    const { worker, append } = harness();
+    const { worker, append, create, disable } = harness();
     await worker.setupVoiceAgent({
       streamPath: `/agents/voice/v23/${device}/test`,
       activation: "test",
       screen: device !== "havpe",
     });
+    expect(create).toHaveBeenCalledExactlyOnceWith(`/agents/voice/v23/${device}/test`);
+    expect(disable).toHaveBeenCalledExactlyOnceWith("agent");
+    expect(create.mock.invocationCallOrder[0]).toBeLessThan(disable.mock.invocationCallOrder[0]!);
+    expect(disable.mock.invocationCallOrder[0]).toBeLessThan(append.mock.invocationCallOrder[0]!);
     const events = append.mock.calls[0]!;
     const contextType = "events.iterate.com/agent/context-added";
     const subscription = events.find((event) => event.payload?.name === "voice-delegate");

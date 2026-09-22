@@ -68,7 +68,9 @@ export async function runDelegationTurn(
         continue;
       }
       scripts += 1;
-      await deps.progress(parsed.prose || parsed.status || "Running a script for your request.");
+      // Prose beside a tool call can speculate about an outcome the script has not produced yet.
+      // Only its activity label is progress; the spoken answer comes after observing the result.
+      await deps.progress(parsed.status || "Running a script for your request.");
       const result: ChatMessage = {
         role: "user",
         content: `Script result:\n${await deps.runScript(parsed.code)}`,

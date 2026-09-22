@@ -155,3 +155,26 @@ test("THE CHAIN: a subagent two levels down resolves a capability provided at th
     /is masked/,
   );
 });
+
+test("owner-written physical redirects survive a loaded-code hop, while fresh calls and forwarded row writes still meet admission", async () => {
+  const root = openItx(freshCtx("admitted-hop"));
+  const child = root.cd("/child");
+  const worker = () => child.workers.get({ source: PROBE });
+  await child.provide("itx.identity", "itx.builtins.cd('/').builtins.whoami");
+  await child.provide("itx.write", "itx.builtins.cd('/').builtins.append");
+  expect(await worker().say("itx.identity()")).toMatchObject({ ok: { path: "/" } });
+  // A successful owner-granted hop must never authorize the worker's next input.
+  expect(await worker().say("itx.builtins.whoami()")).toMatchObject({
+    error: expect.stringMatching(/not a loaded worker's word/),
+  });
+  expect(await worker().say("itx.cd('/').whoami()")).toMatchObject({
+    error: expect.stringMatching(/goes down only/),
+  });
+  expect(
+    await worker().say("itx.write", {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.escape", target: "itx.builtins.kv" },
+    }),
+  ).toMatchObject({ error: expect.stringMatching(/not a loaded worker's word/) });
+  expect(await root.builtins.rewriteRules.get("itx.escape")).toBeNull();
+});

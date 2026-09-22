@@ -49,6 +49,7 @@ import {
 } from "iterate/next/expression";
 import {
   ITX_APP_HEADER,
+  ITX_CALLER_PATH_HEADER,
   ITX_PRINCIPAL_HEADER,
   ITX_GRANT_HEADER,
   stampCaller,
@@ -690,6 +691,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  an incarnation a request or alarm already woke); the caller defaults to the one already in
    *  AsyncLocalStorage, so a loopback's appends stay attributed. */
   readonly #localContext: ReachableContext = {
+    fetch: (request) => this.fetch(request),
     append: async (...events) => this.#appendAndRunCommittedEffects(events),
     read: async (afterOffset, limit, options) => this.#stream.read(afterOffset, limit, options),
     invoke: (call, args = [], caller = this.#callerStorage.getStore() ?? { principal: null }) =>
@@ -1531,10 +1533,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // stamp, stripped before the app sees the Request (an app composes URLs through `itx.url`).
         const platformOrigin = headers.get(ITX_PLATFORM_ORIGIN_HEADER);
         headers.delete(ITX_PLATFORM_ORIGIN_HEADER);
+        const callerPath = headers.get(ITX_CALLER_PATH_HEADER) || undefined;
+        headers.delete(ITX_CALLER_PATH_HEADER);
         const forwarded = new Request(request, { headers });
         const caller = this.#withPlatformOrigin({
           principal,
           grant,
+          path: callerPath,
           platformOrigin,
           ...(app && { app: true as const }),
         });
@@ -1585,6 +1590,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const headers = new Headers(request.headers);
     headers.delete(ITX_PRINCIPAL_HEADER);
     headers.delete(ITX_GRANT_HEADER);
+    headers.delete(ITX_CALLER_PATH_HEADER);
     headers.delete(ITX_EXPRESSION_FETCH_HEADER);
     const outbound = new Request(request, { headers });
     const paths = secretPathsReferenced(outbound);
