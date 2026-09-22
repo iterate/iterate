@@ -405,6 +405,23 @@ test.each(["revoked", "membership"])(
   },
 );
 
+test("a socket holding no project re-checks its grant every thirty seconds and reads no membership", async () => {
+  const flow = await grant([`${ORIGIN}/api`]);
+  const { root } = await rpc(flow.token!.access_token);
+  expect((await root.whoami()).actor).toBe(flow.user.id);
+  // The worker under test runs in this isolate on these bindings: its D1 statements pass this spy.
+  const prepare = vi.spyOn(bindings.DB, "prepare");
+  // Real elapsed time: one tick of the deployed 30 s interval, nothing test-only.
+  await new Promise((resolve) => setTimeout(resolve, 31_000));
+  const statements = prepare.mock.calls.map(([sql]) => sql);
+  prepare.mockRestore();
+  // Every socket in this test holds no project (this one, and `grant()`'s issuer session that
+  // approved the consent): each tick reads its grant's revocation row and nothing else.
+  expect(statements.filter((sql) => sql.includes("FROM oauth_activity"))).not.toEqual([]);
+  expect(statements.filter((sql) => sql.includes("JOIN org_members"))).toEqual([]);
+  expect((await root.whoami()).actor).toBe(flow.user.id); // still live: it holds nothing to lose
+});
+
 test("console and project browsers use the same CIMD flow and independent grants", async () => {
   let logoutUnavailable = false;
   const metadataFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
