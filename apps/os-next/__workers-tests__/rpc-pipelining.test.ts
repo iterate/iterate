@@ -30,7 +30,7 @@ test("the step walk threads a NATIVE RpcPromise unawaited — regression = this 
   // THE regression detector for the native lane: walk a chain whose call step returns a real
   // workerd RpcPromise, with a property step AFTER it. Pipelined (correct), the walk builds on the
   // promise — the property step yields a still-open RpcProperty; if the walk regressed to
-  // await-every-step (or worker.ts's registerPipelinedRpcBrand calls disappeared), the value comes
+  // await-every-step (or iterate-context.ts's registerPipelinedRpcBrand calls disappeared), the value comes
   // back SETTLED — a plain number — and the instanceof assertion fails loudly.
   const { RpcPromise, RpcProperty } = cloudflareWorkers as unknown as Record<
     "RpcPromise" | "RpcProperty",

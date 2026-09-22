@@ -1,33 +1,25 @@
-// Public host routing: the console, MCP and project apps share OAuth grants.
-// Cap’n Web terminates at /api; project application requests enter the context DO.
+// worker.ts — the one worker's fetch entry: the request is sorted top to bottom — a project host
+// (the app it names, the files host, the config worker), the MCP origin, then the platform origin's
+// own paths (`/version`, the secret-OAuth callback, Google identity, `/mcp`, the browser adapter's
+// `/api` and `/.auth/*`) and, last, the OAuth provider with the issuer's pages as its catch-all.
+// Cap’n Web terminates at `/api`; a project host's request rides into the context DO.
 
-import * as cloudflareWorkers from "cloudflare:workers";
-import { RpcPromise as CapnwebRpcPromise, RpcStub as CapnwebRpcStub } from "capnweb";
-import { auth } from "iterate/next/sdk";
-import { verifyClaims } from "iterate/next/principal";
-import { registerPipelinedRpcBrand } from "iterate/next/expression";
 import { ITX_GRANT_HEADER, ITX_PRINCIPAL_HEADER, type Principal } from "iterate/next/principal";
 import { customProjectHostOf, projectAddressOf } from "iterate/next/project-ingress";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
-// the one worker's env: the DO's bindings plus the in-process control plane's (control-plane.ts `Env`)
-import type { Env as WorkerEnv } from "./control-plane.ts";
+import type { Env as WorkerEnv } from "./env.ts";
 import { identityDoor } from "./identity.ts";
-import { isSecretOAuthState, SECRET_OAUTH_CALLBACK_PATH } from "./secret-oauth.ts";
-import type { Reach } from "./directory.ts";
+import { SECRET_OAUTH_CALLBACK_PATH } from "./secret-oauth.ts";
+import { secretOAuthCallback } from "./secret-oauth-callback.ts";
 import { oauthResponse } from "./api.ts";
-import { issuerHandler, issuerPagePaths } from "./control-plane.ts";
-import {
-  appConfigOf,
-  platformAddressesOf,
-  sessionSigningSecretOf,
-  type PlatformAddresses,
-} from "./app-config.ts";
+import { issuerHandler } from "./issuer-pages.ts";
+import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-config.ts";
 import { FILES_APP_LABEL, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
-import { directory, ensureDirectorySchema, type Directory } from "./directory.ts";
+import { directory, ensureDirectorySchema } from "./directory.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
 import { DurableObjectNameCodec, ITX_PLATFORM_ORIGIN_HEADER } from "./iterate-context.ts";
-import { GLOBAL_PROJECT_ID, resourceScope } from "./context/paths.ts";
+import { resourceScope } from "./context/paths.ts";
 import type { SessionInput } from "./session.ts";
 import { authorizationForToken, recordGrantUse, cleanGrantActivity } from "./oauth.ts";
 
@@ -115,124 +107,6 @@ function projectHostRequestTo(
   return new Request(withoutBasePath(request, routing.basePath), { headers });
 }
 
-/** A secret's OWNER (iterate-context.ts `resourceScope`), read off the secret's context (its Durable
- *  Object name, what the callback's claims carry): a project's id, or the user's / the
- *  organization's id whose own secret it is — the callback admits the human by it. `path` is the
- *  path the placeholder spells, `/secrets/<name>`, relative to the owner's root. */
-function secretOwnerOf(context: string): {
-  kind: "project" | "users" | "organizations";
-  id: string;
-  path: string;
-} {
-  const { projectId, path } = DurableObjectNameCodec.parse(context);
-  const owner = resourceScope(projectId, path);
-  const secretPath = owner.rootPath === "/" ? path : path.slice(owner.rootPath.length);
-  if (projectId !== GLOBAL_PROJECT_ID) return { kind: "project", id: projectId, path: secretPath };
-  const [, kind, id] = /^global--(users|organizations)--(.+)$/.exec(owner.id) ?? [];
-  if (kind !== "users" && kind !== "organizations")
-    throw new Error("the global root owns no secrets");
-  return { kind, id: id || "", path: secretPath };
-}
-
-/** WHO may complete a secret's OAuth: a session that reaches the secret's owner — for a project's
- *  secret, a session reaching that project; for a user's own, that user; for an organization's, a
- *  member; the admin reaches every one. A project-bound bearer reaches no user's or organization's
- *  own secrets; nothing but the admin reaches the global root's. */
-async function reachesSecretOwner(
-  directory: Directory,
-  reach: Reach,
-  owner: ReturnType<typeof secretOwnerOf>,
-): Promise<boolean> {
-  if (reach === "every") return true;
-  if (owner.kind === "project")
-    return owner.id !== GLOBAL_PROJECT_ID && directory.reachesProject(reach, owner.id);
-  if (!("userId" in reach)) return false;
-  if (owner.kind === "users") return reach.userId === owner.id;
-  return (await directory.listOrgs(reach.userId)).some((org) => org.id === owner.id);
-}
-
-/** A secret's OAuth callback: the provider redirected the human here with `code` and the
- *  platform-signed `state` (secret-oauth.ts) naming the secret's context and the nonce. WHO
- *  completes it is admitted the way a project host admits a visitor — the same platform session (a
- *  browser cookie, or a bearer) — and must reach the owner (`reachesSecretOwner`): a stranger who saw
- *  the authorize URL cannot plant their own provider account into someone else's secret. The
- *  secret's facet then exchanges the code; a failure is a plain-text 4xx with the reason, never a
- *  credential. */
-async function secretOAuthCallback(
-  request: Request,
-  env: WorkerEnv,
-  ctx: ExecutionContext,
-  addresses: PlatformAddresses,
-): Promise<Response> {
-  const url = new URL(request.url);
-  const answer = (status: number, text: string) =>
-    new Response(`${text}\n`, {
-      status,
-      headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
-    });
-  const claims = await verifyClaims(
-    url.searchParams.get("state") ?? "",
-    await sessionSigningSecretOf(appConfigOf(env)),
-  );
-  if (!isSecretOAuthState(claims) || claims.exp <= Date.now())
-    return answer(400, "This link is not one the platform issued, or it has expired.");
-  const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
-  const authorization = bearer
-    ? await authorizationForToken(env, ctx, bearer, addresses)
-    : await browserAuthorization(env, request, ctx);
-  if (!authorization)
-    return answer(
-      401,
-      "Sign in to iterate in this browser first, then open this link again — the tokens go into a project you must be a member of.",
-    );
-  let owner: ReturnType<typeof secretOwnerOf>;
-  try {
-    owner = secretOwnerOf(claims.context);
-  } catch (error) {
-    return answer(400, error instanceof Error ? error.message : String(error));
-  }
-  if (!(await reachesSecretOwner(directory(env.DB), authorization.reach, owner)))
-    return answer(403, `Your session cannot access the secrets of ${owner.kind} ${owner.id}.`);
-  const denied = url.searchParams.get("error");
-  if (denied) return answer(400, `The provider declined: ${denied}`);
-  const code = url.searchParams.get("code");
-  if (!code) return answer(400, "The provider sent no authorization code.");
-  // On the secret's own context — `itx.secrets.completeOAuth` (built-ins.ts) runs the exchange in
-  // the secret's facet and lands the facts, in the order every other write to that path takes; the
-  // platform's own call, no principal.
-  try {
-    await env.ITERATE_CONTEXT.getByName(claims.context).invoke(
-      ["itx", "builtins", "secrets", ["completeOAuth", owner.path, { code, nonce: claims.nonce }]],
-      [],
-      { principal: null },
-    );
-  } catch (error) {
-    return answer(
-      400,
-      `Storing the tokens for ${owner.path} failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-  return answer(
-    200,
-    `Done: the secret ${owner.path} of ${owner.kind} ${owner.id} holds the tokens. You can close this tab.`,
-  );
-}
-
-// The native workerd brands the step walk threads unawaited (expression.ts `PIPELINED_RPC_BRANDS` —
-// it cannot import cloudflare:workers itself). A call step yields an RpcPromise; a PROPERTY step on
-// one yields an RpcProperty — both pipeline, so both register. The cast bridges a workers-types gap:
-// the runtime exports both (verified by probe) but the .d.ts doesn't.
-const { RpcPromise: NativeRpcPromise, RpcProperty: NativeRpcProperty } =
-  cloudflareWorkers as unknown as Record<"RpcPromise" | "RpcProperty", abstract new () => unknown>;
-registerPipelinedRpcBrand(NativeRpcPromise);
-registerPipelinedRpcBrand(NativeRpcProperty);
-// capnweb's own promises pipeline the same way, and the library's `itx.connectToCapnweb` puts them
-// in the walk (library.ts): a remote chain `.a().b(x)` must stay unawaited between steps or
-// a one-shot batch session dies after its first message. A capnweb RpcStub is not a promise; it
-// registers so a stub-valued step is never awaited either (awaiting one is a no-op anyway).
-registerPipelinedRpcBrand(CapnwebRpcPromise as unknown as abstract new () => unknown);
-registerPipelinedRpcBrand(CapnwebRpcStub as unknown as abstract new () => unknown);
-
 export { IterateContextDurableObject };
 export { BrowserSession } from "iterate/next/app-session";
 // THE FIRST-PARTY FACETS: exported Durable Object classes hosted as facets of a context through
@@ -268,7 +142,9 @@ export default {
 
     // PROJECT-HOST INGRESS (the project host section below): a request on a project host IS the app
     // it names — or, with no app label, the project's config worker — the Request riding into the
-    // DO's fetch lane with its URL, the app's own cookies and a WebSocket upgrade intact. The browser adapter reserves /api and /.auth/* on every host.
+    // DO's fetch lane with its URL, the app's own cookies and a WebSocket upgrade intact. The browser
+    // adapter's `/api` and `/.auth/*` are the app's own on a host of its own (subdomains) and the
+    // issuer's under paths, where the app shares the platform's origin.
     const appConfig = appConfigOf(env);
     const { deployId } = appConfig;
     // THE DIRECTORY SCHEMA, at boot (directory.ts): the first request of an isolate awaits it, so a
@@ -405,27 +281,13 @@ export default {
     }
     const browserResponse = await browserClient(request, env, ctx);
     if (browserResponse) return browserResponse;
+    // `/api` itself was answered above; anything under it is nothing — without this line a bearer
+    // on `/api/<anything>` would pass the provider's gate and be routed to the MCP handler (api.ts).
     if (url.pathname.startsWith("/api")) return new Response("Not found", { status: 404 });
 
-    // The issuer's own paths are open to a browser that is not signed in yet: the pages and their
-    // files (control-plane.ts `issuerPagePaths`), the token and registration endpoints, discovery.
-    const issuerRoute =
-      issuerPagePaths.includes(url.pathname) ||
-      ["/oauth2/token", "/oauth2/register"].includes(url.pathname) ||
-      url.pathname.startsWith("/.well-known/");
-    if (!issuerRoute) {
-      const authorization = await browserAuthorization(env, request, ctx);
-      const headers = new Headers(request.headers);
-      headers.delete(ITX_PRINCIPAL_HEADER);
-      headers.delete(ITX_GRANT_HEADER);
-      if (authorization) headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(authorization.principal));
-      if (authorization?.grant) headers.set(ITX_GRANT_HEADER, authorization.grant.grantId);
-      const denied = auth.require(new Request(request, { headers }));
-      if (denied) return denied;
-    }
-
-    // Everything else on the platform host is the CONTROL PLANE, in-process (src/control-plane.ts
-    // lists its handlers: the OAuth AS, /mcp, the issuer's pages). One worker, one entry point.
+    // Everything else on the platform origin is the OAuth provider (api.ts, oauth.ts: the
+    // authorize, token and registration endpoints, discovery) with the issuer's pages as its
+    // catch-all (issuer-pages.ts) — every one an open path, or a 404.
     return oauthResponse(request, env, ctx, issuerHandler);
   },
 };

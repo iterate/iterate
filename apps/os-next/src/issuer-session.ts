@@ -2,7 +2,7 @@ import { startAppSession } from "iterate/next/app-server";
 import { sameOriginPath } from "iterate/next/lib";
 import { clientDisplay } from "./client-display.ts";
 import { platformAddressesOf } from "./app-config.ts";
-import type { Env } from "./control-plane.ts";
+import type { Env } from "./env.ts";
 import type { User } from "./directory.ts";
 import { oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
 

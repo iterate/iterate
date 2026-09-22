@@ -5,7 +5,7 @@ import { platformAddressesOf } from "../src/app-config.ts";
 import { authorizationForToken } from "../src/oauth.ts";
 import { directory } from "../src/directory.ts";
 import { cleanGrantActivity } from "../src/oauth.ts";
-import type { Env } from "../src/control-plane.ts";
+import type { Env } from "../src/env.ts";
 import schema from "../src/control-plane.sql?raw";
 
 const bindings = env as unknown as Env;

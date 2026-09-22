@@ -279,7 +279,7 @@ export function canonicalItxExpressionPrefix(source: ItxExpressionInput): string
 
 // Promise brands the step walk threads UNAWAITED: property access and calls pipeline on them
 // natively, so the whole chain reduces into one round trip and the caller's terminal await is the
-// single flush. worker.ts registers the native cloudflare:workers brands and capnweb's at boot — that
+// single flush. os-next iterate-context.ts registers the native cloudflare:workers brands and capnweb's at boot — that
 // import can't live here because the unit lane runs this module in Node, where the list stays empty
 // and every step is simply awaited.
 const PIPELINED_RPC_BRANDS: (abstract new (...args: never[]) => unknown)[] = [];

@@ -3,7 +3,7 @@
 One Cloudflare Worker, one package: `src/worker.ts` is the stateless edge (capnweb at `/api`;
 project-host ingress — `<app>--<project>.<base>`, `<app>.<project>.<base>`, the apex
 `<project>.<base>` — the one HTTP way into a project) with
-the control plane in-process as its catch-all (`src/control-plane.ts`: OAuth AS + a D1 directory +
+the control plane in-process as its catch-all (`src/{api,oauth,directory,mcp,issuer-pages}.ts`: OAuth AS + a D1 directory +
 `/mcp`, the ONE MCP server for every project + the issuer's server half) and THE ISSUER'S TWO PAGES —
 `/login` and the `/oauth2/auth` consent, files in `public/` the assets binding serves (no framework, no
 build): sign-in asks `/login.json` what to show and posts plain forms; consent is a capnweb client of `/api`;
@@ -101,7 +101,7 @@ dash is, and `/setup-prompt.md` is the prompt an agent follows to deploy a platf
 `SELF-HOSTING.md`'s recipe.)
 Both are files in `public/` (`login.html`, `oauth2/auth.html`, `issuer.css`, a script each, `_headers`
 for their CSP), served by the assets binding. The sign-in page's script asks `/login.json`
-(`control-plane.ts`) what to show and signs in with plain form posts to `/login`. The consent page is
+(`issuer-pages.ts`) what to show and signs in with plain form posts to `/login`. The consent page is
 a capnweb client of `/api` like any app — `public/capnweb.js`, the fork's browser bundle copied
 beside it by `scripts/build.ts`, one WebSocket the session cookie rides in on: `consent.describe`
 for what to show, `createOrg` and `projects.create` for a project made on the spot,
@@ -121,7 +121,7 @@ identity cookie. The `/login` page asks `/login.json` which mechanisms this depl
 signs in with plain form posts to `/login`.
 
 Email sign-in is a code: `POST /login` with an email mails a six-digit code through the
-`EMAIL` binding (Cloudflare Email Sending, from `login.emailCode.from`; `src/login-code.ts`),
+`EMAIL` binding (Cloudflare Email Sending, from `login.emailCode.from`; `src/password-and-code-sign-in.ts`),
 good for ten minutes and five tries, and the page's code step posts it back; the reserved test
 domains (`example.com`, `.test`, …) are never mailed. Password sign-in is `login.password`: one
 global password, and the email typed beside it is the name tag — how a self-host signs in, and how

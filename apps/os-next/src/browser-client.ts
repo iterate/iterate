@@ -1,7 +1,7 @@
 import { appAuth, appSession } from "iterate/next/app-server";
 import { platformAddressesOf } from "./app-config.ts";
 import { oauthResponse } from "./api.ts";
-import type { Env } from "./control-plane.ts";
+import type { Env } from "./env.ts";
 import { authorizationForToken } from "./oauth.ts";
 
 /** Platform cookies never enter userspace or its outgoing requests. */

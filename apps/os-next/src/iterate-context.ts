@@ -20,9 +20,9 @@
 //   durable object names — `DurableObjectNameCodec` / `resolveContextPath`: the ONE place a context DO name is formatted and parsed
 //   ItxEntrypoint        — a loaded worker's WHOLE WORLD: `env.ITX.get()` and `globalOutbound`, both addressing the DO
 
-import { RpcTarget } from "capnweb";
+import { RpcPromise as CapnwebRpcPromise, RpcStub as CapnwebRpcStub, RpcTarget } from "capnweb";
 import { codedError, resolveContextPath } from "iterate/next/lib";
-import { WorkerEntrypoint } from "cloudflare:workers";
+import * as cloudflareWorkers from "cloudflare:workers";
 import {
   InvokeHandle,
   canonicalItxExpressionPrefix,
@@ -31,6 +31,7 @@ import {
   type ItxExpression,
   type ItxExpressionInput,
   installPrototypeInvokeFallback,
+  registerPipelinedRpcBrand,
 } from "iterate/next/expression";
 import type { IterateContextApi, RewriteRuleConfigured } from "iterate/next/api";
 import {
@@ -509,6 +510,21 @@ export const DurableObjectNameCodec = {
   },
 };
 
+// The native workerd brands the step walk threads unawaited (expression.ts `PIPELINED_RPC_BRANDS` —
+// it cannot import cloudflare:workers itself). A call step yields an RpcPromise; a PROPERTY step on
+// one yields an RpcProperty — both pipeline, so both register. The cast bridges a workers-types gap:
+// the runtime exports both (verified by probe) but the .d.ts doesn't.
+const { RpcPromise: NativeRpcPromise, RpcProperty: NativeRpcProperty } =
+  cloudflareWorkers as unknown as Record<"RpcPromise" | "RpcProperty", abstract new () => unknown>;
+registerPipelinedRpcBrand(NativeRpcPromise);
+registerPipelinedRpcBrand(NativeRpcProperty);
+// capnweb's own promises pipeline the same way, and the library's `itx.connectToCapnweb` puts them
+// in the walk (library.ts): a remote chain `.a().b(x)` must stay unawaited between steps or
+// a one-shot batch session dies after its first message. A capnweb RpcStub is not a promise; it
+// registers so a stub-valued step is never awaited either (awaiting one is a no-op anyway).
+registerPipelinedRpcBrand(CapnwebRpcPromise as unknown as abstract new () => unknown);
+registerPipelinedRpcBrand(CapnwebRpcStub as unknown as abstract new () => unknown);
+
 // ── ItxEntrypoint ── a loaded worker's WHOLE WORLD. Every confined dynamic worker's `env.ITX` and
 // `globalOutbound` are one stub of THIS entrypoint, minted via `ctx.exports.ItxEntrypoint({ props:
 // { iterateContextName } })` — never a raw `env.ITERATE_CONTEXT.getByName` DO stub — so the context it forwards
@@ -521,7 +537,7 @@ export const DurableObjectNameCodec = {
  *  pipelined. The platform's own facets extend the SDK's host with THIS scope, so they spell every
  *  root; an app's facet has the declared `IterateContextApi` (iterate/next/api). */
 export type ItxEntrypointScope = ReturnType<Service<ItxEntrypoint>["get"]>;
-export class ItxEntrypoint extends WorkerEntrypoint<
+export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
   Env,
   { iterateContextName: string; platform?: true; platformOrigin: string | null }
 > {
