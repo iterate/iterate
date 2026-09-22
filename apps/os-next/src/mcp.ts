@@ -2,7 +2,7 @@ import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotoc
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import { errorCode } from "iterate/next/lib";
 import { platformAddressesOf } from "./app-config.ts";
-import type { Env } from "./control-plane.ts";
+import type { Env } from "./env.ts";
 import { directory, type Directory, type Reach } from "./directory.ts";
 import { DurableObjectNameCodec } from "./iterate-context.ts";
 import type { Authorization } from "./oauth.ts";

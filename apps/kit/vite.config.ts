@@ -5,6 +5,10 @@ import viteReact from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { writeWranglerConfig } from "./scripts/generate-wrangler-config.ts";
 
+import { writeVoiceInstall } from "./scripts/build-voice-install.ts";
+
+await writeVoiceInstall();
+
 // wrangler.jsonc is generated and gitignored. Refresh it before the Cloudflare
 // plugin reads it so local dev and deploy builds always agree with envs.ts.
 writeWranglerConfig();

@@ -4,7 +4,7 @@ import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { appSession, startAppSession } from "iterate/next/app-server";
 import { authorizationCodeRequest } from "iterate/next/oauth";
 import { platformAddressesOf } from "../src/app-config.ts";
-import type { Env } from "../src/control-plane.ts";
+import type { Env } from "../src/env.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { directory } from "../src/directory.ts";
 import { startIssuerSession } from "../src/issuer-session.ts";
@@ -47,6 +47,8 @@ test("first consent creates organization and project through the ordinary sessio
   const helpers = oauthHelpers(bindings, platformAddressesOf(bindings, new Request(`${origin}/`)));
   const client = await helpers.createClient({
     clientName: "Claude fixture",
+    clientUri: "https://studio.example/about",
+    logoUri: "https://images.example/studio.svg",
     redirectUris: ["http://127.0.0.1/callback"],
     tokenEndpointAuthMethod: "none",
     grantTypes: ["authorization_code", "refresh_token"],
@@ -73,6 +75,8 @@ test("first consent creates organization and project through the ordinary sessio
     kind: "consent",
     clientName: "Claude fixture",
     clientId: client.clientId,
+    clientDomain: "studio.example",
+    clientLogoUri: "https://images.example/studio.svg",
     picture,
     orgs: [],
     projects: [],
@@ -150,7 +154,13 @@ test("first consent creates organization and project through the ordinary sessio
   expect(selectedBody).toContain(projectId);
   const unselectedBody = await (await runTool(excludedId)).text();
   expect(unselectedBody).toContain("outside this token");
-  expect((await api.grants.list()).items).toHaveLength(2);
+  const grants = (await api.grants.list()).items;
+  expect(grants).toHaveLength(2);
+  expect(grants.find((grant) => grant.clientId === client.clientId)).toMatchObject({
+    name: "Claude fixture",
+    logoUri: "https://images.example/studio.svg",
+    clientDomain: "studio.example",
+  });
   await api.logout();
   // These calls land before the 30s live lease refresh: issuance still reads D1 now.
   await expect(api.consent.approve({ query: flow.url.search, projects: ["*"] })).rejects.toThrow(
@@ -392,12 +402,11 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
   expect(page.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
   expect(page.headers.get("X-Frame-Options")).toBe("DENY");
   // The page is a capnweb client of /api: its bundle is a file beside it, open to anyone; there is
-  // no JSON sibling (an anonymous browser at a non-page path is sent to sign in) and nothing to
-  // post to /authorize.
+  // no JSON sibling (a non-page path on the platform origin is a 404, signed in or not) and
+  // nothing to post to /authorize.
   expect((await SELF.fetch(`${origin}/capnweb.js`)).status).toBe(200);
   const sibling = await SELF.fetch(`${origin}/authorize.json`, { redirect: "manual" });
-  expect(sibling.status).toBe(302);
-  expect(sibling.headers.get("location")).toMatch(/^\/\.auth\/login\?/);
+  expect(sibling.status).toBe(404);
   expect(
     (await SELF.fetch(`${origin}/oauth2/auth`, { method: "POST", headers: { Origin: origin } }))
       .status,
@@ -416,4 +425,72 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
     (await connect({ Authorization: `Bearer ${refreshed}` }).then((api) => api.info())).principal
       .actor,
   ).toBe(user.id);
+});
+
+test("consent omits missing, insecure and credential-bearing branding URLs", async () => {
+  const user = await directory(bindings.DB).upsertUser("branding-urls@example.com");
+  const login = await startIssuerSession(bindings, new Request(origin), user, "/");
+  const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
+  for (const url of [
+    undefined,
+    "not a URL",
+    "http://app.example/logo.svg",
+    "data:image/svg+xml,<svg/>",
+    "javascript:alert(1)",
+    "https://user:password@app.example/logo.svg",
+  ]) {
+    const client = await oauthHelpers(
+      bindings,
+      platformAddressesOf(bindings, new Request(origin)),
+    ).createClient({
+      clientName: "Example App",
+      clientUri: url,
+      logoUri: url,
+      redirectUris: ["https://app.example/callback"],
+      tokenEndpointAuthMethod: "none",
+    });
+    const flow = await authorizationCodeRequest({
+      issuer: origin,
+      clientId: client.clientId,
+      redirectUri: "https://app.example/callback",
+      resources: [`${origin}/api`],
+    });
+    const view = await issuer.consent.describe(flow.url.search);
+    expect(view.kind).toBe("consent");
+    expect(view.kind === "consent" && view.clientLogoUri).toBeUndefined();
+    expect(view.kind === "consent" && view.clientDomain).toBeUndefined();
+  }
+});
+
+test("CIMD consent shows the metadata host even when the client declares a different website", async () => {
+  const clientId = "https://metadata.example/oauth/client.json";
+  vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
+    const request = new Request(input, init);
+    if (request.url === clientId)
+      return Promise.resolve(
+        Response.json({
+          client_id: clientId,
+          client_name: "Example App",
+          client_uri: "https://different.example/",
+          logo_uri: "https://images.example/app.svg",
+          redirect_uris: ["https://app.example/callback"],
+          token_endpoint_auth_method: "none",
+        }),
+      );
+    return SELF.fetch(request);
+  });
+  const user = await directory(bindings.DB).upsertUser("branding-cimd@example.com");
+  const login = await startIssuerSession(bindings, new Request(origin), user, "/");
+  const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
+  const flow = await authorizationCodeRequest({
+    issuer: origin,
+    clientId,
+    redirectUri: "https://app.example/callback",
+    resources: [`${origin}/api`],
+  });
+  expect(await issuer.consent.describe(flow.url.search)).toMatchObject({
+    kind: "consent",
+    clientDomain: "metadata.example",
+    clientLogoUri: "https://images.example/app.svg",
+  });
 });

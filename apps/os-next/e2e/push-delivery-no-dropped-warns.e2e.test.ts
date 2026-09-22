@@ -137,7 +137,7 @@ test.sequential("MEASURED FINDING: a push subscriber that stops reading mid-floo
   // the DO's memory bounded whatever the edge and the socket absorb (BUILD-LOG 2026-09-04; before the
   // ledger this row pinned "no warn at all" — 60 MiB silently in flight). And the close half (close →
   // onRpcBroken → pager close → the DO drops the transport → `itx.rpcStubs.list()` stops listing the
-  // key; capnweb disposes the session's SubscriptionHandle → the ROW is removed) is proven live below.
+  // key; capnweb disposes the session's SubscriptionHandleRpcTarget → the ROW is removed) is proven live below.
   const ctx = freshCtx("overflow");
   const itx = await worker.itx(ctx); // connection A: setup, the flood, and observation
   // Connection B — THE VICTIM: its own client socket, because the callback stub it lent lives in
@@ -223,7 +223,7 @@ test.sequential("MEASURED FINDING: a push subscriber that stops reading mid-floo
     15_000,
   );
   console.log(`socket kill → stub dropped from presence in ${Date.now() - tKill}ms`);
-  // THE ROW IS SESSION-SCOPED: the dead session's SubscriptionHandle is disposed by capnweb, and its
+  // THE ROW IS SESSION-SCOPED: the dead session's SubscriptionHandleRpcTarget is disposed by capnweb, and its
   // dispose appends `subscription-configured { name, target: null }` — the row leaves the table
   // without anyone calling anything. The producer is unaffected: an append still commits, nothing
   // is pushed to a dead stub, and no dropped-delivery warn is logged.

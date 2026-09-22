@@ -39,7 +39,7 @@ type ErrorCode =
   | "RPC_STUB_OFFLINE" // the rpc stub a row names is neither borrowed nor pager-backed right now — or its lend ended mid-call (recalled, returned, broken; the relay re-codes)
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
   | "NO_FACET" // no facet of that name has been loaded into this context
-  | "FACET_NO_UPGRADE" // a WebSocket upgrade aimed at a facet: a facet answers RPC and plain HTTP, never a socket — sockets terminate at the edge (iterate-context-durable-object.ts #invokeFacet)
+  | "FACET_NO_UPGRADE" // a WebSocket upgrade aimed at a facet: a facet answers RPC and plain HTTP, never a socket — sockets terminate at the edge (apps/os-next context/facet-host.ts)
   | "WAIT_TIMEOUT" // waitForEvent expired with no matching event committed
   | "TIMEOUT"; // lib.ts withTimeout: the call did not answer within its deadline
 // (There is no separate boundary-validation library: the append door's own runtime guards
@@ -262,7 +262,7 @@ export async function withTimeout<T>(
 }
 
 // ── origin ── the one check that makes an ambient cookie safe to honour (session.ts
-// `from-server-cookie`, the console's POST doors in control-plane.ts).
+// `from-server-cookie`, the issuer's form posts in os-next issuer-pages.ts).
 
 /** Whether `request` may spend the cookies it carries: its `Origin` header is this origin, or absent
  *  (a non-browser client — curl, a script). A browser stamps the page's origin on every WebSocket
@@ -282,7 +282,7 @@ export function isSameOriginBrowserRequest(request: Pick<Request, "url" | "heade
 
 /** `next` as a path on `origin`, else "/" — a redirect never leaves the host: `//evil.example`,
  *  `/\evil.example` and an absolute URL all resolve to a foreign origin and fall back to "/". The
- *  control plane's login redirect uses it too (control-plane.ts). */
+ *  issuer's login redirect uses it too (os-next issuer-pages.ts). */
 export function sameOriginPath(next: string, origin: string): string {
   try {
     const url = new URL(next, origin);

@@ -25,7 +25,7 @@ import {
   sessionSigningSecretOf,
   type AppConfig,
 } from "./app-config.ts";
-import type { Env } from "./control-plane.ts";
+import type { Env } from "./env.ts";
 
 // ── app config ── THE TABLE for the app config: what the vars become, what is refused (by name),
 // and the per-env memo. Each row is `{ vars, becomes | throws, warns? }`.

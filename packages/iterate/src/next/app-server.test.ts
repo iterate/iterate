@@ -156,3 +156,20 @@ describe("a browser CONNECTED to another issuer stays there", () => {
     );
   });
 });
+
+test("client metadata publishes app branding relative to its own origin, independently of the issuer", async () => {
+  const response = await appAuth(new Request("https://notes.example/.auth/client.json"), {
+    sessions: {} as DurableObjectNamespace<never>,
+    issuer: ISSUER,
+    resource: `${ISSUER}/api`,
+    api: () => new Response(),
+    client: { name: "Iterate Notes", logoUri: "/client-logo.svg" },
+  });
+  expect(await response!.json()).toMatchObject({
+    client_id: "https://notes.example/.auth/client.json",
+    client_name: "Iterate Notes",
+    client_uri: "https://notes.example",
+    logo_uri: "https://notes.example/client-logo.svg",
+    token_endpoint_auth_method: "none",
+  });
+});

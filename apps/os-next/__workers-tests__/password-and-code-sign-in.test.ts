@@ -1,9 +1,9 @@
-// The email code sign-in (src/login-code.ts) with a fake mailbox, so the test can read the code it
+// The email code sign-in (src/password-and-code-sign-in.ts) with a fake mailbox, so the test can read the code it
 // mailed: the message, the right code, the wrong ones, the spent challenge, the reserved domains.
 import { env } from "cloudflare:test";
 import { beforeAll, expect, test, vi } from "vitest";
-import type { Env } from "../src/control-plane.ts";
-import { finishLoginCode, startLoginCode } from "../src/login-code.ts";
+import type { Env } from "../src/env.ts";
+import { finishLoginCode, startLoginCode } from "../src/password-and-code-sign-in.ts";
 import { applyDirectorySchema } from "./support.ts";
 
 const origin = "https://control.test";
@@ -14,7 +14,7 @@ const withCookie = (setCookie: string) =>
     headers: { cookie: setCookie.split(";")[0]! },
   });
 
-/** What login-code.ts hands the mailbox: the builder shape of `SendEmail.send`. */
+/** What password-and-code-sign-in.ts hands the mailbox: the builder shape of `SendEmail.send`. */
 type Mail = { to: string; from: string; subject: string; text: string; html: string };
 
 test("the mailed code signs in; a wrong code costs a try; five wrong tries end the challenge; three codes per address per window; a reserved test domain gets no mail", async () => {

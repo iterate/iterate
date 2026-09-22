@@ -19,6 +19,7 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === "/healthz") return new Response("ok");
     const auth = await appAuth(request, {
+      client: { name: "Iterate Voice", logoUri: "/client-logo.svg" },
       sessions: env.BROWSER_SESSION,
       issuer: env.ITERATE_ORIGIN,
       resource: `${env.ITERATE_ORIGIN}/api`,

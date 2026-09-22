@@ -1,4 +1,4 @@
-// public/login.js — the sign-in page's script. /login.json (control-plane.ts) says who is signed in,
+// public/login.js — the sign-in page's script. /login.json (issuer-pages.ts) says who is signed in,
 // whether a code is on its way (and to whom), what went wrong with the last post, and which
 // sign-ins this deployment offers; this renders that. Signing in itself is plain form posts to
 // /login — the email and the password; or the email, then the mailed code — or the link to

@@ -4,7 +4,7 @@
 // takes, and the props are the facet's identity (`{ iterateContextName, name }`, sdk/index.ts) —
 // never through a loaded source: ordinary bundled worker code, with the worker's real env. THIS
 // TABLE IS THE ONLY PATH from a facet name to `ctx.exports`: no FacetSpec names a class of this
-// worker, and a reserved name refuses a spec (iterate-context-durable-object.ts `#invokeFacet`,
+// worker, and a reserved name refuses a spec (context/facet-host.ts `FacetHost#invoke`,
 // context/built-ins.ts `processors.enable`); the reduce marks a hosting row for a reserved name
 // without a source (stream/core-processor.ts). Pinned: __workers-tests__/facet-from-exports.test.ts.
 export const FIRST_PARTY_FACET_CLASSES = {

@@ -20,16 +20,18 @@
 //   durable object names — `DurableObjectNameCodec` / `resolveContextPath`: the ONE place a context DO name is formatted and parsed
 //   ItxEntrypoint        — a loaded worker's WHOLE WORLD: `env.ITX.get()` and `globalOutbound`, both addressing the DO
 
-import { RpcTarget } from "capnweb";
+import { RpcPromise as CapnwebRpcPromise, RpcStub as CapnwebRpcStub, RpcTarget } from "capnweb";
 import { codedError, resolveContextPath } from "iterate/next/lib";
-import { WorkerEntrypoint } from "cloudflare:workers";
+import * as cloudflareWorkers from "cloudflare:workers";
 import {
   InvokeHandle,
   canonicalItxExpressionPrefix,
+  materializeItxHandleReference,
   normalizedItxExpression,
   type ItxExpression,
   type ItxExpressionInput,
   installPrototypeInvokeFallback,
+  registerPipelinedRpcBrand,
 } from "iterate/next/expression";
 import type { IterateContextApi, RewriteRuleConfigured } from "iterate/next/api";
 import {
@@ -60,7 +62,7 @@ export type WaitUntil = (p: Promise<unknown>) => void;
 /** What `provide` hands back: dispose it — or let the session end — and the act is un-done (a lent
  *  stub recalled, a rule or deny removed while the row is still its own). The caller already holds
  *  the match it passed, so the handle carries nothing else. */
-class RewriteRuleHandle extends RpcTarget {
+class RewriteRuleHandleRpcTarget extends RpcTarget {
   readonly #undo: () => void;
   constructor(undo: () => void) {
     super();
@@ -74,7 +76,7 @@ class RewriteRuleHandle extends RpcTarget {
 /** What `subscribe` hands back: dispose it — or let the session end — and the subscription is removed
  *  (a lent callback is recalled with it). `name` is a GETTER (capnweb exposes prototype members only)
  *  — the generated one when none was given. */
-class SubscriptionHandle extends RpcTarget {
+class SubscriptionHandleRpcTarget extends RpcTarget {
   readonly #name: string;
   readonly #undo: () => void;
   constructor(name: string, undo: () => void) {
@@ -140,11 +142,18 @@ export class IterateContextRpcTarget extends RpcTarget {
     return this.#contextNamespace.getByName(this.#durableObjectAddress.name);
   }
 
-  /** Dispatch on the DO under this context's caller — the one place the edge dispatches. */
-  #invokeOnDurableObject(itxExpression: ItxExpression, args: unknown[] = []): Promise<unknown> {
+  /** Dispatch on the DO under this context's caller — the one place the edge dispatches. A handle the
+   *  DO names by expression (expression.ts) becomes a handle of THIS edge object: every dotted call on
+   *  it is one whole expression back through `invoke`, so what the client holds is an object of this
+   *  stateless worker, and no session onto the actor outlives a call. */
+  async #invokeOnDurableObject(
+    itxExpression: ItxExpression,
+    args: unknown[] = [],
+  ): Promise<unknown> {
     // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the call denotes
     // whatever expression the caller spelled, so `unknown` is the honest contract here.
-    return this.#durableObject.invoke(itxExpression, args, this.#caller) as Promise<unknown>;
+    const result = (await this.#durableObject.invoke(itxExpression, args, this.#caller)) as unknown;
+    return materializeItxHandleReference(result, (expression) => this.invoke(expression));
   }
 
   /** Another context of THIS project. Absolute by convention (`cd("/agents/support")`); relative
@@ -236,13 +245,13 @@ export class IterateContextRpcTarget extends RpcTarget {
    *      denies all), a deletion otherwise (and a stub THIS session lent under it is recalled).
    *  The object form is the event's payload (`RewriteRuleConfigured`) and may carry `description`,
    *  the one line a model reads for the name; `(match, target)` is its shorthand.
-   *  Either way the durable thing made is the rule, so the handle is a `RewriteRuleHandle`: disposing
+   *  Either way the durable thing made is the rule, so the handle is a `RewriteRuleHandleRpcTarget`: disposing
    *  it, or the session ending, un-does the act. */
-  provide(input: RewriteRuleConfigured): Promise<RewriteRuleHandle>;
+  provide(input: RewriteRuleConfigured): Promise<RewriteRuleHandleRpcTarget>;
   provide(
     match: ItxExpressionInput,
     target: ClientRpcStub | ItxExpressionInput | null,
-  ): Promise<RewriteRuleHandle>;
+  ): Promise<RewriteRuleHandleRpcTarget>;
   async provide(
     matchOrInput:
       | ItxExpressionInput
@@ -250,7 +259,7 @@ export class IterateContextRpcTarget extends RpcTarget {
           target: ClientRpcStub | ItxExpressionInput | null;
         }),
     maybeTarget?: ClientRpcStub | ItxExpressionInput | null,
-  ): Promise<RewriteRuleHandle> {
+  ): Promise<RewriteRuleHandleRpcTarget> {
     // The object form IS the event's payload (`RewriteRuleConfigured`, its target widened to a live
     // stub); `(match, target)` is its shorthand. An expression is a string or an array, so the check
     // narrows to the object form.
@@ -287,7 +296,9 @@ export class IterateContextRpcTarget extends RpcTarget {
       };
       await this.#append(event);
       this.#sessionTeardown.dispose(sessionTeardownKey);
-      return new RewriteRuleHandle(() => this.#removeRuleInBackground(matchString, expectedTarget));
+      return new RewriteRuleHandleRpcTarget(() =>
+        this.#removeRuleInBackground(matchString, expectedTarget),
+      );
     }
     // Built BEFORE the lend so a match the codec refuses throws with nothing lent; the rule rides the
     // pager upgrade and the DO appends it as it accepts the pager (context/rpc-stubs.ts).
@@ -313,7 +324,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     // disposed (`SessionTeardown`: a re-provide replaces the entry). The rule is NOT un-set by this
     // session — the DO un-sets what names the key when its LAST pager closes.
     const lease = this.#sessionTeardown.add(sessionTeardownKey, pager);
-    return new RewriteRuleHandle(() => lease.dispose()); // the lease IS the handle: a stale one is inert
+    return new RewriteRuleHandleRpcTarget(() => lease.dispose()); // the lease IS the handle: a stale one is inert
   }
 
   // ── subscriptions: ONE event, over (a) when the target is live ──
@@ -339,7 +350,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     consumes?: string[];
     /** Where the cursor lane starts (0 = the whole log); absent = from now. A push target ignores it. */
     afterOffset?: number;
-  }): Promise<SubscriptionHandle> {
+  }): Promise<SubscriptionHandleRpcTarget> {
     // LOADED CODE may lend a live callback (its own, fed its own context's events); an expression
     // target is a ROW the delivery loop runs as the kernel — that is `itx.append`'s business, through
     // the code's own table — and a removal likewise.
@@ -381,7 +392,7 @@ export class IterateContextRpcTarget extends RpcTarget {
       const lease = this.#sessionTeardown.add(sessionTeardownKey, pager);
       // The handle only recalls its own lend (the lease is the handle; a stale one is inert); the DO
       // un-sets the row on the key's last pager close.
-      return new SubscriptionHandle(name, () => lease.dispose());
+      return new SubscriptionHandleRpcTarget(name, () => lease.dispose());
     }
     // An expression (or a removal): appended FIRST, then this session's lend under the name is
     // recalled — the same order as `provide`, for the same reason.
@@ -391,7 +402,7 @@ export class IterateContextRpcTarget extends RpcTarget {
       payload: { name, target, ...consumes },
     })) as StreamEvent[];
     this.#sessionTeardown.dispose(sessionTeardownKey);
-    return new SubscriptionHandle(name, () => {
+    return new SubscriptionHandleRpcTarget(name, () => {
       // no pager to recall: the handle un-sets the row itself — only the one this call wrote
       if (target) this.#removeSubscriptionInBackground(name, committed.offset);
     });
@@ -501,6 +512,21 @@ export const DurableObjectNameCodec = {
   },
 };
 
+// The native workerd brands the step walk threads unawaited (expression.ts `PIPELINED_RPC_BRANDS` —
+// it cannot import cloudflare:workers itself). A call step yields an RpcPromise; a PROPERTY step on
+// one yields an RpcProperty — both pipeline, so both register. The cast bridges a workers-types gap:
+// the runtime exports both (verified by probe) but the .d.ts doesn't.
+const { RpcPromise: NativeRpcPromise, RpcProperty: NativeRpcProperty } =
+  cloudflareWorkers as unknown as Record<"RpcPromise" | "RpcProperty", abstract new () => unknown>;
+registerPipelinedRpcBrand(NativeRpcPromise);
+registerPipelinedRpcBrand(NativeRpcProperty);
+// capnweb's own promises pipeline the same way, and the library's `itx.connectToCapnweb` puts them
+// in the walk (library.ts): a remote chain `.a().b(x)` must stay unawaited between steps or
+// a one-shot batch session dies after its first message. A capnweb RpcStub is not a promise; it
+// registers so a stub-valued step is never awaited either (awaiting one is a no-op anyway).
+registerPipelinedRpcBrand(CapnwebRpcPromise as unknown as abstract new () => unknown);
+registerPipelinedRpcBrand(CapnwebRpcStub as unknown as abstract new () => unknown);
+
 // ── ItxEntrypoint ── a loaded worker's WHOLE WORLD. Every confined dynamic worker's `env.ITX` and
 // `globalOutbound` are one stub of THIS entrypoint, minted via `ctx.exports.ItxEntrypoint({ props:
 // { iterateContextName } })` — never a raw `env.ITERATE_CONTEXT.getByName` DO stub — so the context it forwards
@@ -513,7 +539,7 @@ export const DurableObjectNameCodec = {
  *  pipelined. The platform's own facets extend the SDK's host with THIS scope, so they spell every
  *  root; an app's facet has the declared `IterateContextApi` (iterate/next/api). */
 export type ItxEntrypointScope = ReturnType<Service<ItxEntrypoint>["get"]>;
-export class ItxEntrypoint extends WorkerEntrypoint<
+export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
   Env,
   { iterateContextName: string; platform?: true; platformOrigin: string | null }
 > {

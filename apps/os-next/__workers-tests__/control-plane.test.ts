@@ -1,8 +1,8 @@
 import { env, SELF } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
-import type { Env } from "../src/control-plane.ts";
-import { startLoginCode } from "../src/login-code.ts";
+import type { Env } from "../src/env.ts";
+import { startLoginCode } from "../src/password-and-code-sign-in.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { directory } from "../src/directory.ts";
 import { applyDirectorySchema, SRC_ECHO_APP } from "./support.ts";

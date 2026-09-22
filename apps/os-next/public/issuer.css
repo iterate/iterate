@@ -345,6 +345,14 @@ body:has(.login-card) {
     opacity: 0;
   }
 }
+.consent-client-tile img {
+  object-fit: contain;
+  padding: 8px;
+  box-sizing: border-box;
+}
+.consent-client-domain {
+  margin: 0;
+}
 .consent-panel {
   display: grid;
   grid-template-columns: 1fr 1fr;

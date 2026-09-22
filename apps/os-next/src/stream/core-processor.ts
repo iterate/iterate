@@ -48,6 +48,7 @@ import {
   implicitRootsAt,
   isBuiltInsRooted,
   normalizeRewriteRuleConfigured,
+  refuseSelfLoopRow,
   resolveItxExpression,
   type ItxExpressionRewriteRule,
 } from "../context/itx-expression-rewriting.ts";
@@ -621,7 +622,7 @@ function normalizeIngressConfigured(input: unknown): { target: ItxExpression | n
  *  a facet source — the codec's 2 KiB cap), and a malformed control event throws HERE instead of
  *  committing a durable no-op. Every other event passes through untouched. The DO runs this on every
  *  append (iterate-context-durable-object.ts). */
-export function normalizeControlEvent(event: StreamEventInput): StreamEventInput {
+export function normalizeControlEvent(event: StreamEventInput, ownPath: string): StreamEventInput {
   if (event.type === "events.iterate.com/project/ingress-configured") {
     if (event.ephemeral) throw new Error("ingress configuration must be durable");
     return { ...event, payload: normalizeIngressConfigured(event.payload) };
@@ -634,7 +635,10 @@ export function normalizeControlEvent(event: StreamEventInput): StreamEventInput
       const payload = ScheduledAppendInput.parse(event.payload);
       return {
         ...event,
-        payload: { ...payload, events: payload.events.map(normalizeControlEvent) },
+        payload: {
+          ...payload,
+          events: payload.events.map((scheduled) => normalizeControlEvent(scheduled, ownPath)),
+        },
       };
     }
     if (event.type === "events.iterate.com/stream/append-schedule-cancelled")
@@ -675,7 +679,10 @@ export function normalizeControlEvent(event: StreamEventInput): StreamEventInput
     // normalizeRewriteRuleConfigured parses match, target AND ifTarget into the stored (parsed)
     // shape, and carries the `ifTarget` KEY through only when the caller sent one — the reduce keys
     // its compare-and-set undo off `"ifTarget" in payload`.
-    return { ...event, payload: normalizeRewriteRuleConfigured(payload) };
+    const normalized = normalizeRewriteRuleConfigured(payload);
+    // The one row no table can refuse at resolve: a bare link back to the context it lands on.
+    refuseSelfLoopRow(normalized, ownPath);
+    return { ...event, payload: normalized };
   }
   return event;
 }

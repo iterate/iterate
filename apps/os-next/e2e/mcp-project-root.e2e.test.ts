@@ -169,7 +169,15 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   expect(capabilities.some((rule: { match: string }) => rule.match === "itx.mcpConnections")).toBe(
     false,
   );
-  expect(await readAll(root.cd(oldPath))).toEqual(oldEvents);
+  // Rereading an idle context can wake its Durable Object. Only lifecycle wakes may be new;
+  // no MCP request, settlement, rewrite or other application event belongs on this old stream.
+  const oldAfter = await readAll(root.cd(oldPath));
+  expect(oldAfter.slice(0, oldEvents.length)).toEqual(oldEvents);
+  expect(
+    oldAfter
+      .slice(oldEvents.length)
+      .every((event) => event.type === "events.iterate.com/stream/woken"),
+  ).toBe(true);
 
   // Two grants execute on the same root; attribution distinguishes their requests.
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- A second bounded mint for a separate MCP connection.

@@ -25,7 +25,7 @@ async function discover(issuer) {
 const redirectUri = () => chrome.identity.getRedirectURL();
 
 async function clientIdFor(issuer, metadata) {
-  const key = `client:${issuer}`;
+  const key = `client:v2:${issuer}`;
   const cached = (await chrome.storage.local.get(key))[key];
   if (cached) return cached;
   const response = await fetch(metadata.registration_endpoint, {
@@ -33,6 +33,8 @@ async function clientIdFor(issuer, metadata) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       client_name: "Iterate Chrome extension",
+      client_uri: "https://iterate.com",
+      logo_uri: "https://os.iterate2.com/client-logos/browser-extension.svg",
       redirect_uris: [redirectUri()],
       token_endpoint_auth_method: "none",
       grant_types: ["authorization_code", "refresh_token"],

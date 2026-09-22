@@ -1,7 +1,7 @@
 import { newWorkersRpcResponse, RpcSession, WebSocketTransport } from "capnweb";
-import type { Env } from "./control-plane.ts";
-import { Consent } from "./consent.ts";
-import { Grants } from "./grants.ts";
+import type { Env } from "./env.ts";
+import { ConsentRpcTarget } from "./consent.ts";
+import { GrantsRpcTarget } from "./grants.ts";
 import { directory } from "./directory.ts";
 import {
   authorizationForToken,
@@ -38,10 +38,10 @@ export async function rpcResponse(
     principal: authorization.principal,
     grant: authorization.grant?.grantId,
     reach: authorization.reach,
-    grants: new Grants(env, ctx, authorization, addresses),
+    grants: new GrantsRpcTarget(env, ctx, authorization, addresses),
     scopes: authorization.grant?.scope,
     ...(authorization.grant?.kind === "issuer" && {
-      consent: new Consent(env, ctx, authorization.grant, addresses),
+      consent: new ConsentRpcTarget(env, ctx, authorization.grant, addresses),
     }),
   });
   // THE GRANT THIS TRANSPORT CARRIES: the upgrade's (resolved by the gate before this call), or the

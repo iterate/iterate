@@ -9,7 +9,7 @@ import {
 import { z } from "zod";
 import { OAuthScope, OAuthScopes } from "iterate/next/oauth-scopes";
 import { verifyAdminSecret, type Principal } from "iterate/next/principal";
-import type { Env, Handler } from "./control-plane.ts";
+import type { Env, Handler } from "./env.ts";
 import { type Reach } from "./directory.ts";
 import { appConfigOf, platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
 
@@ -148,11 +148,10 @@ export function providerOptions(
     // Inspector, Claude's connector) require dynamic registration, so the endpoint is always published.
     clientRegistrationEndpoint: `${issuer}/oauth2/register`,
     scopesSupported: OAuthScope.options,
-    resourceMetadata: {
-      ...(issuer.startsWith("https:") && { authorization_servers: [issuer] }),
-      // Initial challenges request the minimum permission; account is explicit opt-in.
-      scopes_supported: ["iterate"],
-    },
+    // The provider's own protected-resource metadata endpoint never runs (api.ts answers
+    // `/.well-known/oauth-protected-resource*` first), but this list is the `scope=` of every 401
+    // challenge on `/api` and `/mcp`: the minimum permission; account is explicit opt-in.
+    resourceMetadata: { scopes_supported: ["iterate"] },
     clientIdMetadataDocumentEnabled: true,
     allowPlainPKCE: false,
     async resolveExternalToken({ token }) {

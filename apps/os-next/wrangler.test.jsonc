@@ -77,7 +77,7 @@
     // one custom apex, for the consent test that binds a client on it to its project
     "APP_CONFIG_URLS__TEMPORARY_CUSTOM_HOSTNAMES": "{\"custom-apex.test\":\"custom-apex-project\"}",
     // the password signs in through the page's real posts; the mailed code is tested with a fake
-    // mailbox handed to login-code.ts directly
+    // mailbox handed to password-and-code-sign-in.ts directly
     "APP_CONFIG_LOGIN__PASSWORD": "test-password",
     "APP_CONFIG_LOGIN__EMAIL_CODE__FROM": "iterate <login@control.test>",
     "APP_CONFIG_LOGIN__GOOGLE__CLIENT_ID": "google-test-client",

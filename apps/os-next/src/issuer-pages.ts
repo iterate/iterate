@@ -1,16 +1,11 @@
-// The fixed issuer shell: the OAuth AS's bindings, the sign-in POST, and THE ISSUER'S TWO PAGES —
-// /login and the /oauth2/auth consent. The pages are FILES — public/login.html and public/oauth2/auth.html,
-// with the stylesheet and a script each beside them — served through the assets binding: no
-// framework, no build. The sign-in page asks /login.json what to show and signs in with plain form
-// posts to /login — the password, or an email then its mailed code (login-code.ts) — or a provider
-// link (identity.ts); the consent page is a capnweb client of /api like any app (public/capnweb.js
-// beside it is the fork's browser bundle, copied by scripts/build.ts; the cookie rides the
-// handshake) — this worker only gates it. Everything else a person does with Iterate is an app's —
-// an ordinary OAuth client of this issuer (the dash, on its own origin, first among them); `/` says
-// so and points at the dash.
-import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
+// issuer-pages.ts — the issuer's pages: /login and the /oauth2/auth consent, files in public/ with a
+// script each (served through the assets binding, no build), the sign-in page's /login.json and its
+// form POSTs — the password, an email then its mailed code (password-and-code-sign-in.ts), or the
+// identity provider link (identity.ts) — and `/`, which says this origin is headless and points at the dash.
+// The consent page is a capnweb client of /api like any app; this only gates it. Everything else a
+// person does with Iterate is an app's, an ordinary OAuth client of this issuer.
+
 import { errorCode, isSameOriginBrowserRequest, sameOriginPath } from "iterate/next/lib";
-import type { BrowserSession } from "iterate/next/app-session";
 import { startIssuerSession } from "./issuer-session.ts";
 import {
   clearLoginCookie,
@@ -18,41 +13,17 @@ import {
   loginCodePending,
   signInWithPassword,
   startLoginCode,
-} from "./login-code.ts";
+} from "./password-and-code-sign-in.ts";
 import { appConfigOf, platformAddressesOf } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import type { User } from "./directory.ts";
-import type { Env as DurableObjectEnv } from "./iterate-context-durable-object.ts";
+import type { Env, Handler } from "./env.ts";
 
-/** Platform bindings for the issuer, public APIs and project ingress. */
-export interface Env extends DurableObjectEnv {
-  BROWSER_SESSION: DurableObjectNamespace<BrowserSession>;
-  /** Provider-owned store: grants, tokens, DCR clients. Required by @cloudflare/workers-oauth-provider. */
-  OAUTH_KV: KVNamespace;
-  /** The directory: users, orgs, org_members, projects (control-plane.sql). Strongly consistent (D1). */
-  DB: D1Database;
-  /** Injected by the provider — the OAuth helper surface (parseAuthRequest / completeAuthorization / …). */
-  OAUTH_PROVIDER: OAuthHelpers;
-  /** The issuer's pages and their files — public/ (wrangler.jsonc `assets`, `run_worker_first`: this
-   *  worker sees every request first and asks the binding only for `issuerPagePaths`). */
-  ASSETS: Fetcher;
-  /** Email Sending (wrangler `send_email`) — how the sign-in code reaches the person (login-code.ts).
-   *  Simulated by wrangler dev and the test configs; absent where a deployment has no mailbox. */
-  EMAIL?: SendEmail;
-}
-
-/** A worker handler with a REQUIRED fetch — what OAuthProvider expects for defaultHandler/apiHandler. */
-export interface Handler {
-  fetch(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response>;
-}
-
-// ── the issuer's pages ──
-
-/** The paths the issuer's pages own on the platform origin, open to a browser that is not signed in
- *  (worker.ts lets them through without a bearer): the two pages, the sign-in page's JSON, their
- *  files (the consent page's capnweb bundle among them) — and `/`, the landing page (`landingPage`) telling a browser this origin is deliberately headless
- *  and where the dash is. */
-export const issuerPagePaths = [
+/** The paths the issuer's pages own on the platform origin, every one open to a browser that is not
+ *  signed in: the two pages, the sign-in page's JSON, their files (the consent page's capnweb bundle
+ *  among them) — and `/`, the landing page (`landingPage`) telling a browser this origin is
+ *  deliberately headless and where the dash is. */
+const issuerPagePaths = [
   "/",
   "/login",
   "/login.json",
