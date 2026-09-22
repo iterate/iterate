@@ -280,9 +280,10 @@ function render() {
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     if (reviewing) approve();
-    else if (onboarding || state.creating) createProject();
+    else if (onboarding || event.submitter?.value === "create") createProject();
     else {
       state.step = "permissions";
+      state.error = null;
       render();
     }
   });
@@ -407,8 +408,12 @@ function render() {
   let create = null;
   if (creating) {
     const { fields, slugField } = projectFields(view, { follow: false });
-    const createButton = el("button", { type: "button", text: "Create project" });
-    createButton.addEventListener("click", createProject);
+    const createButton = el("button", {
+      type: "submit",
+      name: "action",
+      value: "create",
+      text: "Create project",
+    });
     create = el(
       "section",
       { class: "consent-create", "aria-label": "New project" },

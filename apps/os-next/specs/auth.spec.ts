@@ -214,8 +214,20 @@ test("first Claude consent creates the organization and project on the consent p
     expect(await review.isDisabled()).toBe(true);
     // A second project in a NEW organization, named inside "New project" — the one place the
     // consent flow creates one. Refreshing the directory must preserve the choices made so far.
+    // Review never creates the unfinished draft. Editing again keeps it available.
+    await choice.check();
     await page.getByRole("button", { name: "New project", exact: true }).click();
     await page.getByRole("textbox", { name: "Project slug", exact: true }).fill(otherProject);
+    await review.click();
+    await page.getByRole("heading", { name: "Review permissions", exact: true }).waitFor();
+    await expect(page.getByRole("region", { name: "Selected projects" })).not.toContainText(
+      otherProject,
+    );
+    await page.getByRole("button", { name: "Edit selected projects", exact: true }).click();
+    expect(
+      await page.getByRole("textbox", { name: "Project slug", exact: true }).inputValue(),
+    ).toBe(otherProject);
+    await choice.uncheck();
     // the new organization's name field opens for "New organization…" alone
     const organization = page.getByRole("textbox", { name: "Organization name", exact: true });
     expect(await organization.isVisible()).toBe(false);
