@@ -16,8 +16,10 @@ and writes the `itx.agents` rewrite. `itx.agents.create(path)` installs an agent
 `get(path).message(text)` sends a message. The app owns the code and the project owns its data.
 
 The collection delegates capabilities to each agent and its script context. Restrict scripts by
-narrowing the sandbox's rewrite rules. Keep explicit grants for `run` and `rewriteRules.list` when
-masking its parent: the userspace runtime uses those capabilities for execution and introspection.
+narrowing the sandbox's rewrite rules. A fully masked sandbox can still receive prose replies;
+denied capability introspection advertises no tools to the model. To allow scripts, retain an
+explicit `run` grant and grant `rewriteRules.list` so the model can inspect its allowed capabilities.
+Mask the sandbox's specific `itx.agents` grant too when denying access to the collection.
 
 `pnpm runtime:build` rebuilds the committed runtime in `configs-next/with-agents/agents.js`.
 After changing runtime code, rebuild before testing the template or web installer. Installation also rebinds existing normal agents to the current runtime; their grants and

@@ -22,6 +22,7 @@
 // delivery over the same fold re-derives it, so an attempt lost to an eviction costs nothing, and every
 // append is idempotency-keyed so a retry appends nothing twice.
 import { z } from "zod";
+import { errorCode } from "iterate/next/lib";
 import {
   type ConsumedEvent,
   type EmittedEventInput,
@@ -806,7 +807,14 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     );
     try {
       const { path } = await this.#identity();
-      const tree = await this.deps.withItx((itx) => itx.cd(`${path}/sandbox`).rewriteRules.list());
+      const tree = await this.deps
+        .withItx((itx) => itx.cd(`${path}/sandbox`).rewriteRules.list())
+        .catch((error: unknown) => {
+          // A fully masked sandbox deliberately denies introspection too. Give the model no
+          // advertised tools; prose replies still work. Transport/runtime failures remain errors.
+          if (errorCode(error) === "NO_ITX_EXPRESSION_MATCH") return [];
+          throw error;
+        });
       const items = state.contextItems.filter((item) => item.offset < open.requestedAtOffset);
       // The images the model will see: read now, the freshest bytes at the request; one that is
       // gone (deleted meanwhile) is named instead of shown.
