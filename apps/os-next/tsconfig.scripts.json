@@ -18,6 +18,8 @@
     "scripts/erase-data.ts",
     "scripts/generate-wrangler-config.ts",
     "scripts/preview.ts",
-    "scripts/e2e-soak.ts"
+    "scripts/preview-config.ts",
+    "scripts/e2e-soak.ts",
+    "scripts/preview.test.ts"
   ]
 }

@@ -152,12 +152,12 @@ type PrepareConfinedWorkerOptions = {
 
 /**
  * THE one loading step, in two halves. RESOLVE, now: source → the cache key → `loaderId`, the
- * LOADED IDENTITY `IterateContextDurableObject#invokeFacet` stores as the facet's restart marker
+ * LOADED IDENTITY `FacetHost#invoke` stores as the facet's restart marker
  * (the one await is a dead id's recovery, which produces the modules OUTSIDE the loader so a
  * failure poisons nothing). LOAD, when the caller says: `load()` mints or reuses the confined
  * isolate under that identity and stops at the `worker` handle. "Name the code", "load the code"
  * and "choose the host" are visibly separate: `itx.workers.get` calls `load()` at once (a stateless
- * entrypoint per call; the loader caches by key); `IterateContextDurableObject#invokeFacet` calls
+ * entrypoint per call; the loader caches by key); `FacetHost#invoke` calls
  * it only for a facet that STARTS — a call to a RUNNING facet never touches the loader
  * (Cloudflare's facet lifecycle; apps/os PR #2631 measured the alternative: one isolate lookup per
  * warm call).

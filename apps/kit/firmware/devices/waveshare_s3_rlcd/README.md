@@ -53,7 +53,7 @@ and writes only complete frames. ST7305 command **0x20** gives the required
 1=black polarity; the vendor's 0x21 setting inverts our pixels. The setter waits
 for `screen.status()` refresh completion. Health exposes uploads and failures.
 HTML, fonts and conversion stay on the server. The
-[drawing guide](../../../../os-next/examples/voice-agent/screen-context.md)
+[drawing guide](../../../../agents/voice/screen-context.md)
 is supplied through the screen capability, with a licensed ASCII pixel font
 embedded in project KV; it needs no external font fetch.
 

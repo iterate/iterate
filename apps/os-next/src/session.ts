@@ -1,3 +1,9 @@
+import {
+  normalizeConfigRepoTemplateReference,
+  parseConfigRepoTemplateReference,
+  formatConfigRepoTemplateReference,
+} from "@iterate-com/shared/config-repo-template/reference";
+import { pinPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
 // Public /api starts with a session: the OAuth gate's, resolved on the upgrade, or one a bare
 // socket authenticates IN-BAND — a bearer token, or the operator's admin secret. Sessions vend
 // project contexts and own their teardown.
@@ -8,8 +14,9 @@ import type { IterateApi } from "iterate/next/api";
 import { codedError } from "iterate/next/lib";
 import { verifyAdminSecret, type Caller, type Principal } from "iterate/next/principal";
 import type { StreamEventInput } from "iterate/next/stream/processor";
-import type { Consent } from "./consent.ts";
-import type { Grants } from "./grants.ts";
+import { templates } from "./generated/config-templates.js";
+import type { ConsentRpcTarget } from "./consent.ts";
+import type { GrantsRpcTarget } from "./grants.ts";
 import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import {
   DurableObjectNameCodec,
@@ -22,18 +29,15 @@ import type { AppConfig } from "./app-config.ts";
 import type { AuthenticationFact } from "./account/contract.ts";
 import type { ProjectState } from "./project/contract.ts";
 
-/** A project as a caller names it: its minted id (`prj_<hex>`) or its slug (a URL's
- *  `/projects/<slug>`, a hostname's label) — the directory resolves either (`projectIdOf`), and the
- *  id alone goes on: the DO name's host, a grant's list, `whoami()`. */
-export type ProjectRef = string;
-
 /** What `IterateRpcTarget.authenticate` accepts. `from-server-cookie` is the browser and `bearer` is
- *  a device or script whose token rode the upgrade: the OAuth gate already resolved the session from
- *  the request, so either only says "hand me that session". `bearer` WITH a `token` is the in-band
- *  form (capnweb's own pattern): a client that opened the socket bare — a static page on another
- *  origin, whose browser cannot put a header on a WebSocket (api.ts) — presents its token here, and
- *  it goes through the same gate. `admin-secret` is the operator/CLI credential, verified in-band on
- *  any transport — a bare socket, or one the gate already resolved. */
+ *  a device or script whose token rode the upgrade: the OAuth gate already resolved the session
+ *  from the request, so either only says "hand me that session". Kit firmware (itx_mount.c) sends
+ *  `{ type: "bearer" }` alone — the token-less form exists for it.
+ *  `bearer` WITH a `token` is the in-band form (capnweb's own pattern): a client that opened the
+ *  socket bare — a static page on another origin, whose browser cannot put a header on a WebSocket
+ *  (api.ts) — presents its token here, and it goes through the same gate. `admin-secret` is the
+ *  operator/CLI credential, verified in-band on any transport — a bare socket, or one the gate
+ *  already resolved. */
 const SessionCredentials = z.discriminatedUnion("type", [
   z.object({ type: z.literal("from-server-cookie") }),
   z.object({ type: z.literal("bearer"), token: z.string().min(1).optional() }),
@@ -45,9 +49,6 @@ const SessionCredentials = z.discriminatedUnion("type", [
 ]);
 export type SessionCredentials = z.infer<typeof SessionCredentials>;
 
-/** The verified user or configured administrator acting through this session. */
-export type SessionPrincipal = Principal;
-
 /** What every session is built from: the edge's bindings, the configuration and THIS request. */
 export interface SessionInput {
   contextNamespace: IterateContextNamespace;
@@ -55,8 +56,9 @@ export interface SessionInput {
   directory: Directory;
   /** Configuration for operator authentication and context capabilities. */
   appConfig: AppConfig;
-  /** THE PLATFORM ORIGIN this session was reached on (app-config.ts `platformOriginOf`) — what every context it
-   *  vends composes public URLs with (a DO isolate cannot know it: the caller carries it). */
+  /** THE PLATFORM ORIGIN this session was reached on (app-config.ts `platformAddressesOf`) — what
+   *  every context it vends composes public URLs with (a DO isolate cannot know it: the caller
+   *  carries it). */
   platformOrigin: string;
   /** A live transport tracks projects whose capabilities it has handed out. */
   onProjectAccess?: (projectId: string) => void;
@@ -144,7 +146,7 @@ export class IterateRpcTarget extends RpcTarget {
    *  per-authenticate for now (a reconnect re-publishes); narrowing it to credential-establishment is
    *  a later refinement. Attribution is the user's until the platform principal lands. */
   #publishAuthenticationFact(
-    principal: SessionPrincipal,
+    principal: Principal,
     credential: "from-server-cookie" | "admin-secret",
   ): void {
     if (!principal.email) return;
@@ -170,8 +172,8 @@ export class IterateRpcTarget extends RpcTarget {
  *  it happened, attributed to who did it and through which connection. Best-effort and ASYNC
  *  (waitUntil), off the verb's own path: the directory stays the truth for the state, this is the
  *  record of it — a fact lost to an eviction is a gap in the record, never a failed action. */
-function publishGlobalFact(
-  input: SessionInput,
+export function publishGlobalFact(
+  input: Pick<SessionInput, "contextNamespace" | "waitUntil">,
   path: string,
   /** The first-party processor that folds the fact (first-party-facets.ts): its row on the context
    *  is enabled first — idempotent at the door, so every fact re-asks and only the first appends. */
@@ -196,20 +198,20 @@ function publishGlobalFact(
 /** What you authenticate into: a catalog that vends contexts. A session is NOT a context — it is
  *  the directory you reach one through (apps/os: "a session is what authenticate() returns"). */
 export type SessionAuthority = {
-  principal: SessionPrincipal;
+  principal: Principal;
   /** The OAuth grant this session IS — the connection, stamped beside the principal on every event
    *  (`source.grant`); absent for the admin secret and the in-band cookie/admin authenticate. */
   grant?: string;
   reach: Reach;
-  grants?: Grants;
-  consent?: Consent;
+  grants?: GrantsRpcTarget;
+  consent?: ConsentRpcTarget;
   scopes?: string[];
 };
 
 export class SessionRpcTarget extends RpcTarget {
   readonly #sessionTeardown: SessionTeardown;
-  readonly #projects: ProjectCollection;
-  readonly #organizations: OrganizationCollection;
+  readonly #projects: ProjectCollectionRpcTarget;
+  readonly #organizations: OrganizationCollectionRpcTarget;
   readonly #input: SessionInput;
   readonly #authority: SessionAuthority;
 
@@ -218,7 +220,7 @@ export class SessionRpcTarget extends RpcTarget {
     this.#input = input;
     this.#authority = authority;
     this.#sessionTeardown = sessionTeardown;
-    this.#projects = new ProjectCollection(
+    this.#projects = new ProjectCollectionRpcTarget(
       input,
       sessionTeardown,
       {
@@ -228,7 +230,7 @@ export class SessionRpcTarget extends RpcTarget {
       },
       authority.reach,
     );
-    this.#organizations = new OrganizationCollection(
+    this.#organizations = new OrganizationCollectionRpcTarget(
       (orgId) => this.#reachesOrg(orgId),
       (orgId) => this.#globalContext(`/organizations/${orgId}`),
     );
@@ -247,7 +249,7 @@ export class SessionRpcTarget extends RpcTarget {
   }
 
   /** Attribution comes from the admission gate, never from the caller. */
-  whoami(): SessionPrincipal {
+  whoami(): Principal {
     return this.#authority.principal;
   }
 
@@ -375,14 +377,14 @@ export class SessionRpcTarget extends RpcTarget {
 
   /** The project catalog. A GETTER, not a field: capnweb (like Workers RPC) exposes prototype
    *  members only — an instance property is private state and is refused over the wire. */
-  get projects(): ProjectCollection {
+  get projects(): ProjectCollectionRpcTarget {
     return this.#projects;
   }
 
   /** The organizations this session can reach, each as a global IterateContextRpcTarget at
    *  `(global, /organizations/<orgId>)` — the same context surface as a user or a project. `orgs()`
    *  returns the directory rows; this vends the org's context, by membership. */
-  get organizations(): OrganizationCollection {
+  get organizations(): OrganizationCollectionRpcTarget {
     return this.#organizations;
   }
 
@@ -426,7 +428,7 @@ export class SessionRpcTarget extends RpcTarget {
 /** The organization catalog: `get(orgId)` vends an organization's context in the deployment-global
  *  namespace, `(global, /organizations/<orgId>)` — BY MEMBERSHIP (`SessionRpcTarget.#reachesOrg`):
  *  an org the session does not reach is FORBIDDEN, exactly as `projects.get` outside its reach. */
-class OrganizationCollection extends RpcTarget {
+class OrganizationCollectionRpcTarget extends RpcTarget {
   readonly #reachesOrg: (orgId: string) => Promise<boolean>;
   readonly #context: (orgId: string) => IterateContextRpcTarget;
 
@@ -459,9 +461,9 @@ class OrganizationCollection extends RpcTarget {
 }
 
 /** The project catalog: `list()`, `get(project)`, `create({ project })` — get and create vend the
- *  project's root context. What a session reaches is its `Reach` (control-plane.ts): every project,
+ *  project's root context. What a session reaches is its `Reach` (directory.ts): every project,
  *  the projects of the user's orgs, or the projects named outright. */
-class ProjectCollection extends RpcTarget {
+class ProjectCollectionRpcTarget extends RpcTarget {
   readonly #input: SessionInput;
   readonly #sessionTeardown: SessionTeardown;
   readonly #reach: Reach;
@@ -489,8 +491,22 @@ class ProjectCollection extends RpcTarget {
    *  deployment's own org for the admin secret — and vend its root context. A grant narrowed to
    *  named projects creates none: FORBIDDEN. A slug ANY org already holds is refused, coded
    *  (PROJECT_NAME_TAKEN); the same org's again is idempotent. */
-  async create(input: { project: string; orgId?: string }): Promise<IterateContextRpcTarget> {
-    const data = z.object({ project: z.string(), orgId: z.string().optional() }).parse(input);
+  async templates() {
+    return templates;
+  }
+
+  async create(input: {
+    project: string;
+    orgId?: string;
+    configRepoTemplate?: string;
+  }): Promise<IterateContextRpcTarget> {
+    const data = z
+      .object({
+        project: z.string(),
+        orgId: z.string().optional(),
+        configRepoTemplate: z.string().transform(normalizeConfigRepoTemplateReference).optional(),
+      })
+      .parse(input);
     const project = await this.#input.directory.createProject(
       this.#reach,
       data.project,
@@ -527,6 +543,12 @@ class ProjectCollection extends RpcTarget {
     ])) as { state: ProjectState };
     if (state.creation?.status === "created" || state.creation?.status === "requested")
       return context;
+    // Pin once, before the durable request. A resumed creation always reads the same tree.
+    const configRepoTemplate = data.configRepoTemplate
+      ? formatConfigRepoTemplateReference(
+          await pinPublicGithubTemplate(parseConfigRepoTemplateReference(data.configRepoTemplate)),
+        )
+      : undefined;
     await context.invoke(["itx", "processors", ["enable", "project"]]);
     await context.invoke([
       "itx",
@@ -534,18 +556,24 @@ class ProjectCollection extends RpcTarget {
         "append",
         {
           type: "events.iterate.com/project/create-requested",
-          payload: { slug: project.slug, orgId: project.orgId },
+          payload: {
+            slug: project.slug,
+            orgId: project.orgId,
+            configRepoTemplate,
+          },
         },
       ],
     ]);
     return context;
   }
 
-  /** The project's root context ("/"), by its slug or its id. A project only — a context name
-   *  belongs to `cd`. Outside this session's reach is FORBIDDEN; so is the global namespace's id (it
-   *  is no project). The admin secret alone addresses a project the directory never heard of, by
-   *  id (a fresh context of its own). */
-  async get(project: ProjectRef): Promise<IterateContextRpcTarget> {
+  /** The project's root context ("/"), by its minted id (`prj_<hex>`) or its slug (a URL's
+   *  `/projects/<slug>`, a hostname's label) — the directory resolves either (`projectIdOf`), and
+   *  the id alone goes on: the DO name's host, a grant's list, `whoami()`. A project only — a
+   *  context name belongs to `cd`. Outside this session's reach is FORBIDDEN; so is the global
+   *  namespace's id (it is no project). The admin secret alone addresses a project the directory
+   *  never heard of, by id (a fresh context of its own). */
+  async get(project: string): Promise<IterateContextRpcTarget> {
     const address = DurableObjectNameCodec.parse(project);
     if (address.path !== "/")
       throw new Error(

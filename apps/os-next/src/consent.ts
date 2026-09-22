@@ -14,28 +14,30 @@ import {
   projectAddressOf,
   type IngressRouting,
 } from "iterate/next/project-ingress";
-import { DurableObjectNameCodec } from "./iterate-context.ts";
-import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import { type ConsentApproved } from "./account/contract.ts";
-import type { Env } from "./control-plane.ts";
+import type { Env } from "./env.ts";
 import { directory, type Org, type Project } from "./directory.ts";
-import { appConfigOf } from "./app-config.ts";
+import { appConfigOf, type PlatformAddresses } from "./app-config.ts";
 import {
   authorizationOf,
-  oauthAddresses,
   oauthHelpers,
   parseAuthorization,
   type AccessGrant,
   type GrantProps,
 } from "./oauth.ts";
+import { clientDisplay } from "./client-display.ts";
+import { publishGlobalFact } from "./session.ts";
 
 export type ConsentView =
   | {
       kind: "consent";
       query: string;
       clientName: string;
-      /** the OAuth client id (the consent hero shows the client by its initials) */
+      /** The OAuth client id, independently of the app-supplied display name and logo. */
       clientId: string;
+      clientLogoUri?: string;
+      /** CIMD's metadata host, otherwise the registered client's self-declared website host. */
+      clientDomain?: string;
       email: string;
       /** the identity provider's picture of the signed-in person, when the sign-in brought one */
       picture?: string;
@@ -99,20 +101,20 @@ function authorizationFailure(
 
 /** This capability exists only on the grant minted by verified issuer sign-in.
  * Account scope and a copied issuer client ID never confer approval authority. */
-export class Consent extends RpcTarget {
+export class ConsentRpcTarget extends RpcTarget {
   readonly #env: Env;
   readonly #ctx: ExecutionContext;
   readonly #grant: AccessGrant;
-  /** the platform origin this session reached the platform on (app-config.ts `platformOriginOf`) */
-  readonly #platformOrigin: string;
-  constructor(env: Env, ctx: ExecutionContext, grant: AccessGrant, platformOrigin: string) {
+  /** where this session reached the platform (app-config.ts `platformAddressesOf`) */
+  readonly #addresses: PlatformAddresses;
+  constructor(env: Env, ctx: ExecutionContext, grant: AccessGrant, addresses: PlatformAddresses) {
     super();
     if (grant.kind !== "issuer")
       throw codedError("FORBIDDEN", "Sign in to iterate to approve access.");
     this.#env = env;
     this.#ctx = ctx;
     this.#grant = grant;
-    this.#platformOrigin = platformOrigin;
+    this.#addresses = addresses;
   }
   async #request(query: unknown) {
     // Issuing a new grant must not spend the live transport's revocation grace.
@@ -121,14 +123,15 @@ export class Consent extends RpcTarget {
     const search = z.string().parse(query).replace(/^\?/, "");
     return parseAuthorization(
       this.#env,
-      new Request(`${oauthAddresses(this.#env, this.#platformOrigin).issuer}/authorize?${search}`),
+      new Request(`${this.#addresses.platformOrigin}/oauth2/auth?${search}`),
     );
   }
   async describe(query: string): Promise<ConsentView> {
     const env = this.#env;
     try {
       const request = await this.#request(query);
-      const client = await oauthHelpers(env, this.#platformOrigin).lookupClient(request.clientId);
+      const client = await oauthHelpers(env, this.#addresses).lookupClient(request.clientId);
+      const display = clientDisplay(client, request.clientId);
       const denied = new URL(request.redirectUri);
       denied.searchParams.set("error", "access_denied");
       denied.searchParams.set("error_description", "The user declined access.");
@@ -138,8 +141,10 @@ export class Consent extends RpcTarget {
         kind: "consent",
         query,
         denyLocation: denied.href,
-        clientName: client?.clientName ?? request.clientId,
+        clientName: display.clientName,
         clientId: request.clientId,
+        clientLogoUri: display.logoUri,
+        clientDomain: display.clientDomain,
         email: this.#grant.email,
         picture: this.#grant.picture,
         // parseAuthorization admitted only known scopes
@@ -155,7 +160,7 @@ export class Consent extends RpcTarget {
         }),
         ...(await projectsForClient(
           env,
-          this.#platformOrigin,
+          this.#addresses.platformOrigin,
           request.clientId,
           this.#grant.userId,
         )),
@@ -183,10 +188,10 @@ export class Consent extends RpcTarget {
       .parse(input);
     try {
       const request = await this.#request(data.query);
-      const client = await oauthHelpers(env, this.#platformOrigin).lookupClient(request.clientId);
+      const client = await oauthHelpers(env, this.#addresses).lookupClient(request.clientId);
       const { projects, projectBound } = await projectsForClient(
         env,
-        this.#platformOrigin,
+        this.#addresses.platformOrigin,
         request.clientId,
         this.#grant.userId,
       );
@@ -202,10 +207,10 @@ export class Consent extends RpcTarget {
         ),
       );
       const clientName = client?.clientName ?? request.clientId;
-      const approved = await oauthHelpers(env, this.#platformOrigin).completeAuthorization({
+      const approved = await oauthHelpers(env, this.#addresses).completeAuthorization({
         request,
         userId: this.#grant.userId,
-        metadata: { clientName },
+        metadata: clientDisplay(client, request.clientId),
         scope,
         revokeExistingGrants: false,
         props: {
@@ -218,37 +223,27 @@ export class Consent extends RpcTarget {
         } satisfies GrantProps,
       });
       // The fact of the approval, on the person's account context, stamped with them and the
-      // issuer grant they approved through (session.ts `publishGlobalFact` says why best-effort).
-      const account = DurableObjectNameCodec.stringify({
-        projectId: GLOBAL_PROJECT_ID,
-        path: `/users/${this.#grant.userId}`,
-      });
-      const fact = {
-        type: "events.iterate.com/account/consent-approved",
-        payload: {
-          clientId: request.clientId,
-          clientName,
-          projects: allProjects ? null : granted,
-          scopes: scope,
-        } satisfies ConsentApproved,
-      };
-      const caller = {
-        principal: { actor: this.#grant.userId, email: this.#grant.email },
-        grant: this.#grant.grantId,
-      };
-      this.#ctx.waitUntil(
-        // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the append's
-        // answer is not read.
-        (
-          env.ITERATE_CONTEXT.getByName(account).invoke(
-            ["itx", ["append", fact]],
-            [],
-            caller,
-          ) as Promise<unknown>
-        ).then(
-          () => undefined,
-          () => undefined,
-        ),
+      // issuer grant they approved through.
+      publishGlobalFact(
+        {
+          contextNamespace: env.ITERATE_CONTEXT,
+          waitUntil: (promise) => this.#ctx.waitUntil(promise),
+        },
+        `/users/${this.#grant.userId}`,
+        "account",
+        {
+          type: "events.iterate.com/account/consent-approved",
+          payload: {
+            clientId: request.clientId,
+            clientName,
+            projects: allProjects ? null : granted,
+            scopes: scope,
+          } satisfies ConsentApproved,
+        },
+        {
+          principal: { actor: this.#grant.userId, email: this.#grant.email },
+          grant: this.#grant.grantId,
+        },
       );
       return approved;
     } catch (error) {

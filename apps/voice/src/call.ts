@@ -1,4 +1,4 @@
-// One call from a browser: the device's exact calls (apps/os-next/scripts/voice-call.ts, in a
+// One call from a browser: the device's exact calls (apps/agents/scripts/voice-call.ts, in a
 // browser). Press = a fresh context: one `setupVoiceAgent` append puts the relay and the agent on
 // it and starts the call; a subscription brings the answer's frames and the call's facts back;
 // microphone frames go up as ephemeral appends, twenty a second; hanging up appends the terminal.
@@ -54,7 +54,7 @@ export async function startCall(input: {
   // A project with no voice install has no `itx.voice`: say so before anything is appended.
   await project.invoke(["itx", "voice", ["health"]]).catch((error: unknown) => {
     throw new Error(
-      `This project has no voice agent yet (${error instanceof Error ? error.message : String(error)}). Run apps/os-next/scripts/voice-install.ts for it.`,
+      `This project has no voice agent yet (${error instanceof Error ? error.message : String(error)}). Open https://k.iterate.com and prepare this project to install voice.`,
     );
   });
   const call = (project as unknown as { cd(path: string): CallItx }).cd(streamPath);

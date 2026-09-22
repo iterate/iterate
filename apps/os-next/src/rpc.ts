@@ -1,7 +1,7 @@
 import { newWorkersRpcResponse, RpcSession, WebSocketTransport } from "capnweb";
-import type { Env } from "./control-plane.ts";
-import { Consent } from "./consent.ts";
-import { Grants } from "./grants.ts";
+import type { Env } from "./env.ts";
+import { ConsentRpcTarget } from "./consent.ts";
+import { GrantsRpcTarget } from "./grants.ts";
 import { directory } from "./directory.ts";
 import {
   authorizationForToken,
@@ -15,7 +15,7 @@ import {
   type SessionAuthority,
   type SessionInput,
 } from "./session.ts";
-import { appConfigOf, platformOriginOf } from "./app-config.ts";
+import { appConfigOf, platformAddressesOf } from "./app-config.ts";
 
 /** Cap’n Web always terminates at /api in the stateless edge. Its root is an
  * already-authorized session — or, on a socket opened BARE (api.ts: no credential on the upgrade),
@@ -28,19 +28,20 @@ export async function rpcResponse(
   ctx: ExecutionContext,
   auth: Authorization | null,
 ) {
-  // THE PLATFORM ORIGIN this transport reached the platform on (app-config.ts): every address and
-  // every caller stamp downstream is at it.
-  const platformOrigin = platformOriginOf(appConfigOf(env), request);
+  // THE PLATFORM ADDRESSES this transport reached the platform at (app-config.ts): every address
+  // and every caller stamp downstream is at them.
+  const addresses = platformAddressesOf(env, request);
+  const { platformOrigin } = addresses;
   const projects = new Set<string>();
   const teardown = new SessionTeardown();
   const authorityOf = (authorization: Authorization): SessionAuthority => ({
     principal: authorization.principal,
     grant: authorization.grant?.grantId,
     reach: authorization.reach,
-    grants: new Grants(env, ctx, authorization, platformOrigin),
+    grants: new GrantsRpcTarget(env, ctx, authorization, addresses),
     scopes: authorization.grant?.scope,
     ...(authorization.grant?.kind === "issuer" && {
-      consent: new Consent(env, ctx, authorization.grant, platformOrigin),
+      consent: new ConsentRpcTarget(env, ctx, authorization.grant, addresses),
     }),
   });
   // THE GRANT THIS TRANSPORT CARRIES: the upgrade's (resolved by the gate before this call), or the
@@ -61,7 +62,7 @@ export async function rpcResponse(
       if (bound || binding) throw new Error("This transport already carries a session");
       binding = true;
       try {
-        const authorization = await authorizationForToken(env, ctx, token, platformOrigin);
+        const authorization = await authorizationForToken(env, ctx, token, addresses);
         if (!authorization) return null;
         if (authorization.grant) ctx.waitUntil(recordGrantUse(env, authorization.grant));
         bound = authorization;

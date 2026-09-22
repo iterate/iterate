@@ -89,7 +89,7 @@ Use the target's partition CSV and generated `flasher_args.json` to establish
 those offsets. The release builder checks them against the actual binary
 partition table. Provide its checked-in chime assets if it uses them. The
 browser selector and the release builder consume the catalog. The air-path
-proof, `apps/os-next/scripts/voice-board.ts`, takes the device name on
+proof, `apps/agents/scripts/voice-board.ts`, takes the device name on
 `--device` and needs no registration.
 
 ## Remote screens
@@ -102,7 +102,7 @@ facts; `screen.setImage()` accepts contiguous bounded base64 chunks and
 16-level grayscale (`gray4`) and big-endian RGB565 use row-major pixels with
 each row padded to whole bytes. Panel-native packing belongs to the driver.
 
-`apps/os-next/examples/voice-agent/screen.ts` validates metadata and converts
+`apps/agents/voice/screen.ts` validates metadata and converts
 browser PNGs at the advertised resolution; `voice.setImage` waits for a bounded
 refresh acknowledgment. E-paper submits to a separate task so image updates
 cannot stall voice capture, playback or button handling. The voice loop checks
@@ -157,10 +157,8 @@ and ends the process. Health carries `macCaptureFrames`, `macCaptureDropped`,
 
 ### Provisioning
 
-Kit Flasher's **Prepare device** step calls the chosen project's
-`itx.voice.health()` — a project without the voice agent
-(`apps/os-next/scripts/voice-install.ts` installs it, beside `/secrets/openai`)
-gets no grant — then mints a ten-year personal access token scoped to that
+Kit Flasher's **Prepare device** step installs the voice agent when missing,
+asks for an OpenAI key if needed, and verifies `itx.voice.health()` before it mints a ten-year personal access token scoped to that
 project, named `Kit <board> <date>` in the person's OS sessions list. The
 browser writes Wi-Fi, OS URL, project id and that token into the versioned
 `iterate_kit` partition on the connected board. Credentials never enter the Kit

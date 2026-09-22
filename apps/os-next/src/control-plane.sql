@@ -21,8 +21,20 @@ create table if not exists google_identities (
   user_id text not null unique references users(id)
 );
 
+-- Keep the Google table for existing deployments; copy its stable links idempotently at boot.
+create table if not exists user_identities (
+  provider text not null,
+  subject text not null,
+  user_id text not null references users(id),
+  primary key (provider, subject),
+  unique (provider, user_id)
+);
+
+insert or ignore into user_identities (provider, subject, user_id)
+select 'google', subject, user_id from google_identities;
+
 create table if not exists orgs (
-  id text primary key,            -- org_<hex> (minted), or org_admin — the deployment's own, no members (control-plane.ts adminOrg)
+  id text primary key,            -- org_<hex> (minted), or org_admin — the deployment's own, no members (directory.ts adminOrg)
   name text not null,
   created_at text not null default current_timestamp
 );

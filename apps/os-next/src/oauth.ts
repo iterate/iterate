@@ -9,9 +9,9 @@ import {
 import { z } from "zod";
 import { OAuthScope, OAuthScopes } from "iterate/next/oauth-scopes";
 import { verifyAdminSecret, type Principal } from "iterate/next/principal";
-import type { Env, Handler } from "./control-plane.ts";
+import type { Env, Handler } from "./env.ts";
 import { type Reach } from "./directory.ts";
-import { appConfigOf, platformOriginOf } from "./app-config.ts";
+import { appConfigOf, platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
 
 /** Encrypted by the provider. Every grant is created through parseAuthorization,
  * so this version also proves the grant has a nonempty, allowed resource audience. */
@@ -20,7 +20,7 @@ export const GrantProps = z.object({
   version: z.literal(2),
   userId: z.string().startsWith("user_"),
   email: z.string(),
-  /** the identity provider's picture and display name of the person (Google's), shown where the
+  /** the identity provider's picture and display name of the person (when the provider supplies them), shown where the
    *  grant's session is — the consent page's "signed in as"; the name seeds the onboarding step's
    *  organization name */
   picture: z.string().optional(),
@@ -31,8 +31,7 @@ export const GrantProps = z.object({
 export type GrantProps = z.infer<typeof GrantProps>;
 
 const AccessGrant = GrantProps.extend({
-  /** The provider mints it (16 url-safe characters); it names the connection's own context of a
-   *  project, `/mcp/inbound/grants/<grantId>` (mcp.ts). */
+  /** The provider mints it (16 url-safe characters); MCP stamps it on project-root run requests. */
   grantId: z.string().min(1),
   scope: z.array(z.string()),
   expiresAt: z.number().int().positive(),
@@ -50,25 +49,12 @@ export type Authorization = {
   grant: AccessGrant | null;
 };
 
-/** Canonical resource identifiers, including the MCP root's explicit slash, at `platformOrigin` —
- *  the issuer (app-config.ts `platformOriginOf`: what the request in hand reached the platform on;
- *  a session carries it as `SessionInput.platformOrigin`). */
-export function oauthAddresses(env: Env, platformOrigin: string) {
-  const config = appConfigOf(env);
-  const issuer = platformOrigin;
-  return {
-    issuer,
-    api: `${issuer}/api`,
-    mcp: config.urls.mcp ? `${config.urls.mcp}/` : `${issuer}/mcp`,
-  };
-}
-
 /** The provider validates clients, redirects and PKCE. We own the finite set of
  * resources this authorization server may grant; omission never creates an unbound token. */
 export async function parseAuthorization(env: Env, request: Request): Promise<AuthRequest> {
-  const platformOrigin = platformOriginOf(appConfigOf(env), request);
-  const auth = await oauthHelpers(env, platformOrigin).parseAuthRequest(request);
-  const { api, mcp } = oauthAddresses(env, platformOrigin);
+  const addresses = platformAddressesOf(env, request);
+  const auth = await oauthHelpers(env, addresses).parseAuthRequest(request);
+  const { api, mcp } = addresses;
   const resources = [...new Set(auth.resource ? [auth.resource].flat() : [])];
   if (
     !resources.length ||
@@ -148,26 +134,24 @@ WHERE oauth_activity.last_used_at IS NULL OR oauth_activity.last_used_at < ?`)
  * parseAuthorization is the only public consent path and requires allowed resources. */
 export function providerOptions(
   env: Env,
-  platformOrigin: string,
+  { platformOrigin: issuer, api, mcp }: PlatformAddresses,
   apiHandler: Handler = notFound,
   defaultHandler: Handler = notFound,
 ): OAuthProviderOptions<Env> {
-  const { issuer, api, mcp } = oauthAddresses(env, platformOrigin);
   return {
     apiHandlers: { [api]: apiHandler, [mcp]: apiHandler },
     defaultHandler,
-    authorizeEndpoint: `${issuer}/authorize`,
-    tokenEndpoint: `${issuer}/oauth/token`,
+    authorizeEndpoint: `${issuer}/oauth2/auth`,
+    tokenEndpoint: `${issuer}/oauth2/token`,
     // DCR is served on every deployment (not just local http): CIMD stays the console's own path
     // (browser-session.ts uses a client-id metadata document), but standard MCP clients (the MCP
     // Inspector, Claude's connector) require dynamic registration, so the endpoint is always published.
-    clientRegistrationEndpoint: `${issuer}/oauth/register`,
+    clientRegistrationEndpoint: `${issuer}/oauth2/register`,
     scopesSupported: OAuthScope.options,
-    resourceMetadata: {
-      ...(issuer.startsWith("https:") && { authorization_servers: [issuer] }),
-      // Initial challenges request the minimum permission; account is explicit opt-in.
-      scopes_supported: ["iterate"],
-    },
+    // The provider's own protected-resource metadata endpoint never runs (api.ts answers
+    // `/.well-known/oauth-protected-resource*` first), but this list is the `scope=` of every 401
+    // challenge on `/api` and `/mcp`: the minimum permission; account is explicit opt-in.
+    resourceMetadata: { scopes_supported: ["iterate"] },
     clientIdMetadataDocumentEnabled: true,
     allowPlainPKCE: false,
     async resolveExternalToken({ token }) {
@@ -210,8 +194,8 @@ export function providerOptions(
   };
 }
 
-export function oauthHelpers(env: Env, platformOrigin: string) {
-  return getOAuthApi(providerOptions(env, platformOrigin), env);
+export function oauthHelpers(env: Env, addresses: PlatformAddresses) {
+  return getOAuthApi(providerOptions(env, addresses), env);
 }
 
 /** The browser adapter asks the same provider gate to admit its server-held token
@@ -220,7 +204,7 @@ export async function authorizationForToken(
   env: Env,
   ctx: ExecutionContext,
   token: string,
-  platformOrigin: string,
+  addresses: PlatformAddresses,
 ) {
   let authorization: Authorization | null = null;
   const admission: Handler = {
@@ -229,10 +213,10 @@ export async function authorizationForToken(
       return new Response(null, { status: authorization ? 204 : 401 });
     },
   };
-  const apiRequest = new Request(oauthAddresses(env, platformOrigin).api, {
+  const apiRequest = new Request(addresses.api, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  const response = await new OAuthProvider(providerOptions(env, platformOrigin, admission)).fetch(
+  const response = await new OAuthProvider(providerOptions(env, addresses, admission)).fetch(
     apiRequest,
     env,
     ctx,
@@ -246,7 +230,7 @@ export async function authorizationForToken(
  * the authenticated request's grant. The D1 marker precedes KV cleanup. */
 export async function revokeGrant(
   env: Env,
-  platformOrigin: string,
+  addresses: PlatformAddresses,
   grant: { userId: string; grantId: string },
 ) {
   await env.DB.prepare(`INSERT INTO oauth_activity (user_id, grant_id, revoked_at, cleanup_pending)
@@ -255,7 +239,7 @@ SET revoked_at = COALESCE(oauth_activity.revoked_at, excluded.revoked_at), clean
     .bind(grant.userId, grant.grantId, Date.now())
     .run();
   try {
-    await oauthHelpers(env, platformOrigin).revokeGrant(grant.grantId, grant.userId);
+    await oauthHelpers(env, addresses).revokeGrant(grant.grantId, grant.userId);
   } catch (error) {
     console.error("oauth.revoke_cleanup_failed", {
       userId: grant.userId,

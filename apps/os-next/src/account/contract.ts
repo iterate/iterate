@@ -11,7 +11,7 @@
 //   ConsumedEvent<typeof AccountContract>                    what the reduce sees
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
-import { SecretContract } from "../secret/contract.ts";
+import { SecretCatalog, SecretContract } from "../secret/contract.ts";
 
 // Each fact's payload is spelled once and used twice — by its event and by the state that keeps it.
 
@@ -77,19 +77,8 @@ export const AccountContract = defineProcessorContract({
     endedGrants: z.record(z.string(), z.object({ at: z.string() })).default({}),
     /** Every consent approved, in order: the client and what it was given. */
     consents: z.array(ConsentApproved.extend({ at: z.string() })).default([]),
-    /** Every secret set under this owner, by its path (`/secrets/<name>`, what the placeholder
-     *  spells; the context lives under this root): the pin, the refresh strategy's kind, and when
-     *  it was first set — never a value. What `itx.secrets.list()` reads here. */
-    secrets: z
-      .record(
-        z.string(),
-        z.object({
-          urls: z.array(z.string()),
-          refresh: z.enum(["oauth-refresh-token", "waitrose-session"]).optional(),
-          createdAt: z.string(),
-        }),
-      )
-      .default({}),
+    /** Every secret set under this owner (src/secret/contract.ts): what `itx.secrets.list()` reads here. */
+    secrets: SecretCatalog.default({}),
   }),
   events: {
     "events.iterate.com/account/authenticated": {

@@ -1,0 +1,15 @@
+{
+  "name": "@iterate-com/spa",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "python3 -m http.server 8799 --bind 127.0.0.1 --directory public",
+    "deploy": "tsx scripts/deploy.ts",
+    "build": "tsx scripts/build.ts"
+  },
+  "devDependencies": {
+    "wrangler": "catalog:cloudflare",
+    "tsx": "^4.20.6",
+    "zod": "^4.1.5"
+  }
+}

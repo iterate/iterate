@@ -1,3 +1,4 @@
+import { errorCode } from "iterate/next/lib";
 // context/itx-expression-rewriting.ts — HOW A CALL FINDS ITS TARGET, pure and total. An itx-expression
 // REWRITE RULE is `{ match, target }`: a call that starts with `match` runs as the same call with
 // `match` replaced by `target`. Rewriting repeats until the call is rooted at THE RESERVED ROOT,
@@ -35,7 +36,7 @@
 
 import type { Caller } from "iterate/next/principal";
 import { codedError, jsonEqual, resolveContextPath } from "iterate/next/lib";
-import type { RewriteRuleConfigured } from "iterate/next/api";
+import type { RewriteRuleConfigured, RewriteRuleListEntry } from "iterate/next/api";
 import {
   callOn,
   InvokeHandle,
@@ -45,6 +46,7 @@ import {
   isItxExpressionHole,
   ITX_EXPRESSION_MERGE_KEY,
   itxExpressionStepName,
+  parse,
   parseItxExpressionPrefix,
   print,
   type ItxExpression,
@@ -93,10 +95,6 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
     "git on Artifacts; `/repos/config` is the project's code: `repos.get(path).readFile(f)` · `commitFiles({ message, changes })` · `repos.list()`",
   workspaces:
     "a private overlay over the repos: `workspaces.get(path).writeFile(f, text)` · `gitCommit({ message, scope })`",
-  agents:
-    "other agents, each a conversation on its own path: `agents.get(path).message(text)` · `agents.list()`",
-  mcpConnections:
-    "the MCP connections born under this project, by grant: itx.mcpConnections.list() → [{ grantId, path, createdAt }]",
   files:
     "project files: `files.get(path).put({ contentType, data })` · `.bytes()` · `.url()` · `files.list(prefix)`",
 } as const satisfies Record<string, string>;
@@ -462,7 +460,7 @@ export function rowsNamingRpcStub(args: {
  *  TARGET of a row it appends): never the fixed point, never a `cd` above `base` (self and descendants
  *  only, resolved step by step). Codec-style — nothing here is policy: the rows a call rewrites
  *  through are the owner's and are never checked. */
-export function admitLoadedCodeExpression(expression: ItxExpression, base: string): void {
+function admitLoadedCodeExpression(expression: ItxExpression, base: string): void {
   let at = base;
   for (const step of expression) {
     const name = typeof step === "string" ? step : step[0];
@@ -506,29 +504,41 @@ export function admitLoadedCodeRow(event: { type: string; payload?: unknown }, b
 }
 
 /** A bare `itx` row whose target is `cd` of THIS context is a loop no depth budget can see — every
- *  hop is a fresh resolve — so the append door refuses it where the path is known, whoever appends
- *  (`provide`, a script's `itx.append`). Two contexts pointing at each other stays a trusted-client
- *  misconfiguration. */
+ *  hop is a fresh resolve — so the append boundary refuses it against the path the row lands on
+ *  (core-processor.ts `normalizeControlEvent`), whichever caller appends: `provide`, a script's
+ *  `itx.append`, a sibling's `cd(path).append`, a schedule's batch, a pager attach. Two contexts
+ *  pointing at each other is refused only where it would be created (library.ts `createEntity`: a
+ *  context does not create its own ancestor); rows written by hand can still spell it, a
+ *  trusted-client misconfiguration. Runs on the normalized row: the match and target parsed once. */
 export function refuseSelfLoopRow(
-  event: { type: string; payload?: unknown },
+  row: { match: ItxExpression; target: ItxExpression | null },
   ownPath: string,
 ): void {
-  if (event.type !== "events.iterate.com/itx/rewrite-rule-configured") return;
-  const { match, target } = (event.payload ?? {}) as { match?: unknown; target?: unknown };
-  if (!target) return;
-  let steps: ItxExpression;
-  try {
-    if (parseItxExpressionPrefix(match as ItxExpressionInput).length !== 1) return;
-    steps = normalizedItxExpression(target as ItxExpressionInput, { holes: true });
-  } catch {
-    return; // the door's own validation says what is wrong with it
-  }
-  const cdStep = steps[1] === "builtins" ? steps[2] : steps[1];
+  if (row.match.length !== 1 || !row.target) return;
+  const cdStep = row.target[1] === "builtins" ? row.target[2] : row.target[1];
   if (!Array.isArray(cdStep) || cdStep[0] !== "cd" || typeof cdStep[1] !== "string") return;
   if (resolveContextPath(ownPath, cdStep[1]) === ownPath)
     throw new Error(
-      `a bare itx row may not name its own context: "itx ⇒ ${print(steps, { holes: true })}" at ${JSON.stringify(ownPath)} would route every call back to itself`,
+      `a bare itx row may not name its own context: "itx ⇒ ${print(row.target, { holes: true })}" at ${JSON.stringify(ownPath)} would route every call back to itself`,
     );
+}
+
+/** The `get` step of a RESOLVED target that addresses a registry's entry —
+ *  `itx.builtins.<registry>.get(name, …)`: `[1]` is the name, `[2]` a hosting spec when one rides
+ *  it. Undefined when the target is anything else. */
+export function builtInsGetStep(
+  resolved: ItxExpression,
+  registry: "facets" | "rpcStubs",
+): [method: "get", name: string, ...args: unknown[]] | undefined {
+  const getStep = resolved[3];
+  return resolved[1] === "builtins" &&
+    resolved[2] === registry &&
+    Array.isArray(getStep) &&
+    getStep[0] === "get" &&
+    typeof getStep[1] === "string"
+    ? // the checks above are exactly this tuple's shape; a call step's args are `unknown[]`
+      (getStep as [method: "get", name: string, ...args: unknown[]])
+    : undefined;
 }
 
 /** Every rpc-stub key some row (a rule, a subscription) currently names, resolved through the
@@ -547,20 +557,101 @@ export function rpcStubKeysNamed(args: {
   for (const target of targets) {
     try {
       const resolved = resolveItxExpression(() => rules, target, implicitRoots).at(-1)!;
-      const getStep = resolved[3];
-      if (
-        resolved[1] === "builtins" &&
-        resolved[2] === "rpcStubs" &&
-        Array.isArray(getStep) &&
-        getStep[0] === "get" &&
-        typeof getStep[1] === "string"
-      )
-        keys.add(getStep[1]);
+      const getStep = builtInsGetStep(resolved, "rpcStubs");
+      if (getStep) keys.add(getStep[1]);
     } catch {
       /* an unresolvable target names no key */
     }
   }
   return keys;
+}
+
+// ── THE TABLE, DESCRIBED (pure; the DO hands it the rows and the hop) ──
+
+/** THE EFFECTIVE table as `rewriteRules.list()` shows it — the tree this context can spell: its own
+ *  rows (a template's `@` spelled, a mask as `target: null`, each with the description its event
+ *  carried); the implicit rows HERE not shadowed by an own `itx.<root>` row, each with the platform's
+ *  one-liner — none under a bare null, which denies all; and, behind a bare row that hops
+ *  (`itx ⇒ itx.builtins.cd(path)`), THAT context's list (`inherit(path, depth - 1)`) minus what this
+ *  one's rows claim, every row keeping the `context` it was read from — a bare `itx ⇒ itx.builtins`
+ *  lists every root as local. `depth` bounds the hops; a hop to `path` itself is none. */
+export async function describeRewriteRules(args: {
+  rules: readonly ItxExpressionRewriteRule[];
+  /** The roots with an implicit row HERE (`implicitRootsAt`). */
+  implicitRoots: ReadonlySet<string>;
+  /** This context's canonical path — the `context` of its own rows, the base of the hop. */
+  path: string;
+  depth: number;
+  /** The context at `path`'s own list, `depth` hops deep. */
+  inherit: (path: string, depth: number) => Promise<RewriteRuleListEntry[]>;
+}): Promise<RewriteRuleListEntry[]> {
+  const { rules, implicitRoots, path: ownPath, depth } = args;
+  const own = rules.map(
+    (rule): RewriteRuleListEntry => ({
+      match: print(rule.match),
+      target: rule.target && print(rule.target, { holes: true }),
+      description: rule.description,
+      context: ownPath,
+    }),
+  );
+  const claimed = new Set(own.map((row) => row.match));
+  // `roots` is `implicitRoots` (`implicitRootsAt`: a subset of `BUILT_IN_ROOTS`) or the target of a
+  // bare `itx ⇒ itx.builtins` (every root), so each one indexes the description map; the sets are
+  // typed `string` because the resolver compares them against parsed step names, hence the assertion.
+  const implicit = (roots: Iterable<string>): RewriteRuleListEntry[] =>
+    [...roots]
+      .filter((root) => !claimed.has(`itx.${root}`))
+      .map((root) => ({
+        match: `itx.${root}`,
+        target: `itx.builtins.${root}`,
+        description: BUILT_IN_ROOT_DESCRIPTIONS[root as BuiltInRoot],
+        context: ownPath,
+      }));
+  const bare = rules.find((rule) => rule.match.length === 1);
+  if (bare && !bare.target) return own; // one row denies all: nothing implicit, nothing inherited
+  const rows = [...own, ...implicit(implicitRoots)];
+  if (!bare?.target) return rows;
+  // Resolve app-owned parent links through the same rules as invocation.
+  let target: ItxExpression;
+  try {
+    target = resolveItxExpression(() => rules, bare.target, args.implicitRoots).at(-1)!;
+  } catch (error) {
+    if (errorCode(error) === "NO_ITX_EXPRESSION_MATCH") return rows;
+    throw error;
+  }
+  if (target.length === 2 && target[1] === "builtins")
+    return [...rows, ...implicit(BUILT_IN_ROOTS.filter((root) => !implicitRoots.has(root)))];
+  const cdStep = target[2];
+  if (
+    depth <= 0 ||
+    target.length !== 3 ||
+    target[1] !== "builtins" ||
+    !Array.isArray(cdStep) ||
+    cdStep[0] !== "cd" ||
+    typeof cdStep[1] !== "string"
+  )
+    return rows;
+  const there = resolveContextPath(ownPath, cdStep[1]);
+  if (there === ownPath) return rows;
+  // An inherited row is shown iff a call spelled like it would reach that context — the resolver's
+  // own law (`resolveItxExpression`): the most specific own row claiming the spelling is the link
+  // itself, and the link yields to no implicit row here (a mask at `itx.ai` refuses
+  // `itx.ai.run('gpt-5')`; a child's `itx.append` stays its own). The bare row of the context
+  // behind the link is that context's link, never this one's.
+  const forwarded = (spelling: string): boolean => {
+    if (spelling === "itx") return false;
+    let call: ItxExpression;
+    try {
+      call = parse(spelling);
+    } catch {
+      return false; // a spelling over the string codec's cap: not a name a call here can spell
+    }
+    const root = itxExpressionStepName(call[1]);
+    if (root && implicitRoots.has(root)) return false;
+    return pickItxExpressionRewriteRule(rules, call)?.rule === bare;
+  };
+  const inherited = await args.inherit(there, depth - 1);
+  return [...rows, ...inherited.filter((row) => forwarded(row.match))];
 }
 
 // ── THE RESOLVER (parent-constructed over the physical built-ins and a reader of the CURRENT rules) ──

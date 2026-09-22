@@ -1,23 +1,10 @@
-// public/authorize.js — the consent page's script: a capnweb client of /api like any app, over ONE
-// WebSocket the session cookie rides in on (capnweb.js beside it is the fork's browser bundle,
-// copied by scripts/build.ts). `consent.describe` says what to show — the client, the signed-in
-// person, their projects and organizations, the scopes asked for with what each means — and this
-// renders one of two pages. A person with no project yet gets the onboarding step first (like
-// apps/auth's): their organization's name and their first project's slug, one form, Continue. Then
-// the consent page: iterate ⇄ the client, who is signed in, the permissions, the projects as an
-// either/or — one checkbox for every project now and later, else the ones ticked — with "New
-// project" (in one of the person's organizations, or in a new one named right there: `createOrg`,
-// then `projects.create`, then the refreshed description with every choice kept). Approve is
-// `consent.approve` with the projects and scopes left ticked, and ends in the client's redirect.
-// Consent is task-based: every scope but `iterate` may be unticked, and the grant carries what stays
-// ticked. Plain DOM, no framework: `state` is the one source of truth — events change it, `render`
-// draws it, nothing is read back out of the DOM — and the roles and strings here are what
-// specs/auth.spec.ts drives; every bit of motion is issuer.css's.
+// Two-step consent over one authenticated RPC session. Project and permission choices
+// live in state, so editing the selection never drops a choice or creates another grant.
 import { newWebSocketRpcSession } from "./capnweb.js";
 
 const card = document.getElementById("consent");
 const query = location.search;
-const loginAgain = `/login?next=${encodeURIComponent(`/authorize${query}`)}`;
+const loginAgain = `/login?next=${encodeURIComponent(`/oauth2/auth${query}`)}`;
 /** The session, pipelined: the first call rides the socket's own round trip. A transport that
  *  carries no session (the cookie gone, the grant ended) rejects every call UNAUTHENTICATED. */
 const api = newWebSocketRpcSession(
@@ -35,7 +22,7 @@ const el = (tag, props, ...children) => {
 };
 /** A picture over a fallback: the tile keeps its text until — unless — the image has loaded. */
 const pictured = (tile, src) => {
-  const image = el("img", { src, alt: "" });
+  const image = el("img", { src, alt: "", referrerpolicy: "no-referrer" });
   image.addEventListener("load", () => tile.replaceChildren(image), { once: true });
   return tile;
 };
@@ -48,6 +35,7 @@ const slugOf = (text, { proposed = false } = {}) => {
 
 const state = {
   view: null,
+  step: "projects",
   /** every project now and later — the list is parked (its ticks kept) while this is on */
   all: false,
   /** the projects unticked; a created project starts ticked */
@@ -74,11 +62,8 @@ async function refresh() {
   const view = await api.consent.describe(query);
   if (view.kind === "redirect") return leave(view.location);
   if (!state.view && view.kind === "consent") {
-    // The first view sets the projects default: an app that asked to manage the person's
-    // organizations (the dash) is an account app — every current and future project, unless the
-    // client is bound to one project. Other apps start with the listed projects ticked one by one.
-    state.all =
-      !view.projectBound && view.scopes.some((scope) => scope.name === "organizations:write");
+    // Default to all current and future projects; project-bound clients keep their ceiling.
+    state.all = !view.projectBound;
     // The project form's first draft: the person's first organization, or — with none yet — a
     // new one named from their name or email (apps/auth's heuristic); the onboarding step's slug
     // starts by following that name.
@@ -94,16 +79,13 @@ const chosenOrgName = (view) =>
   state.draft.org
     ? view.orgs.find((org) => org.id === state.draft.org)?.name || ""
     : state.draft.newOrg;
-/** One action at a time: the form's buttons go quiet for the round trips (no re-render — what the
- *  person is typing meanwhile stays put), then the page renders the answer once. Switch account,
- *  outside the form and built once, stays live. A session this transport no longer carries sends
- *  the browser to sign in again; anything else is shown where the person acted. */
+/** Disable controls while an action is pending, preserving its choices until the answer renders.
+ *  An expired session returns to sign-in; other failures appear beside the action. */
 async function act(action) {
   if (state.busy) return;
   state.busy = true;
   state.error = null;
-  for (const button of card.querySelectorAll("#consent-form button, #onboarding-form button"))
-    button.disabled = true;
+  for (const control of card.querySelectorAll("button, input, select")) control.disabled = true;
   try {
     await action();
   } catch (error) {
@@ -141,11 +123,13 @@ const createProject = () =>
       state.error = "Enter a project name.";
       return;
     }
+    const onboarding = !state.view.projects.length;
     try {
       if (!draft.org) draft.org = (await api.createOrg(draft.newOrg || "")).id;
       // the new project's root context is the platform's to hold, not this page's
       (await api.projects.create({ project: draft.slug, orgId: draft.org }))[Symbol.dispose]();
       state.creating = false;
+      if (onboarding) state.step = "permissions";
       Object.assign(draft, { slug: "", follows: true, newOrg: "" });
     } catch (error) {
       if (error?.code === "UNAUTHENTICATED") throw error;
@@ -226,7 +210,9 @@ function projectFields(view, { follow }) {
   return { fields, slugField };
 }
 const errorLine = () =>
-  state.error ? el("p", { role: "alert", "data-type": "error", text: state.error }) : null;
+  state.error
+    ? el("p", { role: "alert", tabindex: "-1", "data-type": "error", text: state.error })
+    : null;
 /** Who is signed in — the person's picture (or initial), the address, Switch account. */
 const signedInAs = (email, picture) => {
   const initial = el("span", {
@@ -251,40 +237,6 @@ const signedInAs = (email, picture) => {
     ),
   );
 };
-const mark = () => el("img", { class: "issuer-mark", src: "/iterate-logo.svg", alt: "" });
-
-/** The onboarding step — a person with no project yet: their organization (its name; or, once
- *  they have one — a refused first try made it — the choice of it) and their first project's
- *  slug, one form; Continue makes both and the consent page follows. */
-function renderOnboarding(view) {
-  document.title = "Create a project — iterate";
-  const { fields, slugField } = projectFields(view, { follow: true });
-  const form = el("form", { id: "onboarding-form" });
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    createProject();
-  });
-  form.append(
-    ...fields,
-    slugField,
-    el(
-      "footer",
-      {},
-      errorLine(),
-      el(
-        "div",
-        { class: "consent-actions" },
-        el("a", { class: "button", href: view.denyLocation, text: "Cancel" }),
-        el("button", { class: "primary", type: "submit", text: "Continue" }),
-      ),
-    ),
-  );
-  card.replaceChildren(
-    el("header", {}, mark(), el("h1", { text: "Create a project" })),
-    signedInAs(view.email, view.picture),
-    form,
-  );
-}
 
 /** A request the authorization server refused outright (no client to send the person back to):
  *  the reason, and the way back to iterate. */
@@ -292,7 +244,7 @@ function renderInvalid(view) {
   document.title = "Invalid authorization request — iterate";
   card.className = "issuer-card";
   card.replaceChildren(
-    mark(),
+    el("img", { class: "issuer-mark", src: "/iterate-logo.svg", alt: "" }),
     el("h1", { text: "Invalid authorization request" }),
     el("p", { text: `The app's request could not be accepted: ${view.description}.` }),
     el("p", { class: "muted", text: "Nothing was granted. Go back to the app and try again." }),
@@ -317,15 +269,32 @@ function render() {
     return;
   }
   if (view.kind === "invalid") return renderInvalid(view);
-  if (!view.projectBound && !view.projects.length) return renderOnboarding(view);
-  const { clientName, email, picture, projects, orgs, projectBound, scopes, denyLocation } = view;
+  const {
+    clientName,
+    clientLogoUri,
+    clientDomain,
+    email,
+    picture,
+    projects,
+    orgs,
+    projectBound,
+    scopes,
+    denyLocation,
+  } = view;
   document.title = `Authorize ${clientName} — iterate`;
+  const onboarding = !projectBound && !projects.length;
+  const reviewing = state.step === "permissions" && !onboarding;
   const names = new Map(orgs.map((org) => [org.id, org.name]));
-  const orgIds = [...new Set(projects.map((project) => project.orgId))];
   const form = el("form", { id: "consent-form" });
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    approve();
+    if (reviewing) approve();
+    else if (onboarding || event.submitter?.value === "create") createProject();
+    else {
+      state.step = "permissions";
+      state.error = null;
+      render();
+    }
   });
 
   // the permissions, as the platform describes them: a required one is ticked and stays so
@@ -343,8 +312,12 @@ function render() {
       el("span", {}, el("strong", { text: title }), el("span", { class: "muted", text: note })),
     );
   });
-  const status = el("p", { class: "muted", role: "status" });
-  const approveButton = el("button", { class: "primary", type: "submit", text: "Approve" });
+  const approveButton = el("button", {
+    class: "primary",
+    type: "submit",
+    form: "consent-form",
+    text: reviewing ? "Authorize" : "Review permissions",
+  });
 
   // Which projects — an either/or, one checkbox: every project now and later, or the ones
   // ticked in the list below it (a client bound to one project has no such choice)
@@ -356,68 +329,48 @@ function render() {
         value: "1",
         "aria-label": "All my projects, now and future",
       });
-  const future = all
-    ? el(
-        "label",
-        { class: "consent-future" },
-        all,
-        el(
-          "span",
-          {},
-          el("strong", { text: "All my projects, now and future" }),
-          el("span", { class: "muted", text: "Includes projects you create or join later." }),
-        ),
-      )
-    : null;
   const list = el("fieldset", { class: "consent-projects", "aria-label": "Projects it may reach" });
-  const boxes = [];
-  for (const orgId of orgIds) {
-    const orgName = names.get(orgId) || orgId;
+  if (all)
+    list.append(el("label", { class: "consent-project" }, all, "All my projects, now and future"));
+  const boxes = projects.map((project) => {
+    const orgName = names.get(project.orgId) || project.orgId;
+    const box = el("input", {
+      type: "checkbox",
+      name: "project",
+      value: project.id,
+      "aria-label": `${project.slug} in ${orgName}`,
+    });
+    box.addEventListener("change", () => {
+      if (box.checked) state.excluded.delete(project.id);
+      else state.excluded.add(project.id);
+      show();
+    });
     list.append(
       el(
-        "section",
-        { class: "consent-org", "aria-label": orgName },
-        // the organization's name only when there is more than one to tell apart
-        orgIds.length > 1 ? el("h3", { text: orgName }) : null,
-        ...projects
-          .filter((project) => project.orgId === orgId)
-          .map((project) => {
-            // the box carries the id (what the grant names); the person reads the slug
-            const box = el("input", {
-              type: "checkbox",
-              name: "project",
-              value: project.id,
-              "aria-label": `${project.slug} in ${orgName}`,
-            });
-            box.addEventListener("change", () => {
-              if (box.checked) state.excluded.delete(project.id);
-              else state.excluded.add(project.id);
-              show();
-            });
-            boxes.push(box);
-            return el(
-              "label",
-              { class: "consent-project" },
-              box,
-              el("span", { text: project.slug }),
-            );
-          }),
+        "label",
+        { class: "consent-project" },
+        box,
+        el(
+          "span",
+          { class: "consent-project-name" },
+          el("span", { class: "consent-slug", text: project.slug }),
+          el("span", { class: "muted", text: orgName }),
+        ),
       ),
     );
-  }
+    return box;
+  });
   if (projectBound && !projects.length)
     list.append(el("p", { class: "muted", text: "You do not have access to this app’s project." }));
-  // The list as the state says: with "all" on, every box ticked and the list parked (its own
-  // ticks kept in `excluded` for when it comes back); else each box its own tick, and the count.
+  // Choosing all parks the individual choices, so narrowing access restores them.
   const show = () => {
     if (all) all.checked = state.all;
-    for (const box of boxes) box.checked = state.all || !state.excluded.has(box.value);
-    list.disabled = state.all;
-    const count = boxes.filter((box) => box.checked).length;
-    // the count of ticked projects; with "all" ticked the checkbox says it, so nothing else does
-    status.hidden = !projects.length || state.all;
-    status.textContent = `${count} selected`;
-    approveButton.disabled = state.busy || (!state.all && count === 0);
+    for (const box of boxes) {
+      box.checked = state.all || !state.excluded.has(box.value);
+      box.disabled = state.all;
+    }
+    const hasSelection = state.all || boxes.some((box) => box.checked);
+    approveButton.disabled = state.busy || (!onboarding && !hasSelection);
   };
   all?.addEventListener("change", () => {
     state.all = all.checked;
@@ -432,7 +385,7 @@ function render() {
     ? null
     : el(
         "button",
-        { class: "consent-add", type: "button", "aria-expanded": String(creating) },
+        { class: "consent-project consent-add", type: "button", "aria-expanded": String(creating) },
         el("span", { "aria-hidden": "true", text: "+" }),
         "New project",
       );
@@ -440,11 +393,16 @@ function render() {
     state.creating = !creating;
     render();
   });
+  if (add) list.append(add);
   let create = null;
   if (creating) {
     const { fields, slugField } = projectFields(view, { follow: false });
-    const createButton = el("button", { type: "button", text: "Create project" });
-    createButton.addEventListener("click", createProject);
+    const createButton = el("button", {
+      type: "submit",
+      name: "action",
+      value: "create",
+      text: "Create project",
+    });
     create = el(
       "section",
       { class: "consent-create", "aria-label": "New project" },
@@ -454,62 +412,105 @@ function render() {
     );
   }
 
-  form.append(
-    ...[
+  if (reviewing) {
+    form.append(
+      el("h2", { tabindex: "-1", text: "Review permissions" }),
       el(
         "section",
         { class: "consent-permissions", "aria-label": "Permissions" },
-        el("h2", { text: "Permissions" }),
         ...permissionRows,
       ),
+    );
+  } else if (onboarding) {
+    const { fields, slugField } = projectFields(view, { follow: true });
+    form.append(
+      el("h2", { tabindex: "-1", text: "Create a project" }),
+      el("div", { class: "consent-onboarding" }, ...fields, slugField),
+    );
+  } else {
+    form.append(
+      ...[el("h2", { tabindex: "-1", text: "Select projects" }), list, create].filter(Boolean),
+    );
+  }
+  const summary = el("section", { class: "consent-summary", "aria-label": "Selected projects" });
+  if (reviewing) {
+    const edit = el("button", {
+      type: "button",
+      text: "Edit",
+      "aria-label": "Edit selected projects",
+    });
+    edit.addEventListener("click", () => {
+      state.step = "projects";
+      state.error = null;
+      render();
+    });
+    summary.append(
+      el("div", { class: "consent-section-heading" }, el("h2", { text: "Project access" }), edit),
+      ...(state.all
+        ? [el("p", {}, el("strong", { text: "All my projects, now and future" }))]
+        : projects
+            .filter((project) => !state.excluded.has(project.id))
+            .map((project) =>
+              el(
+                "div",
+                { class: "consent-selected" },
+                el("strong", { class: "consent-slug", text: project.slug }),
+                el("span", { class: "muted", text: names.get(project.orgId) || project.orgId }),
+              ),
+            )),
+    );
+  }
+  const panel = el(
+    "div",
+    { class: "consent-panel", "data-step": reviewing ? "permissions" : "projects" },
+    form,
+    el(
+      "aside",
+      { class: "consent-sidebar" },
+      signedInAs(email, picture),
+      reviewing ? summary : null,
       el(
         "div",
-        { class: "consent-project-heading" },
-        el("div", {}, el("h2", { text: "Projects" }), status),
-        add,
-      ),
-      future,
-      list,
-      create,
-      el(
-        "footer",
-        {},
+        { class: "consent-footer" },
         errorLine(),
         el(
           "div",
           { class: "consent-actions" },
-          el("a", { class: "button", href: denyLocation, text: "Cancel" }),
           approveButton,
+          el("a", { class: "button", href: denyLocation, text: "Cancel" }),
         ),
       ),
-    ].filter(Boolean),
+    ),
   );
-
-  // The hero (iterate ⇄ the client, by its initials) and who is
-  // signed in are built once; every later render swaps the form alone, so the entrance in
-  // issuer.css plays once and the pictures stay put.
-  const shown = card.querySelector("#consent-form");
-  if (shown) return shown.replaceWith(form);
-  form.classList.add("consent-enter");
+  const shown = card.querySelector(".consent-panel");
+  if (shown) {
+    shown.replaceWith(panel);
+    // Step navigation announces the heading; local changes stay with the form or its error.
+    if (state.error) panel.querySelector('[role="alert"]')?.focus();
+    else if (shown.dataset.step !== panel.dataset.step) form.querySelector("h2")?.focus();
+    else if (creating) form.querySelector('[name="slug"]')?.focus();
+    else add?.focus();
+    return;
+  }
+  const clientTile = el("span", {
+    class: "consent-tile consent-client-tile",
+    text: clientName.slice(0, 2).toUpperCase(),
+  });
   card.replaceChildren(
     el(
       "header",
-      {},
+      { class: "consent-header" },
       el(
         "div",
         { class: "consent-hero", "aria-hidden": "true" },
         el("span", { class: "consent-tile" }, el("img", { src: "/iterate-logo.svg", alt: "" })),
         el("span", { class: "consent-arrow", text: "⇄" }),
-        el(
-          "span",
-          { class: "consent-tile" },
-          el("span", { text: clientName.slice(0, 2).toUpperCase() }),
-        ),
+        clientLogoUri ? pictured(clientTile, clientLogoUri) : clientTile,
       ),
-      el("h1", { text: `Authorize ${clientName}` }),
+      el("h1", { text: `${clientName} wants to access your account` }),
+      clientDomain && el("p", { class: "muted consent-client-domain", text: clientDomain }),
     ),
-    signedInAs(email, picture),
-    form,
+    panel,
   );
 }
 

@@ -1,4 +1,4 @@
-// apps/os's full-text-snapshot: the "View full text" sheet a long live stream offers once the
+// apps/os-next's full-text-snapshot: the "View full text" sheet a long live stream offers once the
 // feed only paints its tail.
 import { memo, useState } from "react";
 import { CopyIcon } from "lucide-react";

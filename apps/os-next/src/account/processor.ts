@@ -3,12 +3,12 @@
 // into their catalog; the kernel's `ProcessorEngine` drives it and projects it to live state, exactly
 // as a project processor. No effect lives here. Imports only the pure kernel, so a unit test constructs
 // it with `new` and reduces rows (processor.test.ts, in node).
-import { jsonEqual } from "iterate/next/lib";
 import {
   type ConsumedEvent,
   type ReduceArgs,
   StreamProcessor,
 } from "iterate/next/stream/processor";
+import { reduceSecretCatalog } from "../secret/contract.ts";
 import { AccountContract, type AccountState } from "./contract.ts";
 
 export class AccountProcessor extends StreamProcessor<
@@ -54,24 +54,12 @@ export class AccountProcessor extends StreamProcessor<
     }
     if (event.type === "events.iterate.com/account/consent-approved")
       return { ...state, consents: [...state.consents, { ...event.payload, at: event.createdAt }] };
-    if (event.type === "events.iterate.com/secret/set") {
-      // The latest write is the row (a rotation keeps the row, a new pin or strategy replaces
-      // it); the first set's time stays. The same pin and strategy again is a no-op.
-      const { path, urls, refresh } = event.payload;
-      const known = state.secrets[path];
-      if (known && known.refresh === refresh && jsonEqual(known.urls, urls)) return undefined;
-      return {
-        ...state,
-        secrets: {
-          ...state.secrets,
-          [path]: { urls, refresh, createdAt: known?.createdAt ?? event.createdAt },
-        },
-      };
-    }
-    if (event.type === "events.iterate.com/secret/deleted") {
-      if (!state.secrets[event.payload.path]) return undefined;
-      const { [event.payload.path]: _gone, ...secrets } = state.secrets;
-      return { ...state, secrets };
+    if (
+      event.type === "events.iterate.com/secret/set" ||
+      event.type === "events.iterate.com/secret/deleted"
+    ) {
+      const secrets = reduceSecretCatalog(state.secrets, event);
+      return secrets && { ...state, secrets };
     }
     return undefined;
   }

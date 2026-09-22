@@ -5,6 +5,7 @@ packages:
   - apps/notes
   - apps/voice
   - apps/kit
+  - apps/spa
   - packages/iterate
   - packages/shared
   - packages/ui
@@ -71,6 +72,7 @@ overrides:
   axios: 1.13.6
   baseline-browser-mapping: ^2.9.14
   iterate>capnweb: npm:@iterate-com/capnweb@0.12.2
+  '@iterate-com/agents>capnweb': npm:@iterate-com/capnweb@0.12.2
   os-next>capnweb: npm:@iterate-com/capnweb@0.12.2
   os-next>wrangler: 4.131.1
   srvx: 0.11.12

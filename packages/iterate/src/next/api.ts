@@ -241,16 +241,24 @@ export interface IterateContextApi {
     create(path: string): Promise<{ path: string }>;
     delete(path: string): Promise<{ path: string }>;
   };
-  agents: {
-    get(path: string): InvokeHandle;
-    list(): Promise<{ path: string; createdAt: string }[]>;
-    create(path: string): Promise<{ path: string }>;
-    delete(path: string): Promise<{ path: string }>;
-  };
-  /** The MCP connections born under the project, by grant: each connection's context path
-   *  (`/mcp/inbound/grants/<grantId>`, its transcript) and when it was born (the grant's first run). */
-  mcpConnections: {
-    list(): Promise<{ grantId: string; path: string; createdAt: string }[]>;
+  /** Workers AI under this context's capability rules. */
+  ai: Ai;
+  /** Files stored in the project's object store. */
+  files: {
+    get(path: string): InvokeHandle & {
+      put(input: {
+        contentType?: string;
+        data: Uint8Array | ArrayBuffer | string;
+      }): Promise<{ path: string; contentType: string; size: number }>;
+      bytes(): Promise<Uint8Array>;
+      head(): Promise<{ path: string; contentType: string; size: number } | null>;
+      delete(): Promise<void>;
+      url(input?: {
+        method?: "GET" | "PUT";
+        expiresInSeconds?: number;
+      }): Promise<{ url: string; expiresAt: string }>;
+    };
+    list(prefix?: string): Promise<{ path: string; contentType: string; size: number }[]>;
   };
 }
 
@@ -259,6 +267,7 @@ export interface GrantRecord {
   id: string;
   clientId?: string;
   logoUri?: string;
+  clientDomain?: string;
   name: string;
   kind: string;
   createdAt: number;
@@ -354,9 +363,15 @@ export interface IterateSessionApi {
     list(): Promise<ProjectRecord[]>;
     /** the project's root context, by its slug or its id */
     get(project: string): Promise<IterateContextApi>;
+    /** Config repository presets available on this platform. */
+    templates(): Promise<{ label: string; reference: string }[]>;
     /** a new project: `project` is slugged into its hostname label, its id is minted — the returned
      *  context's `whoami()` says it, so does `list()` */
-    create(input: { project: string; orgId?: string }): Promise<IterateContextApi>;
+    create(input: {
+      project: string;
+      orgId?: string;
+      configRepoTemplate?: string;
+    }): Promise<IterateContextApi>;
   };
   organizations: { get(orgId: string): Promise<IterateContextApi> };
   user: IterateContextApi;

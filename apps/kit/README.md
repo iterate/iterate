@@ -5,22 +5,32 @@ supported ESP32-S3 voice boards: HA Voice PE, FutureProofHomes Satellite1, M5Sti
 StackChan, Waveshare AMOLED, Waveshare RLCD 4.2 and ZECTRIX NOTE4. The RLCD has an
 experimental KEY-button voice release; see its
 [board notes](firmware/devices/waveshare_s3_rlcd/README.md). Its catalog names the boards
-`apps/os-next/scripts/voice-board.ts` proves through real air. It prepares the selected project,
+`apps/agents/scripts/voice-board.ts` proves through real air. It prepares the selected project,
 then flashes a checked source-built release and its private configuration directly over USB.
 
 ## What a person needs
 
-Sign in with your Iterate account (the page sends you through OS's OAuth and
-back), choose a board release, enter Wi-Fi, pick one of your projects, then click
-**Prepare device** and **Flash device**. The prepare step checks that the project
-has a voice agent installed (`apps/os-next/scripts/voice-install.ts` installs it;
-the project also needs `/secrets/openai`) and mints a ten-year token scoped to
-that project. Each preparation gets a unique OAuth client, with public metadata
-at `k.iterate.com/devices/<model>/clients/<uuid>.json` and the vendor's icon.
-It appears as `Kit <board> <date>` with kind **Device** in your sessions list.
-The token is written to the board and revoked individually from that list,
-never refreshed. Previously provisioned tokens retain their existing identity
-until the device is prepared again.
+Choose your board at `k.iterate.com`, then click **Log in with iterate**. Consent
+shows that board's name and vendor icon; choose its project and authorize access.
+Each setup starts a unique OAuth client before consent, including two boards of
+the same model. After sign-in, enter Wi-Fi, click **Prepare device**, then **Flash
+device**. **Set up another device** returns to the public selector and starts fresh
+consent; it never silently changes the authorized model.
+
+Prepare installs voice when missing and asks for an OpenAI API key if the project
+has none. It verifies voice health before minting a ten-year token scoped to the
+chosen project, under the same OAuth client that was authorized. Existing voice
+services, secrets and project websites are preserved. Immutable voice files live
+under `kit/voice/` in project KV; the `itx.voice` mount is published only after all
+uploads succeed.
+
+Client metadata lives at `k.iterate.com/devices/<model>/clients/<uuid>.json`. The
+flashed token appears as `Kit <board> <date>` with kind **Device** in your sessions
+list and can be revoked individually. **Log out** ends only the browser's setup
+session and returns to device selection; already flashed tokens keep working.
+Previously provisioned tokens retain their existing identity until prepared again.
+Local HTTP development uses the issuer's dynamic client registration with the same
+branding; hosted previews exercise the actual metadata client and consent path.
 
 Wi-Fi and the token stay in browser memory until they are written to the
 connected board's `iterate_kit` partition. Neither goes to the Kit worker or a

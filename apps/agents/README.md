@@ -1,19 +1,38 @@
 # Agents
 
-A page to talk to a project's agents — apps/os's agent UI at the size os-next can carry today, on
-the notes app's shape: one TanStack Start worker on its own `workers.dev` origin, OAuth through the
-platform, `/api` proxied with the session's bearer, capnweb from the browser.
+Agents is an optional app. `apps/os-next` supplies contexts, streams, workers, facets, model access
+and storage; this app owns the agent catalog, lifecycle, model loop, sandbox setup and voice runtime.
+`itx.agents` is a durable rewrite to the installed collection facet, not a platform built-in.
 
-- `/agents?project=<id>&agent=<path>` — the project's agents (the catalog `itx.agents.list()`), one
-  selected: its FEED, rendered from the stream's own events — a person's words with their attachments,
-  the assistant's prose (`agents/web-message-sent`, markdown), a script card per `script-run-requested`
-  with its status label, code and settlement, the breakers' pauses — and a one-line LIVE STATE strip
-  from the agent facet's live snapshot (thinking · running a script · paused · idle), pushed as it changes.
-- The composer sends `itx.agents.get(path).message({ message, files })` — words and, if you attach one,
-  an image the model sees.
-- "New agent" births one: `itx.agents.get(path).create({ systemPrompt })`.
+- `src/` — the web app: chat, attachments, live state, events and traces.
+- `runtime/` — the collection and agent processors, loaded through the public `iterate/next/sdk`.
+- `voice/` — the voice relay, delegate, screen renderer and their tests.
+- `scripts/` — runtime bundling and voice call/device tools.
+- `e2e/` and `__workers-tests__/` — integration tests using os-next's generic worker harness.
 
-Dev: `pnpm dev` (talks to https://os.iterate2.com; a gitignored `.dev.vars` with
-`ITERATE_ORIGIN=http://localhost:8788` points it at a local os-next). Deploy: `doppler run --project agents
---config prd -- pnpm run deploy --env prd` → https://agents.iterate.workers.dev (`.depot/workflows/deploy-agents.yml`
-runs it on every push to main that touches the app or os-next).
+Choose **With agents** when creating a project, or open this app on a minimal project and click
+**Install agents**. Installation stores the runtime in project KV, enables the catalog processor,
+and writes the `itx.agents` rewrite. `itx.agents.create(path)` installs an agent at that context;
+`get(path).message(text)` sends a message. The app owns the code and the project owns its data.
+
+The collection delegates capabilities to each agent and its script context. Restrict scripts by
+narrowing the sandbox's rewrite rules. Keep explicit grants for `run` and `rewriteRules.list` when
+masking its parent: the userspace runtime uses those capabilities for execution and introspection.
+
+`pnpm runtime:build` rebuilds the committed runtime in `configs-next/with-agents/agents.js`.
+After changing runtime code, rebuild before testing the template or web installer. Installation also rebinds existing normal agents to the current runtime; their grants and
+history are retained. Reinstalling is safe. Existing projects are not silently migrated by a platform deployment.
+
+`pnpm test` runs app unit tests. From the repository root, integration tests run with:
+
+```sh
+pnpm --dir apps/os-next exec vitest run --configLoader runner --project e2e ../agents/e2e
+pnpm --dir apps/os-next exec vitest run --configLoader runner --project workers ../agents/__workers-tests__
+```
+
+See [voice/README.md](voice/README.md) for voice setup. Run voice tools from this package:
+`pnpm voice:call`, `pnpm voice:board`. Kit’s Prepare device flow installs voice.
+
+Dev: `pnpm dev` (defaults to https://os.iterate2.com; a gitignored `.dev.vars` with
+`ITERATE_ORIGIN=http://localhost:8788` selects a local platform). Deploy through the existing
+`doppler run --project agents --config prd -- pnpm run deploy --env prd` command.

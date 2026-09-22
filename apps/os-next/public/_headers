@@ -1,10 +1,11 @@
 # public/_headers — the headers wrangler's static assets attach to the issuer's files (login.html,
-# authorize.html and the stylesheet and scripts beside them). The pages load only their own files —
-# images included: the mark, plus the signed-in person's Google picture; talk only to their own origin; never render inside a frame.
+# oauth2/auth.html and the stylesheet and scripts beside them). Scripts and styles are local.
+# Images may also come from HTTPS client logos and account pictures;
+# scripts talk only to their own origin, and pages never render inside a frame.
 /*
-  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: https://*.googleusercontent.com; base-uri 'none'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: https:; base-uri 'none'; frame-ancestors 'none'
   X-Frame-Options: DENY
 /login
   Cache-Control: no-store
-/authorize
+/oauth2/auth
   Cache-Control: no-store

@@ -9,7 +9,7 @@
 //
 //   {
 //     urls: { os, mcp, dash, ingressRouting: { type, hostname }, temporaryCustomHostnames: {} },
-//     login: { password, emailCode: { from }, google: { clientId, clientSecret } },
+//     login: { password, emailCode: { from }, google: { clientId, clientSecret }, cloudflare: { clientId, clientSecret } },
 //     secrets: { key, previousKey, adminBearer },
 //   }
 //
@@ -22,6 +22,7 @@
 
 import { compileRawAppConfigFromEnv, redacted, type Redacted } from "@iterate-com/shared/config";
 import { z } from "zod";
+import type { IngressRouting } from "iterate/next/project-ingress";
 
 /** A field's failure message names the SHAPE; `parseAppConfig` prefixes where it came from. */
 const REQUIRED = "required, but unset or blank";
@@ -63,7 +64,7 @@ export const AppConfig = z.object({
       os: optionalOrigin,
       /** A separate MCP origin. Blank ⇒ `/mcp` on `urls.os`. */
       mcp: optionalOrigin,
-      /** The dash (apps/dash) — where the landing page (`/`, control-plane.ts) sends a person, this
+      /** The dash (apps/dash) — where the landing page (`/`, issuer-pages.ts) sends a person, this
        *  origin being headless. Blank ⇒ the page names no dash. */
       dash: optionalOrigin,
       /** How projects are reached over HTTP (project-ingress.ts): `subdomains` hangs
@@ -92,13 +93,20 @@ export const AppConfig = z.object({
        *  the password, the email is the name tag. The self-host default; also how the specs sign in.
        *  Blank ⇒ off. */
       password: redacted(z.string().trim().default("")),
-      /** A six-digit code mailed through the `EMAIL` binding (login-code.ts) from `from`, an address on
+      /** A six-digit code mailed through the `EMAIL` binding (password-and-code-sign-in.ts) from `from`, an address on
        *  a domain onboarded for Email Sending in the deployment's account. */
       emailCode: z
         .object({ from: z.string({ error: REQUIRED }).trim().min(1, REQUIRED) })
         .optional(),
       /** Google sign-in (identity.ts): the OAuth client, both halves. */
       google: z
+        .object({
+          clientId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
+          clientSecret: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
+        })
+        .optional(),
+      /** Cloudflare sign-in uses our own OAuth client, independently of deployment grants. */
+      cloudflare: z
         .object({
           clientId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
           clientSecret: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
@@ -126,11 +134,9 @@ export const AppConfig = z.object({
     .prefault({ key: "" }),
 });
 
-/** How projects are reached over HTTP, narrowed: `subdomains` always carries its hostname. */
-export type IngressRouting = { type: "subdomains"; hostname: string } | { type: "paths" } | null;
-
 /** THE WORKER'S CONFIGURATION: the parsed object (secrets as `Redacted`), the ingress routing
- *  narrowed, the deploy identity folded in. */
+ *  narrowed to the SDK's `IngressRouting` (`subdomains` always carries its hostname), the deploy
+ *  identity folded in. */
 export type AppConfig = Omit<z.output<typeof AppConfig>, "urls"> & {
   readonly urls: Omit<z.output<typeof AppConfig>["urls"], "ingressRouting"> & {
     readonly ingressRouting: IngressRouting;
@@ -238,9 +244,9 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
       );
     ingressRouting = { type: "paths" };
   }
-  if (!login.password.exposeSecret() && !login.emailCode && !login.google)
+  if (!login.password.exposeSecret() && !login.emailCode && !login.google && !login.cloudflare)
     throw new Error(
-      `${fieldNameOf(["login"])}: no sign-in mechanism — set login.password, login.emailCode or login.google`,
+      `${fieldNameOf(["login"])}: no sign-in mechanism — set login.password, login.emailCode, login.google or login.cloudflare`,
     );
   return {
     ...parsed,
@@ -294,14 +300,24 @@ export function atRestKeysOf(config: AppConfig): { current: string; previous?: s
   return { current: config.secrets.key.exposeSecret(), previous: previous || undefined };
 }
 
-/** THE PLATFORM ORIGIN a request reached the platform on — the OAuth issuer identifier, what `/api`,
- *  `/mcp`, the issuer's pages and every composed URL hang under: `urls.os` when the deployment names
- *  one (prd, a preview: more than one hostname), else the request's own origin (a self-host: one
- *  hostname, workers.dev). Pure. The edge computes it once per request and stamps every caller with
- *  it (`Caller.platformOrigin`); a context persists what its callers said, for the calls that carry
+/** Where the platform answers, for the request in hand. `platformOrigin` is the origin the request
+ *  reached the platform on — `urls.os` when the deployment names one (prd, a preview: more than one
+ *  hostname), else the request's own origin (a self-host: one hostname, workers.dev) — and it IS the
+ *  OAuth issuer identifier: the `__Host-` cookie's origin, what the issuer's pages and every composed
+ *  URL hang under. `api` and `mcp` are the two resource identifiers a token is bound to, `/api` on
+ *  the platform origin and the MCP root (a separate origin's `/` when `urls.mcp` names one, else
+ *  `/mcp`). The edge computes them once per request and stamps every caller with the origin
+ *  (`Caller.platformOrigin`); a context persists what its callers said, for the calls that carry
  *  none (a loaded worker's, an alarm's). */
-export function platformOriginOf(config: AppConfig, request: Request): string {
-  return config.urls.os || new URL(request.url).origin;
+export type PlatformAddresses = { platformOrigin: string; api: string; mcp: string };
+export function platformAddressesOf(env: AppConfigEnv, request: Request): PlatformAddresses {
+  const config = appConfigOf(env);
+  const platformOrigin = config.urls.os || new URL(request.url).origin;
+  return {
+    platformOrigin,
+    api: `${platformOrigin}/api`,
+    mcp: config.urls.mcp ? `${config.urls.mcp}/` : `${platformOrigin}/mcp`,
+  };
 }
 
 export type { Redacted };

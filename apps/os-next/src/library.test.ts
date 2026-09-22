@@ -1,7 +1,7 @@
 // library.test.ts — the library's executable spec, one describe per concept (each over its own fake `itx`),
-// plus THE LIBRARY RULE pinned over the file's imports (the last block).
+// plus THE LIBRARY RULE pinned over the library files' imports (the last block).
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { RpcTarget, newHttpBatchRpcResponse } from "capnweb";
 import { describe, expect, test } from "vitest";
 import { codedError } from "iterate/next/lib";
@@ -11,15 +11,13 @@ import {
   buildLibrary,
   type LibraryItx,
   type LibraryRoots,
-  type OpenApiDocument,
-  connectToCapnweb,
-  connectToMcp,
-  type McpConnection,
-  connectToOpenApi,
   executeScript,
   runScript,
   runScriptModule,
 } from "./library.ts";
+import { connectToCapnweb } from "./library/capnweb.ts";
+import { connectToMcp, type McpConnectionRpcTarget } from "./library/mcp.ts";
+import { connectToOpenApi, type OpenApiDocument } from "./library/openapi.ts";
 
 // ── the library ── the memo `buildLibrary` keeps over the three verbs: a connect with the same
 // (verb, url, options) is ONE live connection for the context's life; `releaseConnections()` (the
@@ -427,11 +425,11 @@ describe("run", () => {
   test("the same text is the same module (byte-equal: the loader's content hash keys ONE isolate); a blank script is refused before any request", async () => {
     expect(runScriptModule("async (itx) => 1")).toEqual(runScriptModule("async (itx) => 1"));
     const { itx, loaded, appended } = host();
-    expect(() => runScript(itx, "   ")).toThrow(/itx\.run\(script/);
+    await expect(runScript(itx, "   ")).rejects.toThrow(/itx\.run\(script/);
     // wire-fed: a non-string (the array-form expression carries no argument validation) is refused
     // with the same usage error, never a TypeError from `.trim`
-    expect(() => runScript(itx, 42)).toThrow(/itx\.run\(script/);
-    expect(() => runScript(itx, undefined)).toThrow(/itx\.run\(script/);
+    await expect(runScript(itx, 42)).rejects.toThrow(/itx\.run\(script/);
+    await expect(runScript(itx, undefined)).rejects.toThrow(/itx\.run\(script/);
     expect(loaded).toEqual([]);
     expect(appended).toEqual([]);
   });
@@ -627,7 +625,7 @@ describe("mcp", () => {
     });
 
     const rows: Array<{
-      call: (c: McpConnection) => Promise<unknown>;
+      call: (c: McpConnectionRpcTarget) => Promise<unknown>;
       becomes?: unknown;
       throws?: RegExp;
       sse?: boolean;
@@ -1163,8 +1161,9 @@ describe("openapi", () => {
 // so at runtime it may import only npm packages a userspace worker could bundle too (capnweb,
 // cloudflare:workers) and the one platform primitive that is pure data or a handle
 // (context/expression.ts — the codec, for an expression carried as data, and the pipelinable
-// handle). Type-only imports are free (they erase). Anything else — the stream, the DO, the rest of
-// context/ — would make the library un-movable to userspace, which is the whole point of the tier.
+// handle), and the library's own files. Type-only imports are free (they erase). Anything else — the
+// stream, the DO, the rest of context/ — would make the library un-movable to userspace, which is
+// the whole point of the tier.
 const ALLOWED_RUNTIME_IMPORTS = new Set([
   "capnweb",
   "cloudflare:workers",
@@ -1174,21 +1173,33 @@ const ALLOWED_RUNTIME_IMPORTS = new Set([
   // The entities' CONTRACTS — pure zod over `defineProcessorContract` (the SDK's), no stream, DO or
   // context runtime: the vocabulary a handle's typed `append` validates against, which a userspace
   // worker would import from the SDK just the same.
-  "./agent/contract.ts",
   "./repo/contract.ts",
   "./workspace/contract.ts",
 ]);
 
 describe("the library boundary", () => {
-  test("library.ts imports only npm packages, the codec, and types", () => {
-    const source = readFileSync(new URL("./library.ts", import.meta.url).pathname, "utf8");
+  test("library.ts and library/*.ts import only npm packages, the codec, each other, and types", () => {
+    const sourceDirectory = new URL("./", import.meta.url);
+    const libraryDirectory = new URL("./library/", import.meta.url);
+    const libraryFiles = [
+      new URL("./library.ts", import.meta.url),
+      ...readdirSync(libraryDirectory.pathname)
+        .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
+        .map((name) => new URL(name, libraryDirectory)),
+    ];
+    const libraryPaths = new Set(libraryFiles.map((file) => file.pathname));
     const offenders: string[] = [];
-    for (const match of source.matchAll(
-      /^import\s+(type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']/gm,
-    )) {
-      const [, typeOnly, specifier] = match;
-      if (typeOnly) continue;
-      if (!ALLOWED_RUNTIME_IMPORTS.has(specifier)) offenders.push(specifier);
+    for (const file of libraryFiles) {
+      const source = readFileSync(file.pathname, "utf8");
+      for (const match of source.matchAll(
+        /^import\s+(type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']/gm,
+      )) {
+        const [, typeOnly, specifier] = match;
+        if (typeOnly || ALLOWED_RUNTIME_IMPORTS.has(specifier)) continue;
+        if (specifier.startsWith(".") && libraryPaths.has(new URL(specifier, file).pathname))
+          continue;
+        offenders.push(`${file.pathname.slice(sourceDirectory.pathname.length)}: ${specifier}`);
+      }
     }
     expect(offenders).toEqual([]);
   });

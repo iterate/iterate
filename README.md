@@ -26,6 +26,4 @@ pnpm spec
 
 `pnpm dev` starts the platform locally. Run a client with `pnpm --dir apps/<name> dev`; its issuer configuration must point to the platform under test. See [platform configuration and development](apps/os-next/README.md), [self-hosting](apps/os-next/SELF-HOSTING.md), and [testing](docs/testing.md).
 
-`envs.ts` owns deployment names, URLs, and resource IDs. Doppler supplies secrets; `doppler.yaml` maps directories to projects. Deploy and resource commands live in each app. [Per-PR previews](apps/os-next/README.md#previews) run through `pnpm preview`.
-
-The repository contains the current platform and its clients. Retired implementations and design history are available through Git history.
+`envs.ts` owns deployment names, URLs, and resource IDs. Doppler supplies secrets; `doppler.yaml` maps directories to projects. Deploy and resource commands live in each app. The Preview OS-Next workflow runs per-PR previews through `pnpm preview`.

@@ -8,7 +8,13 @@ import { OAuthScopes } from "./oauth-scopes.ts";
 import { isLocalOrigin } from "./lib.ts";
 import type { IterateApi } from "./api.ts";
 
-export type BrowserHost = { origin: string; issuer: string; resource: string; scopes: string[] };
+export type BrowserHost = {
+  origin: string;
+  issuer: string;
+  resource: string;
+  scopes: string[];
+  client?: { id?: string; name: string; logoUri: string };
+};
 type Base = BrowserHost & { clientId: string; next: string; until: number };
 type Pending = Base & { phase: "pending"; state: string; verifier: string };
 type Active = Base & {
@@ -29,13 +35,15 @@ export class BrowserSession extends DurableObject {
       const origin = new URL(host.origin);
       const local = isLocalOrigin(host.origin);
       if (origin.protocol !== "https:" && !local) throw new Error("Browser login requires HTTPS");
-      let clientId = `${host.origin}/.auth/client.json`;
+      let clientId = host.client?.id || `${host.origin}/.auth/client.json`;
       if (local) {
-        const response = await fetch(`${host.issuer}/oauth/register`, {
+        const response = await fetch(`${host.issuer}/oauth2/register`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            client_name: origin.host,
+            client_name: host.client?.name || origin.host,
+            client_uri: host.origin,
+            logo_uri: host.client?.logoUri,
             redirect_uris: [`${host.origin}/.auth/callback`],
             token_endpoint_auth_method: "none",
             grant_types: ["authorization_code", "refresh_token"],
@@ -82,7 +90,7 @@ export class BrowserSession extends DurableObject {
         };
       const as: oauth.AuthorizationServer = {
         issuer: data.issuer,
-        token_endpoint: `${data.issuer}/oauth/token`,
+        token_endpoint: `${data.issuer}/oauth2/token`,
         authorization_response_iss_parameter_supported: true,
       };
       const client: oauth.Client = { client_id: data.clientId };
@@ -142,6 +150,11 @@ export class BrowserSession extends DurableObject {
     const data = await this.ctx.storage.get<StoredSession>("session");
     return data?.phase === "active" ? data.scopes : [];
   }
+  /** Public client metadata chosen by the app before consent; never a browser-supplied claim. */
+  async client() {
+    const data = await this.ctx.storage.get<StoredSession>("session");
+    return data?.phase === "active" ? data.client : undefined;
+  }
   /** A verified 401 means this local credential no longer grants access. */
   discard() {
     return this.#serial(() => this.#clear());
@@ -200,7 +213,7 @@ export class BrowserSession extends DurableObject {
     if (data.expiresAt > Date.now() + 30_000) return data.accessToken;
     const as: oauth.AuthorizationServer = {
       issuer: data.issuer,
-      token_endpoint: `${data.issuer}/oauth/token`,
+      token_endpoint: `${data.issuer}/oauth2/token`,
     };
     const client: oauth.Client = { client_id: data.clientId };
     const started = Date.now();
@@ -250,6 +263,7 @@ export class BrowserSession extends DurableObject {
       issuer,
       resource,
       clientId,
+      client: data.client,
       next,
       phase: "active",
       // An omitted (or empty) `scope` means unchanged (RFC 6749 §5.1) — keep what the grant already

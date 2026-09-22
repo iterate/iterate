@@ -372,7 +372,7 @@ test("subscribe → subscribe({ name, target: null }) recalls the lent stub AND 
   );
 });
 
-test("disposing a SubscriptionHandle removes its row and recalls its stub — the same exit, spelled `using`", async () => {
+test("disposing a SubscriptionHandleRpcTarget removes its row and recalls its stub — the same exit, spelled `using`", async () => {
   const observer = openItx(freshCtx("sub-dispose"));
   const c = { delivered: 0 };
   const subscription = await observer.subscribe({
@@ -395,7 +395,7 @@ test("disposing a SubscriptionHandle removes its row and recalls its stub — th
   expect(c.delivered).toBe(1); // nothing reaches a disposed subscription
 });
 
-test("disposing a SubscriptionHandle removes an EXPRESSION row in either codec half — a target that merely NAMES the registry lends nothing, so only the row goes", async () => {
+test("disposing a SubscriptionHandleRpcTarget removes an EXPRESSION row in either codec half — a target that merely NAMES the registry lends nothing, so only the row goes", async () => {
   for (const [half, target] of [
     ["string", "itx.rpcStubs.get('cam')"],
     ["array", ["itx", "rpcStubs", ["get", "cam"]]],

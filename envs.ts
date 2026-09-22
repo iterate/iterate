@@ -1,5 +1,7 @@
 /** Deployment configuration for os-next and its first-party apps. Secrets live in Doppler. */
 
+import type { IngressRouting } from "./packages/iterate/src/next/project-ingress.ts";
+
 /** Cloudflare account names, IDs, and shared credentials for account-wide tooling.
  * dev/preview shares one account; use its preview credentials, not a preview slot. */
 export const cloudflareAccounts = {
@@ -61,8 +63,8 @@ export interface OsNextEnv {
   /** How projects are reached over HTTP (`APP_CONFIG urls.ingressRouting`): `subdomains` hangs
    *  `<app>--<project>.<hostname>` and the apex `<project>.<hostname>` under a wildcard route the
    *  generator adds on `hostname`'s zone (ensure-resources creates the wildcard DNS record); `paths`
-   *  serves `<baseUrl>/<project>/<app>/…` from the one origin. Unset ⇒ no ingress. */
-  ingressRouting?: { type: "subdomains"; hostname: string } | { type: "paths" };
+   *  serves `<baseUrl>/projects/<project>/<app>/…` from the one origin. Unset ⇒ no ingress. */
+  ingressRouting?: NonNullable<IngressRouting>;
   artifactsNamespace: string;
   /** The name the Cloudflare resources were CREATED under (D1 `<prefix>-directory`, KV `<prefix>-oauth|-itx`) —
    *  pinned apart from `workerName` because the worker was renamed after they existed; `ensure-resources` and
@@ -209,5 +211,21 @@ export const voiceEnvs = {
     // Its own workers.dev subdomain — NOT a custom domain (iterate2.com is the iterate project's
     // apex, osNextEnvs.prd.temporaryCustomHostnames). A workers.dev baseUrl adds no custom route (below).
     baseUrl: "https://voice.iterate.workers.dev",
+  },
+};
+
+/** Static OAuth example and downloadable unpacked Chrome extension. Credentials share the platform's Doppler project. */
+export const spaEnvs = {
+  preview: {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: "preview",
+    workerName: "iterate-spa-preview",
+    baseUrl: "https://iterate-spa-preview.iterate-dev-preview.workers.dev",
+  },
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "iterate-spa",
+    baseUrl: "https://iterate-spa.iterate.workers.dev",
   },
 };

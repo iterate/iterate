@@ -1,4 +1,4 @@
-// apps/os's one file-attachment state machine every composer shares: size limits, the oversize
+// apps/os-next's one file-attachment state machine every composer shares: size limits, the oversize
 // warning, stable chip identity, and the hidden picker input (render `AttachmentFileInput` from
 // composer-attachments.tsx once next to the composer).
 import { useRef, useState } from "react";

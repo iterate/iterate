@@ -69,12 +69,4 @@ export const factRenderers: EventRenderers = {
       </>
     );
   },
-  "events.iterate.com/project/mcp-connection-created": (e) => {
-    const p = record(e.payload);
-    return (
-      <>
-        An MCP connection was born {mono(str(p.grantId))} at {mono(str(p.path))}
-      </>
-    );
-  },
 };

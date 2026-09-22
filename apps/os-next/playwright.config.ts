@@ -7,9 +7,22 @@
 // interface E2Es and not workerd-internal tests.
 
 import { defineConfig, devices } from "@playwright/test";
+import { deployedTarget } from "./e2e/support/deployed-target.ts";
 
 const PORT = Number(process.env.DEMO_PORT || 8788);
 const baseURL = process.env.DEMO_BASE_URL || `http://localhost:${PORT}`;
+
+// A deployment under `doppler run`: the specs read the deployed target out of the environment
+// (auth.spec.ts, mini-app.spec.ts, issuer-pages.spec.ts), and the worker processes inherit what is
+// set here — the credentials out of the deployment's APP_CONFIG, the routing out of its envs.ts
+// entry, the way e2e/support/global-setup.ts hands them to the vitest suite.
+if (process.env.DEMO_BASE_URL && process.env.APP_CONFIG) {
+  const target = deployedTarget(process.env.DEMO_BASE_URL);
+  process.env.ADMIN_API_SECRET = target.adminApiSecret;
+  process.env.LOGIN_PASSWORD = target.loginPassword;
+  process.env.PROJECT_INGRESS_ROUTING = target.ingressRouting;
+  process.env.MCP_BASE_URL = target.mcpBaseUrl;
+}
 
 export default defineConfig({
   testDir: "specs",
@@ -22,7 +35,12 @@ export default defineConfig({
   workers: process.env.CI ? 6 : undefined,
   retries: process.env.CI ? 1 : 0,
   reporter: "list",
-  use: { baseURL, trace: "on-first-retry" },
+  use: {
+    baseURL,
+    trace: "on-first-retry",
+    video:
+      process.env.VIDEO_MODE === "1" ? { mode: "on", size: { width: 1280, height: 1000 } } : "off",
+  },
   // Boot a local worker only for a localhost target; a DEMO_BASE_URL to a deployment skips it.
   webServer: process.env.DEMO_BASE_URL
     ? undefined
@@ -33,8 +51,24 @@ export default defineConfig({
         timeout: 120_000,
       },
   projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    {
+      name: "chromium",
+      use: {
+        ...devices["Desktop Chrome"],
+        // Keep the expanded project form in view in walkthrough recordings.
+        ...(process.env.VIDEO_MODE === "1" && { viewport: { width: 1280, height: 1000 } }),
+      },
+    },
     // the consent flow once more at a phone's width, with touch — Chromium, the same worker
-    { name: "phone", use: { ...devices["Pixel 7"] }, testMatch: "**/auth.spec.ts" },
+    {
+      name: "phone",
+      use: {
+        ...devices["Pixel 7"],
+        ...(process.env.VIDEO_MODE === "1" && {
+          video: { mode: "on" as const, size: devices["Pixel 7"].viewport },
+        }),
+      },
+      testMatch: ["**/auth.spec.ts", "**/issuer-pages.spec.ts"],
+    },
   ],
 });

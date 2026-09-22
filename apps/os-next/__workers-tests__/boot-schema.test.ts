@@ -4,7 +4,7 @@
 // its D1 is empty until the worker's first request.
 import { env, SELF } from "cloudflare:test";
 import { expect, test, vi } from "vitest";
-import type { Env } from "../src/control-plane.ts";
+import type { Env } from "../src/env.ts";
 
 const db = (env as unknown as Env).DB;
 const tables = async () =>

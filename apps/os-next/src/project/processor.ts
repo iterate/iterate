@@ -1,14 +1,16 @@
+import { z } from "zod";
+import { downloadPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
+import { parseConfigRepoTemplateReference } from "@iterate-com/shared/config-repo-template/reference";
 // src/project/processor.ts — THE PROJECT PROCESSOR: the reduce of the project's own creation facts
 // and of the certificates cross-posted to `/` (the catalog: first certificate wins — a repo, a
-// workspace or an agent is born once, an MCP connection per grant; a secret's latest `set` is its
+// workspace is born once; a secret's latest `set` is its
 // row — and a death certificate drops the entry; the config repo's commits, whose latest is the tip
 // the apex follows), and TWO EFFECTS, each run from state at head. THE CREATION SAGA: the config repo
 // (`itx.repos.create("/repos/config")`, the same collection a caller uses), its seed committed when
 // `main` is unborn (the homepage worker and an AGENTS.md, below), the project's ingress pointed at
 // that commit (`project/ingress-configured`, the core's), then the certificate. THE APEX FOLLOWING
 // THE CONFIG REPO: every `repo/commit-completed` from `/repos/config` re-points the ingress at that
-// commit — a commit to the config repo IS its publication (apps/os's rule), what an agent used to be
-// told to do by hand from `/` and cannot: its scripts run in a sandbox that never reaches the root.
+// commit — publishing a config-repo website needs a commit, not a manual ingress event.
 // Subscribed to `/` (the row `session.projects.create` enables), it runs again after every eviction:
 // an attempt lost with an incarnation is simply run again by the next — the repo tolerates existing,
 // the seed is skipped once `main` has a tip, every ingress append is keyed by the commit it points
@@ -24,9 +26,29 @@ import {
   StreamProcessor,
 } from "iterate/next/stream/processor";
 import type { WithItx } from "iterate/next/sdk";
-import { jsonEqual } from "iterate/next/lib";
+import { defaultFiles } from "../generated/config-templates.js";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
+import { reduceSecretCatalog } from "../secret/contract.ts";
 import { ProjectContract, type ProjectState } from "./contract.ts";
+
+/** Where the apex points for the config repo at `commitOid`: the repo's whole tree at that exact
+ *  commit as the worker's modules (`worker.ts` the main module, every `.js` file under its own path,
+ *  so relative imports resolve as in the tree — the repo facet's `modules`), cached under the
+ *  commit. The saga writes it for the seed and the follower for every later commit — the same
+ *  target under the same key, so the two appends land one event. */
+function configRepoIngressTarget(commitOid: string) {
+  return [
+    "itx",
+    "workers",
+    [
+      "get",
+      {
+        source: ["itx", "repos", ["get", "/repos/config"], ["modules", { commitOid }]],
+        cacheKey: commitOid,
+      },
+    ],
+  ];
+}
 
 export class ProjectProcessor extends StreamProcessor<
   ProjectState,
@@ -60,7 +82,14 @@ export class ProjectProcessor extends StreamProcessor<
         // Born once: a request after the certificate is a harmless fact; after a failure, a new attempt.
         return state.creation?.status === "created"
           ? undefined
-          : { ...state, creation: { status: "requested", offset: event.offset } };
+          : {
+              ...state,
+              creation: {
+                status: "requested",
+                offset: event.offset,
+                configRepoTemplate: event.payload.configRepoTemplate,
+              },
+            };
       case "events.iterate.com/project/created":
         return { ...state, creation: { status: "created", offset: event.offset } };
       case "events.iterate.com/project/create-failed":
@@ -91,35 +120,10 @@ export class ProjectProcessor extends StreamProcessor<
         const { [event.payload.path]: _gone, ...workspaces } = state.workspaces;
         return { ...state, workspaces };
       }
-      case "events.iterate.com/agent/created":
-        if (state.agents[event.payload.path]) return undefined;
-        return {
-          ...state,
-          agents: { ...state.agents, [event.payload.path]: { createdAt: event.createdAt } },
-        };
-      case "events.iterate.com/agent/deleted": {
-        if (!state.agents[event.payload.path]) return undefined;
-        const { [event.payload.path]: _gone, ...agents } = state.agents;
-        return { ...state, agents };
-      }
-      case "events.iterate.com/secret/set": {
-        // The latest write is the row (a rotation keeps the row, a new pin or strategy replaces
-        // it); the first set's time stays. The same pin and strategy again is a no-op.
-        const { path, urls, refresh } = event.payload;
-        const known = state.secrets[path];
-        if (known && known.refresh === refresh && jsonEqual(known.urls, urls)) return undefined;
-        return {
-          ...state,
-          secrets: {
-            ...state.secrets,
-            [path]: { urls, refresh, createdAt: known?.createdAt ?? event.createdAt },
-          },
-        };
-      }
+      case "events.iterate.com/secret/set":
       case "events.iterate.com/secret/deleted": {
-        if (!state.secrets[event.payload.path]) return undefined;
-        const { [event.payload.path]: _gone, ...secrets } = state.secrets;
-        return { ...state, secrets };
+        const secrets = reduceSecretCatalog(state.secrets, event);
+        return secrets && { ...state, secrets };
       }
       case "events.iterate.com/repo/commit-completed":
         // Only the config repo moves the apex; another repo's commit is a fact for its own log.
@@ -128,19 +132,6 @@ export class ProjectProcessor extends StreamProcessor<
           ...state,
           configRepoTip: { commitOid: event.payload.commitOid, offset: event.offset },
         };
-      case "events.iterate.com/project/mcp-connection-created": {
-        const { grantId, path } = event.payload;
-        const known = state.mcpConnections[grantId];
-        if (known?.path === path) return undefined;
-        // the connection was born once; when its context moved (a path convention changed) the row follows
-        return {
-          ...state,
-          mcpConnections: {
-            ...state.mcpConnections,
-            [grantId]: { path, createdAt: known?.createdAt ?? event.createdAt },
-          },
-        };
-      }
       default:
         return undefined;
     }
@@ -178,24 +169,7 @@ export class ProjectProcessor extends StreamProcessor<
             await append({
               type: "events.iterate.com/project/ingress-configured",
               idempotencyKey: `project/ingress-configured:${tip.commitOid}`,
-              payload: {
-                target: [
-                  "itx",
-                  "workers",
-                  [
-                    "get",
-                    {
-                      source: [
-                        "itx",
-                        "repos",
-                        ["get", "/repos/config"],
-                        ["modules", { commitOid: tip.commitOid }],
-                      ],
-                      cacheKey: tip.commitOid,
-                    },
-                  ],
-                ],
-              },
+              payload: { target: configRepoIngressTarget(tip.commitOid) },
             });
             this.#published = tip.offset;
           }
@@ -221,68 +195,61 @@ export class ProjectProcessor extends StreamProcessor<
           | string
           | null;
         if (!commitOid) {
+          const reference = state.creation?.configRepoTemplate;
+          const changes = reference
+            ? await downloadPublicGithubTemplate(parseConfigRepoTemplateReference(reference))
+            : defaultFiles;
+          if (!changes.some((file) => file.path === "worker.ts"))
+            throw new Error("The config template needs a worker.ts entrypoint");
           const seeded = (await this.withItx((itx) =>
             config(itx).commitFiles({
-              message: "seed: the project's homepage worker and AGENTS.md",
-              // THE SEED: `worker.ts`, the project's homepage — plain JavaScript (the loader executes
-              // what it reads; `.ts` is a name) a project edits in place — and an AGENTS.md saying what
-              // the repo is. Committed once, onto an unborn `main`; the ingress is pointed at this
-              // commit below, and at every later commit by the follower above (the
-              // website-publication e2e is the proof).
-              changes: [
-                {
-                  path: "worker.ts",
-                  content: `import { WorkerEntrypoint } from "cloudflare:workers";
-
-// The project's homepage: what its apex answers. Edit and commit — a commit on this repo's main IS
-// its publication: the platform points the apex at the new commit within a moment.
-export default class extends WorkerEntrypoint {
-  async fetch(request) {
-    const { projectSlug } = await this.env.ITX.get().whoami();
-    return new Response("Homepage of project " + projectSlug + "\\n", {
-      headers: { "content-type": "text/plain; charset=utf-8" },
-    });
-  }
-}
-`,
-                },
-                {
-                  path: "AGENTS.md",
-                  content: `# Project configuration
-
-This repository is the project's executable configuration. \`worker.ts\` is the project's homepage
-worker (its \`fetch\` answers the project's apex); the platform seeded both files when the project was
-created and never touches them again. A commit on \`main\` IS its publication: the platform points the
-apex at the new commit within a moment (the project processor follows this repo's commits). The whole
-tree rides along: \`worker.ts\` may import any \`.js\` file in the repo by its relative path, and each
-runs as a JavaScript module (\`.js\` is the one name the loader takes a module under; \`worker.ts\` is
-the seed's name and runs as the main module). Keep them valid JavaScript — a broken commit takes the
-site down until the next one.
-`,
-                },
-              ],
+              message: reference ? `seed: ${reference}` : "seed: minimal project config",
+              changes,
             }),
           )) as unknown as { commitOid: string | null };
           commitOid = seeded.commitOid;
         }
         if (!commitOid) throw new Error("the config repo's seed left main unborn");
+        const manifestText = await this.withItx((itx) =>
+          config(itx).readFile("iterate.json", { commitOid: commitOid! }),
+        );
+        const manifest = z
+          .object({ events: z.array(z.string().min(1)).default([]) })
+          .parse(manifestText ? JSON.parse(manifestText) : {});
+        if (manifest.events.length) {
+          await this.withItx((itx) =>
+            itx.append({
+              type: "events.iterate.com/stream/subscription-configured",
+              idempotencyKey: `project/config-worker:${commitOid}`,
+              payload: {
+                name: "config-worker",
+                consumes: manifest.events,
+                target: [
+                  "itx",
+                  "workers",
+                  [
+                    "get",
+                    {
+                      source: [
+                        "itx",
+                        "repos",
+                        ["get", "/repos/config"],
+                        ["modules", { commitOid }],
+                      ],
+                      cacheKey: commitOid,
+                    },
+                  ],
+                  "processEventBatch",
+                ],
+              },
+            }),
+          );
+        }
         await append(
           {
             type: "events.iterate.com/project/ingress-configured",
             idempotencyKey: `project/ingress-configured:${commitOid}`,
-            payload: {
-              target: [
-                "itx",
-                "workers",
-                [
-                  "get",
-                  {
-                    source: ["itx", "repos", ["get", "/repos/config"], ["modules", { commitOid }]],
-                    cacheKey: commitOid,
-                  },
-                ],
-              ],
-            },
+            payload: { target: configRepoIngressTarget(commitOid) },
           },
           {
             type: "events.iterate.com/project/created",

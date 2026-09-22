@@ -3,10 +3,11 @@ import { newWebSocketRpcSession, RpcTarget, RpcStub } from "capnweb";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { appSession } from "iterate/next/app-server";
+import { platformAddressesOf } from "../src/app-config.ts";
 import { directory } from "../src/directory.ts";
 import { browserAuthorization } from "../src/browser-client.ts";
 import { oauthHelpers } from "../src/oauth.ts";
-import type { Env } from "../src/control-plane.ts";
+import type { Env } from "../src/env.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import definitions from "../src/control-plane.sql?raw";
 import { loginPassword } from "./support.ts";
@@ -20,7 +21,8 @@ const call = (path: string, init?: RequestInit) => {
   if (path === "/login") headers.set("Authorization", `Bearer ${adminSecret}`);
   return SELF.fetch(new Request(`${ORIGIN}${path}`, { redirect: "manual", ...init, headers }));
 };
-const helpers = () => oauthHelpers(bindings, "https://control.test");
+const helpers = () =>
+  oauthHelpers(bindings, platformAddressesOf(bindings, new Request(`${ORIGIN}/`)));
 
 beforeAll(async () => {
   await bindings.DB.batch(
@@ -167,7 +169,7 @@ async function grant(resources: string[], projects: string[] = ["oauth-a"]) {
       oauthA,
       oauthB,
     };
-  const tokenResponse = await call("/oauth/token", {
+  const tokenResponse = await call("/oauth2/token", {
     method: "POST",
     body: new URLSearchParams({
       grant_type: "authorization_code",
@@ -191,8 +193,10 @@ test("discovery advertises CIMD AND DCR: the registration endpoint is published 
   expect(metadata.client_id_metadata_document_supported).toBe(true);
   expect(metadata.token_endpoint_auth_methods_supported).toContain("none");
   expect(metadata.code_challenge_methods_supported).toEqual(["S256"]);
-  expect(metadata.registration_endpoint).toBe(`${ORIGIN}/oauth/register`);
-  const registered = await call("/oauth/register", {
+  expect(metadata.authorization_endpoint).toBe(`${ORIGIN}/oauth2/auth`);
+  expect(metadata.token_endpoint).toBe(`${ORIGIN}/oauth2/token`);
+  expect(metadata.registration_endpoint).toBe(`${ORIGIN}/oauth2/register`);
+  const registered = await call("/oauth2/register", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -232,7 +236,7 @@ test("the configured header bearer is the same administrator at both protocols",
         })
       ).body.result.content[0].text,
     ),
-  ).toEqual({ projectId: "admin-probe", path: "/mcp/inbound/admin" }); // the admin secret's shared connection context (mcp.ts)
+  ).toEqual({ projectId: "admin-probe", path: "/" }); // MCP executes on the authorized project root.
   expect((await call("/api", { headers: { Authorization: "Bearer wrong" } })).status).toBe(401);
   expect((await tool("wrong", "run", { project: "x", script: "async () => 1" })).status).toBe(401);
 });
@@ -275,7 +279,7 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
   expect(
     (await call("/api", { headers: { Authorization: `Bearer ${token.access_token}` } })).status,
   ).toBe(401);
-  const broaden = await call("/oauth/token", {
+  const broaden = await call("/oauth2/token", {
     method: "POST",
     body: new URLSearchParams({
       grant_type: "refresh_token",
@@ -285,7 +289,7 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
     }),
   });
   expect(broaden.status).toBe(400);
-  const refresh = await call("/oauth/token", {
+  const refresh = await call("/oauth2/token", {
     method: "POST",
     body: new URLSearchParams({
       grant_type: "refresh_token",
@@ -299,7 +303,7 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
   // explicitly keeps that token usable until the client uses a newer one.
   expect(
     (
-      await call("/oauth/token", {
+      await call("/oauth2/token", {
         method: "POST",
         body: new URLSearchParams({
           grant_type: "refresh_token",
@@ -321,7 +325,7 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
   ).toBe(401);
   expect(
     (
-      await call("/oauth/token", {
+      await call("/oauth2/token", {
         method: "POST",
         body: new URLSearchParams({
           grant_type: "refresh_token",
@@ -460,7 +464,7 @@ test("console and project browsers use the same CIMD flow and independent grants
         grant_types: ["authorization_code"],
         response_types: ["code"],
       });
-    if (!["/.auth/client.json", "/oauth/token", "/api"].includes(url.pathname))
+    if (!["/.auth/client.json", "/oauth2/token", "/api"].includes(url.pathname))
       throw new Error(`Unexpected external fetch: ${url}`);
     if (logoutUnavailable && url.pathname === "/api")
       return new Response("Unavailable", { status: 503 });
@@ -578,7 +582,7 @@ test("console and project browsers use the same CIMD flow and independent grants
       ),
     ).toEqual({
       projectId: browserA.id,
-      path: expect.stringMatching(/^\/mcp\/inbound\/grants\/[A-Za-z0-9_-]{16}$/), // the token's own connection context, named by its grant (mcp.ts)
+      path: "/", // the token's own connection context, named by its grant (mcp.ts)
       projectSlug: "browser-a",
       projectUrl: "https://browser-a.projects.test/",
     });
@@ -586,7 +590,8 @@ test("console and project browsers use the same CIMD flow and independent grants
     expect((await personalApi.projects.list()).map((p: { id: string }) => p.id)).toEqual([
       browserA.id,
     ]);
-    // A device says `bearer` for the same act: the token rode the upgrade, hand me that session.
+    // A device says `bearer` for the same act (Kit firmware, itx_mount.c): the token rode the
+    // upgrade, hand me that session.
     const { root: bearerApi } = await rpc(personal.token, "bearer");
     expect((await bearerApi.projects.list()).map((p: { id: string }) => p.id)).toEqual([
       browserA.id,
@@ -647,7 +652,7 @@ test("console and project browsers use the same CIMD flow and independent grants
     ).rejects.toThrow(/at least a minute/);
     expect(
       (
-        await call("/oauth/token", {
+        await call("/oauth2/token", {
           method: "POST",
           body: new URLSearchParams({
             grant_type: "refresh_token",

@@ -96,7 +96,7 @@ describe("a browser CONNECTED to another issuer stays there", () => {
         end: async () => calls.push("end"),
         begin: async (host: { issuer: string }) => {
           calls.push(`begin ${host.issuer}`);
-          return `${host.issuer}/authorize?state=x`;
+          return `${host.issuer}/oauth2/auth?state=x`;
         },
       }),
     } as unknown as DurableObjectNamespace<never>;
@@ -122,7 +122,7 @@ describe("a browser CONNECTED to another issuer stays there", () => {
     const { response, calls } = connected("/.auth/login?next=%2Fprojects%2Facme&scope=iterate");
     const answer = await response;
     expect(answer?.status).toBe(302);
-    expect(answer?.headers.get("location")).toBe(`${CONNECTED}/authorize?state=x`);
+    expect(answer?.headers.get("location")).toBe(`${CONNECTED}/oauth2/auth?state=x`);
     expect(calls).toEqual(["discard", `begin ${CONNECTED}`]);
   });
 
@@ -154,5 +154,22 @@ describe("a browser CONNECTED to another issuer stays there", () => {
     expect((await response)?.headers.get("location")).toBe(
       `/.auth/connect?${new URLSearchParams({ issuer: CONNECTED, next: "/projects/acme", scope: "" })}`,
     );
+  });
+});
+
+test("client metadata publishes app branding relative to its own origin, independently of the issuer", async () => {
+  const response = await appAuth(new Request("https://notes.example/.auth/client.json"), {
+    sessions: {} as DurableObjectNamespace<never>,
+    issuer: ISSUER,
+    resource: `${ISSUER}/api`,
+    api: () => new Response(),
+    client: { name: "Iterate Notes", logoUri: "/client-logo.svg" },
+  });
+  expect(await response!.json()).toMatchObject({
+    client_id: "https://notes.example/.auth/client.json",
+    client_name: "Iterate Notes",
+    client_uri: "https://notes.example",
+    logo_uri: "https://notes.example/client-logo.svg",
+    token_endpoint_auth_method: "none",
   });
 });

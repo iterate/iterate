@@ -23,27 +23,17 @@
 import { codedError, errorCode, reportIssue } from "iterate/next/lib";
 import type { ItxExpressionInput } from "iterate/next/expression";
 import type { Caller } from "iterate/next/principal";
+import type { StreamPage, WaitForEventFilter } from "iterate/next/api";
 import {
   idempotencyConflictMessage,
   sameIdempotentEvent,
   type StreamEvent,
   type StreamEventInput,
-  LiveState,
   ReduceCheckpointTable,
   type SqlStorageHandle,
 } from "iterate/next/stream/processor";
 import { reduceScheduledAppends } from "./scheduled-appends.ts";
 import { CoreContract, reduceCoreEventBatch, type CoreState } from "./core-processor.ts";
-
-/** One page of the log: the events after an offset, how far the scan reached (the range a client
- *  chains for contiguity), and whether that reached the durable head — a page is CUT by `limit` or
- *  by the server's byte budget (`read` below), and its length says nothing about which. */
-export interface StreamPage {
-  events: StreamEvent[];
-  scannedThroughOffset: number;
-  /** True iff the scan reached the durable mark: nothing more to read until the next commit. */
-  atHead: boolean;
-}
 
 /** THE APPEND CEILING on one serialized body, in JS chars (`JSON.stringify(body).length` — the one
  *  O(1) size JS has; V8 serializes a string at 1–2 bytes per char). Workers RPC caps ONE message at
@@ -58,26 +48,33 @@ const READ_PAGE_BUDGET_BYTES = 8 * 1024 * 1024;
 /** The most rows one page returns whatever `limit` asks — the object overhead of tiny events, which
  *  the byte budget cannot see. */
 const READ_PAGE_MAX_EVENTS = 1000;
-/** THE RECENT-EPHEMERALS RING's default size, in serialized JS chars (`StreamDeps` overrides it):
- *  what an incarnation keeps of its ephemerals after the moment they were appended — the one way to
- *  see one after the fact, since no ephemeral ever reaches a row. Oldest out first; an event over the
- *  whole budget is not kept. Per incarnation, like every ephemeral offset. */
-const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
+/** THE RECENT-EPHEMERALS RING's size, in serialized JS chars: what an incarnation keeps of its
+ *  ephemerals after the moment they were appended — the one way to see one after the fact, since no
+ *  ephemeral ever reaches a row. Oldest out first; an event over the whole budget is not kept. Per
+ *  incarnation, like every ephemeral offset. The delivery loop reserves this much cursor-read
+ *  room before a read that can return nothing else (subscription-delivery.ts). */
+export const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
 
 /** THE ALARM TRACE — the DO's ephemeral record of one alarm pass (iterate-context-durable-object.ts
  *  `AlarmTrace`); pause-exempt, so a paused context's passes stay observable. */
 export const STREAM_ALARM_TRACE_EVENT = "events.iterate.com/stream/trace/alarm" as const;
 
-/** The waitForEvent selector: `type` is an exact event-type match, or ONE OF a list — a creation's
- *  two terminals, `created` or `create-failed` (absent = any type); only events with offset strictly
- *  greater than `afterOffset` match (default = the head at call time — "the next occurrence";
- *  history-inclusive waits pass an explicit afterOffset); `timeoutMs` defaults to 30s, capped at
- *  120s, and expiry rejects with codedError("WAIT_TIMEOUT", …). */
-export type WaitForEventFilter = {
-  type?: string | string[];
-  afterOffset?: number;
-  timeoutMs?: number;
-};
+/** What a PAUSED stream still accepts: the platform's own records and the pause/resume pair itself
+ *  (it must always accept its own resume). */
+const PAUSE_EXEMPT_EVENT_TYPES = new Set([
+  "events.iterate.com/stream/created",
+  "events.iterate.com/stream/woken",
+  "events.iterate.com/stream/paused",
+  "events.iterate.com/stream/resumed",
+  "events.iterate.com/stream/append-schedule-cancelled",
+  // the delivery loop's own record of a halted row — a paused stream's ladder must still end
+  "events.iterate.com/stream/subscription-delivery-halted",
+  // the runner's own record of a run's end — a paused stream must still close a script it started
+  "events.iterate.com/context/run-settled",
+  // Alarm traces are kernel diagnostics, not user work; an operator must still be able to
+  // inspect a paused context's current incarnation.
+  STREAM_ALARM_TRACE_EVENT,
+]);
 
 /** One waiting waitForEvent caller. In-memory only — an eviction drops waiters, and that is FINE:
  *  the caller's own open RPC call keeps the DO awake for the wait's duration anyway, and a dropped
@@ -102,8 +99,6 @@ interface StreamDeps {
   /** The post-commit fan-out, once per offset-advancing commit with the newly committed events in
    *  offset order, ephemerals included (the waitForEvent waiters settle before it). */
   onCommit: (freshEvents: StreamEvent[], afterOffset: number, throughOffset: number) => void;
-  /** The recent-ephemerals ring's size, serialized JS chars (RECENT_EPHEMERALS_BUDGET_CHARS). */
-  recentEphemeralsBudgetChars?: number;
 }
 
 /** THE STREAM — the commit point: SQLite rows + ONE durable mark, idempotency at the door, one
@@ -128,22 +123,17 @@ export class Stream {
   /** This incarnation's newest ephemerals, oldest first, within the budget. */
   readonly #recentEphemerals: { event: StreamEvent; chars: number }[] = [];
   #recentEphemeralsChars = 0;
-  readonly #recentEphemeralsBudgetChars: number;
   // ── THE CORE REDUCE's state: rehydrated by the constructor from the versioned checkpoint and caught
   // up to the durable mark, reduced inside every durable commit and checkpointed with it (the cursor
   // every batch, the state on change). Durable events only, so it rebuilds bit-identically. ──
   #coreReducedState: CoreState;
   #coreReducedThroughOffset: number;
-  /** The live-state holder for the core state (`payload.key` = "core"). */
-  readonly #coreLiveState: LiveState<CoreState>;
 
   constructor(deps: StreamDeps) {
     this.storage = new StreamStorage(deps.storage);
     this.#path = deps.path;
     this.#projectId = deps.projectId;
     this.#onCommit = deps.onCommit;
-    this.#recentEphemeralsBudgetChars =
-      deps.recentEphemeralsBudgetChars ?? RECENT_EPHEMERALS_BUDGET_CHARS;
     // THE DURABLE HEAD is the core checkpoint's offset — written every durable commit anyway (the
     // reduce inside the transaction below), so there is no separate mark to write. Read WHATEVER
     // version wrote it: a core-version bump still recovers the head and re-reduces the log up to it.
@@ -197,14 +187,6 @@ export class Stream {
         this.#coreReducedThroughOffset = page.scannedThroughOffset;
       }
     }
-    this.#coreLiveState = new LiveState(
-      { append: (event) => this.append(event) },
-      CoreContract.slug,
-      this.#coreReducedState,
-      // A same-isolate sink: the delta must land densely inside the commit that triggered it, never
-      // deferred through the ordering chain (processor.ts `LiveState#orderDeltaAppends`).
-      { orderDeltaAppends: false },
-    );
   }
 
   #wakeRecorded = false;
@@ -265,10 +247,10 @@ export class Stream {
   }
 
   #rememberEphemeral(event: StreamEvent, chars: number) {
-    if (chars > this.#recentEphemeralsBudgetChars) return;
+    if (chars > RECENT_EPHEMERALS_BUDGET_CHARS) return;
     this.#recentEphemerals.push({ event, chars });
     this.#recentEphemeralsChars += chars;
-    while (this.#recentEphemeralsChars > this.#recentEphemeralsBudgetChars) {
+    while (this.#recentEphemeralsChars > RECENT_EPHEMERALS_BUDGET_CHARS) {
       const oldest = this.#recentEphemerals.shift();
       if (!oldest) break;
       this.#recentEphemeralsChars -= oldest.chars;
@@ -296,11 +278,6 @@ export class Stream {
     return { offset: this.#coreReducedThroughOffset, state: this.#coreReducedState };
   }
 
-  /** The live-state seed door, as a facet processor's `liveSnapshot()` is. */
-  coreLiveStateSnapshot(): { rev: number; state: CoreState } {
-    return this.#coreLiveState.snapshot();
-  }
-
   // ── APPEND: the commit pipeline, top to bottom ──
 
   /** Commit a batch. Synchronous end to end (sync SQLite), so the steps never interleave:
@@ -308,70 +285,32 @@ export class Stream {
    *    1. MAY THIS LAND?  well-formed
    *    2. OFFSETS         idempotency (dedupe or refuse) · the pause (a dedupe hit is admitted, a
    *                       fresh event refused) · expected offsets · one shared sequence, ephemerals
-   *                       included — decided in memory, nothing written yet
+   *                       included · the body serialized once and measured against the ceiling —
+   *                       decided in memory, nothing written yet
    *    3 + 4. REDUCE + COMMIT   rows + the high-water mark + the core reduce with its checkpoint, ONE
    *                             transaction (an ephemeral-only batch skips this entirely: zero SQL)
-   *    5. AFTER           waiters, then the host's fan-out (every subscriber), then core's live delta
+   *    5. AFTER           waiters, then the host's fan-out (every subscriber)
    *
    *  Every refusal happens before a single write. The two marks are advanced only AFTER the
    *  transaction returns, so a throw leaves them true. */
   append(...events: StreamEventInput[]): StreamEvent[] {
     if (events.length === 0) return []; // a pure no-op: nothing checked, minted, or fanned out
     // 1. may this land? — this runtime check is the SOLE enforcement (no boundary validator).
-    const charsByEphemeralInput = new Map<StreamEventInput, number>(); // measured once, for the ring too (step 5)
     for (const event of events) {
       // oxlint-disable-next-line iterate/simple-truthiness-check -- append is the SOLE enforcement door (no boundary validator); event.type arrives from callers/the wire, so the static string type is not a runtime guarantee
       if (typeof event.type !== "string" || event.type.trim() === "")
         throw new Error("append: every event needs a non-empty type");
-      // RESERVED NAMES, refused at the one append door (parseSubscriptionName refuses them at the
-      // command door too): `core` — a raw `subscription-configured { name: "core" }` would install an
-      // undeliverable row that climbs the retry ladder to a halt — and any key of `Object.prototype`,
-      // which the plain-record subscriptions table would read or write as the prototype.
-      if (event.type === "events.iterate.com/stream/subscription-configured") {
-        const name = (event.payload as { name?: unknown } | undefined)?.name;
-        if (name === CoreContract.slug || (typeof name === "string" && name in Object.prototype))
-          throw codedError(
-            "RESERVED_SUBSCRIPTION_NAME",
-            `${JSON.stringify(name)} is reserved as a subscription name: "${CoreContract.slug}" is the core reduce, and a key of Object.prototype would name the table's prototype`,
-            { name },
-          );
-      }
-      // An EPHEMERAL is never stored, but it rides every push over the same 32 MiB RPC and sits in
-      // the same delivery memory — the same ceiling, measured here (a durable is measured at its insert).
-      if (event.ephemeral) {
-        const chars = JSON.stringify(event).length;
-        charsByEphemeralInput.set(event, chars);
-        if (chars > EVENT_BODY_MAX_CHARS)
-          throw codedError(
-            "EVENT_TOO_LARGE",
-            `append: an ephemeral ${JSON.stringify(event.type)} serializes to ${chars} chars, over the ${EVENT_BODY_MAX_CHARS / (1024 * 1024)} MiB ceiling — it would ride every push over Workers RPC (32 MiB per message); nothing was appended`,
-            { type: event.type, chars, maxChars: EVENT_BODY_MAX_CHARS },
-          );
-      }
     }
     // 2. offsets — decided in memory, nothing written yet. THE PAUSE is checked per event AFTER the
-    //    idempotency lookup: replaying an already committed event is safe even while paused. A FRESH event on a paused stream is refused, except the platform's own
-    //    records and the pause/resume pair itself (it must always accept its own resume).
+    //    idempotency lookup: replaying an already committed event is safe even while paused; a FRESH
+    //    event on a paused stream is refused unless PAUSE_EXEMPT_EVENT_TYPES names its type.
     const paused = this.#coreReducedState.paused;
-    const pauseExempt = [
-      "events.iterate.com/stream/created",
-      "events.iterate.com/stream/woken",
-      "events.iterate.com/stream/paused",
-      "events.iterate.com/stream/resumed",
-      "events.iterate.com/stream/append-schedule-cancelled",
-      // the delivery loop's own record of a halted row — a paused stream's ladder must still end
-      "events.iterate.com/stream/subscription-delivery-halted",
-      // the runner's own record of a run's end — a paused stream must still close a script it started
-      "events.iterate.com/context/run-settled",
-      // Alarm traces are kernel diagnostics, not user work; an operator must still be able to
-      // inspect a paused context's current incarnation.
-      STREAM_ALARM_TRACE_EVENT,
-    ];
     const afterOffset = this.#highestAssignedOffset;
     const createdAt = new Date().toISOString();
     const committedEvents: StreamEvent[] = []; // one per appended event, in order (a dedupe hit echoes the existing event)
     const freshEvents: StreamEvent[] = []; // the events NEW to the log, in offset order — what commits, reduces, fans out
     const eventsByIdempotencyKey = new Map<string, StreamEvent>(); // keys landing earlier in THIS batch
+    const freshDurables: { event: StreamEvent; serializedBody: string }[] = []; // the rows to insert, in offset order
     const freshEphemerals: { event: StreamEvent; chars: number }[] = []; // for the ring, once the batch lands
     let throughOffset = afterOffset;
     for (const event of events) {
@@ -400,7 +339,7 @@ export class Stream {
         committedEvents.push(existingEvent); // a retry answers with the event it already has, whatever `offset` it hoped for
         continue;
       }
-      if (paused && !pauseExempt.includes(eventInput.type))
+      if (paused && !PAUSE_EXEMPT_EVENT_TYPES.has(eventInput.type))
         throw codedError("STREAM_PAUSED", `stream paused: ${paused.reason}`);
       // EXPECTED OFFSET: an event carrying `offset` lands exactly there or the batch is refused —
       // "nothing has happened since I last looked" (apps/os's optimistic-concurrency shape).
@@ -412,21 +351,36 @@ export class Stream {
           { expected: expectedOffset, actual: offset },
         );
       throughOffset = offset;
+      // THE BODY, serialized once: the row carries the offset and the stream is the path, so the
+      // stored body is the input plus `createdAt`. THE APPEND CEILING (EVENT_BODY_MAX_CHARS) is
+      // measured on it for every event alike — an ephemeral is never stored, but it rides every push
+      // over the same 32 MiB RPC and sits in the same delivery memory.
+      const serializedBody = JSON.stringify({ ...eventInput, createdAt });
+      if (serializedBody.length > EVENT_BODY_MAX_CHARS)
+        throw codedError(
+          "EVENT_TOO_LARGE",
+          `append: the ${JSON.stringify(eventInput.type)} event that would land at offset ${offset} serializes to ${serializedBody.length} chars, over the ${EVENT_BODY_MAX_CHARS / (1024 * 1024)} MiB ceiling — Workers RPC caps a message at 32 MiB and a read holds several copies; store the payload elsewhere and let the event name it. Nothing was appended`,
+          {
+            type: eventInput.type,
+            offset,
+            chars: serializedBody.length,
+            maxChars: EVENT_BODY_MAX_CHARS,
+          },
+        );
       const committedEvent = { ...eventInput, offset, createdAt, path: this.#path } as StreamEvent;
       if (eventInput.idempotencyKey)
         eventsByIdempotencyKey.set(eventInput.idempotencyKey, committedEvent);
       committedEvents.push(committedEvent);
       freshEvents.push(committedEvent);
       if (committedEvent.ephemeral)
-        freshEphemerals.push({
-          event: committedEvent,
-          // measured in step 1 on the input (the committed event adds its offset, createdAt and path)
-          chars: charsByEphemeralInput.get(event) ?? JSON.stringify(committedEvent).length,
-        });
+        freshEphemerals.push({ event: committedEvent, chars: serializedBody.length });
+      else freshDurables.push({ event: committedEvent, serializedBody });
     }
     if (freshEvents.length === 0) return committedEvents; // every event deduped to an existing one
     // Only definitions can grow the projection. Completion/cancellation shrink it or advance a
     // fixed-width nextAt; bounded failure diagnostics are excluded from the definition budget.
+    // Folded here, ahead of the core reduce's own fold, because this refusal depends on the state
+    // and must land before any write: the reduce's batch door skips a throwing event, never refuses.
     if (freshEvents.some((event) => event.type === "events.iterate.com/stream/append-scheduled")) {
       const scheduledAppends = freshEvents.reduce(
         reduceScheduledAppends,
@@ -450,34 +404,15 @@ export class Stream {
         );
     }
     // 3 + 4. reduce and commit
-    let coreReducedStateChanged = false;
-    if (freshEvents.every((event) => event.ephemeral)) {
+    if (freshDurables.length === 0) {
       // THE EPHEMERAL FAST PATH: nothing to store, so no transaction and no high-water write —
       // what lets a flood of ephemerals leave SQLite untouched (the flood proofs measure it).
       this.#highestAssignedOffset = throughOffset; // the durable mark is untouched
     } else {
       let reducedState = this.#coreReducedState;
       this.storage.transactionSync(() => {
-        for (const event of freshEvents) {
-          if (event.ephemeral) continue;
-          // the row carries the offset, the stream is the path
-          const { offset: _offset, path: _path, ...eventBody } = event;
-          const serializedBody = JSON.stringify(eventBody);
-          // THE APPEND CEILING (EVENT_BODY_MAX_CHARS), measured on the durable's stored body. The
-          // transaction rolls back and the marks are locals until it commits: nothing written, no
-          // offset burned. (An ephemeral met the same ceiling in step 1, before any offset was assigned.)
-          if (serializedBody.length > EVENT_BODY_MAX_CHARS)
-            throw codedError(
-              "EVENT_TOO_LARGE",
-              `append: the event that would land at offset ${event.offset} serializes to ${serializedBody.length} chars, over the ${EVENT_BODY_MAX_CHARS / (1024 * 1024)} MiB ceiling — Workers RPC caps a message at 32 MiB and a read holds several copies; store the payload elsewhere and let the event name it`,
-              {
-                offset: event.offset,
-                chars: serializedBody.length,
-                maxChars: EVENT_BODY_MAX_CHARS,
-              },
-            );
+        for (const { event, serializedBody } of freshDurables)
           this.storage.insertEvent(event.offset, serializedBody, event.idempotencyKey || null);
-        }
         // The core reduce checkpoints with this batch: the cursor every batch IS the durable head
         // (one write, not two), the state on change. Reduced into a LOCAL: the fields move only
         // after the transaction commits, so a failed write never leaves phantom core state in memory.
@@ -489,7 +424,6 @@ export class Stream {
           reducedState !== this.#coreReducedState,
         );
       });
-      coreReducedStateChanged = reducedState !== this.#coreReducedState;
       this.#coreReducedState = reducedState;
       this.#coreReducedThroughOffset = throughOffset;
       this.#highestAssignedOffset = throughOffset;
@@ -500,11 +434,6 @@ export class Stream {
     for (const { event, chars } of freshEphemerals) this.#rememberEphemeral(event, chars);
     this.#resolveWaitForEventWaiters(freshEvents); // waiters first: onCommit may append again (a nested commit)
     this.#onCommit(freshEvents, afterOffset, throughOffset);
-    // Core's live-state delta rides this stream's own append (a nested commit). LOSSY BY CONTRACT:
-    // LiveState.set contains every refusal (a PAUSED stream refuses the delta) as a revision-chain
-    // gap the client heals by re-seeding. No feedback loop: the delta is ephemeral and changes no
-    // core state, so the nested commit's own step 5 finds nothing left.
-    if (coreReducedStateChanged) this.#coreLiveState.set(this.#coreReducedState);
     return committedEvents;
   }
 
@@ -567,8 +496,10 @@ export class Stream {
     return { events, scannedThroughOffset, atHead };
   }
 
-  /** Resolve with the next event matching `filter` — or the first COMMITTED durable match already in
-   *  the log after an explicit `filter.afterOffset`. CHECK-AND-WAIT IS ONE SYNCHRONOUS SLICE: zero
+  /** Resolve with the next event matching `filter` (`type`: one exact type or one of a list; absent =
+   *  any) — or the first COMMITTED durable match already in the log after an explicit
+   *  `filter.afterOffset`. `timeoutMs` defaults to 30s, capped at 120s; expiry rejects with
+   *  codedError("WAIT_TIMEOUT", …). CHECK-AND-WAIT IS ONE SYNCHRONOUS SLICE: zero
    *  awaits between the log scan and waiter registration (an await there would lose a racing commit
    *  → spurious WAIT_TIMEOUT). Waiters are fed from `freshEvents` in append's tail, so EPHEMERAL
    *  events resolve waits too — but only while a waiter is registered, since they never hit the log. */
@@ -675,7 +606,7 @@ export type SubscriptionCursor = {
 };
 
 /** One durable row as stored: its offset and its serialized body, reassembled. */
-export type StoredEventRow = { offset: number; body: string };
+type StoredEventRow = { offset: number; body: string };
 
 class StreamStorage {
   readonly #storage: DurableObjectStorageSlice;

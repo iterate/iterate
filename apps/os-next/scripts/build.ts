@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 // scripts/build.ts — THE BUILD: one esbuild script. wrangler bundles the worker itself
 // (wrangler.jsonc `main: src/worker.ts` — `wrangler dev`, `wrangler deploy`, the test harness), so
 // this writes only what the worker cannot import from source:
@@ -20,11 +21,11 @@
 //      pages' CSP loads script from this origin alone). The workspace's capnweb is what the worker
 //      speaks, so the copy is the same version by construction.
 //
-// The issuer's pages need no build at all: they are files in public/ (login.html, authorize.html,
+// The issuer's pages need no build at all: they are files in public/ (login.html, oauth2/auth.html,
 // their stylesheet and scripts), served by the assets binding. The two generated modules have
 // committed `.d.ts` siblings, so `tsc` and knip resolve the imports without a build; every runtime
 // path runs this first (vitest.global-setup.ts, scripts/dev.ts, scripts/deploy.ts).
-import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import process from "node:process";
@@ -85,6 +86,28 @@ export async function build(): Promise<void> {
   writeWranglerConfig();
   writeSelfHostWranglerConfig();
   mkdirSync(path.join(root, "src/generated"), { recursive: true });
+  const templatesRoot = path.resolve(root, "../../configs-next");
+  const sourceRef =
+    process.env.ITERATE_TEMPLATE_SOURCE_REF ||
+    execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const templates = readdirSync(templatesRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => ({
+      label:
+        entry.name === "default"
+          ? "Minimal"
+          : entry.name.charAt(0).toUpperCase() + entry.name.slice(1).replaceAll("-", " "),
+      reference: `github:iterate/iterate#${sourceRef}&path:configs-next/${entry.name}`,
+    }));
+  const defaultFiles = readdirSync(path.join(templatesRoot, "default")).map((file) => ({
+    path: file,
+    content: readFileSync(path.join(templatesRoot, "default", file), "utf8"),
+  }));
+  writeFileSync(
+    path.join(root, "src/generated/config-templates.js"),
+    `export const templates = ${JSON.stringify(templates)};\nexport const defaultFiles = ${JSON.stringify(defaultFiles)};\n`,
+  );
+
   writeFileSync(
     path.join(root, "src/generated/processor-sdk.js"),
     `export default ${JSON.stringify(await processorSdkModule())};\n`,

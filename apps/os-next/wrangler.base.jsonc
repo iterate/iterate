@@ -20,7 +20,7 @@
   // allow_irrevocable_stub_storage (experimental, undocumented): lets loaded code STORE its env.ITX
   // stub in its own durable storage and replay it (e2e/workers-and-facets.e2e.test.ts pins it); every worker
   // in the chain needs it, so the loaded isolates carry it too (context/worker-loader.ts).
-  // global_fetch_strictly_public: the OAuth provider's Client ID Metadata Documents (control-plane.ts
+  // global_fetch_strictly_public: the OAuth provider's Client ID Metadata Documents (oauth.ts
   // `clientIdMetadataDocumentEnabled`) — its fetch of a client's metadata URL must reach the public
   // internet only, never same-zone routing; without the flag the provider advertises no CIMD.
   "compatibility_flags": [
@@ -34,11 +34,6 @@
   // products on that account, under the developer's `wrangler login`.
   "observability": { "enabled": true, "logs": { "head_sampling_rate": 1 } },
   "workers_dev": true,
-  // PROJECT HOSTS (src/worker.ts `projectHostOf`): `<app>--<project>.<base>`, `<app>.<project>.<base>` and
-  // the apex `<project>.<base>` under the wildcard. The wildcard DNS record (`*.project-worker.iterate.com` AAAA 100::,
-  // proxied — originless, the route terminates it) lives in the zone; the route is this line.
-  "routes": [{ "pattern": "*.project-worker.iterate.com/*", "zone_name": "iterate.com" }],
-
   // subrequests: a capnweb WebSocket session is pumped by ONE long-lived stateless invocation, and
   // every edge->DO `invoke` it makes is a subrequest counted against that one invocation for the
   // session's whole life — the 10,000 paid default is hit by an ordinary long-lived client
@@ -54,7 +49,7 @@
   // Browser Run, the built-in root `itx.browser` (context/built-ins.ts). Quick Actions need the
   // remote binding in local wrangler; the workers test lane omits this the same way it omits `ai`.
   "browser": { "binding": "BROWSER" },
-  // Email Sending: the sign-in code's way out (src/login-code.ts). wrangler dev simulates it (the
+  // Email Sending: the sign-in code's way out (src/password-and-code-sign-in.ts). wrangler dev simulates it (the
   // message lands in a local file); a deployment sends from APP_CONFIG_LOGIN_EMAIL_FROM (envs.ts).
   "send_email": [{ "name": "EMAIL" }],
   // R2, the built-in root `itx.r2` (`itx.files` on top). Local wrangler keeps it in .wrangler/state;
@@ -96,7 +91,9 @@
     // `SecretDurableObject` was a bound namespace (`SECRET`) until 2026-09-21; the facet of the same
     // name took over, and the old objects are unreachable by name — set the secrets again.
     "AccountDurableObject": { "type": "durable-object", "storage": "sqlite" },
-    "AgentDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    // The removed built-in was hosted as a facet of IterateContextDurableObject. Retire its
+    // unused standalone namespace; agent streams and facet storage belong to the context.
+    "AgentDurableObject": { "type": "durable-object", "state": "deleted" },
     "OrganizationDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "ProjectDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "RepoDurableObject": { "type": "durable-object", "storage": "sqlite" },

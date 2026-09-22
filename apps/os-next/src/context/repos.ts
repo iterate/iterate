@@ -51,7 +51,7 @@ interface ArtifactListResult {
  *  object cannot (its `createToken` closure is NonPipelinable and fails to serialize; expression.ts's
  *  `InvokeHandle`). It adds `remote()`, the git-over-HTTPS URL of this repo — the platform knows the
  *  account and namespace; the repo facet does not. */
-export class ScopedArtifactRepo extends RpcTarget {
+export class ScopedArtifactRepoRpcTarget extends RpcTarget {
   readonly #handle: ArtifactRepoHandle;
   readonly #remote: string;
   constructor(handle: ArtifactRepoHandle, remote: string) {
@@ -111,14 +111,14 @@ const PROBE_TOKEN_TTL_SECONDS = 60;
  *  delimiter is `.` ON PURPOSE: project IDs are `[A-Za-z0-9_-]` (no `.`), so `${projectId}.` cannot
  *  collide even when IDs contain `-` (a `--` delimiter could: `a` + `b--x` == `a--b` + `x`), and repo
  *  names allow `.`. `list` is filtered to the prefix LOCALLY (the binding returns EVERY project's
- *  repos) and answers in paths, and `get` returns a `ScopedArtifactRepo` exposing `createToken` and
+ *  repos) and answers in paths, and `get` returns a `ScopedArtifactRepoRpcTarget` exposing `createToken` and
  *  `remote` only: the real handle's `fork(name)` takes an UNPREFIXED name — walked by the dispatcher
  *  regardless of the narrowed type — and would escape the wall, so it is withheld. */
 export interface ArtifactsScope {
   /** The Artifacts repo, `main` unborn until the first commit; false when it already existed. */
   create(path: string): Promise<{ created: boolean }>;
   /** The repo's handle — `createToken(scope, ttlSeconds)` and `remote()`. */
-  get(path: string): Promise<ScopedArtifactRepo>;
+  get(path: string): Promise<ScopedArtifactRepoRpcTarget>;
   /** This project's repos, as paths (one page of the binding's unfiltered list). */
   list(options?: { limit?: number; cursor?: string }): Promise<{
     repos: { path: string }[];
@@ -151,7 +151,7 @@ export function projectScopedArtifacts(input: {
     },
     get: async (path) => {
       const handle = await input.namespace.get(boundName(path));
-      return new ScopedArtifactRepo(handle, (await handle.info()).remote);
+      return new ScopedArtifactRepoRpcTarget(handle, (await handle.info()).remote);
     },
     list: async (options) => {
       const page = await input.namespace.list(options);

@@ -1,0 +1,31 @@
+name: Deploy SPA and Chrome extension
+permissions:
+  contents: read
+concurrency:
+  group: deploy-spa-production
+  cancel-in-progress: false
+on:
+  push:
+    branches: [main]
+    paths:
+      - .depot/workflows/deploy-spa.yml
+      - apps/spa/**
+      - apps/browser-extension/**
+      - envs.ts
+      - scripts/lib/**
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+      - run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Deploy static assets and versioned extension bundle
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: pnpm --dir apps/spa run-script deploy --env prd

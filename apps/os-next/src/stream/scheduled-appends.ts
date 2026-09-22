@@ -75,12 +75,14 @@ export const ScheduledAppendCancelled = z.strictObject({
   key: ScheduleKey,
   ifScheduledAtOffset: z.number().int().positive().optional(),
 });
+export type ScheduledAppendCancelled = z.infer<typeof ScheduledAppendCancelled>;
 export const ScheduledAppendSettled = z.strictObject({
   key: ScheduleKey,
   scheduledAtOffset: z.number().int().positive(),
   at: instant.optional(),
   error: z.string().max(2000).optional(),
 });
+export type ScheduledAppendSettled = z.infer<typeof ScheduledAppendSettled>;
 
 export type ScheduledAppend = z.output<typeof ScheduledAppendInput> & {
   nextAt: string;
@@ -89,7 +91,9 @@ export type ScheduledAppend = z.output<typeof ScheduledAppendInput> & {
   failure?: { error: string; offset: number };
 };
 
-/** A pure projection: replay never consults the clock or re-appends an occurrence. */
+/** A pure projection: replay never consults the clock or re-appends an occurrence. The payloads are
+ *  read as `normalizeControlEvent` (core-processor.ts) parsed and stored them — the casts below name
+ *  each schema's output shape. */
 export function reduceScheduledAppends(
   schedules: Record<string, ScheduledAppend>,
   event: StreamEvent,
@@ -97,7 +101,7 @@ export function reduceScheduledAppends(
   if (event.ephemeral) return schedules;
   switch (event.type) {
     case "events.iterate.com/stream/append-scheduled": {
-      const input = ScheduledAppendInput.parse(event.payload);
+      const input = event.payload as z.output<typeof ScheduledAppendInput>;
       return {
         ...schedules,
         [input.key]: {
@@ -115,7 +119,7 @@ export function reduceScheduledAppends(
       };
     }
     case "events.iterate.com/stream/append-schedule-cancelled": {
-      const input = ScheduledAppendCancelled.parse(event.payload);
+      const input = event.payload as ScheduledAppendCancelled;
       const row = schedules[input.key];
       if (
         !row ||
@@ -128,7 +132,7 @@ export function reduceScheduledAppends(
     }
     case "events.iterate.com/stream/append-schedule-completed":
     case "events.iterate.com/stream/append-schedule-failed": {
-      const input = ScheduledAppendSettled.parse(event.payload);
+      const input = event.payload as ScheduledAppendSettled;
       const row = schedules[input.key];
       if (!row || row.scheduledAtOffset !== input.scheduledAtOffset) return schedules;
       if ("everyMs" in row.when && input.at !== row.nextAt) return schedules;

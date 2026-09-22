@@ -37,7 +37,8 @@
     "**/evalite-export/**",
     ".tmp-ci-build*",
     "**/*ignoreme*",
-    "apps/os-next/public/capnweb.js"
+    "apps/os-next/public/capnweb.js",
+    "configs-next/with-agents/agents.js"
   ],
   "jsPlugins": [
     "./lint/oxlint-plugin-iterate.ts",
@@ -51,7 +52,8 @@
     {
       "name": "unicorn-js",
       "specifier": "eslint-plugin-unicorn"
-    }
+    },
+    "middlewright/lint-plugin"
   ],
   "rules": {
     "constructor-super": "error",
@@ -210,7 +212,7 @@
       "plugins": ["react"]
     },
     {
-      "files": ["**/test/**", "**/*.test.ts"],
+      "files": ["**/*.test.ts"],
       "rules": {
         "no-console": "off"
       }
@@ -228,6 +230,14 @@
         "react/only-export-components": "off"
       },
       "plugins": ["react"]
+    },
+    {
+      "files": ["apps/os-next/specs/**/*.ts"],
+      "rules": {
+        "middlewright/prefer-locator-waits": "error",
+        "middlewright/prefer-positive-waits": "error",
+        "middlewright/require-timeout-comment": "error"
+      }
     }
   ]
 }

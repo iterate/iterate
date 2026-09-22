@@ -1,8 +1,8 @@
 import { env, SELF } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
-import type { Env } from "../src/control-plane.ts";
-import { startLoginCode } from "../src/login-code.ts";
+import type { Env } from "../src/env.ts";
+import { startLoginCode } from "../src/password-and-code-sign-in.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { directory } from "../src/directory.ts";
 import { applyDirectorySchema, SRC_ECHO_APP } from "./support.ts";
@@ -226,9 +226,15 @@ test("password sign-in: the email and the password make an ordinary user session
   // the page learns which sign-ins this deployment offers — this lane's config has all three
   const state = await (
     await SELF.fetch(`${origin}/login.json?next=/sessions`)
-  ).json<{ password: boolean; emailSignIn: boolean; google: string | null }>();
+  ).json<{
+    password: boolean;
+    emailSignIn: boolean;
+    google: string | null;
+    cloudflare: string | null;
+  }>();
   expect(state).toMatchObject({ password: true, emailSignIn: true });
   expect(state.google).toMatch(/^\/\.auth\/identity/);
+  expect(state.cloudflare).toBe("/.auth/identity/cloudflare?next=%2Fsessions");
   // a wrong password goes back to the page with the reason, and makes no session
   const wrong = await postLogin({
     email: "Test-Login@directory.test",
@@ -240,6 +246,11 @@ test("password sign-in: the email and the password make an ordinary user session
   expect(bounced.pathname).toBe("/login");
   expect(bounced.searchParams.get("next")).toBe("/sessions");
   expect(bounced.searchParams.get("error")).toBeTruthy();
+  expect(bounced.searchParams.get("method")).toBe("password");
+  const retryState = await SELF.fetch(`${origin}/login.json${bounced.search}`).then((r) =>
+    r.json(),
+  );
+  expect(retryState).toMatchObject({ passwordSelected: true, email: "Test-Login@directory.test" });
   expect(wrong.headers.get("set-cookie") ?? "").not.toMatch(/__Host-itx-session=/);
   // the right one is the session — the email lowercased, the user created on first sign-in
   const login = await postLogin({

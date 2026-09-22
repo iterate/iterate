@@ -17,7 +17,7 @@
 // again". A bare `test.fails` cannot tell a fix from a different breakage; the guard can. To flip a
 // fixed row to `test`, delete its guard line and keep its assertions.
 //
-// Two cell-cap facts these rows lean on (scratchpad/platform-facts.md §5): a SQLite-backed DO's
+// Two cell-cap facts these rows lean on: a SQLite-backed DO's
 // storage cell — a kv value, a TEXT column — is capped by SQLITE_LIMIT_LENGTH: 4 MiB in local
 // workerd, 2 MB in production (docs). The append ceiling (stream.ts EVENT_BODY_MAX_CHARS) is 8 MiB,
 // so a body can be small enough to append and too big to checkpoint or memo.
@@ -223,15 +223,15 @@ test("A2 — CONTROL: the refused configure leaves memory and the log consistent
   };
   expect(Object.keys(core.state.itxExpressionRewriteRules)).toEqual(["itx.bigA"]);
   expect(core.offset).toBe(a); // reduced through rule A, not a phantom B
-  // The refused batch's offset was never burnt: A's live-state delta took a+1, so the next durable
-  // event lands at a+2 — exactly where B would have.
+  // The refused batch's offset was never burnt: the next durable event lands at a+1 — exactly
+  // where B would have.
   const c = offsetOf(
     await s.append({
       type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: { match: "itx.small", target: "itx.whoami" },
     }),
   );
-  expect(c).toBe(a + 2);
+  expect(c).toBe(a + 1);
   const page = (await s.invoke(["itx", ["readEvents", 0, 500]])) as {
     events: { offset: number }[];
   };
@@ -240,7 +240,7 @@ test("A2 — CONTROL: the refused configure leaves memory and the log consistent
 });
 
 // WHAT IT DIES OF: the hosting row LANDS (a 4.5 MiB event is under the 8 MiB append ceiling), then
-// `#invokeFacet`'s startup memo `kv.put("facet:big", spec)` dies of `string or blob too big:
+// `FacetHost#invoke`'s startup memo `kv.put("facet:big", spec)` dies of `string or blob too big:
 // SQLITE_TOOBIG` — at the enable-time catch-up AND on every push after it. Worse than a refusal:
 // with no memo, every push takes the M1 recovery path (`read(configuredAtOffset - 1, 1)`), re-reads
 // and re-parses the 4.5 MiB event out of SQLite, and dies at the same put. `snapshot()` rejects with
@@ -327,7 +327,7 @@ async function facetThatCannotStart(
 }
 
 // WHAT IT DIES OF: `Error: internal error; reference = <opaque id>` — workerd's catch-all, one fresh
-// reference id per call, no class name, no hint. `#invokeFacet`'s own `if (!klass) throw new Error(
+// reference id per call, no class name, no hint. `FacetHost#invoke`'s own `if (!klass) throw new Error(
 // 'loaded worker does not export class …')` is DEAD CODE: `getDurableObjectClass` never returns
 // falsy — it hands back a handle that fails inside the runtime when the facet starts. Every push
 // (one `subscription-delivery.deliver` line per commit) and every read dies of it, until disabled.

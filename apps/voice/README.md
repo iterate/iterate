@@ -4,7 +4,7 @@ A browser phone for a project's voice agent: log in with iterate, pick a project
 switcher, press Call, talk. The page frames itself in packages/ui's `AppShell`, the shell every
 os-next app shares.
 The page is the Kit device in a browser — the same three appends and one subscription the board
-makes (`apps/os-next/scripts/voice-call.ts`), with the browser's microphone and speaker on either
+makes (`apps/agents/scripts/voice-call.ts`), with the browser's microphone and speaker on either
 end and the relay's live state on screen.
 
 ## Shape
@@ -20,7 +20,7 @@ end and the relay's live state on screen.
   50 ms PCM16 frames, the playback worklet drains a queue of answer chunks (cleared when the relay
   says so). Modeled on the recorder and stream player of OpenAI's realtime console.
 
-The project needs the voice agent installed (`apps/os-next/scripts/voice-install.ts`); the page says
+The project needs the voice agent installed (prepare the project at [Kit](https://k.iterate.com)); the page says
 so if it is not.
 
 ## Run

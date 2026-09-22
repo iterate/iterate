@@ -24,10 +24,6 @@ const workspaceBorn = (path: string) => ({
   type: "events.iterate.com/workspace/created",
   payload: { path },
 });
-const agentBorn = (path: string) => ({
-  type: "events.iterate.com/agent/created",
-  payload: { path },
-});
 const committed = (path: string, commitOid: string) => ({
   type: "events.iterate.com/repo/commit-completed",
   payload: { path, commitOid, message: "m", changedPaths: ["worker.ts"] },
@@ -46,8 +42,6 @@ const empty: ProjectState = {
   creation: null,
   repos: {},
   workspaces: {},
-  agents: {},
-  mcpConnections: {},
   secrets: {},
   configRepoTip: null,
 };
@@ -90,19 +84,11 @@ describe("ProjectProcessor — the reduce", () => {
     },
     {
       name: "a repo's, a workspace's and an agent's certificates each add one entry, by path, stamped with the event's time — the project's own creation untouched",
-      events: [
-        requested,
-        created,
-        repoBorn("/repos/config"),
-        workspaceBorn("/workspaces/notes"),
-        agentBorn("/agents/support"),
-      ],
+      events: [requested, created, repoBorn("/repos/config"), workspaceBorn("/workspaces/notes")],
       state: {
         creation: { status: "created", offset: 2 },
         repos: { "/repos/config": { createdAt: expect.any(String) } },
         workspaces: { "/workspaces/notes": { createdAt: expect.any(String) } },
-        agents: { "/agents/support": { createdAt: expect.any(String) } },
-        mcpConnections: {},
         secrets: {},
         configRepoTip: null,
       },
@@ -143,8 +129,6 @@ describe("ProjectProcessor — the reduce", () => {
         repoBorn("/repos/config"),
         { type: "note" },
         repoBorn("/vendor/lib"),
-        agentBorn("/agents/support"),
-        agentBorn("/agents/support"),
       ],
       state: {
         ...empty,
@@ -152,43 +136,23 @@ describe("ProjectProcessor — the reduce", () => {
           "/repos/config": { createdAt: expect.any(String) },
           "/vendor/lib": { createdAt: expect.any(String) },
         },
-        agents: { "/agents/support": { createdAt: expect.any(String) } },
       },
     },
     {
-      name: "an MCP client connects once per grant — the connection's path and first time; a second connect is ignored",
+      name: "historical MCP connection certificates no longer populate the project catalog",
       events: [
+        repoBorn("/repos/config"),
         {
           type: "events.iterate.com/project/mcp-connection-created",
-          payload: { grantId: "grant_a", path: "/mcp/inbound/grants/grant_a" },
-        },
-        {
-          type: "events.iterate.com/project/mcp-connection-created",
-          payload: { grantId: "grant_a", path: "/mcp/inbound/grants/grant_a" },
-        },
-        {
-          type: "events.iterate.com/project/mcp-connection-created",
-          payload: { grantId: "admin", path: "/mcp/inbound/admin" },
-        },
-        // the connection's context moved: the row follows the path, its birth stays the first one
-        {
-          type: "events.iterate.com/project/mcp-connection-created",
-          payload: { grantId: "grant_a", path: "/mcp/inbound/grants/moved/grant_a" },
+          payload: { grantId: "old-grant", path: "/mcp/inbound/grants/old-grant" },
         },
       ],
-      state: {
-        ...empty,
-        mcpConnections: {
-          grant_a: { path: "/mcp/inbound/grants/moved/grant_a", createdAt: expect.any(String) },
-          admin: { path: "/mcp/inbound/admin", createdAt: expect.any(String) },
-        },
-      },
+      state: { ...empty, repos: { "/repos/config": { createdAt: expect.any(String) } } },
     },
     {
       name: "a malformed payload for a KNOWN type is skipped by the contract, never reduced",
       events: [
         { type: "events.iterate.com/repo/created", payload: { path: 1 } },
-        { type: "events.iterate.com/agent/created", payload: {} },
         { type: "events.iterate.com/project/create-requested", payload: { slug: "" } },
         workspaceBorn("/w"),
       ],
@@ -252,4 +216,13 @@ describe("ProjectProcessor — the apex follows the config repo", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(appended).toHaveLength(2);
   });
+});
+
+test("template provenance survives replay of the project creation request", () => {
+  const configRepoTemplate = "github:example/config#" + "a".repeat(40) + "&path:starter";
+  expect(
+    reduceProcessor(processor(), [
+      { ...requested, payload: { ...requested.payload, configRepoTemplate } },
+    ]).creation,
+  ).toEqual({ status: "requested", offset: 1, configRepoTemplate });
 });

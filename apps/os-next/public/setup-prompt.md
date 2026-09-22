@@ -1,6 +1,6 @@
-# Set up iterate OS for me
+# Set up OS Next for me
 
-You are helping a person deploy **iterate OS** into their own Cloudflare account and start using it:
+You are helping a person deploy **OS Next** into their own Cloudflare account and start using it:
 one Cloudflare Worker that makes each project a programmable workspace, with one MCP server (`/mcp`)
 whose one tool, `run`, evaluates an `async (itx) => …` script against a project. Work through these
 steps in order, and stop to wait for the person wherever a step says so.

@@ -1,7 +1,7 @@
 // workspaces.e2e.test.ts — THE WORKSPACE of any context, at most one per path: the `workspace` facet
 // (src/workspace/durable-object.ts) on `itx.cd(path)`, addressed as `itx.workspaces.get(path)`
 // (src/library.ts, nothing appended to get it) and born through the collection,
-// `itx.workspaces.create(path)` (src/workspace/collection.ts): it enables the `workspace` processor
+// `itx.workspaces.create(path)` (src/project/collection.ts): it enables the `workspace` processor
 // row on that path (a `stream/subscription-configured` fact), lands `workspace/create-requested` there
 // and waits for the terminal fact. The processor (src/workspace/processor.ts) runs the saga from state
 // at head — nothing to provision, so it lands `workspace/created`, the birth certificate, on `/` (the

@@ -15,14 +15,17 @@ const Manifest = z.object({
 
 /** Verify the deployed bytes against the release assets used for this deployment. */
 export async function verifyFirmwareAssets(baseUrl: string, headers?: HeadersInit) {
+  // Workers and their asset manifests can reach different locations at different
+  // times. Allow two minutes of propagation, while still checking every byte.
+  const maxAttempts = 25;
   for (let attempt = 1; ; attempt += 1) {
     try {
       await verifyFirmwareAssetsOnce(baseUrl, headers);
       return;
     } catch (error) {
-      if (attempt >= 4) throw error;
+      if (attempt >= maxAttempts) throw error;
       console.log(
-        `Firmware verification attempt ${attempt}/4 failed: ${String(error)}; retrying in 5 seconds for deployment propagation.`,
+        `Firmware verification attempt ${attempt}/${maxAttempts} failed: ${String(error)}; retrying in 5 seconds for deployment propagation.`,
       );
       await setTimeout(5000);
     }
@@ -39,9 +42,10 @@ async function verifyFirmwareAssetsOnce(baseUrl: string, headers?: HeadersInit) 
       const expected = await readFile(localUrl, "utf8");
       const publicUrl = new URL(manifestPath, baseUrl);
       const response = await fetch(publicUrl, { headers });
-      if (!response.ok || (await response.text()) !== expected) {
+      const actual = await response.text();
+      if (!response.ok || actual !== expected) {
         throw new Error(
-          `${device.id}/${release.version}: HTTP ${response.status}; deployed manifest differs from the release`,
+          `${device.id}/${release.version}: HTTP ${response.status}; deployed manifest differs from the release; expected SHA-256 ${createHash("sha256").update(expected).digest("hex")}, received ${createHash("sha256").update(actual).digest("hex")}; CF-Ray ${response.headers.get("cf-ray")}`,
         );
       }
       const manifest = Manifest.parse(JSON.parse(expected));

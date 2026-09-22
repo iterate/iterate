@@ -28,8 +28,9 @@ import {
   FacetHandle,
   InvokeHandle,
   RpcStubHandle,
+  materializeItxHandleReference,
 } from "iterate/next/expression";
-import type { RewriteRuleListEntry } from "iterate/next/api";
+import type { RewriteRuleListEntry, StreamPage, WaitForEventFilter } from "iterate/next/api";
 import { projectUrlOf, type IngressRouting } from "iterate/next/project-ingress";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
@@ -38,7 +39,7 @@ import {
   type ScheduledAppendInput,
   type ScheduledAppend,
 } from "../stream/scheduled-appends.ts";
-import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
+import type { ReachableContext } from "../stream/stream.ts";
 import type { LibraryRoots } from "../library.ts";
 import {
   assertSecretPath,
@@ -48,7 +49,7 @@ import {
   type SecretMaterial,
   type SecretRefresh,
 } from "../secrets.ts";
-import type { SecretState } from "../secret/contract.ts";
+import type { SecretCatalog, SecretState } from "../secret/contract.ts";
 import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
@@ -57,7 +58,7 @@ import {
   encodeFetchExpression,
   terminalFetchOf,
 } from "./rpc-stubs.ts";
-import { admitLoadedCodeRow, refuseSelfLoopRow } from "./itx-expression-rewriting.ts";
+import { admitLoadedCodeRow } from "./itx-expression-rewriting.ts";
 import { GLOBAL_PROJECT_ID, resourceScope } from "./paths.ts";
 import {
   assertFacetSourceWithinCeiling,
@@ -89,7 +90,7 @@ export type SubscriptionListEntry = {
 
 /** An `R2Object` as `itx.r2` answers it: every field the class carries, as data — the key with the
  *  owner prefix stripped, dates as ISO strings, checksums as hex. */
-export type R2ObjectRecord = {
+type R2ObjectRecord = {
   key: string;
   version: string;
   size: number;
@@ -471,12 +472,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
    *  stamp, never a client's (src/principal.ts): the session's verified principal, or none. */
   const append = (...events: StreamEventInput[]) => {
     const caller = deps.caller();
-    // LOADED CODE's rows are walled on their targets (itx-expression-rewriting.ts): the same wall its
-    // calls meet, applied where the row is written.
-    for (const event of events) {
-      refuseSelfLoopRow(event, path);
-      if (caller.app) admitLoadedCodeRow(event, path);
-    }
+    // Loaded code can delegate its scope to descendants through durable rows; child code
+    // keeps its own ceiling. The append boundary validates the rest of each control event.
+    if (caller.app) for (const event of events) admitLoadedCodeRow(event, caller.path || path);
     return ownContext().append(...events.map((event) => stampCaller(event, caller)));
   };
   /** Secrets are the RESOURCE OWNER's, and a secret IS its path under the owner's root
@@ -742,7 +740,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         const { state } = (await deps
           .context(owner.rootPath)
           .invoke(["itx", "facets", ["get", ownerRootFacet()], ["snapshot"]], [], hopCaller())) as {
-          state: { secrets: Record<string, Omit<SecretCatalogEntry, "path">> };
+          state: { secrets: SecretCatalog };
         };
         return Object.entries(state.secrets).map(([path, row]) => ({ path, ...row }));
       },
@@ -829,10 +827,15 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           if (caller.platformOrigin) headers.set("x-itx-platform-origin", caller.platformOrigin);
           return context.fetch(new Request(terminalFetch.request, { headers }));
         }
-        return context.invoke(["itx", ...itxExpressionSteps], [], {
-          ...caller,
-          path: caller.path || path,
-        });
+        const hopCaller = { ...caller, path: caller.path || path };
+        // The sibling names a handle by expression (expression.ts): this context mints its own over the
+        // sibling's stub, so a handle held here is one whole call per verb, never a session held open.
+        return Promise.resolve(context.invoke(["itx", ...itxExpressionSteps], [], hopCaller)).then(
+          (result) =>
+            materializeItxHandleReference(result, (expression) =>
+              context.invoke(expression, [], hopCaller),
+            ),
+        );
       });
     },
     fetch: (request: Request) => deps.egress(request),
@@ -877,7 +880,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             name,
             target: [
               "itx",
-              "builtins",
+              ...(deps.caller().app ? [] : ["builtins"]),
               "facets",
               firstPartyClassName ? ["get", name] : ["get", name, facetSpecOf(loaded!)],
               "processEventBatch",

@@ -10,7 +10,7 @@
 import { randomUUID } from "node:crypto";
 import { createTestHarness } from "wrangler";
 import type { TestProject } from "vitest/node";
-import { osNextEnvs } from "../../../../envs.ts";
+import { deployedTarget } from "./deployed-target.ts";
 import {
   E2E_ADMIN_API_SECRET,
   E2E_INGRESS_ROUTING,
@@ -51,43 +51,21 @@ declare module "vitest" {
 
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
   project.provide("runId", process.env.E2E_RUN_ID || randomUUID().slice(0, 8));
-  // DEPLOYED-TARGET MODE — the proof that counts: `WORKER_BASE_URL=https://os.iterate2.com
-  // ADMIN_API_SECRET=… LOGIN_PASSWORD=… pnpm e2e` runs the SAME suite against the deployed worker,
-  // no local boot.
+  // DEPLOYED-TARGET MODE — the proof that counts: `WORKER_BASE_URL=https://os.iterate2.com pnpm e2e`
+  // runs the SAME suite against the deployed worker, no local boot. Its credentials and routing come
+  // from the deployment's APP_CONFIG in the environment (`doppler run`) and its envs.ts entry, or
+  // from an explicit ADMIN_API_SECRET / LOGIN_PASSWORD (support/deployed-target.ts).
   const deployedWorkerBaseUrl = process.env.WORKER_BASE_URL;
   if (deployedWorkerBaseUrl) {
-    const adminApiSecret = process.env.ADMIN_API_SECRET;
-    if (!adminApiSecret)
-      throw new Error(
-        "ADMIN_API_SECRET unset — the deployed worker's secrets.adminBearer, which every e2e session authenticates with",
-      );
-    const loginPassword = process.env.LOGIN_PASSWORD;
-    if (!loginPassword)
-      throw new Error(
-        "LOGIN_PASSWORD unset — the deployed worker's login.password, which the e2e browser sessions sign in with",
-      );
+    const target = deployedTarget(deployedWorkerBaseUrl);
     project.provide("workerBaseUrl", deployedWorkerBaseUrl);
-    project.provide("adminApiSecret", adminApiSecret);
-    project.provide("loginPassword", loginPassword);
+    project.provide("adminApiSecret", target.adminApiSecret);
+    project.provide("loginPassword", target.loginPassword);
     // The OpenAI key a deployed story sets as a project's `openai` secret (the agent's default
     // model speaks to OpenAI); absent, those stories skip. Never needed locally: the fake model.
     project.provide("openaiApiKey", process.env.OPENAI_API_KEY || "");
-    // The deployment's ingress lives in envs.ts (the same source the deploy and wrangler-config
-    // generation read): how projects are reached, MCP on `mcpBaseUrl`. Match the env by its baseUrl;
-    // an explicit PROJECT_INGRESS_ROUTING (JSON) / MCP_BASE_URL still wins.
-    const deployedEnv = Object.values(osNextEnvs).find((env) =>
-      deployedWorkerBaseUrl.startsWith(env.baseUrl),
-    );
-    project.provide(
-      "ingressRouting",
-      process.env.PROJECT_INGRESS_ROUTING || JSON.stringify(deployedEnv?.ingressRouting ?? null),
-    );
-    project.provide(
-      "mcpBaseUrl",
-      process.env.MCP_BASE_URL ||
-        deployedEnv?.mcpBaseUrl ||
-        new URL("/mcp", deployedWorkerBaseUrl).href,
-    );
+    project.provide("ingressRouting", target.ingressRouting);
+    project.provide("mcpBaseUrl", target.mcpBaseUrl);
     return async () => {};
   }
   const server = createTestHarness({

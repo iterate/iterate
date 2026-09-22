@@ -1,29 +1,17 @@
 import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import { errorCode } from "iterate/next/lib";
-import { appConfigOf, platformOriginOf } from "./app-config.ts";
-import type { Env } from "./control-plane.ts";
+import { platformAddressesOf } from "./app-config.ts";
+import type { Env } from "./env.ts";
 import { directory, type Directory, type Reach } from "./directory.ts";
 import { DurableObjectNameCodec } from "./iterate-context.ts";
 import type { Authorization } from "./oauth.ts";
 
-// MCP uses the same verified authorization as Cap’n Web. It exposes ONE tool, `run`: a script
-// evaluated under that principal in THE CONNECTION'S OWN CONTEXT of a project — `/mcp/inbound/grants/<grantId>`,
-// the grant being the connection (the 2026-07-28 revision is per-request: no session id, and the
-// same OAuth grant is what every call of one client carries) — so every script a client ever ran is
-// that context's log, `context/run-requested` + `run-settled` stamped with who and through which
-// grant (the audit lives where it happened); the project root is `itx.cd('/')`, and kv, files, repos,
-// secrets are the project's wherever the script runs. `run(script)` when the token reaches exactly
-// one project, `run(project, script)` otherwise. The project's catalog lists every connection born
-// under it (src/project/: `project/mcp-connection-created`, appended to `/` on a grant's first run).
-// Everything else a caller might read (who am I, which projects) is the server's own `instructions`
-// or a one-line script; project creation is the public Session's.
+// MCP uses the same authorization and project root as a Cap’n Web project handle. The OAuth
+// grant limits which projects can be selected; each run is attributed to that grant on the root
+// log. A connection is not a child sandbox with a second, narrower set of capabilities.
 
-/** The project a tool call runs in (apps/os `resolveToolProject`): `project`, when named, is a
- *  project — a context name is refused, as `projects.get` refuses it (session.ts): the expression
- *  reaches the project's other contexts through `itx.cd(path)` — and must be within the grant;
- *  omitted, it is the one project the bearer reaches — the admin secret reaches every project, so
- *  it must name one. */
+/** Resolve a project slug or id within this token's grant before obtaining its root context. */
 async function projectOfToolCall(
   d1Directory: Directory,
   reach: Reach,
@@ -50,18 +38,30 @@ async function projectOfToolCall(
   );
 }
 
-/** What the client learns at `initialize` — the one place it can read anything without a script:
- *  which projects this token reaches (so `project` is spelled right the first time) and where its
- *  scripts run. Read once per request from the directory, like the tool's own project check. */
+// Shared by initialize and tools/list so clients receive the same usage guidance from either.
+const runInstructions = [
+  "One tool, `run({ project?, script })`: evaluate a JavaScript function, `async (itx) => { ... }`, with the selected project's root `itx` handle at `/`. Pass a project slug or id when your grant reaches several projects; the admin secret always requires it.",
+  'Start by inspecting identity and capabilities:\n```json\n{"script":"async (itx) => ({ identity: await itx.whoami(), capabilities: await itx.rewriteRules.list() })"}\n```',
+  'Use `itx.cd("/path")` to address another context in this project. Each call runs the complete script in a worker; await operations and return JSON-serializable results. Carry state between calls in returned results or stored data. Requests and settlements are logged at `/`, attributed to your principal and grant; project rewrite rules apply.',
+  'The config repo is `itx.repos.get("/repos/config")`. Use `listFiles()` and `readFile(path)` to inspect existing files, including `AGENTS.md` when present. Commit edits with `commitFiles({ message, changes: [{ path, content }] })`; file paths are repo-relative. A config-repo commit publishes the project worker.',
+  `Read the current worker:
+\`\`\`json
+{"script":"async (itx) => itx.repos.get('/repos/config').readFile('worker.ts')"}
+\`\`\``,
+  `Commit a file (this writes to the repo; replace the example path and content with your intended edit):
+\`\`\`json
+{"script":"async (itx) => itx.repos.get('/repos/config').commitFiles({ message: 'Add a note', changes: [{ path: 'notes.txt', content: 'Hello from MCP' }] })"}
+\`\`\``,
+  'Website source must be valid JavaScript, including `worker.ts`; sibling modules use `.js`. Preview candidate modules with `itx.workers.get({ source: { "cap.js": candidateSource } }).fetch(new Request(projectUrl))`. After committing, fetch the `projectUrl` returned by `itx.whoami()` and verify the expected response before reporting publication success.',
+  "Working examples: https://raw.githubusercontent.com/iterate/iterate/main/apps/os-next/e2e/mcp-project-root.e2e.test.ts — use the `async (itx) => ...` scripts and repo commit examples. The surrounding OAuth setup, project creation and assertions are the integration-test harness; your MCP connection supplies authentication and the project handle. Discover the live capabilities with `itx.rewriteRules.list()`.",
+].join("\n\n");
+
+/** Initialization includes usage guidance and the projects this token reaches, so the client can
+ *  select one before running a script. Read from the directory, like the tool's project check. */
 async function serverInstructions(d1Directory: Directory, reach: Reach): Promise<string> {
-  const where = [
-    "One tool, `run`: a script — the text of `async (itx) => { … }` — evaluated in YOUR CONNECTION'S context of a project, `/mcp/inbound/grants/<your grant>`.",
-    "`itx.kv`, `itx.files`, `itx.repos`, `itx.agents`, `itx.secrets` are the project's wherever a script runs; `itx.append` / `itx.readEvents` / `itx.provide` are your connection's own context; the project root is `itx.cd('/')`.",
-    "Every run is on your connection's log (`context/run-requested` / `run-settled`), attributed to you and this grant.",
-  ];
   if (reach === "every")
     return [
-      ...where,
+      runInstructions,
       "This token is the admin secret: pass `project` (slug or id) on every call.",
     ].join("\n");
   const projects = await d1Directory.reachableProjects(reach);
@@ -71,7 +71,7 @@ async function serverInstructions(d1Directory: Directory, reach: Reach): Promise
       : projects.length === 1
         ? `This token reaches one project, ${projects[0]!.slug} (${projects[0]!.id}) — \`project\` may be omitted.`
         : `This token reaches ${String(projects.length)} projects — pass \`project\` (slug or id): ${projects.map((project) => `${project.slug} (${project.id})`).join(", ")}.`;
-  return [...where, reachable].join("\n");
+  return [runInstructions, reachable].join("\n");
 }
 
 const validator = new CfWorkerJsonSchemaValidator();
@@ -86,9 +86,6 @@ async function buildServer(
 ): Promise<McpServer> {
   const d1Directory = directory(env.DB);
   const { reach, principal, grant } = authorization;
-  // THE CONNECTION: the grant (a personal token, a Claude Code sign-in); the admin secret has none,
-  // so every admin client shares one context per project.
-  const connectionPath = grant ? `/mcp/inbound/grants/${grant.grantId}` : "/mcp/inbound/admin";
   const caller = { principal, grant: grant?.grantId, platformOrigin };
   const mcpServer = new McpServer(
     { name: "control-plane", version: "0.1.0" },
@@ -99,8 +96,7 @@ async function buildServer(
     "run",
     {
       title: "Run a script",
-      description:
-        "Run a script in your connection's context of a project (`/mcp/inbound/grants/<your grant>`), under this token's principal — THE way to do work in a project over MCP. The script is the text of an async function of one parameter, `itx`: `async (itx) => { ... }` — a coding agent's whole output, an alternative to a tool call, its values baked in (no arguments). It is evaluated once in a confined worker with `itx` bound to that context (`itx.kv`, `itx.files`, `itx.repos`, `itx.agents` are the project's; `itx.append`/`itx.readEvents` are the connection's own log; the project root is `itx.cd('/')`) and returns a JSON-serializable value. Every run is logged there, attributed to you. This is `itx.run`. `await itx.rewriteRules.list()` is the tree — every capability this context can spell, each with a one-line description and the context it comes from; read it first.",
+      description: runInstructions,
       inputSchema: fromJsonSchema(
         {
           type: "object",
@@ -131,30 +127,10 @@ async function buildServer(
           reach,
           toolArguments.project?.trim() ?? "",
         );
-        // THE BIRTH CERTIFICATE of the connection's context, cross-posted to `/` for the catalog —
-        // idempotent on the grant (a dedupe hit writes nothing) — before its first script runs.
-        await env.ITERATE_CONTEXT.getByName(
-          DurableObjectNameCodec.stringify({ projectId, path: "/" }),
-        ).invoke(
-          [
-            "itx",
-            [
-              "append",
-              {
-                type: "events.iterate.com/project/mcp-connection-created",
-                // one row per connection AND path: a connection whose context moved is born again there
-                idempotencyKey: `mcp-connection-created${connectionPath}`,
-                payload: { grantId: grant?.grantId ?? "admin", path: connectionPath },
-              },
-            ],
-          ],
-          [],
-          caller,
-        );
-        // `itx.run(script)` in the connection's context, under this caller: the request lands on
-        // that log with the principal and grant, the context runs it, the settlement answers.
+        // Execute against the authorized root, through its rules, exactly as a project handle does.
+        // The request carries the principal and grant; the root's runner records its settlement.
         const value = await env.ITERATE_CONTEXT.getByName(
-          DurableObjectNameCodec.stringify({ projectId, path: connectionPath }),
+          DurableObjectNameCodec.stringify({ projectId, path: "/" }),
         ).invoke(["itx", ["run", toolArguments.script]], [], caller);
         // THE JSON BOUNDARY: a round trip drops what JSON cannot carry and throws on what it refuses.
         const json = JSON.stringify(value) ?? "null";
@@ -183,6 +159,6 @@ async function buildServer(
 /** The shared bearer gate has established this principal and reach. */
 export function mcpResponse(request: Request, env: Env, authorization: Authorization) {
   return createMcpHandler(() =>
-    buildServer(env, authorization, platformOriginOf(appConfigOf(env), request)),
+    buildServer(env, authorization, platformAddressesOf(env, request).platformOrigin),
   ).fetch(request);
 }

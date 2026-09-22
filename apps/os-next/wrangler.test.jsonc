@@ -22,7 +22,7 @@
     "global_fetch_strictly_public",
   ],
   "worker_loaders": [{ "binding": "LOADER" }],
-  // The issuer's pages, the same files (issuer-bootstrap.test.ts fetches /authorize).
+  // The issuer's pages, the same files (issuer-bootstrap.test.ts fetches /oauth2/auth).
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   // NO `ai` or `browser` binding here, on purpose: Workers AI and Browser Run are REMOTE-ONLY in
   // local dev, and vitest-pool-workers starts a remote proxy session for them at boot (an account to
@@ -47,7 +47,6 @@
     // THE FIRST-PARTY FACETS: Durable Object classes hosted as facets of a context through
     // `ctx.exports` — declared like any DO class (the facet's own SQLite is where their state lives).
     "AccountDurableObject": { "type": "durable-object", "storage": "sqlite" },
-    "AgentDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "OrganizationDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "ProjectDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "RepoDurableObject": { "type": "durable-object", "storage": "sqlite" },
@@ -77,11 +76,13 @@
     // one custom apex, for the consent test that binds a client on it to its project
     "APP_CONFIG_URLS__TEMPORARY_CUSTOM_HOSTNAMES": "{\"custom-apex.test\":\"custom-apex-project\"}",
     // the password signs in through the page's real posts; the mailed code is tested with a fake
-    // mailbox handed to login-code.ts directly
+    // mailbox handed to password-and-code-sign-in.ts directly
     "APP_CONFIG_LOGIN__PASSWORD": "test-password",
     "APP_CONFIG_LOGIN__EMAIL_CODE__FROM": "iterate <login@control.test>",
     "APP_CONFIG_LOGIN__GOOGLE__CLIENT_ID": "google-test-client",
     "APP_CONFIG_LOGIN__GOOGLE__CLIENT_SECRET": "google-test-secret",
+    "APP_CONFIG_LOGIN__CLOUDFLARE__CLIENT_ID": "cloudflare-test-client",
+    "APP_CONFIG_LOGIN__CLOUDFLARE__CLIENT_SECRET": "cloudflare-test-secret",
     "APP_CONFIG_SECRETS__KEY": "test-secrets-key",
     "APP_CONFIG_SECRETS__ADMIN_BEARER": "test-admin-api-secret",
   },

@@ -77,7 +77,7 @@ export function issuerOriginOf(
 
 /** The issuer must say it is the issuer: its discovery document's `issuer` equals the origin
  *  exactly. NOTHING else is read from the document — the endpoints stay hand-built from the origin
- *  (app-session.ts: `/oauth/token`, and `/api` as the resource), so a document can steer nothing.
+ *  (app-session.ts: `/oauth2/token`, and `/api` as the resource), so a document can steer nothing.
  *  Null when it answers as expected, else the reason. */
 async function issuerAnswersAt(origin: string): Promise<string | null> {
   try {
@@ -275,6 +275,8 @@ function refusalPage(defaultIssuer: string, message: string, status = 400): Resp
 }
 
 type AppAuth = {
+  /** Public app branding; relative logo paths resolve against this app's origin. */
+  client?: { name: string; logoUri: string };
   sessions: DurableObjectNamespace<BrowserSession>;
   /** The deployment's own issuer — where a browser with no session signs in. */
   issuer: string;
@@ -293,6 +295,10 @@ type AppAuth = {
 export async function appAuth(request: Request, config: AppAuth): Promise<Response | null> {
   const url = new URL(request.url);
   const { issuer, resource, sessions } = config;
+  const client = config.client && {
+    name: config.client.name,
+    logoUri: new URL(config.client.logoUri, url.origin).href,
+  };
   const session = appSession(sessions, request);
   const clearCookie = `${sessionCookieName(url)}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
   /** Where THIS browser's credential goes: its session's record, else the deployment's own. A record
@@ -311,7 +317,9 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     return Response.json(
       {
         client_id: `${url.origin}/.auth/client.json`,
-        client_name: url.host,
+        client_name: client?.name || url.host,
+        client_uri: url.origin,
+        logo_uri: client?.logoUri,
         redirect_uris: [`${url.origin}/.auth/callback`],
         token_endpoint_auth_method: "none",
         grant_types: ["authorization_code", "refresh_token"],
@@ -402,6 +410,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
       sessions,
       {
         origin: url.origin,
+        client,
         issuer: named.origin,
         resource: `${named.origin}/api`,
         scopes: parsed.data,
@@ -490,7 +499,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     // record signs in at the default.
     const { location, setCookie } = await startAppSession(
       sessions,
-      { origin: url.origin, issuer: target.issuer, resource: target.resource, scopes },
+      { origin: url.origin, issuer: target.issuer, resource: target.resource, scopes, client },
       next,
     );
     return new Response(null, {

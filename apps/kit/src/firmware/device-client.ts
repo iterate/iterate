@@ -41,7 +41,7 @@ export function deviceClientMetadata(url: URL): Response | null {
       logo_uri: `${url.origin}/vendors/${vendor.icon}`,
       redirect_uris: [`${url.origin}/.auth/callback`],
       token_endpoint_auth_method: "none",
-      grant_types: ["authorization_code"],
+      grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
     },
     { headers: { "Cache-Control": "public, max-age=300" } },

@@ -17,7 +17,7 @@ import { FakeGitServer } from "./fake-git-server.ts";
 /** One commit as the repo facet's `log` lists it — the real `RepoLogEntry`, newest first. */
 export type FakeCommit = RepoLogEntry;
 
-/** What the fake's `get(path)` hands back — an `RpcTarget` like the real `ScopedArtifactRepo`, so it
+/** What the fake's `get(path)` hands back — an `RpcTarget` like the real `ScopedArtifactRepoRpcTarget`, so it
  *  crosses the wire and `get(path).createToken(…)` / `.remote()` pipeline; the credential is a
  *  placeholder (the fake remote ignores auth), the remote is the fake server's URL for that repo. */
 class FakeArtifactRepo extends RpcTarget {

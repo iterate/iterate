@@ -13,10 +13,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldLabel } from "@iterate-com/ui/components/field";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 
-// The note is a FILE in the project's config repo, edited through a workspace: the loader brings
-// the repo and the workspace into being (`create()` is idempotent), reads the file through the
-// workspace (its overlay, else the repo's tip), and Save writes the overlay and commits it — ONE
-// commit on the repo's main per save, through `itx.workspaces.get(WORKSPACE).gitCommit`.
+// Notes edits a file in the config repo through a project workspace.
 const REPO = "/repos/config";
 const WORKSPACE = "/workspaces/notes";
 const FILE = `${REPO}/notes/log.md`;
@@ -29,16 +26,14 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
     if (!project) return context.signInFor(params.slug);
     // the project's root context, pipelined: the calls below ride it before it has resolved
     using itx = context.api.projects.get(project.id);
-    // two chains side by side, each its own context: the workspace comes into being and the file is
-    // read through it (its overlay, else the tip of a repo the catalog lists — none yet reads as no
-    // note); the repo comes into being (idempotent: the project seeded it) and its tip is read
+    await Promise.all([
+      itx.invoke(["itx", "workspaces", ["create", WORKSPACE]]),
+      itx.invoke(["itx", "repos", ["create", REPO]]),
+    ]);
+    // Both must exist before reading: the workspace discovers mounts from the repo catalog.
     const [note, tip] = await Promise.all([
-      itx
-        .invoke(["itx", "workspaces", ["get", WORKSPACE], ["create"]])
-        .then(() => itx.invoke(["itx", "workspaces", ["get", WORKSPACE], ["readFile", FILE]])),
-      itx
-        .invoke(["itx", "repos", ["get", REPO], ["create"]])
-        .then(() => itx.invoke(["itx", "repos", ["get", REPO], ["tip"]])),
+      itx.invoke(["itx", "workspaces", ["get", WORKSPACE], ["readFile", FILE]]),
+      itx.invoke(["itx", "repos", ["get", REPO], ["tip"]]),
     ]);
     return {
       projects,

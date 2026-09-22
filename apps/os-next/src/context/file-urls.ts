@@ -21,7 +21,7 @@ const FileUrlClaims = z.object({
   exp: z.number().int().positive(),
 });
 
-export const DEFAULT_FILE_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
+const DEFAULT_FILE_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
 /** The reserved app label a signed file URL hangs under: `files--<project>.<base>`. */
 export const FILES_APP_LABEL = "files";
 

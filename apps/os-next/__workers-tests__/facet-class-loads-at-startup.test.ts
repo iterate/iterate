@@ -1,11 +1,11 @@
-// __workers-tests__/facet-class-loads-at-startup.test.ts — `IterateContextDurableObject#invokeFacet`
+// __workers-tests__/facet-class-loads-at-startup.test.ts — `FacetHost#invoke`
 // (the one method every `itx.facets.get(...)` call lands in) mints a facet's class ONLY for a facet
 // that STARTS, so a facet that is already RUNNING never touches the Worker Loader (Cloudflare's
 // facet lifecycle; the shape apps/os took in PR #2631 after measuring the alternative — one isolate
 // lookup per warm call, and a running facet unreachable for as long as the loader is unhealthy).
 //
 // Pinned in the `workers` vitest project (it runs inside workerd) because it needs the real LOADER,
-// the real `ctx.facets` and the DO's LIVE instance: `#invokeFacet` reads `this.env` at call time
+// the real `ctx.facets` and the DO's LIVE instance: `FacetHost#invoke` reads the DO's `env` at call time
 // and `env` is the DurableObject base class's plain field, so inside `runInDurableObject` the test
 // replaces `instance.env` with a copy whose `LOADER` COUNTS (a plain delegating object — a Proxy
 // would hand the native method a foreign `this`): every `LOADER.get`, every
@@ -63,7 +63,7 @@ type LoaderTap = {
 };
 
 /** Install the counting LOADER on the context DO's live instance (see the header). Returns the tap
- *  `#invokeFacet` writes into from then on — same isolate, same heap. */
+ *  `FacetHost#invoke` writes into from then on — same isolate, same heap. */
 async function tapLoader(ctx: string): Promise<LoaderTap> {
   const tap: LoaderTap = { gets: [], classGets: 0, codeCallbacks: 0, refuseAfterFirst: undefined };
   await runInDurableObject(stub(ctx), (instance) => {
@@ -103,7 +103,7 @@ const warmHello = (ctx: string) =>
   stub(ctx).invoke("itx.facets.get('x').hello()") as Promise<Hello>;
 
 /** `gets.length` unchanged for `quietMs` — the push path has drained (nothing else calls
- *  `#invokeFacet`). */
+ *  `FacetHost#invoke`). */
 async function untilLoaderQuiet(tap: LoaderTap, quietMs = 400, timeoutMs = 8_000): Promise<void> {
   let last = tap.gets.length;
   let quietSince = Date.now();
@@ -175,7 +175,7 @@ test("20 durable events pushed to a hosted facet's processEventBatch add no LOAD
   const enableClassGets = tap.classGets;
 
   // 20 durable events, one at a time, each awaited (committed). Every one is delivered — pushed,
-  // awaited, in order — to the running tally facet through `#invokeFacet`.
+  // awaited, in order — to the running tally facet through `FacetHost#invoke`.
   for (let i = 0; i < 20; i++) await stub(ctx).append({ type: `pin/${i}` });
   await untilLoaderQuiet(tap);
   const stats = (await stub(ctx).invoke("itx.facets.get('tally').stats()")) as {
@@ -200,7 +200,7 @@ test("a RUNNING facet is not coupled to loader availability: with the loader ref
   expect(tap.gets.length).toBe(1); // never asked
 
   // After the release the facet must start again — THAT needs the loader, and gets its refusal,
-  // on this call and the next: a startup callback that threw is aborted by `#invokeFacet`, so every
+  // on this call and the next: a startup callback that threw is aborted by `FacetHost#invoke`, so every
   // attempt asks the loader again instead of replaying the first failure from a broken container.
   await releasePins(ctx);
   // A rejected RPC promise consumed through `expect(…).rejects` is reported UNHANDLED by the workers

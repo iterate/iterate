@@ -1,6 +1,6 @@
 // agent-events.test.ts — the os-next log through the shared reducer: `adaptContextRuns` turns the
 // CONTEXT's runs (`context/run-requested` / `run-settled`, the request's offset as identity) into the
-// script vocabulary apps/os's reducer folds (`capability-host/script-run-*`, an executionId the
+// script vocabulary apps/os-next's reducer folds (`capability-host/script-run-*`, an executionId the
 // reducer links to the assistant's message — from the processor's `whileProcessing` stamp), so a
 // turn renders as one activity with its code step, and a bare reply's `reply:` script is filtered out
 // of the feed whether its activity settled on its own or at the idle boundary.
@@ -108,7 +108,7 @@ describe("adaptContextRuns — the context's runs in the reducer's vocabulary", 
     expect(unasked!.payload).toMatchObject({ executionId: "run:20" });
   });
 
-  test("a failed settlement gains the fields apps/os's strict schema wants — an interrupted run counts as having run", () => {
+  test("a failed settlement gains the fields apps/os-next's strict schema wants — an interrupted run counts as having run", () => {
     const [, settled] = adaptContextRuns([
       at(
         8,
