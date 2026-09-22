@@ -324,7 +324,6 @@ body:has(.login-card) {
 }
 .consent-sidebar {
   padding: 0.5rem 0 0.5rem 2rem;
-  border-left: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
@@ -387,12 +386,10 @@ body:has(.login-card) {
   object-fit: cover;
 }
 .consent-projects {
-  border: 1px solid var(--line);
-  border-radius: 12px;
+  border: 0;
   padding: 0;
   margin: 1.5rem 0 0;
   min-width: 0;
-  overflow: hidden;
 }
 .consent-project,
 .consent-scope {
@@ -404,13 +401,7 @@ body:has(.login-card) {
   margin: 0;
 }
 .consent-project {
-  padding: 1rem;
-}
-.consent-project + .consent-project {
-  border-top: 1px solid var(--line);
-}
-.consent-project:has(:checked) {
-  background: var(--soft);
+  padding: 0.625rem 0;
 }
 .consent-project:has(:disabled) {
   cursor: default;
@@ -429,6 +420,10 @@ body:has(.login-card) {
 }
 .consent-add {
   width: 100%;
+  &:not(:disabled):hover {
+    background: transparent;
+    text-decoration: underline;
+  }
   border: 0;
   border-radius: 0;
   text-align: left;
@@ -527,8 +522,6 @@ body:has(.login-card) {
   }
   .consent-sidebar {
     padding: 1.5rem 0 0;
-    border-left: 0;
-    border-top: 1px solid var(--line);
     gap: 1rem;
   }
   .consent-header {
