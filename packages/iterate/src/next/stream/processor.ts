@@ -7,7 +7,7 @@
 //   events             — `StreamEventInput` / `StreamEvent`, the envelope, and the idempotency rules
 //   reduce checkpoint  — `ReduceCheckpointTable`, THE ONE spelling of a persisted reduce checkpoint
 //   live state         — `LiveState`, one value, its revision chain and the diff→emit delta
-//   processor contract — `defineProcessorContract`, the zod contract helper (zod stays off the worker script)
+//   processor contract — `defineProcessorContract`, the zod contract helper (zod rides the SDK bundle)
 //
 // THE CONCURRENCY CONTRACT:
 //   1. ONE SERIAL CHAIN per processor — batches never interleave.
@@ -671,7 +671,7 @@ export class ProcessorEngine<State> {
 // ── events ── the stream event envelope + idempotency rules. Zod-FREE: the envelope carries no
 // runtime validator (the processor contract section below has the zod half).
 
-// THE one deep-equal lives in patch.ts; re-exported here for the SDK bundle.
+// THE one deep-equal lives in lib.ts; re-exported here for the SDK bundle.
 export { jsonEqual };
 
 /** What `append` accepts: the event body, before the stream assigns its committed identity. The
@@ -889,24 +889,13 @@ export class LiveState<S> {
    *  chain idle) is issued synchronously; only when an append is already in flight does the next
    *  queue behind it. Nobody waits on this. */
   #liveStateDeltaAppendChain: Promise<unknown> = Promise.resolve();
-  /** Whether to order delta appends across turns (above). TRUE by default, so a mini-app holder gets
-   *  it without opting in. FALSE for the core reduce, whose sink is the stream's OWN synchronous
-   *  `append` (same isolate, no reorder possible): there the delta must land densely inside the
-   *  commit that triggered it, never deferred a microtask. */
-  readonly #orderDeltaAppends: boolean;
 
-  constructor(
-    sink: LiveStateSink,
-    key: string,
-    initial: S,
-    options?: { orderDeltaAppends?: boolean },
-  ) {
+  constructor(sink: LiveStateSink, key: string, initial: S) {
     this.#liveStateSink = sink;
     this.#liveStateKey = key;
     this.#state = initial;
     this.#lastSerializedState = initial;
     this.#liveStateRev = Date.now() * 4096 + Math.floor(Math.random() * 4096);
-    this.#orderDeltaAppends = options?.orderDeltaAppends ?? true;
   }
 
   /** The current value (reflects every `set`). */
@@ -955,39 +944,21 @@ export class LiveState<S> {
         ephemeral: true,
         payload: { key: this.#liveStateKey, from, to, patch: wirePatch },
       });
-    // A dropped delta — a sync throw or a rejection — is a chain gap the client heals (the rev
+    // A cross-hop sink mints a FRESH capability per call, so two deltas can race on the wire: every
+    // delta rides ONE chain, each emitted only after the previous append settles, so mint order IS
+    // the delivery order. No in-flight flag + synchronous fast path — clearing the flag in the first
+    // append's `finally` while a later delta was still queued let a newer delta see "idle", fork a
+    // parallel chain, and overtake the queued one (commit order 1, 3, 2). The chain's own `.catch`
+    // contains a dropped delta (a sync throw or a rejection): a chain gap the client heals (the rev
     // already advanced); it must never reach the caller.
-    if (!this.#orderDeltaAppends) {
-      // The same-isolate sink: synchronously and densely, every time (`#orderDeltaAppends`).
-      try {
-        void Promise.resolve(emitDelta()).catch(() => {});
-      } catch {
-        /* the gap, contained */
-      }
-      return;
-    }
-    // The ORDERING path (a cross-hop sink mints a FRESH capability per call, so two deltas can race
-    // on the wire): every delta rides ONE chain, each emitted only after the previous append settles,
-    // so mint order IS the delivery order. No in-flight flag + synchronous fast path — clearing the
-    // flag in the first append's `finally` while a later delta was still queued let a newer delta see
-    // "idle", fork a parallel chain, and overtake the queued one (commit order 1, 3, 2). The chain's
-    // own `.catch` contains a dropped delta (a sync throw or a rejection): a gap the client heals.
     this.#liveStateDeltaAppendChain = this.#liveStateDeltaAppendChain
       .then(emitDelta)
       .catch(() => {});
   }
-
-  /** Every delta minted so far has reached the sink (or failed into the chain gap) — the test seam
-   *  for LiveState's now-asynchronous append (the delta append chain). Production never awaits it. */
-  deltasSettled(): Promise<unknown> {
-    return this.#liveStateDeltaAppendChain;
-  }
 }
 
-// ── processor contract ── the zod CONTRACT helper (apps/os `defineProcessorContract`, focused). zod
-// is ~310 KB of runtime the edge/DO script never needs (the core contract is hand-built,
-// stream/core-processor.ts): only this helper reaches it, so esbuild tree-shakes zod off the worker
-// script (zod ships `sideEffects: false`) — it rides the SDK bundle alone. A contract declares its
+// ── processor contract ── the zod CONTRACT helper (apps/os `defineProcessorContract`, focused); zod
+// rides the SDK bundle with it. A contract declares its
 // identity, reduced-state schema, the events it OWNS (`events`, keyed by the durable type string,
 // each with a zod payload schema — so the type strings and payload shapes are visible right here),
 // the events it `consumes`/`emits`, and optional `processorDeps` (other contracts whose events it may

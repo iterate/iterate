@@ -1,7 +1,7 @@
 /// <reference types="node" />
 // memory-budget-scenarios.ts — THE MEMORY PROOFS: each scenario drives the REAL classes (`Stream`
 // over node:sqlite, `ProcessorEngine`, `SubscriptionDelivery`) through one workload that must fit a
-// 128 MiB Durable Object isolate and prints its facts as ONE JSON line. memory-budget.test.ts
+// 128 MiB Durable Object isolate and prints its facts as ONE JSON line. src/stream/memory-budget.test.ts
 // runs each in a Node CHILD PROCESS capped with `--max-old-space-size` — the stand-in for the
 // production cap, which local workerd does not enforce (NullIsolateLimitEnforcer); a child that
 // dies of V8's heap limit is the local spelling of "Durable Object's isolate exceeded its memory
@@ -28,10 +28,10 @@ import {
   type ReduceArgs,
   ReduceCheckpointTable,
 } from "iterate/next/stream/processor";
-import { CoreContract, normalizeControlEvent } from "./core-processor.ts";
-import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
-import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
-import { SubscriptionDelivery } from "./subscription-delivery.ts";
+import { CoreContract, normalizeControlEvent } from "../src/stream/core-processor.ts";
+import { nodeSqliteDurableObjectStorage } from "../src/stream/test-support.ts";
+import { Stream, type DurableObjectStorageSlice } from "../src/stream/stream.ts";
+import { SubscriptionDelivery } from "../src/stream/subscription-delivery.ts";
 
 /** These workloads run no background work, so the engine never claims the alarm: a stub that must
  *  never be reached. */
@@ -651,8 +651,8 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
   /** The core checkpoint is ONE kv cell: subscription rows fill it until the configure that would
    *  grow it past the cap throws inside the commit — the control plane's ceiling, refused with the
    *  platform's own uncoded SQLITE_TOOBIG where every other door refusal is coded. Rows land
-   *  `rowsPerAppend` at a time (one core diff per commit; one at a time the Nth configure also pays
-   *  an O(N) live-state diff — `configureMsAtCap` is that cost). Then a core-version bump: the
+   *  `rowsPerAppend` at a time (`configureMsAtCap` is the cost of one configure at that size). Then
+   *  a core-version bump: the
    *  constructor re-reduces every configure — one table copy per 500-event page (`reduceCoreEventBatch`),
    *  where it once spread the whole table per event, O(rows²) — timed. */
   async "core-rows-until-cell-cap"(args) {
