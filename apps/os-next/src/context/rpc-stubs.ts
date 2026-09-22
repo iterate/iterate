@@ -792,7 +792,7 @@ export function terminalFetchOf(
 // sockets included — crossing the RPC legs.
 // ═════════════════════════════════════════════════════════════════════════════════════
 
-const FETCH_UPGRADE_SOCKET_HEADER = "x-itx-fetch-upgrade";
+export const FETCH_UPGRADE_SOCKET_HEADER = "x-itx-fetch-upgrade";
 
 /** One upgrade socket's attachment (survives hibernation — so the upgrade does too): which
  *  upgrade it belongs to and which SIDE it is (`eyeball` = the caller's pair half, `leg` = the

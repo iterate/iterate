@@ -52,6 +52,8 @@ import type { SecretState } from "../secret/contract.ts";
 import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
+  RPC_STUB_PAGER_WEBSOCKET_HEADER,
+  FETCH_UPGRADE_SOCKET_HEADER,
   encodeFetchExpression,
   terminalFetchOf,
 } from "./rpc-stubs.ts";
@@ -815,8 +817,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             ITX_GRANT_HEADER,
             ITX_APP_HEADER,
             "x-itx-platform-origin",
-            "x-itx-rpc-stub-pager",
-            "x-itx-fetch-upgrade",
+            RPC_STUB_PAGER_WEBSOCKET_HEADER,
+            FETCH_UPGRADE_SOCKET_HEADER,
           ])
             headers.delete(name);
           headers.set(ITX_EXPRESSION_FETCH_HEADER, encodeFetchExpression(terminalFetch.steps));
