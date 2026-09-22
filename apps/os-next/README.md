@@ -39,7 +39,7 @@ Read the config repo through `itx.repos.get("/repos/config")`; inspect its `AGEN
 A config-repo commit publishes the website. [Working MCP examples](e2e/mcp-project-root.e2e.test.ts)
 show reads, commits and verification through the real endpoint. The tool description links their
 [public raw source](https://raw.githubusercontent.com/iterate/iterate/main/apps/os-next/e2e/mcp-project-root.e2e.test.ts).
-The `<codemode>` response format in `src/agent/system-prompt.ts` belongs to the internal agent loop;
+The `<codemode>` response format in `../agents/runtime/system-prompt.ts` belongs to the optional agents app;
 MCP accepts the function text in `script`.
 
 ## Read next

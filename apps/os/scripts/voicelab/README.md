@@ -12,7 +12,7 @@ side without playing audio. A conversation from this Mac's microphone and
 speaker is the board firmware's Mac target, which mounts os-next: from
 `apps/kit`, `pnpm firmware:build:host` then
 `firmware/.build/host/iterate-kit-mac --config <image>`;
-`apps/os-next/scripts/voice-board.ts --device <name>` is the proof.
+`apps/agents/scripts/voice-board.ts --device <name>` is the proof.
 
 ## Commands
 

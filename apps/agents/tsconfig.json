@@ -18,5 +18,5 @@
     },
     "baseUrl": "."
   },
-  "include": ["src"]
+  "include": ["src", "runtime", "voice"]
 }

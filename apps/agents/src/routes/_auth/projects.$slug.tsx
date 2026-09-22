@@ -1,3 +1,4 @@
+import type { IterateContextApi } from "iterate/next/api";
 import { createFileRoute, useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CircleIcon } from "lucide-react";
@@ -27,6 +28,8 @@ import {
   ContextViewState,
   RIGHT_EDGE_CLOSED,
 } from "@iterate-com/ui/components/context-view/context-view-search";
+import { installAgents } from "../../../runtime/install.ts";
+import agentRuntime from "../../../../../configs-next/with-agents/agents.js?raw";
 import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
 import { InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
 import { LiveStateValue } from "../../components/live-state-value.tsx";
@@ -76,8 +79,10 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
     const project = projects.find((item) => item.slug === params.slug || item.id === params.slug);
     if (!project) return context.signInFor(params.slug);
     using itx = await context.api.projects.get(project.id);
+    const rule = await itx.rewriteRules.get("itx.agents");
+    if (!rule?.target) return { projects, project, agents: [], agent: undefined, installed: false };
     const agents = AgentList.parse(await itx.invoke(["itx", "agents", ["list"]]));
-    return { projects, project, agents, agent: deps.agent || agents[0]?.path };
+    return { projects, project, agents, agent: deps.agent || agents[0]?.path, installed: true };
   },
   component: AgentsPage,
 });
@@ -100,11 +105,19 @@ function AgentsPage() {
         <AgentsNav
           slug={data.project.slug}
           agents={data.agents}
+          installed={data.installed}
           agent={data.agent}
           onCreate={async () => {
             // an agent is its path; a new one is born at the moment's path, as in apps/os
             const path = newWebAgentPath(new Date());
             using itx = await api.projects.get(project);
+            if (!data.installed) {
+              // The SDK models the public API as promises; capnweb's stub has the
+              // same runtime methods with additional pipelining types.
+              await installAgents(itx as unknown as IterateContextApi, agentRuntime);
+              await router.invalidate();
+              return;
+            }
             await itx.invoke(["itx", "agents", ["create", path]]);
             await router.invalidate();
             await navigate({
@@ -136,8 +149,12 @@ function AgentsPage() {
       ) : (
         <Empty>
           <EmptyHeader>
-            <EmptyTitle>No agents yet</EmptyTitle>
-            <EmptyDescription>Create one in the sidebar, then talk to it here.</EmptyDescription>
+            <EmptyTitle>{data.installed ? "No agents yet" : "Agents are not installed"}</EmptyTitle>
+            <EmptyDescription>
+              {data.installed
+                ? "Create one in the sidebar, then talk to it here."
+                : "Choose Install agents in the sidebar to add them to this project."}
+            </EmptyDescription>
           </EmptyHeader>
         </Empty>
       )}

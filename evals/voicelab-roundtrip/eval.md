@@ -50,7 +50,7 @@ from `apps/os` inside `doppler run --config prd -- …`.
    target: from `apps/kit`, `pnpm firmware:build:host` then
    `firmware/.build/host/iterate-kit-mac --config <image> --name <name>`, and
    speak each utterance with
-   `apps/os-next/scripts/voice-board.ts --device <name> --prompt "<text>"`.
+   `apps/agents/scripts/voice-board.ts --device <name> --prompt "<text>"`.
 
    Speak the ask, then keep nudging, which both keeps the call alive across
    the colleague's thinking time and mirrors a real impatient human.

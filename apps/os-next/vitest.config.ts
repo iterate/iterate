@@ -97,7 +97,7 @@ export default defineConfig({
         ],
         test: {
           name: "workers",
-          include: ["__workers-tests__/**/*.test.ts"],
+          include: ["__workers-tests__/**/*.test.ts", "../agents/__workers-tests__/**/*.test.ts"],
           // First test pays workerd boot + the 200-client attach storm (the cloudflare-os
           // cold-start lesson, scaled up).
           testTimeout: 120_000,
@@ -109,7 +109,7 @@ export default defineConfig({
         test: {
           name: "e2e",
           environment: "node",
-          include: ["e2e/**/*.e2e.test.ts"],
+          include: ["e2e/**/*.e2e.test.ts", "../agents/e2e/**/*.e2e.test.ts"],
           // Boots the one shared worker and provides its URL (support/setup.ts injects it per file).
           globalSetup: ["./e2e/support/global-setup.ts"],
           setupFiles: ["./e2e/support/setup.ts"],

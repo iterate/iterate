@@ -1,4 +1,4 @@
-// One call from a browser: the device's exact calls (apps/os-next/scripts/voice-call.ts, in a
+// One call from a browser: the device's exact calls (apps/agents/scripts/voice-call.ts, in a
 // browser). Press = a fresh context: one `setupVoiceAgent` append puts the relay and the agent on
 // it and starts the call; a subscription brings the answer's frames and the call's facts back;
 // microphone frames go up as ephemeral appends, twenty a second; hanging up appends the terminal.

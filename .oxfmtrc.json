@@ -49,6 +49,7 @@
     "**/components/ai-elements/",
     "apps/os/wrangler.jsonc",
     "apps/browser-extension/capnweb.js",
-    "apps/os-next/public/capnweb.js"
+    "apps/os-next/public/capnweb.js",
+    "configs-next/with-agents/agents.js"
   ]
 }

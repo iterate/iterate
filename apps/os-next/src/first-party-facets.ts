@@ -9,7 +9,6 @@
 // without a source (stream/core-processor.ts). Pinned: __workers-tests__/facet-from-exports.test.ts.
 export const FIRST_PARTY_FACET_CLASSES = {
   account: "AccountDurableObject",
-  agent: "AgentDurableObject",
   organization: "OrganizationDurableObject",
   project: "ProjectDurableObject",
   repo: "RepoDurableObject",

@@ -65,7 +65,8 @@
     "./next/stream/processor": "./src/next/stream/processor.ts",
     "./next/oauth-scopes": "./src/next/oauth-scopes.ts",
     "./next/project-ingress": "./src/next/project-ingress.ts",
-    "./next/oauth": "./src/next/client/oauth.ts"
+    "./next/oauth": "./src/next/client/oauth.ts",
+    "./next/stream/run": "./src/next/stream/run.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -260,6 +261,11 @@
       "./next/oauth": {
         "types": "./dist/next/client/oauth.d.ts",
         "import": "./dist/next/oauth.mjs"
+      },
+      "./next/stream/run": {
+        "types": "./dist/next/stream/run.d.ts",
+        "import": "./dist/next/stream/run.mjs",
+        "default": "./dist/next/stream/run.mjs"
       }
     }
   },

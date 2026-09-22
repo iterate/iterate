@@ -1,8 +1,10 @@
 import type { IterateContextApi } from "iterate/next/api";
 import { z } from "zod";
+import { installAgents } from "../../../agents/runtime/install.ts";
 
 const VoiceFileKey = z.string().regex(/^kit\/voice\/[a-f0-9]{64}\/[a-z-]+\.(js|css)$/);
 export const VoiceInstall = z.object({
+  agentsRuntime: z.string().min(1),
   files: z.record(VoiceFileKey, z.string().min(1)),
   workerKey: VoiceFileKey,
   cacheKey: z.string().regex(/^voice-worker:[a-f0-9]{64}$/),
@@ -12,10 +14,9 @@ const VoiceHealth = z.object({ ok: z.literal(true) });
 /** No device grant is minted until this succeeds. Partial uploads are safe to retry:
  * content-addressed files are written first, then one durable rule publishes the service. */
 export async function ensureVoiceAgent(
-  project: Pick<IterateContextApi, "append" | "invoke"> & {
+  project: Parameters<typeof installAgents>[0] & {
     secrets: Pick<IterateContextApi["secrets"], "list" | "set">;
     rewriteRules: Pick<IterateContextApi["rewriteRules"], "get">;
-    kv: Pick<IterateContextApi["kv"], "put">;
   },
   loadInstall: () => Promise<z.infer<typeof VoiceInstall>>,
   openaiKey?: string,
@@ -36,6 +37,8 @@ export async function ensureVoiceAgent(
     await Promise.all(
       Object.entries(install.files).map(([key, source]) => project.kv.put(key, source)),
     );
+    if (!(await project.rewriteRules.get("itx.agents"))?.target)
+      await installAgents(project, install.agentsRuntime);
     await project.append({
       type: "events.iterate.com/itx/rewrite-rule-configured",
       idempotencyKey: `kit/install/${install.cacheKey}`,

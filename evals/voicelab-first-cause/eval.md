@@ -28,7 +28,7 @@ Run the conversation on the board firmware's Mac target: from `apps/kit`,
 `pnpm firmware:build:host` then
 `firmware/.build/host/iterate-kit-mac --config <image> --name <name>`, and
 speak each utterance with
-`apps/os-next/scripts/voice-board.ts --device <name> --prompt "<text>"`.
+`apps/agents/scripts/voice-board.ts --device <name> --prompt "<text>"`.
 
 ## Success criteria (all must hold)
 

@@ -40,7 +40,6 @@ test("a facet from ctx.exports.<Class>({ props }) sees ctx.props and answers thr
     creation: null,
     repos: {},
     workspaces: {},
-    agents: {},
     secrets: {},
     configRepoTip: null,
   });
@@ -71,7 +70,7 @@ test("a first-party facet name refuses a spec — no source ever names a class o
         processor: await refusal([
           "itx",
           "processors",
-          ["enable", "agent", { source: { "cap.js": "export class X {}" }, className: "X" }],
+          ["enable", "repo", { source: { "cap.js": "export class X {}" }, className: "X" }],
         ]),
       };
     },

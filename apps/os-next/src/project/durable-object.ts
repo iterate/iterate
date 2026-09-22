@@ -1,7 +1,7 @@
 // src/project/durable-object.ts — THE PROJECT: the `project` facet on the context at `/`, THE CATALOG
 // HOST. It hosts the project processor (processor.ts: the project's own creation saga and the catalog
 // folded from the certificates cross-posted to `/`), and THE COLLECTIONS hang off it as methods —
-// `repos`, `workspaces`, `agents` (collection.ts, one instance per entity): each reads the catalog
+// `repos`, `workspaces` (collection.ts, one instance per entity): each reads the catalog
 // from this facet's `snapshot()` for `list()` and runs the entity's creation saga for `create(path)`,
 // reached as `itx.repos.list()` / `itx.repos.create(path)` through the library (library.ts, one
 // dispatch on this facet: `repos().list()`). Hosted from `ctx.exports` (first-party-facets.ts):
@@ -24,7 +24,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
   // and an RpcTarget a METHOD returns is the shape it hands back as a stub — so the library spells
   // `itx.facets.get("project").repos().create(path)`. Each is built once, on first use.
   #collections = new Map<string, EntityCollectionRpcTarget>();
-  #collection(slug: "repo" | "workspace" | "agent"): EntityCollectionRpcTarget {
+  #collection(slug: "repo" | "workspace"): EntityCollectionRpcTarget {
     const known = this.#collections.get(slug);
     if (known) return known;
     const collection = new EntityCollectionRpcTarget(
@@ -43,9 +43,5 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
   /** `itx.workspaces`: the catalog's workspaces, and a workspace's creation on its path. */
   workspaces(): EntityCollectionRpcTarget {
     return this.#collection("workspace");
-  }
-  /** `itx.agents`: the catalog's agents, and an agent's creation on its path. */
-  agents(): EntityCollectionRpcTarget {
-    return this.#collection("agent");
   }
 }

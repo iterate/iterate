@@ -58,9 +58,7 @@ export class RepoNotSeededError extends Error {
 
 /** A temporary source failure that must leave the repo-creation obligation
  * open for the processor's existing recovery lane. */
-export class RetryableRepoCreationError extends Error {
-  override readonly name = "RetryableRepoCreationError";
-}
+export { RetryableRepoCreationError } from "@iterate-com/shared/config-repo-template/github";
 
 const ARTIFACTS_REPO_NOT_READY_CODES = new Set([
   "NOT_FOUND",

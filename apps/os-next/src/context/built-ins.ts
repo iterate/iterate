@@ -472,10 +472,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
    *  stamp, never a client's (src/principal.ts): the session's verified principal, or none. */
   const append = (...events: StreamEventInput[]) => {
     const caller = deps.caller();
-    // LOADED CODE's rows are walled on their targets (itx-expression-rewriting.ts): the same wall its
-    // calls meet, applied where the row is written — the one check that needs `caller.app`; the
-    // rest of a row's admission is the append boundary's (core-processor.ts `normalizeControlEvent`).
-    if (caller.app) for (const event of events) admitLoadedCodeRow(event, path);
+    // Loaded code can delegate its scope to descendants through durable rows; child code
+    // keeps its own ceiling. The append boundary validates the rest of each control event.
+    if (caller.app) for (const event of events) admitLoadedCodeRow(event, caller.path || path);
     return ownContext().append(...events.map((event) => stampCaller(event, caller)));
   };
   /** Secrets are the RESOURCE OWNER's, and a secret IS its path under the owner's root
@@ -881,7 +880,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             name,
             target: [
               "itx",
-              "builtins",
+              ...(deps.caller().app ? [] : ["builtins"]),
               "facets",
               firstPartyClassName ? ["get", name] : ["get", name, facetSpecOf(loaded!)],
               "processEventBatch",

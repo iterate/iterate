@@ -1,3 +1,9 @@
+import {
+  normalizeConfigRepoTemplateReference,
+  parseConfigRepoTemplateReference,
+  formatConfigRepoTemplateReference,
+} from "@iterate-com/shared/config-repo-template/reference";
+import { pinPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
 // Public /api starts with a session: the OAuth gate's, resolved on the upgrade, or one a bare
 // socket authenticates IN-BAND — a bearer token, or the operator's admin secret. Sessions vend
 // project contexts and own their teardown.
@@ -8,6 +14,7 @@ import type { IterateApi } from "iterate/next/api";
 import { codedError } from "iterate/next/lib";
 import { verifyAdminSecret, type Caller, type Principal } from "iterate/next/principal";
 import type { StreamEventInput } from "iterate/next/stream/processor";
+import { templates } from "./generated/config-templates.js";
 import type { ConsentRpcTarget } from "./consent.ts";
 import type { GrantsRpcTarget } from "./grants.ts";
 import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
@@ -484,8 +491,22 @@ class ProjectCollectionRpcTarget extends RpcTarget {
    *  deployment's own org for the admin secret — and vend its root context. A grant narrowed to
    *  named projects creates none: FORBIDDEN. A slug ANY org already holds is refused, coded
    *  (PROJECT_NAME_TAKEN); the same org's again is idempotent. */
-  async create(input: { project: string; orgId?: string }): Promise<IterateContextRpcTarget> {
-    const data = z.object({ project: z.string(), orgId: z.string().optional() }).parse(input);
+  async templates() {
+    return templates;
+  }
+
+  async create(input: {
+    project: string;
+    orgId?: string;
+    configRepoTemplate?: string;
+  }): Promise<IterateContextRpcTarget> {
+    const data = z
+      .object({
+        project: z.string(),
+        orgId: z.string().optional(),
+        configRepoTemplate: z.string().transform(normalizeConfigRepoTemplateReference).optional(),
+      })
+      .parse(input);
     const project = await this.#input.directory.createProject(
       this.#reach,
       data.project,
@@ -522,6 +543,12 @@ class ProjectCollectionRpcTarget extends RpcTarget {
     ])) as { state: ProjectState };
     if (state.creation?.status === "created" || state.creation?.status === "requested")
       return context;
+    // Pin once, before the durable request. A resumed creation always reads the same tree.
+    const configRepoTemplate = data.configRepoTemplate
+      ? formatConfigRepoTemplateReference(
+          await pinPublicGithubTemplate(parseConfigRepoTemplateReference(data.configRepoTemplate)),
+        )
+      : undefined;
     await context.invoke(["itx", "processors", ["enable", "project"]]);
     await context.invoke([
       "itx",
@@ -529,7 +556,11 @@ class ProjectCollectionRpcTarget extends RpcTarget {
         "append",
         {
           type: "events.iterate.com/project/create-requested",
-          payload: { slug: project.slug, orgId: project.orgId },
+          payload: {
+            slug: project.slug,
+            orgId: project.orgId,
+            configRepoTemplate,
+          },
         },
       ],
     ]);
