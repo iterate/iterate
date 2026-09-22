@@ -75,8 +75,38 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
 
   const files = await success('async (itx) => itx.repos.get("/repos/config").listFiles()');
   expect(files.paths).toContain("worker.ts");
-  const identity = await success("async (itx) => itx.whoami()");
-  expect(identity).toMatchObject({ projectId, path: "/" });
+  const discovery = await request("tools/list", {});
+  const description = discovery.tools[0].description;
+  const initialized = await request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: {},
+    clientInfo: { name: "mcp-guidance-test", version: "1.0.0" },
+  });
+  expect(initialized.instructions).toContain(description);
+  expect(description).toContain(
+    "https://raw.githubusercontent.com/iterate/iterate/main/apps/os-next/e2e/mcp-project-root.e2e.test.ts",
+  );
+  // Execute all examples exactly as a client copies them, in this isolated test project.
+  const examples = [...description.matchAll(/```json\n([\s\S]*?)\n```/g)].map((match) =>
+    JSON.parse(match[1]),
+  );
+  expect(examples).toHaveLength(3);
+  const [starter, readWorker, commitNote] = examples;
+  const started = await request("tools/call", { name: "run", arguments: starter });
+  expect(started.isError, JSON.stringify(started)).toBe(false);
+  expect(started.structuredContent.result.identity).toMatchObject({ projectId, path: "/" });
+  expect(started.structuredContent.result.capabilities).toEqual(
+    expect.arrayContaining([expect.objectContaining({ match: "itx.repos" })]),
+  );
+  const read = await request("tools/call", { name: "run", arguments: readWorker });
+  expect(read.isError, JSON.stringify(read)).toBe(false);
+  expect(read.structuredContent.result).toBe(
+    await root.repos.get("/repos/config").readFile("worker.ts"),
+  );
+  const noted = await request("tools/call", { name: "run", arguments: commitNote });
+  expect(noted.isError, JSON.stringify(noted)).toBe(false);
+  expect(noted.structuredContent.result.commitOid).toEqual(expect.any(String));
+  expect(await root.repos.get("/repos/config").readFile("notes.txt")).toBe("Hello from MCP");
   expect(
     await success('async (itx) => itx.repos.get("/repos/config").readFile("AGENTS.md")'),
   ).toContain("Project configuration");
@@ -115,7 +145,7 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     ),
   ).toBeDefined();
   const requested = events.filter((e) => e.type === "events.iterate.com/context/run-requested");
-  expect(requested.length).toBe(5);
+  expect(requested.length).toBe(7);
   expect(
     requested.every(
       (e) => e.source.principal.actor === principal.actor && e.source.grant === grantId,
@@ -181,7 +211,6 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   const masked = await run('async (itx) => itx.repos.get("/repos/config").readFile("worker.ts")');
   expect(masked.isError).toBe(true);
   expect(masked.content[0].text).toContain("masked");
-  const discovery = await request("tools/list", {});
-  expect(discovery.tools[0].description).toContain("root `itx` handle");
-  expect(discovery.tools[0].description).not.toContain("/mcp/inbound/");
+  expect(description).toContain("root `itx` handle");
+  expect(description).not.toContain("/mcp/inbound/");
 });

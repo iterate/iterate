@@ -38,18 +38,30 @@ async function projectOfToolCall(
   );
 }
 
-/** What the client learns at `initialize` — the one place it can read anything without a script:
- *  which projects this token reaches (so `project` is spelled right the first time) and where its
- *  scripts run. Read once per request from the directory, like the tool's own project check. */
+// Shared by initialize and tools/list so clients receive the same usage guidance from either.
+const runInstructions = [
+  "One tool, `run({ project?, script })`: evaluate a JavaScript function, `async (itx) => { ... }`, with the selected project's root `itx` handle at `/`. Pass a project slug or id when your grant reaches several projects; the admin secret always requires it.",
+  'Start by inspecting identity and capabilities:\n```json\n{"script":"async (itx) => ({ identity: await itx.whoami(), capabilities: await itx.rewriteRules.list() })"}\n```',
+  'Use `itx.cd("/path")` to address another context in this project. Each call runs the complete script in a worker; await operations and return JSON-serializable results. Carry state between calls in returned results or stored data. Requests and settlements are logged at `/`, attributed to your principal and grant; project rewrite rules apply.',
+  'The config repo is `itx.repos.get("/repos/config")`. Use `listFiles()` and `readFile(path)` to inspect existing files, including `AGENTS.md` when present. Commit edits with `commitFiles({ message, changes: [{ path, content }] })`; file paths are repo-relative. A config-repo commit publishes the project worker.',
+  `Read the current worker:
+\`\`\`json
+{"script":"async (itx) => itx.repos.get('/repos/config').readFile('worker.ts')"}
+\`\`\``,
+  `Commit a file (this writes to the repo; replace the example path and content with your intended edit):
+\`\`\`json
+{"script":"async (itx) => itx.repos.get('/repos/config').commitFiles({ message: 'Add a note', changes: [{ path: 'notes.txt', content: 'Hello from MCP' }] })"}
+\`\`\``,
+  'Website source must be valid JavaScript, including `worker.ts`; sibling modules use `.js`. Preview candidate modules with `itx.workers.get({ source: { "worker.js": candidateSource } }).fetch(new Request(projectUrl))`. After committing, fetch the `projectUrl` returned by `itx.whoami()` and verify the expected response before reporting publication success.',
+  "Working examples: https://raw.githubusercontent.com/iterate/iterate/main/apps/os-next/e2e/mcp-project-root.e2e.test.ts — use the `async (itx) => ...` scripts and repo commit examples. The surrounding OAuth setup, project creation and assertions are the integration-test harness; your MCP connection supplies authentication and the project handle. Discover the live capabilities with `itx.rewriteRules.list()`.",
+].join("\n\n");
+
+/** Initialization includes usage guidance and the projects this token reaches, so the client can
+ *  select one before running a script. Read from the directory, like the tool's project check. */
 async function serverInstructions(d1Directory: Directory, reach: Reach): Promise<string> {
-  const where = [
-    "One tool, `run`: a script — the text of `async (itx) => { … }` — evaluated with the authorized project’s root `itx` handle.",
-    'Discover the current capabilities with `await itx.rewriteRules.list()`. The config repo is `itx.repos.get("/repos/config")`; use `readFile(path)` and `commitFiles({ message, changes })`. A config-repo commit publishes the project worker.',
-    "Every run is on the project root’s log (`context/run-requested` / `run-settled`), attributed to you and this grant. Project rewrite rules still apply.",
-  ];
   if (reach === "every")
     return [
-      ...where,
+      runInstructions,
       "This token is the admin secret: pass `project` (slug or id) on every call.",
     ].join("\n");
   const projects = await d1Directory.reachableProjects(reach);
@@ -59,7 +71,7 @@ async function serverInstructions(d1Directory: Directory, reach: Reach): Promise
       : projects.length === 1
         ? `This token reaches one project, ${projects[0]!.slug} (${projects[0]!.id}) — \`project\` may be omitted.`
         : `This token reaches ${String(projects.length)} projects — pass \`project\` (slug or id): ${projects.map((project) => `${project.slug} (${project.id})`).join(", ")}.`;
-  return [...where, reachable].join("\n");
+  return [runInstructions, reachable].join("\n");
 }
 
 const validator = new CfWorkerJsonSchemaValidator();
@@ -84,8 +96,7 @@ async function buildServer(
     "run",
     {
       title: "Run a script",
-      description:
-        'Run an async function with the authorized project’s root `itx` handle: `async (itx) => { ... }`. The script runs once in a confined worker and returns a JSON-serializable value. It has the project root’s capabilities and can navigate project contexts with `itx.cd(path)`. Start with `await itx.rewriteRules.list()` for the current capability tree. Read the config repo with `itx.repos.get("/repos/config").readFile("worker.ts")`; `commitFiles({ message, changes })` publishes changes. Every run is logged on the project root and attributed to your principal and OAuth grant.',
+      description: runInstructions,
       inputSchema: fromJsonSchema(
         {
           type: "object",

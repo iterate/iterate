@@ -1,14 +1,13 @@
 // src/project/processor.ts — THE PROJECT PROCESSOR: the reduce of the project's own creation facts
 // and of the certificates cross-posted to `/` (the catalog: first certificate wins — a repo, a
-// workspace or an agent is born once, an MCP connection per grant; a secret's latest `set` is its
+// workspace or an agent is born once; a secret's latest `set` is its
 // row — and a death certificate drops the entry; the config repo's commits, whose latest is the tip
 // the apex follows), and TWO EFFECTS, each run from state at head. THE CREATION SAGA: the config repo
 // (`itx.repos.create("/repos/config")`, the same collection a caller uses), its seed committed when
 // `main` is unborn (the homepage worker and an AGENTS.md, below), the project's ingress pointed at
 // that commit (`project/ingress-configured`, the core's), then the certificate. THE APEX FOLLOWING
 // THE CONFIG REPO: every `repo/commit-completed` from `/repos/config` re-points the ingress at that
-// commit — a commit to the config repo IS its publication (apps/os's rule), what an agent used to be
-// told to do by hand from `/` and cannot: its scripts run in a sandbox that never reaches the root.
+// commit — publishing a config-repo website needs a commit, not a manual ingress event.
 // Subscribed to `/` (the row `session.projects.create` enables), it runs again after every eviction:
 // an attempt lost with an incarnation is simply run again by the next — the repo tolerates existing,
 // the seed is skipped once `main` has a tip, every ingress append is keyed by the commit it points
