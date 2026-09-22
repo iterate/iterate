@@ -1,260 +1,97 @@
 # iterate
 
-CLI for Iterate.
+CLI for OS Next (`apps/os-next`). Requires Node >=22.15; no Bun runtime.
 
-`npx iterate` opens the Iterate chat terminal UI. It is equivalent to
-`npx iterate chat`.
-
-The package also runs as a thin bootstrapper: inside this repo it delegates to
-the local `packages/iterate` source, and from npm it runs the published build.
-
-## Requirements
-
-- Node `>=22`
-- Bun, for the current OpenTUI-based chat terminal runtime
-
-## Quick start
-
-Run without installing globally:
-
-```bash
-npx iterate
-```
-
-If you are not logged in yet, `iterate chat` starts the browser OAuth flow. The
-auth flow asks for project access and can create your first organization and
-project before returning to the CLI.
-
-```bash
-npx iterate chat
-```
-
-For help and other commands:
-
-```bash
-npx iterate --help
-npx iterate login
+```sh
+npx iterate                       # offline help
+npx iterate login                 # browser OAuth with project consent
+npx iterate projects list
 npx iterate orgs list
-npx iterate config list
+npx iterate ping
+npx iterate itx run --project my-project --eval 'return await itx.whoami();'
+npx iterate use-my-computer --project my-project --name myComputer
+npx iterate logout
 ```
 
-## Commands
+The default server is `https://os.iterate2.com`. Login uses that server's OAuth
+issuer, PKCE and a loopback callback. Tokens refresh automatically before a
+command when close to expiry. `ITERATE_BEARER_TOKEN` supplies a token for scripts;
+`APP_CONFIG_ADMIN_API_SECRET` supplies operator credentials and takes precedence.
+`ITERATE_SKIP_BROWSER_OPEN=1` prints the login URL without opening a browser.
 
-- `iterate` - open chat
-- `iterate chat` - open the Iterate agent chat terminal UI
-- `iterate login` - authenticate with browser-based OAuth
-- `iterate logout` - remove the stored session for the current config
-- `iterate approve` - be the human in the loop for a project's egress (see below)
-- `iterate use-my-computer` - lend this Mac to a project's agents (see below)
-- `iterate orgs list`
-- `iterate config ...`
-- `iterate os ...`
+## Running scripts
 
-## Egress approvals (`iterate approve`)
+`itx run` executes a JavaScript function body on OS Next with `itx` in scope.
+Use `return` for the result. The server records the run and its settlement;
+the CLI never retries a script automatically. Scripts execute on the server,
+so local Node APIs and local filesystem access are unavailable.
 
-A project's outbound HTTP can require a human. Egress rules on the project
-hold matching requests (the caller's `fetch` stays open) until you approve or
-reject them; once you enroll a key, approvals are Secure-Enclave-signed and
-unforgeable. Full design + schemas: the egress-approvals PR.
-
-Be the human — three surfaces, same thing:
-
-```bash
-iterate approve --project <id-or-slug>            # terminal y/n
-iterate approve --project <id-or-slug> --native   # macOS dialog → Touch ID
-iterate approve --project <id-or-slug> --menubar  # menu-bar app (macOS)
-```
-
-Keys (macOS Secure Enclave; software P-256 elsewhere):
-
-```bash
-iterate approve --project <p> --enroll   # mint + enroll this machine's key
-iterate approve --project <p> --keys     # list enrolled keys
-iterate approve --project <p> --revoke   # revoke this machine's key
-```
-
-### Against prd vs a preview
-
-- **prd** is the built-in default — no config needed:
-  `iterate approve --project <slug>` targets `os.iterate.com`.
-- **A preview**: add a named config once (see [Config file](#config-file)), then
-  pass `--config`:
-
-  ```bash
-  iterate config set --name preview_3 \
-    --os-base-url https://os.iterate-preview-3.com \
-    --auth-base-url https://auth.iterate-preview-3.com
-  iterate --config preview_3 login          # each config has its own session
-  iterate --config preview_3 approve --project <slug> --native
-  ```
-
-### Configure rules on a project
-
-Rules are project state, set wholesale via one event on the project's `/`
-stream (first match wins; no match allows). Append it with an itx script —
-`itx run --context <project-id>` (the context is the `prj_…` id):
-
-```bash
-iterate os itx run --context <project-id> --eval '
-  await itx.streams.get("/").append({
-    type: "events.iterate.com/project/egress-rules-configured",
-    payload: { rules: [
-      { ruleKey: "stripe-mutations",
-        match: { hosts: ["api.stripe.com"], methods: ["POST","PUT","DELETE"] },
-        verdict: "hold", approvalTimeoutMs: 600000 },
-      { ruleKey: "spends-prod-key",
-        match: { secretPaths: ["/secrets/stripe/prod"] },
-        verdict: "hold" },
-    ] },
-  });
+```sh
+iterate itx run --project my-project --context /notes --eval '
+  await itx.append({ type: "note", payload: { text: "hello" } });
+  return await itx.readEvents(0, 10);
 '
+iterate itx run --project my-project --file ./script.js
+cat script.js | iterate itx run --project my-project --file -
 ```
 
-Inside an `iterate/iterate` clone the same runs as
-`doppler run --config <env> -- pnpm cli itx run --context <project-id> --eval '…'`.
+Specify exactly one of `--eval` or `--file`. `--context` is a project-local path
+(default `/`). `--project` accepts an id or slug; otherwise the CLI uses the
+config's `defaultProject`, or the only project accessible to the session.
 
-## Use my computer (`iterate use-my-computer`)
+## Use my computer
 
-Lend this Mac to a project's agents. It mounts a live capability at
-`itx.<name>` — agents call `ask` (native dialog), `notify` (desktop
-notification) and `runSwift` (arbitrary Swift), and the calls run **right here**
-on your machine, over the socket, as you. Runs until Ctrl-C.
+`use-my-computer` shares a Mac as a live OS Next capability until Ctrl-C:
 
-```bash
-iterate use-my-computer --project <id-or-slug>              # prompts for a name, prints a paste-for-your-agent hint
-iterate use-my-computer --project <id-or-slug> --name jonasComputer
+- `itx.myComputer.ask({ question, buttons? })`: native choice dialog.
+- `itx.myComputer.notify({ message, title? })`: desktop notification.
+- `itx.myComputer.runSwift({ code })`: Swift with the owner's local permissions.
+- `itx.myComputer.__describe()`: usage instructions and method signatures.
+
+The command requires macOS, AppleScript and Swift. Share only with a project
+you trust: its callers can run local code. The capability belongs to the live
+connection and is released on exit. A disconnect or token expiry ends sharing
+with an error; rerun the command to refresh authentication and reconnect.
+
+## Configs and migration
+
+Configs live in `${XDG_CONFIG_HOME:-~/.config}/iterate/config.json`. Selection
+order is `--config`, a parent-directory workspace mapping, the default config,
+a single saved config, then built-in `prd`.
+
+```sh
+iterate config set --name next --os-base-url https://os.iterate2.com \
+  --default-project my-project --set-default
+iterate --config next login
+iterate config set --name local --os-base-url http://localhost:8787 --set-workspace
+iterate config list
+iterate config get
 ```
 
-From an active `iterate chat` session, type `/use-my-computer` instead. Chat
-uses the local OS username for the capability name: a user named `joebloggs`
-shares `itx.joebloggsComputer`. The provider stays project-wide and stops when
-chat exits.
+Existing configs keep their server URL. For a config that targets the old OS,
+set its `--os-base-url` to an OS Next deployment and log in again. Changing the
+server clears that config's session. There is no separate `authBaseUrl` setting.
 
-It's also built into the **menu-bar app** (`iterate approve --menubar`): flip
-**Use my computer** on to share, and the dropdown shows each call as it happens —
-a green dot appears in the menu bar while an agent is actively using your Mac.
-Sharing is opt-in, stops when you flip it off or quit, and the toggle drives the
-same `iterate use-my-computer --json` under the hood.
+The old chat TUI, egress approver, menu-bar app and remotely discovered
+`iterate os ...` commands have been removed. Use `iterate itx run` for scripts;
+its `--project` selects the project and `--context` selects a path within it.
+Legacy SDK exports remain available for apps that still use the original OS.
 
-### Testing a held request
+## Node connections
 
-> **Gotcha:** fire the test request through `itx.egress.fetch(...)`, **not** a
-> bare `fetch()`. A bare `fetch()` in an itx script runs on your laptop and
-> bypasses the project's egress gate, so nothing is held.
+`iterate/next/node` exposes a connection owner for OS Next scripts and live
+providers. It uses the same protocol and cleanup as the CLI:
 
-```bash
-iterate os itx run --context <project-id> --eval '
-  const r = await itx.egress.fetch(new Request("https://httpbin.org/post", { method: "POST", body: "hi" }));
-  return { status: r.status };   // hangs until you approve/reject in `iterate approve`
-'
+```js
+import { connectOsNext } from "iterate/next/node";
+
+using connection = await connectOsNext({
+  baseUrl: "https://os.iterate2.com",
+  auth: { type: "bearer", token: process.env.ITERATE_BEARER_TOKEN },
+});
+using project = await connection.session.projects.get("my-project");
+console.log(await project.run("async (itx) => await itx.whoami()"));
 ```
 
-## Config file
-
-Config path:
-
-`${XDG_CONFIG_HOME:-~/.config}/iterate/config.json`
-
-Config shape:
-
-```json
-{
-  "configs": {
-    "default": {
-      "osBaseUrl": "https://os.iterate.com",
-      "authBaseUrl": "https://auth.iterate.com",
-      "defaultProject": "my-project"
-    },
-    "dev": {
-      "osBaseUrl": "http://localhost:54896",
-      "authBaseUrl": "http://localhost:7101"
-    }
-  },
-  "default": "default",
-  "workspaces": {
-    "/absolute/workspace/path": "dev"
-  }
-}
-```
-
-Config resolution priority: `--config` flag > workspace match (walk up from cwd) > `default` key > single-config auto-select.
-
-## Local iterate dev
-
-If you run inside an `iterate/iterate` clone, the CLI auto-detects it and
-delegates to the local source instead of the published build.
-
-## GitHub AI linter
-
-Project workers can configure the packaged pull-request linter and call it
-explicitly from their event hook:
-
-```ts
-import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
-import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
-
-export default class ProjectWorker extends IterateWorkerEntrypoint {
-  #aiLintApp = GithubAiLinter.create(this.env, {
-    policyVersion: "2",
-    rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
-  });
-
-  protected override async processEvent(event: StreamEvent): Promise<void> {
-    await this.#aiLintApp.processEvent(event);
-  }
-}
-```
-
-Each matched Markdown file supplies one rule. Its frontmatter contains a stable
-ID and JSON file globs; its body is the review invariant:
-
-```md
----
-id: typescript/no-inferable-type-annotation
-files: ["**/*.{ts,tsx,mts,cts}", "!**/*.test.ts"]
----
-
-Do not declare a type annotation that TypeScript can infer from the value.
-```
-
-The package owns GitHub event routing and the durable processor. Rules are read
-from one pinned repository commit for each webhook.
-
-## Stateful Todo app
-
-Project workers can route authenticated HTTP to the packaged Todo app:
-
-```ts
-import { TodoApp } from "iterate/starter-apps/todo";
-import { IterateWorkerEntrypoint } from "iterate/sdk";
-
-export default class ProjectWorker extends IterateWorkerEntrypoint {
-  #todoApp = TodoApp.create(this.env);
-
-  async fetch(request: Request): Promise<Response> {
-    const denied = await this.fetchProjectAuth(request, { policy: "project-member" });
-    if (denied) return denied;
-    return this.#todoApp.fetch(request);
-  }
-}
-```
-
-`TodoApp.create(env)` keeps the stateful worker ref private and forwards over
-the fetch lane, so WebSocket upgrades reach the Durable Object. The physical
-package artifact contains the sqlfu-backed SQLite runtime and browser client;
-the project config does not carry Todo source or install Todo dependencies.
-Its durable identity remains `app-todo-live`, so moving an existing project to
-the factory preserves its rows.
-
-## Publishing (maintainers)
-
-From repo root:
-
-```bash
-pnpm --filter ./packages/iterate build
-pnpm --filter ./packages/iterate typecheck
-pnpm --filter ./packages/iterate test
-pnpm exec oxlint packages/iterate/src/cli.ts packages/iterate/src/cli.test.ts
-pnpm exec oxfmt --check packages/iterate
-pnpm --filter ./packages/iterate publish --access public
-```
+The package launcher delegates to repository source during development and
+uses the published build when installed through `npx`.

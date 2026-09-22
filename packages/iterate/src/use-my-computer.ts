@@ -1,42 +1,11 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// `iterate use-my-computer` — lend your laptop to a project's AI agents.
-//
-// The whole idea in three sentences:
-//   1. You open one WebSocket to your Iterate project and "provide" a capability
-//      called `myComputer` onto it.
-//   2. From then on, any agent in that project can call `itx.myComputer.ask(...)`,
-//      `itx.myComputer.notify(...)` or `itx.myComputer.runSwift(...)`.
-//   3. Because it's a *live* capability, the agent's call travels back down your
-//      WebSocket and the code runs right here — on your Mac, as you, with your
-//      screen, files and network. There is no server-side sandbox in between.
-//
-// That's the trick: `provideCapability({ type: "live", capability })` hands the
-// project a remote reference to a plain JavaScript object. Calls to it are RPCs
-// that come home to this process. Everything below is just (a) that object and
-// (b) keeping the socket alive so agents can reach it.
-//
-// Two front-ends ride the same core: the terminal command (shareMyComputer,
-// prints a paste-for-your-agent hint) and the machine one the menu-bar app
-// drives (runUseMyComputerJson) — the latter wraps the capability so every agent
-// call announces itself as NDJSON, which is how the app shows "in use".
-// ─────────────────────────────────────────────────────────────────────────────
-
-import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-
 import * as prompts from "@clack/prompts";
-import type { RpcStub } from "@iterate-com/capnweb";
-
-import { connectItx } from "./itx/itx-node-client.ts";
-import type { ItxAuthCredentials, Project } from "./itx-api.generated.ts";
+import { RpcTarget } from "capnweb";
 import { run } from "./run-command.ts";
+import type { connectOsNext } from "./next-node.ts";
 
-/**
- * The object we lend to the project. Each method becomes callable by agents as
- * `itx.myComputer.<method>(...)`. capnweb ships the *call* over this process's
- * socket, so the body runs locally — native macOS dialogs and all.
- */
-const myComputer = {
+/** Methods run locally with the authority of the person sharing this Mac. */
+export class MyComputer extends RpcTarget {
   /** Pop a native dialog on screen and return which button the human clicked. */
   async ask({ question, buttons = ["No", "Yes"] }: { question: string; buttons?: string[] }) {
     // AppleScript's `display dialog` supports one to three buttons.
@@ -54,7 +23,7 @@ const myComputer = {
     );
     // osascript prints e.g. `button returned:Yes` — hand back just the choice.
     return { answer: stdout.trim().replace(/^button returned:/, "") };
-  },
+  }
 
   /** Show a desktop notification. */
   async notify({ message, title = "iterate" }: { message: string; title?: string }) {
@@ -62,50 +31,24 @@ const myComputer = {
       `display notification "${escapeForAppleScript(message)}" with title "${escapeForAppleScript(title)}"`,
     );
     return { ok: true as const };
-  },
+  }
 
   /** Run arbitrary Swift and return its output — full power, when an agent needs it. */
   async runSwift({ code }: { code: string }) {
     // `swift -` reads a whole program from stdin and runs it.
     return await run("swift", ["-"], code);
-  },
+  }
 
-  /**
-   * A liveness probe, deliberately absent from the declared types so agents
-   * never see it. The provider calls it only after its relay-local
-   * Capability Provider Pager check fails, to distinguish a broken return channel
-   * from a different process taking the same name. It is not a periodic
-   * keepalive: idle sharing must leave the CapabilityHost Durable Object
-   * eligible for hibernation.
-   */
-  async ["__ping"]() {
-    return MOUNT_ID;
-  },
-};
+  __describe() {
+    return {
+      instructions:
+        "A live Mac shared by its owner. Ask before destructive actions. Methods: ask({ question, buttons? }), notify({ message, title? }), runSwift({ code }). Swift has full local access.",
+      types:
+        "ask(input: { question: string; buttons?: string[] }): Promise<{ answer: string }>; notify(input: { message: string; title?: string }): Promise<{ ok: true }>; runSwift(input: { code: string }): Promise<{ stdout: string; stderr: string; exitCode: number }>;",
+    };
+  }
+}
 
-/** Unique per-process id, returned by `__ping`, so keepMountAlive can prove it still owns the mount. */
-const MOUNT_ID = randomUUID();
-
-/** Prose + a type signature so agents (and `__describe()`) know how to call this. */
-const INSTRUCTIONS = `A real person's Mac, shared live from their terminal for as long as \`iterate use-my-computer\` runs.
-- ask({ question, buttons? }) pops a native dialog on their screen and returns { answer } — the button they clicked. Perfect for a quick human yes/no or choice.
-- notify({ message, title? }) shows a desktop notification.
-- runSwift({ code }) runs Swift on their Mac and returns { stdout, stderr, exitCode }. It has full access to their files, GUI and network, so ask before doing anything destructive.`;
-
-// A capability `types` string must be a valid TS declaration named `Capability`
-// (the egress/capability host typechecks it before mounting) — not a bare object
-// literal, which fails to compile and aborts the mount.
-const TYPES = `export type Capability = {
-  ask(input: { question: string; buttons?: string[] }): Promise<{ answer: string }>;
-  notify(input: { message: string; title?: string }): Promise<{ ok: true }>;
-  runSwift(input: { code: string }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
-};`;
-
-/**
- * Ask what agents should call this computer, and mount the capability there —
- * e.g. answering "jonasComputer" makes it `itx.jonasComputer`. We propose a
- * camelCase name from the hostname; the human can accept it or type their own.
- */
 async function askComputerName(): Promise<string> {
   const proposed = proposeComputerName();
   // Non-interactive (piped output, an agent): just take the proposal.
@@ -137,389 +80,36 @@ function proposeComputerName(): string {
   return cleaned ? `${cleaned}Computer` : "myComputer";
 }
 
-/**
- * A line the human can paste to an agent so it knows this capability exists.
- * `itx.<name>.__describe()` then teaches the agent exactly how to drive it.
- */
-function agentPrompt(name: string): string {
-  const kind = /macbook/i.test(hostname())
-    ? "a MacBook"
-    : process.platform === "darwin"
-      ? "a Mac"
-      : "their computer";
-  const owner = /^(.+?)(computer|mac|laptop|machine)$/i.exec(name)?.[1];
-  const whose = owner ? `${owner[0].toUpperCase()}${owner.slice(1)}’s computer` : name;
-  return [
-    "📋 Paste this to an agent so it knows it can use your computer:",
-    "",
-    `   By the way, you can use \`itx.${name}\` to interact with ${whose} (${kind}).`,
-    `   Call \`itx.${name}.__describe()\` first to learn how it works — it can ask you`,
-    `   questions with native dialogs, send notifications, and run Swift.`,
-  ].join("\n");
-}
-
-/** Freshly-resolved credentials for one (re)connect. */
-type ResolvedAuth = { auth: ItxAuthCredentials; headers?: Record<string, string> };
-
-type ConnectInput = {
-  baseUrl: string;
-  projectId: string;
+/** Provision belongs to this connection; signals release it before closing the transport.
+ * A disconnect ends sharing visibly. The caller explicitly starts each new share. */
+export async function shareMyComputer(input: {
+  connection: Awaited<ReturnType<typeof connectOsNext>>;
+  project: string;
   name?: string;
-  /**
-   * Re-resolve (and refresh) credentials — called before EVERY (re)connect. The
-   * OS access token has a short (~15-minute) TTL, so a reconnect that reused the
-   * token captured at launch would fail once it expires; re-resolving picks up a
-   * refreshed token so extended sharing survives reconnects.
-   */
-  reauth: () => Promise<ResolvedAuth>;
-};
-
-/**
- * Connect (freshly-resolved auth) and mount `capability` at `itx.<name>`. The
- * provide is timeout-bounded ABOVE connectItx's ~15s WebSocket handshake, and on
- * ANY failure the session is disposed before we throw — so a slow or failed
- * attempt can never leak a socket or, worse, complete late and silently replace
- * the mount from under the keepalive loop.
- */
-async function connectAndProvide(
-  input: ConnectInput,
-  name: string,
-  capability: typeof myComputer,
-): Promise<MountedSession> {
-  const { auth, headers } = await input.reauth();
-  const itx = connectItx({
-    auth,
-    baseUrl: input.baseUrl,
-    projectId: input.projectId,
-    headers,
-  }) as RpcStub<Project>;
-  try {
-    const provision = await withTimeout(
-      itx.provideCapability({
-        type: "live",
-        path: [name],
-        capability,
-        instructions: INSTRUCTIONS,
-        types: TYPES,
-      }),
-      PROVIDE_TIMEOUT_MS,
-      "provide",
-    );
-    return { itx, provision };
-  } catch (error) {
-    disposeItx(itx); // disposing the session cancels the in-flight handshake/provide
-    throw error;
-  }
-}
-
-type MountedSession = {
-  itx: RpcStub<Project>;
-  provision: Awaited<ReturnType<RpcStub<Project>["provideCapability"]>>;
-};
-
-const PAGER_CHECK_INTERVAL_MS = 8_000;
-const PAGER_CHECK_TIMEOUT_MS = 5_000;
-// The provide await includes connectItx's ~15s handshake, so its bound sits well
-// above that — a handshake that would have succeeded must not be abandoned.
-const PROVIDE_TIMEOUT_MS = 25_000;
-const RECOVERY_BACKOFF_MS = 3_000;
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/**
- * Race a promise against a timeout so a STALLED RPC (a wedged connection that
- * never errors) counts as a failure instead of hanging forever. The abandoned
- * work is caught so a rejection landing after the timeout can't go unhandled;
- * the caller disposes the underlying session, which actually cancels it.
- */
-function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
-  work.catch(() => {});
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([
-    work,
-    new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
-    }),
-  ]).finally(() => {
-    if (timer !== undefined) clearTimeout(timer);
+}) {
+  const name = input.name || (await askComputerName());
+  using project = await input.connection.session.projects.get(input.project);
+  using _provision = await project.provide(`itx.${name}`, new MyComputer());
+  console.error(`itx.${name} is live for project ${input.project}. Press Ctrl-C to stop sharing.`);
+  console.error(`Tell your agent to call itx.${name}.__describe() to learn how to use this Mac.`);
+  let stop: () => void = () => {};
+  const stopped = new Promise<"stopped">((resolve) => {
+    stop = () => resolve("stopped");
   });
-}
-
-/** Best-effort close of a capnweb session's socket, so recoveries don't leak connections. */
-function disposeItx(itx: RpcStub<Project>): void {
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
   try {
-    (itx as unknown as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
-  } catch {
-    // already gone
+    const outcome = await Promise.race([stopped, input.connection.closed]);
+    if (outcome !== "stopped") {
+      throw new Error(
+        `Computer sharing disconnected (${outcome.code}: ${outcome.reason || "connection closed"}). Run iterate use-my-computer again to reconnect.`,
+      );
+    }
+  } finally {
+    process.removeListener("SIGINT", stop);
+    process.removeListener("SIGTERM", stop);
   }
 }
-
-function disposeMountedSession(session: MountedSession): void {
-  try {
-    session.provision[Symbol.dispose]?.();
-  } catch {
-    // already gone
-  }
-  disposeItx(session.itx);
-}
-
-/** Probe the stateless ownership handle; this call never reaches the CapabilityHost DO. */
-function capabilityProviderPagerActive(provision: MountedSession["provision"]): Promise<boolean> {
-  // This watchdog-only method is deliberately omitted from the generated public ITX API.
-  // CapabilityProvision supplies it on every returned provision; the assertion exposes
-  // only that internal method because code generation intentionally hides it from agents.
-  const pager = provision as unknown as { __capabilityProviderPagerActive(): Promise<boolean> };
-  return withTimeout(
-    pager.__capabilityProviderPagerActive(),
-    PAGER_CHECK_TIMEOUT_MS,
-    "Capability Provider Pager check",
-  );
-}
-
-/** Diagnose an ended Pager-backed mount over the full path; returns the provider's mount id. */
-function pingMount(itx: RpcStub<Project>, name: string): Promise<string> {
-  // `myComputer` above always supplies __ping, but the mount name is runtime-selected and
-  // the method is intentionally absent from the public generated API agents receive.
-  const ping = (itx as unknown as Record<string, { __ping(): Promise<string> }>)[name].__ping();
-  return withTimeout(ping, PAGER_CHECK_TIMEOUT_MS, "mount ownership check");
-}
-
-/**
- * Keep the live mount routable for as long as we run. A live capability's
- * client gave the CapabilityHost DO one hibernatable Capability Provider Pager:
- * "if you need my provider after releasing it, Page me here." The relay's
- * local ownership probe is the Pager-backed mount's cheap health check. It never touches the
- * CapabilityHost DO, so an idle shared computer no longer defeats DO
- * hibernation. Only after the Pager-backed mount reports that it ended do we make one full
- * path call to learn whether another provider took the name.
- *
- * States, reported via the callbacks (transitions only, not every retry):
- * - provision is active  → live (`onLive`).
- * - Pager check fails     → dispose the suspect session and reconnect fresh (with
- *   re-resolved auth, so a reconnect past the token TTL still authenticates);
- *   `onDegraded` fires once until we're live again. This never throws out of the
- *   loop — a failed round backs off and retries.
- * - inactive + mount answers with a DIFFERENT id → another process owns the
- *   name; we `onConflict` and STOP rather than fight it forever.
- */
-async function keepMountAlive(input: {
-  connect: ConnectInput;
-  name: string;
-  capability: typeof myComputer;
-  onLive?: () => void;
-  onDegraded?: () => void;
-  onConflict?: () => void;
-}): Promise<void> {
-  let session: MountedSession | undefined;
-  // Report transitions only — including the FIRST connect. `undefined` until we
-  // report either state, so a failed initial connect still surfaces `onDegraded`
-  // (not a silent "Starting…" while the CLI retries in the background).
-  let reported: "live" | "down" | undefined;
-  const goLive = () => {
-    if (reported === "live") return;
-    reported = "live";
-    input.onLive?.();
-  };
-  const goDown = () => {
-    if (reported === "down") return;
-    reported = "down";
-    input.onDegraded?.();
-  };
-
-  while (true) {
-    if (session === undefined) {
-      // (Re)connect. connectAndProvide self-disposes on failure, so nothing leaks
-      // and no abandoned attempt can late-mount.
-      try {
-        session = await connectAndProvide(input.connect, input.name, input.capability);
-      } catch {
-        goDown();
-        await sleep(RECOVERY_BACKOFF_MS);
-        continue;
-      }
-      // provideCapability returns only after this exact Pager-backed relay owns the
-      // durable mount, so no DO round trip is needed to declare it live.
-      goLive();
-    }
-
-    await sleep(PAGER_CHECK_INTERVAL_MS);
-    let active: boolean;
-    try {
-      active = await capabilityProviderPagerActive(session.provision);
-    } catch {
-      disposeMountedSession(session);
-      session = undefined;
-      goDown();
-      continue;
-    }
-    if (active) continue;
-
-    let observedId: string;
-    try {
-      observedId = await pingMount(session.itx, input.name);
-    } catch {
-      disposeMountedSession(session);
-      session = undefined;
-      goDown();
-      continue;
-    }
-    if (observedId !== MOUNT_ID) {
-      input.onConflict?.();
-      disposeMountedSession(session);
-      return; // yield the name; the caller (process/menu bar) decides what's next
-    }
-
-    // This Pager-backed mount ended but the durable route still momentarily reaches us.
-    // Replace it on a fresh relay instead of leaving a healthy-looking zombie.
-    disposeMountedSession(session);
-    session = undefined;
-    goDown();
-  }
-}
-
-/**
- * Ask for a name, provide `itx.<name>`, and hold the line until Ctrl-C (or until
- * another provider takes the name over). The Pager watchdog owns the connection.
- */
-export async function shareMyComputer(
-  input: ConnectInput & { log?: (message: string) => void },
-): Promise<void> {
-  const log = input.log ?? ((message: string) => console.error(message));
-  const name = input.name ?? (await askComputerName());
-  let announced = false;
-  await keepMountAlive({
-    connect: input,
-    name,
-    capability: myComputer,
-    onLive: () => {
-      if (announced) return void log(`↻ itx.${name} re-shared.`);
-      announced = true;
-      log(`✅ itx.${name} is live for project ${input.projectId}. Press Ctrl-C to stop sharing.\n`);
-      log(agentPrompt(name));
-    },
-    onDegraded: () => log(`… itx.${name} dropped — reconnecting.`),
-    onConflict: () => log(`Another session is now sharing as itx.${name}; stopping this one.`),
-  });
-}
-
-/**
- * The machine front-end the menu-bar app drives. Same live mount, but the
- * capability is wrapped so every agent call announces itself as NDJSON on
- * stdout — that stream is how the app shows the computer being used.
- *
- * Out (stdout):
- *   {"type":"status","loggedIn":true,"project":"prj_…","name":"jonasComputer"}
- *   {"type":"status",…,"reconnecting":true}   // mount dropped; recovering
- *   {"type":"status",…,"conflict":true}       // another session took the name; stopping
- *   {"type":"call","id":1,"method":"ask","summary":"Deploy to prod?","at":"…"}
- *   {"type":"call-done","id":1,"method":"ask","ok":true,"ms":1234}
- */
-export async function runUseMyComputerJson(input: ConnectInput): Promise<void> {
-  const name = input.name ?? proposeComputerName();
-  const capability = withActivity(myComputer);
-  const status = (extra?: Record<string, unknown>) =>
-    emitJson({ type: "status", loggedIn: true, project: input.projectId, name, ...extra });
-  // If the menu-bar parent goes away, stdin closes — stop sharing rather than
-  // leaving the computer silently lent with no window onto it.
-  process.stdin.on("end", () => process.exit(0));
-  process.stdin.resume();
-  await keepMountAlive({
-    connect: input,
-    name,
-    capability,
-    onLive: () => status(),
-    onDegraded: () => status({ reconnecting: true }),
-    onConflict: () => status({ conflict: true }),
-  });
-  // keepMountAlive only returns after a conflict (another session took the name).
-  // `process.stdin.resume()` above holds the event loop open, so return alone
-  // would leave the CLI running with no active share — exit explicitly. (The menu
-  // bar also kills the child on `conflict`; this covers running --json directly.)
-  // Flush stdout first: process.exit can truncate a buffered pipe write, and the
-  // final `conflict` line is what the menu bar reads to show the takeover message
-  // (its teardown is ordered on that line's EOF). The callback fires once every
-  // prior write has drained to the pipe.
-  await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
-  process.exit(0);
-}
-
-/** One NDJSON line to stdout — the machine protocol's only output channel. */
-function emitJson(line: Record<string, unknown>): void {
-  process.stdout.write(`${JSON.stringify(line)}\n`);
-}
-
-/** Emitted (and the process exits) when there is no usable session yet. */
-export function emitComputerNeedsLogin(): void {
-  emitJson({ type: "status", loggedIn: false });
-}
-
-/**
- * Wrap each capability method so it emits `call` before running and `call-done`
- * after — the menu-bar app reads these to show which agent action is live. The
- * behaviour is otherwise identical: the wrapped method awaits the real one and
- * returns (or rethrows) exactly what it did.
- */
-function withActivity(capability: typeof myComputer): typeof myComputer {
-  let nextId = 0;
-  const wrapped = {} as Record<string, (arg: never) => Promise<unknown>>;
-  for (const [method, fn] of Object.entries(capability)) {
-    // Internal probes (e.g. __ping) pass through unwrapped — they're not agent
-    // activity and must not spam the NDJSON stream every health check.
-    if (method.startsWith("__")) {
-      wrapped[method] = fn as (arg: never) => Promise<unknown>;
-      continue;
-    }
-    wrapped[method] = async (arg: never) => {
-      const id = (nextId += 1);
-      emitJson({
-        type: "call",
-        id,
-        method,
-        summary: summarizeCall(method, arg),
-        at: new Date().toISOString(),
-      });
-      const startedAt = Date.now();
-      try {
-        const result = await fn(arg);
-        emitJson({ type: "call-done", id, method, ok: true, ms: Date.now() - startedAt });
-        return result;
-      } catch (error) {
-        emitJson({
-          type: "call-done",
-          id,
-          method,
-          ok: false,
-          ms: Date.now() - startedAt,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        throw error;
-      }
-    };
-  }
-  return wrapped as typeof myComputer;
-}
-
-/**
- * A short, human-readable line describing one call — for the app's activity log.
- * Total: it must never throw on a malformed argument (that would run BEFORE the
- * wrapped method's own error handling), so it only reads string fields.
- */
-function summarizeCall(method: string, arg: unknown): string {
-  const str = (value: unknown): string | undefined =>
-    typeof value === "string" ? value : undefined;
-  const input = (arg ?? {}) as Record<string, unknown>;
-  if (method === "ask") return truncate(str(input.question) ?? "asked a question");
-  if (method === "notify") return truncate(str(input.message) ?? "sent a notification");
-  if (method === "runSwift") {
-    const lines = (str(input.code) ?? "").split("\n").filter((line) => line.trim() !== "").length;
-    return `ran ${lines} line${lines === 1 ? "" : "s"} of Swift`;
-  }
-  return method;
-}
-
-const truncate = (text: string) => (text.length > 80 ? `${text.slice(0, 79)}…` : text);
-
-// ── tiny local helpers ───────────────────────────────────────────────────────
 
 /** Run an AppleScript snippet, throwing if osascript reports failure (e.g. the human cancels). */
 async function osascript(script: string) {

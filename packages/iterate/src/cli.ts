@@ -1,33 +1,15 @@
 import { createHash, randomBytes } from "node:crypto";
-import { accessSync, constants, existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname } from "node:path";
 import process from "node:process";
-
 import * as prompts from "@clack/prompts";
-import type { RpcStub } from "@iterate-com/capnweb";
-import { createORPCClient } from "@orpc/client";
-import { RPCLink } from "@orpc/client/fetch";
 import { os } from "@orpc/server";
-import { createCli, parseRouter, type AnyRouter, yamlTableConsoleLogger } from "trpc-cli";
+import { createCli, yamlTableConsoleLogger } from "trpc-cli";
 import { z } from "zod/v4";
-import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
-import type { AuthContractClient } from "../../../apps/auth-contract/src/index.ts";
-import { connectItx } from "./itx/itx-node-client.ts";
-import type {
-  ItxAuthCredentials,
-  Project,
-  ProjectListEntry,
-  Session,
-} from "./itx-api.generated.ts";
-import {
-  emitComputerNeedsLogin,
-  runUseMyComputerJson,
-  shareMyComputer,
-} from "./use-my-computer.ts";
-import { runApprovalCli } from "./approve.ts";
-import { emitNeedsLogin, runApprovalJson } from "./approve-json.ts";
-import { launchMenubarApp } from "./menubar-app.ts";
+import { connectOsNext } from "./next-node.ts";
+import type { SessionCredentials } from "./next/api.ts";
+import { shareMyComputer } from "./use-my-computer.ts";
 import {
   CONFIG_PATH,
   Config,
@@ -40,148 +22,22 @@ import {
   type StoredSession,
 } from "./config.ts";
 
-type ParsedRouter = ReturnType<typeof parseRouter>;
-
 const OAUTH_REFRESH_SKEW_MS = 60_000;
-const DEFAULT_CHAT_AGENT_PATH = "/agents/default";
-type OsAuthHeaders = { cookie?: string; authorization?: string };
-type OsAuth = { credentials: ItxAuthCredentials; requestHeaders?: HeadersInit };
-type CreateOsSession = (input: { auth: OsAuth; baseUrl: string }) => RpcStub<Session>;
-
 const isAgent =
   process.env.AGENT === "1" ||
   process.env.OPENCODE === "1" ||
   Boolean(process.env.OPENCODE_SESSION) ||
   Boolean(process.env.CLAUDE_CODE);
-
-/** Global override set by --config flag before CLI commands run. */
 let configFlagOverride: string | undefined;
-
-/**
- * We strip host-level flags before handing argv to `trpc-cli`,
- * That keeps router-local help/validation focused on the mounted
- * procedures instead of teaching every command about iterate-specific flags.
- *
- * Example: `iterate --config dev doctor`
- */
 const consumeCliStringFlag = (flagName: string): string | undefined => {
   const args = process.argv.slice(2);
   const flagIndex = args.indexOf(flagName);
   if (flagIndex === -1) return undefined;
   const value = args[flagIndex + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flagName} requires a value`);
-  }
+  if (!value || value.startsWith("-")) throw new Error(`${flagName} requires a value`);
   process.argv.splice(flagIndex + 2, 2);
   return value;
 };
-
-const firstNonFlagArgument = (args: string[]): string | undefined => {
-  for (const arg of args) {
-    if (arg === "--") return undefined;
-    if (!arg.startsWith("-")) return arg;
-  }
-  return undefined;
-};
-
-export const defaultBareInvocationToChat = (args: string[]) =>
-  args.length === 0 ? ["chat"] : args;
-
-const applyDefaultBareInvocation = () => {
-  const args = process.argv.slice(2);
-  const nextArgs = defaultBareInvocationToChat(args);
-  if (nextArgs !== args) process.argv.splice(2, args.length, ...nextArgs);
-};
-
-const resolveStreamTuiEntrypointPath = () => {
-  const moduleDir = import.meta.dirname;
-  const candidates = [
-    join(moduleDir, "stream-tui/agent-chat-terminal.tsx"),
-    join(moduleDir, "stream-tui/agent-chat-terminal.mjs"),
-    join(moduleDir, "stream-tui/agent-chat-terminal.js"),
-  ];
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-
-  throw new Error("Could not find the Iterate stream TUI entrypoint.");
-};
-
-export const buildChatCommand = (input: {
-  osBaseUrl: string;
-  projectId: string;
-  agentPath: string;
-  entrypointPath: string;
-  cliPath: string;
-  configName: string;
-}) => ({
-  command: "bun",
-  args: [
-    input.entrypointPath,
-    "--base-url",
-    input.osBaseUrl,
-    "--project-id",
-    input.projectId,
-    "--agent-path",
-    input.agentPath,
-    "--cli-path",
-    input.cliPath,
-    "--config-name",
-    input.configName,
-  ],
-});
-
-const resolveExecutablePath = (command: string, pathValue: string | undefined): string => {
-  const candidates =
-    isAbsolute(command) || command.includes("/")
-      ? [resolve(command)]
-      : (pathValue ?? "")
-          .split(delimiter)
-          .filter(Boolean)
-          .map((directory) => join(directory, command));
-
-  for (const candidate of candidates) {
-    try {
-      accessSync(candidate, constants.X_OK);
-      return candidate;
-    } catch {
-      // Keep searching PATH. The final error names the command, not every miss.
-    }
-  }
-
-  throw new Error(`Could not find executable "${command}" on PATH.`);
-};
-
-/**
- * Replace the launcher with the interactive terminal process.
- *
- * A spawned TUI has a distinct PID and can survive when a terminal harness
- * kills only the launcher. `execve` preserves the current stdin/stdout/stderr
- * descriptors and process identity, so OpenTUI receives teardown signals
- * directly.
- */
-export const replaceWithInheritedProcess = (input: {
-  command: string;
-  args: string[];
-  env: Record<string, string | undefined>;
-  execve?: (file: string, args: string[], env: Record<string, string>) => never;
-}): never => {
-  const execve = input.execve ?? process.execve;
-  if (typeof execve !== "function") {
-    throw new Error("iterate chat requires Node.js 22.15 or newer on a POSIX platform.");
-  }
-
-  const env = Object.fromEntries(
-    Object.entries({ ...process.env, ...input.env }).filter(
-      (entry): entry is [string, string] => entry[1] !== undefined,
-    ),
-  );
-  const executablePath = resolveExecutablePath(input.command, env.PATH);
-  execve(executablePath, [executablePath, ...input.args], env);
-  throw new Error(`Failed to replace the Iterate launcher with ${input.command}.`);
-};
-
 const hasConfig = (configFile: ReturnType<typeof readConfigFile>, name: string) =>
   name === DEFAULT_CONFIG_NAME || Boolean(configFile.configs?.[name]);
 
@@ -250,232 +106,29 @@ function resolveConfig(
   return result;
 }
 
-class StoredOsSessionError extends Error {
-  readonly reason: "missing" | "expired";
-
-  constructor(reason: "missing" | "expired", message: string) {
-    super(message);
-    this.reason = reason;
-    this.name = "StoredOsSessionError";
-  }
-}
-
 /**
- * Get auth headers for OS API calls based on the resolved config's stored session.
+ * Resolve the config's OAuth credentials before connecting.
  * OAuth sessions are refreshed when possible.
  */
-const getOsAuthHeaders = async (config: Config, configName?: string): Promise<OsAuthHeaders> => {
+const storedCredentials = async (
+  config: Config,
+  configName?: string,
+): Promise<SessionCredentials> => {
   let session = config.session;
   if (!session) {
-    throw new StoredOsSessionError(
-      "missing",
-      `Not logged in to ${config.osBaseUrl}. Run \`iterate login\` first.`,
-    );
+    throw new Error(`Not logged in to ${config.osBaseUrl}. Run \`iterate login\` first.`);
   }
   if (sessionNeedsRefresh(session)) {
     if (session.refreshToken && session.clientId) {
       session = await refreshOAuthSession({ config, configName, session });
     } else {
-      throw new StoredOsSessionError(
-        "expired",
-        `Session expired for ${config.osBaseUrl}. Run \`iterate login\` again.`,
-      );
+      throw new Error(`Session expired for ${config.osBaseUrl}. Run \`iterate login\` again.`);
     }
   }
   if (session.token) {
-    return { authorization: `Bearer ${session.token}` };
+    return { type: "bearer", token: session.token };
   }
-  if (session.cookie) {
-    return { cookie: session.cookie };
-  }
-  throw new Error(`Stored session for ${config.osBaseUrl} has no token or cookie.`);
-};
-
-const osAuthFromHeaders = (headers: OsAuthHeaders): OsAuth => {
-  if (headers.authorization) {
-    const match = /^Bearer\s+(.+)$/i.exec(headers.authorization);
-    if (!match) throw new Error("Stored OS authorization header is not a bearer token.");
-    return { credentials: { type: "bearer", token: match[1] } };
-  }
-  if (headers.cookie) {
-    return {
-      credentials: { type: "from-server-cookie" },
-      requestHeaders: { cookie: headers.cookie },
-    };
-  }
-  throw new Error("No OS auth credentials available.");
-};
-
-const osAuthFromEnvironment = (): OsAuth | undefined => {
-  const adminSecret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
-  if (adminSecret) return { credentials: { type: "admin-secret", secret: adminSecret } };
-
-  const bearerToken = process.env.ITERATE_BEARER_TOKEN?.trim();
-  if (bearerToken) return { credentials: { type: "bearer", token: bearerToken } };
-
-  return undefined;
-};
-
-const disposeRpc = (stub: { [Symbol.dispose]?: () => void } | undefined) => {
-  try {
-    stub?.[Symbol.dispose]?.();
-  } catch {
-    // Broken transports may already have disposed the remote side.
-  }
-};
-
-const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
-
-const headersRecord = (headers: HeadersInit | undefined): Record<string, string> | undefined => {
-  if (headers === undefined) return undefined;
-  return Object.fromEntries(new Headers(headers).entries());
-};
-
-const withAuthenticatedOsSession = async <T>(input: {
-  auth: OsAuth;
-  baseUrl: string;
-  createSession?: CreateOsSession;
-  run: (session: RpcStub<Session>) => Promise<T>;
-}): Promise<T> => {
-  const session =
-    input.createSession?.({ auth: input.auth, baseUrl: input.baseUrl }) ??
-    (connectItx({
-      auth: input.auth.credentials,
-      baseUrl: input.baseUrl,
-      headers: headersRecord(input.auth.requestHeaders),
-    }) as RpcStub<Session>);
-
-  try {
-    return await input.run(session);
-  } finally {
-    disposeRpc(session);
-  }
-};
-
-export const verifyOsSession = async (input: {
-  authHeaders: OsAuthHeaders;
-  baseUrl: string;
-  createSession?: CreateOsSession;
-}) => {
-  return await withAuthenticatedOsSession({
-    auth: osAuthFromHeaders(input.authHeaders),
-    baseUrl: input.baseUrl,
-    createSession: input.createSession,
-    run: async (session) => await session.__describe(),
-  });
-};
-
-const setupMissingProjectForChat = async (session: RpcStub<Session>, project: ProjectListEntry) => {
-  let projectItx: RpcStub<Project> | undefined;
-  try {
-    projectItx = (await session.projects.get(project.slug).create({
-      projectId: project.id,
-      ...(project.organizationSlug && { organizationSlug: project.organizationSlug }),
-    })) as unknown as RpcStub<Project>;
-  } catch (error) {
-    throw new Error(
-      `Project "${project.slug}" (${project.id}) exists in auth but is missing in OS. Failed to set it up for chat: ${errorMessage(error)}`,
-    );
-  } finally {
-    disposeRpc(projectItx);
-  }
-  return project.id;
-};
-
-const prepareProjectForChat = async (session: RpcStub<Session>, project: ProjectListEntry) => {
-  switch (project.deploymentStatus) {
-    case "created":
-      return project.id;
-    case "missing":
-      return await setupMissingProjectForChat(session, project);
-    case "creating": {
-      let projectItx: RpcStub<Project> | undefined;
-      try {
-        projectItx = (await session.projects.get(project.slug)) as unknown as RpcStub<Project>;
-        await projectItx.waitUntilCreated();
-      } catch (error) {
-        throw new Error(
-          `Project "${project.slug}" (${project.id}) is still being created and could not finish creation for chat: ${errorMessage(error)}`,
-        );
-      } finally {
-        disposeRpc(projectItx);
-      }
-      return project.id;
-    }
-    case "failed":
-      throw new Error(
-        `Project "${project.slug}" (${project.id}) could not be selected for chat because its creation failed.`,
-      );
-    case "unknown":
-      throw new Error(
-        `Project "${project.slug}" (${project.id}) could not be selected for chat because its deployment status is unknown.`,
-      );
-  }
-};
-
-const accessibleProjectsMessage = (projects: ProjectListEntry[]) =>
-  projects.length === 0
-    ? "No accessible projects found."
-    : `Accessible projects: ${projects
-        .map((project) => `${project.slug} (${project.id}, ${project.deploymentStatus})`)
-        .join(", ")}.`;
-
-export const resolveChatProject = async (input: {
-  auth: OsAuth;
-  baseUrl: string;
-  configName: string;
-  configPath: string;
-  configuredDefaultProject?: string;
-  createSession?: CreateOsSession;
-  explicitProject?: string;
-}) => {
-  if (input.explicitProject?.startsWith("prj_")) return input.explicitProject;
-
-  const configured = input.explicitProject || input.configuredDefaultProject;
-
-  return await withAuthenticatedOsSession({
-    auth: input.auth,
-    baseUrl: input.baseUrl,
-    createSession: input.createSession,
-    run: async (session) => {
-      let projects: ProjectListEntry[];
-      try {
-        projects = await session.projects.list();
-      } catch (error) {
-        if (configured) {
-          throw new Error(
-            `Failed to resolve project "${configured}" for config "${input.configName}" in ${input.configPath}. The CLI could not list accessible projects, so it cannot resolve slugs or recover auth-known projects that are missing in OS: ${errorMessage(error)}`,
-          );
-        }
-        throw new Error(
-          `No project specified. Pass --project or set "defaultProject" on config "${input.configName}" in ${input.configPath}. Failed to list accessible projects: ${errorMessage(error)}`,
-        );
-      }
-
-      if (configured) {
-        const project = projects.find(
-          (candidate) => candidate.id === configured || candidate.slug === configured,
-        );
-        if (!project) {
-          if (configured.startsWith("prj_")) return configured;
-          throw new Error(
-            `Project "${configured}" was not found among accessible projects for config "${input.configName}" in ${input.configPath}. ${accessibleProjectsMessage(projects)}`,
-          );
-        }
-        return await prepareProjectForChat(session, project);
-      }
-
-      const createdProjects = projects.filter((project) => project.deploymentStatus === "created");
-      const candidates = createdProjects.length > 0 ? createdProjects : projects;
-      if (candidates.length === 1) {
-        return await prepareProjectForChat(session, candidates[0]!);
-      }
-
-      throw new Error(
-        `No project specified. Pass --project or set "defaultProject" on config "${input.configName}" in ${input.configPath}. ${accessibleProjectsMessage(projects)}`,
-      );
-    },
-  });
+  throw new Error(`No bearer token for ${config.osBaseUrl}. Run \`iterate login\` again.`);
 };
 
 const sessionNeedsRefresh = (session: StoredSession) => {
@@ -484,91 +137,67 @@ const sessionNeedsRefresh = (session: StoredSession) => {
   return Number.isFinite(expiresAt) && expiresAt <= Date.now() + OAUTH_REFRESH_SKEW_MS;
 };
 
-const getAuthWorkerHeaders = async (
-  config: Config,
-): Promise<{ cookie?: string; authorization?: string }> => {
-  const session = config.session;
-  if (!session) {
-    throw new Error(`Not logged in to ${config.authBaseUrl}. Run \`iterate login\` first.`);
-  }
-  if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
-    throw new Error(`Session expired for ${config.authBaseUrl}. Run \`iterate login\` again.`);
-  }
-  if (session.token) {
-    return { authorization: `Bearer ${session.token}` };
-  }
-  if (session.cookie) {
-    return { cookie: session.cookie };
-  }
-  throw new Error(`Stored session for ${config.authBaseUrl} has no token or cookie.`);
+const credentialsForConfig = async (config: Config, name: string): Promise<SessionCredentials> => {
+  const secret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
+  if (secret) return { type: "admin-secret", secret };
+  const token = process.env.ITERATE_BEARER_TOKEN?.trim();
+  if (token) return { type: "bearer", token };
+  return await storedCredentials(config, name);
 };
-
-const getAuthWorkerClient = async (config: Config): Promise<AuthContractClient> => {
-  const baseURL = config.authBaseUrl;
-  const headers = await getAuthWorkerHeaders(config);
-  return createORPCClient(
-    new RPCLink({
-      url: `${baseURL}/api/orpc/`,
-      fetch: async (request: URL | Request, init?: RequestInit) => {
-        const reqHeaders = new Headers(
-          request instanceof Request ? request.headers : init?.headers,
-        );
-        if (headers.cookie) reqHeaders.set("cookie", headers.cookie);
-        if (headers.authorization) reqHeaders.set("authorization", headers.authorization);
-        return fetch(request, { ...init, headers: reqHeaders });
-      },
-    }),
+const connectConfigured = async () => {
+  const resolved = resolveConfig(process.cwd(), { throw: true });
+  const connection = await connectOsNext({
+    baseUrl: resolved.config.osBaseUrl,
+    auth: await credentialsForConfig(resolved.config, resolved.name),
+  });
+  return { resolved, connection };
+};
+const selectProject = async (
+  connection: Awaited<ReturnType<typeof connectOsNext>>,
+  configured?: string,
+) => {
+  if (configured) return configured;
+  const projects = await connection.session.projects.list();
+  if (projects.length === 1) return projects[0].id;
+  throw new Error(
+    `Pass --project or set defaultProject in ${CONFIG_PATH}. Accessible projects: ${projects.map((p) => `${p.slug} (${p.id})`).join(", ") || "none"}.`,
   );
 };
-
-const OAUTH_SCOPE = "openid profile email offline_access project";
+const OAUTH_SCOPE = "iterate";
 const LOOPBACK_HOST = "localhost";
 const LOOPBACK_CALLBACK_PATH = "/callback";
 const OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60 * 1000;
 
-type OAuthTokenResponse = {
-  access_token: string;
-  refresh_token?: string;
-  expires_in?: number;
-  expires_at?: number;
-  token_type?: string;
-  scope?: string;
-  id_token?: string;
-};
+const OAuthTokenResponse = z.object({
+  access_token: z.string().min(1),
+  refresh_token: z.string().optional(),
+  expires_in: z.number().positive().optional(),
+  expires_at: z.number().positive().optional(),
+  token_type: z.string().optional(),
+  scope: z.string().optional(),
+});
+type OAuthTokenResponse = z.infer<typeof OAuthTokenResponse>;
 
 const base64Url = (buffer: Buffer) => buffer.toString("base64url");
 
 const randomBase64Url = (byteLength = 32) => base64Url(randomBytes(byteLength));
 
 export const oauthResourceForOsBaseUrl = (osBaseUrl: string) => {
-  const url = new URL(osBaseUrl);
-  const loopbackHosts = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
-
-  if (loopbackHosts.has(url.hostname)) {
-    return `${url.protocol}//${url.hostname}`;
-  }
-
-  url.search = "";
-  url.hash = "";
-  url.pathname = url.pathname.replace(/\/+$/, "") || "/";
-  return url.toString().replace(/\/$/, "");
+  return new URL("/api", osBaseUrl).href;
 };
 
 const openUrlInBrowser = async (url: string) => {
-  try {
-    const { execFile } = await import("node:child_process");
-    if (process.platform === "darwin") {
-      execFile("open", [url]);
-      return;
-    }
-    if (process.platform === "win32") {
-      execFile("cmd", ["/c", "start", "", url]);
-      return;
-    }
-    execFile("xdg-open", [url]);
-  } catch {
-    // Ignore; the URL is printed for manual opening.
-  }
+  const { execFile } = await import("node:child_process");
+  const { command, args } =
+    process.platform === "darwin"
+      ? { command: "open", args: [url] }
+      : process.platform === "win32"
+        ? { command: "cmd", args: ["/c", "start", "", url] }
+        : { command: "xdg-open", args: [url] };
+  execFile(command, args, (error) => {
+    if (error)
+      console.error(`Could not open a browser: ${error.message}. Open the URL above manually.`);
+  });
 };
 
 const readErrorBody = async (response: Response) => {
@@ -577,8 +206,9 @@ const readErrorBody = async (response: Response) => {
 };
 
 const registerOAuthClient = async (input: { authBaseUrl: string; redirectUri: string }) => {
-  const response = await fetch(`${input.authBaseUrl}/api/auth/oauth2/register`, {
+  const response = await fetch(`${input.authBaseUrl}/oauth2/register`, {
     method: "POST",
+    signal: AbortSignal.timeout(30_000),
     headers: { "content-type": "application/json", origin: input.authBaseUrl },
     body: JSON.stringify({
       client_name: "Iterate CLI",
@@ -598,7 +228,7 @@ const registerOAuthClient = async (input: { authBaseUrl: string; redirectUri: st
     );
   }
 
-  const client = (await response.json()) as { client_id?: string };
+  const client = z.object({ client_id: z.string().min(1) }).parse(await response.json());
   if (!client.client_id) throw new Error("OAuth client registration did not return client_id.");
   return client.client_id;
 };
@@ -622,6 +252,8 @@ const startOAuthCallbackServer = async (): Promise<{
     resolveCallback = resolve;
     rejectCallback = reject;
   });
+
+  void callbackPromise.catch(() => {});
 
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
     if (settled) {
@@ -695,7 +327,10 @@ const startOAuthCallbackServer = async (): Promise<{
   return {
     redirectUri: `http://${LOOPBACK_HOST}:${port}${LOOPBACK_CALLBACK_PATH}`,
     wait: () => callbackPromise.finally(() => clearTimeout(timeout)),
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    close: () => {
+      clearTimeout(timeout);
+      return new Promise<void>((resolve) => server.close(() => resolve()));
+    },
   };
 };
 
@@ -716,8 +351,9 @@ const exchangeOAuthCode = async (input: {
     resource: input.resource,
   });
 
-  const response = await fetch(`${input.authBaseUrl}/api/auth/oauth2/token`, {
+  const response = await fetch(`${input.authBaseUrl}/oauth2/token`, {
     method: "POST",
+    signal: AbortSignal.timeout(30_000),
     headers: {
       "content-type": "application/x-www-form-urlencoded",
       origin: input.authBaseUrl,
@@ -731,7 +367,7 @@ const exchangeOAuthCode = async (input: {
     );
   }
 
-  const token = (await response.json()) as OAuthTokenResponse;
+  const token = OAuthTokenResponse.parse(await response.json());
   if (!token.access_token) throw new Error("OAuth token exchange did not return access_token.");
   return token;
 };
@@ -764,7 +400,7 @@ export const refreshOAuthSession = async (input: {
     throw new Error(`Session expired for ${input.config.osBaseUrl}. Run \`iterate login\` again.`);
   }
 
-  const authBaseUrl = input.config.authBaseUrl;
+  const authBaseUrl = input.config.osBaseUrl;
   const body = new URLSearchParams({
     grant_type: "refresh_token",
     client_id: input.session.clientId,
@@ -773,8 +409,9 @@ export const refreshOAuthSession = async (input: {
   });
   if (input.session.scope) body.set("scope", input.session.scope);
 
-  const response = await fetch(`${authBaseUrl}/api/auth/oauth2/token`, {
+  const response = await fetch(`${authBaseUrl}/oauth2/token`, {
     method: "POST",
+    signal: AbortSignal.timeout(30_000),
     headers: {
       "content-type": "application/x-www-form-urlencoded",
       origin: authBaseUrl,
@@ -786,7 +423,7 @@ export const refreshOAuthSession = async (input: {
     throw new Error(`OAuth refresh failed (${response.status}). Run \`iterate login\` again.`);
   }
 
-  const token = (await response.json()) as OAuthTokenResponse;
+  const token = OAuthTokenResponse.parse(await response.json());
   const refreshedSession = oauthTokenToSession(token, input.session);
   refreshedSession.clientId = input.session.clientId;
   input.config.session = refreshedSession;
@@ -795,560 +432,173 @@ export const refreshOAuthSession = async (input: {
 };
 
 const oauthLogin = async (config: Config): Promise<StoredSession> => {
-  const authBaseUrl = config.authBaseUrl;
+  const authBaseUrl = config.osBaseUrl;
   const resource = oauthResourceForOsBaseUrl(config.osBaseUrl);
   const codeVerifier = randomBase64Url(48);
   const state = randomBase64Url(32);
   const callback = await startOAuthCallbackServer();
-  const clientId = await registerOAuthClient({ authBaseUrl, redirectUri: callback.redirectUri });
-
-  const authorizeUrl = new URL(`${authBaseUrl}/api/auth/oauth2/authorize`);
-  authorizeUrl.searchParams.set("response_type", "code");
-  authorizeUrl.searchParams.set("client_id", clientId);
-  authorizeUrl.searchParams.set("redirect_uri", callback.redirectUri);
-  authorizeUrl.searchParams.set("scope", OAUTH_SCOPE);
-  authorizeUrl.searchParams.set("resource", resource);
-  authorizeUrl.searchParams.set("state", state);
-  authorizeUrl.searchParams.set(
-    "code_challenge",
-    base64Url(createHash("sha256").update(codeVerifier).digest()),
-  );
-  authorizeUrl.searchParams.set("code_challenge_method", "S256");
-
-  console.error(`\nOpening browser to authenticate with Iterate:\n`);
-  console.error(`  ${authorizeUrl.href}\n`);
-  if (!isAgent && process.env.ITERATE_SKIP_BROWSER_OPEN !== "1") {
-    await openUrlInBrowser(authorizeUrl.href);
-  }
-
-  let callbackResult: { code: string; state: string; redirectUri: string };
   try {
-    callbackResult = await callback.wait();
+    const clientId = await registerOAuthClient({ authBaseUrl, redirectUri: callback.redirectUri });
+
+    const authorizeUrl = new URL(`${authBaseUrl}/oauth2/auth`);
+    authorizeUrl.searchParams.set("response_type", "code");
+    authorizeUrl.searchParams.set("client_id", clientId);
+    authorizeUrl.searchParams.set("redirect_uri", callback.redirectUri);
+    authorizeUrl.searchParams.set("scope", OAUTH_SCOPE);
+    authorizeUrl.searchParams.set("resource", resource);
+    authorizeUrl.searchParams.set("state", state);
+    authorizeUrl.searchParams.set(
+      "code_challenge",
+      base64Url(createHash("sha256").update(codeVerifier).digest()),
+    );
+    authorizeUrl.searchParams.set("code_challenge_method", "S256");
+
+    console.error(`\nOpening browser to authenticate with Iterate:\n`);
+    console.error(`  ${authorizeUrl.href}\n`);
+    if (!isAgent && process.env.ITERATE_SKIP_BROWSER_OPEN !== "1") {
+      await openUrlInBrowser(authorizeUrl.href);
+    }
+
+    const callbackResult = await callback.wait();
+
+    if (callbackResult.state !== state) {
+      throw new Error("OAuth callback state did not match. Please try again.");
+    }
+
+    const token = await exchangeOAuthCode({
+      authBaseUrl,
+      clientId,
+      code: callbackResult.code,
+      codeVerifier,
+      redirectUri: callbackResult.redirectUri,
+      resource,
+    });
+    const session = oauthTokenToSession(token, { clientId, refreshToken: undefined });
+    session.clientId = clientId;
+    return session;
   } finally {
-    await callback.close().catch(() => {});
+    await callback.close();
   }
-
-  if (callbackResult.state !== state) {
-    throw new Error("OAuth callback state did not match. Please try again.");
-  }
-
-  const token = await exchangeOAuthCode({
-    authBaseUrl,
-    clientId,
-    code: callbackResult.code,
-    codeVerifier,
-    redirectUri: callbackResult.redirectUri,
-    resource,
-  });
-  const session = oauthTokenToSession(token, { clientId, refreshToken: undefined });
-  session.clientId = clientId;
-  return session;
 };
 
 const loginToResolvedConfig = async (resolved: { name: string; config: Config }) => {
   const { config } = resolved;
 
-  console.error(`Logging in to ${config.authBaseUrl}...`);
+  console.error(`Logging in to ${config.osBaseUrl}...`);
   const oauthResult = await oauthLogin(config);
-  updateConfigSession(resolved.name, oauthResult);
+
   // Update in-memory config so subsequent verification and calls see the token.
   config.session = oauthResult;
 
-  await verifyOsSession({
-    authHeaders: await getOsAuthHeaders(config, resolved.name),
+  using connection = await connectOsNext({
     baseUrl: config.osBaseUrl,
-  }).catch((error: unknown) => {
-    throw new Error(`Failed to verify OS session: ${errorMessage(error)}`);
+    auth: { type: "bearer", token: oauthResult.token },
   });
+  await connection.session.whoami();
 
+  updateConfigSession(resolved.name, oauthResult);
   return oauthResult;
-};
-
-const shouldAutoLoginForChat = (error: unknown) =>
-  error instanceof StoredOsSessionError &&
-  (error.reason === "missing" || error.reason === "expired");
-
-export const ensureBearerAuthHeadersForChat = async (input: {
-  getAuthHeaders: () => Promise<OsAuthHeaders>;
-  login: () => Promise<void>;
-  osBaseUrl: string;
-}) => {
-  let authHeaders = await input.getAuthHeaders();
-  if (authHeaders.authorization) return authHeaders;
-
-  console.error(
-    `Stored session for ${input.osBaseUrl} cannot be used for chat. Starting browser login...`,
-  );
-  await input.login();
-  authHeaders = await input.getAuthHeaders();
-  if (authHeaders.authorization) return authHeaders;
-
-  throw new Error(
-    `Stored session for ${input.osBaseUrl} has no bearer token. Run \`iterate login\` again.`,
-  );
-};
-
-const loadRemoteProcedures = async (params: {
-  baseUrl: string;
-}): Promise<{ procedures: ParsedRouter }> => {
-  const url = `${params.baseUrl}/api/trpc-cli-procedures`;
-  const response = await fetch(url);
-  if (!response.ok) {
-    let text = await response.text();
-    if (text.includes("<title>")) {
-      text = "HTML with title: " + text.split("<title>")[1].split("</title>")[0];
-    } else if (["<html>", "<body>", "<head>", "!DOCTYPE html"].some((s) => text.includes(s))) {
-      text = "<html>...</html>";
-    } else {
-      text = text.split("\n")[0];
-      if (text.length > 50) text = text.slice(0, 50) + "...";
-    }
-
-    throw new Error(`${url} got ${response.status}: ${text}`);
-  }
-
-  let router: any;
-  try {
-    router = await response.json();
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    throw new Error(`${url} returned invalid router: ${message}`);
-  }
-  if (!Array.isArray(router?.procedures)) {
-    throw new Error(`${url} returned invalid router: ${JSON.stringify(router)}`);
-  }
-  return router as { procedures: ParsedRouter };
-};
-
-/** Wraps an oRPC client so `wrapper[dotPath].query(input)` and `.mutate(input)` work (for trpc-cli proxify compat) */
-const orpcToTrpcStyleClient = (orpcClient: unknown) => {
-  return new Proxy(
-    {},
-    {
-      get: (_target, prop: string) => {
-        const parts = prop.split(".");
-        let current: any = orpcClient;
-        for (const part of parts) current = current[part];
-        return {
-          query: (input: any) => current(input),
-          mutate: (input: any) => current(input),
-        };
-      },
-    },
-  );
-};
-
-const getOsProcedures = async (params: {
-  baseUrl: string;
-  config: Config;
-  configName?: string;
-}) => {
-  const appRouter = await loadRemoteProcedures(params);
-  const proxiedRouter = proxifyOrpc(appRouter.procedures, () => {
-    const client = createORPCClient(
-      new RPCLink({
-        url: `${params.baseUrl}/api/orpc/`,
-        fetch: async (request: URL | Request, init?: RequestInit) => {
-          const authHeaders = await getOsAuthHeaders(params.config, params.configName);
-          const headers = new Headers(request instanceof Request ? request.headers : init?.headers);
-          if (authHeaders.cookie) headers.set("cookie", authHeaders.cookie);
-          if (authHeaders.authorization) headers.set("authorization", authHeaders.authorization);
-          return fetch(request, { ...init, headers });
-        },
-      }),
-    );
-    return orpcToTrpcStyleClient(client);
-  });
-
-  return proxiedRouter;
 };
 
 const launcherProcedures = {
   ping: os.input(z.object({})).handler(async () => {
-    const resolved = resolveConfig(process.cwd(), { throw: true });
-    const { config } = resolved;
-    const description = await verifyOsSession({
-      authHeaders: await getOsAuthHeaders(config, resolved.name),
-      baseUrl: config.osBaseUrl,
-    }).catch((error: unknown) => {
-      throw new Error(`Failed to verify OS session: ${errorMessage(error)}`);
-    });
-    return { message: "OS session valid", principal: description.principal };
+    const { connection } = await connectConfigured();
+    using owned = connection;
+    return { message: "OS Next session valid", principal: await owned.session.whoami() };
   }),
   login: os
     .input(z.object({}))
-    .meta({
-      description: "Authenticate with the OS server via browser-based OAuth",
-    })
+    .meta({ description: "Authenticate with OS Next via browser OAuth" })
     .handler(async () => {
-      const resolved = resolveConfig(process.cwd(), { throw: true });
-      const oauthResult = await loginToResolvedConfig(resolved);
+      const session = await loginToResolvedConfig(resolveConfig(process.cwd(), { throw: true }));
       return {
         message: "Logged in successfully",
-        expiresAt: oauthResult.expiresAt,
-        scope: oauthResult.scope,
+        expiresAt: session.expiresAt,
+        scope: session.scope,
       };
     }),
-
   logout: os
     .input(z.object({}))
-    .meta({ description: "Remove stored session for the current config" })
+    .meta({ description: "Remove the current config's stored session" })
     .handler(async () => {
       const resolved = resolveConfig(process.cwd(), { throw: true });
       removeConfigSession(resolved.name);
-      return { message: `Logged out from ${resolved.name} (${resolved.config.osBaseUrl})` };
+      return { message: `Logged out from ${resolved.name}` };
     }),
-
-  chat: os
-    .input(
-      z.object({
-        project: z
-          .string()
-          .trim()
-          .min(1)
-          .optional()
-          .describe(
-            "OS project id (prj_…) or slug. Defaults to the active config's defaultProject.",
+  orgs: {
+    list: os.input(z.object({})).handler(async () => {
+      const { connection } = await connectConfigured();
+      using owned = connection;
+      return await owned.session.orgs();
+    }),
+  },
+  projects: {
+    list: os.input(z.object({})).handler(async () => {
+      const { connection } = await connectConfigured();
+      using owned = connection;
+      return await owned.session.projects.list();
+    }),
+  },
+  itx: {
+    run: os
+      .input(
+        z
+          .object({
+            project: z
+              .string()
+              .optional()
+              .describe("Project id or slug; defaults to config.defaultProject"),
+            context: z.string().default("/").describe("Context path within the project"),
+            eval: z
+              .string()
+              .optional()
+              .describe("Script body with itx in scope; use return for the result"),
+            file: z
+              .string()
+              .optional()
+              .describe("Read the script from a UTF-8 file; - reads stdin"),
+          })
+          .refine(
+            (input) => Boolean(input.eval) !== Boolean(input.file),
+            "Specify exactly one of --eval or --file",
           ),
-        agentPath: z
-          .string()
-          .trim()
-          .min(1)
-          .startsWith("/agents/")
-          .optional()
-          .default(DEFAULT_CHAT_AGENT_PATH)
-          .describe("Agent stream path to chat with (default: /agents/default)"),
+      )
+      .meta({ description: "Run an itx script once on OS Next" })
+      .handler(async ({ input }) => {
+        let script = input.eval;
+        if (input.file === "-") {
+          const chunks: Buffer[] = [];
+          for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+          script = Buffer.concat(chunks).toString("utf8");
+        } else if (input.file) script = await readFile(input.file, "utf8");
+        const { resolved, connection } = await connectConfigured();
+        using owned = connection;
+        const project = await selectProject(owned, input.project || resolved.config.defaultProject);
+        using root = await owned.session.projects.get(project);
+        using context = await root.cd(input.context);
+        return await context.run(`async (itx) => {\n${script}\n}`);
       }),
-    )
-    .meta({
-      description: "Open the Iterate agent chat terminal UI",
-    })
-    .handler(async ({ input }) => {
-      // Resolved here, not in the input schema: the schema is built at module
-      // load, before `--config` has been consumed.
-      const resolved = resolveConfig(process.cwd(), { throw: true });
-      const envAuth = osAuthFromEnvironment();
-      let storedAuthHeaders: OsAuthHeaders | undefined;
-      let didAutoLogin = false;
-      const loginForChat = async () => {
-        didAutoLogin = true;
-        storedAuthHeaders = undefined;
-        await loginToResolvedConfig(resolved);
-      };
-      const getStoredAuthHeaders = async () => {
-        if (storedAuthHeaders) return storedAuthHeaders;
-        try {
-          storedAuthHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
-        } catch (error) {
-          if (didAutoLogin || !shouldAutoLoginForChat(error)) throw error;
-          console.error(
-            `No active session for ${resolved.config.osBaseUrl}. Starting browser login...`,
-          );
-          await loginForChat();
-          storedAuthHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
-        }
-        return storedAuthHeaders;
-      };
-      const getStoredBearerAuthHeaders = () =>
-        ensureBearerAuthHeadersForChat({
-          getAuthHeaders: getStoredAuthHeaders,
-          login: loginForChat,
-          osBaseUrl: resolved.config.osBaseUrl,
-        });
-      const project = await resolveChatProject({
-        auth: envAuth ?? osAuthFromHeaders(await getStoredBearerAuthHeaders()),
-        baseUrl: resolved.config.osBaseUrl,
-        configName: resolved.name,
-        configPath: CONFIG_PATH,
-        configuredDefaultProject: resolved.config.defaultProject,
-        explicitProject: input.project,
-      });
-      const cliPath = process.argv[1];
-      if (!cliPath) throw new Error("iterate chat could not identify its CLI entrypoint.");
-      const command = buildChatCommand({
-        osBaseUrl: resolved.config.osBaseUrl,
-        projectId: project,
-        agentPath: input.agentPath,
-        entrypointPath: resolveStreamTuiEntrypointPath(),
-        cliPath,
-        configName: resolved.name,
-      });
-      // Auth: admin/bearer secrets from the inherited environment win (doppler,
-      // e2e). Otherwise refresh the stored `iterate login` session here — the
-      // launcher owns the OAuth refresh machinery — and hand the TUI a plain
-      // bearer token; the capnweb WebSocket authenticates once at connect.
-      const env: Record<string, string | undefined> = { ITERATE_CONFIG_NAME: resolved.name };
-      if (!envAuth) {
-        const headers = await getStoredBearerAuthHeaders();
-        const token = headers.authorization?.replace(/^Bearer /, "");
-        if (!token) {
-          throw new Error(
-            `Stored session for ${resolved.config.osBaseUrl} has no bearer token. Run \`iterate login\` again.`,
-          );
-        }
-        env.ITERATE_BEARER_TOKEN = token;
-        env.ITERATE_CHAT_BEARER_FROM_STORED_SESSION = "1";
-      }
-      replaceWithInheritedProcess({ ...command, env });
-    }),
-
+  },
   useMyComputer: os
     .input(
       z.object({
-        project: z
-          .string()
-          .trim()
-          .min(1)
-          .optional()
-          .describe(
-            "OS project id (prj_…) or slug. Defaults to the active config's defaultProject.",
-          ),
+        project: z.string().optional().describe("Project id or slug"),
         name: z
           .string()
-          .trim()
-          .regex(
-            /^[a-zA-Z][a-zA-Z0-9]*$/,
-            "Use a camelCase name: letters and digits, starting with a letter.",
-          )
+          .regex(/^[a-zA-Z][a-zA-Z0-9]*$/)
           .optional()
-          .describe(
-            "Name agents use to reach this computer (camelCase; the itx.<name> path). Prompted if omitted.",
-          ),
-        json: z
-          .boolean()
-          .optional()
-          .default(false)
-          .describe(
-            "Machine mode for the menu-bar app: NDJSON activity on stdout. Never opens a browser — emits a needs-login line instead.",
-          ),
+          .describe("Computer capability name, e.g. jonasComputer"),
       }),
     )
-    .meta({
-      description:
-        "Share THIS computer with a project's agents as itx.myComputer (native dialogs, notifications, Swift). Runs until Ctrl-C.",
-    })
+    .meta({ description: "Share this Mac with a project until Ctrl-C" })
     .handler(async ({ input }) => {
-      const resolved = resolveConfig(process.cwd(), { throw: true });
-
-      // Auth, exactly like `chat`: env secrets win (doppler/e2e), otherwise use
-      // the stored `iterate login` session. In JSON mode we never open a
-      // browser — a missing session is reported so the app can drive login.
-      const envAuth = osAuthFromEnvironment();
-      let authHeaders: OsAuthHeaders | undefined;
-      if (!envAuth) {
-        try {
-          authHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
-        } catch (error) {
-          if (!shouldAutoLoginForChat(error)) throw error;
-          if (input.json) {
-            emitComputerNeedsLogin();
-            return;
-          }
-          console.error(
-            `No active session for ${resolved.config.osBaseUrl}. Starting browser login...`,
-          );
-          await loginToResolvedConfig(resolved);
-          authHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
-        }
-      }
-      const auth = envAuth ?? osAuthFromHeaders(authHeaders!);
-
-      const projectId = await resolveChatProject({
-        auth,
-        baseUrl: resolved.config.osBaseUrl,
-        configName: resolved.name,
-        configPath: CONFIG_PATH,
-        configuredDefaultProject: resolved.config.defaultProject,
-        explicitProject: input.project,
-      });
-
-      // The share loop re-resolves credentials before every (re)connect so it
-      // survives the short access-token TTL over extended sharing: env secrets
-      // win (doppler/e2e, never expire), else re-read the stored session — which
-      // refreshes the OAuth token when it's near expiry.
-      const reauth = async () => {
-        const env = osAuthFromEnvironment();
-        if (env) return { auth: env.credentials, headers: headersRecord(env.requestHeaders) };
-        // Re-read the EXACT launch-time config by name (picks up a token the
-        // previous refresh persisted) — never re-resolve from cwd, which could
-        // select a different config and send its credential to this server.
-        const config = readConfig(resolved.name);
-        if (config instanceof Error) throw config;
-        const refreshed = osAuthFromHeaders(await getOsAuthHeaders(config, resolved.name));
-        return { auth: refreshed.credentials, headers: headersRecord(refreshed.requestHeaders) };
-      };
-      const shared = {
-        baseUrl: resolved.config.osBaseUrl,
-        projectId,
-        name: input.name,
-        reauth,
-      };
-      // JSON mode announces activity for the menu-bar app; the terminal form
-      // prompts for a name and prints a paste-for-your-agent hint. Both block.
-      if (input.json) {
-        await runUseMyComputerJson(shared);
-        return;
-      }
-      await shareMyComputer(shared);
+      if (process.platform !== "darwin")
+        throw new Error("use-my-computer requires macOS (AppleScript and Swift).");
+      const { resolved, connection } = await connectConfigured();
+      using owned = connection;
+      const project = await selectProject(owned, input.project || resolved.config.defaultProject);
+      await shareMyComputer({ connection: owned, project, name: input.name });
     }),
-
-  approve: os
-    .input(
-      z.object({
-        project: z
-          .string()
-          .trim()
-          .min(1)
-          .optional()
-          .describe(
-            "OS project id (prj_…) or slug. Defaults to the active config's defaultProject.",
-          ),
-        enroll: z
-          .boolean()
-          .optional()
-          .default(false)
-          .describe(
-            "Generate this machine's approval key (Secure Enclave when available) and enroll it before listening.",
-          ),
-        softwareKey: z
-          .boolean()
-          .optional()
-          .default(false)
-          .describe("With --enroll: force a software P-256 key instead of the Secure Enclave."),
-        native: z
-          .boolean()
-          .optional()
-          .default(false)
-          .describe(
-            "macOS: approve via native dialogs — the Approve button leads straight into Touch ID. Needs an enrolled Secure Enclave key.",
-          ),
-        keys: z
-          .boolean()
-          .optional()
-          .default(false)
-          .describe("List the project's enrolled approval keys and exit."),
-        revoke: z
-          .boolean()
-          .optional()
-          .default(false)
-          .describe(
-            "Revoke this machine's approval key (append key-revoked, destroy local material) and exit.",
-          ),
-        json: z
-          .boolean()
-          .optional()
-          .default(false)
-          .describe(
-            "Machine mode for the menu-bar app: NDJSON events on stdout, {offset,decision} on stdin. Never opens a browser — emits a needs-login line instead.",
-          ),
-        menubar: z
-          .boolean()
-          .optional()
-          .default(false)
-          .describe(
-            "macOS: build (on first use, from the shipped Swift source) and launch the menu-bar approver app for this project, then exit.",
-          ),
-      }),
-    )
-    .meta({
-      description:
-        "Be the human in the loop for a project's egress: watch held outbound requests and approve or reject each one (Touch-ID-signed when an enclave key is enrolled). Runs until Ctrl-C.",
-    })
-    .handler(async ({ input }) => {
-      const resolved = resolveConfig(process.cwd(), { throw: true });
-
-      // --menubar just builds + launches the GUI app; it needs no auth here (the
-      // app signs in itself). Handle it first, and standalone.
-      if (input.menubar) {
-        if (input.json || input.enroll || input.keys || input.revoke || input.native) {
-          throw new Error("--menubar is standalone; run it without the other flags.");
-        }
-        const project = input.project ?? resolved.config.defaultProject;
-        if (!project) {
-          throw new Error("--menubar needs --project or a configured defaultProject.");
-        }
-        await launchMenubarApp({
-          configName: resolved.name,
-          project,
-          log: (message) => console.error(message),
-        });
-        return;
-      }
-
-      // --json is listen-and-decide only; the setup flags are for the terminal
-      // form. Reject the combination loudly rather than silently ignoring it.
-      if (input.json && (input.enroll || input.keys || input.revoke || input.native)) {
-        throw new Error(
-          "--json cannot be combined with --enroll/--keys/--revoke/--native; run those separately.",
-        );
-      }
-
-      // Auth, exactly like `chat`: env secrets win (doppler/e2e), otherwise use
-      // the stored `iterate login` session. In JSON mode we never open a
-      // browser — a missing session is reported so the app can drive login.
-      const envAuth = osAuthFromEnvironment();
-      let authHeaders: OsAuthHeaders | undefined;
-      if (!envAuth) {
-        try {
-          authHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
-        } catch (error) {
-          if (!shouldAutoLoginForChat(error)) throw error;
-          if (input.json) {
-            emitNeedsLogin();
-            return;
-          }
-          console.error(
-            `No active session for ${resolved.config.osBaseUrl}. Starting browser login...`,
-          );
-          await loginToResolvedConfig(resolved);
-          authHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
-        }
-      }
-      const auth = envAuth ?? osAuthFromHeaders(authHeaders!);
-
-      const projectId = await resolveChatProject({
-        auth,
-        baseUrl: resolved.config.osBaseUrl,
-        configName: resolved.name,
-        configPath: CONFIG_PATH,
-        configuredDefaultProject: resolved.config.defaultProject,
-        explicitProject: input.project,
-      });
-
-      if (input.json) {
-        await runApprovalJson({
-          auth: auth.credentials,
-          baseUrl: resolved.config.osBaseUrl,
-          projectId,
-          headers: headersRecord(auth.requestHeaders),
-        });
-        return;
-      }
-
-      await runApprovalCli({
-        auth: auth.credentials,
-        baseUrl: resolved.config.osBaseUrl,
-        projectId,
-        headers: headersRecord(auth.requestHeaders),
-        enroll: input.enroll,
-        softwareKey: input.softwareKey,
-        native: input.native,
-        keys: input.keys,
-        revoke: input.revoke,
-      });
-    }),
-
-  orgs: {
-    list: os
-      .input(z.object({}))
-      .meta({ description: "List organizations from the auth worker" })
-      .handler(async () => {
-        const resolved = resolveConfig(process.cwd(), { throw: true });
-        const authClient = await getAuthWorkerClient(resolved.config);
-        return await authClient.user.myOrganizations();
-      }),
-  },
-
   config: {
     get: os
       .input(z.object({}))
@@ -1365,7 +615,6 @@ const launcherProcedures = {
               name,
               {
                 hasToken: Boolean(cfg.session?.token),
-                hasCookie: Boolean(cfg.session?.cookie),
                 expiresAt: cfg.session?.expiresAt,
                 expired: cfg.session?.expiresAt
                   ? new Date(cfg.session.expiresAt) < new Date()
@@ -1414,23 +663,24 @@ const launcherProcedures = {
           osBaseUrl: z
             .string()
             .optional()
-            .describe("Base URL for OS API (e.g. https://os.iterate.com)"),
-          authBaseUrl: z
-            .string()
-            .optional()
-            .describe("Base URL for auth API (e.g. https://auth.iterate.com)"),
+            .describe("Base URL for OS API (e.g. https://os.iterate2.com)"),
+          defaultProject: z.string().optional().describe("Default project id or slug"),
           setDefault: z.boolean().optional().describe("Set as the default config"),
           setWorkspace: z.boolean().optional().describe("Map current directory to this config"),
         }),
       )
-      .meta({ prompt: true, description: "Create or update a named config" })
+      .meta({ description: "Create or update a named config" })
       .handler(async ({ input }) => {
         const configFile = readConfigFile();
         configFile.configs ||= {};
 
-        configFile.configs[input.name] ||= {} as never;
-        if (input.osBaseUrl) configFile.configs[input.name].osBaseUrl = input.osBaseUrl;
-        if (input.authBaseUrl) configFile.configs[input.name].authBaseUrl = input.authBaseUrl;
+        configFile.configs[input.name] ||= Config.parse({});
+        if (input.osBaseUrl && input.osBaseUrl !== configFile.configs[input.name].osBaseUrl) {
+          configFile.configs[input.name].osBaseUrl = input.osBaseUrl;
+          delete configFile.configs[input.name].session;
+        }
+        if (input.defaultProject)
+          configFile.configs[input.name].defaultProject = input.defaultProject;
 
         if (input.setDefault) {
           configFile.default = input.name;
@@ -1443,7 +693,7 @@ const launcherProcedures = {
         writeConfigFile(configFile);
         return {
           configPath: CONFIG_PATH,
-          config: configFile.configs[input.name],
+          config: { ...configFile.configs[input.name], session: undefined },
         };
       }),
 
@@ -1473,105 +723,29 @@ const launcherProcedures = {
         const resolved = resolveConfig(process.cwd(), { throw: true });
         return {
           name: resolved.name,
-          config: resolved.config,
-          resolvedAuthBaseUrl: resolved.config.authBaseUrl,
+          config: {
+            ...resolved.config,
+            session: resolved.config.session ? { loggedIn: true } : undefined,
+          },
           resolvedVia: configFlagOverride ? "--config flag" : "workspace mapping or default",
         };
       }),
   },
 };
-
 export const getCli = async () => {
-  // Parse custom top-level flags early, before trpc-cli sees the args.
   configFlagOverride = consumeCliStringFlag("--config");
-  applyDefaultBareInvocation();
-  const requestedRootCommand = firstNonFlagArgument(process.argv.slice(2));
-  const shouldLoadRemoteRouters =
-    requestedRootCommand &&
-    !Object.prototype.hasOwnProperty.call(launcherProcedures, requestedRootCommand);
-
-  const errorProcedure = (problem: string) => (e: Error) => {
-    const message = `${problem}: ${e.message}`;
-    return os.meta({ description: message }).handler(() => {
-      throw new Error(problem, { cause: e });
-    });
-  };
-
-  const routers: Record<string, import("@orpc/server").Router<any, any>>[] = [launcherProcedures];
-
-  // Top-level help and launcher commands work offline. Only discover remote
-  // procedures when the caller asks for a remote command (including its help).
-  if (shouldLoadRemoteRouters) {
-    const resolved = resolveConfig(process.cwd());
-    if (resolved instanceof Error) {
-      const procedure = errorProcedure(`Invalid config`)(resolved);
-      routers.push({ os: procedure, daemon: procedure });
-    } else {
-      const { config } = resolved;
-      const settledResults = await Promise.allSettled([
-        getOsProcedures({ baseUrl: config.osBaseUrl, config, configName: resolved.name }),
-      ]);
-
-      const [osProcedures] = settledResults;
-
-      if (osProcedures.status === "fulfilled") {
-        routers.push({ os: osProcedures.value });
-      } else {
-        const message = `Couldn't connect to os at ${config.osBaseUrl}`;
-        routers.push({ os: errorProcedure(message)(osProcedures.reason) });
-      }
-    }
-  }
-
-  const router = Object.assign({}, ...routers);
-
+  if (process.argv.length === 2) process.argv.push("--help");
   const cli = createCli({
-    router,
+    router: launcherProcedures,
     name: "iterate",
-    version: "0.0.1",
-    description: "Iterate CLI\n\nRun `iterate os --help` to discover OS commands.",
+    description: "Iterate CLI for OS Next. Run itx scripts, authenticate, and share your computer.",
   });
-
-  return { cli, prompts: isAgent ? undefined : prompts };
+  return {
+    cli,
+    prompts: isAgent || !process.stdin.isTTY || !process.stdout.isTTY ? undefined : prompts,
+  };
 };
-
 export const runCli = async () => {
   const { cli, prompts: cliPrompts } = await getCli();
   await cli.run({ prompts: cliPrompts, logger: yamlTableConsoleLogger });
-};
-
-// todo: move this to trpc-cli
-export const proxifyOrpc = <R extends AnyRouter>(
-  router: R | ReturnType<typeof parseRouter>,
-  getClient: (procedurePath: string) => unknown,
-) => {
-  const parsed = Array.isArray(router) ? router : parseRouter({ router });
-  const outputRouterRecord = {};
-  for (const [procedurePath, info] of parsed) {
-    const parts = procedurePath.split(".");
-    let currentRouter: any = outputRouterRecord;
-    for (const part of parts.slice(0, -1)) {
-      currentRouter = currentRouter[part] ||= {};
-    }
-    const schemas = info.inputSchemas.success ? info.inputSchemas.value : [];
-    const standardSchema: StandardSchemaV1 & { toJsonSchema: () => {} } = {
-      "~standard": {
-        vendor: "trpc-cli",
-        version: 1,
-        validate: (value: unknown) => ({ value }),
-      },
-      toJsonSchema: () => {
-        if (schemas.length === 0) return {};
-        if (schemas.length === 1) return schemas[0];
-        return { allOf: schemas };
-      },
-    };
-    currentRouter[parts[parts.length - 1]] = os
-      .input(standardSchema)
-      .handler(async ({ input }: any) => {
-        const client: any = await getClient(procedurePath);
-        return client[procedurePath].query(input);
-      });
-  }
-  return outputRouterRecord;
 };

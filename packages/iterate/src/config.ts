@@ -10,8 +10,6 @@ const XDG_CONFIG_PARENT = join(
 
 export const CONFIG_PATH = join(XDG_CONFIG_PARENT, "config.json");
 export const DEFAULT_CONFIG_NAME = "prd";
-const DEFAULT_OS_BASE_URL = "https://os.iterate.com";
-const DEFAULT_AUTH_BASE_URL = "https://auth.iterate.com";
 
 /** Stored session (lives inside a config entry) */
 export const StoredSession = z.object({
@@ -20,7 +18,6 @@ export const StoredSession = z.object({
   clientId: z.string().optional(),
   scope: z.string().optional(),
   tokenType: z.string().optional(),
-  cookie: z.string().optional(),
   expiresAt: z.string().optional(),
 });
 
@@ -29,8 +26,7 @@ export type StoredSession = z.infer<typeof StoredSession>;
 /** A named config — describes which server to talk to and how to authenticate. */
 export const Config = z.object({
   defaultProject: z.string().optional(),
-  osBaseUrl: z.string().optional().default(DEFAULT_OS_BASE_URL),
-  authBaseUrl: z.string().optional().default(DEFAULT_AUTH_BASE_URL),
+  osBaseUrl: z.string().optional().default("https://os.iterate2.com"),
   session: StoredSession.optional(),
 });
 
@@ -50,14 +46,13 @@ const normalizeConfig = (config: Config): Config => ({
   ...config,
   // Strip trailing slashes to avoid double-slash URLs downstream.
   osBaseUrl: config.osBaseUrl.replace(/\/+$/, ""),
-  authBaseUrl: config.authBaseUrl.replace(/\/+$/, ""),
 });
 
 export const readConfigFile = (): ConfigFile => {
   if (!existsSync(CONFIG_PATH)) return {};
   const rawText = readFileSync(CONFIG_PATH, "utf8");
   try {
-    return JSON.parse(rawText) as ConfigFile;
+    return ConfigFile.parse(JSON.parse(rawText));
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`Invalid JSON in ${CONFIG_PATH}: ${detail}`);
@@ -70,7 +65,7 @@ export const writeConfigFile = (configFile: ConfigFile): void => {
     throw new Error(`Invalid config file: ${z.prettifyError(parsed.error)}`);
   }
   mkdirSync(dirname(CONFIG_PATH), { recursive: true });
-  writeFileSync(CONFIG_PATH, `${JSON.stringify(parsed.data, null, 2)}\n`);
+  writeFileSync(CONFIG_PATH, `${JSON.stringify(parsed.data, null, 2)}\n`, { mode: 0o600 });
 };
 
 /**

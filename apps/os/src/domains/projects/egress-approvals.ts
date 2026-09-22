@@ -277,15 +277,6 @@ export async function verifyApprovalSignature(input: {
   );
 }
 
-/** A key's id is a fingerprint of its public point: first 16 hex chars of its SHA-256. */
-export async function approvalKeyId(publicKeyBase64: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    base64ToBytes(publicKeyBase64) as BufferSource,
-  );
-  return bytesToHex(new Uint8Array(digest)).slice(0, 16);
-}
-
 /**
  * DER/ASN.1 ECDSA signature → raw 64-byte r‖s. The Secure Enclave (and most
  * non-WebCrypto signers) emit DER; the platform only ever stores raw.
@@ -316,7 +307,7 @@ export function derSignatureToRaw(der: Uint8Array): Uint8Array {
 
 export async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", bytes as BufferSource);
-  return bytesToHex(new Uint8Array(digest));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export function base64ToBytes(base64: string): Uint8Array {
@@ -328,8 +319,4 @@ export function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary);
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
