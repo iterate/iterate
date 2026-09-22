@@ -104,7 +104,7 @@ type R2ObjectRecord = {
   storageClass: string;
 };
 
-/** THE built-in scope, as ONE interface — the clean-room's whole kernel surface; the library's verbs
+/** THE built-in scope, as one interface — the platform's kernel surface; the library's verbs
  *  come in by `extends` (library.ts). The record is a PLAIN OBJECT of own-enumerable closures,
  *  not an RpcTarget class, on purpose: the resolver gates on `Object.hasOwn`, so a prototype-method
  *  class would leave every root unreachable. Exported for ONE reader: the edge `IterateContextRpcTarget`'s TYPE
@@ -182,7 +182,7 @@ export interface BuiltInScope extends LibraryRoots {
    *  its path, and the path is what the placeholder spells: `getSecret("/secrets/<name>")` in an
    *  outbound request's URL (path or query) or headers substitutes to the value at egress
    *  (`fetch`), and `getSecret("/secrets/<name>", { field: "a.b" })` to one string field of a JSON
-   *  material — apps/os's placeholder grammar for a URL or a header (not its `Basic
+   *  material — the placeholder grammar for a URL or a header (not `Basic
    *  base64(user:getSecret(…))` peeling nor its JSON-body template — the body is never scanned).
    *  The material is a string or a JSON object; `urls` (required) pins it to those ORIGINS only — a
    *  mis-typed URL cannot mail a credential to a stranger, nor can an app that forwards a visitor's
@@ -234,7 +234,7 @@ export interface BuiltInScope extends LibraryRoots {
    *  model with `@` (`itx.fable ⇒ itx.ai.run('@cf/…', @)`). A test shadows it with `provide("itx.ai",
    *  fake)`; the physical door stays `itx.builtins.ai`. */
   ai: Ai;
-  /** Cloudflare Browser Run (`apps/os` `itx.browser`): `.quickAction(action, options)` returns the
+  /** Cloudflare Browser Run: `.quickAction(action, options)` returns the
    *  action's RESULT; `.fetch(input, init)` is the raw CDP door. */
   browser: ReturnType<typeof cfBrowser>;
   /** THE ARTIFACTS PROXY (repos.ts `ArtifactsScope`): Cloudflare Artifacts, project-scoped and

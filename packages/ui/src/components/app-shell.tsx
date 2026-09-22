@@ -1,7 +1,7 @@
 // ONE shell for the os-next apps — agents, notes, voice, the dash next: the sidebar (the project
 // switcher in its header, the app's own navigation in its body, the collapse button and the account
 // menu in its footer, the rail) and the page beside it under a header row that carries the phone's
-// sidebar trigger. apps/os's frame on this package's shadcn Sidebar. Router-agnostic on purpose:
+// sidebar trigger. Router-agnostic on purpose:
 // the app hands over hrefs and its current location, nothing from TanStack comes in here.
 import { useEffect, useRef, useSyncExternalStore, type MouseEvent, type ReactNode } from "react";
 import { CheckIcon, ChevronsLeftIcon, ChevronsUpDownIcon, LogOutIcon } from "lucide-react";

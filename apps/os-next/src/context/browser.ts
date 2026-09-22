@@ -1,4 +1,4 @@
-// browser.ts — apps/os's `itx.browser` (CfBrowserCapabilityRpcTarget + unwrap), as a built-in root.
+// browser.ts — the `itx.browser` built-in root.
 // Two methods: raw `fetch` for CDP, and `quickAction` which returns the action's RESULT instead of
 // the binding's `{ success, result }` Response envelope.
 

@@ -1,4 +1,4 @@
-// apps/os-next's streaming-text: the live text of a step as it streams — sealed groups keep their React
+// the platform's streaming-text: the live text of a step as it streams — sealed groups keep their React
 // subtree and only the small append tail changes; code stays plain (no highlighting) while it is
 // still being written; a blinking caret marks the tail.
 import { memo, useLayoutEffect, useRef } from "react";

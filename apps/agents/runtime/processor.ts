@@ -2,7 +2,7 @@
 // the conversation and the loop's obligations, and the effects over that fold — THE SAGAS (the birth
 // `itx.agents.create(path)` opens: the certificate on `/` and here with the default prompt beside it;
 // the death `itx.agents.delete(path)` opens: the certificate on `/` and here, after which the loop
-// runs no more turns) and THE LOOP (apps/os-next's turn loop, LLM request and codemode parts folded into
+// runs no more turns) and THE LOOP (the platform's turn loop, LLM request and codemode parts folded into
 // one class, lean). The
 // model call LIVES HERE (`#stream`): a `@cf/…` model through `itx.ai` (the Workers AI binding under
 // THIS context's rules, so a test lends a fake there), anything else through the account's AI
@@ -11,10 +11,10 @@
 // constructs the processor with `new` and reduces rows (processor.test.ts, in node); the saga and
 // the loop are proven on the worker (e2e/agents.e2e.test.ts, a fake `itx.ai` lent by rule).
 //
-// A request is DEBOUNCED as in apps/os (the at-head scheduling below): one window after its trigger,
+// A request is debounced by the at-head scheduling below: one window after its trigger,
 // the failure backoff folded in, the delayed append being the intent.
 //
-// Two kinds of effect, chosen at the dispatch site (apps/os-next's rule): a PER-EVENT consequence — the
+// Two kinds of effect, chosen at the dispatch site (the platform's rule): a PER-EVENT consequence — the
 // assistant's output parsed into a script request, a script's settlement rendered into the next
 // developer item — is BLOCKED (`blockProcessorWhile`): the event is delivered once, so losing the
 // append would lose the consequence. A STATE-DERIVED consequence — the birth, recording the next
@@ -48,7 +48,7 @@ import { parseCodemodeResponse } from "./codemode-format.ts";
 const AI_GATEWAY_ID = "default";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./system-prompt.ts";
 
-/** apps/os-next's failure backoff, folded into the debounce window: doubling from the policy's base per
+/** the platform's failure backoff, folded into the debounce window: doubling from the policy's base per
  *  consecutive failure, capped at its ceiling; nothing after a success. */
 function retryBackoffMs(state: Pick<AgentState, "consecutiveLlmFailures" | "config">): number {
   const { backoffBaseMs, backoffMaxMs } = state.config.llmRequestRetryPolicy;
@@ -58,7 +58,7 @@ function retryBackoffMs(state: Pick<AgentState, "consecutiveLlmFailures" | "conf
 
 /** The conversation as the model reads it. An item's images become image parts (a data: URL of the
  *  bytes in `images`, keyed by path — a vision model sees the pixels); any other attachment, or an
- *  image whose bytes are gone, is a line naming it and how a script reads it (apps/os-next's hint line).
+ *  image whose bytes are gone, is a line naming it and how a script reads it (the platform's hint line).
  *  The developer's notes read as system instructions. */
 export function buildChatMessages(
   items: AgentState["contextItems"],
@@ -121,16 +121,16 @@ function fileHintLine(file: FileAttachment): string {
   return `[Attached file: ${file.filename} (${file.contentType}, ${String(file.size)} bytes) — read it with \`await itx.files.get(${JSON.stringify(file.path)}).bytes()\`]`;
 }
 
-/** apps/os-next's chunk-coalescing window: how much streamed output rides one `llm-response-chunks`
+/** the platform's chunk-coalescing window: how much streamed output rides one `llm-response-chunks`
  *  append — ~7 repaints a second, and one commit per window instead of per token. */
 const CHUNK_WINDOW_MS = 150;
 /** A window that grew past this lands early rather than as one oversized append. */
 const CHUNK_WINDOW_MAX_CHARS = 64_000;
-/** apps/os-next's idle watchdog: a stream that carries nothing for this long fails the attempt, so a
+/** the platform's idle watchdog: a stream that carries nothing for this long fails the attempt, so a
  *  stalled provider never wedges a turn until its expiry. */
 const STREAM_IDLE_BUDGET_MS = 45_000;
 
-/** apps/os-next's table, the models this loop names; a conservative floor for the rest. OpenAI's
+/** the platform's table, the models this loop names; a conservative floor for the rest. OpenAI's
  *  figures are the operating window (where pricing doubles), not the documented one. */
 function contextWindowTokens(model: string): number {
   if (/^gpt-(6|5)/.test(model)) return 272_000;
@@ -168,7 +168,7 @@ function base64Of(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-// ── the model call's wire shapes (apps/os-next's, verbatim) ──
+// ── the model call's wire shapes (the platform's, verbatim) ──
 
 /** What Workers AI answers when it does not stream: `{ response }`, or the chat-completions shape. */
 const ChatAnswer = z.union([
@@ -176,7 +176,7 @@ const ChatAnswer = z.union([
   z.object({ choices: z.array(z.object({ message: z.object({ content: z.string() }) })).min(1) }),
 ]);
 
-/** The usage a provider reports, both dialects (apps/os-next's `LlmUsage`): OpenAI Responses
+/** The usage a provider reports, both dialects (the platform's `LlmUsage`): OpenAI Responses
  *  (`input_tokens`/`output_tokens`) and chat completions (`prompt_tokens`/`completion_tokens`),
  *  with the cached/reasoning breakdowns when present. Loose: vendors keep adding fields. */
 const ProviderUsage = z.looseObject({
@@ -260,7 +260,7 @@ async function drainSse(
   if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
 }
 
-/** Race an un-abortable dial against the caller's signal (apps/os-next's `raceAbort`): the caller regains
+/** Race an un-abortable dial against the caller's signal (the platform's `raceAbort`): the caller regains
  *  control the moment it aborts — an interruption, the expiry, the idle watchdog — while the orphaned
  *  dial finishes into the void; a stream already open is cancelled by `drainSse` itself. */
 function raceAbort<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
@@ -512,7 +512,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       this.#atHead(args);
       return;
     }
-    // THE INTERRUPT (apps/os-next's): cancellation is a property of new input, never a command. The
+    // THE INTERRUPT (the platform's): cancellation is a property of new input, never a command. The
     // person's words abort whatever this incarnation is streaming, keep what streamed as an
     // assistant item the next turn can see (no llmRequestOffset: a record, never parsed for a
     // script), and settle the request cancelled — blocked, so an eviction can never leave the
@@ -729,7 +729,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         );
         return;
       }
-      // THE DEBOUNCE (apps/os-next's): wait for more content, plus the failure backoff — one window,
+      // THE DEBOUNCE (the platform's): wait for more content, plus the failure backoff — one window,
       // anchored at the trigger. The delayed append IS the intent (no wake event): more words inside
       // the window move the trigger; the old trigger's intent then lands as a harmless fact (the
       // reduce opens a request only for the trigger it names) and the moved trigger's own intent, a
@@ -794,7 +794,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   ): Promise<void> {
     const startedAt = this.#now();
     const { controller } = inFlight;
-    // Two clocks fail a stalled stream, never wedge it: the request's own expiry, and apps/os-next's
+    // Two clocks fail a stalled stream, never wedge it: the request's own expiry, and the platform's
     // idle budget since the last provider event.
     const expiry = setTimeout(
       () => controller.abort(new Error("the model did not finish before the request expired")),
@@ -824,7 +824,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           }
         }
       const messages = buildChatMessages(items, images, tree);
-      // THE CHUNK WINDOWS (apps/os-next's coalescing): provider events pile into one buffer; a window
+      // THE CHUNK WINDOWS (the platform's coalescing): provider events pile into one buffer; a window
       // closes CHUNK_WINDOW_MS after its first event (or at the size cap) and lands as one
       // ephemeral append, windows in order — each waits for the one before. Nothing is stored:
       // the settlement below carries the durable text.
@@ -1002,10 +1002,10 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       return { text };
     }
     // No key of ours rides this request: an `openai/…` model is a Workers AI PARTNER model, billed
-    // by Cloudflare through the binding (apps/os-next's `unified` transport) — the Responses API shape,
+    // by Cloudflare through the binding (the platform's `unified` transport) — the Responses API shape,
     // streamed, the raw Response asked for so the SSE body is ours to read. The gateway option
     // routes it through the account's AI Gateway; its metadata is what the gateway's spend limits
-    // partition on (apps/os-next's: environment, project, stream), so a runaway agent hits ITS ceiling.
+    // partition on (the platform's: environment, project, stream), so a runaway agent hits ITS ceiling.
     // Two casts, both because workers-types spells Workers AI's OWN catalog as literals: a partner
     // model's name (`openai/…`) is not among them though the binding takes any model the account
     // can reach, and a partner model takes the PROVIDER's request body (here the Responses API's),

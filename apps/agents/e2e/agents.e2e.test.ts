@@ -203,7 +203,7 @@ test("debounced: two messages inside the window are answered by ONE request that
   });
   expect(assistantWords(first)).toEqual(["Both noted."]);
   // ONE request opened and ran (the second message's late intent is a harmless fact the reduce
-  // ignores — apps/os-next's rule — so the intents may number two; the settlements never do).
+  // ignores — the platform's rule — so the intents may number two; the settlements never do).
   expect(short(first).filter((t) => t === "agent/llm-request-settled")).toHaveLength(1);
   expect(ai.calls).toHaveLength(1);
   // The one call saw both messages — the prompt is built from the log at run time.
@@ -435,7 +435,7 @@ test("interrupted: the person's next words cut the running answer short — sett
     ),
   );
   await sleep(500); // the runner has dialed the model
-  // apps/os-next's interrupt: a developer item from the person, its policy the cancellation.
+  // the platform's interrupt: a developer item from the person, its policy the cancellation.
   await support.append({
     type: "events.iterate.com/agent/context-added",
     payload: {

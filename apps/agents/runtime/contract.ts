@@ -12,7 +12,7 @@
 //   ConsumedEvent<typeof AgentContract>                                        what reduce and processEvent see
 //   EventInput<typeof AgentContract>                                           what `itx.agents.get(path).append(…)` takes
 //
-// apps/os-next's agent brought over LEAN — the same loop, nothing else. Its birth is the saga
+// the platform's agent brought over LEAN — the same loop, nothing else. Its birth is the saga
 // `itx.agents.create(path)` opens: `create-requested`, then `created` — the certificate,
 // cross-posted to `/` for the project catalog (src/project/) — with the default system prompt
 // beside it; an operator's instructions are their own `context-added` after. From then on
@@ -26,8 +26,8 @@
 // `run-settled` result is the next developer `context-added`, which triggers the next turn; prose
 // alone ends the turn. Bounded: an open request expires, N consecutive model failures pause, N
 // consecutive self-triggered turns pause, and a person's next words resume. A request is DEBOUNCED
-// as in apps/os: one window after the trigger (more words inside it move the trigger; one request
-// answers them all), a failure's backoff folded into the same window. Dropped from apps/os on
+// as one window after the trigger (more words inside it move the trigger; one request
+// answers them all), with a failure's backoff folded into the same window. This runtime intentionally omits
 // purpose: streaming chunks, interrupts, compaction, token accounting, summaries, mentions, and the
 // capability host with its typecheck and preambles — the script runs against this context's `itx`
 // as it is.
@@ -55,7 +55,7 @@ export type ChatMessage = {
     | ({ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } })[];
 };
 
-/** A file attached to a context item (apps/os-next's attachment record, minus its signed URL): the
+/** A file attached to a context item (the platform's attachment record, minus its signed URL): the
  *  project file it was stored as (`itx.files`), its content type, original name and size. */
 const FileAttachment = z.object({
   contentType: z.string().min(1),
@@ -68,7 +68,7 @@ export type FileAttachment = z.infer<typeof FileAttachment>;
 /** Where a request's trigger came from: a person (`external`) or the loop's own consequences. */
 const TriggerSource = z.enum(["external", "agent-loop"]);
 
-/** What a model call cost, normalized (apps/os-next's `AgentLlmUsage`): the provider's totals, and the
+/** What a model call cost, normalized (the platform's `AgentLlmUsage`): the provider's totals, and the
  *  cached/reasoning breakdowns when it reports them. */
 const LlmUsage = z.object({
   inputTokens: z.number().int().nonnegative(),
@@ -127,7 +127,7 @@ export const AgentContract = defineProcessorContract({
           .int()
           .positive()
           .default(10 * 60_000),
-        /** apps/os-next's window: a request waits this long after its trigger for more content — a second
+        /** the platform's window: a request waits this long after its trigger for more content — a second
          *  message inside the window moves the trigger and ONE request answers both. */
         llmRequestDebounceMs: z.number().int().nonnegative().default(250),
         /** THE PLAIN-RESPONSE HANDLER: an itx expression (a callable, dotted) invoked with a response
@@ -135,7 +135,7 @@ export const AgentContract = defineProcessorContract({
          *  code, and a bare-prose reply is sugar for `<codemode>await <this>(<the prose>)</codemode>`.
          *  The default sends the text to web chat; a Slack-connected agent points it at its Slack
          *  reply instead. Blank drops a bare reply (an agent that only acts). */
-        /** Consecutive model failures before the loop pauses; between attempts, apps/os-next's backoff —
+        /** Consecutive model failures before the loop pauses; between attempts, the platform's backoff —
          *  `backoffBaseMs · 2^(failures−1)`, capped at `backoffMaxMs` — folded into the debounce window. */
         llmRequestRetryPolicy: z
           .object({
@@ -235,7 +235,7 @@ export const AgentContract = defineProcessorContract({
         actor: Actor.optional(),
         /** What rides with the words: files stored under this agent's path (`message()` stores them). */
         files: z.array(FileAttachment).optional(),
-        /** apps/os-next's policies: `dont-trigger-request` (words that raise no turn), `after-current-request`
+        /** the platform's policies: `dont-trigger-request` (words that raise no turn), `after-current-request`
          *  (the default: the next turn), `interrupt-current-request` (cut the running answer short —
          *  the request settles cancelled with what streamed so far, and these words start the next). */
         llmRequestPolicy: z
@@ -260,7 +260,7 @@ export const AgentContract = defineProcessorContract({
     },
     "events.iterate.com/agent/summary-updated": {
       description:
-        "The tag's status attribute as the live activity label — apps/os-next's summary vocabulary, the one field this loop speaks.",
+        "The tag's status attribute as the live activity label — the platform's summary vocabulary, the one field this loop speaks.",
       payloadSchema: z.object({ activity: z.string().min(1) }),
     },
     "events.iterate.com/agent/llm-request-requested": {
@@ -310,7 +310,7 @@ export const AgentContract = defineProcessorContract({
     },
     "events.iterate.com/agent/token-usage-reported": {
       description:
-        "What the last successful request cost against the model's context window (apps/os-next's vocabulary; a feed shows the context's fullness).",
+        "What the last successful request cost against the model's context window (the platform's vocabulary; a feed shows the context's fullness).",
       payloadSchema: z.object({
         model: z.string().min(1),
         maxContextTokens: z.number().int().positive(),

@@ -1,12 +1,12 @@
 // The agent's log as the shared agent-UI reducer (packages/ui) reads it. os-next's agent speaks
-// apps/os-next's event vocabulary for the loop, so the feed model IS apps/os-next's: `reduceAgentUi` folds every
+// the platform's event vocabulary for the loop, so the feed model IS the platform's: `reduceAgentUi` folds every
 // committed event into messages and activities (an LLM step that wrote a script, the code step that
 // ran it, grouped into rounds). Three differences are adapted here: an attachment carries no `url` on
 // os-next (the page signs one when it renders); a SCRIPT is the CONTEXT's on os-next —
 // `context/run-requested` / `context/run-settled`, identified by the request's offset (os-next
-// src/stream/core-processor.ts) — where the reducer reads apps/os-next's `capability-host/script-run-*`
+// src/stream/core-processor.ts) — where the reducer reads the platform's `capability-host/script-run-*`
 // with an `executionId` (`adaptContextRuns`); and a failed settlement carries fewer fields than
-// apps/os-next's strict schema (the missing ones follow from `failureKind`).
+// the platform's strict schema (the missing ones follow from `failureKind`).
 import { z } from "zod";
 import { sliceText, type StreamText } from "@iterate-com/shared/chunked-text";
 import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
@@ -61,7 +61,7 @@ export function toAgentEvent(raw: unknown, streamPath: string): Event | null {
 
 /** os-next's script events as the shared reducer reads them. A `context/run-requested` the agent
  *  appended while processing an assistant item (`source.processor.whileProcessing`, the engine's
- *  stamp) is apps/os-next's `script-run-requested` with the ids the reducer keys on — `agent-output:<that
+ *  stamp) is the platform's `script-run-requested` with the ids the reducer keys on — `agent-output:<that
  *  offset>` for a codemode script, `reply:<that offset>` for the plain-response handler (the
  *  processor's idempotency key says which) — and one any other caller asked for (`itx.run` on the
  *  agent's path) is `run:<its offset>`; its `context/run-settled` names the request by offset, so the
@@ -120,7 +120,7 @@ export function adaptContextRuns(events: readonly Event[]): Event[] {
 
 /** The whole feed from the log: every event in offset order through the shared reducer, then —
  *  when the agent facet reports itself idle and no step is still running — the turn boundary
- *  apps/os learns from its runtime-changed event, dated at the last fact. */
+ *  the runtime reports its transition, dated at the last fact. */
 export function reduceAgentFeed(
   events: readonly Event[],
   idle: boolean,
@@ -156,7 +156,7 @@ export function reduceAgentFeed(
   return { state, items };
 }
 
-// ── display formatters (apps/os-next's feed-format, the ones this page needs) ──
+// ── display formatters (the platform's feed-format, the ones this page needs) ──
 
 export const formatSeconds = (durationMs: number): string => formatAgentUiDuration(durationMs);
 

@@ -17,7 +17,7 @@ export type ContextViewEvent = {
   };
 };
 
-/** How the log reads — apps/os's three: `pretty` — one sentence per event (the platform's own
+/** How the log reads: `pretty` — one sentence per event (the platform's own
  *  events come with theirs; an app adds its vocabulary; a type nobody names shows the type and a
  *  glance at the payload's fields), the platform's housekeeping folded into one quiet row, a fact
  *  repeated back-to-back shown once with its count; `pretty-raw` — every event, its sentence and

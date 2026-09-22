@@ -1,12 +1,12 @@
 /** @jsxImportSource react */
-// client/react.tsx — the REACT binding for clean-room live state, shared by every UI (the hosted
+// client/react.tsx — the React binding for live state, shared by every UI (the hosted
 // /demo and the control-plane console). `useLiveState` subscribes a component to a producer's live
 // state (a processor slug, a mini-app key), seeds through its door, and re-renders on every synced
 // delta via `useSyncExternalStore` over the LiveStateStore. The transport and the store
 // (client/live-state.ts) stay framework-free, so this is the ONE file that imports React.
 //
-// Adapted from apps/os's `useLiveState` (packages/iterate/src/sdk/capnweb/react.tsx), kept to the one
-// shape a UI/test needs — no reconnect/backoff/ping-watchdog (that policy belongs to whoever owns the
+// Kept to the one shape a UI or test needs — no reconnect/backoff/ping-watchdog (that policy belongs
+// to whoever owns the
 // capnweb session; here the caller passes a ready `itx`).
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {

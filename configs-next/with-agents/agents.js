@@ -64,7 +64,7 @@ var AgentContract = defineProcessorContract({
       maxAutonomousTurns: z.number().int().positive().default(20),
       /** How long a recorded request stays runnable; past it, settled as expired. */
       llmRequestExpiryMs: z.number().int().positive().default(10 * 6e4),
-      /** apps/os-next's window: a request waits this long after its trigger for more content — a second
+      /** the platform's window: a request waits this long after its trigger for more content — a second
        *  message inside the window moves the trigger and ONE request answers both. */
       llmRequestDebounceMs: z.number().int().nonnegative().default(250),
       /** THE PLAIN-RESPONSE HANDLER: an itx expression (a callable, dotted) invoked with a response
@@ -72,7 +72,7 @@ var AgentContract = defineProcessorContract({
        *  code, and a bare-prose reply is sugar for `<codemode>await <this>(<the prose>)</codemode>`.
        *  The default sends the text to web chat; a Slack-connected agent points it at its Slack
        *  reply instead. Blank drops a bare reply (an agent that only acts). */
-      /** Consecutive model failures before the loop pauses; between attempts, apps/os-next's backoff —
+      /** Consecutive model failures before the loop pauses; between attempts, the platform's backoff —
        *  `backoffBaseMs · 2^(failures−1)`, capped at `backoffMaxMs` — folded into the debounce window. */
       llmRequestRetryPolicy: z.object({
         maxAttempts: z.number().int().positive().default(3),
@@ -150,7 +150,7 @@ var AgentContract = defineProcessorContract({
         actor: Actor.optional(),
         /** What rides with the words: files stored under this agent's path (`message()` stores them). */
         files: z.array(FileAttachment).optional(),
-        /** apps/os-next's policies: `dont-trigger-request` (words that raise no turn), `after-current-request`
+        /** the platform's policies: `dont-trigger-request` (words that raise no turn), `after-current-request`
          *  (the default: the next turn), `interrupt-current-request` (cut the running answer short —
          *  the request settles cancelled with what streamed so far, and these words start the next). */
         llmRequestPolicy: z.object({
@@ -171,7 +171,7 @@ var AgentContract = defineProcessorContract({
       })
     },
     "events.iterate.com/agent/summary-updated": {
-      description: "The tag's status attribute as the live activity label \u2014 apps/os-next's summary vocabulary, the one field this loop speaks.",
+      description: "The tag's status attribute as the live activity label \u2014 the platform's summary vocabulary, the one field this loop speaks.",
       payloadSchema: z.object({ activity: z.string().min(1) })
     },
     "events.iterate.com/agent/llm-request-requested": {
@@ -217,7 +217,7 @@ var AgentContract = defineProcessorContract({
       })
     },
     "events.iterate.com/agent/token-usage-reported": {
-      description: "What the last successful request cost against the model's context window (apps/os-next's vocabulary; a feed shows the context's fullness).",
+      description: "What the last successful request cost against the model's context window (the platform's vocabulary; a feed shows the context's fullness).",
       payloadSchema: z.object({
         model: z.string().min(1),
         maxContextTokens: z.number().int().positive(),
@@ -1128,7 +1128,7 @@ var AgentDurableObject = class extends StreamProcessorDurableObject {
     return this.#pathRead = path;
   }
   /** A person's words: ONE `context-added`, the trigger of the next turn — with their attachments,
-   *  each stored first under this agent's path (`itx.files`, apps/os-next's `<path>/<8 of a uuid>-<name>`)
+   *  each stored first under this agent's path (`itx.files`, the platform's `<path>/<8 of a uuid>-<name>`)
    *  and named on the event; an image among them is what the model will see. The event is answered
    *  so a caller can wait for what follows it. */
   async message(input) {

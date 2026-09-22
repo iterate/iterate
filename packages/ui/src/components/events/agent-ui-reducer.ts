@@ -174,9 +174,7 @@ export type AgentUiActivityRound = {
  * and the code step that runs it belong together, and an agent that returns
  * itself a value for the next attempt produces round 2, 3, … A round opens at
  * every llm step (or at a code step with no llm before it — replays can drop
- * the llm half). Both round renderers — mobile's activity card
- * (apps/mobile/src/components/activity-card.tsx) and the os web feed
- * (apps/os/src/components/agent-feed.tsx) — group through this one function.
+ * the llm half). The agent feed groups through this one function.
  */
 export function groupActivityRounds(steps: readonly AgentUiStep[]) {
   const rounds: AgentUiActivityRound[] = [];
@@ -760,9 +758,6 @@ const AGENT_TOKEN_USAGE_REPORTED = "events.iterate.com/agent/token-usage-reporte
 const AGENT_LLM_RESPONSE_CHUNKS = "events.iterate.com/agent/llm-response-chunks";
 const SCRIPT_EXECUTION_REQUESTED = "events.iterate.com/capability-host/script-run-requested";
 const SCRIPT_EXECUTION_COMPLETED = "events.iterate.com/capability-host/script-run-settled";
-const SLACK_WEBHOOK_RECEIVED = "events.iterate.com/slack/webhook-received";
-const TELEGRAM_WEBHOOK_RECEIVED = "events.iterate.com/telegram/webhook-received";
-const TELEGRAM_SEND_REQUESTED = "events.iterate.com/telegram/send-requested";
 const STREAM_CONNECTION_OPENED = "events.iterate.com/stream/connection-opened";
 const STREAM_CONNECTION_CLOSED = "events.iterate.com/stream/connection-closed";
 const STREAM_WOKEN = "events.iterate.com/stream/woken";
@@ -800,8 +795,6 @@ function reduceAgentUiEvent(
     // bubble; assistant context replaces the streamed LLM text; developer
     // context from another human-facing integration renders with its source.
     // Script-produced developer context is model input, not another bubble.
-    // ONE reducer renders two products' feeds: apps/os spells these two `agents/…`, os-next `agent/…`.
-    case "events.iterate.com/agents/context-added":
     case "events.iterate.com/agent/context-added": {
       const role = readString(event, "role");
       const text = readString(event, "content");
@@ -897,7 +890,6 @@ function reduceAgentUiEvent(
       return contextState;
     }
 
-    case "events.iterate.com/agents/web-message-sent":
     case "events.iterate.com/agent/web-message-sent": {
       const text = readString(event, "message");
       if (text == null) return state;
@@ -1143,59 +1135,6 @@ function reduceAgentUiEvent(
           lastReport: { model, maxContextTokens, inputTokens, outputTokens },
         },
       };
-    }
-
-    case SLACK_WEBHOOK_RECEIVED: {
-      const message = readSlackWebhookMessage(event);
-      if (message == null) return state;
-      const item: AgentUiMessageItem = {
-        kind: message.kind,
-        id: `slack-${event.offset}`,
-        text: message.text,
-        timestampMs,
-        via: {
-          service: "slack",
-          ...(message.sender == null ? {} : { sender: message.sender }),
-        },
-      };
-      // Our bot's echoes land mid-turn (it posts from inside a code step), so
-      // they emit directly like web-message-sent; humans and third-party bots
-      // queue while steps are running, like web user messages.
-      return message.kind === "assistant"
-        ? emitAssistantMessageItem(state, items, item)
-        : emitUserMessageItem(state, items, item);
-    }
-
-    case TELEGRAM_WEBHOOK_RECEIVED: {
-      // Always a user bubble: Telegram never delivers the bot's own messages
-      // through the webhook (the outbound side renders from send-requested).
-      const message = readTelegramWebhookMessage(event);
-      if (message == null) return state;
-      return emitUserMessageItem(state, items, {
-        kind: "user",
-        id: `telegram-${event.offset}`,
-        text: message.text,
-        timestampMs,
-        via: {
-          service: "telegram",
-          ...(message.sender == null ? {} : { sender: message.sender }),
-        },
-      });
-    }
-
-    case TELEGRAM_SEND_REQUESTED: {
-      // The journaled send IS the bot's outbound message (the telegram-agent
-      // processor is obliged to deliver it and Telegram won't echo it back),
-      // so it renders as the assistant bubble.
-      const text = readString(event, "text");
-      if (text == null || text === "") return state;
-      return emitAssistantMessageItem(state, items, {
-        kind: "assistant",
-        id: `telegram-send-${event.offset}`,
-        text,
-        timestampMs,
-        via: { service: "telegram" },
-      });
     }
 
     case STREAM_CONNECTION_OPENED: {
@@ -1735,140 +1674,6 @@ function readStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
-}
-
-// Best-effort view of a Telegram Update webhook, mirroring the shape the
-// telegram-agent processor parses (apps/os
-// telegram-agent-processor-implementation.ts) without depending on it: the
-// reducer only needs enough to render a chat bubble. Edits and non-message
-// updates (membership changes, callback queries, ...) return null; media-only
-// messages render their caption plus bracketed placeholders, matching the
-// transcription the agent sees.
-function readTelegramWebhookMessage(event: Event): { text: string; sender?: string } | null {
-  const body = readRecord(event, "body");
-  const message = isRecord(body?.message)
-    ? body.message
-    : isRecord(body?.channel_post)
-      ? body.channel_post
-      : null;
-  if (message == null) return null;
-  const from = isRecord(message.from) ? message.from : null;
-  if (from?.is_bot === true) return null;
-  const caption = typeof message.caption === "string" ? message.caption : "";
-  const rawText = typeof message.text === "string" ? message.text : caption;
-  const placeholders = TELEGRAM_MEDIA_PLACEHOLDERS.filter(([key]) => message[key] != null)
-    .map(([, placeholder]) => placeholder)
-    .join(" ");
-  const text = [rawText, rawText === caption ? "" : "", placeholders]
-    .filter((part) => part !== "")
-    .join(" ")
-    .trim();
-  if (text === "") return null;
-  const username = typeof from?.username === "string" ? from.username : "";
-  const firstName = typeof from?.first_name === "string" ? from.first_name : "";
-  const sender = username || firstName;
-  return { text, ...(sender === "" ? {} : { sender }) };
-}
-
-/** Mirrors telegramMediaPlaceholders in apps/os
- * telegram-agent-processor-implementation.ts (kept import-free — the ui
- * package cannot depend on apps/os). */
-const TELEGRAM_MEDIA_PLACEHOLDERS: Array<[key: string, placeholder: string]> = [
-  ["photo", "[photo]"],
-  ["voice", "[voice message]"],
-  ["audio", "[audio]"],
-  ["video", "[video]"],
-  ["video_note", "[video note]"],
-  ["sticker", "[sticker]"],
-  ["document", "[document]"],
-  ["animation", "[animation]"],
-  ["location", "[location]"],
-  ["contact", "[contact]"],
-  ["poll", "[poll]"],
-  ["venue", "[venue]"],
-];
-
-// Best-effort view of a Slack Events API `event_callback` message webhook.
-// Mirrors the shape the slack-agent processor parses (see apps/os
-// slack-agent-processor-implementation.ts) without depending on it: the
-// reducer only needs enough to render a chat bubble. Non-message webhooks
-// (reactions, channel joins) and edit/delete subtypes return null.
-function readSlackWebhookMessage(
-  event: Event,
-): { text: string; kind: "user" | "assistant"; sender?: string } | null {
-  const body = readRecord(event, "body");
-  if (body?.type !== "event_callback") return null;
-  const slackEvent = isRecord(body.event) ? body.event : null;
-  if (slackEvent == null || slackEvent.type !== "message") return null;
-  const subtype = typeof slackEvent.subtype === "string" ? slackEvent.subtype : null;
-  if (subtype != null && subtype !== "bot_message" && subtype !== "file_share") return null;
-  const text = typeof slackEvent.text === "string" ? slackEvent.text : "";
-  if (text === "") return null;
-  const botProfile = isRecord(slackEvent.bot_profile) ? slackEvent.bot_profile : null;
-  const fromBot =
-    subtype === "bot_message" || typeof slackEvent.bot_id === "string" || botProfile != null;
-  const botName = typeof botProfile?.name === "string" ? botProfile.name : "";
-  const username = typeof slackEvent.username === "string" ? slackEvent.username : "";
-  const userId = typeof slackEvent.user === "string" ? slackEvent.user : "";
-  const sender = fromBot ? botName || username : userId;
-  // Only OUR bot's messages are the assistant speaking; a third-party bot is
-  // just another participant and renders as a user bubble (its name stays on
-  // the via label). Identity comes from the webhook's `authorizations`
-  // envelope, mirroring the slack-agent processor's isOwnBotMessage — and
-  // like it, an incomparable identity is assumed to be our own.
-  const kind = !fromBot ? "user" : isOwnSlackBotMessage(body, slackEvent) ? "assistant" : "user";
-  return {
-    text: slackMrkdwnToMarkdown(text),
-    kind,
-    ...(sender === "" ? {} : { sender }),
-  };
-}
-
-function isOwnSlackBotMessage(
-  body: Record<string, unknown>,
-  slackEvent: Record<string, unknown>,
-): boolean {
-  const authorizations = Array.isArray(body.authorizations) ? body.authorizations : [];
-  const botAuth = authorizations
-    .filter(isRecord)
-    .find((authorization) => authorization.is_bot === true);
-  const authBotId = typeof botAuth?.bot_id === "string" ? botAuth.bot_id : null;
-  const authUserId = typeof botAuth?.user_id === "string" ? botAuth.user_id : null;
-  const botProfile = isRecord(slackEvent.bot_profile) ? slackEvent.bot_profile : null;
-  const messageBotId = typeof slackEvent.bot_id === "string" ? slackEvent.bot_id : null;
-  const messageUserId =
-    typeof slackEvent.user === "string"
-      ? slackEvent.user
-      : typeof botProfile?.user_id === "string"
-        ? botProfile.user_id
-        : null;
-
-  let compared = false;
-  if (authBotId != null && messageBotId != null) {
-    compared = true;
-    if (messageBotId === authBotId) return true;
-  }
-  if (authUserId != null && messageUserId != null) {
-    compared = true;
-    if (messageUserId === authUserId) return true;
-  }
-  return !compared;
-}
-
-/**
- * Light mrkdwn → markdown: unwrap mentions and links, decode the three HTML
- * entities slack escapes. Deliberately does not touch bold/italic markers —
- * close enough is the goal.
- */
-function slackMrkdwnToMarkdown(text: string): string {
-  return text
-    .replace(/<@([A-Z0-9]+)(?:\|([^>]+))?>/g, (_, id: string, label?: string) => `@${label || id}`)
-    .replace(/<#[A-Z0-9]+\|([^>]+)>/g, "#$1")
-    .replace(/<(https?:\/\/[^|>]+)\|([^>]+)>/g, "[$2]($1)")
-    .replace(/<(https?:\/\/[^>]+)>/g, "$1")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&");
 }
 
 function readFileAttachments(event: Event): AgentUiFileAttachment[] {

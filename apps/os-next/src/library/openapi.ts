@@ -1,6 +1,6 @@
 // library/openapi.ts — `itx.connectToOpenApi(specOrUrl, { baseUrl?, headers? })`: an OpenAPI 3
 // service as an RpcTarget whose methods are its `operationId`s, written against `itx.fetch` alone.
-// Deliberately small, the apps/os shape (rpc-targets.ts `executeOperation`): one input OBJECT per
+// Deliberately small: one input OBJECT per
 // call — path parameters substitute into the path, query parameters go on the URL, header
 // parameters on the request, and what is left is the JSON body when the operation declares one (an
 // input whose only key is `body` sends `input.body` verbatim, for a non-object body). A non-2xx
@@ -156,7 +156,7 @@ async function fetchDocument(
   specUrl: string,
   options: OpenApiConnectOptions,
 ): Promise<OpenApiDocument> {
-  // auth headers reach the spec only when it lives on the API's host (apps/os `specFetchHeaders`)
+  // Auth headers reach the spec only when it lives on the API's host.
   const sameHost = !options.baseUrl || new URL(options.baseUrl).host === new URL(specUrl).host;
   const headers = sameHost ? options.headers || {} : {};
   const response = await refuseUnlessOk(

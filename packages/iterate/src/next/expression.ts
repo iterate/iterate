@@ -346,7 +346,7 @@ export async function walkSteps(
 }
 
 /** Apply `args` to a resolved value on its carried receiver, or a LOUD error if it is not callable
- *  (never the silent arg-drop apps/os shipped). An `InvokeHandle` is NOT a JS function (a real
+ *  (never a silent argument drop). An `InvokeHandle` is NOT a JS function (a real
  *  RpcTarget so dotted access pipelines — the invoke handle section), so ROOT-calling it dispatches
  *  those args at its EMPTY path: `handle(events,range)` ⇒ the bare callback the handle fronts. The one
  *  bridge between "callable capability" and "pipelinable RpcTarget". */
@@ -383,7 +383,7 @@ export async function callOn(value: unknown, receiver: unknown, args: unknown[])
 // - Instances stay clean of own properties, so Workers RPC's instance-property protection needs
 //   no `getOwnPropertyDescriptor` help.
 //
-// KNOWN QUIRKS (accepted, by parity with apps/os): no `has` trap on the hop, so `"x" in instance`
+// KNOWN QUIRKS: no `has` trap on the hop, so `"x" in instance`
 // reflects DECLARED members only while `instance.x` conjures a dispatcher — feature-detect with
 // access, not `in`; a typo'd built-in (`itx.strems`) is a syntactically valid dynamic dispatch that
 // fails at the capability table, not a crisp missing-method error.

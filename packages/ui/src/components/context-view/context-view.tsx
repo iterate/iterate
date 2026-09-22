@@ -3,7 +3,7 @@
 // how many events, who is here, the mode, the two buttons), a filter row (a text query, the types
 // left ticked), the log folded for reading (folds.tsx) as rows one line wide on a desktop and two
 // on a phone, and two right-edge sheets — the inspector for one event, the processors with their
-// live state. apps/os's three modes: Pretty (sentences, housekeeping folded, repeats counted),
+// live state. Three modes: Pretty (sentences, housekeeping folded, repeats counted),
 // Pretty + raw (every event, sentence and raw line), Raw (the log as data). Nothing here ever
 // scrolls sideways; the inspector shows what a line cuts.
 // CONTROLLED: every choice a person makes here is `state` (context-view-search.ts — a URL's search

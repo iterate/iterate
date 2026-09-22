@@ -1,4 +1,4 @@
-// apps/os-next's pill composer, at this page's size: a `+` menu (Message / Raw event, and Attach files),
+// the platform's pill composer, at this page's size: a `+` menu (Message / Raw event, and Attach files),
 // the CodeMirror message editor that grows with the draft, a raw-event editor that appends YAML or
 // JSON to the agent's log, attachment chips with drag-and-drop, and one round button that sends —
 // or, while a turn runs, STOPS it (an interruption is a property of the person's next input).
@@ -50,7 +50,7 @@ type AgentComposerRawConfig = {
   onSubmit: () => Promise<void> | void;
 };
 
-/** The pill itself — apps/os-next's `AgentPillComposer` without its examples mode. */
+/** The pill itself — the platform's `AgentPillComposer` without its examples mode. */
 export function AgentPillComposer({
   mode,
   onModeChange,

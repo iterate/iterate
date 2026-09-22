@@ -4,7 +4,7 @@
 // (`itx.clients.<device_name>`, underscores for anything that is not an identifier character). This
 // script asks it to start a conversation (a remote press), watches the conversation's context for
 // what the provider heard and said, speaks the prompt out of this Mac's speaker so the board's
-// microphone has to hear it, and reports the four facts the apps/os `voicelab boards` proof asks:
+// microphone has to hear it, and reports the end-to-end evidence:
 // the call became active (and how long that took), microphone frames left the device, an answer
 // reached its speaker, and the provider transcribed the words and the board answered them.
 //

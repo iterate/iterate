@@ -1,4 +1,4 @@
-// The feed rows, apps/os-next's agent-feed.tsx at the size this page needs: a person's message, the
+// The feed rows, the platform's agent-feed.tsx at the size this page needs: a person's message, the
 // assistant's prose, and the quiet "Ran code 2× · 3 requests · 7.4 s" activity row that opens into
 // rounds — the LLM step that wrote a script and the code step that ran it, each a `Script | Result |
 // Meta` tab group. Items come from the shared reducer (packages/ui); this file owns only their look.
@@ -509,7 +509,7 @@ export function ScriptResult({ code }: { code: AgentUiCodeStep }) {
   );
 }
 
-// ── the live tail: what the agent is doing right now (apps/os-next's AgentLiveActivity) ──
+// ── the live tail: what the agent is doing right now (the platform's AgentLiveActivity) ──
 
 /** The feed's trailing row whenever work is in flight. Receives the live reduced state on every
  *  chunk: finished steps collapse upward into quiet rows while the current request or script keeps

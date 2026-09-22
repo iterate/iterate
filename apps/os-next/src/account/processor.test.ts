@@ -1,6 +1,6 @@
 // src/account/processor.test.ts — the AccountProcessor's executable spec, declarative `{ events →
 // state }` rows on the shared processor harness (stream/test-support.ts `reduceProcessor`): the pure
-// reduce only, with the engine's contract validation (a malformed KNOWN payload is skipped). apps/os
+// reduce only, with the engine's contract validation (a malformed KNOWN payload is skipped).
 // tests its processors the same shape.
 
 import { describe, expect, test } from "vitest";

@@ -43,7 +43,7 @@ import {
  *  reference = …" when it does not. The facet container is then unusable for the incarnation (a
  *  live facet never re-runs its startup) and the loader's cached entry is too (a fresh loader id
  *  heals at once) — so the recovery is a restart of both and ONE more attempt (`invoke`),
- *  counted per facet (`facet:<name>:restarts`, shown on `processors.list()`). apps/os carries the
+ *  counted per facet (`facet:<name>:restarts`, shown on `processors.list()`).
  *  same recovery for its dynamic workers (issue #2288). Remove when the platform is fixed. */
 const isFacetStartPlatformFailure = (error: unknown): error is Error =>
   error instanceof Error &&

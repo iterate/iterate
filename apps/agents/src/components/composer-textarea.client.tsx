@@ -1,5 +1,5 @@
 "use client";
-// apps/os-next's composer textarea without its mention layer: a CodeMirror editor that grows with the
+// the platform's composer textarea without its mention layer: a CodeMirror editor that grows with the
 // draft — Enter submits (never mid-IME-composition), Shift+Enter is a new line, ⌘/Ctrl+Enter
 // submits too; 16px type so iOS does not zoom on focus.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";

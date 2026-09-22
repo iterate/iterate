@@ -1,7 +1,7 @@
 // secret-at-rest.ts — a project secret's material AT REST: AES-256-GCM under the deployment's key
 // (`APP_CONFIG_SECRETS_KEY`, app-config.ts), the ciphertext BOUND to the one place it may be read
 // back from — the secret's context (its Durable Object name: the project and the path), the pin it
-// was stored with, and the revision it was written at (the additional authenticated data). apps/os's
+// was stored with, and the revision it was written at (the additional authenticated data).
 // ADR 0005 binding (project, path, pin, offset) carried over: a ciphertext copied into another
 // context, under another pin, or back over a later write does not open. Rotation: `previous` opens what `current` cannot; the caller re-encrypts
 // under `current` when told it happened, so a rotation completes one read at a time and the old key
