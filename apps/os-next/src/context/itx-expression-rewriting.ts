@@ -38,6 +38,7 @@ import { codedError, jsonEqual, resolveContextPath } from "iterate/next/lib";
 import type { RewriteRuleConfigured } from "iterate/next/api";
 import {
   callOn,
+  InvokeHandle,
   walkSteps,
   normalizedItxExpression,
   containsItxExpressionHole,
@@ -597,7 +598,12 @@ export class ItxExpressionResolver {
    *  a parent link `itx ⇒ itx.builtins.cd('/agents/x')` carries a script up exactly as far as its
    *  owner said. Codec-style, kin to the reserved names `parse` refuses — nothing here is policy. */
   #admit(expression: ItxExpression): void {
-    if (this.#caller().app) admitLoadedCodeExpression(expression, this.#path);
+    const caller = this.#caller();
+    // Only a trusted cd hop stamps path, after the whole input expression passed this check.
+    // The remaining expression now includes the owner's rewrites (e.g. the agent's sandbox
+    // redirect to builtins.run), not just loaded code's words. Keep app for row admission and
+    // attribution, but don't reject the owner's grant again at its destination.
+    if (caller.app && !caller.path) admitLoadedCodeExpression(expression, this.#path);
   }
 
   /** PURE: the chain of rewrites from `call` to the builtins-rooted call that would run (rules 3–5).
@@ -637,6 +643,19 @@ export class ItxExpressionResolver {
         "NO_ITX_EXPRESSION_MATCH",
         `no built-in ${JSON.stringify(rootName)} under itx.builtins (${roots()})`,
       );
+    // Forward the whole remaining expression through cd. Walking a factory call such as
+    // workers.get(spec) here would return its handle over RPC first, making the later fetch
+    // an RPC call too and losing a socket-bearing Response before cd can select native fetch.
+    if (rootName === "cd" && Array.isArray(rewritten[2]) && rewritten.length > 3) {
+      const { value } = await walkSteps(
+        { value: this.#builtIns, receiver: undefined },
+        rewritten.slice(2, 3),
+      );
+      if (!(value instanceof InvokeHandle))
+        throw new Error("builtins.cd must return an InvokeHandle");
+      const result = await value.invoke(rewritten.slice(3));
+      return extraArgs.length > 0 ? await callOn(result, undefined, extraArgs) : result;
+    }
     const { value, receiver } = await walkSteps(
       { value: this.#builtIns, receiver: undefined },
       rewritten.slice(2),

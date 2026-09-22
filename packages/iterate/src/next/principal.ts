@@ -17,7 +17,9 @@ export type Caller = {
   grant?: string;
   /** The context the call ORIGINATED at — stamped by the first `cd` hop and forwarded by every later
    *  one, so a relative path resolved after a hop (`repos.get('./x')` answered at the root) still
-   *  means the caller's `./x`. Absent until a hop. */
+   *  means the caller's `./x`. Absent until a hop. Its presence also means the complete input
+   *  expression was already admitted: a receiving resolver must not recheck owner-written
+   *  rewrites as loaded code's input. Fresh env.ITX calls never inherit this stamp. */
   path?: string;
   /** Set when the caller is LOADED CODE — a worker, a facet, a script — holding a context through
    *  `env.ITX`. Under it the resolver refuses the fixed point (`itx.builtins…`) and any `cd` above
@@ -37,6 +39,8 @@ export const ITX_GRANT_HEADER = "x-itx-grant";
 /** The header a loaded worker's `env.ITX.fetch` sets on the Request it forwards, so the context's
  *  fetch runs the call as app code; stripped from every Request that arrives from outside. */
 export const ITX_APP_HEADER = "x-itx-app";
+/** Originating context of a native fetch forwarded by a trusted context. */
+export const ITX_CALLER_PATH_HEADER = "x-itx-caller-path";
 
 /** The event as the log stores it: `source.principal` and `source.grant` are the platform's — set
  *  from the admitted caller, client-supplied ones dropped (an anonymous session's event carries

@@ -48,14 +48,15 @@ const onUnhandledError = (error: unknown): boolean | void => {
 /** THE LONG POLES FIRST. vitest orders files by their cached durations, and CI has no cache — so the
  *  row that waits a real deadline started after ninety seconds of short files and the run ended at
  *  170 s instead of its floor (measured 2026-09-21). These files start in slot one, longest first;
- *  everything else follows vitest's own order. With rows concurrent the poles are (deployed, 2026-09-21):
- *  the dormant deadline 44 s, session's 30 s grant re-check 34 s, the slow client's upload 31 s, then
- *  nothing above 12 s. A file that stops being long drops off this list. */
+ *  everything else follows vitest's own order. With rows concurrent the poles are (deployed, 2026-09-22):
+ *  session's 30 s grant re-check 34 s, the dormant deadline 24 s, the 144 MiB file's sequential rows,
+ *  the slow client's upload 10–15 s, then nothing above 12 s. A file that stops being long drops off
+ *  this list. */
 const LONG_POLES = [
-  "e2e/scheduled-appends-dormant.e2e.test.ts",
   "e2e/session.e2e.test.ts",
-  "e2e/isolate-ceilings-slow-client.e2e.test.ts",
+  "e2e/scheduled-appends-dormant.e2e.test.ts",
   "e2e/isolate-ceilings-deployed.e2e.test.ts",
+  "e2e/isolate-ceilings-slow-client.e2e.test.ts",
 ];
 class LongPolesFirst extends BaseSequencer {
   override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {

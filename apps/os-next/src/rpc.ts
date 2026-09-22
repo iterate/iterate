@@ -127,12 +127,19 @@ export async function rpcResponse(
     );
     renewal = setTimeout(async () => {
       const started = Date.now();
+      // THE PROJECTS THIS SOCKET HOLDS at this tick. One admitted while the reads are in flight
+      // passed `reachesProject` itself and is the next tick's to re-check — measured against a list
+      // read before it existed, it would close a live socket for nothing. The grant read and the
+      // membership read are independent (both take the bind-time grant), so they run together; a
+      // socket holding no project has no membership to re-check and reads none.
+      const held = [...projects];
       try {
-        const current = await authorizationOf(env, grant);
-        const reachable = new Set(
-          (await input.directory.reachableProjects(authorization.reach)).map((p) => p.id),
-        );
-        if (!current || [...projects].some((id) => !reachable.has(id))) {
+        const [current, reachable] = await Promise.all([
+          authorizationOf(env, grant),
+          held.length ? input.directory.reachableProjects(authorization.reach) : [],
+        ]);
+        const reachableIds = new Set(reachable.map((project) => project.id));
+        if (!current || held.some((id) => !reachableIds.has(id))) {
           stop(new Error("Session revoked or project membership removed"));
           return;
         }

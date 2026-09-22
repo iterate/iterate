@@ -70,3 +70,42 @@ test("a WebSocket 101 through a secret: the caller's context forwards to /secret
   });
   expect(await closed).toMatchObject({ code: 1006 });
 });
+
+// The deployed voice-agent e2e covers the full loaded-facet and audio path; this isolates the
+// parent-context forwarding regression without needing a deployed Worker Loader.
+test("an app's fetch expression inherits WebSocket egress through its parent context", async () => {
+  const project = "prj_voice_parent_socket";
+  const root = stub(project);
+  const child = stub(`${project}.iterate/agents/voice`);
+  await child.invoke([
+    "itx",
+    [
+      "append",
+      {
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: "itx", target: ["itx", "builtins", ["cd", "/"]] },
+      },
+    ],
+  ]);
+  const login = await fetch(`${SHOP}/api/legacy-login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "voice-parent-ws@example.com", password: "correct-horse" }),
+  });
+  expect(login.status).toBe(200);
+  const { accessToken } = (await login.json()) as { accessToken: string };
+  await root.invoke(["itx", "secrets", ["set", "/secrets/shop", accessToken, { urls: [SHOP] }]]);
+  const response = await child.fetch(
+    new Request(`${SHOP}/capnweb`, {
+      headers: {
+        upgrade: "websocket",
+        "x-itx-expression": "itx.fetch",
+        "x-itx-app": "1",
+        authorization: 'Bearer getSecret("/secrets/shop")',
+      },
+    }),
+  );
+  expect(response.status, response.status === 101 ? "upgraded" : await response.text()).toBe(101);
+  response.webSocket!.accept();
+  response.webSocket!.close();
+});

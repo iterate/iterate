@@ -4,12 +4,10 @@
  *
  *   await root.voice.setupVoiceAgent({ streamPath, activation })   // → { streamPath }
  *
- * ONE append on the conversation's fresh context: the two facet subscription rows (the voice
- * relay and the agent that answers its delegations — what `processors.enable` writes) and the
- * call's birth, so the relay materialises, reads `call-started` from its log and dials the provider
- * before the first microphone frame arrives. That same event is the agent's first delivery: it
- * lands `agent/created` on `/`, so `itx.agents.list()` knows the conversation. The device carries no source and no class name; the
- * bundles live in the project's KV.
+ * Normal agent creation establishes the parent link, sandbox and catalog entry. Then the voice
+ * processors replace the default agent processor: one append installs their subscriptions and
+ * starts the call, so the relay dials the provider before the first microphone frame arrives.
+ * The device carries no source or class name; the bundles live in the project's KV.
  */
 import { z } from "zod";
 import { ConfigWorker } from "./processor.js";
@@ -156,16 +154,24 @@ export default class VoiceWorker extends ConfigWorker {
     const screenDevice =
       options.screen === true && deviceMatch?.[1] ? deviceMatch[1].replaceAll("-", "_") : undefined;
     const itx = this.env.ITX.get() as unknown as {
-      cd(path: string): { append(...events: object[]): Promise<unknown> };
+      agents: { create(path: string): Promise<unknown> };
+      cd(path: string): {
+        append(...events: object[]): Promise<unknown>;
+        processors: { disable(name: string): Promise<unknown> };
+      };
     };
-    await itx.cd(streamPath).append(
+    // Normal agent creation establishes the creator link and script sandbox before
+    // either loaded voice processor needs project code, egress or tools.
+    await itx.agents.create(streamPath);
+    const conversation = itx.cd(streamPath);
+    await conversation.processors.disable("agent");
+    await conversation.append(
       {
         type: "events.iterate.com/stream/subscription-configured",
         payload: {
           name: "voice-agent",
           target: [
             "itx",
-            "builtins",
             "facets",
             [
               "get",
@@ -194,7 +200,6 @@ export default class VoiceWorker extends ConfigWorker {
           name: "voice-delegate",
           target: [
             "itx",
-            "builtins",
             "facets",
             [
               "get",
