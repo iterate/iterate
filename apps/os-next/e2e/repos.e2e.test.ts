@@ -1,7 +1,7 @@
 // repos.e2e.test.ts — A REPO AS A DOMAIN OBJECT: the `repo` facet (src/repo/durable-object.ts) on the
 // context at any path (`/repos/<name>` is the convention, not a rule; the physical tier,
 // `itx.cfArtifacts`, knows the repo by that same path), addressed as `itx.repos.get(path)` (src/library.ts)
-// and born through the collection, `itx.repos.create(path)` (src/repo/collection.ts): it enables the
+// and born through the collection, `itx.repos.create(path)` (src/project/collection.ts): it enables the
 // `repo` processor row on that path (a `stream/subscription-configured` fact), lands
 // `repo/create-requested` there and waits for the terminal fact. The processor (src/repo/processor.ts)
 // runs the saga from state at head: it provisions the Artifacts repo and lands `repo/created` — the

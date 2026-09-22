@@ -255,7 +255,7 @@ function fromHex(oid: string): Uint8Array {
 
 // -- tree and commit codecs ----------------------------------------------------
 
-export interface TreeEntry {
+interface TreeEntry {
   /** Octal mode string as git writes it: 100644, 100755, 120000, 40000, 160000. */
   mode: string;
   name: string;
@@ -281,7 +281,7 @@ export function parseTree(payload: Uint8Array): TreeEntry[] {
   return entries;
 }
 
-export function encodeTree(entries: TreeEntry[]): Uint8Array {
+function encodeTree(entries: TreeEntry[]): Uint8Array {
   // git sorts tree entries as if directory names carried a trailing slash.
   const sortKey = (entry: TreeEntry) => (entry.mode === "40000" ? `${entry.name}/` : entry.name);
   const sorted = [...entries].sort((a, b) => (sortKey(a) < sortKey(b) ? -1 : 1));

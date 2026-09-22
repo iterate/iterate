@@ -24,9 +24,28 @@ import {
   StreamProcessor,
 } from "iterate/next/stream/processor";
 import type { WithItx } from "iterate/next/sdk";
-import { jsonEqual } from "iterate/next/lib";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
+import { reduceSecretCatalog } from "../secret/contract.ts";
 import { ProjectContract, type ProjectState } from "./contract.ts";
+
+/** Where the apex points for the config repo at `commitOid`: the repo's whole tree at that exact
+ *  commit as the worker's modules (`worker.ts` the main module, every `.js` file under its own path,
+ *  so relative imports resolve as in the tree — the repo facet's `modules`), cached under the
+ *  commit. The saga writes it for the seed and the follower for every later commit — the same
+ *  target under the same key, so the two appends land one event. */
+function configRepoIngressTarget(commitOid: string) {
+  return [
+    "itx",
+    "workers",
+    [
+      "get",
+      {
+        source: ["itx", "repos", ["get", "/repos/config"], ["modules", { commitOid }]],
+        cacheKey: commitOid,
+      },
+    ],
+  ];
+}
 
 export class ProjectProcessor extends StreamProcessor<
   ProjectState,
@@ -102,24 +121,10 @@ export class ProjectProcessor extends StreamProcessor<
         const { [event.payload.path]: _gone, ...agents } = state.agents;
         return { ...state, agents };
       }
-      case "events.iterate.com/secret/set": {
-        // The latest write is the row (a rotation keeps the row, a new pin or strategy replaces
-        // it); the first set's time stays. The same pin and strategy again is a no-op.
-        const { path, urls, refresh } = event.payload;
-        const known = state.secrets[path];
-        if (known && known.refresh === refresh && jsonEqual(known.urls, urls)) return undefined;
-        return {
-          ...state,
-          secrets: {
-            ...state.secrets,
-            [path]: { urls, refresh, createdAt: known?.createdAt ?? event.createdAt },
-          },
-        };
-      }
+      case "events.iterate.com/secret/set":
       case "events.iterate.com/secret/deleted": {
-        if (!state.secrets[event.payload.path]) return undefined;
-        const { [event.payload.path]: _gone, ...secrets } = state.secrets;
-        return { ...state, secrets };
+        const secrets = reduceSecretCatalog(state.secrets, event);
+        return secrets && { ...state, secrets };
       }
       case "events.iterate.com/repo/commit-completed":
         // Only the config repo moves the apex; another repo's commit is a fact for its own log.
@@ -165,24 +170,7 @@ export class ProjectProcessor extends StreamProcessor<
             await append({
               type: "events.iterate.com/project/ingress-configured",
               idempotencyKey: `project/ingress-configured:${tip.commitOid}`,
-              payload: {
-                target: [
-                  "itx",
-                  "workers",
-                  [
-                    "get",
-                    {
-                      source: [
-                        "itx",
-                        "repos",
-                        ["get", "/repos/config"],
-                        ["modules", { commitOid: tip.commitOid }],
-                      ],
-                      cacheKey: tip.commitOid,
-                    },
-                  ],
-                ],
-              },
+              payload: { target: configRepoIngressTarget(tip.commitOid) },
             });
             this.#published = tip.offset;
           }
@@ -257,19 +245,7 @@ site down until the next one.
           {
             type: "events.iterate.com/project/ingress-configured",
             idempotencyKey: `project/ingress-configured:${commitOid}`,
-            payload: {
-              target: [
-                "itx",
-                "workers",
-                [
-                  "get",
-                  {
-                    source: ["itx", "repos", ["get", "/repos/config"], ["modules", { commitOid }]],
-                    cacheKey: commitOid,
-                  },
-                ],
-              ],
-            },
+            payload: { target: configRepoIngressTarget(commitOid) },
           },
           {
             type: "events.iterate.com/project/created",

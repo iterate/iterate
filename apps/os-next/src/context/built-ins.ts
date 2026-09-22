@@ -48,7 +48,7 @@ import {
   type SecretMaterial,
   type SecretRefresh,
 } from "../secrets.ts";
-import type { SecretState } from "../secret/contract.ts";
+import type { SecretCatalog, SecretState } from "../secret/contract.ts";
 import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
@@ -740,7 +740,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         const { state } = (await deps
           .context(owner.rootPath)
           .invoke(["itx", "facets", ["get", ownerRootFacet()], ["snapshot"]], [], hopCaller())) as {
-          state: { secrets: Record<string, Omit<SecretCatalogEntry, "path">> };
+          state: { secrets: SecretCatalog };
         };
         return Object.entries(state.secrets).map(([path, row]) => ({ path, ...row }));
       },

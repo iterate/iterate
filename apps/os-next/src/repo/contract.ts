@@ -2,8 +2,8 @@
 // convention). Its git lives in Cloudflare Artifacts; its facts live on that path's log, and THIS
 // FILE is the only place they are spelled. The rest of the folder derives from it: processor.ts
 // reduces these events and runs the creation and deletion sagas, durable-object.ts speaks git behind
-// the `created` guard, collection.ts is `itx.repos` (`list`, `create`, `delete`), library.ts hands
-// out the handle (`itx.repos.get(path)`: the host's verbs plus the typed `append`). Deletion is the
+// the `created` guard, src/project/collection.ts is `itx.repos` (`list`, `create`, `delete`), library.ts
+// hands out the handle (`itx.repos.get(path)`: the host's verbs plus the typed `append`). Deletion is the
 // creation's mirror: `delete-requested` opens it, the processor tears down the Artifacts repo and
 // lands `deleted` — cross-posted to `/` so the catalog drops the entry. Every type is derived here,
 // never hand-kept:
@@ -12,35 +12,16 @@
 //   EventInput<typeof RepoContract>                                          what `itx.repos.get(path).append(…)` takes
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
+import { EntityCreationAndDeletionState } from "../project/entity-state.ts";
 
 export const RepoContract = defineProcessorContract({
   slug: "repo",
   version: "2",
   description: "A repo: its creation and deletion, and the commits that landed through it.",
-  /** THE REDUCED STATE — what the reduce keeps between events: where creation stands, as the OFFSET
-   *  of the event that says so (the request, the certificate, or the failure — read that event for
-   *  the error), and where deletion stands the same way (the request, or the certificate). It is the
-   *  checkpoint the facet stores, what `snapshot()` and `liveSnapshot()` answer, and the guard every
-   *  verb reads before it speaks git. */
-  stateSchema: z.object({
-    creation: z
-      .object({
-        status: z.enum(["requested", "created", "failed"]),
-        offset: z.number().int().positive(),
-        /** The context that asked (`create-requested.creator`): the saga writes the parent link to it. */
-        creator: z.string().optional(),
-      })
-      .nullable()
-      .default(null),
-    /** Where deletion stands, as the offset of the event that says so; null while the repo lives. */
-    deletion: z
-      .object({
-        status: z.enum(["requested", "deleted"]),
-        offset: z.number().int().positive(),
-      })
-      .nullable()
-      .default(null),
-  }),
+  /** THE REDUCED STATE — the one every entity keeps (src/project/entity-state.ts): where creation and
+   *  deletion stand, as the offsets of the events that say so; the guard every verb reads before it
+   *  speaks git. */
+  stateSchema: EntityCreationAndDeletionState,
   events: {
     "events.iterate.com/repo/create-requested": {
       description:

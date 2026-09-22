@@ -3,7 +3,7 @@
 // is the processor's SHELL plus `message()`: the loop, the model call (a `@cf/…` model through
 // `itx.ai`, anything else through the account's AI Gateway) and the birth are all the processor's
 // (processor.ts), reached through the `withItx` and the env handed in here. Creation is
-// `itx.agents.create(path)` (src/agent/collection.ts): the processor row on the path, then
+// `itx.agents.create(path)` (src/project/collection.ts): the processor row on the path, then
 // `agent/create-requested`, then the saga in the processor lands the certificate — cross-posted to `/`
 // first, then here with the default system prompt beside it. `message(text)`, a person's words, is
 // the one verb of its own, and it refuses until the certificate has landed (`state.creation`) and
