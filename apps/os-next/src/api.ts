@@ -1,7 +1,7 @@
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { OAuthScope } from "iterate/next/oauth-scopes";
 import { platformAddressesOf } from "./app-config.ts";
-import type { Env, Handler } from "./control-plane.ts";
+import type { Env, Handler } from "./env.ts";
 import { authorizationOf, recordGrantUse, providerOptions } from "./oauth.ts";
 import { rpcResponse } from "./rpc.ts";
 import { mcpResponse } from "./mcp.ts";

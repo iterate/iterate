@@ -10,7 +10,7 @@ import { codedError, isLocalOrigin } from "iterate/next/lib";
 import { authorizationCodeRequest } from "iterate/next/oauth";
 import { type GrantEnded, type GrantMinted } from "./account/contract.ts";
 import type { PlatformAddresses } from "./app-config.ts";
-import type { Env } from "./control-plane.ts";
+import type { Env } from "./env.ts";
 import { directory } from "./directory.ts";
 import {
   authorizationOf,
@@ -45,7 +45,7 @@ const mintsPersonalAccessTokens = (issuer: string): boolean =>
   issuer.startsWith("https:") || isLocalOrigin(issuer);
 
 /** Account capabilities are consented independently of project access. */
-export class Grants extends RpcTarget {
+export class GrantsRpcTarget extends RpcTarget {
   readonly #env: Env;
   readonly #ctx: ExecutionContext;
   readonly #auth: Authorization;

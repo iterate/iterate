@@ -2,7 +2,7 @@ import * as oauth from "oauth4webapi";
 import { z } from "zod";
 import { errorCode, sameOriginPath } from "iterate/next/lib";
 import { cookieValueOf, signClaims, verifyClaims } from "iterate/next/principal";
-import type { Env } from "./control-plane.ts";
+import type { Env } from "./env.ts";
 import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-config.ts";
 import { startIssuerSession } from "./issuer-session.ts";
 import { directory } from "./directory.ts";

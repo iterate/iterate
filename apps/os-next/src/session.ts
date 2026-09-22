@@ -8,8 +8,8 @@ import type { IterateApi } from "iterate/next/api";
 import { codedError } from "iterate/next/lib";
 import { verifyAdminSecret, type Caller, type Principal } from "iterate/next/principal";
 import type { StreamEventInput } from "iterate/next/stream/processor";
-import type { Consent } from "./consent.ts";
-import type { Grants } from "./grants.ts";
+import type { ConsentRpcTarget } from "./consent.ts";
+import type { GrantsRpcTarget } from "./grants.ts";
 import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import {
   DurableObjectNameCodec,
@@ -195,15 +195,15 @@ export type SessionAuthority = {
    *  (`source.grant`); absent for the admin secret and the in-band cookie/admin authenticate. */
   grant?: string;
   reach: Reach;
-  grants?: Grants;
-  consent?: Consent;
+  grants?: GrantsRpcTarget;
+  consent?: ConsentRpcTarget;
   scopes?: string[];
 };
 
 export class SessionRpcTarget extends RpcTarget {
   readonly #sessionTeardown: SessionTeardown;
-  readonly #projects: ProjectCollection;
-  readonly #organizations: OrganizationCollection;
+  readonly #projects: ProjectCollectionRpcTarget;
+  readonly #organizations: OrganizationCollectionRpcTarget;
   readonly #input: SessionInput;
   readonly #authority: SessionAuthority;
 
@@ -212,7 +212,7 @@ export class SessionRpcTarget extends RpcTarget {
     this.#input = input;
     this.#authority = authority;
     this.#sessionTeardown = sessionTeardown;
-    this.#projects = new ProjectCollection(
+    this.#projects = new ProjectCollectionRpcTarget(
       input,
       sessionTeardown,
       {
@@ -222,7 +222,7 @@ export class SessionRpcTarget extends RpcTarget {
       },
       authority.reach,
     );
-    this.#organizations = new OrganizationCollection(
+    this.#organizations = new OrganizationCollectionRpcTarget(
       (orgId) => this.#reachesOrg(orgId),
       (orgId) => this.#globalContext(`/organizations/${orgId}`),
     );
@@ -369,14 +369,14 @@ export class SessionRpcTarget extends RpcTarget {
 
   /** The project catalog. A GETTER, not a field: capnweb (like Workers RPC) exposes prototype
    *  members only — an instance property is private state and is refused over the wire. */
-  get projects(): ProjectCollection {
+  get projects(): ProjectCollectionRpcTarget {
     return this.#projects;
   }
 
   /** The organizations this session can reach, each as a global IterateContextRpcTarget at
    *  `(global, /organizations/<orgId>)` — the same context surface as a user or a project. `orgs()`
    *  returns the directory rows; this vends the org's context, by membership. */
-  get organizations(): OrganizationCollection {
+  get organizations(): OrganizationCollectionRpcTarget {
     return this.#organizations;
   }
 
@@ -420,7 +420,7 @@ export class SessionRpcTarget extends RpcTarget {
 /** The organization catalog: `get(orgId)` vends an organization's context in the deployment-global
  *  namespace, `(global, /organizations/<orgId>)` — BY MEMBERSHIP (`SessionRpcTarget.#reachesOrg`):
  *  an org the session does not reach is FORBIDDEN, exactly as `projects.get` outside its reach. */
-class OrganizationCollection extends RpcTarget {
+class OrganizationCollectionRpcTarget extends RpcTarget {
   readonly #reachesOrg: (orgId: string) => Promise<boolean>;
   readonly #context: (orgId: string) => IterateContextRpcTarget;
 
@@ -453,9 +453,9 @@ class OrganizationCollection extends RpcTarget {
 }
 
 /** The project catalog: `list()`, `get(project)`, `create({ project })` — get and create vend the
- *  project's root context. What a session reaches is its `Reach` (control-plane.ts): every project,
+ *  project's root context. What a session reaches is its `Reach` (directory.ts): every project,
  *  the projects of the user's orgs, or the projects named outright. */
-class ProjectCollection extends RpcTarget {
+class ProjectCollectionRpcTarget extends RpcTarget {
   readonly #input: SessionInput;
   readonly #sessionTeardown: SessionTeardown;
   readonly #reach: Reach;

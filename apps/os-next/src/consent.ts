@@ -15,7 +15,7 @@ import {
   type IngressRouting,
 } from "iterate/next/project-ingress";
 import { type ConsentApproved } from "./account/contract.ts";
-import type { Env } from "./control-plane.ts";
+import type { Env } from "./env.ts";
 import { directory, type Org, type Project } from "./directory.ts";
 import { appConfigOf, type PlatformAddresses } from "./app-config.ts";
 import {
@@ -97,7 +97,7 @@ function authorizationFailure(
 
 /** This capability exists only on the grant minted by verified issuer sign-in.
  * Account scope and a copied issuer client ID never confer approval authority. */
-export class Consent extends RpcTarget {
+export class ConsentRpcTarget extends RpcTarget {
   readonly #env: Env;
   readonly #ctx: ExecutionContext;
   readonly #grant: AccessGrant;

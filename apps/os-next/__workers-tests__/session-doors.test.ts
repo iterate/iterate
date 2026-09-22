@@ -2,7 +2,7 @@ import { env, SELF } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, beforeAll, expect, test } from "vitest";
 import type { IterateRpcTarget } from "../src/session.ts";
-import type { Env } from "../src/control-plane.ts";
+import type { Env } from "../src/env.ts";
 import { applyDirectorySchema, SRC_ECHO_APP } from "./support.ts";
 
 const bindings = env as unknown as Env;

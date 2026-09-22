@@ -4,7 +4,7 @@ import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { appSession, startAppSession } from "iterate/next/app-server";
 import { authorizationCodeRequest } from "iterate/next/oauth";
 import { platformAddressesOf } from "../src/app-config.ts";
-import type { Env } from "../src/control-plane.ts";
+import type { Env } from "../src/env.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { directory } from "../src/directory.ts";
 import { startIssuerSession } from "../src/issuer-session.ts";
@@ -388,12 +388,11 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
   expect(page.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
   expect(page.headers.get("X-Frame-Options")).toBe("DENY");
   // The page is a capnweb client of /api: its bundle is a file beside it, open to anyone; there is
-  // no JSON sibling (an anonymous browser at a non-page path is sent to sign in) and nothing to
-  // post to /authorize.
+  // no JSON sibling (a non-page path on the platform origin is a 404, signed in or not) and
+  // nothing to post to /authorize.
   expect((await SELF.fetch(`${origin}/capnweb.js`)).status).toBe(200);
   const sibling = await SELF.fetch(`${origin}/authorize.json`, { redirect: "manual" });
-  expect(sibling.status).toBe(302);
-  expect(sibling.headers.get("location")).toMatch(/^\/\.auth\/login\?/);
+  expect(sibling.status).toBe(404);
   expect(
     (await SELF.fetch(`${origin}/oauth2/auth`, { method: "POST", headers: { Origin: origin } }))
       .status,

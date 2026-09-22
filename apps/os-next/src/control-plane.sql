@@ -22,7 +22,7 @@ create table if not exists google_identities (
 );
 
 create table if not exists orgs (
-  id text primary key,            -- org_<hex> (minted), or org_admin — the deployment's own, no members (control-plane.ts adminOrg)
+  id text primary key,            -- org_<hex> (minted), or org_admin — the deployment's own, no members (directory.ts adminOrg)
   name text not null,
   created_at text not null default current_timestamp
 );

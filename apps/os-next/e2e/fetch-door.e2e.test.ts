@@ -149,12 +149,11 @@ test("a hop count the platform never wrote (an app spelling `NaN` to defeat the 
   expect(response.text).toContain('"NaN"');
 });
 
-test("the old RPC routes are GONE — /expression, /call, /ws and /cap are no capnweb endpoint: the platform host's browser-auth gate sends an unauthenticated GET to /.auth/login (302), never an itx result; a /ws upgrade gets no 101", async () => {
+test("the old RPC routes are GONE — /expression, /call, /ws and /cap are no capnweb endpoint: on the platform origin each is a 404 (the issuer's pages are the only non-protocol paths), never an itx result; a /ws upgrade gets no 101", async () => {
   // A project host is the one HTTP way into a project. The old /expression, /call, /ws and /cap
-  // routes on the platform host no longer exist as RPC doors — every non-issuer path there is behind
-  // the browser-auth gate (src/sdk/auth.ts `auth.require`), so an unauthenticated GET is redirected to
-  // /.auth/login. What matters for this pin: none is a capnweb/itx endpoint any more, and none upgrades.
-  // (`redirect: "manual"` — a plain `fetch` would FOLLOW the 302 to the login page and see its 200.)
+  // routes on the platform origin do not exist: a path that is neither the provider's nor one of
+  // the issuer's pages is a 404 from issuer-pages.ts, signed in or not. What matters for this pin:
+  // none is a capnweb/itx endpoint any more, and none upgrades.
   for (const path of [
     "/expression?context=prj_x&itx=itx.whoami",
     "/expression/rpc/v1?context=prj_x&itx=itx.site",
@@ -163,8 +162,7 @@ test("the old RPC routes are GONE — /expression, /call, /ws and /cap are no ca
     "/cap?context=prj_x&cap=itx.whoami",
   ]) {
     const res = await fetch(workerUrl(path), { redirect: "manual" });
-    expect(res.status, path).toBe(302);
-    expect(res.headers.get("location"), path).toMatch(/^\/\.auth\/login\?next=/);
+    expect(res.status, path).toBe(404);
   }
   const outcome = await new Promise<string>((resolve) => {
     const ws = new WebSocket(workerUrl("/ws").replace(/^http/, "ws"));
