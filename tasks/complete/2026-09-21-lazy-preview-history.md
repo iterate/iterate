@@ -1,11 +1,11 @@
 ---
-status: in-progress
+status: ready-for-review
 size: medium
 ---
 
 # Fetch preview planning history only when needed
 
-Status: the requested API/async simplification is implemented and focused tests pass. The reader now yields commit metadata through `for await`, with conservative deployment at merge, file-page and history limits. Full checks and fresh preview acceptance remain.
+Status: the async API rewrite is implemented and pushed with current main. Full local checks, real GitHub inheritance, and the merged-head preview all pass. The final request-deadline correction passes focused tests; current-head CI is tracked in PR #2744. The draft awaits review and monitoring is active.
 
 The Plan job should use the ordinary actions/checkout defaults to get the checked-in scripts. Planning must fetch additional Git metadata only as needed, rather than making checkout fetch the entire repository history before any decision is possible.
 
@@ -17,8 +17,8 @@ The Plan job should use the ordinary actions/checkout defaults to get the checke
 - [x] Preserve green/red docs inheritance, test-only deployment reuse, rename paths and the merge-base boundary for supported histories. *HTTP integration tests drive the real Octokit client and planner.*
 - [x] Prefer full deployment over reconstructing unsupported history. *Merge commits, pagination/full 100-file pages and exhaustion of 20 commits carry explicit stop reasons.*
 - [x] Keep API failures visible and preserve checkout identity validation. *15-second request timeouts; checkout SHA is read with the existing async command runner.*
-- [ ] Run full checks and exercise a full preview, then docs-only inheritance. *The earlier Git implementation passed both; the API version needs fresh acceptance.*
-- [ ] Update the PR body and handle submitted review feedback. *Continue PR #2744 with new commits; retain the existing preview state block.*
+- [x] Run full checks and exercise a full preview, then docs-only inheritance. *All local checks passed. Merge `749781d78` passed a full settled preview; a read-only API run of docs SHA `28e52ebfe` inherited the real settled result from `e36843a25`.*
+- [x] Update the PR body and handle submitted review feedback. *PR #2744 describes the final API design and preserves automated preview state. No submitted review threads; monitoring renewed through 2026-09-23 13:17 UTC.*
 
 ## Decisions and assumptions
 
@@ -43,3 +43,5 @@ The Plan job should use the ordinary actions/checkout defaults to get the checke
 - 2026-09-22: Replaced Git history reconstruction with cached asynchronous commit reads and a lazy merge-base request. Red/green tests covered one-request product decisions, inherited failures, conservative merge/size/history limits and rename paths. Migrated the remaining selection coverage to HTTP tests; the initial 47 focused tests and scripts typecheck pass.
 
 - Merged current main to pick up its expired mobile-spec skip correction and preserve the newly merged os-next branch exemption. The exemption needs a comparison even for head decisions; the same cached response supplies the merge-base for later traversal. Tests cover reverted apps/os changes, mixed branches, a capped comparison and both rename paths.
+
+- Full validation after merging main passed: all local workspace tests, typecheck, lint, knip and formatting; 58 focused planner/evidence/workflow tests. Live API probes selected product deployment in 1.181s (two history requests) and inherited docs success in 2.329s (three history requests plus settlement evidence). The merged-head preview settled successfully. Dependency-source inspection found Octokit v10 ignores `request.timeout`; both reads now pass an actual abort signal, retaining the 15-second deadline.

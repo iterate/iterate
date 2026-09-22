@@ -52,7 +52,7 @@ export class CommitHistory {
       base: this.main,
       head: this.head,
       per_page: 1,
-      request: { timeout: 15_000 },
+      request: { signal: AbortSignal.timeout(15_000) },
     });
     if (!data.files) throw new Error("GitHub omitted the branch comparison files.");
     this.comparison = {
@@ -76,7 +76,7 @@ export class CommitHistory {
       ...this.repository,
       ref: commit,
       per_page: 100,
-      request: { timeout: 15_000 },
+      request: { signal: AbortSignal.timeout(15_000) },
     });
     if (!data.files) throw new Error(`GitHub omitted files for ${commit}.`);
     const result = {

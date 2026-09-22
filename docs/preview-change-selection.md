@@ -265,61 +265,33 @@ its deploy. Ordinary full runs retain the existing three-app restoration.
 `preview-settled` is published only after the restore succeeds. Main/manual runs
 continue to request full deployment and tests.
 
-## Initial Git implementation acceptance
+## API history acceptance
 
-Before the API simplification, [PR #2744](https://github.com/iterate/iterate/pull/2744) measured these two Plan
-jobs on the same baked CI image. These are individual observations, not an
-averaged benchmark; the baseline docs commit reached an untested product
-ancestor, while the implementation commit required deployment at head.
+[PR #2744](https://github.com/iterate/iterate/pull/2744) replaces the initial
+incremental-Git implementation with asynchronous API reads. Its merged-main
+head `749781d78` passed the [full preview workflow](https://depot.dev/orgs/0p91s0lz49/workflows/0b5xv9ksbp):
+deployment, readiness, app tests, all six browser shards, cleanup and restoration.
+Settlement recorded `tests=success; deployment=restored; check=106764525149`.
+The Plan log explicitly selected deployment because head was a merge commit.
 
-| Measurement                           | Full-history checkout (`ba8ff38c5`) | Lazy metadata (`44107d152`)                              |
-| ------------------------------------- | ----------------------------------- | -------------------------------------------------------- |
-| Plan job                              | 55s                                 | 31s                                                      |
-| Checkout fetch phase                  | 27.185s                             | 0.432s                                                   |
-| Metadata fetches inside planning      | None                                | One `--deepen=3 --filter=blob:none` fetch; no main fetch |
-| Metadata fetch start through decision | Not separately measured             | 1.170s                                                   |
+Checkout's fetch phase took 0.377s, versus 27.185s in the original full-history
+[baseline](https://depot.dev/orgs/0p91s0lz49/workflows/x103v367zm?job=8lspj90c2k&attempt=115srn7fzs).
+Separate read-only runs of the API reader against real GitHub data selected:
 
-The [baseline Plan](https://depot.dev/orgs/0p91s0lz49/workflows/x103v367zm?job=8lspj90c2k&attempt=115srn7fzs)
-and [lazy Plan](https://depot.dev/orgs/0p91s0lz49/workflows/tt77gkjqqt?job=4915hvtkq2&attempt=cxn3gs0zq8)
-logs identify both checkout fetch boundaries and the planning decision. The
-lazy job published `tests=true; deploy=true` for the exact implementation SHA.
-Its local regression test also verifies that the former product blob remains
-absent after the filtered fetch and that the checkout stays clean.
+| Revision            | Result                                   | History API requests | Elapsed |
+| ------------------- | ---------------------------------------- | -------------------- | ------- |
+| Product `ccb8f8e66` | Deploy head                              | 2                    | 1.181s  |
+| Docs `28e52ebfe`    | Inherit settled success from `e36843a25` | 3                    | 2.329s  |
 
-Local validation passed all 52 focused planner/evidence/workflow tests, repository
-typecheck, lint, unused-code checks and formatting. The complete repository
-suite passed with `pnpm -r --workspace-concurrency=1 test`. Parallel local runs
-hit five-second timeouts: the new history fixture was shortened, and an
-unchanged telemetry subprocess test passed when workspaces ran serially. No
-timeouts were increased.
+The docs timing includes checking the real settlement evidence. These are
+individual observations, not an averaged benchmark; the read-only probes ran
+locally, while checkout timings came from CI. Full local tests, typecheck, lint,
+formatting and unused-code checks pass. HTTP tests cover all decision paths and
+conservative limits using a real Octokit client and local server.
 
-The implementation run also passed deployment, app tests and all six browser
-shards, then restored the preview. Its [settlement](https://depot.dev/orgs/0p91s0lz49/workflows/tt77gkjqqt?job=fx5b2kkt74&attempt=rl1ltfjsrr)
-recorded `tests=success; deployment=restored; check=106277241289`. The following
-docs-only push tested inheritance and exposed the mismatch described below.
-
-The first docs-only push exposed an existing evidence-reader mismatch: Depot
-reported `Preview / Preview / deploy + e2e / App tests`, while the reader
-removed only one prefix and rejected the settled run. A regression now covers
-those actual nested names, and the reader matches the leaf job name while
-retaining every provenance and completeness check. Replaying the real
-`44107d152` checks/statuses then recognized its settled success.
-
-Final code at `e36843a25` passed unit/lint CI and a [full preview run](https://depot.dev/orgs/0p91s0lz49/workflows/th655r5qwt):
-readiness, app tests, all six browser shards and restoration, followed by
-`tests=success; deployment=restored; check=106287271519`. An earlier attempt
-failed readiness when npm returned 404 for the newly published
-`@tanstack/query-core@5.103.2` tarball; after cleanup and registry recovery, the
-fresh run passed without dependency or timeout changes. Subsequent product
-checkout fetches took 0.394s and 0.416s; total job times still vary with runner
-queueing. The docs-only acceptance push follows this settlement; its outcome is
-recorded in the PR body to avoid another evidence-only commit.
-
-## Async GitHub history follow-up
-
-The API version removes incremental Git fetches and shallow-history bookkeeping.
-HTTP integration tests exercise the real Octokit client against a local server:
-head-only decisions, inherited green/red results, deployment reuse, replayed
-searches, merge-base boundaries, merge/size/history limits, rename paths, roots
-and visible API errors. Fresh full-preview and docs-inheritance acceptance is
-recorded in PR #2744 after the implementation push.
+Acceptance also exposed an existing result-parser mismatch: Depot checks have
+nested prefixes such as `Preview / Preview / deploy + e2e / App tests`. The
+reader now matches the leaf job name while retaining all provenance and
+completeness checks. Requests use `AbortSignal.timeout(15_000)`, since the
+installed Octokit request implementation does not enforce the old `timeout`
+option. Final CI results are recorded in the PR body.
