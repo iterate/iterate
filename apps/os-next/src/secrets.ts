@@ -11,36 +11,16 @@
 // be pinned — so a credential that expires (an OAuth access token, a Waitrose session) is one secret,
 // not a worker.
 
-/** A secret's material: one string (`getSecret("/secrets/NAME")` is the whole value) or a JSON
- *  object whose string fields `getSecret("/secrets/NAME", { field: "a.b" })` picks — the
- *  multidimensional shape a credential exchange needs (`{ username, password, accessToken }`,
- *  `{ clientId, clientSecret, refreshToken, accessToken }`). A JSON STRING still works as an object
- *  (`set(name, JSON.stringify({...}))`). */
-export type SecretMaterial = string | Record<string, unknown>;
-
-/** How a token endpoint wants the client credential — the RFC 8414 `token_endpoint_auth_methods_supported`
- *  registry values, so a provider's discovery document pastes straight in: `client_secret_basic`
- *  (HTTP Basic — Google, Slack, the petshop; the default), `client_secret_post` (`client_id` +
- *  `client_secret` as form fields — GitHub, Linear), `none` (a public client: `client_id` alone,
- *  PKCE stands in for the secret). RFC 6749 §2.3.1 forbids sending two forms at once. */
-export type ClientAuth = "client_secret_basic" | "client_secret_post" | "none";
-
-/** How the secret's facet re-mints an expired credential, in its own trusted code: the
- *  exchange reads this secret's own material, POSTs to an endpoint within the pin, and writes the
- *  answer back into the material — `accessToken` (and a rotated `refreshToken`). Triggered on a 401
- *  from the pinned host, and on first use when the placeholder's field is not there yet. */
-export type SecretRefresh =
-  /** RFC 6749 §6, the refresh_token grant: `refreshToken` + `clientId` (+ `clientSecret` for a
-   *  confidential client) from the material → `accessToken` (+ the newest `refreshToken`). Google,
-   *  GitHub, an MCP server's authorization server, the petshop fixture. */
-  | { kind: "oauth-refresh-token"; tokenEndpoint: string; clientAuth?: ClientAuth }
-  /** The username/password → session-token archetype's one instance so far, Waitrose's login: POST
-   *  the Android app's `NewSession` GraphQL mutation with `username`/`password` from the material →
-   *  `accessToken`. Waitrose has no refresh grant — re-login IS the refresh — so one strategy covers
-   *  the first-use mint and the 401 re-mint. Vendor-specific on purpose: a caller-supplied login
-   *  template would put an arbitrary request body in trusted code; a second vendor of this shape
-   *  earns the generalization, not before. */
-  | { kind: "waitrose-session"; graphqlUrl: string };
+// The four shapes a caller sees — the material, the client-auth method, the refresh strategy and
+// the catalog entry — are the SDK's (`iterate/next/api`, where the dash and every client read them);
+// re-exported so the rest of os-next keeps one import for everything a secret is.
+import type {
+  ClientAuth,
+  SecretCatalogEntry,
+  SecretMaterial,
+  SecretRefresh,
+} from "iterate/next/api";
+export type { ClientAuth, SecretCatalogEntry, SecretMaterial, SecretRefresh };
 
 /** What the secret's facet stores: the material, the ORIGINS it may be sent to (never
  *  empty — a secret is always pinned), and the refresh strategy or none. */
@@ -48,16 +28,6 @@ export type SecretRecord = {
   material: SecretMaterial;
   urls: string[];
   refresh: SecretRefresh | null;
-};
-
-/** A secret's catalog entry — `itx.secrets.list()` — its path, the pin, the strategy's KIND and when
- *  it was first set; never a value (the owner root's fold of the `secret/set` certificates:
- *  src/project/contract.ts and its account and organization twins). */
-export type SecretCatalogEntry = {
-  path: string;
-  urls: string[];
-  refresh?: SecretRefresh["kind"];
-  createdAt: string;
 };
 
 /** A secret IS its path, and the path is what the placeholder spells: `/secrets/<name>`, the name

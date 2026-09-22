@@ -76,9 +76,50 @@ export type WorkerSource = Record<string, string> | ItxExpressionInput;
 /** What hosts a class as a durable facet — `facets.get(name, spec)`, `processors.enable(name, spec)`. */
 export type FacetSpec = { source: WorkerSource; cacheKey?: string; className: string };
 
-/** A context (a project, a user, an organization): every `itx` root, reached through `invoke`. */
 /** What `schedules.set` answers: the definition's identity, to cancel exactly it. */
 export type ScheduleReceipt = { key: string; scheduledAtOffset: number };
+
+/** A secret's material: one string (`getSecret("/secrets/<name>")` is the whole value) or a JSON
+ *  object whose string fields `getSecret("/secrets/<name>", { field: "a.b" })` picks — the
+ *  multidimensional shape a credential exchange needs (`{ username, password, accessToken }`,
+ *  `{ clientId, clientSecret, refreshToken, accessToken }`). A JSON STRING still works as an object
+ *  (`set(name, JSON.stringify({...}))`). */
+export type SecretMaterial = string | Record<string, unknown>;
+
+/** How a token endpoint wants the client credential — the RFC 8414 `token_endpoint_auth_methods_supported`
+ *  registry values, so a provider's discovery document pastes straight in: `client_secret_basic`
+ *  (HTTP Basic — Google, Slack, the petshop; the default), `client_secret_post` (`client_id` +
+ *  `client_secret` as form fields — GitHub, Linear), `none` (a public client: `client_id` alone,
+ *  PKCE stands in for the secret). RFC 6749 §2.3.1 forbids sending two forms at once. */
+export type ClientAuth = "client_secret_basic" | "client_secret_post" | "none";
+
+/** How the secret's facet re-mints an expired credential, in its own trusted code: the
+ *  exchange reads this secret's own material, POSTs to an endpoint within the pin, and writes the
+ *  answer back into the material — `accessToken` (and a rotated `refreshToken`). Triggered on a 401
+ *  from the pinned host, and on first use when the placeholder's field is not there yet. */
+export type SecretRefresh =
+  /** RFC 6749 §6, the refresh_token grant: `refreshToken` + `clientId` (+ `clientSecret` for a
+   *  confidential client) from the material → `accessToken` (+ the newest `refreshToken`). Google,
+   *  GitHub, an MCP server's authorization server, the petshop fixture. */
+  | { kind: "oauth-refresh-token"; tokenEndpoint: string; clientAuth?: ClientAuth }
+  /** The username/password → session-token archetype's one instance so far, Waitrose's login: POST
+   *  the Android app's `NewSession` GraphQL mutation with `username`/`password` from the material →
+   *  `accessToken`. Waitrose has no refresh grant — re-login IS the refresh — so one strategy covers
+   *  the first-use mint and the 401 re-mint. Vendor-specific on purpose: a caller-supplied login
+   *  template would put an arbitrary request body in trusted code; a second vendor of this shape
+   *  earns the generalization, not before. */
+  | { kind: "waitrose-session"; graphqlUrl: string };
+
+/** A secret's catalog entry — `secrets.list()` — its path, the pin, the strategy's KIND and when
+ *  it was first set; never a value (the owner root's fold of the `secret/set` certificates). */
+export type SecretCatalogEntry = {
+  path: string;
+  urls: string[];
+  refresh?: SecretRefresh["kind"];
+  createdAt: string;
+};
+
+/** A context (a project, a user, an organization): every `itx` root, reached through `invoke`. */
 
 export interface IterateContextApi {
   invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown>;
@@ -113,6 +154,23 @@ export interface IterateContextApi {
     put(key: string, value: string): Promise<{ ok: true }>;
     delete(key: string): Promise<{ ok: true }>;
     list(prefix?: string): Promise<{ keys: string[] }>;
+  };
+  /** The project's secrets, WRITE-ONLY: a secret IS its path (`/secrets/<name>`, the name
+   *  `[a-zA-Z0-9._-]+`), and the path is what an outbound request's placeholder spells —
+   *  `getSecret("/secrets/<name>")` in a URL or a header substitutes to the value at egress, and only
+   *  towards the ORIGINS in `urls` (required: a secret is always pinned). `set` stores a string or a
+   *  JSON object (`refresh` names the strategy that re-mints an expiring credential); `delete`
+   *  forgets it (re-settable); `list` is the catalog — paths, pins, strategy kinds, when first set —
+   *  never a value. Every change is one fact on the secret's path (`secret/set`, `secret/deleted`),
+   *  attributed to the caller and cross-posted to the root, so the log says who set what and when. */
+  secrets: {
+    set(
+      path: string,
+      material: SecretMaterial,
+      options: { urls: string[]; refresh?: SecretRefresh },
+    ): Promise<{ path: string }>;
+    delete(path: string): Promise<{ path: string }>;
+    list(): Promise<SecretCatalogEntry[]>;
   };
   /** The table this context resolves against, described — the tree a model reads. `list()` follows a
    *  bare hop row into the context it names (a Durable Object hop, hence async). */
@@ -199,6 +257,8 @@ export interface IterateContextApi {
 /** One OAuth grant as `grants.list()` shows it: a session, a connected app, a minted token. */
 export interface GrantRecord {
   id: string;
+  clientId?: string;
+  logoUri?: string;
   name: string;
   kind: string;
   createdAt: number;
