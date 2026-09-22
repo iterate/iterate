@@ -42,6 +42,8 @@ test("first consent creates organization and project through the ordinary sessio
   const helpers = oauthHelpers(bindings, "https://control.test");
   const client = await helpers.createClient({
     clientName: "Claude fixture",
+    clientUri: "https://studio.example/about",
+    logoUri: "https://images.example/studio.svg",
     redirectUris: ["http://127.0.0.1/callback"],
     tokenEndpointAuthMethod: "none",
     grantTypes: ["authorization_code", "refresh_token"],
@@ -68,6 +70,8 @@ test("first consent creates organization and project through the ordinary sessio
     kind: "consent",
     clientName: "Claude fixture",
     clientId: client.clientId,
+    clientDomain: "studio.example",
+    clientLogoUri: "https://images.example/studio.svg",
     picture,
     orgs: [],
     projects: [],
@@ -408,4 +412,69 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
     (await connect({ Authorization: `Bearer ${refreshed}` }).then((api) => api.info())).principal
       .actor,
   ).toBe(user.id);
+});
+
+test("consent omits missing, insecure and credential-bearing branding URLs", async () => {
+  const user = await directory(bindings.DB).upsertUser("branding-urls@example.com");
+  const login = await startIssuerSession(bindings, new Request(origin), user, "/");
+  const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
+  for (const url of [
+    undefined,
+    "not a URL",
+    "http://app.example/logo.svg",
+    "data:image/svg+xml,<svg/>",
+    "javascript:alert(1)",
+    "https://user:password@app.example/logo.svg",
+  ]) {
+    const client = await oauthHelpers(bindings, origin).createClient({
+      clientName: "Example App",
+      clientUri: url,
+      logoUri: url,
+      redirectUris: ["https://app.example/callback"],
+      tokenEndpointAuthMethod: "none",
+    });
+    const flow = await authorizationCodeRequest({
+      issuer: origin,
+      clientId: client.clientId,
+      redirectUri: "https://app.example/callback",
+      resources: [`${origin}/api`],
+    });
+    const view = await issuer.consent.describe(flow.url.search);
+    expect(view.kind).toBe("consent");
+    expect(view).not.toHaveProperty("clientLogoUri");
+    expect(view).not.toHaveProperty("clientDomain");
+  }
+});
+
+test("CIMD consent shows the metadata host even when the client declares a different website", async () => {
+  const clientId = "https://metadata.example/oauth/client.json";
+  vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
+    const request = new Request(input, init);
+    if (request.url === clientId)
+      return Promise.resolve(
+        Response.json({
+          client_id: clientId,
+          client_name: "Example App",
+          client_uri: "https://different.example/",
+          logo_uri: "https://images.example/app.svg",
+          redirect_uris: ["https://app.example/callback"],
+          token_endpoint_auth_method: "none",
+        }),
+      );
+    return SELF.fetch(request);
+  });
+  const user = await directory(bindings.DB).upsertUser("branding-cimd@example.com");
+  const login = await startIssuerSession(bindings, new Request(origin), user, "/");
+  const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
+  const flow = await authorizationCodeRequest({
+    issuer: origin,
+    clientId,
+    redirectUri: "https://app.example/callback",
+    resources: [`${origin}/api`],
+  });
+  expect(await issuer.consent.describe(flow.url.search)).toMatchObject({
+    kind: "consent",
+    clientDomain: "metadata.example",
+    clientLogoUri: "https://images.example/app.svg",
+  });
 });

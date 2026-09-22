@@ -29,13 +29,23 @@ import {
   type GrantProps,
 } from "./oauth.ts";
 
+// Client branding is supplied by the app, not a publisher-verification assertion.
+const ClientDisplayUrl = z.url({ protocol: /^https$/ }).refine((value) => {
+  if (!URL.canParse(value)) return false;
+  const url = new URL(value);
+  return !url.username && !url.password;
+});
+
 export type ConsentView =
   | {
       kind: "consent";
       query: string;
       clientName: string;
-      /** the OAuth client id (the consent hero shows the client by its initials) */
+      /** The OAuth client id, independently of the app-supplied display name and logo. */
       clientId: string;
+      clientLogoUri?: string;
+      /** CIMD's metadata host, otherwise the registered client's self-declared website host. */
+      clientDomain?: string;
       email: string;
       /** the identity provider's picture of the signed-in person, when the sign-in brought one */
       picture?: string;
@@ -131,6 +141,10 @@ export class Consent extends RpcTarget {
     try {
       const request = await this.#request(query);
       const client = await oauthHelpers(env, this.#platformOrigin).lookupClient(request.clientId);
+      const logo = ClientDisplayUrl.safeParse(client?.logoUri);
+      const website = ClientDisplayUrl.safeParse(client?.clientUri);
+      const metadata = ClientDisplayUrl.safeParse(request.clientId);
+      const domainUrl = metadata.success ? metadata.data : website.success ? website.data : null;
       const denied = new URL(request.redirectUri);
       denied.searchParams.set("error", "access_denied");
       denied.searchParams.set("error_description", "The user declined access.");
@@ -142,6 +156,8 @@ export class Consent extends RpcTarget {
         denyLocation: denied.href,
         clientName: client?.clientName ?? request.clientId,
         clientId: request.clientId,
+        ...(logo.success && { clientLogoUri: logo.data }),
+        ...(domainUrl && { clientDomain: new URL(domainUrl).host }),
         email: this.#grant.email,
         picture: this.#grant.picture,
         // parseAuthorization admitted only known scopes
