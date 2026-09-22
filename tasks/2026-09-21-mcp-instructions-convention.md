@@ -14,7 +14,7 @@ Jonas, 2026-09-21: the convention is not thought through yet — record the idea
 `apps/os-next/src/mcp.ts` `serverInstructions` tells a connecting client three things at
 `initialize`: that there is one tool, `run`, and where its scripts execute
 (the project root, `/`); that every run is on the project root's log; and which projects the token reaches (so `project` is spelled right the first
-time). Nothing tells the client how THIS project wants to be used.
+time). The tool also links executable MCP examples and tells clients to inspect config-repo `AGENTS.md` when present. A project-specific guidance convention remains open.
 
 ## The idea
 
@@ -24,7 +24,7 @@ project — the way a repo's `AGENTS.md` tells a coding agent how the repo works
 
 ## Open (the convention)
 
-- Where the guidance lives: `AGENTS.md` at the root of the project's config repo (`itx.repo`)?
+- Where the guidance lives: `AGENTS.md` at the root of the project's config repo (`itx.repos.get("/repos/config")`)?
   A file the project chooses? Something the config worker answers?
 - The expression itself: a fixed spelling every project honours (e.g. reading that file through
   `itx.repos`), or one the project registers?
