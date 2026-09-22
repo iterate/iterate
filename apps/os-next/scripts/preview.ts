@@ -279,6 +279,14 @@ async function ensureArtifactsNamespace(cf: Cf, artifactsNamespaceName: string):
  *  expected case. */
 async function deleteArtifactsNamespace(cf: Cf, artifactsNamespaceName: string): Promise<void> {
   const route = `/artifacts/namespaces/${encodeURIComponent(artifactsNamespaceName)}`;
+  // The namespace itself is what answers "does not exist" (404, code 10200); its repos list answers
+  // an empty page for a missing namespace (measured 2026-09-22), so the check is on the namespace.
+  const existing = await cf<ArtifactsNamespaceRow>(route).catch((error) => {
+    if (isArtifactsNotFoundError(error)) return undefined;
+    throw error;
+  });
+  if (!existing)
+    return console.warn(`Artifacts namespace ${artifactsNamespaceName} did not exist; continuing.`);
   let deletedRepos = 0;
   for (let round = 1; ; round++) {
     if (round > 200)
@@ -287,14 +295,7 @@ async function deleteArtifactsNamespace(cf: Cf, artifactsNamespaceName: string):
       );
     // The first page, read again each round until it is empty — that is this loop's pagination, so
     // `page=1` is named (env-context refuses a truncated listing that names no page).
-    const repos = await cf<{ name: string }[]>(`${route}/repos?limit=200&page=1`).catch((error) => {
-      if (isArtifactsNotFoundError(error)) return undefined;
-      throw error;
-    });
-    if (!repos)
-      return console.warn(
-        `Artifacts namespace ${artifactsNamespaceName} did not exist; continuing.`,
-      );
+    const repos = await cf<{ name: string }[]>(`${route}/repos?limit=200&page=1`);
     // ten at a time: one delete answers in ~1 s (measured), and a preview's e2e run leaves hundreds
     for (let i = 0; i < repos.length; i += 10) {
       await Promise.all(
@@ -310,9 +311,11 @@ async function deleteArtifactsNamespace(cf: Cf, artifactsNamespaceName: string):
       deletedRepos += Math.min(10, repos.length - i);
     }
     if (repos.length > 0) continue;
+    // gone under this run (the sweep and the close job can race) is deleted
     const deleted = await cf(route, { method: "DELETE" }).then(
       () => true,
       (error) => {
+        if (isArtifactsNotFoundError(error)) return true;
         if (!isArtifactsNotEmptyError(error)) throw error;
         return false;
       },

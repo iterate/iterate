@@ -142,7 +142,9 @@ export async function resolveEnvContext<E extends DeployableEnv>(options: {
         `Cloudflare API ${path} returned page 1 of ${info.total_count} results — raise per_page or paginate.`,
       );
     }
-    return body.result as T;
+    // A 2xx with no JSON body answers undefined — Artifacts accepts a repo delete with a 202 and
+    // nothing else, and deletes a namespace the same way.
+    return body?.result as T;
   };
   return {
     name,
