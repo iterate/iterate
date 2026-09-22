@@ -213,7 +213,7 @@ export function buildLibrary(
       // An entity root is ONE shape: `get(path)` the handle (`entityHandle`, typed as the facet it
       // dispatches to — the entities section says why the assertion is safe), `list()` and
       // `create(path)` one dispatch each on the collection the `project` facet carries
-      // (`projectFacet`): the platform's own `<Entity>CollectionRpcTarget`, whose `list` and
+      // (`projectFacet`): the platform's own `EntityCollectionRpcTarget`, whose `list` and
       // `create` answer exactly these shapes — ours, so the wire's copy is asserted, not re-validated.
       repos: {
         get: (path) =>
@@ -402,10 +402,11 @@ export async function runScript(itx: LibraryItx, script: unknown): Promise<unkno
 // under the CALLER's principal, never through the facet (a facet's appends are the processor's,
 // stamped as its). `list()` and `create(path)` are THE COLLECTION's, which lives where the catalog
 // does: the `project` facet on `/` (src/project/durable-object.ts carries one
-// `<Entity>CollectionRpcTarget` per entity) — `list()` reads the catalog the project processor folds
-// from the cross-posted certificates; `create(path)` is the creation saga on the path: the
-// processor row, `<entity>/create-requested`, then `<entity>/created` (cross-posted to `/` by the
-// entity's processor, which provisions at head from state) or `<entity>/create-failed`, thrown.
+// `EntityCollectionRpcTarget` per entity, src/project/collection.ts) — `list()` reads the catalog
+// the project processor folds from the cross-posted certificates; `create(path)` is the creation
+// saga on the path: the processor row, `<entity>/create-requested`, then `<entity>/created`
+// (cross-posted to `/` by the entity's processor, which provisions at head from state) or
+// `<entity>/create-failed`, thrown.
 
 /** The context a handle's relative paths mean, and a creation's CREATOR: the caller's originating
  *  context (`Caller.path`, stamped by the first hop — `./x` from a child, answered at the root

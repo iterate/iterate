@@ -3,8 +3,8 @@
 // context's `itx`. Its facts live on that path's log, and THIS FILE is the only place they are
 // spelled. The rest of the folder derives from it: processor.ts reduces these events, runs the
 // creation and deletion sagas and THE LOOP, durable-object.ts is the processor's shell plus
-// `message()`, collection.ts is `itx.agents` (`list`, `create`, `delete`), library.ts hands out the
-// handle (`itx.agents.get(path)`: the host's verbs plus the typed `append`). Deletion is the
+// `message()`, src/project/collection.ts is `itx.agents` (`list`, `create`, `delete`), library.ts hands
+// out the handle (`itx.agents.get(path)`: the host's verbs plus the typed `append`). Deletion is the
 // creation's mirror: `delete-requested` opens it, the processor lands `deleted` — cross-posted to
 // `/` so the catalog drops the entry — and a deleted agent runs no more turns. Every type is derived
 // here, never hand-kept:
@@ -33,6 +33,7 @@
 // as it is.
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
+import { EntityCreationAndDeletionState } from "../project/entity-state.ts";
 import { CoreContract } from "../stream/core-processor.ts";
 
 /** Who put words into the context: a person, a script's result, or the loop itself (a format
@@ -93,24 +94,7 @@ export const AgentContract = defineProcessorContract({
    *  for is the CONTEXT's obligation: core state `runs`). It is the checkpoint the facet stores, what
    *  `snapshot()` and `liveSnapshot()` answer, the guard `message()` reads before it speaks, and
    *  what the agents app renders as the live status beside the log. */
-  stateSchema: z.object({
-    creation: z
-      .object({
-        status: z.enum(["requested", "created", "failed"]),
-        offset: z.number().int().positive(),
-        /** The context that asked (`create-requested.creator`): the saga writes the parent link to it. */
-        creator: z.string().optional(),
-      })
-      .nullable()
-      .default(null),
-    /** Where deletion stands, as the offset of the event that says so; null while the agent lives. */
-    deletion: z
-      .object({
-        status: z.enum(["requested", "deleted"]),
-        offset: z.number().int().positive(),
-      })
-      .nullable()
-      .default(null),
+  stateSchema: EntityCreationAndDeletionState.extend({
     /** The knobs `agent/configured` patches; every one defaulted, so `{}` is a whole config. */
     config: z
       .object({

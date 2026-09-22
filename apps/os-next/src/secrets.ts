@@ -20,6 +20,7 @@ import type {
   SecretMaterial,
   SecretRefresh,
 } from "iterate/next/api";
+import { SecretRefreshKind } from "./secret/contract.ts";
 export type { ClientAuth, SecretCatalogEntry, SecretMaterial, SecretRefresh };
 
 /** What the secret's facet stores: the material, the ORIGINS it may be sent to (never
@@ -48,13 +49,12 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && !!value && !Array.isArray(value);
 }
 
-const REFRESH_KINDS: readonly SecretRefresh["kind"][] = ["oauth-refresh-token", "waitrose-session"];
 const CLIENT_AUTHS: readonly ClientAuth[] = ["client_secret_basic", "client_secret_post", "none"];
 
-/** The strategy kinds implemented — the one place a kind is admitted from untyped input (a `set`
- *  option). */
-export function isRefreshKind(kind: unknown): kind is SecretRefresh["kind"] {
-  return REFRESH_KINDS.some((known) => known === kind);
+/** The strategy kinds implemented (`SecretRefreshKind`, secret/contract.ts) — the one place a kind
+ *  is admitted from untyped input (a `set` option). */
+function isRefreshKind(kind: unknown): kind is SecretRefreshKind {
+  return SecretRefreshKind.safeParse(kind).success;
 }
 
 /** The client-auth method as given, or the default; anything else is refused by name. */
@@ -92,7 +92,7 @@ export function normalizeSecretRecord(
   if (options?.refresh) {
     if (!isRecord(options.refresh) || !isRefreshKind(options.refresh.kind))
       throw new Error(
-        `secrets: refresh.kind is one of ${REFRESH_KINDS.join(", ")}, got ${JSON.stringify(isRecord(options.refresh) ? options.refresh.kind : options.refresh)}`,
+        `secrets: refresh.kind is one of ${SecretRefreshKind.options.join(", ")}, got ${JSON.stringify(isRecord(options.refresh) ? options.refresh.kind : options.refresh)}`,
       );
     const kind = options.refresh.kind;
     const endpointKey = kind === "oauth-refresh-token" ? "tokenEndpoint" : "graphqlUrl";

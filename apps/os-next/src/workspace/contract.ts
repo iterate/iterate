@@ -2,8 +2,8 @@
 // (`/workspaces/<name>` by convention). It is ONE private overlay over the project's repos; its facts
 // live on that path's log, and THIS FILE is the only place they are spelled. The rest of the folder
 // derives from it: processor.ts reduces these events and runs the creation and deletion sagas,
-// durable-object.ts keeps the overlay behind the `created` guard, collection.ts is `itx.workspaces`
-// (`list`, `create`, `delete`), library.ts hands out the handle (`itx.workspaces.get(path)`: the
+// durable-object.ts keeps the overlay behind the `created` guard, src/project/collection.ts is
+// `itx.workspaces` (`list`, `create`, `delete`), library.ts hands out the handle (`itx.workspaces.get(path)`: the
 // host's verbs plus the typed `append`). Deletion is the creation's mirror: `delete-requested` opens
 // it, the processor lands `deleted` — cross-posted to `/` so the catalog drops the entry — and the
 // overlay goes with the facet. Every type is derived here, never hand-kept:
@@ -12,37 +12,17 @@
 //   EventInput<typeof WorkspaceContract>                                               what `itx.workspaces.get(path).append(…)` takes
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
+import { EntityCreationAndDeletionState } from "../project/entity-state.ts";
 
 export const WorkspaceContract = defineProcessorContract({
   slug: "workspace",
   version: "2",
   description: "A workspace: its creation and deletion.",
-  /** THE REDUCED STATE — what the reduce keeps between events: where creation stands, as the OFFSET
-   *  of the event that says so (the request, the certificate, or the failure — read that event for
-   *  the error), and where deletion stands the same way (the request, or the certificate). It is the
-   *  checkpoint the facet stores, what `snapshot()` and `liveSnapshot()` answer, and the guard every
-   *  verb reads before it touches the overlay. Files are not here: the overlay lives in the host's
-   *  own storage, a commit is a repo fact, and the mount table is derived from the project catalog,
-   *  never stored. */
-  stateSchema: z.object({
-    creation: z
-      .object({
-        status: z.enum(["requested", "created", "failed"]),
-        offset: z.number().int().positive(),
-        /** The context that asked (`create-requested.creator`): the saga writes the parent link to it. */
-        creator: z.string().optional(),
-      })
-      .nullable()
-      .default(null),
-    /** Where deletion stands, as the offset of the event that says so; null while the workspace lives. */
-    deletion: z
-      .object({
-        status: z.enum(["requested", "deleted"]),
-        offset: z.number().int().positive(),
-      })
-      .nullable()
-      .default(null),
-  }),
+  /** THE REDUCED STATE — the one every entity keeps (src/project/entity-state.ts): where creation and
+   *  deletion stand, as the offsets of the events that say so; the guard every verb reads before it
+   *  touches the overlay. Files are not here: the overlay lives in the host's own storage, a commit
+   *  is a repo fact, and the mount table is derived from the project catalog, never stored. */
+  stateSchema: EntityCreationAndDeletionState,
   events: {
     "events.iterate.com/workspace/create-requested": {
       description:
