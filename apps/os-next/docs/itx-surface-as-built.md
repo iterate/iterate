@@ -638,8 +638,9 @@ absent when there was nothing to choose from ⇒ every project of the user's org
 request the provider refuses is sent back to the client with `error`, `error_description`, `state`
 and `iss` once its redirect URI validated, rendered here otherwise), and `/mcp` — THE ONE MCP SERVER
 for every project, ONE tool: `run({ project?, script })` — the text of
-`async (itx) => …` run (`itx.run`) in the CONNECTION'S context of THAT project (`/mcp/inbound/grants/<grantId>`; the project root is `itx.cd('/')`) in-process under the
-bearer's principal; `project` optional when the grant reaches exactly one, required
+`async (itx) => …` run (`itx.run`) at the authorized project's root, with the same capabilities
+as its root ITX handle. Requests and settlements are recorded on the root log; the request carries
+the bearer's principal and grant. Project rewrite rules apply; `project` optional when the grant reaches exactly one, required
 for the admin secret, refused outside the grant (apps/os `resolveToolProject`) and refused as a
 context name (the expression reaches the project's other contexts through `itx.cd(path)`); an
 expression error an `isError` result led by its code. No tool creates a project: a project is

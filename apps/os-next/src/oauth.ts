@@ -31,8 +31,7 @@ export const GrantProps = z.object({
 export type GrantProps = z.infer<typeof GrantProps>;
 
 const AccessGrant = GrantProps.extend({
-  /** The provider mints it (16 url-safe characters); it names the connection's own context of a
-   *  project, `/mcp/inbound/grants/<grantId>` (mcp.ts). */
+  /** The provider mints it (16 url-safe characters); MCP stamps it on project-root run requests. */
   grantId: z.string().min(1),
   scope: z.array(z.string()),
   expiresAt: z.number().int().positive(),

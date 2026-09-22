@@ -7,23 +7,11 @@ import { directory, type Directory, type Reach } from "./directory.ts";
 import { DurableObjectNameCodec } from "./iterate-context.ts";
 import type { Authorization } from "./oauth.ts";
 
-// MCP uses the same verified authorization as Cap’n Web. It exposes ONE tool, `run`: a script
-// evaluated under that principal in THE CONNECTION'S OWN CONTEXT of a project — `/mcp/inbound/grants/<grantId>`,
-// the grant being the connection (the 2026-07-28 revision is per-request: no session id, and the
-// same OAuth grant is what every call of one client carries) — so every script a client ever ran is
-// that context's log, `context/run-requested` + `run-settled` stamped with who and through which
-// grant (the audit lives where it happened); the project root is `itx.cd('/')`, and kv, files, repos,
-// secrets are the project's wherever the script runs. `run(script)` when the token reaches exactly
-// one project, `run(project, script)` otherwise. The project's catalog lists every connection born
-// under it (src/project/: `project/mcp-connection-created`, appended to `/` on a grant's first run).
-// Everything else a caller might read (who am I, which projects) is the server's own `instructions`
-// or a one-line script; project creation is the public Session's.
+// MCP uses the same authorization and project root as a Cap’n Web project handle. The OAuth
+// grant limits which projects can be selected; each run is attributed to that grant on the root
+// log. A connection is not a child sandbox with a second, narrower set of capabilities.
 
-/** The project a tool call runs in (apps/os `resolveToolProject`): `project`, when named, is a
- *  project — a context name is refused, as `projects.get` refuses it (session.ts): the expression
- *  reaches the project's other contexts through `itx.cd(path)` — and must be within the grant;
- *  omitted, it is the one project the bearer reaches — the admin secret reaches every project, so
- *  it must name one. */
+/** Resolve a project slug or id within this token's grant before obtaining its root context. */
 async function projectOfToolCall(
   d1Directory: Directory,
   reach: Reach,
@@ -55,9 +43,9 @@ async function projectOfToolCall(
  *  scripts run. Read once per request from the directory, like the tool's own project check. */
 async function serverInstructions(d1Directory: Directory, reach: Reach): Promise<string> {
   const where = [
-    "One tool, `run`: a script — the text of `async (itx) => { … }` — evaluated in YOUR CONNECTION'S context of a project, `/mcp/inbound/grants/<your grant>`.",
-    "`itx.kv`, `itx.files`, `itx.repos`, `itx.agents`, `itx.secrets` are the project's wherever a script runs; `itx.append` / `itx.readEvents` / `itx.provide` are your connection's own context; the project root is `itx.cd('/')`.",
-    "Every run is on your connection's log (`context/run-requested` / `run-settled`), attributed to you and this grant.",
+    "One tool, `run`: a script — the text of `async (itx) => { … }` — evaluated with the authorized project’s root `itx` handle.",
+    'Discover the current capabilities with `await itx.rewriteRules.list()`. The config repo is `itx.repos.get("/repos/config")`; use `readFile(path)` and `commitFiles({ message, changes })`. A config-repo commit publishes the project worker.',
+    "Every run is on the project root’s log (`context/run-requested` / `run-settled`), attributed to you and this grant. Project rewrite rules still apply.",
   ];
   if (reach === "every")
     return [
@@ -86,9 +74,9 @@ async function buildServer(
 ): Promise<McpServer> {
   const d1Directory = directory(env.DB);
   const { reach, principal, grant } = authorization;
-  // THE CONNECTION: the grant (a personal token, a Claude Code sign-in); the admin secret has none,
-  // so every admin client shares one context per project.
-  const connectionPath = grant ? `/mcp/inbound/grants/${grant.grantId}` : "/mcp/inbound/admin";
+  // The catalog records where this connection executes. Older connections ran in an unlinked
+  // child context; the new certificate points them at the project root on their next call.
+  const connectionPath = "/";
   const caller = { principal, grant: grant?.grantId, platformOrigin };
   const mcpServer = new McpServer(
     { name: "control-plane", version: "0.1.0" },
@@ -100,7 +88,7 @@ async function buildServer(
     {
       title: "Run a script",
       description:
-        "Run a script in your connection's context of a project (`/mcp/inbound/grants/<your grant>`), under this token's principal — THE way to do work in a project over MCP. The script is the text of an async function of one parameter, `itx`: `async (itx) => { ... }` — a coding agent's whole output, an alternative to a tool call, its values baked in (no arguments). It is evaluated once in a confined worker with `itx` bound to that context (`itx.kv`, `itx.files`, `itx.repos`, `itx.agents` are the project's; `itx.append`/`itx.readEvents` are the connection's own log; the project root is `itx.cd('/')`) and returns a JSON-serializable value. Every run is logged there, attributed to you. This is `itx.run`. `await itx.rewriteRules.list()` is the tree — every capability this context can spell, each with a one-line description and the context it comes from; read it first.",
+        'Run an async function with the authorized project’s root `itx` handle: `async (itx) => { ... }`. The script runs once in a confined worker and returns a JSON-serializable value. It has the project root’s capabilities and can navigate project contexts with `itx.cd(path)`. Start with `await itx.rewriteRules.list()` for the current capability tree. Read the config repo with `itx.repos.get("/repos/config").readFile("worker.ts")`; `commitFiles({ message, changes })` publishes changes. Every run is logged on the project root and attributed to your principal and OAuth grant.',
       inputSchema: fromJsonSchema(
         {
           type: "object",
@@ -143,7 +131,7 @@ async function buildServer(
               {
                 type: "events.iterate.com/project/mcp-connection-created",
                 // one row per connection AND path: a connection whose context moved is born again there
-                idempotencyKey: `mcp-connection-created${connectionPath}`,
+                idempotencyKey: `mcp-connection-created/${grant?.grantId ?? "admin"}${connectionPath}`,
                 payload: { grantId: grant?.grantId ?? "admin", path: connectionPath },
               },
             ],
@@ -151,8 +139,8 @@ async function buildServer(
           [],
           caller,
         );
-        // `itx.run(script)` in the connection's context, under this caller: the request lands on
-        // that log with the principal and grant, the context runs it, the settlement answers.
+        // Execute against the authorized root, through its rules, exactly as a project handle does.
+        // The request carries the principal and grant; the root's runner records its settlement.
         const value = await env.ITERATE_CONTEXT.getByName(
           DurableObjectNameCodec.stringify({ projectId, path: connectionPath }),
         ).invoke(["itx", ["run", toolArguments.script]], [], caller);
