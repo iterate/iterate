@@ -11,7 +11,8 @@
     "ensure-resources": "tsx scripts/app.ts ensure-resources",
     "erase-data": "tsx scripts/app.ts erase-data",
     "routes:generate": "tsx scripts/app.ts generate-route-tree",
-    "routes:check": "tsx scripts/app.ts generate-route-tree --check"
+    "routes:check": "tsx scripts/app.ts generate-route-tree --check",
+    "spec": "playwright test"
   },
   "dependencies": {
     "@iterate-com/ui": "workspace:*",

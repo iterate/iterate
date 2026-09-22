@@ -1505,9 +1505,15 @@ importers:
 
   apps/spa:
     devDependencies:
+      tsx:
+        specifier: ^4.20.6
+        version: 4.21.0
       wrangler:
         specifier: 4.107.0
         version: 4.107.0(@cloudflare/workers-types@5.20260911.1)
+      zod:
+        specifier: ^4.1.5
+        version: 4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5)
 
   apps/streams-example-app:
     dependencies:

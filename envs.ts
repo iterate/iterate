@@ -773,3 +773,19 @@ export const voiceEnvs = {
     baseUrl: "https://voice.iterate.workers.dev",
   },
 };
+
+/** Static OAuth example and downloadable unpacked Chrome extension. Credentials share the platform's Doppler project. */
+export const spaEnvs = {
+  preview: {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: "preview",
+    workerName: "iterate-spa-preview",
+    baseUrl: "https://iterate-spa-preview.iterate-dev-preview.workers.dev",
+  },
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "iterate-spa",
+    baseUrl: "https://iterate-spa.iterate.workers.dev",
+  },
+};

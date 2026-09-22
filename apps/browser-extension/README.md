@@ -35,6 +35,11 @@ context of the project (an agent's script runs in its own) the spelling is
 
 ## Install
 
+Download the current ZIP from [the SPA's downloads page](https://iterate-spa.iterate.workers.dev/downloads/)
+and unzip it, or use this source folder. The SPA deployment publishes a new bundle whenever these
+files change on main. Bump `manifest.json`'s version when shipping an update; keep its `key` unchanged
+so existing installs retain their extension ID and OAuth redirect URI. The panel heading shows the version.
+
 Chrome 114 or newer. Open `chrome://extensions`, enable **Developer mode**, **Load unpacked**, select
 this folder. Open the panel once from Chrome's side panel menu (from then on the toolbar action opens
 it). Sign in — the platform's own login and consent pages open in a Chrome identity window; tick the
@@ -43,3 +48,10 @@ the panel calls `itx.chrome.openPage` and then `itx.chrome.cdp(tabId, "Runtime.e
 through the platform, which calls back into the panel, which opens the tab and reads its title. After editing a file, click **Reload** on the extension's card. Against a local
 os-next (`pnpm --dir apps/os-next dev -- --port 8797`), enter `http://localhost:8797` as the platform
 before signing in.
+
+For an existing unpacked install, replace the files in its installed folder and click **Reload**
+on its `chrome://extensions` card, then close and reopen the side panel. Unpacked extensions do
+not update automatically. Sign out and sign in again to create a session with the new client logo;
+existing grants retain the metadata they were approved with.
+
+To package locally: `python3 apps/browser-extension/package.py /tmp/iterate-extension` from the repo root.

@@ -272,7 +272,7 @@ async function signedOut(issuer) {
   live?.[Symbol.dispose]();
   live = null;
   app.innerHTML = `
-    <h1>Iterate</h1>
+    <h1>Iterate <small class="muted">v${escape(chrome.runtime.getManifest().version)}</small></h1>
     <p class="muted">Sign in at an iterate platform and pick a project: this Chrome becomes that
     project's <code>itx.chrome</code>.</p>
     <label>Platform <input id="issuer" value="${escape(issuer)}" spellcheck="false" /></label>
@@ -293,7 +293,7 @@ async function signedIn(session) {
   const { project } = await settings();
   app.innerHTML = `
     <header>
-      <h1>Iterate</h1>
+      <h1>Iterate <small class="muted">v${escape(chrome.runtime.getManifest().version)}</small></h1>
       <button id="logout" class="secondary">Sign out</button>
     </header>
     <p class="muted">Signed in at <code>${escape(session.issuer)}</code>.</p>
