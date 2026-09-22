@@ -186,7 +186,15 @@ export function previewWranglerConfig(input: {
     preview_urls: true,
     rules: base.rules,
     assets: base.assets,
-    migrations: [{ tag: "v1", new_sqlite_classes: Object.keys(base.exports) }],
+    // Tombstones retire existing namespaces; a preview provisions only the live SQLite classes.
+    migrations: [
+      {
+        tag: "v1",
+        new_sqlite_classes: Object.keys(base.exports).filter(
+          (name) => base.exports[name].storage === "sqlite",
+        ),
+      },
+    ],
     previews: {
       observability: OBSERVABILITY,
       limits: base.limits,

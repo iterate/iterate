@@ -113,6 +113,7 @@ describe("the preview's wrangler config (a pure transform of wrangler.base.jsonc
     exports: {
       IterateContextDurableObject: { type: "durable-object", storage: "sqlite" },
       BrowserSession: { type: "durable-object", storage: "sqlite" },
+      AgentDurableObject: { type: "durable-object", state: "deleted" },
     },
     r2_buckets: [{ binding: "FILES", bucket_name: "os-next-files" }],
     artifacts: [{ binding: "ARTIFACTS", namespace: "os-next-dev-repos" }],
@@ -129,7 +130,7 @@ describe("the preview's wrangler config (a pure transform of wrangler.base.jsonc
     d1DatabaseId: "d1-id",
   });
 
-  test("the top level is the parent worker plus the classes as a legacy migrations entry", () => {
+  test("the top level provisions live classes, excluding deleted exports, as a legacy migrations entry", () => {
     expect(config.name).toBe("os-next-preview");
     expect(config.migrations).toEqual([
       { tag: "v1", new_sqlite_classes: ["IterateContextDurableObject", "BrowserSession"] },
