@@ -2,8 +2,8 @@
 // `{projectId, path}` (codec-named `{projectId}.iterate{path}`), the parent of everything a context
 // holds: the stream with its core reduce (stream/stream.ts), subscription delivery
 // (stream/subscription-delivery.ts), the facets (context/facet-host.ts over `ctx.facets` and
-// context/worker-loader.ts), the rpc stubs (context/rpc-stubs.ts), and the fetch door (the pager
-// upgrade, the fetch lane, egress). Each module's header says what it does; this file is the wiring and the doors.
+// context/worker-loader.ts), the rpc stubs (context/rpc-stubs.ts), and `fetch()` (the pager
+// upgrade, HTTP requests, egress). Each module's header says what it does; this file is the wiring and the entry points.
 //   egress — `#egress`: a `getSecret("/secrets/NAME")` request is forwarded to the context at that path, whose `secret` facet substitutes and dispatches (secret/durable-object.ts)
 //
 // PURE WORKERS-RPC: capnweb never terminates here — the stateless `/api` worker relays. Dispatch is
