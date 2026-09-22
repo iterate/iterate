@@ -210,7 +210,7 @@ function inflateAt(pack: Uint8Array, offset: number): { consumed: number; out: U
   if (!inflator.ended) throw new Error("truncated zlib stream in pack");
   // pako does not expose consumed-byte accounting publicly; we rely on its
   // zlib-mirror `strm.avail_in`. Assert the shape so a pako upgrade fails
-  // HERE with a clear message (callers fall back to the clone lane) instead
+  // HERE with a clear message (callers can fall back to cloning the repository) instead
   // of corrupting pack cursor arithmetic silently.
   const strm = (inflator as unknown as { strm?: { avail_in?: number } }).strm;
   if (!strm || typeof strm.avail_in !== "number") {
@@ -648,7 +648,7 @@ export interface GitWireTransport {
 
 /**
  * HTTP transport against one Artifacts remote. `token` is the repo access
- * token (the same credential the clone lane uses as a basic-auth password).
+ * token (the same credential used as a basic-auth password when cloning).
  */
 export function createGitWireTransport(input: {
   fetchImpl?: typeof fetch;

@@ -16,7 +16,7 @@ import { cn } from "@iterate-com/ui/lib/utils";
 import { openAudio, type AudioSession } from "../../audio.ts";
 import { startCall, type Call, type CallFact } from "../../call.ts";
 
-/** The relay's live view (apps/agents/voice VoiceLiveView), parsed at the seed door. */
+/** The relay's live view (apps/agents/voice VoiceLiveView), validated when reading the initial snapshot. */
 const VoiceLiveView = z.object({
   phase: z.enum(["idle", "dialing", "live", "ended"]),
   activation: z.string().nullable(),
