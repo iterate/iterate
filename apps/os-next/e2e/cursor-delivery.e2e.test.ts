@@ -14,8 +14,8 @@
 //     row's next pump; a resume BEYOND head never deadens the row
 //   • the view: a push target's row has NO cursor; a resumed fact for an unknown name changes nothing
 //   • consumes ['*'] delivers every durable event with the cursor at `through` and the ladder idle;
-//     ephemerals DO reach a caught-up cursor target (they ride the pushed batch, never the log) — a
-//     fresh row's first batch after unrelated commits included
+//     ephemerals DO reach a caught-up cursor target (read back from the stream's recent-ephemerals
+//     ring) — a fresh row's first batch after unrelated commits included
 //   • removing a row mid-delivery leaves no ghost halt and no resurrected cursor; one halted row never
 //     blocks its neighbor; cursor subscriptions enable no processor and mint no facet; subscribe never
 //     probes the receiver (an unusable target fails at its FIRST delivery); a push and a cursor
@@ -390,12 +390,11 @@ test("consumes ['*'] delivers every durable event; the row carries a cursor at `
   }
 });
 
-test("ephemerals DO reach a caught-up cursor target (they ride the pushed batch, never the log) — including a FRESH row's first batch after unrelated commits", async () => {
-  // The one loop remembers the freshest pushed batch per cursor subscription and hands it over when
-  // the cursor is contiguous with it — so a caught-up cursor target sees the ephemerals it named;
-  // only a target that is BEHIND (repairing from the log) misses them. "Caught up" means no CONSUMED
-  // event is outstanding: a filtered commit between the configuration and the first consumed batch
-  // must not make the first batch read "behind".
+test("ephemerals DO reach a caught-up cursor target (read back from the stream's recent-ephemerals ring) — including a FRESH row's first batch after unrelated commits", async () => {
+  // The one loop reads a cursor row's batch from the log with the stream's recent-ephemerals ring
+  // merged in, so a cursor target sees the ephemerals it named while the ring holds them (1 MiB,
+  // per incarnation). A filtered commit between the configuration and the first consumed batch
+  // must not lose that first ephemeral: the row is caught up, and reads it from the ring.
   const itx = openItx(freshCtx("ephcur"));
   const c = collector();
   await cursorSubscribe(itx, "ephcur", c.fn, ["blip"]);

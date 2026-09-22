@@ -587,13 +587,13 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     fact("maxCallsInFlight", maxCallsInFlight);
   },
 
-  /** N CURSOR rows on DISJOINT event types whose sinks never answer, fed large EPHEMERALS. The loop
-   *  remembers ONE pushed batch per cursor row (the record's `pushedEventBatch`, latest wins — how ephemerals
-   *  reach a caught-up cursor target), outside every budget; the row whose call is in flight holds
-   *  the batch it took as well, and a row waiting for cursor-read room holds nothing but its latest.
-   *  The fold (the record's `pendingPush`) is bounded across rows; the remembered batches are not: about
-   *  `batchChars` × (rows + 1). */
-  async "cursor-rows-pushed-ephemerals"(args) {
+  /** N CURSOR rows on DISJOINT event types whose sinks never answer, fed EPHEMERALS under the ring's
+   *  budget, round-robin. A cursor row reads its ephemerals out of the stream's recent-ephemerals
+   *  ring (1 MiB, the stream's own bound) after reserving that much cursor-read room: the rows whose
+   *  calls are in flight hold their batches under the cursor-read budget, a row waiting for room
+   *  holds nothing, and what the ring let go while it waited is not delivered. Retention is the two
+   *  budgets, whatever the row count — never `batchChars` × rows. */
+  async "cursor-rows-ephemerals-from-ring"(args) {
     const storage = nodeSqliteDurableObjectStorage();
     let delivery: SubscriptionDelivery | undefined;
     const stream = bareStream(storage, (fresh, after, through) =>
@@ -625,8 +625,8 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       ),
     );
     await new Promise((r) => setImmediate(r));
-    // ONE durable after the configures: every cursor catches up to it, so the pushed ephemerals that
-    // follow are contiguous — the first row's call goes in flight, the rest wait for cursor-read room.
+    // ONE durable after the configures: every cursor stands at the mark, so each row's ephemerals
+    // come from the ring — the first rows' calls go in flight, the rest wait for cursor-read room.
     stream.append({ type: "tick" });
     await new Promise((r) => setImmediate(r));
     for (let i = 0; i < args.batchCount; i++) {

@@ -24,8 +24,8 @@
 // Nothing here reads a "kind" off an event: the kind is the evaluated value's brand, minted by the
 // built-in that produced it. Every delivery carries `{ after, through }`; per subscription the loop
 // remembers the last `through` it handed over, so a batch the filter skipped still rides inside the
-// next delivered range. A cursor target additionally receives ephemerals when it is caught up (they
-// ride the pushed batch; they are not in the log), never when it is behind.
+// next delivered range. A cursor target receives ephemerals too: its reads merge in the stream's
+// recent-ephemerals ring (stream.ts), so it sees whatever the ring still holds when its loop reads.
 
 import {
   type ItxExpression,
@@ -38,7 +38,7 @@ import { errorCode, reportIssue, withTimeout } from "iterate/next/lib";
 import type { StreamPage } from "iterate/next/api";
 import { type StreamEvent, consumesEvent, type ScannedRange } from "iterate/next/stream/processor";
 import { type Subscription, targetOwnsProgress } from "./core-processor.ts";
-import type { Stream, SubscriptionCursor } from "./stream.ts";
+import { RECENT_EPHEMERALS_BUDGET_CHARS, type Stream, type SubscriptionCursor } from "./stream.ts";
 
 /** A cursor delivery's awaited call is bounded by this; it is also how far ahead a row behind the
  *  durable mark claims the alarm — by the time it fires the call has acked (the cursor row is
@@ -64,7 +64,9 @@ const DELIVERY_IN_FLIGHT_BUDGET_CHARS = 8 * 1024 * 1024;
  *  MORE, so a full catch-up page OVERFILLS it: the read branch holds the whole budget from before the
  *  read and only ever RELEASES (the overshoot stays charged as the page), so big catch-up serializes
  *  and the next cursor read WAITS; a small batch is trimmed to its real size and frees the reserve so
- *  small cursor deliveries stay concurrent and no call head-of-line-blocks the lane. */
+ *  small cursor deliveries stay concurrent and no call head-of-line-blocks the other cursor rows.
+ *  A row AT the mark reads nothing but the stream's recent-ephemerals ring and reserves that ring's
+ *  size instead. */
 const CURSOR_READ_BUDGET_CHARS = 8 * 1024 * 1024;
 /** THE PENDING-PUSH BUDGET, per context: the most serialized event chars ALL rows together may hold
  *  back while their deliveries are in flight. Past it the OLDEST events are dropped from the LARGEST
@@ -110,11 +112,9 @@ type SubscriptionDeliveryRecord = {
    *  into it (one range, one call, one facet commit) — never a closure per commit. Its presence IS
    *  "a delivery closure is coming": the closure takes it before it delivers. */
   pendingPush?: PendingPush;
-  /** The last `through` handed over — a batch the filter skipped rides inside the next range. */
+  /** The last `through` a PUSH row handed over — a batch the filter skipped rides inside the next
+   *  range. A cursor row's watermark is its cursor. */
   lastDeliveredThroughOffset?: number;
-  /** The freshest pushed batch of a CURSOR row — how ephemerals reach a caught-up cursor target
-   *  (the log has no ephemerals; the push does). Latest wins; a stale one is ignored. */
-  pushedEventBatch?: { events: StreamEvent[]; after: number; through: number };
   /** The cursor, in memory — the truth for this incarnation; the `subscription_cursors` table
    *  mirrors it at DURABLE boundaries only (an ephemeral-only batch advances memory and touches no
    *  storage: ephemerals are not in the log, and after an eviction the persisted cursor rewinds to
@@ -196,9 +196,6 @@ export class SubscriptionDelivery {
    *  delivery already in flight and derives its deadline after the ack. Written before the loop's
    *  first turn and deleted by the loop itself, synchronously with its last act. */
   readonly #cursorDeliveryLoops = new Map<string, Promise<void>>();
-  /** The stream's durable mark as of the previous commit — so that, inside `onCommit`, this is the
-   *  mark BEFORE the batch: a cursor row at or past it was caught up when the batch landed. */
-  #durableMarkBeforeCommit: number;
   /** Chars handed to calls that have not settled, all rows (DELIVERY_IN_FLIGHT_BUDGET_CHARS). */
   readonly #deliveryCharsInFlight = new DeliveryCharsBudget(DELIVERY_IN_FLIGHT_BUDGET_CHARS);
   /** The CURSOR lane's read-through-call — a SEPARATE ceiling (CURSOR_READ_BUDGET_CHARS says why). */
@@ -208,7 +205,6 @@ export class SubscriptionDelivery {
     this.#stream = deps.stream;
     this.#evaluateItxExpression = deps.evaluateItxExpression;
     this.#reconcileAlarm = deps.reconcileAlarm;
-    this.#durableMarkBeforeCommit = this.#stream.highestDurableOffset();
     // The persisted cursors seed memory once, here — after this, memory is the one truth.
     for (const [name, cursor] of this.#stream.storage.listSubscriptionCursors())
       this.#deliveryRecordFor(name).cursor = cursor;
@@ -313,40 +309,32 @@ export class SubscriptionDelivery {
         this.#queuePushBehindInFlightDelivery(name, events, { after, through: throughOffset });
         continue;
       }
-      if (events.length > 0) {
-        // Remembered for the cursor loop: it takes the batch when contiguous (ephemerals ride it),
-        // else it pages the log up to it.
-        record.pushedEventBatch = {
-          events,
-          after: record.lastDeliveredThroughOffset ?? afterOffset,
-          through: throughOffset,
-        };
-        record.lastDeliveredThroughOffset = throughOffset;
-      } else {
-        if (!durable) continue;
-        // A durable batch this row does not consume: a caught-up idle row is moved along HERE,
-        // as an ack would move it, without the loop's page read (the loop would advance it the same
-        // way, one read later); any other row's loop pages past it.
+      if (events.length === 0) {
+        // A batch this row does not consume: a caught-up idle row is moved along HERE, as an ack
+        // would move it — one page read saved per such commit per idle cursor row (the loop would
+        // advance it the same way, one read later). Caught up means confirmed through the head as
+        // it stood before this batch, ephemerals included: a row still owed a ring ephemeral reads.
         const cursor = record.cursor || {
           confirmedOffset: row.afterOffset ?? row.configuredAtOffset,
           attempt: 0,
         };
         if (
           !this.#cursorDeliveryLoops.has(name) &&
-          !record.pushedEventBatch &&
           cursor.nextAttemptAtMs === undefined &&
-          cursor.confirmedOffset >= this.#durableMarkBeforeCommit
+          cursor.confirmedOffset >= afterOffset
         ) {
-          this.#adoptCursor(name, { ...cursor, confirmedOffset: throughOffset }, true);
-          record.lastDeliveredThroughOffset = throughOffset;
+          this.#adoptCursor(name, { ...cursor, confirmedOffset: throughOffset }, durable);
           continue;
         }
+        // An ephemeral-only batch owes any other row nothing: its loop, when it next runs, reads
+        // past what the ring holds and takes what it consumes.
+        if (!durable) continue;
       }
+      // The loop reads the batch itself — the log, with the ring's ephemerals merged in.
       void this.#deliverFromCursor(name).catch((error) =>
         reportIssue("subscription-delivery.cursor", error, { name }),
       );
     }
-    this.#durableMarkBeforeCommit = this.#stream.highestDurableOffset();
   }
 
   /** Evaluate a row that owns its progress and, when it is a facet, have it catch up from the log
@@ -475,10 +463,16 @@ export class SubscriptionDelivery {
   }
 
   /** Memory always; the table only when `persist` (a durable boundary moved, a claim before a call,
-   *  a ladder step, a halt, a resume — never an ephemeral-only advance). */
+   *  a ladder step, a halt, a resume — never an ephemeral-only advance). The table never names an
+   *  offset past the durable mark: memory may stand on a head ephemeral, whose number a later
+   *  incarnation can hand to a durable (stream.ts's contract), so what is written is clamped. */
   #adoptCursor(name: string, cursor: SubscriptionCursor, persist: boolean): void {
     this.#deliveryRecordFor(name).cursor = cursor;
-    if (persist) this.#stream.storage.writeSubscriptionCursor(name, cursor);
+    if (persist)
+      this.#stream.storage.writeSubscriptionCursor(name, {
+        ...cursor,
+        confirmedOffset: Math.min(cursor.confirmedOffset, this.#stream.highestDurableOffset()),
+      });
   }
 
   // ── one batch, one row that owns its progress: evaluate, look at the value, push ──
@@ -687,6 +681,10 @@ export class SubscriptionDelivery {
   }
 
   async #drainCursor(name: string): Promise<void> {
+    // A claim written on the commit's own turn is armed by the commit's reconcile, and one written
+    // after an ack rides the alarm the previous claim armed; the claim a restart (below) causes has
+    // neither behind it and arms the alarm itself.
+    let claimArmsTheAlarm = false;
     try {
       for (;;) {
         const row = this.#stream.coreReducedState.subscriptions[name];
@@ -724,9 +722,11 @@ export class SubscriptionDelivery {
         // from here and the next incarnation reads it from the cursor table — the attempt this is,
         // and when to come back. Fifteen attempts with neither an ack nor a failure halt the row, as
         // fifteen refusals would (a batch that kills its caller is a refusal that can only repeat).
-        // A row at the mark is owed nothing durable (an ephemeral-only push rides in memory).
+        // A row at the mark is owed nothing durable; what the ring may hold for it is memory, and
+        // nothing in memory is a reason to wake.
         const cursorBeforeAttempt = cursor;
-        if (cursor.confirmedOffset < this.#stream.highestDurableOffset()) {
+        const behindTheDurableMark = cursor.confirmedOffset < this.#stream.highestDurableOffset();
+        if (behindTheDurableMark) {
           const attempt = cursor.attempt + 1;
           if (attempt > 15) {
             const { nextAttemptAtMs: _spent, ...settled } = cursor;
@@ -748,89 +748,81 @@ export class SubscriptionDelivery {
             nextAttemptAtMs: Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS,
           };
           this.#adoptCursor(name, cursor, true);
+          if (claimArmsTheAlarm) {
+            claimArmsTheAlarm = false;
+            this.#reconcileAlarm();
+          }
         }
-        // The batch: the pushed one when contiguous (ephemerals ride it) — or whenever the cursor
-        // stands AT the durable mark, whatever the pushed batch's start: the log holds nothing past
-        // the mark, so the span between them was ephemeral and is gone. (An ephemeral push that FAILED
-        // leaves the cursor where it was while the row's watermark moves on; taken by contiguity
-        // alone, the row would be deaf to every ephemeral until a durable landed.) Else a page of the
-        // log, read only UP TO the pushed batch's start, so that once the durables before it are
-        // delivered the cursor IS contiguous with it and takes it. A pushed batch the cursor has
-        // already passed is stale and forgotten. Cursor-read room (CURSOR_READ_BUDGET_CHARS) is held
-        // from BEFORE the read — the READ is what allocates — THROUGH the awaited call, released once
-        // in the finally.
+        // The batch: one page of the log with the ring's ephemerals merged in (stream.ts `read`),
+        // from the cursor — which, after an ephemeral-only ack, stands on that ephemeral's offset in
+        // memory, so a re-read holds only what is newer. Cursor-read room is held from BEFORE the
+        // read — the READ is what allocates — THROUGH the awaited call, released once in the
+        // finally: a row behind the mark reads a page of unknown size and reserves the whole
+        // CURSOR_READ_BUDGET_CHARS; a row at the mark can read nothing but the ring and reserves
+        // its size, so a row waiting for room pins no batch of its own (what the ring lets go
+        // while it waits is not delivered, as a pending push loses what is dropped from it).
         let inFlightRoomHeld = 0;
         try {
-          const record = this.#deliveryRecordFor(name); // the cursor above put it there
-          let pushedEventBatch = record.pushedEventBatch;
-          if (pushedEventBatch && pushedEventBatch.after < cursor.confirmedOffset) {
-            record.pushedEventBatch = undefined;
-            pushedEventBatch = undefined;
-          }
-          let eventBatch: { events: StreamEvent[]; through: number };
+          const reserveChars = behindTheDurableMark
+            ? CURSOR_READ_BUDGET_CHARS
+            : RECENT_EPHEMERALS_BUDGET_CHARS;
+          await this.#cursorReadCharsInFlight.acquire(reserveChars);
+          inFlightRoomHeld = reserveChars;
+          // A durable that landed while an at-mark row waited for room put it behind the mark: this
+          // attempt holds no claim and a ring-sized reserve, neither of which covers a page of
+          // durables — start the iteration over (the finally releases the room), and the next turn
+          // claims, arms the alarm for that claim, and reserves a page's worth before it reads.
           if (
-            pushedEventBatch &&
-            (pushedEventBatch.after === cursor.confirmedOffset ||
-              cursor.confirmedOffset >= this.#stream.highestDurableOffset())
+            !behindTheDurableMark &&
+            cursor.confirmedOffset < this.#stream.highestDurableOffset()
           ) {
-            record.pushedEventBatch = undefined;
-            eventBatch = { events: pushedEventBatch.events, through: pushedEventBatch.through };
-          } else {
-            await this.#cursorReadCharsInFlight.acquire(CURSOR_READ_BUDGET_CHARS);
-            inFlightRoomHeld = CURSOR_READ_BUDGET_CHARS;
-            let page: StreamPage;
-            try {
-              page = this.#stream.read(cursor.confirmedOffset, 100);
-            } catch (error) {
-              // A row this subscription can never read past (EVENT_UNREADABLE) is a refusal that
-              // can only repeat: halt now, as the ladder's end would — never a retry into it.
-              this.#haltRow(
-                name,
-                row.configuredAtOffset,
-                cursor.confirmedOffset,
-                cursorBeforeAttempt.attempt + 1,
-                error,
-              );
-              return;
-            }
-            const ceiling = pushedEventBatch
-              ? Math.min(page.scannedThroughOffset, pushedEventBatch.after)
-              : page.scannedThroughOffset;
-            if (ceiling <= cursor.confirmedOffset) {
-              // CAUGHT UP: nothing owed, no claim (the finally releases the room). This is the
-              // row's normal end — a wake that found nothing to do must not arm another. A claim
-              // or a ladder still set (its batch was ephemeral, and is gone) is spent with it; an
-              // attempt that found nothing to deliver was no death.
-              if (cursor.nextAttemptAtMs !== undefined) {
-                const { nextAttemptAtMs: _spent, ...settled } = cursor;
-                this.#adoptCursor(name, { ...settled, attempt: 0 }, true);
-              }
-              return;
-            }
-            eventBatch = {
-              events: page.events.filter(
-                (event) => event.offset <= ceiling && consumesEvent(row.consumes, event),
-              ),
-              through: ceiling,
-            };
+            claimArmsTheAlarm = true;
+            continue;
           }
-          const range: ScannedRange = {
-            after: cursor.confirmedOffset,
-            through: eventBatch.through,
-          };
-          const durable = eventBatch.events.some((event) => !event.ephemeral);
-          // Adjust the held room to the batch's REAL size. The read branch (a worst-case page) only
-          // ever RELEASES here — synchronous with the read, no yield, so a second read never piles a
-          // page on: a SMALL batch frees the reserve so a racing PUSH is not dropped for a full
-          // budget. A page that serializes PAST the reserve (a full page: offset and path ride on top
-          // of the bodies) stays charged as the page — acquiring the overshoot while holding the
-          // whole budget would wait on this very reservation, forever, and every cursor row behind
-          // it. The pushed branch (held 0) acquires its batch's worth, which may wait.
-          const batchChars = serializedChars(eventBatch.events);
-          if (inFlightRoomHeld === 0) {
-            await this.#cursorReadCharsInFlight.acquire(batchChars);
-            inFlightRoomHeld = batchChars;
-          } else if (batchChars < inFlightRoomHeld) {
+          let page: StreamPage;
+          try {
+            page = this.#stream.read(cursor.confirmedOffset, 100, { includeEphemeral: true });
+          } catch (error) {
+            // A row this subscription can never read past (EVENT_UNREADABLE) is a refusal that
+            // can only repeat: halt now, as the ladder's end would — never a retry into it.
+            this.#haltRow(
+              name,
+              row.configuredAtOffset,
+              cursor.confirmedOffset,
+              cursorBeforeAttempt.attempt + 1,
+              error,
+            );
+            return;
+          }
+          // What this delivery hands over: the log's proof, or the head ephemeral past it — an
+          // offset that lives in memory only, which is where the cursor keeps it.
+          const through = Math.max(page.scannedThroughOffset, page.events.at(-1)?.offset ?? 0);
+          if (through <= cursor.confirmedOffset) {
+            // CAUGHT UP: nothing owed, no claim (the finally releases the room). This is the
+            // row's normal end — a wake that found nothing to do must not arm another. A claim
+            // or a ladder still set (its batch was ephemeral, and the ring let it go) is spent
+            // with it; an attempt that found nothing to deliver was no death.
+            if (cursor.nextAttemptAtMs !== undefined) {
+              const { nextAttemptAtMs: _spent, ...settled } = cursor;
+              this.#adoptCursor(name, { ...settled, attempt: 0 }, true);
+            }
+            return;
+          }
+          const events = page.events.filter((event) => consumesEvent(row.consumes, event));
+          const range: ScannedRange = { after: cursor.confirmedOffset, through };
+          // The table follows only when the log's proof moved past the cursor or a claim stands
+          // in it: an ephemeral-only pass on a quiet row touches no storage.
+          const persist =
+            page.scannedThroughOffset > cursor.confirmedOffset ||
+            cursor.nextAttemptAtMs !== undefined;
+          // Adjust the held room to the batch's REAL size — only ever RELEASING here, synchronous
+          // with the read, no yield, so a second read never piles a page on: a SMALL batch frees
+          // the reserve so other cursor rows keep flowing. A page that serializes PAST the reserve
+          // (a full page: offset and path ride on top of the bodies) stays charged as the reserve —
+          // acquiring the overshoot while holding the whole budget would wait on this very
+          // reservation, forever, and every cursor row behind it.
+          const batchChars = serializedChars(events);
+          if (batchChars < inFlightRoomHeld) {
             this.#cursorReadCharsInFlight.release(inFlightRoomHeld - batchChars);
             inFlightRoomHeld = batchChars;
           }
@@ -843,15 +835,15 @@ export class SubscriptionDelivery {
             row.configuredAtOffset
           )
             continue;
-          if (eventBatch.events.length === 0) {
-            // A log page the filter emptied (or the span up to a pushed batch): durable ground,
-            // advanced without a call, no attempt spent; the loop goes on to whatever is owed. A
-            // claim or a due ladder time that reached here is spent — kept, it would be a past claim.
+          if (events.length === 0) {
+            // A page the filter emptied: advanced without a call, no attempt spent; the loop goes
+            // on to whatever is owed. A claim or a due ladder time that reached here is spent —
+            // kept, it would be a past claim.
             const { nextAttemptAtMs: _spent, ...settled } = cursor;
             this.#adoptCursor(
               name,
-              { ...settled, attempt: cursorBeforeAttempt.attempt, confirmedOffset: range.through },
-              true,
+              { ...settled, attempt: cursorBeforeAttempt.attempt, confirmedOffset: through },
+              persist,
             );
             continue;
           }
@@ -859,7 +851,7 @@ export class SubscriptionDelivery {
             const { call } = await this.#evaluateTargetHeadForRow(name, row);
             if (!this.cursor(name)) continue; // replaced while the target was evaluated
             await withTimeout(
-              call([eventBatch.events, range]),
+              call([events, range]),
               CURSOR_DELIVERY_CALL_WATCHDOG_MS,
               `subscription "${name}"`,
             );
@@ -867,15 +859,17 @@ export class SubscriptionDelivery {
             // and so did the evaluation: the identity check above re-evaluates for the replacement.
             if (!this.cursor(name)) continue;
             // THE ACK: attempt 0, no time; a commit that landed during the call is owed by
-            // derivation (the loop finds the row behind the mark and goes on).
+            // derivation (the loop finds the row behind the mark and goes on). Memory takes the
+            // whole span, a head ephemeral's offset included, so the next read returns only what is
+            // newer and nothing is handed over twice; the table takes the durable part (`#adoptCursor`).
             this.#adoptCursor(
               name,
               {
-                confirmedOffset: range.through,
+                confirmedOffset: through,
                 attempt: 0,
                 resumeAppliedAtOffset: cursor.resumeAppliedAtOffset,
               },
-              durable, // an ephemeral-only batch never touches storage
+              persist,
             );
           } catch (error) {
             if (!this.cursor(name)) continue; // replaced mid-flight: re-evaluated for the new row

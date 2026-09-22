@@ -50,7 +50,7 @@ const hostedFacet = (source: Record<string, string>, cls: string, name: string):
 const COUNTER_MODULES = { "cap.js": COUNTER_SRC };
 const DIGEST_MODULES = { "cap.js": DIGEST_SRC };
 
-test("stream-kept cursor: an alarm pump with ephemerals at head leaves the cursor on the durable mark; after the release + evict the durables re-minted at those offsets are delivered", async () => {
+test("stream-kept cursor: an alarm pump with ephemerals at head moves the cursor along in memory and persists nothing past the durable mark; after the release + evict the durables re-minted at those offsets are delivered", async () => {
   const ctx = "prj_rev_cursorskip";
   const s = stub(ctx);
   await s.append({
@@ -75,13 +75,15 @@ test("stream-kept cursor: an alarm pump with ephemerals at head leaves the curso
 
   await s.append({ type: "blip", ephemeral: true }, { type: "blip", ephemeral: true }); // head = mark+2, mark unchanged
   // An alarm pass, run directly (a caught-up cursor row and a live facet arm nothing, so there is
-  // no alarm to fire): deliverEveryCursorSubscription → read(mark) proves only through the mark →
-  // `dig` is caught up, nothing written.
+  // no alarm to fire): its own trace is one more ephemeral at head, and deliverEveryCursorSubscription
+  // finds `dig` caught up. In MEMORY the cursor moved along past the ephemerals it does not consume
+  // (the head, ephemerals included, is what "caught up" means there); what kv holds is the mark,
+  // proven below through the eviction.
   await runInDurableObject(s, (instance) => instance.alarm());
   const row1 = (await s.invoke("itx.subscriptions.get('dig')")) as {
     cursor?: { confirmedOffset: number };
   };
-  expect(row1.cursor!.confirmedOffset).toBe(highestDurableOffset); // the cursor never leaves durable ground
+  expect(row1.cursor!.confirmedOffset).toBeGreaterThanOrEqual(highestDurableOffset + 2); // memory stands on the head
 
   await releasePins(ctx);
   await evictDurableObject(s);

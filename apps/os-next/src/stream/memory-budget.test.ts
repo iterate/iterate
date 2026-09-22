@@ -310,40 +310,41 @@ test(
   },
 );
 
-/** Cursor rows on disjoint event types, sinks that never answer, 7 MiB ephemerals — three per row. */
-const CURSOR_ROWS_PUSHED_EPHEMERALS = { batchChars: 7 * MiB };
+/** Cursor rows on disjoint event types, sinks that never answer, 900 KiB ephemerals (under the
+ *  ring's 1 MiB) — two per row. */
+const CURSOR_ROWS_EPHEMERALS_FROM_RING = { batchChars: 900 * 1024 };
 
 test(
-  "control: 2 cursor rows remembering a 7 MiB pushed ephemeral batch each stay within the budget",
+  "control: 2 cursor rows fed 900 KiB ephemerals from the ring stay within the budget",
   { timeout: 60_000 },
   () => {
-    const run = runScenario("cursor-rows-pushed-ephemerals", {
-      ...CURSOR_ROWS_PUSHED_EPHEMERALS,
+    const run = runScenario("cursor-rows-ephemerals-from-ring", {
+      ...CURSOR_ROWS_EPHEMERALS_FROM_RING,
       rowCount: 2,
-      batchCount: 6,
+      batchCount: 4,
     });
-    expectSurvived(run, "cursor-rows-pushed-ephemerals");
+    expectSurvived(run, "cursor-rows-ephemerals-from-ring");
     expect(Number(run.facts.callsStarted)).toBeGreaterThanOrEqual(1);
   },
 );
 
-// Dies of: oom. The loop remembers ONE pushed batch per CURSOR row (the record's `pushedEventBatch`, latest
-// wins — how ephemerals reach a caught-up cursor target) outside every budget: the pending fold is
-// bounded per row and across rows, the in-flight ledgers bound the calls, but this second copy is
-// bounded by nothing but the row count — 24 rows × 7 MiB, plus the batch the in-flight row holds.
-// The fix is a new mechanism, not a constant: either the remembered batch joins a cross-row ledger
-// (dropped oldest-first like the fold, the cursor lane reading the log instead), or a cursor row
-// stops remembering ephemerals it cannot deliver yet.
-test.fails(
-  "cursor rows: 24 cursor rows each remembering a 7 MiB pushed ephemeral batch retain ~170 MiB outside every budget",
+// BORN RED (oom): the loop remembered ONE pushed batch per cursor row outside every budget — the
+// pending fold bounded, the in-flight ledgers bounded, this second copy bounded by nothing but the
+// row count (160 rows × 900 KiB is 140 MiB). Flipped by reading a cursor row's ephemerals from the
+// stream's recent-ephemerals ring (1 MiB) under the cursor-read budget: a row waiting for room holds
+// nothing, so what is retained is the in-flight batches (8 MiB) and the ring, whatever the row count.
+test(
+  "cursor rows: 160 cursor rows fed 900 KiB ephemerals retain the ring and the in-flight batches, never a batch per row",
   { timeout: 60_000 },
   () => {
-    const run = runScenario("cursor-rows-pushed-ephemerals", {
-      ...CURSOR_ROWS_PUSHED_EPHEMERALS,
-      rowCount: 24,
-      batchCount: 72,
+    const run = runScenario("cursor-rows-ephemerals-from-ring", {
+      ...CURSOR_ROWS_EPHEMERALS_FROM_RING,
+      rowCount: 160,
+      batchCount: 320,
     });
-    expectSurvived(run, "cursor-rows-pushed-ephemerals");
+    expectSurvived(run, "cursor-rows-ephemerals-from-ring");
+    expect(Number(run.facts.callsStarted)).toBeGreaterThanOrEqual(2);
+    expect(Number(run.facts.callsStarted)).toBeLessThan(160); // the budget, not the row count, sets the fan-out
   },
 );
 

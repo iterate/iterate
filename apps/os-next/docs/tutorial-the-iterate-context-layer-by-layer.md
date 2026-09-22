@@ -1100,8 +1100,9 @@ expect(dflt.types()).not.toContain("chunk");
 // e2e/push-delivery.e2e.test.ts
 ```
 
-A cursor target that is caught up receives the ephemerals it named too — they ride the pushed
-batch, never the log; a target that is behind, repairing from the log, misses them by design.
+A cursor target receives the ephemerals it named too — read back from the stream's
+recent-ephemerals ring (1 MiB, per incarnation) along with the log; one the ring has let go by the
+time the row reads is missed by design.
 
 **What this brick leaves on the table:** a live callback dies with its session, and a stateless
 worker keeps nothing between deliveries. A subscriber that wants to REMEMBER — a count, a presence
