@@ -50,9 +50,7 @@ import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./system-prompt.ts";
 
 /** apps/os's failure backoff, folded into the debounce window: doubling from the policy's base per
  *  consecutive failure, capped at its ceiling; nothing after a success. */
-export function retryBackoffMs(
-  state: Pick<AgentState, "consecutiveLlmFailures" | "config">,
-): number {
+function retryBackoffMs(state: Pick<AgentState, "consecutiveLlmFailures" | "config">): number {
   const { backoffBaseMs, backoffMaxMs } = state.config.llmRequestRetryPolicy;
   if (state.consecutiveLlmFailures <= 0) return 0;
   return Math.min(2 ** (state.consecutiveLlmFailures - 1) * backoffBaseMs, backoffMaxMs);
@@ -134,7 +132,7 @@ const STREAM_IDLE_BUDGET_MS = 45_000;
 
 /** apps/os's table, the models this loop names; a conservative floor for the rest. OpenAI's
  *  figures are the operating window (where pricing doubles), not the documented one. */
-export function contextWindowTokens(model: string): number {
+function contextWindowTokens(model: string): number {
   if (/^gpt-(6|5)/.test(model)) return 272_000;
   if (model.startsWith("@cf/meta/llama-4-scout")) return 131_072;
   return 128_000;

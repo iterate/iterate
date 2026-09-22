@@ -105,7 +105,7 @@ export interface LibraryRoots {
   /** THE REPOS (src/repo/): a repo as a DOMAIN OBJECT — a stream on ANY path (`/repos/<name>` by
    *  convention) whose `repo` facet lands the commit facts and memoizes the tip — git spoken from
    *  inside the facet, its token and remote from `itx.cfArtifacts` (which derives the Artifacts
-   *  repo's name from the path). `create(path)` is THE CREATION, the collection's (src/repo/collection.ts,
+   *  repo's name from the path). `create(path)` is THE CREATION, the collection's (src/project/collection.ts,
    *  on the `project` facet at `/`): the `repo` processor row on the path, `repo/create-requested`,
    *  then the terminal fact — `repo/created`, cross-posted to `/` by the repo processor, or
    *  `repo/create-failed`, thrown. `get(path)` is the handle — pure addressing, hosted on its first
@@ -122,7 +122,7 @@ export interface LibraryRoots {
     delete(path: string): Promise<{ path: string }>;
   };
   /** THE WORKSPACES (src/workspace/): the workspace of ANY context, at most one per path — a
-   *  workspace IS its path. `create(path)` is the collection's (src/workspace/collection.ts): the
+   *  workspace IS its path. `create(path)` is the collection's (src/project/collection.ts): the
    *  `workspace` processor row on the path, `workspace/create-requested`, then `workspace/created`
    *  (cross-posted to `/` by the workspace processor) or `workspace/create-failed`, thrown.
    *  `get(path)` is the `workspace` facet on `itx.cd(path)`, hosted on its first call and addressed
@@ -140,7 +140,7 @@ export interface LibraryRoots {
   /** THE AGENTS (src/agent/): an agent as a DOMAIN OBJECT — a conversation on the context at ANY
    *  path (`/agents/<name>` by convention), driven by a model that acts by writing scripts against
    *  that context's `itx`; apps/os's agent, lean. `create(path)` is the collection's
-   *  (src/agent/collection.ts): the `agent` processor row on the path (the loop runs on every
+   *  (src/project/collection.ts): the `agent` processor row on the path (the loop runs on every
    *  commit), `agent/create-requested`, then `agent/created` (cross-posted to `/` by the agent
    *  processor) or `agent/create-failed`, thrown; an operator prompt is a keyed
    *  `agent/context-added` through the handle's `append`. `get(path)` is the `agent` facet there,
@@ -268,7 +268,7 @@ export function buildLibrary(
       // An entity root is ONE shape: `get(path)` the handle (`entityHandle`, typed as the facet it
       // dispatches to — the entities section says why the assertion is safe), `list()` and
       // `create(path)` one dispatch each on the collection the `project` facet carries
-      // (`projectFacet`): the platform's own `<Entity>CollectionRpcTarget`, whose `list` and
+      // (`projectFacet`): the platform's own `EntityCollectionRpcTarget`, whose `list` and
       // `create` answer exactly these shapes — ours, so the wire's copy is asserted, not re-validated.
       repos: {
         get: (path) =>
@@ -461,10 +461,11 @@ async function requestAndAwaitRun(itx: LibraryItx, script: string): Promise<unkn
 // under the CALLER's principal, never through the facet (a facet's appends are the processor's,
 // stamped as its). `list()` and `create(path)` are THE COLLECTION's, which lives where the catalog
 // does: the `project` facet on `/` (src/project/durable-object.ts carries one
-// `<Entity>CollectionRpcTarget` per entity) — `list()` reads the catalog the project processor folds
-// from the cross-posted certificates; `create(path)` is the creation saga on the path: the
-// processor row, `<entity>/create-requested`, then `<entity>/created` (cross-posted to `/` by the
-// entity's processor, which provisions at head from state) or `<entity>/create-failed`, thrown.
+// `EntityCollectionRpcTarget` per entity, src/project/collection.ts) — `list()` reads the catalog
+// the project processor folds from the cross-posted certificates; `create(path)` is the creation
+// saga on the path: the processor row, `<entity>/create-requested`, then `<entity>/created`
+// (cross-posted to `/` by the entity's processor, which provisions at head from state) or
+// `<entity>/create-failed`, thrown.
 
 /** The context a handle's relative paths mean, and a creation's CREATOR: the caller's originating
  *  context (`Caller.path`, stamped by the first hop — `./x` from a child, answered at the root

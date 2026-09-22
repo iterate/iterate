@@ -26,17 +26,17 @@ import type { WorkspaceState } from "./contract.ts";
 import { WorkspaceProcessor } from "./processor.ts";
 
 /** One mount: the PATH of the project repo whose `main` shows through at the mount path (its own). */
-export type WorkspaceMount = { repo: string };
+type WorkspaceMount = { repo: string };
 
 /** One overlay entry as `gitStatus` reports it, against its mount at HEAD (scratch is "added"). */
-export type WorkspaceChange = { path: string; change: "added" | "deleted" | "modified" };
+type WorkspaceChange = { path: string; change: "added" | "deleted" | "modified" };
 
 /** One mount as `gitStatus` reports it: its path, its repo, and the overlay's changes under it. */
-export type WorkspaceMountStatus = { path: string; repo: string; changes: WorkspaceChange[] };
+type WorkspaceMountStatus = { path: string; repo: string; changes: WorkspaceChange[] };
 
 /** An absolute workspace path — the ONE spelling the overlay and the mount table are keyed by:
  *  starts with `/`, no empty, `.` or `..` segment. */
-export function absolutePath(path: string): string {
+function absolutePath(path: string): string {
   const segments = path.slice(1).split("/");
   const malformed =
     !path.startsWith("/") ||
@@ -48,7 +48,7 @@ export function absolutePath(path: string): string {
 /** The mount a FILE path falls under — the LONGEST mount path that is a proper ancestor of it (a
  *  repo may live at a path beneath another's) — with the repo-relative remainder; null under no
  *  mount, and null for a mount point itself: a mount point is a directory, never a file. */
-export function routeMount(
+function routeMount(
   mounts: Record<string, WorkspaceMount>,
   path: string,
 ): { mountPath: string; repo: string; relativePath: string } | null {

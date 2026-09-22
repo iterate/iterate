@@ -1,7 +1,7 @@
 // src/project/contract.ts — A PROJECT: the context at `/`. Its facts live on that root log, and THIS
 // FILE is the only place they are spelled. The `project` facet hosted there is the catalog host — the
-// collections hang off it (`itx.repos`, `itx.workspaces`, `itx.agents`: src/<entity>/collection.ts,
-// fields of src/project/durable-object.ts) — and the project is itself a domain object with a
+// collections hang off it (`itx.repos`, `itx.workspaces`, `itx.agents`: collection.ts, one per
+// entity on src/project/durable-object.ts) — and the project is itself a domain object with a
 // creation saga: `session.projects.create` (session.ts) says the directory row, enables the `project`
 // row on `/` and appends `project/create-requested`; processor.ts runs the saga from state at head
 // and lands `project/created` or `project/create-failed`; the dash renders the state live. The rest
@@ -14,7 +14,7 @@ import { defineProcessorContract, type ProcessorState } from "iterate/next/strea
 import { RepoContract } from "../repo/contract.ts";
 import { WorkspaceContract } from "../workspace/contract.ts";
 import { AgentContract } from "../agent/contract.ts";
-import { SecretContract } from "../secret/contract.ts";
+import { SecretCatalog, SecretContract } from "../secret/contract.ts";
 
 export const ProjectContract = defineProcessorContract({
   slug: "project",
@@ -44,19 +44,8 @@ export const ProjectContract = defineProcessorContract({
     workspaces: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
     /** Every agent born under the project, by path — announced by its own (userspace) processor. */
     agents: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
-    /** Every secret set under the project, by its path (`/secrets/<name>`, what the placeholder
-     *  spells): the pin, the refresh strategy's kind, and when it was first set — never a value.
-     *  What `itx.secrets.list()` reads. */
-    secrets: z
-      .record(
-        z.string(),
-        z.object({
-          urls: z.array(z.string()),
-          refresh: z.enum(["oauth-refresh-token", "waitrose-session"]).optional(),
-          createdAt: z.string(),
-        }),
-      )
-      .default({}),
+    /** Every secret set under the project (src/secret/contract.ts): what `itx.secrets.list()` reads. */
+    secrets: SecretCatalog.default({}),
     /** The config repo's tip as its commits reach `/`: the latest `repo/commit-completed` from
      *  `/repos/config` — the commit the apex follows — by its oid (what the ingress target names) and
      *  the OFFSET of the fact (the publication the processor owes for it). Null until the seed. */

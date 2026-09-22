@@ -10,14 +10,43 @@
 // one code that substitutes it into a request and dispatches it (a context's egress forwards a
 // placeholder-bearing request to it, a WebSocket upgrade included). The catalog is the owner root's:
 // `secret/set` and `secret/deleted` are cross-posted there and folded by the `project`, `account` or
-// `organization` processor — what `itx.secrets.list()` reads. Every type is derived here, never
-// hand-kept:
+// `organization` processor — what `itx.secrets.list()` reads; the catalog's shape and its fold are
+// spelled here too (`SecretCatalog`, `reduceSecretCatalog`), once for the three owners. Every type
+// is derived here, never hand-kept:
 //   SecretState                          = ProcessorState<typeof SecretContract>  the reduced state below
 //   ConsumedEvent<typeof SecretContract>                                           what reduce sees
 //   EventInput<typeof SecretContract>                                              what the verbs append
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "iterate/next/stream/processor";
+import { jsonEqual } from "iterate/next/lib";
+import {
+  type ConsumedEvent,
+  defineProcessorContract,
+  type ProcessorState,
+} from "iterate/next/stream/processor";
 import type { SecretRefresh } from "../secrets.ts";
+
+/** The refresh strategies implemented (secrets.ts), by kind: what a `set` names, a `refreshed`
+ *  reports and the catalog keeps — pinned to the SDK's `SecretRefresh`, so a strategy added there
+ *  is a type error here until it is named. */
+export const SecretRefreshKind = z.enum([
+  "oauth-refresh-token",
+  "waitrose-session",
+] satisfies SecretRefresh["kind"][]);
+export type SecretRefreshKind = z.infer<typeof SecretRefreshKind>;
+
+/** The catalog an owner root keeps — every secret set under it, by its path (`/secrets/<name>`,
+ *  what the placeholder spells; the context lives under that root): the pin, the refresh strategy's
+ *  kind, and when it was first set — never a value. What `itx.secrets.list()` reads; the `project`,
+ *  `account` and `organization` states each carry one. */
+export const SecretCatalog = z.record(
+  z.string(),
+  z.object({
+    urls: z.array(z.string()),
+    refresh: SecretRefreshKind.optional(),
+    createdAt: z.string(),
+  }),
+);
+export type SecretCatalog = z.infer<typeof SecretCatalog>;
 
 export const SecretContract = defineProcessorContract({
   slug: "secret",
@@ -42,9 +71,7 @@ export const SecretContract = defineProcessorContract({
       payloadSchema: z.object({
         path: z.string().min(1),
         urls: z.array(z.string()).min(1),
-        refresh: z
-          .enum(["oauth-refresh-token", "waitrose-session"] satisfies SecretRefresh["kind"][])
-          .optional(),
+        refresh: SecretRefreshKind.optional(),
       }),
     },
     "events.iterate.com/secret/deleted": {
@@ -56,7 +83,7 @@ export const SecretContract = defineProcessorContract({
       description:
         "The refresh strategy ran — on a 401 from the pinned host, or on first use with no access token yet — and this is how it went; the facet appends it itself. A fact, not state.",
       payloadSchema: z.object({
-        kind: z.enum(["oauth-refresh-token", "waitrose-session"] satisfies SecretRefresh["kind"][]),
+        kind: SecretRefreshKind,
         ok: z.boolean(),
         error: z.string().optional(),
       }),
@@ -78,3 +105,29 @@ export const SecretContract = defineProcessorContract({
 /** The secret's reduced state: whether material is stored and whether it was deleted, by the offsets
  *  of the facts that say so (the contract's `stateSchema`). */
 export type SecretState = ProcessorState<typeof SecretContract>;
+
+/** The owner root's fold of a secret's certificates into its catalog — the two cases every owner's
+ *  reduce delegates here. The latest `set` is the row (a rotation keeps the row, a new pin or
+ *  strategy replaces it); the first set's time stays; the same pin and strategy again is a no-op. A
+ *  `deleted` drops the row. Undefined when the catalog is unchanged, as a reduce answers. */
+export function reduceSecretCatalog(
+  secrets: SecretCatalog,
+  event: ConsumedEvent<typeof SecretContract>,
+): SecretCatalog | undefined {
+  switch (event.type) {
+    case "events.iterate.com/secret/set": {
+      const { path, urls, refresh } = event.payload;
+      const known = secrets[path];
+      if (known && known.refresh === refresh && jsonEqual(known.urls, urls)) return undefined;
+      return {
+        ...secrets,
+        [path]: { urls, refresh, createdAt: known?.createdAt ?? event.createdAt },
+      };
+    }
+    case "events.iterate.com/secret/deleted": {
+      if (!secrets[event.payload.path]) return undefined;
+      const { [event.payload.path]: _gone, ...rest } = secrets;
+      return rest;
+    }
+  }
+}
