@@ -74,6 +74,7 @@ can rotate with `previousKey` beside it. A self-host sets the object and the key
     password: "…",                                      // secret · anyone who knows it signs in as the email they type
     emailCode: { from: "iterate <login@iterate2.com>" },  // a mailed six-digit code · Email Sending on that domain
     google: { clientId: "…", clientSecret: "…" },
+    cloudflare: { clientId: "…", clientSecret: "…" },
   },
   secrets: {
     key: "…",            // THE key: project secrets at rest, and the session-signing secret derives from it
@@ -115,17 +116,40 @@ ticked — an app reads `session.info().scopes` and offers a step-up link for wh
 else — the dash (sessions, projects, organizations), agents, notes — is an app on its own origin holding
 an OAuth grant (`kind: "app"`); only the issuer's own grant (`kind: "issuer"`) can approve consent.
 
-Google login proves identity to our issuer. Its callback establishes one ordinary, revocable
+Google and Cloudflare login prove identity to our issuer. Each callback establishes one ordinary, revocable
 issuer grant through the same `BrowserSession` used by other apps. There is no separate
 identity cookie. The `/login` page asks `/login.json` which mechanisms this deployment offers and
 signs in with plain form posts to `/login`.
+
+When email codes are enabled, the page starts with an email field and **Send me a code**.
+**Use password instead** appears only when password sign-in is also configured; switching
+methods preserves the email, and a rejected password keeps that method selected for retry.
+Configured OAuth providers remain directly available, including on the code-entry step.
 
 Email sign-in is a code: `POST /login` with an email mails a six-digit code through the
 `EMAIL` binding (Cloudflare Email Sending, from `login.emailCode.from`; `src/password-and-code-sign-in.ts`),
 good for ten minutes and five tries, and the page's code step posts it back; the reserved test
 domains (`example.com`, `.test`, …) are never mailed. Password sign-in is `login.password`: one
 global password, and the email typed beside it is the name tag — how a self-host signs in, and how
-the specs and the e2e lane sign in on every deployment. Google is offered wherever it is configured.
+the specs and the e2e lane sign in on every deployment. Google and Cloudflare are each offered wherever their client is configured.
+
+Cloudflare uses our own confidential OAuth client and Authorization Code with PKCE. Register
+`<urls.os>/.auth/identity/cloudflare/callback` as an exact redirect URI. Cloudflare's client
+configuration needs `response_types: ["code", "id_token"]` to enable `openid`; the actual login
+request remains `response_type=code` and asks only for `openid user-details.read`. Cloudflare
+rejects the separate `email`/`profile` scopes but returns `email` and `email_verified` in the
+signed ID token with these scopes (verified against the live dev/preview client on 2026-09-22).
+Both providers require verified email and validated signature, issuer, audience, state and nonce.
+Identities are keyed by provider and subject; a first verified login can link to an existing user
+by email, with only one subject per provider per user. Existing Google links migrate at boot.
+Login does not retain Cloudflare API tokens or request deployment permissions.
+
+Doppler `project-worker/prd` and `project-worker/preview` store `login.cloudflare` alongside Google
+inside `APP_CONFIG`; its `clientSecret` references `APP_CONFIG_LOGIN__CLOUDFLARE__CLIENT_SECRET`.
+The public client ID is in that same object, matching the existing Google configuration.
+Self-hosters must use their own OAuth client; an Iterate-owned client secret must not be
+shipped to customer-controlled Workers. The two Iterate clients are currently private, so
+only members of their respective parent Cloudflare accounts can authorize them.
 
 Only that issuer grant receives `session.consent`. The `/oauth2/auth` page can create an
 organization and project through `session.createOrg` and `session.projects.create`, then

@@ -60,6 +60,12 @@ const expose = (config: AppConfig) => ({
         clientSecret: config.login.google.clientSecret.exposeSecret(),
       },
     }),
+    ...(config.login.cloudflare && {
+      cloudflare: {
+        clientId: config.login.cloudflare.clientId,
+        clientSecret: config.login.cloudflare.clientSecret.exposeSecret(),
+      },
+    }),
   },
   secrets: {
     key: config.secrets.key.exposeSecret(),
@@ -191,6 +197,21 @@ describe("parseAppConfig", () => {
         ...MINIMAL_CONFIG,
         login: { password: "", emailCode: { from: "iterate <login@iterate2.com>" } },
       },
+    },
+    {
+      vars: {
+        APP_CONFIG_SECRETS__KEY: "secrets-key",
+        APP_CONFIG_LOGIN__CLOUDFLARE__CLIENT_ID: "cf-id",
+        APP_CONFIG_LOGIN__CLOUDFLARE__CLIENT_SECRET: "cf-secret",
+      },
+      becomes: {
+        ...MINIMAL_CONFIG,
+        login: { password: "", cloudflare: { clientId: "cf-id", clientSecret: "cf-secret" } },
+      },
+    },
+    {
+      vars: { ...MINIMAL, APP_CONFIG_LOGIN__CLOUDFLARE__CLIENT_ID: "cf-id" },
+      throws: /login\.cloudflare\.clientSecret .*required, but unset or blank/,
     },
     // Google is both halves or neither
     {

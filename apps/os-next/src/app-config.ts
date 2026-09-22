@@ -9,7 +9,7 @@
 //
 //   {
 //     urls: { os, mcp, dash, ingressRouting: { type, hostname }, temporaryCustomHostnames: {} },
-//     login: { password, emailCode: { from }, google: { clientId, clientSecret } },
+//     login: { password, emailCode: { from }, google: { clientId, clientSecret }, cloudflare: { clientId, clientSecret } },
 //     secrets: { key, previousKey, adminBearer },
 //   }
 //
@@ -100,6 +100,13 @@ export const AppConfig = z.object({
         .optional(),
       /** Google sign-in (identity.ts): the OAuth client, both halves. */
       google: z
+        .object({
+          clientId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
+          clientSecret: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
+        })
+        .optional(),
+      /** Cloudflare sign-in uses our own OAuth client, independently of deployment grants. */
+      cloudflare: z
         .object({
           clientId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
           clientSecret: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
@@ -237,9 +244,9 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
       );
     ingressRouting = { type: "paths" };
   }
-  if (!login.password.exposeSecret() && !login.emailCode && !login.google)
+  if (!login.password.exposeSecret() && !login.emailCode && !login.google && !login.cloudflare)
     throw new Error(
-      `${fieldNameOf(["login"])}: no sign-in mechanism — set login.password, login.emailCode or login.google`,
+      `${fieldNameOf(["login"])}: no sign-in mechanism — set login.password, login.emailCode, login.google or login.cloudflare`,
     );
   return {
     ...parsed,

@@ -39,7 +39,11 @@ async function connect(headers: Record<string, string>) {
 }
 
 test("first consent creates organization and project through the ordinary session, then grants only the chosen project", async () => {
-  const user = await directory(bindings.DB).upsertGoogleUser("1357924680", "bootstrap@example.com");
+  const user = await directory(bindings.DB).upsertIdentityUser(
+    "google",
+    "1357924680",
+    "bootstrap@example.com",
+  );
   const helpers = oauthHelpers(bindings, platformAddressesOf(bindings, new Request(`${origin}/`)));
   const client = await helpers.createClient({
     clientName: "Claude fixture",

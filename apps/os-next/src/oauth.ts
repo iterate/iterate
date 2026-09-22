@@ -20,7 +20,7 @@ export const GrantProps = z.object({
   version: z.literal(2),
   userId: z.string().startsWith("user_"),
   email: z.string(),
-  /** the identity provider's picture and display name of the person (Google's), shown where the
+  /** the identity provider's picture and display name of the person (when the provider supplies them), shown where the
    *  grant's session is — the consent page's "signed in as"; the name seeds the onboarding step's
    *  organization name */
   picture: z.string().optional(),

@@ -1,9 +1,10 @@
 // issuer-pages.ts — the issuer's pages: /login and the /oauth2/auth consent, files in public/ with a
 // script each (served through the assets binding, no build), the sign-in page's /login.json and its
 // form POSTs — the password, an email then its mailed code (password-and-code-sign-in.ts), or the
-// Google link (identity.ts) — and `/`, which says this origin is headless and points at the dash.
+// identity provider link (identity.ts) — and `/`, which says this origin is headless and points at the dash.
 // The consent page is a capnweb client of /api like any app; this only gates it. Everything else a
 // person does with Iterate is an app's, an ordinary OAuth client of this issuer.
+
 import { errorCode, isSameOriginBrowserRequest, sameOriginPath } from "iterate/next/lib";
 import { startIssuerSession } from "./issuer-session.ts";
 import {
@@ -33,15 +34,16 @@ const issuerPagePaths = [
   "/issuer.css",
   "/iterate-logo.svg",
   "/google-logo.svg",
+  "/cloudflare-logo.svg",
   // the prompt an agent follows to deploy and connect a platform of the person's own
   "/setup-prompt.md",
 ];
 
 /** /login.json — what the sign-in page (public/login.js) shows: who is signed in (continue, or switch
  *  account); or that a code is on its way and to whom (the code step); or the sign-ins this
- *  deployment offers — the password, email (a code), Google — and where to continue to; and what
+ *  deployment offers — the password, email (a code), Google or Cloudflare — and where to continue to; and what
  *  went wrong with the last post (`?error=`, the message `loginFormPost` bounced back with). Signing
- *  in is the form's POSTs to `loginFormPost` or the Google link (identity.ts); "switch account" ends
+ *  in is the form's POSTs to `loginFormPost` or a provider link (identity.ts); "switch account" ends
  *  the browser's session and returns here. Without a `next` the page is its own destination (the
  *  issuer has no home page): signed in, it says so. */
 async function loginState(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -61,11 +63,14 @@ async function loginState(request: Request, env: Env, ctx: ExecutionContext): Pr
       error: url.searchParams.get("error"),
       // the email the refused post carried, so the page keeps what was typed
       email: url.searchParams.get("email") || "",
-      // the mechanisms this deployment offers (app-config.ts `login`): the page renders each; a
-      // code needs the mailbox binding as well as its block
+      // The code form needs both its configuration and the mailbox binding.
       password: Boolean(config.login.password.exposeSecret()),
+      passwordSelected: url.searchParams.get("method") === "password",
       emailSignIn: Boolean(env.EMAIL && config.login.emailCode),
       google: config.login.google ? `/.auth/identity?next=${encodeURIComponent(next)}` : null,
+      cloudflare: config.login.cloudflare
+        ? `/.auth/identity/cloudflare?next=${encodeURIComponent(next)}`
+        : null,
       // where a signed-in person with nowhere else to go is sent (the landing page's pointer)
       dash: config.urls.dash || null,
     },
@@ -87,6 +92,7 @@ async function loginFormPost(request: Request, env: Env): Promise<Response | nul
     const query = new URLSearchParams({ next });
     if (error) query.set("error", error);
     if (error && email) query.set("email", email);
+    if (error && form.has("password")) query.set("method", "password");
     const headers = new Headers({ location: `/login?${query}` });
     for (const cookie of cookies) headers.append("set-cookie", cookie);
     return new Response(null, { status: 303, headers });

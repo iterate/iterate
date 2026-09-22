@@ -8,7 +8,7 @@ import { ITX_GRANT_HEADER, ITX_PRINCIPAL_HEADER, type Principal } from "iterate/
 import { customProjectHostOf, projectAddressOf } from "iterate/next/project-ingress";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import type { Env as WorkerEnv } from "./env.ts";
-import { identityDoor } from "./identity.ts";
+import { identityResponse } from "./identity.ts";
 import { SECRET_OAUTH_CALLBACK_PATH } from "./secret-oauth.ts";
 import { secretOAuthCallback } from "./secret-oauth-callback.ts";
 import { oauthResponse } from "./api.ts";
@@ -270,8 +270,8 @@ export default {
     // with the code. Its own reserved path, `/.secrets/`, beside `/version`.
     if (url.pathname === SECRET_OAUTH_CALLBACK_PATH)
       return secretOAuthCallback(request, env, ctx, addresses);
-    const identityResponse = await identityDoor(request, env);
-    if (identityResponse) return identityResponse;
+    const identity = await identityResponse(request, env);
+    if (identity) return identity;
     if (url.pathname === "/mcp") {
       // With its own origin configured, MCP lives THERE: a client (or a person) pointed at the
       // platform's /mcp is sent to it, method and body kept (308), instead of falling through to the

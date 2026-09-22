@@ -62,7 +62,12 @@ export default defineConfig({
     // the consent flow once more at a phone's width, with touch — Chromium, the same worker
     {
       name: "phone",
-      use: { ...devices["Pixel 7"] },
+      use: {
+        ...devices["Pixel 7"],
+        ...(process.env.VIDEO_MODE === "1" && {
+          video: { mode: "on" as const, size: devices["Pixel 7"].viewport },
+        }),
+      },
       testMatch: ["**/auth.spec.ts", "**/issuer-pages.spec.ts"],
     },
   ],

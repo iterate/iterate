@@ -54,8 +54,12 @@ and hands you the dash.
 
 The whole configuration is one JSON object, the `APP_CONFIG` secret (`apps/os-next/src/app-config.ts`
 documents every key). Any key can also be set alone as a var, the path joined by `__`; the generated
-config sets `APP_CONFIG_URLS__INGRESS_ROUTING` and `APP_CONFIG_URLS__DASH` that way. To add Google
-sign-in or mailed codes later, put `login.google` or `login.emailCode` in the object and deploy again.
+config sets `APP_CONFIG_URLS__INGRESS_ROUTING` and `APP_CONFIG_URLS__DASH` that way. To add Google or Cloudflare
+sign-in or mailed codes later, put `login.google`, `login.cloudflare` or `login.emailCode` in the
+object and deploy again. Cloudflare takes `{ clientId, clientSecret }` from your own OAuth client;
+register `<your-origin>/.auth/identity/cloudflare/callback` and configure the client for
+`response_types: ["code", "id_token"]` and the `user-details.read` scope. See the README for the
+identity scopes and verification requirements.
 
 ```bash
 printf 'APP_CONFIG=%s\n' '{"login":{"password":"…","google":{"clientId":"…","clientSecret":"…"}}}' > .secrets

@@ -17,13 +17,12 @@ const loginPassword = (origin: string) => {
   return password;
 };
 
-/** The page's password step: the email, the password (on the first step where the page shows it at
- *  once, else behind Continue), Continue. */
+/** Password is the alternate method when email-code sign-in is configured. */
 async function passwordStep(page: Page, origin: string, email: string, password?: string) {
   await page.getByRole("textbox", { name: "Email", exact: true }).fill(email);
   const field = page.getByRole("textbox", { name: "Password", exact: true });
   if (!(await field.isVisible()))
-    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByRole("button", { name: "Use password instead", exact: true }).click();
   await field.fill(password || loginPassword(origin));
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
 }
@@ -145,14 +144,45 @@ test("a consent page that cannot reach the platform says so instead of loading f
 // These are presentation fixtures for deployment options, not proofs of Google/email identity.
 // The password flow above and the OAuth browser test exercise the real server.
 for (const variant of [
-  { name: "password", password: true, emailSignIn: false, google: null },
-  { name: "email code", password: false, emailSignIn: true, google: null },
-  { name: "Google", password: false, emailSignIn: false, google: "/.auth/identity" },
-  { name: "password and code", password: true, emailSignIn: true, google: null },
-  { name: "password and Google", password: true, emailSignIn: false, google: "/.auth/identity" },
-  { name: "code and Google", password: false, emailSignIn: true, google: "/.auth/identity" },
-  { name: "all methods", password: true, emailSignIn: true, google: "/.auth/identity" },
-  { name: "unconfigured", password: false, emailSignIn: false, google: null },
+  { name: "password", password: true, emailSignIn: false, google: null, cloudflare: null },
+  { name: "email code", password: false, emailSignIn: true, google: null, cloudflare: null },
+  {
+    name: "Google",
+    password: false,
+    emailSignIn: false,
+    google: "/.auth/identity",
+    cloudflare: null,
+  },
+  {
+    name: "Cloudflare",
+    password: false,
+    emailSignIn: false,
+    google: null,
+    cloudflare: "/.auth/identity/cloudflare",
+  },
+  { name: "password and code", password: true, emailSignIn: true, google: null, cloudflare: null },
+  {
+    name: "password and Google",
+    password: true,
+    emailSignIn: false,
+    google: "/.auth/identity",
+    cloudflare: null,
+  },
+  {
+    name: "code and providers",
+    password: false,
+    emailSignIn: true,
+    google: "/.auth/identity",
+    cloudflare: "/.auth/identity/cloudflare",
+  },
+  {
+    name: "all methods",
+    password: true,
+    emailSignIn: true,
+    google: "/.auth/identity",
+    cloudflare: "/.auth/identity/cloudflare",
+  },
+  { name: "unconfigured", password: false, emailSignIn: false, google: null, cloudflare: null },
 ]) {
   test(`login layout: ${variant.name}`, async ({ page }) => {
     await page.route("**/login.json*", (route) =>
@@ -163,9 +193,20 @@ for (const variant of [
     await expect(page.getByLabel("Email", { exact: true })).toHaveCount(
       variant.password || variant.emailSignIn ? 1 : 0,
     );
-    await expect(page.getByLabel("Password", { exact: true })).toHaveCount(
-      variant.password ? 1 : 0,
+    await expect(
+      page.getByLabel("Password", { exact: true }).filter({ visible: true }),
+    ).toHaveCount(variant.password && !variant.emailSignIn ? 1 : 0);
+    await expect(page.getByRole("button", { name: "Use password instead" })).toHaveCount(
+      variant.password && variant.emailSignIn ? 1 : 0,
     );
+    if (variant.emailSignIn) await page.getByRole("button", { name: "Send me a code" }).waitFor();
+    await expect(page.getByRole("link", { name: "Continue with Cloudflare" })).toHaveCount(
+      variant.cloudflare ? 1 : 0,
+    );
+    if (variant.cloudflare)
+      await expect(
+        page.getByRole("link", { name: "Continue with Cloudflare" }).locator("img"),
+      ).not.toHaveJSProperty("naturalWidth", 0);
     await expect(page.getByRole("link", { name: "Continue with Google" })).toHaveCount(
       variant.google ? 1 : 0,
     );
@@ -173,17 +214,19 @@ for (const variant of [
       await expect(
         page.getByRole("link", { name: "Continue with Google" }).locator("img"),
       ).not.toHaveJSProperty("naturalWidth", 0);
-    if (!variant.password && !variant.emailSignIn && !variant.google)
+    if (!variant.password && !variant.emailSignIn && !variant.google && !variant.cloudflare)
       await page.getByText("Sign-in is not configured for this deployment.").waitFor();
     // Catch the original missing password styles and narrow-screen overflow.
-    if (variant.password) {
+    if (variant.password && !variant.emailSignIn) {
       const email = await page.getByLabel("Email", { exact: true }).boundingBox();
       const password = await page.getByLabel("Password", { exact: true }).boundingBox();
       expect(password?.width).toBe(email?.width);
       expect(password?.height).toBe(email?.height);
       const submit = await page.getByRole("button", { name: "Sign in", exact: true }).boundingBox();
-      expect(submit!.y - (password!.y + password!.height)).toBeGreaterThanOrEqual(16);
+      expect(submit!.y - (password!.y + password!.height)).toBeGreaterThanOrEqual(12);
     }
+    const card = await page.locator(".login-card").boundingBox();
+    expect(card!.height).toBeLessThan(460);
     await expect(page.locator("body")).toHaveJSProperty("scrollWidth", page.viewportSize()!.width);
     await page.screenshot({ path: test.info().outputPath("login.png"), fullPage: true });
   });
@@ -221,6 +264,58 @@ test("email-code entry preserves the destination and supports retrying another e
   await page.getByRole("heading", { name: "Submitted" }).waitFor();
   expect(submissions[1]?.get("restart")).toBe("1");
   expect(submissions[1]?.get("next")).toBe("/oauth2/auth?client_id=example");
+});
+
+// Walkthrough uses real page assets with deterministic login-state responses. It demonstrates
+// method selection and form payloads; identity verification is covered by the server tests.
+test("login walkthrough: email first, optional password, and both OAuth providers", async ({
+  page,
+}) => {
+  let codeSent = false;
+  const submissions: URLSearchParams[] = [];
+  await page.route("**/login.json*", (route) =>
+    route.fulfill({
+      json: {
+        next: "/oauth2/auth?client_id=example",
+        password: true,
+        emailSignIn: true,
+        google: "/.auth/identity?next=%2Foauth2%2Fauth",
+        cloudflare: "/.auth/identity/cloudflare?next=%2Foauth2%2Fauth",
+        codeSentTo: codeSent ? "alex@example.com" : null,
+      },
+    }),
+  );
+  await page.route("**/login", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    const form = new URLSearchParams(route.request().postData() || "");
+    submissions.push(form);
+    if (form.has("code"))
+      return route.fulfill({ contentType: "text/html", body: "<h1>Code submitted</h1>" });
+    codeSent = true;
+    await route.fulfill({ status: 303, headers: { location: "/login" } });
+  });
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Send me a code" }).waitFor();
+  await expect(page.getByLabel("Password", { exact: true })).toBeHidden();
+  await page.getByRole("link", { name: "Continue with Google" }).waitFor();
+  await page.getByRole("link", { name: "Continue with Cloudflare" }).waitFor();
+  await page.getByLabel("Email", { exact: true }).fill("alex@example.com");
+  await page.getByRole("button", { name: "Use password instead" }).click();
+  await page.getByLabel("Password", { exact: true }).fill("example-password");
+  await page.getByRole("button", { name: "Use email code instead" }).click();
+  expect(await page.getByLabel("Email", { exact: true }).inputValue()).toBe("alex@example.com");
+  await page.getByRole("button", { name: "Send me a code" }).click();
+  await page.getByRole("heading", { name: "Check your inbox" }).waitFor();
+  expect(submissions[0]?.get("email")).toBe("alex@example.com");
+  expect(submissions[0]?.has("password")).toBe(false);
+  expect(submissions[0]?.get("next")).toBe("/oauth2/auth?client_id=example");
+  // Providers stay available even after asking for a code.
+  await page.getByRole("link", { name: "Continue with Google" }).waitFor();
+  await page.getByRole("link", { name: "Continue with Cloudflare" }).waitFor();
+  await page.getByRole("textbox", { name: "Code", exact: true }).fill("123456");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("heading", { name: "Code submitted" }).waitFor();
+  expect(submissions[1]?.get("code")).toBe("123456");
 });
 
 // Real DCR and consent, with only the external logo response controlled by the browser.

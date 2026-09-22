@@ -29,12 +29,12 @@ const loginPassword = (origin: string) => {
 };
 
 /** Sign in on the page the way a person does: the email, the password, Sign in — the password
- *  field is on the first step where the page shows it at once, else behind Continue. */
+ *  field is shown immediately only when email-code sign-in is unavailable. */
 async function signIn(page: Page, origin: string, email: string, _next = "/") {
   await page.getByRole("textbox", { name: "Email", exact: true }).fill(email);
   const password = page.getByRole("textbox", { name: "Password", exact: true });
   if (!(await password.isVisible()))
-    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByRole("button", { name: "Use password instead", exact: true }).click();
   await password.fill(loginPassword(origin));
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
 }
