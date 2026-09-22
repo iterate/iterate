@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { OAuthProvider, type GrantSummary } from "@cloudflare/workers-oauth-provider";
+import {
+  CimdFetchError,
+  OAuthProvider,
+  type GrantSummary,
+} from "@cloudflare/workers-oauth-provider";
 import type { StreamEventInput } from "iterate/next/stream/processor";
 import { RpcTarget } from "capnweb";
 import { codedError, isLocalOrigin } from "iterate/next/lib";
@@ -234,7 +238,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
    * access token is answered ONCE and never stored readable; it carries no refresh credential
    * (`tokenExchangeCallback`, oauth.ts, refuses a refresh of a personal grant). The bearer opens
    * `/api`, `/mcp` and a project host of a covered project as the user (`authorizationForToken`).
-   * The console's own CIMD client performs the code exchange in process. */
+   * The console's client, or the device's public CIMD client, performs the exchange in process. */
   async mint(input: unknown) {
     const env = this.#env;
     const ctx = this.#ctx;
@@ -252,7 +256,16 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
     const redirectUri = `${data.clientId ? new URL(data.clientId).origin : issuer}/.auth/callback`;
     const clientId = data.clientId || (await this.#consoleClientId(issuer, redirectUri));
     const helpers = oauthHelpers(env, this.#platformOrigin);
-    const client = data.clientId ? await helpers.lookupClient(clientId) : null;
+    const client = data.clientId
+      ? await helpers.lookupClient(clientId).catch((error: unknown) => {
+          if (!(error instanceof CimdFetchError)) throw error;
+          throw codedError(
+            "INVALID_INPUT",
+            "The device's OAuth metadata could not be loaded. Try preparing the device again.",
+            { clientId, detail: error.detail },
+          );
+        })
+      : null;
     if (data.clientId && (!client || client.tokenEndpointAuthMethod !== "none"))
       throw codedError("INVALID_INPUT", "A device needs a public OAuth client metadata document.");
     const flow = await authorizationCodeRequest({
@@ -268,6 +281,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
     );
     if (expiresAt < Date.now() + 60_000)
       throw codedError("INVALID_INPUT", "expiresAt must be at least a minute away.");
+    const logoUri = z.url({ protocol: /^https$/ }).safeParse(client?.logoUri);
     const approved = await helpers.completeAuthorization({
       request: auth,
       userId: session.sub,
@@ -276,10 +290,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
       metadata: {
         clientName: data.name,
         tokenKind: data.clientId ? "device" : "personal",
-        ...(client?.logoUri &&
-          z.url({ protocol: /^https$/ }).safeParse(client.logoUri).success && {
-            logoUri: client.logoUri,
-          }),
+        ...(logoUri.success ? { logoUri: logoUri.data } : {}),
       },
       props: {
         kind: "personal",

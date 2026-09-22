@@ -304,7 +304,7 @@ function KitPage() {
                   <>
                     The device gets its own access token for this project. Revoke it from{" "}
                     <a
-                      href={`${dashEnvs.prd.baseUrl}/sessions?issuer=${encodeURIComponent(info.platformOrigin)}`}
+                      href={`${dashEnvs.prd.baseUrl}/.auth/connect?${new URLSearchParams({ issuer: info.platformOrigin, next: "/sessions", scope: "iterate account organizations:write" })}`}
                       className="underline underline-offset-2"
                     >
                       your sessions

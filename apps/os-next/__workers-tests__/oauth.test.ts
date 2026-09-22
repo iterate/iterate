@@ -448,6 +448,8 @@ test("console and project browsers use the same CIMD flow and independent grants
   const metadataFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
+    if (url.href === "https://kit.test/devices/missing.json")
+      return new Response("Not found", { status: 404 });
     if (url.origin === "https://kit.test" && url.pathname.startsWith("/devices/"))
       return Response.json({
         client_id: url.href,
@@ -593,6 +595,16 @@ test("console and project browsers use the same CIMD flow and independent grants
     await expect(Promise.resolve().then(() => personalApi.user.whoami())).rejects.toThrow(
       /bound to projects/,
     );
+    await expect(
+      consoleLogin.root.grants.mint({
+        name: "Unavailable device",
+        projects: [browserA.id],
+        clientId: "https://kit.test/devices/missing.json",
+      }),
+    ).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      message: "The device's OAuth metadata could not be loaded. Try preparing the device again.",
+    });
     // A device's token: `expiresAt` asks for years, capped at ten; the provider's token agrees.
     const device = await consoleLogin.root.grants.mint({
       name: "Kit HAVPE",
