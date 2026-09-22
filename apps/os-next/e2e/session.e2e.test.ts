@@ -303,11 +303,8 @@ test("a personal access token — one OAuth grant the account mints — is the u
   expect(grant?.kind).toBe("Personal access token");
   // the provider keeps its deadline in seconds; the list shows that, the mint the millisecond one
   expect(Math.abs((grant?.expiresAt ?? 0) - expiresAt)).toBeLessThan(2000);
-  // THE CONNECTION'S LOG: the /mcp run landed in `/mcp/inbound/grants/<grant>` of the project — a
-  // request and its settlement, stamped with the user AND the grant (the connection); the project's
-  // catalog names the client once, at `/`
-  const connectionPath = `/mcp/inbound/grants/${grant!.id}`;
-  const runPair = (await readAll(api.projects.get(projectId).cd(connectionPath))).filter((e) =>
+  // MCP runs on the project root, with the user and grant stamped on the request.
+  const runPair = (await readAll(api.projects.get(projectId))).filter((e) =>
     e.type.startsWith("events.iterate.com/context/run-"),
   );
   expect(runPair.map((e) => e.type)).toEqual([
@@ -319,17 +316,14 @@ test("a personal access token — one OAuth grant the account mints — is the u
     requestOffset: runPair[0].offset,
     settlement: {
       status: "succeeded",
-      result: expect.objectContaining({ projectId, path: connectionPath }), // whoami: the slug and url ride along
+      result: expect.objectContaining({ projectId, path: "/" }), // whoami: the slug and url ride along
     },
   });
   expect(
-    (await readAll(api.projects.get(projectId))).find(
+    (await readAll(api.projects.get(projectId))).some(
       (e) => e.type === "events.iterate.com/project/mcp-connection-created",
-    )?.payload,
-  ).toEqual({ grantId: grant!.id, path: connectionPath });
-  expect(await api.projects.get(projectId).mcpConnections.list()).toEqual([
-    { grantId: grant!.id, path: connectionPath, createdAt: expect.any(String) },
-  ]);
+    ),
+  ).toBe(false);
   // THE ACCOUNT'S RECORD: the mint is a fact on the person's own context, stamped with them and
   // the issuer session it was minted through (best-effort and async: wait for it)
   const accountEvents = async () => {
