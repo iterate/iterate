@@ -56,7 +56,7 @@ import {
   type Caller,
   type Principal,
 } from "iterate/next/principal";
-import type { RewriteRuleListEntry } from "iterate/next/api";
+import type { RewriteRuleListEntry, StreamPage } from "iterate/next/api";
 import { projectUrlOf } from "iterate/next/project-ingress";
 import {
   assertFacetSourceWithinCeiling,
@@ -84,12 +84,7 @@ import {
   type BorrowedRpcStub,
 } from "./context/rpc-stubs.ts";
 import { buildLibrary, executeScript, type LibraryItx } from "./library.ts";
-import {
-  STREAM_ALARM_TRACE_EVENT,
-  Stream,
-  type ReachableContext,
-  type StreamPage,
-} from "./stream/stream.ts";
+import { STREAM_ALARM_TRACE_EVENT, Stream, type ReachableContext } from "./stream/stream.ts";
 import { AlarmCoordinator } from "./alarm-coordinator.ts";
 import {
   DurableObjectNameCodec,
@@ -615,7 +610,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #startRequestedRuns(committedEvents: StreamEvent[]): void {
     for (const event of committedEvents) {
       if (event.type !== "events.iterate.com/context/run-requested") continue;
-      const { code } = RunRequested.parse(event.payload); // normalized at the append boundary
+      const { code } = event.payload as RunRequested; // parsed at the append boundary (normalizeControlEvent)
       if (
         this.#scriptRunsInFlight.has(event.offset) ||
         !this.#stream.coreReducedState.scriptRuns[event.offset]
@@ -1181,7 +1176,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           {
             value: {
               snapshot: () => this.#stream.coreReducedStateSnapshot(),
-              liveSnapshot: () => this.#stream.coreLiveStateSnapshot(),
             },
             receiver: undefined,
           },

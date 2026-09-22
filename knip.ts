@@ -209,6 +209,8 @@ function makeOsNextWorkspace(): WorkspaceConfig {
       "src/worker.ts!",
       "src/client/**/*.{ts,tsx}",
       "scripts/vite-plugin-processor-sdk.ts",
+      // the memory proofs' child-process program (src/stream/memory-budget.test.ts spawns it)
+      "scripts/memory-budget-scenarios.ts",
       "vitest.config.ts",
       "vitest.global-setup.ts",
       // the e2e lane's test files and the two vitest hooks are entries; e2e/support/** is project code,

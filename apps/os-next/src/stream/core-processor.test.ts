@@ -10,6 +10,7 @@
 import { describe, expect, test } from "vitest";
 import { parse, print, type ItxExpression, type ItxExpressionInput } from "iterate/next/expression";
 import type { StreamEvent } from "iterate/next/stream/processor";
+import { BUILT_IN_ROOTS, resolveItxExpression } from "../context/itx-expression-rewriting.ts";
 import {
   CoreContract,
   reduceCoreEvent,
@@ -76,17 +77,17 @@ describe("the scriptRuns table — by the request's offset: requested opens, set
     const state = reduceAll([requested(5), requested(6), settled(7, 5)]);
     expect(Object.keys(state.scriptRuns)).toEqual(["6"]);
   });
-  test("a malformed payload THROWS at the reduce (an empty code, a missing settlement) — the host skips it", () => {
+  test("a malformed payload (an empty code, a missing settlement) is refused at the append boundary, before it can reach the reduce", () => {
     expect(() =>
-      reduceCoreEvent({
-        event: at(5, "events.iterate.com/context/run-requested", { code: "" }),
-        state: CoreContract.initialState(),
+      normalizeControlEvent({
+        type: "events.iterate.com/context/run-requested",
+        payload: { code: "" },
       }),
     ).toThrow();
     expect(() =>
-      reduceCoreEvent({
-        event: at(6, "events.iterate.com/context/run-settled", { requestOffset: 5 }),
-        state: reduceAll([requested(5)]),
+      normalizeControlEvent({
+        type: "events.iterate.com/context/run-settled",
+        payload: { requestOffset: 5 },
       }),
     ).toThrow();
   });
@@ -150,6 +151,54 @@ describe("identity, incarnation, the pause latch", () => {
     expect(reduceAll([at(1, "events.iterate.com/stream/paused", {})]).paused).toEqual({
       reason: "paused",
     });
+  });
+});
+
+describe("the ingress target — project/ingress-configured, normalized at the append boundary", () => {
+  const type = "events.iterate.com/project/ingress-configured";
+  const target: ItxExpression = ["itx", "workers", ["get", { source: { "cap.js": "source" } }]];
+
+  test("stores and replaces the full expression without creating any rewrite alias; null clears it; an unchanged or ephemeral event keeps the state", () => {
+    const event = {
+      ...normalizeControlEvent({ type, payload: { target } }),
+      offset: 1,
+      path: "/",
+      createdAt: "2026-09-21T00:00:00Z",
+    };
+    const state = reduceCoreEvent({ event, state: CoreContract.initialState() })!;
+    expect(state.ingressTarget).toEqual(target);
+    expect(state.itxExpressionRewriteRules).toEqual({});
+    expect(
+      reduceCoreEvent({ event: { ...event, payload: { target: null } }, state })?.ingressTarget,
+    ).toBeNull();
+    expect(reduceCoreEvent({ event, state })).toBeUndefined();
+    expect(
+      reduceCoreEvent({ event: { ...event, ephemeral: true }, state: CoreContract.initialState() }),
+    ).toBeUndefined();
+  });
+
+  test.each([{}, { target: 123 }, { target: "other.workers" }, { target: ["itx", null] }])(
+    "an invalid configuration is refused at the boundary, before append: %j",
+    (payload) => {
+      expect(() => normalizeControlEvent({ type, payload })).toThrow();
+    },
+  );
+
+  test("an ephemeral configuration cannot be published", () => {
+    expect(() => normalizeControlEvent({ type, payload: { target }, ephemeral: true })).toThrow(
+      "must be durable",
+    );
+  });
+
+  test("a singular worker name has no implicit platform resolution", () => {
+    expect(() =>
+      resolveItxExpression(() => [], ["itx", "worker", "fetch"], new Set(BUILT_IN_ROOTS)),
+    ).toThrow("no rewrite rule matches");
+    expect(resolveItxExpression(() => [], target, new Set(BUILT_IN_ROOTS)).at(-1)).toEqual([
+      "itx",
+      "builtins",
+      ...target.slice(1),
+    ]);
   });
 });
 
@@ -816,8 +865,8 @@ describe("the platform rows a null MASKS (kept) vs a plain delete", () => {
 
 // ── subscriptions ── the subscriptions table's one COMMAND (a literal `subscription-configured` event, normalized at the append boundary by `normalizeControlEvent`)
 // BUILDS the event the caller appends — a configure, a replace, or (target null) a removal; a refusal
-// (a dotted name, a target not rooted at itx) THROWS at the door, nothing appended (the reserved
-// `core` is the APPEND door's refusal — stream.test.ts). A subscription is PURE DATA — a name, a target expression stored as its printed string,
+// (a dotted name, the reserved `core`, a target not rooted at itx) THROWS at the door, nothing
+// appended. A subscription is PURE DATA — a name, a target expression stored as its printed string,
 // an optional `consumes` filter; nothing here knows HOW a target is served (subscription-delivery.ts
 // decides that by evaluating it). The rows THEMSELVES are `core` state, reduced here through
 // `reduceCoreEvent` exactly as the DO does; the reduce's own pins (replace / drop / halted /
@@ -962,7 +1011,7 @@ describe("configure — ONE event: set, replace, or remove", () => {
     expect(events).toHaveLength(0);
   });
 
-  test("a name is ONE segment, [A-Za-z0-9_-]+, never a key of Object.prototype — a dotted, spaced, `__proto__` or `constructor` name is refused at the door, nothing appended", () => {
+  test("a name is ONE segment, [A-Za-z0-9_-]+, never a key of Object.prototype and never `core` — a dotted, spaced, `__proto__`, `constructor` or `core` name is refused at the door, nothing appended", () => {
     const { configure, events } = setup();
     expect(() => configure({ name: "a.b", target: "itx.whoami" })).toThrow(/one segment/);
     expect(() => configure({ name: "has space", target: "itx.whoami" })).toThrow(/one segment/);
@@ -974,6 +1023,10 @@ describe("configure — ONE event: set, replace, or remove", () => {
     expect(() => configure({ name: "constructor", target: "itx.whoami" })).toThrow(
       /Object.prototype/,
     );
+    // the always-on core reduce is addressable as a facet, never a configurable subscription — a
+    // row named `core` would be undeliverable and climb the retry ladder to a halt
+    expect(() => configure({ name: "core", target: "itx.whoami" })).toThrow(/reserved/);
+    expect(() => configure({ name: "core", target: null })).toThrow(/reserved/);
     expect(events).toHaveLength(0);
   });
 

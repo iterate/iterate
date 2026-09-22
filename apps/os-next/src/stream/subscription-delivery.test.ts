@@ -171,12 +171,13 @@ describe("the pending push is bounded", () => {
   test("control: under the budget, commits behind an in-flight delivery fold into ONE push, in order, ranging from the first commit", async () => {
     const rig = stuckFacetRig();
     await settle(); // the materialization (catchUpFromLog) parks — the chain's head
+    rig.stream.append({ type: "noise", ephemeral: true }); // not consumed: a gap between the row's configuration and its first blob
     const offsets = rig.commitBlobs(4);
     await rig.release();
     expect(rig.pushes).toHaveLength(1);
     expect(blobIndexes(rig.pushes[0])).toEqual([0, 1, 2, 3]);
     // A row's first push ranges from its first commit's afterOffset (the span since the row's
-    // configuration — here one ephemeral core delta — is the facet's own gap repair to read).
+    // configuration — here the ephemeral it does not consume — is the facet's own gap repair to read).
     expect(rig.pushes[0].range).toEqual({ after: offsets[0] - 1, through: offsets[3] });
     expect(rig.pushes[0].range.after).toBeGreaterThan(rig.configuredAtOffset);
   });

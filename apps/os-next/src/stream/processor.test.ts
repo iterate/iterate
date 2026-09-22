@@ -1225,7 +1225,7 @@ test("set() chains rev exactly and emits the diff a client can apply", async () 
   const epoch = live.snapshot().rev;
   live.set({ n: 1 });
   live.set({ n: 2 });
-  await live.deltasSettled(); // the delta appends are chained (mint order) — flush them
+  await settle(); // the delta appends are chained (mint order) — let them settle
   expect(sink.frames.map((f) => [f.from, f.to])).toEqual([
     [epoch, epoch + 1],
     [epoch + 1, epoch + 2],
@@ -1266,7 +1266,7 @@ test("cross-hop ordering: each delta append is issued only after the previous on
   await flush();
   expect(issued).toEqual([base + 1, base + 2, base + 3]);
   resolvers[2]!();
-  await live.deltasSettled();
+  await settle();
 });
 
 test("the SAME object set again is a no-op — no diff computed, no delta, the rev untouched", () => {
@@ -1298,17 +1298,17 @@ test("an unserializable value can't corrupt or wedge the chain — a gap, then d
   const live = new LiveState<Record<string, unknown>>(sink, "k", { n: 0 });
   const epoch = live.snapshot().rev;
   live.set({ n: 1 }); // client syncs through this frame → holds rev epoch+1
-  await live.deltasSettled();
+  await settle();
   expect(sink.frames).toHaveLength(1);
 
   live.set({ n: 1, big: 10n }); // the diff throws → adopted, no emit, rev advances, base stays {n:1}
-  await live.deltasSettled();
+  await settle();
   expect(sink.frames).toHaveLength(1);
   expect(live.snapshot()).toEqual({ rev: epoch + 2, state: { n: 1, big: 10n } });
 
   // emission RESUMES as a diff from the last SERIALIZED base ({n:1}), never from the poisoned value
   live.set({ n: 2 });
-  await live.deltasSettled();
+  await settle();
   expect(sink.frames).toHaveLength(2);
   expect(sink.frames[1]).toEqual({
     key: "k",
@@ -1319,7 +1319,7 @@ test("an unserializable value can't corrupt or wedge the chain — a gap, then d
 
   // and normal diffing resumes off the healed base
   live.set({ n: 3 });
-  await live.deltasSettled();
+  await settle();
   expect(sink.frames).toHaveLength(3);
   expect(sink.frames[2].from).toBe(epoch + 3);
   expect(sink.frames[2].patch).toEqual([{ op: "replace", path: "/n", value: 3 }]);
@@ -1337,7 +1337,7 @@ test("a throwing sink is contained (lossy notification, value still adopted, the
   );
   const epoch = live.snapshot().rev;
   expect(() => live.set({ n: 1 })).not.toThrow(); // the append is chained; the throw never reaches the caller
-  await expect(live.deltasSettled()).resolves.toBeUndefined(); // the chain's .catch swallowed it — no wedge, no unhandled rejection
+  await settle(); // the chain's .catch swallowed it — no wedge, no unhandled rejection reaches the runner
   // the value and the rev both advanced — the lost emission is a chain gap, not lost state
   expect(live.snapshot()).toEqual({ rev: epoch + 1, state: { n: 1 } });
 });
