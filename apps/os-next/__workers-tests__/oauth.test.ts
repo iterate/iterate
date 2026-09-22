@@ -448,6 +448,16 @@ test("console and project browsers use the same CIMD flow and independent grants
   const metadataFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
+    if (url.origin === "https://kit.test" && url.pathname.startsWith("/devices/"))
+      return Response.json({
+        client_id: url.href,
+        client_name: "Home Assistant Voice Preview Edition",
+        logo_uri: "https://kit.test/vendors/home-assistant.png",
+        redirect_uris: ["https://kit.test/.auth/callback"],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code"],
+        response_types: ["code"],
+      });
     if (!["/.auth/client.json", "/oauth/token", "/api"].includes(url.pathname))
       throw new Error(`Unexpected external fetch: ${url}`);
     if (logoutUnavailable && url.pathname === "/api")
@@ -586,6 +596,7 @@ test("console and project browsers use the same CIMD flow and independent grants
     // A device's token: `expiresAt` asks for years, capped at ten; the provider's token agrees.
     const device = await consoleLogin.root.grants.mint({
       name: "Kit HAVPE",
+      clientId: "https://kit.test/devices/havpe/clients/unit-one.json",
       projects: [browserA.id],
       expiresAt: Date.now() + 20 * 365 * 24 * 3600_000,
     });
@@ -593,6 +604,32 @@ test("console and project browsers use the same CIMD flow and independent grants
     expect(device.expiresAt - Date.now()).toBeLessThan(11 * 365 * 24 * 3600_000);
     const storedDevice = await helpers().unwrapToken(device.token);
     expect(Math.abs(storedDevice!.expiresAt * 1000 - device.expiresAt)).toBeLessThan(2000);
+    const secondDevice = await consoleLogin.root.grants.mint({
+      name: "Kit HAVPE two",
+      projects: [browserA.id],
+      clientId: "https://kit.test/devices/havpe/clients/unit-two.json",
+    });
+    const [, firstDeviceId] = device.token.split(":");
+    const [, secondDeviceId] = secondDevice.token.split(":");
+    const deviceInventory = await consoleLogin.root.grants.list();
+    expect(deviceInventory.items.find((item) => item.id === firstDeviceId)).toMatchObject({
+      name: "Kit HAVPE",
+      kind: "Device",
+      clientId: "https://kit.test/devices/havpe/clients/unit-one.json",
+      logoUri: "https://kit.test/vendors/home-assistant.png",
+    });
+    expect(deviceInventory.items.find((item) => item.id === secondDeviceId)?.clientId).toBe(
+      "https://kit.test/devices/havpe/clients/unit-two.json",
+    );
+    const { root: deviceApi } = await rpc(device.token, "bearer");
+    expect((await deviceApi.projects.list()).map((p) => p.id)).toEqual([browserA.id]);
+    await expect(deviceApi.grants.list()).rejects.toThrow(/Account permission/);
+    await consoleLogin.root.grants.end(firstDeviceId!);
+    expect(
+      (await call("/api", { headers: { Authorization: `Bearer ${device.token}` } })).status,
+    ).toBe(401);
+    const { root: secondDeviceApi } = await rpc(secondDevice.token, "bearer");
+    expect((await secondDeviceApi.projects.list()).map((p) => p.id)).toEqual([browserA.id]);
     await expect(
       consoleLogin.root.grants.mint({ name: "Stale", projects: [browserA.id], expiresAt: 1 }),
     ).rejects.toThrow(/at least a minute/);

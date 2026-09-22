@@ -19,6 +19,7 @@ import {
 } from "@iterate-com/ui/components/select";
 import { UsbIcon } from "lucide-react";
 import { z } from "zod";
+import { dashEnvs, kitEnvs } from "../../../../../envs.ts";
 import { FirmwareInstallButton } from "../../components/firmware-install-button.tsx";
 import {
   DEFAULT_DEVICE_ID,
@@ -27,6 +28,7 @@ import {
   firmwareCatalog,
   resolveFirmwareRelease,
 } from "../../firmware/catalog.ts";
+import { deviceVendors } from "../../firmware/device-client.ts";
 import type { DeviceConfiguration } from "../../firmware/config-image.ts";
 
 export const Route = createFileRoute("/_auth/devices/$deviceId/firmware/$firmwareVersion")({
@@ -189,7 +191,14 @@ function KitPage() {
                   </SelectGroup>
                 </SelectContent>
               </Select>
-              <FieldDescription>{device.description}</FieldDescription>
+              <FieldDescription className="flex items-center gap-2">
+                <img
+                  src={`/vendors/${deviceVendors[device.id]!.icon}`}
+                  alt={deviceVendors[device.id]!.name}
+                  className="size-6 object-contain"
+                />
+                {device.description}
+              </FieldDescription>
             </FieldContent>
           </Field>
 
@@ -295,7 +304,7 @@ function KitPage() {
                   <>
                     The device gets its own access token for this project. Revoke it from{" "}
                     <a
-                      href={`${info.platformOrigin}/sessions`}
+                      href={`${dashEnvs.prd.baseUrl}/sessions?issuer=${encodeURIComponent(info.platformOrigin)}`}
                       className="underline underline-offset-2"
                     >
                       your sessions
@@ -335,6 +344,8 @@ function KitPage() {
                       const { token } = await api.grants.mint({
                         name: `Kit ${device.name} ${new Date().toISOString().slice(0, 10)}`,
                         projects: [projectId],
+                        // The issuer must fetch public HTTPS metadata, including during local development.
+                        clientId: `${kitEnvs.prd.baseUrl}/devices/${device.id}/clients/${crypto.randomUUID()}.json`,
                         // The device can neither refresh nor reflash itself: it is retired by
                         // revocation from the sessions list, not by expiry.
                         expiresAt: Date.now() + 10 * 365 * 24 * 3600_000,
