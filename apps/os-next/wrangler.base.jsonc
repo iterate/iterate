@@ -28,7 +28,10 @@
     "allow_irrevocable_stub_storage",
     "global_fetch_strictly_public",
   ],
-  "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
+  // No `account_id` here: the generator sets one per block — the local block's is the dev/preview
+  // account (envs.ts PREVIEW_AND_DEV_ACCOUNT_ID), each deployment's its own. The account matters
+  // locally: wrangler's local runtime PROXIES the Artifacts, AI and Browser bindings to the real
+  // products on that account, under the developer's `wrangler login`.
   "observability": { "enabled": true, "logs": { "head_sampling_rate": 1 } },
   "workers_dev": true,
   // PROJECT HOSTS (src/worker.ts `projectHostOf`): `<app>--<project>.<base>`, `<app>.<project>.<base>` and
@@ -59,9 +62,14 @@
   "r2_buckets": [{ "binding": "FILES", "bucket_name": "os-next-files" }],
   // Cloudflare Artifacts ("git for agents", beta) — the ONE bound namespace, project-scoped as the
   // built-in root `itx.cfArtifacts` (context/built-ins.ts forces every repo name under `${projectId}.`).
-  // repo-create auto-provisions the namespace; APP_CONFIG_ARTIFACTS_ACCOUNT_ID/NAMESPACE (vars, below)
-  // build the git remotes.
-  "artifacts": [{ "binding": "ARTIFACTS", "namespace": "project-worker-repos" }],
+  // A namespace is created by name through the API (`POST /accounts/<id>/artifacts/namespaces`; a
+  // repo create on a missing one fails with "Namespace is not active"). wrangler's local runtime has
+  // NO Artifacts simulator — the binding is a proxy to the real product on the block's account — so
+  // the local lane (`pnpm dev`, `pnpm e2e`) has a namespace of its own on the dev/preview account,
+  // created once by hand (2026-09-22); until then it named prd's, and every local run wrote real
+  // repos there. A deployment's is envs.ts `artifactsNamespace`; a preview's is
+  // `os-next-preview-<name>-repos`, created and deleted with the preview (scripts/preview.ts).
+  "artifacts": [{ "binding": "ARTIFACTS", "namespace": "os-next-dev-repos" }],
 
   // Deploy identity. Loader isolates are cached ACROSS deployments, but a DO is durable and
   // survives redeploys — so a facet built from an isolate minted by a PRIOR deployment can't be

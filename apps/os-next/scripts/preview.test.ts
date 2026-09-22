@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { previewResourceName, previewWranglerConfig } from "./generate-wrangler-config.ts";
+import {
+  previewNameOfResource,
+  previewResourceName,
+  previewWranglerConfig,
+} from "./generate-wrangler-config.ts";
 import {
   APPS,
   changedApps,
@@ -119,7 +123,7 @@ describe("the preview's wrangler config (a pure transform of wrangler.base.jsonc
       BrowserSession: { type: "durable-object", storage: "sqlite" },
     },
     r2_buckets: [{ binding: "FILES", bucket_name: "os-next-files" }],
-    artifacts: [{ binding: "ARTIFACTS", namespace: "project-worker-repos" }],
+    artifacts: [{ binding: "ARTIFACTS", namespace: "os-next-dev-repos" }],
     d1_databases: [{ binding: "DB", database_name: "x", database_id: "y" }],
     kv_namespaces: [
       { binding: "ITX_KV", id: "1" },
@@ -182,5 +186,29 @@ describe("which apps on top a change touches (cloudflare-os previews all; ours o
     ["a look-alike path is not an app", ["apps/dashboard/x.ts", "packages/iterate-docs/x.md"], []],
   ])("%s", (_, paths, expected) => {
     expect(changedApps(paths).map((app) => app.name)).toEqual(expected);
+  });
+});
+
+describe("the preview a resource name encodes (previewResourceName's inverse; the sweep's orphan passes)", () => {
+  test.each<[string, string, string | undefined]>([
+    ["os-next-preview-pr123-feature-foo-repos", "repos", "pr123-feature-foo"],
+    ["os-next-preview-pr123-feature-foo-db", "db", "pr123-feature-foo"],
+    ["os-next-preview-soak-repos", "repos", "soak"],
+    // the parent's own namespace is nobody's preview
+    ["os-next-preview-repos", "repos", undefined],
+    // another binding's resource
+    ["os-next-preview-pr123-feature-foo-db", "repos", undefined],
+    // another worker's
+    ["os-preview-1-repos", "repos", undefined],
+    ["project-worker-prd-repos", "repos", undefined],
+    // a former parent's: it reads as a preview name that is not `pr`-prefixed, so the sweep skips it
+    ["os-next-preview-2-pr1-x-repos", "repos", "2-pr1-x"],
+  ])("%s as %s → %s", (resourceName, binding, expected) => {
+    expect(previewNameOfResource(resourceName, binding)).toBe(expected);
+  });
+
+  test("round-trips previewResourceName", () => {
+    expect(previewNameOfResource(previewResourceName("pr7-x", "repos"), "repos")).toBe("pr7-x");
+    expect(previewNameOfResource(previewResourceName("pr7-x", "db"), "db")).toBe("pr7-x");
   });
 });

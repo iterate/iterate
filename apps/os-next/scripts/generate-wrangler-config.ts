@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import JSON5 from "json5";
-import { osNextEnvs, type OsNextEnv } from "../../../envs.ts";
+import { osNextEnvs, PREVIEW_AND_DEV_ACCOUNT_ID, type OsNextEnv } from "../../../envs.ts";
 import {
   OBSERVABILITY,
   writeGeneratedWranglerConfig,
@@ -43,7 +43,7 @@ function template() {
 
 /** Runtime bindings stay with the app; deployed names and IDs come from envs.ts. The top-level
  *  block is local dev (projects under `<project>.localhost`, the secrets as plain dev vars —
- *  scripts/dev.ts), one `env` block per deployment. */
+ *  scripts/dev.ts) on the dev/preview account, one `env` block per deployment. */
 export function writeWranglerConfig() {
   const base = template();
   // THE BINDINGS every env block repeats (wrangler does not inherit them): the base minus its
@@ -54,7 +54,6 @@ export function writeWranglerConfig() {
     main: _main,
     compatibility_date: _compatibilityDate,
     compatibility_flags: _compatibilityFlags,
-    account_id: _accountId,
     observability: _observability,
     workers_dev: _workersDev,
     routes: _routes,
@@ -68,6 +67,11 @@ export function writeWranglerConfig() {
   } = base;
   const config = {
     ...base,
+    // The local lane's account: wrangler's local runtime proxies the Artifacts binding (no
+    // simulator), AI and Browser to the real products on it under the developer's `wrangler login`
+    // — so a local e2e run's repos land in the dev/preview account's `os-next-dev-repos`
+    // (wrangler.base.jsonc), never in a deployment's namespace.
+    account_id: PREVIEW_AND_DEV_ACCOUNT_ID,
     routes: [],
     vars: {
       APP_CONFIG_URLS__OS: "http://localhost:8788",
@@ -143,14 +147,7 @@ export function writeWranglerConfig() {
  *  the `APP_CONFIG` blob (login.password) and `APP_CONFIG_SECRETS__KEY`, put at deploy time. */
 export function writeSelfHostWranglerConfig() {
   const base = template();
-  const {
-    account_id: _accountId,
-    routes: _routes,
-    d1_databases,
-    kv_namespaces,
-    r2_buckets,
-    ...rest
-  } = base;
+  const { routes: _routes, d1_databases, kv_namespaces, r2_buckets, ...rest } = base;
   const config = {
     ...rest,
     name: "iterate",
@@ -201,6 +198,16 @@ export function previewUrl(previewName: string): string {
  *  namespace follow it by hand. */
 export const previewResourceName = (previewName: string, binding: string): string =>
   `${PREVIEW_PARENT.workerName}-${previewName}-${binding}`;
+
+/** The preview a per-preview resource name encodes — `previewResourceName`'s inverse — or undefined
+ *  for a name of another shape: the parent's own (`os-next-preview-repos`), another worker's,
+ *  another binding's. How the sweep reads a leftover D1 or Artifacts namespace (scripts/preview.ts). */
+export function previewNameOfResource(resourceName: string, binding: string): string | undefined {
+  const prefix = `${PREVIEW_PARENT.workerName}-`;
+  const suffix = `-${binding}`;
+  if (!resourceName.startsWith(prefix) || !resourceName.endsWith(suffix)) return undefined;
+  return resourceName.slice(prefix.length, -suffix.length) || undefined;
+}
 
 /** A resource list with only its `binding` names kept — how wrangler is told to auto-provision a
  *  fresh one per preview (cloudflare-os `previewResourceBindings`). */
