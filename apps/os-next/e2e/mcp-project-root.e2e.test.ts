@@ -103,6 +103,12 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   expect(read.structuredContent.result).toBe(
     await root.repos.get("/repos/config").readFile("worker.ts"),
   );
+  const probe = description.match(/`(itx\.workers\.get\(.*?)`/)![1];
+  expect(
+    await success(
+      `async (itx) => { const candidateSource = ${JSON.stringify(read.structuredContent.result)}; const { projectUrl } = await itx.whoami(); const response = await ${probe}; return response.status; }`,
+    ),
+  ).toBe(200);
   const noted = await request("tools/call", { name: "run", arguments: commitNote });
   expect(noted.isError, JSON.stringify(noted)).toBe(false);
   expect(noted.structuredContent.result.commitOid).toEqual(expect.any(String));
@@ -145,7 +151,7 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     ),
   ).toBeDefined();
   const requested = events.filter((e) => e.type === "events.iterate.com/context/run-requested");
-  expect(requested.length).toBe(7);
+  expect(requested.length).toBe(8);
   expect(
     requested.every(
       (e) => e.source.principal.actor === principal.actor && e.source.grant === grantId,

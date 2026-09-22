@@ -7,7 +7,10 @@
 import { parseCodemodeResponse } from "../../src/agent/codemode-format.ts";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../../src/agent/system-prompt.ts";
 
-const MAX_SCRIPT_STEPS = 6;
+// A website edit needs discovery, a candidate probe, publication and a live check;
+// the production recovery case alone took seven scripts. Allow bounded recovery
+// across those phases, then reserve the final model call for an honest summary.
+const MAX_SCRIPT_STEPS = 24;
 const HANG_UP_TOKEN = "HANG_UP";
 
 export const DELEGATION_SYSTEM_PROMPT = [
@@ -15,6 +18,7 @@ export const DELEGATION_SYSTEM_PROMPT = [
   "INSTRUCTIONS FOR SPOKEN CONVERSATIONS:",
   "You are the backend of a spoken assistant on the Iterate platform. A live voice model talks to the person and hands you the requests it cannot answer itself; you answer in writing and the voice reads your answer aloud.",
   "Keep prose outside codemode blocks suitable for speech: one to three short sentences, no markdown or preamble. Be exact about numbers and names. Report actions and failures only from the script results you have observed.",
+  `You have at most ${MAX_SCRIPT_STEPS} script attempts for this request. Combine related reads when useful and leave room to verify changes. If blocked, explain the specific blocker and any changes already made.`,
   `If the person asked to end the call, answer with a short goodbye and end your reply with the token ${HANG_UP_TOKEN}.`,
 ].join("\n");
 
@@ -52,6 +56,13 @@ export async function runDelegationTurn(
       })),
     ];
     for (let step = 0; step <= MAX_SCRIPT_STEPS; step += 1) {
+      if (step === MAX_SCRIPT_STEPS) {
+        messages.push({
+          role: "system",
+          content:
+            "No script attempts remain. Respond without a codemode block. Explain what the observed results show was completed, what remains unverified or blocked, and the next action needed. Do not claim success for an unverified change.",
+        });
+      }
       const reply = await deps.complete(messages);
       const parsed = parseCodemodeResponse(reply);
       if (parsed.kind === "none") {
