@@ -23,8 +23,9 @@ import type { AuthenticationFact } from "./account/contract.ts";
 import type { ProjectState } from "./project/contract.ts";
 
 /** What `IterateRpcTarget.authenticate` accepts. `from-server-cookie` is the browser and `bearer` is
- *  a device or script whose token rode the upgrade (Kit firmware, itx_mount.c): the OAuth gate
- *  already resolved the session from the request, so either only says "hand me that session".
+ *  a device or script whose token rode the upgrade: the OAuth gate already resolved the session
+ *  from the request, so either only says "hand me that session". Kit firmware (itx_mount.c) sends
+ *  `{ type: "bearer" }` alone — the token-less form exists for it.
  *  `bearer` WITH a `token` is the in-band form (capnweb's own pattern): a client that opened the
  *  socket bare — a static page on another origin, whose browser cannot put a header on a WebSocket
  *  (api.ts) — presents its token here, and it goes through the same gate. `admin-secret` is the
