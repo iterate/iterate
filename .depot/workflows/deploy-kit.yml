@@ -15,6 +15,7 @@ on:
       - apps/kit/**
       - packages/ui/**
       - apps/os-next/**
+      - apps/agents/**
       - packages/iterate/**
       - package.json
       - pnpm-lock.yaml
