@@ -105,6 +105,7 @@ beside it by `scripts/build.ts`, one WebSocket the session cookie rides in on: `
 for what to show, `createOrg` and `projects.create` for a project made on the spot,
 `consent.approve` for the client's redirect; the worker only gates the page.
 Consent has two steps: choose or create projects, then review permissions and authorize.
+All current and future projects are selected by default for clients that are not bound to one project.
 Editing the project selection preserves the optional permissions already chosen. Consent is task-based: an app asks for
 scopes (`iterate`; `account` for sessions and personal access tokens; `organizations:write` to create
 organizations), the person may untick every one but `iterate`, and the grant carries what stayed

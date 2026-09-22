@@ -62,11 +62,8 @@ async function refresh() {
   const view = await api.consent.describe(query);
   if (view.kind === "redirect") return leave(view.location);
   if (!state.view && view.kind === "consent") {
-    // The first view sets the projects default: an app that asked to manage the person's
-    // organizations (the dash) is an account app — every current and future project, unless the
-    // client is bound to one project. Other apps start with the listed projects ticked one by one.
-    state.all =
-      !view.projectBound && view.scopes.some((scope) => scope.name === "organizations:write");
+    // Default to all current and future projects; project-bound clients keep their ceiling.
+    state.all = !view.projectBound;
     // The project form's first draft: the person's first organization, or — with none yet — a
     // new one named from their name or email (apps/auth's heuristic); the onboarding step's slug
     // starts by following that name.
@@ -275,7 +272,6 @@ function render() {
   const onboarding = !projectBound && !projects.length;
   const reviewing = state.step === "permissions" && !onboarding;
   const names = new Map(orgs.map((org) => [org.id, org.name]));
-  const orgIds = [...new Set(projects.map((project) => project.orgId))];
   const form = el("form", { id: "consent-form" });
   form.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -303,7 +299,6 @@ function render() {
       el("span", {}, el("strong", { text: title }), el("span", { class: "muted", text: note })),
     );
   });
-  const status = el("p", { class: "muted", role: "status" });
   const approveButton = el("button", {
     class: "primary",
     type: "submit",
@@ -321,68 +316,48 @@ function render() {
         value: "1",
         "aria-label": "All my projects, now and future",
       });
-  const future = all
-    ? el(
-        "label",
-        { class: "consent-future" },
-        all,
-        el(
-          "span",
-          {},
-          el("strong", { text: "All my projects, now and future" }),
-          el("span", { class: "muted", text: "Includes projects you create or join later." }),
-        ),
-      )
-    : null;
   const list = el("fieldset", { class: "consent-projects", "aria-label": "Projects it may reach" });
-  const boxes = [];
-  for (const orgId of orgIds) {
-    const orgName = names.get(orgId) || orgId;
+  if (all)
+    list.append(el("label", { class: "consent-project" }, all, "All my projects, now and future"));
+  const boxes = projects.map((project) => {
+    const orgName = names.get(project.orgId) || project.orgId;
+    const box = el("input", {
+      type: "checkbox",
+      name: "project",
+      value: project.id,
+      "aria-label": `${project.slug} in ${orgName}`,
+    });
+    box.addEventListener("change", () => {
+      if (box.checked) state.excluded.delete(project.id);
+      else state.excluded.add(project.id);
+      show();
+    });
     list.append(
       el(
-        "section",
-        { class: "consent-org", "aria-label": orgName },
-        // the organization's name only when there is more than one to tell apart
-        el("h3", { text: orgName }),
-        ...projects
-          .filter((project) => project.orgId === orgId)
-          .map((project) => {
-            // the box carries the id (what the grant names); the person reads the slug
-            const box = el("input", {
-              type: "checkbox",
-              name: "project",
-              value: project.id,
-              "aria-label": `${project.slug} in ${orgName}`,
-            });
-            box.addEventListener("change", () => {
-              if (box.checked) state.excluded.delete(project.id);
-              else state.excluded.add(project.id);
-              show();
-            });
-            boxes.push(box);
-            return el(
-              "label",
-              { class: "consent-project" },
-              box,
-              el("span", { text: project.slug }),
-            );
-          }),
+        "label",
+        { class: "consent-project" },
+        box,
+        el(
+          "span",
+          { class: "consent-project-name" },
+          el("span", { class: "consent-slug", text: project.slug }),
+          el("span", { class: "muted", text: orgName }),
+        ),
       ),
     );
-  }
+    return box;
+  });
   if (projectBound && !projects.length)
     list.append(el("p", { class: "muted", text: "You do not have access to this app’s project." }));
-  // The list as the state says: with "all" on, every box ticked and the list parked (its own
-  // ticks kept in `excluded` for when it comes back); else each box its own tick, and the count.
+  // Choosing all parks the individual choices, so narrowing access restores them.
   const show = () => {
     if (all) all.checked = state.all;
-    for (const box of boxes) box.checked = state.all || !state.excluded.has(box.value);
-    list.disabled = state.all;
-    const count = boxes.filter((box) => box.checked).length;
-    // the count of ticked projects; with "all" ticked the checkbox says it, so nothing else does
-    status.hidden = !projects.length || state.all;
-    status.textContent = `${count} selected`;
-    approveButton.disabled = state.busy || (!onboarding && !state.all && count === 0);
+    for (const box of boxes) {
+      box.checked = state.all || !state.excluded.has(box.value);
+      box.disabled = state.all;
+    }
+    const hasSelection = state.all || boxes.some((box) => box.checked);
+    approveButton.disabled = state.busy || (!onboarding && !hasSelection);
   };
   all?.addEventListener("change", () => {
     state.all = all.checked;
@@ -397,7 +372,7 @@ function render() {
     ? null
     : el(
         "button",
-        { class: "consent-add", type: "button", "aria-expanded": String(creating) },
+        { class: "consent-project consent-add", type: "button", "aria-expanded": String(creating) },
         el("span", { "aria-hidden": "true", text: "+" }),
         "New project",
       );
@@ -405,6 +380,7 @@ function render() {
     state.creating = !creating;
     render();
   });
+  if (add) list.append(add);
   let create = null;
   if (creating) {
     const { fields, slugField } = projectFields(view, { follow: false });
@@ -425,13 +401,7 @@ function render() {
 
   if (reviewing) {
     form.append(
-      el(
-        "div",
-        { class: "consent-section-heading" },
-        el("h2", { tabindex: "-1", text: "Review permissions" }),
-        el("span", { class: "muted", text: `${scopes.length} requested` }),
-      ),
-      el("p", { class: "muted consent-intro", text: "Choose what this application can do." }),
+      el("h2", { tabindex: "-1", text: "Review permissions" }),
       el(
         "section",
         { class: "consent-permissions", "aria-label": "Permissions" },
@@ -442,30 +412,11 @@ function render() {
     const { fields, slugField } = projectFields(view, { follow: true });
     form.append(
       el("h2", { tabindex: "-1", text: "Create a project" }),
-      el("p", {
-        class: "muted consent-intro",
-        text: "Set up your organization and first project to get started.",
-      }),
       el("div", { class: "consent-onboarding" }, ...fields, slugField),
     );
   } else {
     form.append(
-      ...[
-        el(
-          "div",
-          { class: "consent-section-heading" },
-          el("h2", { tabindex: "-1", text: "Select projects" }),
-          status,
-        ),
-        el("p", {
-          class: "muted consent-intro",
-          text: "Choose the projects this application can access.",
-        }),
-        future,
-        list,
-        add,
-        create,
-      ].filter(Boolean),
+      ...[el("h2", { tabindex: "-1", text: "Select projects" }), list, create].filter(Boolean),
     );
   }
   const summary = el("section", { class: "consent-summary", "aria-label": "Selected projects" });
@@ -483,17 +434,14 @@ function render() {
     summary.append(
       el("div", { class: "consent-section-heading" }, el("h2", { text: "Project access" }), edit),
       ...(state.all
-        ? [
-            el("p", {}, el("strong", { text: "All my projects, now and future" })),
-            el("p", { class: "muted", text: "Includes projects you create or join later." }),
-          ]
+        ? [el("p", {}, el("strong", { text: "All my projects, now and future" }))]
         : projects
             .filter((project) => !state.excluded.has(project.id))
             .map((project) =>
               el(
                 "div",
                 { class: "consent-selected" },
-                el("strong", { text: project.slug }),
+                el("strong", { class: "consent-slug", text: project.slug }),
                 el("span", { class: "muted", text: names.get(project.orgId) || project.orgId }),
               ),
             )),
@@ -511,12 +459,6 @@ function render() {
       el(
         "div",
         { class: "consent-footer" },
-        reviewing
-          ? el("p", {
-              class: "muted consent-trust",
-              text: "Only authorize access if you trust this application.",
-            })
-          : null,
         errorLine(),
         el(
           "div",
@@ -540,12 +482,11 @@ function render() {
       el(
         "div",
         { class: "consent-hero", "aria-hidden": "true" },
-        el("span", { class: "consent-tile", text: clientName.slice(0, 2).toUpperCase() }),
-        el("span", { class: "consent-arrow", text: "→" }),
         el("span", { class: "consent-tile" }, el("img", { src: "/iterate-logo.svg", alt: "" })),
+        el("span", { class: "consent-arrow", text: "⇄" }),
+        el("span", { class: "consent-tile", text: clientName.slice(0, 2).toUpperCase() }),
       ),
       el("h1", { text: `${clientName} wants to access your account` }),
-      el("p", { class: "muted", text: "Connect your projects to this application with iterate." }),
     ),
     panel,
   );

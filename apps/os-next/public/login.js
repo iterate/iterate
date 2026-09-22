@@ -36,10 +36,8 @@
     ? el("p", { role: "alert", "data-type": "error", text: state.error })
     : null;
   const heading = document.querySelector("h1");
-  const subtitle = document.querySelector(".login-subtitle");
   if (state.signedInAs) {
     heading.textContent = "You’re signed in";
-    subtitle.textContent = "You’re ready to continue.";
     // where to go: on to `next`, or — this page being its own destination — to the dash, where a
     // person's projects, organizations and sessions are (a deployment without one offers nothing)
     const onward =
@@ -62,7 +60,6 @@
   const next = () => el("input", { type: "hidden", name: "next", value: state.next });
   if (state.codeSentTo) {
     heading.textContent = "Check your inbox";
-    subtitle.textContent = "Enter your six-digit sign-in code.";
     show(
       alert,
       el("p", {}, "We sent a code to ", el("strong", { text: state.codeSentTo }), "."),

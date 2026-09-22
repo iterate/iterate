@@ -204,12 +204,14 @@ test("first Claude consent creates the organization and project on the consent p
     await choice.waitFor();
     expect(await choice.isChecked()).toBe(true);
     // The either/or: one checkbox for every project now and later, else the projects ticked —
-    // a Claude grant starts with the ticked ones.
+    // grants start with all current and future projects.
     const future = page.getByRole("checkbox", {
       name: "All my projects, now and future",
       exact: true,
     });
-    expect(await future.isChecked()).toBe(false);
+    expect(await future.isChecked()).toBe(true);
+    expect(await choice.isDisabled()).toBe(true);
+    await future.uncheck();
     await choice.uncheck();
     expect(await review.isDisabled()).toBe(true);
     // A second project in a NEW organization, named inside "New project" — the one place the
@@ -243,23 +245,20 @@ test("first Claude consent creates the organization and project on the consent p
     await otherChoice.waitFor();
     expect(await otherChoice.isChecked()).toBe(true);
     expect(await choice.isChecked()).toBe(false);
-    await page.getByRole("region", { name: firstOrg, exact: true }).waitFor();
-    await page.getByRole("region", { name: "Second studio", exact: true }).waitFor();
-    await page
-      .getByRole("status")
-      .filter({ hasText: /^1 selected$/ })
-      .waitFor();
+    await expect(page.getByRole("group", { name: "Projects it may reach" })).toContainText(
+      firstOrg,
+    );
+    await expect(page.getByRole("group", { name: "Projects it may reach" })).toContainText(
+      "Second studio",
+    );
     await choice.check();
     await otherChoice.uncheck();
     await future.check();
     expect(await choice.isChecked()).toBe(true);
     expect(await otherChoice.isChecked()).toBe(true);
     expect(await otherChoice.isDisabled()).toBe(true);
-    // with "all" ticked the checkbox says it: the count is hidden
-    await page.getByRole("status").waitFor({ state: "hidden" });
     // A create while "all" is chosen re-renders the parked list; the new project goes into the
-    // FIRST organization, so the boxes' order (grouped by organization) differs from the projects'
-    // creation order — the ticks must come back to the right boxes.
+    // FIRST organization; each project keeps its own choice when all is switched off.
     await page.getByRole("button", { name: "New project", exact: true }).click();
     await page.getByRole("textbox", { name: "Project slug", exact: true }).fill(thirdProject);
     await page
@@ -277,15 +276,7 @@ test("first Claude consent creates the organization and project on the consent p
     expect(await choice.isChecked()).toBe(true);
     expect(await thirdChoice.isChecked()).toBe(true);
     expect(await otherChoice.isChecked()).toBe(false);
-    await page
-      .getByRole("status")
-      .filter({ hasText: /^2 selected$/ })
-      .waitFor();
     await thirdChoice.uncheck();
-    await page
-      .getByRole("status")
-      .filter({ hasText: /^1 selected$/ })
-      .waitFor();
     expect(new URL(page.url()).search).toBe(flow.url.search);
     await review.click();
     expect(await accountAccess.isChecked()).toBe(false);
