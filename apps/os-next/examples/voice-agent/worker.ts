@@ -10,9 +10,6 @@
  * before the first microphone frame arrives. That same event is the agent's first delivery: it
  * lands `agent/created` on `/`, so `itx.agents.list()` knows the conversation. The device carries no source and no class name; the
  * bundles live in the project's KV.
- *
- * The funnel delivers every durable event of every context here too (`processEvent`); nothing
- * reacts today.
  */
 import { z } from "zod";
 import { ConfigWorker } from "./processor.js";

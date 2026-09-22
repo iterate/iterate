@@ -31,11 +31,6 @@
   "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
   "observability": { "enabled": true, "logs": { "head_sampling_rate": 1 } },
   "workers_dev": true,
-  // PROJECT HOSTS (src/worker.ts `projectHostOf`): `<app>--<project>.<base>`, `<app>.<project>.<base>` and
-  // the apex `<project>.<base>` under the wildcard. The wildcard DNS record (`*.project-worker.iterate.com` AAAA 100::,
-  // proxied — originless, the route terminates it) lives in the zone; the route is this line.
-  "routes": [{ "pattern": "*.project-worker.iterate.com/*", "zone_name": "iterate.com" }],
-
   // subrequests: a capnweb WebSocket session is pumped by ONE long-lived stateless invocation, and
   // every edge->DO `invoke` it makes is a subrequest counted against that one invocation for the
   // session's whole life — the 10,000 paid default is hit by an ordinary long-lived client
@@ -59,8 +54,7 @@
   "r2_buckets": [{ "binding": "FILES", "bucket_name": "os-next-files" }],
   // Cloudflare Artifacts ("git for agents", beta) — the ONE bound namespace, project-scoped as the
   // built-in root `itx.cfArtifacts` (context/built-ins.ts forces every repo name under `${projectId}.`).
-  // repo-create auto-provisions the namespace; APP_CONFIG_ARTIFACTS_ACCOUNT_ID/NAMESPACE (vars, below)
-  // build the git remotes.
+  // repo-create auto-provisions the namespace.
   "artifacts": [{ "binding": "ARTIFACTS", "namespace": "project-worker-repos" }],
 
   // Deploy identity. Loader isolates are cached ACROSS deployments, but a DO is durable and

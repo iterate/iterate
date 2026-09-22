@@ -1,8 +1,0 @@
-[data-testid="terminal-container"] .xterm {
-  width: 100% !important;
-  height: 100% !important;
-}
-
-[data-testid="terminal-container"] .xterm-viewport {
-  overflow-y: auto !important;
-}
