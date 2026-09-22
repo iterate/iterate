@@ -174,6 +174,7 @@ test("first Claude consent creates the organization and project on the consent p
       .getByRole("alert")
       .filter({ hasText: /already taken/ })
       .waitFor();
+    await expect(page.getByRole("alert")).toBeFocused();
     const madeOrg = page.getByRole("combobox", { name: "Organization", exact: true });
     expect(await madeOrg.locator("option:checked").textContent()).toBe(firstOrg);
     expect(await orgField.isVisible()).toBe(false);
@@ -219,9 +220,15 @@ test("first Claude consent creates the organization and project on the consent p
     // Review never creates the unfinished draft. Editing again keeps it available.
     await choice.check();
     await page.getByRole("button", { name: "New project", exact: true }).click();
+    await expect(projectField).toBeFocused();
+    await page.getByRole("button", { name: "New project", exact: true }).click();
+    await expect(page.getByRole("button", { name: "New project", exact: true })).toBeFocused();
+    await page.getByRole("button", { name: "New project", exact: true }).click();
     await page.getByRole("textbox", { name: "Project slug", exact: true }).fill(otherProject);
     await review.click();
-    await page.getByRole("heading", { name: "Review permissions", exact: true }).waitFor();
+    await expect(
+      page.getByRole("heading", { name: "Review permissions", exact: true }),
+    ).toBeFocused();
     await expect(page.getByRole("region", { name: "Selected projects" })).not.toContainText(
       otherProject,
     );

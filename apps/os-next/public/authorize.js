@@ -210,7 +210,9 @@ function projectFields(view, { follow }) {
   return { fields, slugField };
 }
 const errorLine = () =>
-  state.error ? el("p", { role: "alert", "data-type": "error", text: state.error }) : null;
+  state.error
+    ? el("p", { role: "alert", tabindex: "-1", "data-type": "error", text: state.error })
+    : null;
 /** Who is signed in — the person's picture (or initial), the address, Switch account. */
 const signedInAs = (email, picture) => {
   const initial = el("span", {
@@ -449,7 +451,7 @@ function render() {
   }
   const panel = el(
     "div",
-    { class: "consent-panel" },
+    { class: "consent-panel", "data-step": reviewing ? "permissions" : "projects" },
     form,
     el(
       "aside",
@@ -472,7 +474,11 @@ function render() {
   const shown = card.querySelector(".consent-panel");
   if (shown) {
     shown.replaceWith(panel);
-    form.querySelector("h2")?.focus();
+    // Step navigation announces the heading; local changes stay with the form or its error.
+    if (state.error) panel.querySelector('[role="alert"]')?.focus();
+    else if (shown.dataset.step !== panel.dataset.step) form.querySelector("h2")?.focus();
+    else if (creating) form.querySelector('[name="slug"]')?.focus();
+    else add?.focus();
     return;
   }
   card.replaceChildren(
