@@ -91,6 +91,9 @@
     // `SecretDurableObject` was a bound namespace (`SECRET`) until 2026-09-21; the facet of the same
     // name took over, and the old objects are unreachable by name — set the secrets again.
     "AccountDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    // The removed built-in was hosted as a facet of IterateContextDurableObject. Retire its
+    // unused standalone namespace; agent streams and facet storage belong to the context.
+    "AgentDurableObject": { "type": "durable-object", "state": "deleted" },
     "OrganizationDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "ProjectDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "RepoDurableObject": { "type": "durable-object", "storage": "sqlite" },
