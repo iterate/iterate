@@ -190,7 +190,6 @@ if (existsSync(stampPath)) {
           console.log(
             `[ci-deps] reused baked dependencies ${fingerprint} in ${Math.round(performance.now() - started)}ms; ${environmentNote}`,
           );
-          warmBakedNodeModules();
           process.exit(0);
         }
       }
@@ -211,24 +210,6 @@ const install = spawnSync("pnpm", ["install", "--frozen-lockfile", "--prefer-off
 });
 if (install.error) throw install.error;
 process.exit(install.status === null ? 1 : install.status);
-
-// THE PAGING THE NO-OP INSTALL USED TO DO. The baked image is loaded lazily: the first touch of a
-// file fetches its block. `pnpm install` on an up-to-date tree stat'ed every file serially — 54–69 s
-// at 0–3 % CPU — and that walk was what made the first imports fast. Reusing the tree without it moved
-// the paging into the tests (2026-09-22: the first packages ran 1.5–2× slower and a 3 s test blew
-// its 5 s timeout). A parallel walk fetches the same blocks in a fraction of the time, once, here.
-function warmBakedNodeModules() {
-  if (process.platform !== "linux" || !existsSync("node_modules/.pnpm")) return;
-  const warmed = performance.now();
-  const walk = spawnSync(
-    "sh",
-    ["-c", "find node_modules -type f -print0 | xargs -0 -P 64 -n 4000 stat -c %s | wc -l"],
-    { encoding: "utf8" },
-  );
-  console.log(
-    `[ci-deps] warmed ${walk.stdout.trim() || "?"} baked files in ${Math.round(performance.now() - warmed)}ms${walk.status === 0 ? "" : ` (walk exited ${walk.status})`}`,
-  );
-}
 
 function installedState(directories) {
   const state = createHash("sha256");
