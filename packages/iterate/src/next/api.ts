@@ -119,6 +119,22 @@ export type SecretCatalogEntry = {
   createdAt: string;
 };
 
+/** The input an agent gives `itx.secrets.collectFromUser`: the write-only secret path, the
+ * origins its material may reach, and the short explanation the authenticated collection form
+ * shows its user. */
+export type CollectSecretInput = {
+  path: string;
+  egress: { urls: string[] };
+  description?: string;
+};
+
+/** A secret collection link. Sending this asks the person to authenticate to the intended
+ * Iterate instance; it is not itself permission to write a secret. */
+export type CollectSecretLink = { path: string; url: string };
+
+/** An existing agent's public message surface. */
+export type AgentHandle = InvokeHandle & { message(message: string): Promise<StreamEvent> };
+
 /** A context (a project, a user, an organization): every `itx` root, reached through `invoke`. */
 
 export interface IterateContextApi {
@@ -171,6 +187,10 @@ export interface IterateContextApi {
     ): Promise<{ path: string }>;
     delete(path: string): Promise<{ path: string }>;
     list(): Promise<SecretCatalogEntry[]>;
+    /** Build the authenticated Dash link where a person enters a value an agent must never see in
+     * chat. The link fixes the project, platform instance, secret path and egress pin. If called
+     * from an agent context, a successful submission messages that same agent with the path only. */
+    collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink>;
   };
   /** The table this context resolves against, described — the tree a model reads. `list()` follows a
    *  bare hop row into the context it names (a Durable Object hop, hence async). */
@@ -259,6 +279,17 @@ export interface IterateContextApi {
       }): Promise<{ url: string; expiresAt: string }>;
     };
     list(prefix?: string): Promise<{ path: string; contentType: string; size: number }[]>;
+  };
+  agents: {
+    get(path: string): AgentHandle;
+    list(): Promise<{ path: string; createdAt: string }[]>;
+    create(path: string): Promise<{ path: string }>;
+    delete(path: string): Promise<{ path: string }>;
+  };
+  /** The MCP connections born under the project, by grant: each connection's context path
+   *  (`/mcp/inbound/grants/<grantId>`, its transcript) and when it was born (the grant's first run). */
+  mcpConnections: {
+    list(): Promise<{ grantId: string; path: string; createdAt: string }[]>;
   };
 }
 
