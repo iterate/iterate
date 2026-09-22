@@ -61,6 +61,7 @@ async function main(): Promise<void> {
   await root.invoke(["itx", ["whoami"]]);
   const kit = root.clients[DEVICE];
   const before = await healthWithRetry(kit);
+  if (before.callActive) throw new Error(`Device ${DEVICE} is already in a call; leave it alone.`);
   console.log(
     `before: ${JSON.stringify({ framesSent: before.framesSent, spkWrites: before.spkWrites, uptimeMs: before.uptimeMs, callActive: before.callActive })}`,
   );
@@ -90,6 +91,7 @@ async function main(): Promise<void> {
   let heardUs = "";
   let saidBack = "";
   let answers = 0;
+  let ending = false;
   const errors: string[] = [];
   await call.subscribe({
     name: `voice-board-${askedAt}`,
@@ -111,7 +113,8 @@ async function main(): Promise<void> {
         else if (kind === "answer-transcript") saidBack += ` ${p.text}`;
         else if (kind === "provider-error" || kind === "provider-disconnected")
           errors.push(`${kind}: ${JSON.stringify(p).slice(0, 200)}`);
-        else if (kind === "conversation-ended") errors.push(`ended: ${String(p.reason)}`);
+        else if (kind === "conversation-ended" && !ending)
+          errors.push(`ended: ${String(p.reason)}`);
       }
     },
   });
@@ -133,6 +136,7 @@ async function main(): Promise<void> {
     await sleep(1000);
   }
   await sleep(1500);
+  ending = true;
   try {
     await kit.conversation.end();
   } catch (error) {

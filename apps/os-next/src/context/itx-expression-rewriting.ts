@@ -597,7 +597,12 @@ export class ItxExpressionResolver {
    *  a parent link `itx ⇒ itx.builtins.cd('/agents/x')` carries a script up exactly as far as its
    *  owner said. Codec-style, kin to the reserved names `parse` refuses — nothing here is policy. */
   #admit(expression: ItxExpression): void {
-    if (this.#caller().app) admitLoadedCodeExpression(expression, this.#path);
+    const caller = this.#caller();
+    // Only a trusted cd hop stamps path, after the whole input expression passed this check.
+    // The remaining expression now includes the owner's rewrites (e.g. the agent's sandbox
+    // redirect to builtins.run), not just loaded code's words. Keep app for row admission and
+    // attribution, but don't reject the owner's grant again at its destination.
+    if (caller.app && !caller.path) admitLoadedCodeExpression(expression, this.#path);
   }
 
   /** PURE: the chain of rewrites from `call` to the builtins-rooted call that would run (rules 3–5).

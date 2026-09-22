@@ -37,8 +37,14 @@ deployedOnly(
           source: {
             "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class extends WorkerEntrypoint {
-  fetch(request) {
+  async fetch(request) {
     if (!request.headers.get("x-itx-principal")) return new Response("missing provider credential", {status: 401});
+    if (request.method === "POST") {
+      const {input} = await request.json();
+      const result = input.findLast(message => message.content.startsWith("Script result:\\n"));
+      const text = result ? result.content : '<codemode status="Checking the clock">\\nreturn {time: new Date().toISOString(), identity: await itx.whoami()};\\n</codemode>';
+      return Response.json({output: [{type: "message", content: [{type: "output_text", text}]}]});
+    }
     const [client, server] = Object.values(new WebSocketPair());
     server.accept();
     server.addEventListener("message", event => {
@@ -76,12 +82,15 @@ export default class extends WorkerEntrypoint {
     const liveUrl = "https://api.openai.com/v1/live/sessions";
     expect(voice.split(liveUrl)).toHaveLength(2);
     const fixtureVoice = voice.replace(liveUrl, providerUrl);
+    const responsesUrl = "https://api.openai.com/v1/responses";
+    expect(delegate.split(responsesUrl)).toHaveLength(2);
+    const fixtureDelegate = delegate.replace(responsesUrl, providerUrl);
     const key = (source: string) => createHash("sha256").update(source).digest("hex");
     const fixtureWorker = worker
       .replace("voice-agent:dev", `voice-agent:${key(fixtureVoice)}`)
-      .replace("voice-delegate:dev", `voice-delegate:${key(delegate)}`);
+      .replace("voice-delegate:dev", `voice-delegate:${key(fixtureDelegate)}`);
     await root.kv.put("voice-agent.js", fixtureVoice);
-    await root.kv.put("voice-delegate.js", delegate);
+    await root.kv.put("voice-delegate.js", fixtureDelegate);
     await root.kv.put("worker.js", fixtureWorker);
     await root.provide("itx.voice", [
       "itx",
@@ -132,6 +141,29 @@ export default class extends WorkerEntrypoint {
           received.some((event) => event.type === `${T}spk-frame` && event.payload.pcm === encoded),
         );
       }
+      // The loaded delegate must execute a script in the conversation's real sandbox. Audio
+      // alone missed the regression where the sandbox redirect was rejected as app-written builtins.
+      const clockStarted = Date.now();
+      await call.append({
+        type: `${T}delegation-requested`,
+        payload: {
+          activation,
+          conversationId: `conv_${activation}`,
+          delegationId: "clock",
+          transcript: [{ role: "listener", text: "What time is it in London?" }],
+        },
+      });
+      const commentary = await until("delegated clock result", () =>
+        received.find(
+          (event) => event.type === `${T}commentary` && event.payload.delegationId === "clock",
+        ),
+      );
+      const content = String(commentary.payload.content);
+      expect(content).not.toContain("ERROR:");
+      const clock = JSON.parse(content.replace("Script result:\n", ""));
+      expect(clock.identity.path).toBe(`${streamPath}/sandbox`);
+      expect(Date.parse(clock.time)).toBeGreaterThanOrEqual(clockStarted);
+      expect(Date.parse(clock.time)).toBeLessThanOrEqual(Date.now());
       expect(
         received.filter((event) =>
           ["conversation-ended", "provider-error", "provider-disconnected"].some(
@@ -144,6 +176,8 @@ export default class extends WorkerEntrypoint {
       );
       expect(uses.map((event) => event.payload)).toEqual([
         { method: "GET", url: providerUrl, status: 101 },
+        { method: "POST", url: providerUrl, status: 200 },
+        { method: "POST", url: providerUrl, status: 200 },
       ]);
       const subscriptions = await call.subscriptions.list();
       for (const name of ["voice-agent", "voice-delegate"]) {
