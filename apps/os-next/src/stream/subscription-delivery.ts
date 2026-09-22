@@ -681,6 +681,10 @@ export class SubscriptionDelivery {
   }
 
   async #drainCursor(name: string): Promise<void> {
+    // A claim written on the commit's own turn is armed by the commit's reconcile, and one written
+    // after an ack rides the alarm the previous claim armed; the claim a restart (below) causes has
+    // neither behind it and arms the alarm itself.
+    let claimArmsTheAlarm = false;
     try {
       for (;;) {
         const row = this.#stream.coreReducedState.subscriptions[name];
@@ -744,6 +748,10 @@ export class SubscriptionDelivery {
             nextAttemptAtMs: Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS,
           };
           this.#adoptCursor(name, cursor, true);
+          if (claimArmsTheAlarm) {
+            claimArmsTheAlarm = false;
+            this.#reconcileAlarm();
+          }
         }
         // The batch: one page of the log with the ring's ephemerals merged in (stream.ts `read`),
         // from the cursor — which, after an ephemeral-only ack, stands on that ephemeral's offset in
@@ -763,9 +771,14 @@ export class SubscriptionDelivery {
           // A durable that landed while an at-mark row waited for room put it behind the mark: this
           // attempt holds no claim and a ring-sized reserve, neither of which covers a page of
           // durables — start the iteration over (the finally releases the room), and the next turn
-          // claims and reserves a page's worth before it reads.
-          if (!behindTheDurableMark && cursor.confirmedOffset < this.#stream.highestDurableOffset())
+          // claims, arms the alarm for that claim, and reserves a page's worth before it reads.
+          if (
+            !behindTheDurableMark &&
+            cursor.confirmedOffset < this.#stream.highestDurableOffset()
+          ) {
+            claimArmsTheAlarm = true;
             continue;
+          }
           let page: StreamPage;
           try {
             page = this.#stream.read(cursor.confirmedOffset, 100, { includeEphemeral: true });

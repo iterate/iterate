@@ -1089,6 +1089,9 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): exactly t
       expect.objectContaining({ attempt: 1 }),
     ]);
     expect(rig.delivery.deadlines()).toMatchObject([{ name: "small", attempt: 1 }]);
+    // …and the alarm is armed for it: this claim was written after a wait, with no commit's
+    // reconcile behind it — a death mid-call must still be woken.
+    expect(rig.coordinator.snapshot().armedAt).toBe(rig.delivery.cursor("small")!.nextAttemptAtMs);
     await release("small");
     expect(rig.delivery.cursor("small")).toMatchObject({
       confirmedOffset: durable.offset,
