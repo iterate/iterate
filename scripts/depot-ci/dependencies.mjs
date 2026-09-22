@@ -170,10 +170,17 @@ if (mode === "seal") {
   process.exit(0);
 }
 
+// What the fingerprint was computed WITH, on every outcome: the node the step ran (its version and
+// path are inputs — a runner whose PATH puts another node first than the image's baked one computes
+// a different fingerprint on identical sources; 2026-09-22 every job missed a stamp that jobs had hit
+// the evening before) and the stamp it was compared against.
+const environmentNote = `node=${process.version} at ${process.execPath}`;
 let reason = "no baked fingerprint";
+let stampNote = "no stamp";
 if (existsSync(stampPath)) {
   try {
     const stamp = JSON.parse(readFileSync(stampPath, "utf8"));
+    stampNote = `stamp=${String(stamp.fingerprint).slice(0, 12)}`;
     reason = "dependency inputs changed";
     if (stamp.fingerprint === fingerprint) {
       reason = "workspace lifecycle requires install";
@@ -181,7 +188,7 @@ if (existsSync(stampPath)) {
         reason = "installed state changed";
         if (installedState(stamp.directories) === stamp.state) {
           console.log(
-            `[ci-deps] reused baked dependencies ${fingerprint} in ${Math.round(performance.now() - started)}ms`,
+            `[ci-deps] reused baked dependencies ${fingerprint} in ${Math.round(performance.now() - started)}ms; ${environmentNote}`,
           );
           process.exit(0);
         }
@@ -193,7 +200,9 @@ if (existsSync(stampPath)) {
     reason = "baked state missing or unreadable";
   }
 }
-console.log(`[ci-deps] install required: ${reason}; fingerprint=${fingerprint}`);
+console.log(
+  `[ci-deps] install required: ${reason}; fingerprint=${fingerprint}; ${stampNote}; ${environmentNote}`,
+);
 // A failed reconciliation must never leave an apparently valid stamp behind.
 rmSync(stampPath, { force: true });
 const install = spawnSync("pnpm", ["install", "--frozen-lockfile", "--prefer-offline"], {
