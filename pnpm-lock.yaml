@@ -1749,6 +1749,9 @@ importers:
       '@clack/prompts':
         specifier: ^1.0.0
         version: 1.1.0
+      '@cloudflare/workers-types':
+        specifier: ^5.20260831.1
+        version: 5.20260911.1
       '@iterate-com/capnweb':
         specifier: ^0.10.0
         version: 0.10.0
@@ -1786,9 +1789,6 @@ importers:
         specifier: 4.5.4
         version: 4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5)
     devDependencies:
-      '@cloudflare/workers-types':
-        specifier: ^5.20260831.1
-        version: 5.20260911.1
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.13

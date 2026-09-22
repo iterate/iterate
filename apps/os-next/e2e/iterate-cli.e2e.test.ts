@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 // eslint-disable-next-line iterate/no-capnweb-http-batch -- Same bounded consent request as the issuer page; CLI calls use WebSockets.
 import { newHttpBatchRpcSession } from "capnweb";
 import { connectOsNext } from "iterate/next/node";
-import { beforeAll, expect, test } from "vitest";
+import { beforeAll, test } from "vitest";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { MyComputer } from "../../../packages/iterate/src/use-my-computer.ts";
 import { adminCredentials, freshCtx, openItx, readAll, workerUrl } from "./support/client.ts";
@@ -27,7 +27,9 @@ beforeAll(async () => {
   );
 }, 65_000);
 
-test("published CLI: OAuth PKCE login, refresh, project listing and an itx script with durable settlement", async () => {
+test("published CLI: OAuth PKCE login, refresh, project listing and an itx script with durable settlement", async ({
+  expect,
+}) => {
   const slug = freshDnsSafeProjectSlug("cli");
   const member = { email: `${slug}@example.com` };
   const project = await registerProject(slug, member);
@@ -106,7 +108,9 @@ test("published CLI: OAuth PKCE login, refresh, project listing and an itx scrip
   }
 });
 
-test("computer provider is callable from another connection and released on disposal", async () => {
+test("computer provider is callable from another connection and released on disposal", async ({
+  expect,
+}) => {
   const projectId = freshCtx("cli-computer");
   using connection = await connectOsNext({ baseUrl: workerUrl("/"), auth: adminCredentials() });
   using project = await connection.session.projects.get(projectId);
