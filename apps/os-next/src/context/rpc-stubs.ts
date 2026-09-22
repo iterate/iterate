@@ -712,7 +712,7 @@ export const ITX_EXPRESSION_FETCH_HEADER = "x-itx-expression";
  * Keep ordinary JSON on the wire so existing expression readers can parse it unchanged. */
 export function encodeFetchExpression(expression: ItxExpression): string {
   return JSON.stringify(expression).replace(
-    /[^\x00-\x7f]/g,
+    /[\u0080-\uffff]/g,
     (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
 }
