@@ -62,7 +62,7 @@ async function googleLogin(overrides: Record<string, unknown> = {}, invalidSigna
     if (url.origin === origin) return SELF.fetch(new Request(input, init));
     throw new Error(`Unexpected Google fixture fetch: ${url}`);
   });
-  const begin = await SELF.fetch(`${origin}/.auth/identity?next=%2Fauthorize%3Fclient%3Dtest`, {
+  const begin = await SELF.fetch(`${origin}/.auth/identity?next=%2Foauth2%2Fauth%3Fclient%3Dtest`, {
     redirect: "manual",
   });
   expect(begin.status).toBe(302);
@@ -110,7 +110,7 @@ async function googleLogin(overrides: Record<string, unknown> = {}, invalidSigna
 test("Google proves issuer identity; upstream credentials never become app tokens", async () => {
   const response = await googleLogin();
   expect(response.status, await response.clone().text()).toBe(303);
-  expect(response.headers.get("location")).toBe("/authorize?client=test");
+  expect(response.headers.get("location")).toBe("/oauth2/auth?client=test");
   const cookies = response.headers.getSetCookie();
   expect(cookies.join()).not.toContain("upstream-google-access-token");
   const sessionCookie = cookies.find((cookie) => cookie.startsWith("__Host-itx-session="))!;

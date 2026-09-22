@@ -41,7 +41,6 @@ test("a facet from ctx.exports.<Class>({ props }) sees ctx.props and answers thr
     repos: {},
     workspaces: {},
     agents: {},
-    mcpConnections: {},
     secrets: {},
     configRepoTip: null,
   });

@@ -6,5 +6,5 @@
   X-Frame-Options: DENY
 /login
   Cache-Control: no-store
-/authorize
+/oauth2/auth
   Cache-Control: no-store

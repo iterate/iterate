@@ -1,6 +1,7 @@
 import { appAuth } from "iterate/next/app-server";
 import type { BrowserSession } from "iterate/next/app-session";
 import entry from "@tanstack/react-start/server-entry";
+import { deviceClientMetadata } from "./firmware/device-client.ts";
 export { BrowserSession } from "iterate/next/app-session";
 
 /** The installer's own origin signs the person in through os-next's OAuth and proxies
@@ -15,6 +16,8 @@ export default {
     },
   ) {
     if (new URL(request.url).pathname === "/healthz") return new Response("ok");
+    const deviceClient = deviceClientMetadata(new URL(request.url));
+    if (deviceClient) return deviceClient;
     const auth = await appAuth(request, {
       sessions: env.BROWSER_SESSION,
       issuer: env.ITERATE_ORIGIN,

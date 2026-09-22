@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { OAuthProvider, type GrantSummary } from "@cloudflare/workers-oauth-provider";
+import {
+  CimdFetchError,
+  OAuthProvider,
+  type GrantSummary,
+} from "@cloudflare/workers-oauth-provider";
 import type { StreamEventInput } from "iterate/next/stream/processor";
 import { RpcTarget } from "capnweb";
 import { codedError, isLocalOrigin } from "iterate/next/lib";
@@ -23,10 +27,13 @@ import {
 const DisplayMetadata = z.object({
   clientName: z.string().optional(),
   tokenKind: z.string().optional(),
+  logoUri: z.url({ protocol: /^https$/ }).optional(),
 });
 const MintInput = z.object({
   name: z.string().trim().min(1).max(100),
   projects: z.array(z.string()).min(1),
+  /** A public CIMD client for a separately provisioned device. */
+  clientId: z.url({ protocol: /^https$/ }).optional(),
   /** Epoch ms. Default 30 days; at most ten years — a device that can neither refresh nor
    *  reflash itself is retired by revocation from the sessions list, not by a clock. */
   expiresAt: z.number().int().positive().optional(),
@@ -129,11 +136,15 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
         {
           id: grant.id,
           name: metadata.clientName || grant.clientId,
+          clientId: grant.clientId,
+          logoUri: metadata.logoUri,
           kind: !grant.expiresAt
             ? "Pending sign-in"
-            : metadata.tokenKind === "personal"
-              ? "Personal access token"
-              : "Session",
+            : metadata.tokenKind === "device"
+              ? "Device"
+              : metadata.tokenKind === "personal"
+                ? "Personal access token"
+                : "Session",
           createdAt: grant.createdAt * 1000,
           expiresAt,
           lastUsedAt: row?.last_used_at ?? null,
@@ -149,6 +160,8 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
       .map((row) => ({
         id: row.grant_id,
         name: "Revoked session",
+        clientId: undefined,
+        logoUri: undefined,
         kind: "Session",
         createdAt: 0,
         expiresAt: null,
@@ -225,7 +238,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
    * access token is answered ONCE and never stored readable; it carries no refresh credential
    * (`tokenExchangeCallback`, oauth.ts, refuses a refresh of a personal grant). The bearer opens
    * `/api`, `/mcp` and a project host of a covered project as the user (`authorizationForToken`).
-   * The console's own CIMD client performs the code exchange in process. */
+   * The console's client, or the device's public CIMD client, performs the exchange in process. */
   async mint(input: unknown) {
     const env = this.#env;
     const ctx = this.#ctx;
@@ -240,15 +253,27 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
       .filter((project) => data.projects.includes(project.id))
       .map((project) => project.id);
     if (!projects.length) throw codedError("FORBIDDEN", "Choose a project you can access.");
-    const redirectUri = `${issuer}/.auth/callback`;
-    const clientId = await this.#consoleClientId(issuer, redirectUri);
+    const redirectUri = `${data.clientId ? new URL(data.clientId).origin : issuer}/.auth/callback`;
+    const clientId = data.clientId || (await this.#consoleClientId(issuer, redirectUri));
+    const helpers = oauthHelpers(env, this.#platformOrigin);
+    const client = data.clientId
+      ? await helpers.lookupClient(clientId).catch((error: unknown) => {
+          if (!(error instanceof CimdFetchError)) throw error;
+          throw codedError(
+            "INVALID_INPUT",
+            "The device's OAuth metadata could not be loaded. Try preparing the device again.",
+            { clientId, detail: error.detail },
+          );
+        })
+      : null;
+    if (data.clientId && (!client || client.tokenEndpointAuthMethod !== "none"))
+      throw codedError("INVALID_INPUT", "A device needs a public OAuth client metadata document.");
     const flow = await authorizationCodeRequest({
       issuer,
       clientId,
       redirectUri,
       resources: [api, mcp],
     });
-    const helpers = oauthHelpers(env, this.#platformOrigin);
     const auth = await parseAuthorization(env, new Request(flow.url));
     const expiresAt = Math.min(
       data.expiresAt ?? Date.now() + 30 * 24 * 3600_000,
@@ -256,12 +281,17 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
     );
     if (expiresAt < Date.now() + 60_000)
       throw codedError("INVALID_INPUT", "expiresAt must be at least a minute away.");
+    const logoUri = z.url({ protocol: /^https$/ }).safeParse(client?.logoUri);
     const approved = await helpers.completeAuthorization({
       request: auth,
       userId: session.sub,
       scope: ["iterate"],
       revokeExistingGrants: false,
-      metadata: { clientName: data.name, tokenKind: "personal" },
+      metadata: {
+        clientName: data.name,
+        tokenKind: data.clientId ? "device" : "personal",
+        ...(logoUri.success && { logoUri: logoUri.data }),
+      },
       props: {
         kind: "personal",
         version: 2,
@@ -276,7 +306,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
     // Personal token minting runs the code→token exchange through the SAME provider gate in process
     // (browser apps hit its public endpoint instead).
     const response = await new OAuthProvider(providerOptions(env, this.#platformOrigin)).fetch(
-      new Request(`${issuer}/oauth/token`, {
+      new Request(`${issuer}/oauth2/token`, {
         method: "POST",
         body: new URLSearchParams({
           grant_type: "authorization_code",

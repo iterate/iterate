@@ -47,7 +47,6 @@ const empty: ProjectState = {
   repos: {},
   workspaces: {},
   agents: {},
-  mcpConnections: {},
   secrets: {},
   configRepoTip: null,
 };
@@ -102,7 +101,6 @@ describe("ProjectProcessor — the reduce", () => {
         repos: { "/repos/config": { createdAt: expect.any(String) } },
         workspaces: { "/workspaces/notes": { createdAt: expect.any(String) } },
         agents: { "/agents/support": { createdAt: expect.any(String) } },
-        mcpConnections: {},
         secrets: {},
         configRepoTip: null,
       },
@@ -156,33 +154,15 @@ describe("ProjectProcessor — the reduce", () => {
       },
     },
     {
-      name: "an MCP client connects once per grant — the connection's path and first time; a second connect is ignored",
+      name: "historical MCP connection certificates no longer populate the project catalog",
       events: [
+        repoBorn("/repos/config"),
         {
           type: "events.iterate.com/project/mcp-connection-created",
-          payload: { grantId: "grant_a", path: "/mcp/inbound/grants/grant_a" },
-        },
-        {
-          type: "events.iterate.com/project/mcp-connection-created",
-          payload: { grantId: "grant_a", path: "/mcp/inbound/grants/grant_a" },
-        },
-        {
-          type: "events.iterate.com/project/mcp-connection-created",
-          payload: { grantId: "admin", path: "/mcp/inbound/admin" },
-        },
-        // the connection's context moved: the row follows the path, its birth stays the first one
-        {
-          type: "events.iterate.com/project/mcp-connection-created",
-          payload: { grantId: "grant_a", path: "/mcp/inbound/grants/moved/grant_a" },
+          payload: { grantId: "old-grant", path: "/mcp/inbound/grants/old-grant" },
         },
       ],
-      state: {
-        ...empty,
-        mcpConnections: {
-          grant_a: { path: "/mcp/inbound/grants/moved/grant_a", createdAt: expect.any(String) },
-          admin: { path: "/mcp/inbound/admin", createdAt: expect.any(String) },
-        },
-      },
+      state: { ...empty, repos: { "/repos/config": { createdAt: expect.any(String) } } },
     },
     {
       name: "a malformed payload for a KNOWN type is skipped by the contract, never reduced",

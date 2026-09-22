@@ -121,7 +121,9 @@ export class Consent extends RpcTarget {
     const search = z.string().parse(query).replace(/^\?/, "");
     return parseAuthorization(
       this.#env,
-      new Request(`${oauthAddresses(this.#env, this.#platformOrigin).issuer}/authorize?${search}`),
+      new Request(
+        `${oauthAddresses(this.#env, this.#platformOrigin).issuer}/oauth2/auth?${search}`,
+      ),
     );
   }
   async describe(query: string): Promise<ConsentView> {

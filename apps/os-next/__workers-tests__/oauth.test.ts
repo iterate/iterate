@@ -167,7 +167,7 @@ async function grant(resources: string[], projects: string[] = ["oauth-a"]) {
       oauthA,
       oauthB,
     };
-  const tokenResponse = await call("/oauth/token", {
+  const tokenResponse = await call("/oauth2/token", {
     method: "POST",
     body: new URLSearchParams({
       grant_type: "authorization_code",
@@ -191,8 +191,10 @@ test("discovery advertises CIMD AND DCR: the registration endpoint is published 
   expect(metadata.client_id_metadata_document_supported).toBe(true);
   expect(metadata.token_endpoint_auth_methods_supported).toContain("none");
   expect(metadata.code_challenge_methods_supported).toEqual(["S256"]);
-  expect(metadata.registration_endpoint).toBe(`${ORIGIN}/oauth/register`);
-  const registered = await call("/oauth/register", {
+  expect(metadata.authorization_endpoint).toBe(`${ORIGIN}/oauth2/auth`);
+  expect(metadata.token_endpoint).toBe(`${ORIGIN}/oauth2/token`);
+  expect(metadata.registration_endpoint).toBe(`${ORIGIN}/oauth2/register`);
+  const registered = await call("/oauth2/register", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -232,7 +234,7 @@ test("the configured header bearer is the same administrator at both protocols",
         })
       ).body.result.content[0].text,
     ),
-  ).toEqual({ projectId: "admin-probe", path: "/mcp/inbound/admin" }); // the admin secret's shared connection context (mcp.ts)
+  ).toEqual({ projectId: "admin-probe", path: "/" }); // MCP executes on the authorized project root.
   expect((await call("/api", { headers: { Authorization: "Bearer wrong" } })).status).toBe(401);
   expect((await tool("wrong", "run", { project: "x", script: "async () => 1" })).status).toBe(401);
 });
@@ -275,7 +277,7 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
   expect(
     (await call("/api", { headers: { Authorization: `Bearer ${token.access_token}` } })).status,
   ).toBe(401);
-  const broaden = await call("/oauth/token", {
+  const broaden = await call("/oauth2/token", {
     method: "POST",
     body: new URLSearchParams({
       grant_type: "refresh_token",
@@ -285,7 +287,7 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
     }),
   });
   expect(broaden.status).toBe(400);
-  const refresh = await call("/oauth/token", {
+  const refresh = await call("/oauth2/token", {
     method: "POST",
     body: new URLSearchParams({
       grant_type: "refresh_token",
@@ -299,7 +301,7 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
   // explicitly keeps that token usable until the client uses a newer one.
   expect(
     (
-      await call("/oauth/token", {
+      await call("/oauth2/token", {
         method: "POST",
         body: new URLSearchParams({
           grant_type: "refresh_token",
@@ -321,7 +323,7 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
   ).toBe(401);
   expect(
     (
-      await call("/oauth/token", {
+      await call("/oauth2/token", {
         method: "POST",
         body: new URLSearchParams({
           grant_type: "refresh_token",
@@ -448,7 +450,19 @@ test("console and project browsers use the same CIMD flow and independent grants
   const metadataFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
-    if (!["/.auth/client.json", "/oauth/token", "/api"].includes(url.pathname))
+    if (url.href === "https://kit.test/devices/missing.json")
+      return new Response("Not found", { status: 404 });
+    if (url.origin === "https://kit.test" && url.pathname.startsWith("/devices/"))
+      return Response.json({
+        client_id: url.href,
+        client_name: "Home Assistant Voice Preview Edition",
+        logo_uri: "https://kit.test/vendors/home-assistant.png",
+        redirect_uris: ["https://kit.test/.auth/callback"],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code"],
+        response_types: ["code"],
+      });
+    if (!["/.auth/client.json", "/oauth2/token", "/api"].includes(url.pathname))
       throw new Error(`Unexpected external fetch: ${url}`);
     if (logoutUnavailable && url.pathname === "/api")
       return new Response("Unavailable", { status: 503 });
@@ -566,7 +580,7 @@ test("console and project browsers use the same CIMD flow and independent grants
       ),
     ).toEqual({
       projectId: browserA.id,
-      path: expect.stringMatching(/^\/mcp\/inbound\/grants\/[A-Za-z0-9_-]{16}$/), // the token's own connection context, named by its grant (mcp.ts)
+      path: "/", // the token's own connection context, named by its grant (mcp.ts)
       projectSlug: "browser-a",
       projectUrl: "https://browser-a.projects.test/",
     });
@@ -583,9 +597,20 @@ test("console and project browsers use the same CIMD flow and independent grants
     await expect(Promise.resolve().then(() => personalApi.user.whoami())).rejects.toThrow(
       /bound to projects/,
     );
+    await expect(
+      consoleLogin.root.grants.mint({
+        name: "Unavailable device",
+        projects: [browserA.id],
+        clientId: "https://kit.test/devices/missing.json",
+      }),
+    ).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      message: "The device's OAuth metadata could not be loaded. Try preparing the device again.",
+    });
     // A device's token: `expiresAt` asks for years, capped at ten; the provider's token agrees.
     const device = await consoleLogin.root.grants.mint({
       name: "Kit HAVPE",
+      clientId: "https://kit.test/devices/havpe/clients/unit-one.json",
       projects: [browserA.id],
       expiresAt: Date.now() + 20 * 365 * 24 * 3600_000,
     });
@@ -593,12 +618,38 @@ test("console and project browsers use the same CIMD flow and independent grants
     expect(device.expiresAt - Date.now()).toBeLessThan(11 * 365 * 24 * 3600_000);
     const storedDevice = await helpers().unwrapToken(device.token);
     expect(Math.abs(storedDevice!.expiresAt * 1000 - device.expiresAt)).toBeLessThan(2000);
+    const secondDevice = await consoleLogin.root.grants.mint({
+      name: "Kit HAVPE two",
+      projects: [browserA.id],
+      clientId: "https://kit.test/devices/havpe/clients/unit-two.json",
+    });
+    const [, firstDeviceId] = device.token.split(":");
+    const [, secondDeviceId] = secondDevice.token.split(":");
+    const deviceInventory = await consoleLogin.root.grants.list();
+    expect(deviceInventory.items.find((item) => item.id === firstDeviceId)).toMatchObject({
+      name: "Kit HAVPE",
+      kind: "Device",
+      clientId: "https://kit.test/devices/havpe/clients/unit-one.json",
+      logoUri: "https://kit.test/vendors/home-assistant.png",
+    });
+    expect(deviceInventory.items.find((item) => item.id === secondDeviceId)?.clientId).toBe(
+      "https://kit.test/devices/havpe/clients/unit-two.json",
+    );
+    const { root: deviceApi } = await rpc(device.token, "bearer");
+    expect((await deviceApi.projects.list()).map((p) => p.id)).toEqual([browserA.id]);
+    await expect(deviceApi.grants.list()).rejects.toThrow(/Account permission/);
+    await consoleLogin.root.grants.end(firstDeviceId!);
+    expect(
+      (await call("/api", { headers: { Authorization: `Bearer ${device.token}` } })).status,
+    ).toBe(401);
+    const { root: secondDeviceApi } = await rpc(secondDevice.token, "bearer");
+    expect((await secondDeviceApi.projects.list()).map((p) => p.id)).toEqual([browserA.id]);
     await expect(
       consoleLogin.root.grants.mint({ name: "Stale", projects: [browserA.id], expiresAt: 1 }),
     ).rejects.toThrow(/at least a minute/);
     expect(
       (
-        await call("/oauth/token", {
+        await call("/oauth2/token", {
           method: "POST",
           body: new URLSearchParams({
             grant_type: "refresh_token",

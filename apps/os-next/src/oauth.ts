@@ -31,8 +31,7 @@ export const GrantProps = z.object({
 export type GrantProps = z.infer<typeof GrantProps>;
 
 const AccessGrant = GrantProps.extend({
-  /** The provider mints it (16 url-safe characters); it names the connection's own context of a
-   *  project, `/mcp/inbound/grants/<grantId>` (mcp.ts). */
+  /** The provider mints it (16 url-safe characters); MCP stamps it on project-root run requests. */
   grantId: z.string().min(1),
   scope: z.array(z.string()),
   expiresAt: z.number().int().positive(),
@@ -156,12 +155,12 @@ export function providerOptions(
   return {
     apiHandlers: { [api]: apiHandler, [mcp]: apiHandler },
     defaultHandler,
-    authorizeEndpoint: `${issuer}/authorize`,
-    tokenEndpoint: `${issuer}/oauth/token`,
+    authorizeEndpoint: `${issuer}/oauth2/auth`,
+    tokenEndpoint: `${issuer}/oauth2/token`,
     // DCR is served on every deployment (not just local http): CIMD stays the console's own path
     // (browser-session.ts uses a client-id metadata document), but standard MCP clients (the MCP
     // Inspector, Claude's connector) require dynamic registration, so the endpoint is always published.
-    clientRegistrationEndpoint: `${issuer}/oauth/register`,
+    clientRegistrationEndpoint: `${issuer}/oauth2/register`,
     scopesSupported: OAuthScope.options,
     resourceMetadata: {
       ...(issuer.startsWith("https:") && { authorization_servers: [issuer] }),

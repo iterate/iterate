@@ -5,7 +5,7 @@ project-host ingress — `<app>--<project>.<base>`, `<app>.<project>.<base>`, th
 `<project>.<base>` — the one HTTP way into a project) with
 the control plane in-process as its catch-all (`src/control-plane.ts`: OAuth AS + a D1 directory +
 `/mcp`, the ONE MCP server for every project + the issuer's server half) and THE ISSUER'S TWO PAGES —
-`/login` and the `/authorize` consent, files in `public/` the assets binding serves (no framework, no
+`/login` and the `/oauth2/auth` consent, files in `public/` the assets binding serves (no framework, no
 build): sign-in asks `/login.json` what to show and posts plain forms; consent is a capnweb client of `/api`;
 `src/iterate-context-durable-object.ts` is THE CONTEXT — one Durable Object per `{ projectId, path }`
 holding the event log, the core reduce, subscription delivery, the facets, the rpc-stub pagers and
@@ -28,7 +28,7 @@ TOKEN — `session.grants.mint({ name, projects })` on the dash's sessions page 
 whose bearer opens `/api`, `/mcp` and a covered project host as the user.
 
 An MCP client connects to `https://<worker>/mcp` through the same login: the OAuth 2.1 AS is the
-worker itself (`/authorize`, `/oauth/token`, `/oauth/register`, `/.well-known/*`), the consent page
+worker itself (`/oauth2/auth`, `/oauth2/token`, `/oauth2/register`, `/.well-known/*`), the consent page
 picks the projects the token may reach, and it exposes ONE tool, `run({ project?, script })`
 — the text of `async (itx) => …` evaluated in that project's context under the caller's
 principal (`run(script)` when the token reaches exactly one project). Whatever a caller might read —
@@ -80,7 +80,7 @@ can rotate with `previousKey` beside it. A self-host sets the object and the key
 
 | Origin                           | What answers                                                                                                                                                                                                                                      | Whose                                                                                                                                                                   |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `os.iterate2.com`                | THE HEADLESS PLATFORM — the issuer: `/login`, the `/authorize` consent, `/oauth/*`, `/.well-known/*`, `/api` for bearers                                                                                                                          | the platform — this worker; the one origin that is cryptographically load-bearing (the OAuth issuer identifier, the `__Host-` cookie, the resource tokens are bound to) |
+| `os.iterate2.com`                | THE HEADLESS PLATFORM — the issuer: `/login`, the `/oauth2/auth` consent, `/oauth2/*`, `/.well-known/*`, `/api` for bearers                                                                                                                       | the platform — this worker; the one origin that is cryptographically load-bearing (the OAuth issuer identifier, the `__Host-` cookie, the resource tokens are bound to) |
 | `mcp.iterate2.com`               | the ONE MCP server, a door beside `/api`                                                                                                                                                                                                          | the platform — this worker                                                                                                                                              |
 | `*.iterate2.app`                 | project hosts: `<app>--<project>`, `<app>.<project>`, the apex `<project>` (the config worker's `fetch`)                                                                                                                                          | userspace                                                                                                                                                               |
 | `iterate2.com`                   | the `iterate` project's apex — its config worker's `fetch`, through the custom-hostname door (`urls.temporaryCustomHostnames`, envs.ts)                                                                                                           | userspace                                                                                                                                                               |
@@ -92,13 +92,16 @@ cookie is the issuer origin's, and consent, because the authorization server is 
 (Beside them, two files for machines and their operators: `/` says the origin is headless and where the
 dash is, and `/setup-prompt.md` is the prompt an agent follows to deploy a platform of its own —
 `SELF-HOSTING.md`'s recipe.)
-Both are files in `public/` (`login.html`, `authorize.html`, `issuer.css`, a script each, `_headers`
+Both are files in `public/` (`login.html`, `oauth2/auth.html`, `issuer.css`, a script each, `_headers`
 for their CSP), served by the assets binding. The sign-in page's script asks `/login.json`
 (`control-plane.ts`) what to show and signs in with plain form posts to `/login`. The consent page is
 a capnweb client of `/api` like any app — `public/capnweb.js`, the fork's browser bundle copied
 beside it by `scripts/build.ts`, one WebSocket the session cookie rides in on: `consent.describe`
 for what to show, `createOrg` and `projects.create` for a project made on the spot,
-`consent.approve` for the client's redirect; the worker only gates the page. Consent is task-based: an app asks for
+`consent.approve` for the client's redirect; the worker only gates the page.
+Consent has two steps: choose or create projects, then review permissions and authorize.
+All current and future projects are selected by default for clients that are not bound to one project.
+Editing the project selection preserves the optional permissions already chosen. Consent is task-based: an app asks for
 scopes (`iterate`; `account` for sessions and personal access tokens; `organizations:write` to create
 organizations), the person may untick every one but `iterate`, and the grant carries what stayed
 ticked — an app reads `session.info().scopes` and offers a step-up link for what it lacks. Everything
@@ -117,7 +120,7 @@ domains (`example.com`, `.test`, …) are never mailed. Password sign-in is `log
 global password, and the email typed beside it is the name tag — how a self-host signs in, and how
 the specs and the e2e lane sign in on every deployment. Google is offered wherever it is configured.
 
-Only that issuer grant receives `session.consent`. The `/authorize` page can create an
+Only that issuer grant receives `session.consent`. The `/oauth2/auth` page can create an
 organization and project through `session.createOrg` and `session.projects.create`, then
 approve the pending client's access without leaving the flow — over `/api`, as any client would. Other apps may request account
 permission through explicit consent, but cannot approve grants. All apps use the same
