@@ -17,6 +17,7 @@ import {
   type ItxExpressionInput,
   InvokeHandle,
 } from "iterate/next/expression";
+import type { RewriteRuleListEntry } from "iterate/next/api";
 import { CoreContract, normalizeControlEvent, reduceCoreEvent } from "../stream/core-processor.ts";
 import { memoryStream } from "../stream/test-support.ts";
 import {
@@ -26,8 +27,10 @@ import {
   resolveItxExpression,
   rowsNamingRpcStub,
   BUILT_IN_ROOTS,
+  BUILT_IN_ROOT_DESCRIPTIONS,
   CONTEXT_ROOTS,
   admitLoadedCodeRow,
+  describeRewriteRules,
 } from "./itx-expression-rewriting.ts";
 
 /** The roots implicit at the owner root (every built-in) and at a child (the context roots) —
@@ -495,20 +498,26 @@ describe("`@` round-trips the codec (targets only): parse → print → parse; t
 describe("rewrite-rule-configured — ONE event, both halves canonical, loud at the append boundary", () => {
   test("AT REST: BOTH halves are the PARSED form (either codec half in, the parsed form out) — the reduce keys the table by printing the match, so a canonical match over the codec cap never re-parses", () => {
     expect(
-      normalizeControlEvent({
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match: "itx.db", target: ["itx", "facets", ["get", "tab-1"]] },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/itx/rewrite-rule-configured",
+          payload: { match: "itx.db", target: ["itx", "facets", ["get", "tab-1"]] },
+        },
+        "/",
+      ),
     ).toEqual({
       type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: { match: ["itx", "db"], target: ["itx", "facets", ["get", "tab-1"]] },
     });
     // either codec half on either side, parsed once at the door
     expect(
-      normalizeControlEvent({
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match: ["itx", "db"], target: "itx.facets.get('tab-1')" },
-      }).payload,
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/itx/rewrite-rule-configured",
+          payload: { match: ["itx", "db"], target: "itx.facets.get('tab-1')" },
+        },
+        "/",
+      ).payload,
     ).toEqual({
       match: ["itx", "db"],
       target: ["itx", "facets", ["get", "tab-1"]],
@@ -517,10 +526,13 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
 
   test("`null` target is the deny: the same event, target null", () => {
     expect(
-      normalizeControlEvent({
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match: "itx.db", target: null },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/itx/rewrite-rule-configured",
+          payload: { match: "itx.db", target: null },
+        },
+        "/",
+      ),
     ).toEqual({
       type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: { match: ["itx", "db"], target: null },
@@ -570,10 +582,13 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
   for (const { match, target, throws } of doorRefusals)
     test(`REFUSED: ${JSON.stringify(match)} ⇒ ${JSON.stringify(target)}  ${throws}`, () => {
       expect(() =>
-        normalizeControlEvent({
-          type: "events.iterate.com/itx/rewrite-rule-configured",
-          payload: { match: match, target: target },
-        }),
+        normalizeControlEvent(
+          {
+            type: "events.iterate.com/itx/rewrite-rule-configured",
+            payload: { match: match, target: target },
+          },
+          "/",
+        ),
       ).toThrow(throws);
     });
 
@@ -624,17 +639,22 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
   for (const { match, target, payload } of doorAccepts)
     test(`ACCEPTED: ${JSON.stringify(match)} ⇒ ${JSON.stringify(target)}`, () => {
       expect(
-        normalizeControlEvent({
-          type: "events.iterate.com/itx/rewrite-rule-configured",
-          payload: { match: match, target: target },
-        }).payload,
+        normalizeControlEvent(
+          {
+            type: "events.iterate.com/itx/rewrite-rule-configured",
+            payload: { match: match, target: target },
+          },
+          "/",
+        ).payload,
       ).toEqual(payload);
     });
 
   test("ACCEPTED: `ifTarget` (a handle's compare-and-set undo) is normalized like `target` — a string parses to the stored shape, null is the mask sentinel, the key rides through only when sent, undefined is refused", () => {
     const door = (payload: Record<string, unknown>) =>
-      normalizeControlEvent({ type: "events.iterate.com/itx/rewrite-rule-configured", payload })
-        .payload as Record<string, unknown>;
+      normalizeControlEvent(
+        { type: "events.iterate.com/itx/rewrite-rule-configured", payload },
+        "/",
+      ).payload as Record<string, unknown>;
     const base = { match: ["itx", "x"], target: ["itx", "builtins", "x"] };
     expect(door({ match: "itx.x", target: "itx.builtins.x", ifTarget: "itx.tab1" })).toEqual({
       ...base,
@@ -653,6 +673,175 @@ describe("rewrite-rule-configured — ONE event, both halves canonical, loud at 
       /never undefined/,
     );
     expect(() => door({ match: "itx.x", target: "itx.builtins.x", ifTarget: "itx.(" })).toThrow();
+  });
+
+  test("REFUSED against the path the row LANDS on, whichever caller appends: a bare `itx` row whose target is `cd` of that context; a bare link elsewhere, a longer match, a mask and a foreign event pass; a schedule's batch is checked as it is scheduled", () => {
+    const rule = "events.iterate.com/itx/rewrite-rule-configured";
+    const at = (ownPath: string, payload: Record<string, unknown>) => () =>
+      normalizeControlEvent({ type: rule, payload }, ownPath);
+    const loop = /would route every call back to itself/;
+    expect(at("/agents/a", { match: "itx", target: "itx.builtins.cd('/agents/a')" })).toThrow(loop);
+    expect(at("/agents/a", { match: "itx", target: "itx.cd('.')" })).toThrow(loop);
+    expect(at("/agents/a", { match: ["itx"], target: ["itx", "builtins", ["cd", "./"]] })).toThrow(
+      loop,
+    );
+    expect(at("/", { match: "itx", target: "itx.builtins.cd('/')" })).toThrow(loop);
+    // the sibling's spelling: `/y` appends `itx ⇒ cd('/x')` to `/x` — checked against `/x`, not `/y`
+    expect(at("/x", { match: "itx", target: "itx.builtins.cd('/x')" })).toThrow(loop);
+    expect(at("/agents/a", { match: "itx", target: "itx.builtins.cd('/')" })).not.toThrow();
+    expect(at("/agents/a", { match: "itx", target: "itx.builtins.cd('./b')" })).not.toThrow();
+    expect(at("/agents/a", { match: "itx.x", target: "itx.builtins.cd('.')" })).not.toThrow();
+    expect(at("/agents/a", { match: "itx", target: null })).not.toThrow();
+    expect(at("/agents/a", { match: "itx", target: "itx.builtins" })).not.toThrow();
+    expect(() =>
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/append-scheduled",
+          payload: {
+            key: "k",
+            when: { at: "2030-01-01T00:00:00Z" },
+            events: [{ type: rule, payload: { match: "itx", target: "itx.cd('.')" } }],
+          },
+        },
+        "/agents/a",
+      ),
+    ).toThrow(loop);
+  });
+});
+
+// ───────────────────────────── the table, described ─────────────────────────────
+
+describe("describeRewriteRules — the effective table as `rewriteRules.list()` shows it", () => {
+  const platformRow = (root: string, context: string): RewriteRuleListEntry => ({
+    match: `itx.${root}`,
+    target: `itx.builtins.${root}`,
+    description: BUILT_IN_ROOT_DESCRIPTIONS[root as keyof typeof BUILT_IN_ROOT_DESCRIPTIONS],
+    context,
+  });
+  const ownRow = (
+    match: string,
+    target: string | null,
+    context: string,
+    description?: string,
+  ): RewriteRuleListEntry => ({ match, target, description, context });
+  /** The list at `path` over these rows; `inherit` answers the hop (none by default). */
+  const listed = (
+    rows: string[],
+    options: {
+      path?: string;
+      implicitRoots?: ReadonlySet<string>;
+      depth?: number;
+      inherit?: (path: string, depth: number) => Promise<RewriteRuleListEntry[]>;
+    } = {},
+  ) =>
+    describeRewriteRules({
+      rules: table(rows),
+      implicitRoots: options.implicitRoots || CHILD,
+      path: options.path || "/agents/a",
+      depth: options.depth ?? 3,
+      inherit: options.inherit || (async () => []),
+    });
+
+  test("own rows first, as spelled (a template's `@`, a mask as null), then the implicit rows here minus what an own `itx.<root>` row claims — the context roots at a child, every root at the owner root", async () => {
+    const rows = ["itx.fable ⇒ itx.ai.run('m', @)", "itx.append ⇒ null"];
+    expect(await listed(rows)).toEqual([
+      ownRow("itx.fable", "itx.ai.run('m',@)", "/agents/a"),
+      ownRow("itx.append", null, "/agents/a"),
+      ...CONTEXT_ROOTS.filter((root) => root !== "append").map((root) =>
+        platformRow(root, "/agents/a"),
+      ),
+    ]);
+    expect(await listed(rows, { path: "/", implicitRoots: ROOT })).toEqual([
+      ownRow("itx.fable", "itx.ai.run('m',@)", "/"),
+      ownRow("itx.append", null, "/"),
+      ...BUILT_IN_ROOTS.filter((root) => root !== "append").map((root) => platformRow(root, "/")),
+    ]);
+  });
+
+  test("a bare `itx ⇒ null` denies all: own rows only, no implicit row, no hop", async () => {
+    let hopped = false;
+    const rows = await listed(["itx ⇒ null", "itx.kv ⇒ itx.builtins.kv"], {
+      inherit: async () => {
+        hopped = true;
+        return [];
+      },
+    });
+    expect(rows).toEqual([
+      ownRow("itx", null, "/agents/a"),
+      ownRow("itx.kv", "itx.builtins.kv", "/agents/a"),
+    ]);
+    expect(hopped).toBe(false);
+  });
+
+  test("a bare `itx ⇒ itx.builtins` lists every root as local: the context roots, then the rest", async () => {
+    expect(await listed(["itx ⇒ itx.builtins"])).toEqual([
+      ownRow("itx", "itx.builtins", "/agents/a"),
+      ...CONTEXT_ROOTS.map((root) => platformRow(root, "/agents/a")),
+      ...BUILT_IN_ROOTS.filter((root) => !CHILD.has(root)).map((root) =>
+        platformRow(root, "/agents/a"),
+      ),
+    ]);
+  });
+
+  test("behind a bare link, the linked context's list one hop shallower — an inherited row shown iff a call spelled like it is forwarded, the resolver's own law: hidden under a longer own row (a mask at `itx.browser` hides `itx.browser.quickAction`, `itx.kv` hides `itx.kv.get`, the same pinned row is claimed), under an implicit root here (`itx.append` stays the child's own), and never the linked context's own bare row; a pinned row with other args is forwarded, every row keeping the context it was read from", async () => {
+    const hops: [string, number][] = [];
+    const parentRows: RewriteRuleListEntry[] = [
+      ownRow("itx", "itx.builtins.cd('/organizations/o')", "/"),
+      ownRow("itx.ai.run('gpt-5')", "itx.builtins.ai.run('gpt-5-fast')", "/"),
+      ownRow("itx.ai.run('b')", "itx.builtins.ai.run('b-fast')", "/"),
+      ownRow("itx.browser.quickAction", "itx.builtins.browser.quickAction", "/"),
+      ownRow("itx.kv.get", "itx.builtins.kv.get", "/"),
+      ownRow("itx.repos.get", "itx.builtins.repos.get", "/", "the parent's repos"),
+      platformRow("append", "/"),
+      platformRow("secrets", "/"),
+      ownRow("itx.tools", "itx.builtins.rpcStubs.get('itx.tools')", "/organizations/o"),
+    ];
+    const rows = await listed(
+      [
+        "itx ⇒ itx.builtins.cd('/')",
+        "itx.browser ⇒ null",
+        "itx.ai.run('b') ⇒ itx.builtins.ai.run('b')",
+        "itx.kv ⇒ itx.builtins.kv",
+      ],
+      {
+        inherit: async (path, depth) => {
+          hops.push([path, depth]);
+          return parentRows;
+        },
+      },
+    );
+    expect(hops).toEqual([["/", 2]]);
+    expect(rows).toEqual([
+      ownRow("itx", "itx.builtins.cd('/')", "/agents/a"),
+      ownRow("itx.browser", null, "/agents/a"),
+      ownRow("itx.ai.run('b')", "itx.builtins.ai.run('b')", "/agents/a"),
+      ownRow("itx.kv", "itx.builtins.kv", "/agents/a"),
+      ...CONTEXT_ROOTS.map((root) => platformRow(root, "/agents/a")),
+      ownRow("itx.ai.run('gpt-5')", "itx.builtins.ai.run('gpt-5-fast')", "/"),
+      ownRow("itx.repos.get", "itx.builtins.repos.get", "/", "the parent's repos"),
+      platformRow("secrets", "/"),
+      ownRow("itx.tools", "itx.builtins.rpcStubs.get('itx.tools')", "/organizations/o"),
+    ]);
+  });
+
+  test("no hop at depth 0, through a link to this context itself, or behind a bare row that is not a `cd`", async () => {
+    let hopped = false;
+    const inherit = async () => {
+      hopped = true;
+      return [];
+    };
+    const link = "itx ⇒ itx.builtins.cd('/')";
+    expect(await listed([link], { depth: 0, inherit })).toEqual([
+      ownRow("itx", "itx.builtins.cd('/')", "/agents/a"),
+      ...CONTEXT_ROOTS.map((root) => platformRow(root, "/agents/a")),
+    ]);
+    expect(await listed(["itx ⇒ itx.builtins.cd('.')"], { inherit })).toHaveLength(
+      1 + CONTEXT_ROOTS.length,
+    );
+    expect(
+      await listed(["itx ⇒ itx.builtins.rpcStubs.get('everything')"], { inherit }),
+    ).toHaveLength(1 + CONTEXT_ROOTS.length);
+    expect(hopped).toBe(false);
   });
 });
 
@@ -785,10 +974,13 @@ const setup = () => {
   const rewrite = (match: ItxExpressionInput, target: ItxExpressionInput | null) =>
     (
       stream.append(
-        normalizeControlEvent({
-          type: "events.iterate.com/itx/rewrite-rule-configured",
-          payload: { match: match, target: target },
-        }),
+        normalizeControlEvent(
+          {
+            type: "events.iterate.com/itx/rewrite-rule-configured",
+            payload: { match: match, target: target },
+          },
+          "/",
+        ),
       ) as StreamEvent[]
     )[0];
   /** The edge's `provide(match, stub)`, spelled out: lend under the key (= the match), configure the
@@ -808,10 +1000,13 @@ const setup = () => {
     remove: (match: ItxExpressionInput) =>
       (
         stream.append(
-          normalizeControlEvent({
-            type: "events.iterate.com/itx/rewrite-rule-configured",
-            payload: { match: match, target: restoreRuleTarget(match) },
-          }),
+          normalizeControlEvent(
+            {
+              type: "events.iterate.com/itx/rewrite-rule-configured",
+              payload: { match: match, target: restoreRuleTarget(match) },
+            },
+            "/",
+          ),
         ) as StreamEvent[]
       )[0],
     provide,

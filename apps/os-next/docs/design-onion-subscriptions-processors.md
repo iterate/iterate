@@ -250,7 +250,7 @@ loaded code may not call it, and the platform never spells a short name in an ev
 The `delivery`, `processor` and `lane` fields of the old row are gone; `itx.subscribers.*` stops
 being a convention; a rewrite rule is a name for a target, plus one line of `description` a model
 reads, and nothing else. The edge verb is ONE: `provide({ match, target, description? })` —
-`provide(match, stub | expression | null)` for short — → a disposable `RewriteRuleHandle`; a live
+`provide(match, stub | expression | null)` for short — → a disposable `RewriteRuleHandleRpcTarget`; a live
 stub is lent under the key = the canonical match and the rule
 `match ⇒ itx.builtins.rpcStubs.get('<match>')` is written with it; an expression is the rule alone.
 The rule dies with the stub: the handle's dispose recalls the stub, and when the key's LAST pager
@@ -361,12 +361,12 @@ processor: that shape needed an alarm proxy facets do not have (workerd#6810, st
  *  removes the row. Same name replaces. Literally `append(subscriptionConfiguredEvent(…))` — the
  *  returned handle removes the row (and recalls the lent callback) when disposed or when the
  *  session ends. */
-subscribe(input: { name?: string; target: ItxExpressionInput | ClientRpcStub | null; consumes?: string[]; afterOffset?: number }): Promise<SubscriptionHandle>;
-class SubscriptionHandle extends RpcTarget { get name(): string; [Symbol.dispose](): void }
+subscribe(input: { name?: string; target: ItxExpressionInput | ClientRpcStub | null; consumes?: string[]; afterOffset?: number }): Promise<SubscriptionHandleRpcTarget>;
+class SubscriptionHandleRpcTarget extends RpcTarget { get name(): string; [Symbol.dispose](): void }
 ```
 
 AS BUILT there is no `unsubscribe`: `subscribe({ name, target: null })` is the removal, and every
-`subscribe` hands back a DISPOSABLE `SubscriptionHandle` (`name` is the generated `sub-<8 hex>` when
+`subscribe` hands back a DISPOSABLE `SubscriptionHandleRpcTarget` (`name` is the generated `sub-<8 hex>` when
 none was given). capnweb disposes every exported handle when the session ends, so a subscription made
 through the verb — named or not — is SESSION-SCOPED; a row that must outlive its session is the raw
 event, `itx.append(subscriptionConfiguredEvent({ name, target, consumes }))`. When a lent callback's
@@ -562,26 +562,26 @@ class IterateContext extends RpcTarget {
     match: ItxExpressionInput;
     target: ClientRpcStub | ItxExpressionInput | null;
     description?: string;
-  }): Promise<RewriteRuleHandle>;
+  }): Promise<RewriteRuleHandleRpcTarget>;
   provide(
     match: ItxExpressionInput,
     target: ClientRpcStub | ItxExpressionInput | null,
-  ): Promise<RewriteRuleHandle>;
+  ): Promise<RewriteRuleHandleRpcTarget>;
   // subscriptions · processors — each is visibly "build the event, append it" (the DO has append and no configuration verbs)
   subscribe(input: {
     name?: string;
     target: ItxExpressionInput | ClientRpcStub | null;
     consumes?: string[];
     afterOffset?: number; // where the cursor lane starts (0 = the whole log); absent = from now
-  }): Promise<SubscriptionHandle>;
+  }): Promise<SubscriptionHandleRpcTarget>;
   // processors: since 2026-09-11 a built-in ROOT, not an edge verb — itx.processors.enable(name,
   // { source, className, consumes? }) → { name } (DURABLE, no handle) · .disable(name) · .list()
   [dotted: string]: unknown; // everything else
 }
-class RewriteRuleHandle extends RpcTarget {
+class RewriteRuleHandleRpcTarget extends RpcTarget {
   [Symbol.dispose](): void;
 } // provide: disposing (or session end) undoes the act — recalls a lent stub, appends null for an expression
-class SubscriptionHandle extends RpcTarget {
+class SubscriptionHandleRpcTarget extends RpcTarget {
   get name(): string;
   [Symbol.dispose](): void;
 } // subscribe: the generated name when none was given

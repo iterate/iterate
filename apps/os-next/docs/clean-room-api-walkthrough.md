@@ -134,7 +134,7 @@ packages/v3/project-worker/
                                  project (ONE tool: run(project?, script)); control-plane.sql is the schema
     iterate-context.ts           IterateContext, the client-facing RpcTarget: a PROXY in front of the DO —
                                  cd · invoke · provide · subscribe;
-                                 RewriteRuleHandle / SubscriptionHandle (disposable); the DO-name codec
+                                 RewriteRuleHandleRpcTarget / SubscriptionHandleRpcTarget (disposable); the DO-name codec
                                  (DurableObjectNameCodec, resolveContextPath); ItxEntrypoint (what a loaded
                                  worker's env.ITX is)
     iterate-context-durable-object.ts  THE CONTEXT DO: stream + the core reduce + delivery + facets +
@@ -375,11 +375,11 @@ class IterateContext extends RpcTarget {
     match: ItxExpressionInput;
     target: ClientRpcStub | ItxExpressionInput | null;
     description?: string;
-  }): Promise<RewriteRuleHandle>;
+  }): Promise<RewriteRuleHandleRpcTarget>;
   provide(
     match: ItxExpressionInput,
     target: ClientRpcStub | ItxExpressionInput | null,
-  ): Promise<RewriteRuleHandle>;
+  ): Promise<RewriteRuleHandleRpcTarget>;
 
   // ── subscriptions: ONE event, over (a) when the target is live ──
   /** Have each committed batch — filtered by `consumes` — delivered to `target` as
@@ -393,7 +393,7 @@ class IterateContext extends RpcTarget {
     consumes?: string[];
     /** Where the cursor lane starts (0 = the whole log); absent = from now. A push target ignores it. */
     afterOffset?: number;
-  }): Promise<SubscriptionHandle>;
+  }): Promise<SubscriptionHandleRpcTarget>;
 
   // ── processors: DURABLE configuration, two lines each over the subscription event ──
   // Processors are NOT edge verbs: `itx.processors.enable(name, { source, className, consumes? })`
@@ -411,11 +411,11 @@ class IterateContext extends RpcTarget {
 /** What `provide` hands back: ONLY `[Symbol.dispose]` — the caller already holds the match it
  *  passed. Disposing UNDOES the act: a lent stub is recalled (the DO un-sets the rule that named it
  *  on its last pager close); an expression rule is un-set by appending `null`. */
-class RewriteRuleHandle extends RpcTarget {
+class RewriteRuleHandleRpcTarget extends RpcTarget {
   [Symbol.dispose](): void;
 }
 /** `subscribe`'s handle: disposing removes the row (and recalls the callback lent for it). */
-class SubscriptionHandle extends RpcTarget {
+class SubscriptionHandleRpcTarget extends RpcTarget {
   get name(): string; // the generated `sub-<8hex>` when none was given
   [Symbol.dispose](): void;
 }
@@ -633,7 +633,7 @@ interface BuiltInScope {
   ai: Ai;
   cfArtifacts: {
     create(name: string, options?: { setDefaultBranch?: string }): Promise<ArtifactCreateResult>;
-    get(name: string): Promise<ScopedArtifactRepo>;
+    get(name: string): Promise<ScopedArtifactRepoRpcTarget>;
     list(options?: { limit?: number; cursor?: string }): Promise<ArtifactListResult>;
     delete(name: string): Promise<boolean>;
   };
@@ -1622,7 +1622,7 @@ sequenceDiagram
   E->>D: open the pager WebSocket — ONE request: x-itx-rpc-stub-pager = { rpcStubKey: "itx.robot", appendEvents: [rewrite-rule-configured { match: "itx.robot", target: "itx.builtins.rpcStubs.get('itx.robot')" }] }
   Note over D: accept the socket, append the rule (pure data; the log never records the socket), then rpc-stub/attached { rpcStubKey: "itx.robot" } (ephemeral) — one synchronous turn; a paused stream answers 409 + STREAM_PAUSED and no socket
   D-->>E: 101
-  E-->>C: RewriteRuleHandle
+  E-->>C: RewriteRuleHandleRpcTarget
   Note over D: ... idle: DO hibernates, the pager socket survives ...
   C->>D: itx.robot.move(10)   (via edge, invoke)
   Note over D: rewrite → itx.builtins.rpcStubs.get('itx.robot').move(10)   (ONE rewrite lands at the fixed point)
@@ -1758,7 +1758,7 @@ reaches the granted rows and nothing else (section 5).
 | InvokeHandle          | a pipelinable `RpcTarget` returned mid-chain (`cd`, `workers.get(...)`); `FacetHandle` and `RpcStubHandle` are its two brands                                                                                                                                                                                                                                                                                                                        |
 | rpc stub              | a live capnweb value a session LENDS under an opaque `rpcStubKey`; the edge owns it, the DO BORROWS it per page and RETURNS it at idle; `itx.builtins.rpcStubs.get(rpcStubKey)` is how the platform's rows name it, and any spelling that resolves there counts; presence is `list()`                                                                                                                                                                |
 | pager                 | the hibernatable WebSocket from the edge relay to the DO, one per key, carrying `{ transportId, rpcStubKey }`; the DO sends `{ type: "page" }` to get a fresh stub lent                                                                                                                                                                                                                                                                              |
-| session-scoped handle | what `provide` / `subscribe` return (`RewriteRuleHandle`, `SubscriptionHandle`): disposable; disposing — or the session ending — undoes the act; the durable spelling is the raw event                                                                                                                                                                                                                                                               |
+| session-scoped handle | what `provide` / `subscribe` return (`RewriteRuleHandleRpcTarget`, `SubscriptionHandleRpcTarget`): disposable; disposing — or the session ending — undoes the act; the durable spelling is the raw event                                                                                                                                                                                                                                             |
 | subscription          | a named row `{ target, consumes? }` in the subscriptions table; delivered every commit by the one loop                                                                                                                                                                                                                                                                                                                                               |
 | push                  | delivery to a target that owns its progress: `(events, range)`, fire-and-forget to a lent stub, awaited to a facet                                                                                                                                                                                                                                                                                                                                   |
 | stream-kept cursor    | delivery to a target that cannot own progress: at-least-once from a row in the `subscription_cursors` table, retry ladder, halt fact                                                                                                                                                                                                                                                                                                                 |

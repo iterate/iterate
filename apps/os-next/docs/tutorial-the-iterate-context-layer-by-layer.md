@@ -250,7 +250,7 @@ async provide(match, target) {
   const ruleEvent = rewriteRuleConfiguredEvent(matchString, ["itx", "builtins", "rpcStubs", ["get", matchString]]);
   const pager = await lendRpcStubOverPager(this.#durableObject, target, matchString, [ruleEvent], this.#waitUntil);
   const lease = this.#sessionTeardown.add(this.#sessionTeardownKey(matchString), pager);
-  return new RewriteRuleHandle(() => lease.dispose()); // the lease IS the handle
+  return new RewriteRuleHandleRpcTarget(() => lease.dispose()); // the lease IS the handle
 }
 ```
 

@@ -5,14 +5,17 @@ import { Stream } from "./stream.ts";
 import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
 
 const scheduled = (key = "reminder", at = "2030-01-01T00:00:00Z") =>
-  normalizeControlEvent({
-    type: "events.iterate.com/stream/append-scheduled",
-    payload: {
-      key,
-      when: { at },
-      events: [{ type: "reminder", payload: { n: 1 } }, { type: "audit" }],
+  normalizeControlEvent(
+    {
+      type: "events.iterate.com/stream/append-scheduled",
+      payload: {
+        key,
+        when: { at },
+        events: [{ type: "reminder", payload: { n: 1 } }, { type: "audit" }],
+      },
     },
-  });
+    "/",
+  );
 /** A Stream wired to its own coordinator as the DO wires them — every commit reconciles against
  *  the schedules' deadline plus `otherDeadlines` (a stand-in for delivery and idle). `alarms` and
  *  `deletes` record every write the coordinator issued; `create()` is the next incarnation over
@@ -115,7 +118,7 @@ test.each([
 ])("invalid durable definitions are refused before commit: %j", (override) => {
   const input = scheduled();
   expect(() =>
-    normalizeControlEvent({ ...input, payload: { ...input.payload, ...override } }),
+    normalizeControlEvent({ ...input, payload: { ...input.payload, ...override } }, "/"),
   ).toThrow();
 });
 
@@ -177,7 +180,7 @@ test("a non-string type passes the normalizer untouched — Stream.append refuse
   // The e2e guard test appends `{ type: 12345 }`: the stream's "non-empty type" refusal, never a
   // TypeError out of the scheduling prefix check.
   const event = { type: 12345 as unknown as string };
-  expect(normalizeControlEvent(event)).toBe(event);
+  expect(normalizeControlEvent(event, "/")).toBe(event);
 });
 
 test.each([
@@ -190,24 +193,30 @@ test.each([
 ])("runtime control %s cannot be scheduled", (type) => {
   const input = scheduled();
   expect(() =>
-    normalizeControlEvent({
-      ...input,
-      payload: { ...input.payload, events: [{ type: `events.iterate.com/stream/${type}` }] },
-    }),
+    normalizeControlEvent(
+      {
+        ...input,
+        payload: { ...input.payload, events: [{ type: `events.iterate.com/stream/${type}` }] },
+      },
+      "/",
+    ),
   ).toThrow();
 });
 
 test("aggregate definition size is bounded before the batch commits", () => {
   const { stream } = setup();
   const definitions = Array.from({ length: 17 }, (_, i) =>
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/append-scheduled",
-      payload: {
-        key: `large${i}`,
-        when: { at: "2035-01-01T00:00:00Z" },
-        events: [{ type: "large", payload: { body: "x".repeat(63_000) } }],
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/stream/append-scheduled",
+        payload: {
+          key: `large${i}`,
+          when: { at: "2035-01-01T00:00:00Z" },
+          events: [{ type: "large", payload: { body: "x".repeat(63_000) } }],
+        },
       },
-    }),
+      "/",
+    ),
   );
   expect(() => stream.append(...definitions)).toThrow("1,048,576 serialized characters");
   expect(stream.coreReducedState.schedules).toEqual({});
@@ -218,14 +227,17 @@ test("a nearly full definition budget still permits bounded terminal failure dia
   const { stream } = setup();
   const definitions = stream.append(
     ...Array.from({ length: 16 }, (_, i) =>
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/append-scheduled",
-        payload: {
-          key: `large${i}`,
-          when: { at: "2035-01-01T00:00:00Z" },
-          events: [{ type: "large", payload: { body: "x".repeat(64_900) } }],
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/append-scheduled",
+          payload: {
+            key: `large${i}`,
+            when: { at: "2035-01-01T00:00:00Z" },
+            events: [{ type: "large", payload: { body: "x".repeat(64_900) } }],
+          },
         },
-      }),
+        "/",
+      ),
     ),
   );
   stream.append(
@@ -243,11 +255,18 @@ test("a nearly full definition budget still permits bounded terminal failure dia
 
 test("relative deadlines resolve once from the committed definition, including retries and replay", () => {
   const { stream, create } = setup();
-  const input = normalizeControlEvent({
-    type: "events.iterate.com/stream/append-scheduled",
-    idempotencyKey: "relative-request",
-    payload: { key: ["facet-a", "deadline"], when: { afterMs: 30_000 }, events: [{ type: "due" }] },
-  });
+  const input = normalizeControlEvent(
+    {
+      type: "events.iterate.com/stream/append-scheduled",
+      idempotencyKey: "relative-request",
+      payload: {
+        key: ["facet-a", "deadline"],
+        when: { afterMs: 30_000 },
+        events: [{ type: "due" }],
+      },
+    },
+    "/",
+  );
   const [definition] = stream.append(input);
   const key = JSON.stringify(["facet-a", "deadline"]);
   const expected = new Date(Date.parse(definition.createdAt) + 30_000).toISOString();
@@ -299,10 +318,13 @@ test.each([
   { at: "2030-01-01T00:00:00Z", afterMs: 1 },
 ])("invalid relative/interval deadlines are refused: %j", (when) => {
   expect(() =>
-    normalizeControlEvent({
-      type: "events.iterate.com/stream/append-scheduled",
-      payload: { key: "invalid", when, events: [{ type: "due" }] },
-    }),
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/stream/append-scheduled",
+        payload: { key: "invalid", when, events: [{ type: "due" }] },
+      },
+      "/",
+    ),
   ).toThrow();
 });
 
@@ -311,18 +333,24 @@ test("replacing an interval anchors its new cadence and ignores the old completi
   try {
     const { stream, create } = setup();
     const [old] = stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/append-scheduled",
-        payload: { key: "tick", when: { everyMs: 1000 }, events: [{ type: "old/tick" }] },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/append-scheduled",
+          payload: { key: "tick", when: { everyMs: 1000 }, events: [{ type: "old/tick" }] },
+        },
+        "/",
+      ),
     );
     const oldAt = stream.coreReducedState.schedules.tick.nextAt;
     vi.setSystemTime(Date.now() + 750);
     const [replacement] = stream.append(
-      normalizeControlEvent({
-        type: "events.iterate.com/stream/append-scheduled",
-        payload: { key: "tick", when: { everyMs: 5000 }, events: [{ type: "new/tick" }] },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/stream/append-scheduled",
+          payload: { key: "tick", when: { everyMs: 5000 }, events: [{ type: "new/tick" }] },
+        },
+        "/",
+      ),
     );
     stream.append(
       {

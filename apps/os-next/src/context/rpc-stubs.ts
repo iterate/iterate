@@ -806,7 +806,7 @@ const upgradeTag = (side: "eyeball" | "leg", upgradeId: string) =>
 type FetchUpgradeMarker = { webSocketUpgrade: true };
 
 /** What `serve` needs from the borrowed rpc stub: the fetch dial. */
-export type RpcStubFetchTransport = {
+type RpcStubFetchTransport = {
   fetch(upgradeId: string, itxExpressionSteps: ItxExpression, request: Request): Promise<unknown>;
 };
 

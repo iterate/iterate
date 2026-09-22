@@ -92,26 +92,35 @@ describe("the scriptRuns table — by the request's offset: requested opens, set
   });
   test("the append boundary (normalizeControlEvent) parses both payloads against the contract's schemas and refuses an ephemeral one — the table is rebuilt from the durable log", () => {
     expect(
-      normalizeControlEvent({
-        type: "events.iterate.com/context/run-requested",
-        payload: { code: "async (itx) => 1", extra: "dropped" },
-      }).payload,
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/context/run-requested",
+          payload: { code: "async (itx) => 1", extra: "dropped" },
+        },
+        "/",
+      ).payload,
     ).toEqual({ code: "async (itx) => 1" });
     expect(() =>
-      normalizeControlEvent({
-        type: "events.iterate.com/context/run-settled",
-        payload: {
-          requestOffset: 5,
-          settlement: { status: "failed", error: "x", failureKind: "expired" },
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/context/run-settled",
+          payload: {
+            requestOffset: 5,
+            settlement: { status: "failed", error: "x", failureKind: "expired" },
+          },
         },
-      }),
+        "/",
+      ),
     ).toThrow();
     expect(() =>
-      normalizeControlEvent({
-        type: "events.iterate.com/context/run-requested",
-        ephemeral: true,
-        payload: { code: "async (itx) => 1" },
-      }),
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/context/run-requested",
+          ephemeral: true,
+          payload: { code: "async (itx) => 1" },
+        },
+        "/",
+      ),
     ).toThrow(/durable/);
   });
 });
@@ -235,10 +244,13 @@ describe("the rewrite-rule table — a MAP by match", () => {
   // reduce now agree: the boundary accepts it, the reduce stores it.
   test("a well-formed match the boundary accepts reduces even when its canonical form crosses the codec cap", () => {
     const longMatch = "itx.foo(" + Array(400).fill("1e99").join(",") + ")";
-    const normalized = normalizeControlEvent({
-      type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: { match: longMatch, target: "itx.kv" },
-    });
+    const normalized = normalizeControlEvent(
+      {
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: longMatch, target: "itx.kv" },
+      },
+      "/",
+    );
     expect(Array.isArray((normalized.payload as { match: unknown }).match)).toBe(true); // parsed, not re-stringified
     const reduced = reduceCoreEvent({
       event: at(1, normalized.type, normalized.payload as Record<string, unknown>),
@@ -838,10 +850,13 @@ const setup = () => {
     consumes?: string[];
     afterOffset?: number;
   }) => {
-    const event = normalizeControlEvent({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: input,
-    });
+    const event = normalizeControlEvent(
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: input,
+      },
+      "/",
+    );
     stream.append(event);
     return event;
   };

@@ -12,7 +12,7 @@ const type = "events.iterate.com/project/ingress-configured";
 
 test("ingress stores and replaces the full expression without creating any rewrite alias", () => {
   const event = {
-    ...normalizeControlEvent({ type, payload: { target } }),
+    ...normalizeControlEvent({ type, payload: { target } }, "/"),
     offset: 1,
     path: "/",
     createdAt: "2026-09-21T00:00:00Z",
@@ -37,7 +37,7 @@ test.each([{}, { target: 123 }, { target: "other.workers" }, { target: ["itx", n
 );
 
 test("ephemeral ingress configuration cannot be published", () => {
-  expect(() => normalizeControlEvent({ type, payload: { target }, ephemeral: true })).toThrow(
+  expect(() => normalizeControlEvent({ type, payload: { target }, ephemeral: true }, "/")).toThrow(
     "must be durable",
   );
 });

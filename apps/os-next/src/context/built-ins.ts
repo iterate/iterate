@@ -57,7 +57,7 @@ import {
   encodeFetchExpression,
   terminalFetchOf,
 } from "./rpc-stubs.ts";
-import { admitLoadedCodeRow, refuseSelfLoopRow } from "./itx-expression-rewriting.ts";
+import { admitLoadedCodeRow } from "./itx-expression-rewriting.ts";
 import { GLOBAL_PROJECT_ID, resourceScope } from "./paths.ts";
 import {
   assertFacetSourceWithinCeiling,
@@ -89,7 +89,7 @@ export type SubscriptionListEntry = {
 
 /** An `R2Object` as `itx.r2` answers it: every field the class carries, as data — the key with the
  *  owner prefix stripped, dates as ISO strings, checksums as hex. */
-export type R2ObjectRecord = {
+type R2ObjectRecord = {
   key: string;
   version: string;
   size: number;
@@ -472,11 +472,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const append = (...events: StreamEventInput[]) => {
     const caller = deps.caller();
     // LOADED CODE's rows are walled on their targets (itx-expression-rewriting.ts): the same wall its
-    // calls meet, applied where the row is written.
-    for (const event of events) {
-      refuseSelfLoopRow(event, path);
-      if (caller.app) admitLoadedCodeRow(event, path);
-    }
+    // calls meet, applied where the row is written — the one check that needs `caller.app`; the
+    // rest of a row's admission is the append boundary's (core-processor.ts `normalizeControlEvent`).
+    if (caller.app) for (const event of events) admitLoadedCodeRow(event, path);
     return ownContext().append(...events.map((event) => stampCaller(event, caller)));
   };
   /** Secrets are the RESOURCE OWNER's, and a secret IS its path under the owner's root
