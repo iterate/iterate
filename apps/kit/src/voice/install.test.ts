@@ -3,11 +3,14 @@ import { ensureVoiceAgent } from "./install.ts";
 
 const workerKey = `kit/voice/${"a".repeat(64)}/worker.js`;
 const bundle = {
+  agentsRuntime: "agents",
   files: { [workerKey]: "worker" },
   workerKey,
   cacheKey: `voice-worker:${"a".repeat(64)}`,
 };
 const project = () => ({
+  whoami: vi.fn().mockResolvedValue({path: "/"}),
+  processors: {enable: vi.fn().mockResolvedValue(undefined), disable: vi.fn(), list: vi.fn()},
   secrets: {
     list: vi.fn().mockResolvedValue([{ path: "/secrets/openai" }]),
     set: vi.fn(),
@@ -30,7 +33,8 @@ test("a failed upload never publishes a broken voice service and retry completes
   await expect(ensureVoiceAgent(root, async () => bundle)).rejects.toThrow("upload interrupted");
   expect(root.append).not.toHaveBeenCalled();
   expect(await ensureVoiceAgent(root, async () => bundle)).toBe("ready");
-  expect(root.append).toHaveBeenCalledTimes(1);
+  expect(root.append).toHaveBeenCalledTimes(2);
+  expect(root.processors.enable).toHaveBeenCalledWith("agents", expect.objectContaining({className: "AgentCollectionDurableObject"}));
 });
 
 test("a broken existing voice service is reported without replacing it", async () => {

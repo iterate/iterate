@@ -471,7 +471,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // WHERE a requested script runs is this context's own `itx.run` row: here by default (the
         // implicit row), elsewhere when a row REDIRECTS it — the agent's `itx.run ⇒
         // itx.builtins.cd('<agent>/sandbox').builtins.run` sends its scripts to a child whose table
-        // is the scripts' alone (agent/durable-object.ts). A redirect is one more request-and-settle
+        // is the scripts' alone (configured by the installed app). A redirect is one more request-and-settle
         // there. A mask on `run` (a jail's bare null) says what code HERE may spell — never where a
         // request already on this log executes: it runs here.
         let redirect: ItxExpression | undefined;

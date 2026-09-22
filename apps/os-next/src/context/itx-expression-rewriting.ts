@@ -1,3 +1,4 @@
+import { errorCode } from "iterate/next/lib";
 // context/itx-expression-rewriting.ts — HOW A CALL FINDS ITS TARGET, pure and total. An itx-expression
 // REWRITE RULE is `{ match, target }`: a call that starts with `match` runs as the same call with
 // `match` replaced by `target`. Rewriting repeats until the call is rooted at THE RESERVED ROOT,
@@ -94,8 +95,6 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
     "git on Artifacts; `/repos/config` is the project's code: `repos.get(path).readFile(f)` · `commitFiles({ message, changes })` · `repos.list()`",
   workspaces:
     "a private overlay over the repos: `workspaces.get(path).writeFile(f, text)` · `gitCommit({ message, scope })`",
-  agents:
-    "other agents, each a conversation on its own path: `agents.get(path).message(text)` · `agents.list()`",
   files:
     "project files: `files.get(path).put({ contentType, data })` · `.bytes()` · `.url()` · `files.list(prefix)`",
 } as const satisfies Record<string, string>;
@@ -612,7 +611,14 @@ export async function describeRewriteRules(args: {
   if (bare && !bare.target) return own; // one row denies all: nothing implicit, nothing inherited
   const rows = [...own, ...implicit(implicitRoots)];
   if (!bare?.target) return rows;
-  const target = bare.target;
+  // Resolve app-owned parent links through the same rules as invocation.
+  let target: ItxExpression;
+  try {
+    target = resolveItxExpression(() => rules, bare.target, args.implicitRoots).at(-1)!;
+  } catch (error) {
+    if (errorCode(error) === "NO_ITX_EXPRESSION_MATCH") return rows;
+    throw error;
+  }
   if (target.length === 2 && target[1] === "builtins")
     return [...rows, ...implicit(BUILT_IN_ROOTS.filter((root) => !implicitRoots.has(root)))];
   const cdStep = target[2];

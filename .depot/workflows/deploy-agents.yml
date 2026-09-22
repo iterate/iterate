@@ -17,6 +17,7 @@ on:
       - envs.ts
       - scripts/lib/**
       - apps/os-next/**
+      - configs-next/**
       - packages/iterate/**
       - packages/ui/**
       - packages/shared/**

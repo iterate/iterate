@@ -71,7 +71,7 @@ not only by ASR text.
 Every counter must move and have a reader. `heapFree` includes PSRAM; inspect
 `internalFree`, `internalMin` and `internalLargest` when TLS, Wi-Fi or DMA fail.
 Use `health()` before and after an air-path proof.
-`apps/os-next/scripts/voice-board.ts --device <device_name>` speaks via the Mac
+`apps/agents/scripts/voice-board.ts --device <device_name>` speaks via the Mac
 speaker, checks board microphone uplink, playout and transcript, then hangs up;
 never run it on a board in use.
 

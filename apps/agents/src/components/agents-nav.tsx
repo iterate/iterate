@@ -19,9 +19,11 @@ export function AgentsNav({
   agents,
   agent,
   onCreate,
+  installed,
 }: {
   /** the project's slug — its URL (`/projects/<slug>`) */
   slug: string;
+  installed: boolean;
   agents: { path: string }[];
   agent: string | undefined;
   /** Births an agent at a fresh path; the page navigates to it once it exists. */
@@ -49,10 +51,18 @@ export function AgentsNav({
                 type="button"
                 onClick={() => void create()}
                 disabled={creating}
-                tooltip="New agent"
+                tooltip={installed ? "New agent" : "Install agents"}
               >
                 <SquarePenIcon />
-                <span>{creating ? "Creating…" : "New agent"}</span>
+                <span>
+                  {creating
+                    ? installed
+                      ? "Creating…"
+                      : "Installing…"
+                    : installed
+                      ? "New agent"
+                      : "Install agents"}
+                </span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>

@@ -1,4 +1,4 @@
-// src/project/collection.ts — THE COLLECTION: `itx.repos`, `itx.workspaces`, `itx.agents`, one
+// src/project/collection.ts — THE COLLECTION: `itx.repos`, `itx.workspaces`, one
 // instance per entity, a member of the project facet on `/` (durable-object.ts), where the catalog
 // lives. `list()` reads the catalog; `create(path)` is THE CREATION — the processor row on the
 // path, the request, then the terminal fact; `delete(path)` is THE DELETION, its mirror — the
@@ -14,7 +14,7 @@ import type { EntityCreationAndDeletionState } from "./entity-state.ts";
 
 export class EntityCollectionRpcTarget extends RpcTarget {
   constructor(
-    private readonly slug: "repo" | "workspace" | "agent",
+    private readonly slug: "repo" | "workspace",
     private readonly withItx: WithItx<ItxEntrypointScope>,
     private readonly catalog: () => Promise<ProjectState>,
   ) {

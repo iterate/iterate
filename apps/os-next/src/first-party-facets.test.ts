@@ -14,6 +14,8 @@ test("a first-party name hosts its exported class with no source; other names ne
     expect(firstPartyFacetClassOf(name)).toBe(className);
     expect(facetSpecFromHostingTarget(target(["get", name]))).toEqual({ name, className });
   }
+  expect(firstPartyFacetClassOf("agent")).toBeUndefined();
+  expect(firstPartyFacetClassOf("agents")).toBeUndefined();
   expect(firstPartyFacetClassOf("presence")).toBeUndefined();
   expect(facetSpecFromHostingTarget(target(["get", "presence"]))).toBeUndefined();
   expect(

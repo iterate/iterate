@@ -5,7 +5,7 @@ supported ESP32-S3 voice boards: HA Voice PE, FutureProofHomes Satellite1, M5Sti
 StackChan, Waveshare AMOLED, Waveshare RLCD 4.2 and ZECTRIX NOTE4. The RLCD has an
 experimental KEY-button voice release; see its
 [board notes](firmware/devices/waveshare_s3_rlcd/README.md). Its catalog names the boards
-`apps/os-next/scripts/voice-board.ts` proves through real air. It prepares the selected project,
+`apps/agents/scripts/voice-board.ts` proves through real air. It prepares the selected project,
 then flashes a checked source-built release and its private configuration directly over USB.
 
 ## What a person needs

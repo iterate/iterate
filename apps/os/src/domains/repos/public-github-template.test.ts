@@ -7,10 +7,35 @@ import {
   pktLine,
   type TreeEntry,
 } from "./git-wire.ts";
-import { downloadPublicGithubTemplate } from "./public-github-template.ts";
+import { downloadPublicGithubTemplate, pinPublicGithubTemplate } from "./public-github-template.ts";
 import { RetryableRepoCreationError } from "./utils.ts";
 
 const textEncoder = new TextEncoder();
+
+describe("pinPublicGithubTemplate", () => {
+  it("pins a branch without downloading its tree and leaves exact commits alone", async () => {
+    const ref = "a".repeat(40);
+    const reference = {
+      owner: "iterate",
+      repo: "iterate",
+      ref: "main",
+      path: "configs-next/with-agents",
+    };
+    const githubFetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          concatBytes([pktLine(`${ref} refs/heads/main`), textEncoder.encode("0000")]) as BodyInit,
+        ),
+      );
+    const pinned = await pinPublicGithubTemplate(reference, githubFetch);
+    expect(pinned).toEqual({ ...reference, ref });
+    expect(githubFetch).toHaveBeenCalledTimes(1);
+    expect(decodeRequestBody(githubFetch.mock.calls[0]?.[1]?.body)).toContain("command=ls-refs");
+    await expect(pinPublicGithubTemplate(pinned, githubFetch)).resolves.toEqual(pinned);
+    expect(githubFetch).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("downloadPublicGithubTemplate", () => {
   it("copies an exact commit's public folder in two anonymous Git requests", async () => {

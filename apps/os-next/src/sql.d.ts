@@ -5,3 +5,8 @@ declare module "*.sql" {
   const text: string;
   export default text;
 }
+
+declare module "*?raw" {
+  const source: string;
+  export default source;
+}

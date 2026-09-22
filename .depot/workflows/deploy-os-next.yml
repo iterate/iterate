@@ -15,6 +15,7 @@ on:
     paths:
       - .depot/workflows/deploy-os-next.yml
       - apps/os-next/**
+      - configs-next/**
       - packages/iterate/**
       - envs.ts
       - scripts/lib/**

@@ -1,3 +1,5 @@
+import { RunRequested, RunSettled } from "iterate/next/stream/run";
+export { RunRequested, RunSettled, type RunSettlement } from "iterate/next/stream/run";
 // core-processor.ts — THE CORE REDUCE: the one processor the context DO reduces INLINE at its commit
 // point. Its reduced state is everything the DO needs SYNCHRONOUSLY at its doors, event-sourced from
 // the context's own control events and nothing else:
@@ -265,29 +267,7 @@ type OpenScriptRun = { requestedAt: string };
 // contract (`CoreContract.events`): the one place their schemas live. A processor that consumes
 // them names the contract in its `processorDeps` (the agent); the runner and `itx.run` read them here.
 
-/** `events.iterate.com/context/run-requested`: the whole script — the text of `async (itx) => …`.
- *  The event's own OFFSET is the run's identity: the settlement names it back. */
-export const RunRequested = z.object({ code: z.string().min(1) });
-export type RunRequested = z.infer<typeof RunRequested>;
-/** `events.iterate.com/context/run-settled`: `requestOffset` names the request; `settlement` is
- *  what the script returned (JSON — a round trip drops what JSON cannot carry) or how it failed —
- *  `runtime` (the script threw, or returned what the log refuses) or `interrupted` (the context
- *  restarted before it finished; it is not run again). */
-export const RunSettled = z.object({
-  requestOffset: z.number().int().positive(),
-  settlement: z.discriminatedUnion("status", [
-    z.object({ status: z.literal("succeeded"), result: z.unknown().optional() }),
-    z.object({
-      status: z.literal("failed"),
-      error: z.string(),
-      failureKind: z.enum(["runtime", "interrupted"]),
-    }),
-  ]),
-});
-export type RunSettled = z.infer<typeof RunSettled>;
-export type RunSettlement = RunSettled["settlement"];
-
-/** A subscription name is ONE segment, [A-Za-z0-9_-] — never a key of `Object.prototype` (the
+/** A subscription name is ONE segment, [A-Za-z0-9_-] — and never a key of `Object.prototype`: the
  *  tables are plain records indexed by name, so such a name would read or write the prototype
  *  instead of a row) and never `core`: the always-on reduce is addressable as a facet but not a
  *  configurable subscription — a row named `core` would be undeliverable and climb the retry ladder

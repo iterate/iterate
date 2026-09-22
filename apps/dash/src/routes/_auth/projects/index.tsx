@@ -40,6 +40,7 @@ const shell = getRouteApi("/_auth");
 
 export const Route = createFileRoute("/_auth/projects/")({
   validateSearch: z.object({ new: z.literal(1).optional().catch(undefined) }),
+  loader: async ({ context }) => ({ templateOptions: await context.api.projects.templates() }),
   head: () => ({ meta: [{ title: "Projects · Dash" }] }),
   component: ProjectsPage,
 });
@@ -165,6 +166,7 @@ function NewProjectForm({
   onCreated: (project: string) => Promise<void>;
 }) {
   const { api, info } = shell.useRouteContext();
+  const { templateOptions } = Route.useLoaderData();
   const router = useRouter();
   // the project's slug — its hostname's label (its id is minted): lowercased as typed, anything but
   // a-z, 0-9 and dashes becoming a dash (the platform slugs it the same way)
@@ -174,6 +176,8 @@ function NewProjectForm({
   // there is none yet (the platform then makes the person's first, from their email)
   const [orgId, setOrgId] = useState(orgs[0]?.id ?? "");
   const [orgName, setOrgName] = useState("");
+  const [template, setTemplate] = useState("");
+  const [customTemplate, setCustomTemplate] = useState("");
   const [error, setError] = useState<string | null>(null);
   const creatingOrg = orgId === "new";
   async function create(event: FormEvent<HTMLFormElement>) {
@@ -194,6 +198,7 @@ function NewProjectForm({
       using created = await api.projects.create({
         project: name.trim(),
         orgId: chosenOrgId || undefined,
+        configRepoTemplate: (template === "custom" ? customTemplate.trim() : template) || undefined,
       });
       // the slug as the platform slugged it, off the root context handed back
       const { projectId, projectSlug } = await created.whoami();
@@ -210,7 +215,7 @@ function NewProjectForm({
       <SheetHeader className="border-b">
         <SheetTitle>New project</SheetTitle>
         <SheetDescription>
-          A project is a workspace of its own — its site, repos and agents.
+          A project has its own site, repositories and installed apps.
         </SheetDescription>
       </SheetHeader>
       <FieldGroup className="flex-1 p-4">
@@ -232,6 +237,40 @@ function NewProjectForm({
             <FieldDescription>Your project will be hosted at {new URL(host).host}</FieldDescription>
           ) : null}
         </Field>
+        <Field>
+          <FieldLabel htmlFor="project-template">Template</FieldLabel>
+          <NativeSelect
+            id="project-template"
+            className="w-full"
+            value={template}
+            onChange={(event) => setTemplate(event.target.value)}
+          >
+            <NativeSelectOption value="">Minimal</NativeSelectOption>
+            {templateOptions
+              .filter((option) => option.label !== "Minimal")
+              .map((option) => (
+                <NativeSelectOption key={option.reference} value={option.reference}>
+                  {option.label}
+                </NativeSelectOption>
+              ))}
+            <NativeSelectOption value="custom">Custom GitHub template…</NativeSelectOption>
+          </NativeSelect>
+          <FieldDescription>
+            The template is copied into your project's config repository.
+          </FieldDescription>
+        </Field>
+        {template === "custom" ? (
+          <Field>
+            <FieldLabel htmlFor="project-template-reference">GitHub template</FieldLabel>
+            <Input
+              id="project-template-reference"
+              value={customTemplate}
+              onChange={(event) => setCustomTemplate(event.target.value)}
+              placeholder="github:owner/repo#path:template"
+              required
+            />
+          </Field>
+        ) : null}
         {orgs.length ? (
           <Field>
             <FieldLabel htmlFor="project-organization">Organization</FieldLabel>

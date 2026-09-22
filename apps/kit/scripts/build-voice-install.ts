@@ -3,10 +3,11 @@ import { URL } from "node:url";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { build } from "esbuild";
+import { buildAgentRuntime } from "../../agents/scripts/build-runtime.ts";
 
 /** Build the same hosted processors the devices call, with immutable project KV keys. */
 export async function buildVoiceInstall() {
-  const assets = new URL("../../os-next/examples/voice-agent/assets/", import.meta.url);
+  const assets = new URL("../../agents/voice/assets/", import.meta.url);
   const css = await readFile(new URL("pixel-font.css", assets), "utf8");
   const font = await readFile(new URL("press-start-2p-ascii.woff2", assets));
   const fontUrl = 'url("./press-start-2p-ascii.woff2")';
@@ -19,7 +20,7 @@ export async function buildVoiceInstall() {
     ["voice-agent.ts", "voice-delegate.ts", "worker.ts"].map(async (file) => {
       const result = await build({
         entryPoints: [
-          new URL(`../../os-next/examples/voice-agent/${file}`, import.meta.url).pathname,
+          new URL(`../../agents/voice/${file}`, import.meta.url).pathname,
         ],
         bundle: true,
         write: false,
@@ -40,6 +41,7 @@ export async function buildVoiceInstall() {
     voiceDelegate: bundles[1]!,
     worker: bundles[2]!,
     fontCss,
+    agentsRuntime: await buildAgentRuntime(),
   });
 }
 
@@ -49,6 +51,7 @@ export function createVoiceInstall(sources: {
   voiceDelegate: string;
   worker: string;
   fontCss: string;
+  agentsRuntime: string;
 }) {
   const files: Record<string, string> = {};
   const add = (name: string, source: string) => {
@@ -74,7 +77,7 @@ export function createVoiceInstall(sources: {
     files[worker.key]!.includes('"voice-delegate:dev"')
   )
     throw new Error("Voice cache keys were not substituted");
-  return { files, workerKey: worker.key, cacheKey: `voice-worker:${worker.hash}` };
+  return { agentsRuntime: sources.agentsRuntime, files, workerKey: worker.key, cacheKey: `voice-worker:${worker.hash}` };
 }
 
 export async function writeVoiceInstall() {

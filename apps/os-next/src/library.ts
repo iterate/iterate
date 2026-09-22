@@ -1,7 +1,7 @@
 // library.ts — the library: `buildLibrary` closes the verbs below over one `itx` and memoizes the
 // live connections. The connectors (library/capnweb.ts, mcp.ts, openapi.ts) are userspace-shaped —
 // written against `itx.fetch` alone, so a userspace worker could carry them unchanged. `run` and the
-// entity roots (`repos`, `workspaces`, `agents`) are platform sugar spelled at the fixed point,
+// entity roots (`repos`, `workspaces`) are platform sugar spelled at the fixed point,
 // `itx.builtins` — the word loaded code may not say; `files` is a path namespace over `itx.r2`.
 // library.test.ts pins what every library file may import at runtime.
 
@@ -17,8 +17,6 @@ import type { Caller } from "iterate/next/principal";
 import type { EventInput, StreamEvent } from "iterate/next/stream/processor";
 import type { RunSettled } from "./stream/core-processor.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
-import { AgentContract } from "./agent/contract.ts";
-import type { AgentDurableObject } from "./agent/durable-object.ts";
 import { RepoContract } from "./repo/contract.ts";
 import type { RepoDurableObject } from "./repo/durable-object.ts";
 import { WorkspaceContract } from "./workspace/contract.ts";
@@ -91,16 +89,6 @@ export interface LibraryRoots {
     /** The entity's deletion saga on that path: the request, the death certificate (cross-posted to `/`, the catalog drops it), then the row disabled. */
     delete(path: string): Promise<{ path: string }>;
   };
-  /** An agent (src/agent/): a conversation on the context at any path, driven by a model that acts
-   *  by scripts against that context's `itx`. `get(path)` is the handle — `message(text)` plus the
-   *  typed `append` of the agent's own events; `list()` and `create(path)` are the collection's. */
-  agents: {
-    get(path: string): InvokeHandle & AgentFacet;
-    list(): Promise<{ path: string; createdAt: string }[]>;
-    create(path: string): Promise<{ path: string }>;
-    /** The entity's deletion saga on that path: the request, the death certificate (cross-posted to `/`, the catalog drops it), then the row disabled. */
-    delete(path: string): Promise<{ path: string }>;
-  };
   /** THE FILES (apps/os's `itx.files`, lean): project file storage as a PATH namespace over `itx.r2`
    *  — a file is its path (leading slash), its bytes and a content type; last write wins, no
    *  events. `get(path)` is a handle: `.put({ contentType, data })` (data: bytes, or a string that
@@ -137,11 +125,6 @@ type RepoFacet = Pick<
   RepoDurableObject,
   "tip" | "readFile" | "readModules" | "modules" | "listFiles" | "commitFiles" | "writeFile" | "log"
 > & { append(...events: EventInput<typeof RepoContract>[]): Promise<StreamEvent[]> };
-/** What an agent handle's dotted members reach: the agent facet's own methods, and the typed
- *  `append` of the agent's events on that context. */
-type AgentFacet = Pick<AgentDurableObject, "message"> & {
-  append(...events: EventInput<typeof AgentContract>[]): Promise<StreamEvent[]>;
-};
 /** What a workspace handle's dotted members reach: the workspace facet's own methods, and the typed
  *  `append` of the workspace's events on that context. */
 type WorkspaceFacet = Pick<
@@ -248,27 +231,6 @@ export function buildLibrary(
         delete: async (path) =>
           projectFacet(itx, [
             ["workspaces"],
-            ["delete", resolveContextPath(originOf(deps.caller(), deps.path), path)],
-          ]) as Promise<{ path: string }>,
-      },
-      agents: {
-        get: (path) =>
-          entityHandle(
-            itx,
-            path,
-            "agent",
-            AgentContract,
-            deps.caller(),
-            deps.path,
-          ) as InvokeHandle & AgentFacet,
-        list: () =>
-          projectFacet(itx, [["agents"], ["list"]]) as Promise<
-            { path: string; createdAt: string }[]
-          >,
-        create: (path) => createEntity(itx, path, "agents", deps.caller(), deps.path),
-        delete: async (path) =>
-          projectFacet(itx, [
-            ["agents"],
             ["delete", resolveContextPath(originOf(deps.caller(), deps.path), path)],
           ]) as Promise<{ path: string }>,
       },
@@ -392,8 +354,8 @@ export async function runScript(itx: LibraryItx, script: unknown): Promise<unkno
   }
 }
 
-// ── the entities ── `itx.repos`, `itx.workspaces`, `itx.agents`: a repo (src/repo/), a workspace
-// (src/workspace/) and an agent (src/agent/) are each a FACET hosted on their own context, and ONE
+// ── the entities ── `itx.repos`, `itx.workspaces`: a repo (src/repo/) and a workspace
+// (src/workspace/) are each a FACET hosted on their own context, and ONE
 // SHAPE here. `get(path)` is the HANDLE — pure addressing: a first-party facet is hosted on its first
 // call and addressed after (the DO's startup memo), so nothing is appended to get one; every call on
 // the handle is one dotted expression on that facet, run in the sibling under ITS rules (a test lends
@@ -421,7 +383,7 @@ const originOf = (caller: Caller, ownPath: string): string => caller.path || own
 async function createEntity(
   itx: LibraryItx,
   path: string,
-  collection: "repos" | "workspaces" | "agents",
+  collection: "repos" | "workspaces",
   caller: Caller,
   ownPath: string,
 ): Promise<{ path: string }> {

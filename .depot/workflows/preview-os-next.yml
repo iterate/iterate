@@ -37,6 +37,7 @@ on:
     paths:
       - .depot/workflows/preview-os-next.yml
       - apps/os-next/**
+      - configs-next/**
       - apps/dash/**
       - apps/agents/**
       - apps/notes/**
