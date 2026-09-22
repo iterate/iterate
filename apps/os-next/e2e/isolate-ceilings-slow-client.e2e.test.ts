@@ -26,8 +26,9 @@ deployedOnly(
     let reset: any;
     // 160 × 1 MiB: past the 128 MiB isolate (the born-red version reset at ~125 MiB retained) with a
     // quarter's margin. The row is upload time, and one append at a time paid a round trip per MiB
-    // (~180 ms in CI, 25 s); eight in flight keep the wire full — 9.5–15 s measured 2026-09-22, the
-    // DO ingesting every MiB either way. A reset fails the append in hand and stops every lane.
+    // (~180 ms in CI, 25 s); eight concurrent appenders keep the wire full — 9.5–15 s measured
+    // 2026-09-22, the DO ingesting every MiB either way. A reset fails the append in hand and stops
+    // every appender.
     let next = 0;
     const flood = async () => {
       while (next < 160 && !reset) {
