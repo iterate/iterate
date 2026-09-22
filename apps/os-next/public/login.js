@@ -156,7 +156,16 @@
     if (state.password || state.emailSignIn)
       options.push(el("div", { class: "login-divider", text: "or" }));
     options.push(
-      el("p", {}, el("a", { class: "button", href: state.google, text: "Continue with Google" })),
+      el(
+        "p",
+        {},
+        el(
+          "a",
+          { class: "button google-login", href: state.google },
+          el("img", { src: "/google-logo.svg", alt: "", width: "20", height: "20" }),
+          "Continue with Google",
+        ),
+      ),
     );
   }
   if (!state.password && !state.emailSignIn && !state.google)

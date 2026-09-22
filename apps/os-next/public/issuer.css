@@ -205,6 +205,15 @@ body:has(.login-card) {
   :is(.primary, .button) {
     margin: 0;
   }
+  .google-login {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    img {
+      flex-shrink: 0;
+    }
+  }
   .quiet {
     width: 100%;
     font-size: 14px;

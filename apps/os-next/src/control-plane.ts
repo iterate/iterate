@@ -64,6 +64,7 @@ export const issuerPagePaths = [
   "/capnweb.js",
   "/issuer.css",
   "/iterate-logo.svg",
+  "/google-logo.svg",
   // the prompt an agent follows to deploy and connect a platform of the person's own
   "/setup-prompt.md",
 ];

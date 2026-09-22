@@ -169,6 +169,10 @@ for (const variant of [
     await expect(page.getByRole("link", { name: "Continue with Google" })).toHaveCount(
       variant.google ? 1 : 0,
     );
+    if (variant.google)
+      await expect(
+        page.getByRole("link", { name: "Continue with Google" }).locator("img"),
+      ).not.toHaveJSProperty("naturalWidth", 0);
     if (!variant.password && !variant.emailSignIn && !variant.google)
       await page.getByText("Sign-in is not configured for this deployment.").waitFor();
     // Catch the original missing password styles and narrow-screen overflow.
