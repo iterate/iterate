@@ -157,7 +157,7 @@ export function renderPullRequestSection(input: {
           "No app on top changed in this PR (dash, agents, notes, voice deploy only when their own paths change).",
         ]),
     "",
-    "Every push redeploys it in place. Reset, e2e, delete and the laptop commands: [apps/os-next/README.md, Previews](https://github.com/iterate/iterate/blob/main/apps/os-next/README.md#previews--one-per-pull-request).",
+    "Every push redeploys it in place. Reset, e2e, delete and the laptop commands: [apps/os-next/README.md](https://github.com/iterate/iterate/blob/main/apps/os-next/README.md).",
   ].join("\n");
 }
 

@@ -45,7 +45,16 @@ pnpm --dir apps/os-next build
 pnpm --dir apps/os-next deploy -- --env <environment>
 ```
 
-The Preview OS-Next workflow deploys per-PR previews and runs their integration and browser checks.
+The Preview OS-Next workflow deploys a platform preview and all four hosted clients (Dash,
+Agents, Notes, Voice), then runs integration and browser checks. To run it from a checkout:
+
+```sh
+doppler run --project project-worker --config preview -- \
+  pnpm preview deploy --pr <number> --name <branch> --apps all
+```
+
+Use `e2e` in place of `deploy` to test an existing preview. `reset` destroys that preview's state
+before redeploying; `delete` removes it. CI publishes URLs and operation links in the PR body.
 For an operational change, verify the preview's resulting state and telemetry as well as its checks.
 The [engineering invariant](../../docs/engineering-invariants.md) defines the required standard.
 

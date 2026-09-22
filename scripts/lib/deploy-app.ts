@@ -44,7 +44,7 @@ export interface SmokeProbe {
 export async function deployApp<E extends DeployableEnv>(input: {
   /** Absolute app root (wrangler/vite commands run here). */
   appRoot: string;
-  /** e.g. "apps/os" — used in log lines. */
+  /** e.g. "apps/os-next" — used in log lines. */
   appLabel: string;
   /** The app's env map from the root envs.ts. */
   envs: Record<string, E>;

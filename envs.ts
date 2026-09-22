@@ -77,7 +77,7 @@ export interface OsNextEnv {
    *  DNS record. Belongs in the project's own runtime config, not here. */
   temporaryCustomHostnames?: Record<string, string>;
   /** The project-host zones this deployment serves as a Cloudflare for SaaS provider (the zone's
-   *  fallback origin, `cname.<zone>`, is the deployment's; apps/os's `cloudflareForSaasProjectHostnameBases`).
+   *  fallback origin, `cname.<zone>`, is the deployment's).
    *  A `temporaryCustomHostnames` key whose zone lives in ANOTHER Cloudflare account is a CUSTOM
    *  HOSTNAME on the first of these (ensure-resources creates it; the owner CNAMEs their apex to the
    *  fallback origin), reached through the one `*\/*` route the generator adds per SaaS zone. */
