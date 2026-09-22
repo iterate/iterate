@@ -74,9 +74,6 @@ async function buildServer(
 ): Promise<McpServer> {
   const d1Directory = directory(env.DB);
   const { reach, principal, grant } = authorization;
-  // The catalog records where this connection executes. Older connections ran in an unlinked
-  // child context; the new certificate points them at the project root on their next call.
-  const connectionPath = "/";
   const caller = { principal, grant: grant?.grantId, platformOrigin };
   const mcpServer = new McpServer(
     { name: "control-plane", version: "0.1.0" },
@@ -119,30 +116,10 @@ async function buildServer(
           reach,
           toolArguments.project?.trim() ?? "",
         );
-        // THE BIRTH CERTIFICATE of the connection's context, cross-posted to `/` for the catalog —
-        // idempotent on the grant (a dedupe hit writes nothing) — before its first script runs.
-        await env.ITERATE_CONTEXT.getByName(
-          DurableObjectNameCodec.stringify({ projectId, path: "/" }),
-        ).invoke(
-          [
-            "itx",
-            [
-              "append",
-              {
-                type: "events.iterate.com/project/mcp-connection-created",
-                // one row per connection AND path: a connection whose context moved is born again there
-                idempotencyKey: `mcp-connection-created/${grant?.grantId ?? "admin"}${connectionPath}`,
-                payload: { grantId: grant?.grantId ?? "admin", path: connectionPath },
-              },
-            ],
-          ],
-          [],
-          caller,
-        );
         // Execute against the authorized root, through its rules, exactly as a project handle does.
         // The request carries the principal and grant; the root's runner records its settlement.
         const value = await env.ITERATE_CONTEXT.getByName(
-          DurableObjectNameCodec.stringify({ projectId, path: connectionPath }),
+          DurableObjectNameCodec.stringify({ projectId, path: "/" }),
         ).invoke(["itx", ["run", toolArguments.script]], [], caller);
         // THE JSON BOUNDARY: a round trip drops what JSON cannot carry and throws on what it refuses.
         const json = JSON.stringify(value) ?? "null";

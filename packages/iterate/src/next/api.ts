@@ -189,11 +189,6 @@ export interface IterateContextApi {
     create(path: string): Promise<{ path: string }>;
     delete(path: string): Promise<{ path: string }>;
   };
-  /** The MCP connections born under the project, by grant: their execution path (`/` for current
-   *  clients; older records may name a child context) and the time of the grant's first run. */
-  mcpConnections: {
-    list(): Promise<{ grantId: string; path: string; createdAt: string }[]>;
-  };
 }
 
 /** One OAuth grant as `grants.list()` shows it: a session, a connected app, a minted token. */

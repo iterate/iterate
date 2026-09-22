@@ -31,8 +31,7 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     .grants.mint({ name: "MCP root regression", projects: [projectId] });
   const grantId = token.split(":")[1]!;
   const oldPath = `/mcp/inbound/grants/${grantId}`;
-  // An existing connection from before root execution, with its original transcript.
-  // Root execution does not alter that child's rules or erase its transcript.
+  // Historical connection facts and transcripts remain readable, but MCP no longer uses them.
   await root.append({
     type: "events.iterate.com/project/mcp-connection-created",
     payload: { grantId, path: oldPath },
@@ -127,12 +126,16 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
       .filter((e) => e.type === "events.iterate.com/context/run-settled")
       .every((e) => e.payload.settlement.status === "succeeded"),
   ).toBe(true);
-  expect(await root.mcpConnections.list()).toEqual([
-    { grantId, path: "/", createdAt: expect.any(String) },
-  ]);
+  expect(
+    events.filter((e) => e.type === "events.iterate.com/project/mcp-connection-created"),
+  ).toHaveLength(1); // only the historical fixture
+  const capabilities = await success("async (itx) => itx.rewriteRules.list()");
+  expect(capabilities.some((rule: { match: string }) => rule.match === "itx.mcpConnections")).toBe(
+    false,
+  );
   expect(await readAll(root.cd(oldPath))).toEqual(oldEvents);
 
-  // Two grants in one root must not collide on the connection certificate's idempotency key.
+  // Two grants execute on the same root; attribution distinguishes their requests.
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- A second bounded mint for a separate MCP connection.
   using secondMinter = newHttpBatchRpcSession<IterateRpcTarget>(
     new Request(workerUrl("/api"), { headers: issuerHeaders }),
@@ -146,11 +149,21 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     second.token,
   );
   expect(secondRun.isError, JSON.stringify(secondRun)).toBe(false);
+  expect(secondRun.structuredContent.result).toMatchObject({ projectId, path: "/" });
+  const afterSecond = await readAll(root);
+  const secondGrantId = second.token.split(":")[1]!;
   expect(
-    (await root.mcpConnections.list())
-      .map((connection: { grantId: string }) => connection.grantId)
-      .sort(),
-  ).toEqual([grantId, second.token.split(":")[1]].sort());
+    afterSecond.filter((e) => e.type === "events.iterate.com/context/run-requested").at(-1)?.source,
+  ).toEqual({ principal, grant: secondGrantId });
+  expect(
+    afterSecond.filter((e) => e.type === "events.iterate.com/project/mcp-connection-created"),
+  ).toHaveLength(1);
+  // Reading a previously unused context creates its stream lifecycle events, but no MCP runs.
+  expect(
+    (await readAll(root.cd(`/mcp/inbound/grants/${secondGrantId}`))).filter(
+      (event) => !event.type.startsWith("events.iterate.com/stream/"),
+    ),
+  ).toEqual([]);
 
   const otherEvents = await readAll(openItx(other));
   const denied = await run(

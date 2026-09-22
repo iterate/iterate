@@ -95,8 +95,6 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
     "a private overlay over the repos: `workspaces.get(path).writeFile(f, text)` · `gitCommit({ message, scope })`",
   agents:
     "other agents, each a conversation on its own path: `agents.get(path).message(text)` · `agents.list()`",
-  mcpConnections:
-    "the MCP connections born under this project, by grant: itx.mcpConnections.list() → [{ grantId, path, createdAt }]",
   files:
     "project files: `files.get(path).put({ contentType, data })` · `.bytes()` · `.url()` · `files.list(prefix)`",
 } as const satisfies Record<string, string>;

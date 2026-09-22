@@ -128,19 +128,6 @@ export class ProjectProcessor extends StreamProcessor<
           ...state,
           configRepoTip: { commitOid: event.payload.commitOid, offset: event.offset },
         };
-      case "events.iterate.com/project/mcp-connection-created": {
-        const { grantId, path } = event.payload;
-        const known = state.mcpConnections[grantId];
-        if (known?.path === path) return undefined;
-        // the connection was born once; when its context moved (a path convention changed) the row follows
-        return {
-          ...state,
-          mcpConnections: {
-            ...state.mcpConnections,
-            [grantId]: { path, createdAt: known?.createdAt ?? event.createdAt },
-          },
-        };
-      }
       default:
         return undefined;
     }
