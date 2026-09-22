@@ -39,21 +39,22 @@ const now = () => Date.now();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** 16 kHz mono PCM16 WAV → the PCM bytes (chunk-aware: `say` writes its fmt chunk after others). */
-function pcmFromWav(file: string): Buffer {
-  const wav = readFileSync(file);
-  if (wav.toString("ascii", 0, 4) !== "RIFF" || wav.toString("ascii", 8, 12) !== "WAVE")
-    throw new Error(`${file}: not a RIFF/WAVE file`);
+function pcmFromWav(file: string): Uint8Array {
+  const wav = new Uint8Array(readFileSync(file));
+  const view = new DataView(wav.buffer, wav.byteOffset, wav.byteLength);
+  const tag = (at: number) => new TextDecoder("ascii").decode(wav.subarray(at, at + 4));
+  if (tag(0) !== "RIFF" || tag(8) !== "WAVE") throw new Error(`${file}: not a RIFF/WAVE file`);
   let format: { rate: number; channels: number; bits: number } | null = null;
   let offset = 12;
   while (offset + 8 <= wav.length) {
-    const id = wav.toString("ascii", offset, offset + 4);
-    const size = wav.readUInt32LE(offset + 4);
+    const id = tag(offset);
+    const size = view.getUint32(offset + 4, true);
     const body = offset + 8;
     if (id === "fmt ") {
       format = {
-        channels: wav.readUInt16LE(body + 2),
-        rate: wav.readUInt32LE(body + 4),
-        bits: wav.readUInt16LE(body + 14),
+        channels: view.getUint16(body + 2, true),
+        rate: view.getUint32(body + 4, true),
+        bits: view.getUint16(body + 14, true),
       };
     } else if (id === "data") {
       if (!format) throw new Error(`${file}: data before fmt`);
@@ -68,7 +69,7 @@ function pcmFromWav(file: string): Buffer {
   throw new Error(`${file}: no data chunk`);
 }
 
-function wavFromPcm(pcm: Buffer): Buffer {
+function wavFromPcm(pcm: Uint8Array): Uint8Array {
   const header = Buffer.alloc(44);
   header.write("RIFF", 0);
   header.writeUInt32LE(36 + pcm.length, 4);
@@ -103,7 +104,7 @@ async function main(): Promise<void> {
   const at = () => now() - t0;
   const activation = crypto.randomUUID().replace(/-/g, "");
   const marks: Record<string, number> = {};
-  const speaker: Buffer[] = [];
+  const speaker: Uint8Array[] = [];
   const transcript: string[] = [];
   let ended: string | null = null;
   let accepted: (() => void) | null = null;
@@ -185,13 +186,16 @@ async function main(): Promise<void> {
   // then silence until the answer had its say. The first frame mints the call server-side.
   let pending = 0;
   let failed = 0;
-  const sendFrame = (pcm: Buffer) => {
+  const sendFrame = (pcm: Uint8Array) => {
     pending++;
     Promise.resolve(
       itx.append({
         type: `${T}mic-frame`,
         ephemeral: true,
-        payload: { activation, pcm: pcm.toString("base64") },
+        payload: {
+          activation,
+          pcm: Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength).toString("base64"),
+        },
       }),
     ).then(
       () => pending--,
@@ -203,7 +207,7 @@ async function main(): Promise<void> {
     );
   };
   const frameBytes = FRAME_MS * BYTES_PER_MS;
-  const frames: Buffer[] = [];
+  const frames: Uint8Array[] = [];
   for (let i = 0; i < micPcm.length; i += frameBytes)
     frames.push(micPcm.subarray(i, i + frameBytes));
   const silence = Buffer.alloc(frameBytes);
