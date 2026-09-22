@@ -530,8 +530,8 @@ Every rule below is a row in its table test.
    applied and done; anything else is `NO_ITX_EXPRESSION_MATCH`, default-deny. What is implicit
    depends on where you stand: at the owner root — `/` for a project; `/users/<id>` or
    `/organizations/<id>` in the global namespace — every built-in root; at every other context
-   only the fourteen context roots (`CONTEXT_ROOTS`, each listed and described in
-   itx-surface-as-built.md §5). `kv`, `secrets`, `ai`, `fetch`, `repos`, `agents` and the rest are the
+   only the fourteen context roots (`CONTEXT_ROOTS` in
+   `src/context/itx-expression-rewriting.ts`). `kv`, `secrets`, `ai`, `fetch`, `repos`, `agents` and the rest are the
    project's, ambient nowhere below its root. 32 rewrites is the budget.
 6. **The door.** A match is rooted at `itx`, never at `itx.builtins`, never at a proxy verb
    (`invoke`, `provide`, `subscribe`; `itx.cd` is a legal match, so `itx.cd ⇒ null` is a row). A

@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../../src/agent/system-prompt.ts";
 import { runDelegationTurn } from "./delegation-turn.ts";
+import websiteSteps from "./website-steps-repro.json";
 
 const transcript = [{ role: "listener" as const, text: "what is two plus two" }];
 
@@ -79,13 +80,53 @@ test("a speculative failure beside the clock script is not spoken before its suc
 });
 
 test("the script bound reports unfinished work instead of claiming success", async () => {
-  const { result, scripts } = await turn(Array(7).fill("<codemode>\nreturn 1\n</codemode>"));
-  expect(scripts).toHaveLength(6);
+  const { result, scripts } = await turn(Array(25).fill("<codemode>\nreturn 1\n</codemode>"));
+  expect(scripts).toHaveLength(24);
   expect(result).toEqual({
     content: "I couldn't finish the request within the allowed number of steps.",
     hangUp: false,
-    scripts: 6,
+    scripts: 24,
   });
+});
+
+test("budget exhaustion gives the model a final non-executing turn to explain partial work", async () => {
+  const { result, completions, scripts } = await turn([
+    ...Array(24).fill("<codemode>\nreturn 1\n</codemode>"),
+    "The change was saved, but I haven't verified the live website yet.",
+  ]);
+  expect(scripts).toHaveLength(24);
+  expect(completions.at(-1)?.at(-1)).toEqual({
+    role: "system",
+    content: expect.stringContaining("No script attempts remain"),
+  });
+  expect(result.content).toBe("The change was saved, but I haven't verified the live website yet.");
+});
+
+// Satellite1, 2026-09-22 12:14 UTC: six scripts published the horse joke, then the
+// delegate discarded the seventh (live verification). Keep the actual model/tool
+// messages verbatim; omit the earlier clock requests and audio/lifecycle events.
+test("a published website gets verified before the voice reports its outcome", async () => {
+  const { result, scripts } = await turn(
+    [
+      ...websiteSteps
+        .filter((message) => message.role === "assistant")
+        .map((message) => message.content),
+      '<codemode status="Verifying the published joke">\nconst response = await itx.fetch(new Request("https://prj-kit-bench.iterate2.app/"));\nreturn {status: response.status, body: await response.text()};\n</codemode>',
+      "The horse joke is live on your website.",
+    ],
+    [
+      ...websiteSteps
+        .filter((message) => message.role === "user")
+        .map((message) => message.content.replace("Script result:\n", "")),
+      '{"status":200,"body":"Because it had bad stable manners!"}',
+    ],
+  );
+  expect(result).toEqual({
+    content: "The horse joke is live on your website.",
+    hangUp: false,
+    scripts: 7,
+  });
+  expect(scripts.at(-1)).toContain("itx.fetch");
 });
 
 test("a goodbye with the hang-up token hangs up without saying the token", async () => {
