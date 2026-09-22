@@ -712,7 +712,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       const project = z.object({ id: z.string(), slug: z.string().optional() }).parse(row);
       const projectSlug = project.slug || project.id;
       // the apex URL, when the caller carries the platform origin to compose it with
-      const platformOrigin = this.#platformOriginNow();
+      const platformOrigin = this.#platformOrigin;
       const url = platformOrigin
         ? projectUrlOf(this.#appConfig.urls.ingressRouting, platformOrigin, {
             project: projectSlug,
@@ -726,9 +726,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     env: this.env,
     deployId: this.#appConfig.deployId,
     ingressRouting: this.#appConfig.urls.ingressRouting,
-    platformOrigin: () => this.#platformOriginNow(),
+    platformOrigin: () => this.#platformOrigin,
     signFileUrl: async (input) => {
-      const platformOrigin = this.#platformOriginNow();
+      const platformOrigin = this.#platformOrigin;
       if (!platformOrigin)
         throw new Error(
           "files: a signed URL is composed from the platform origin the caller reached the platform on — this call carries none (call it from a session)",
@@ -1462,10 +1462,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       return caller;
     }
     return this.#platformOrigin ? { ...caller, platformOrigin: this.#platformOrigin } : caller;
-  }
-  /** The origin for THIS call: the caller's (the persisted one filled in above), else nothing yet. */
-  #platformOriginNow(): string | null {
-    return this.#callerStorage.getStore()?.platformOrigin || this.#platformOrigin;
   }
 
   // ── native fetch: the rpc-stub pager door, the fetch lane, egress ──

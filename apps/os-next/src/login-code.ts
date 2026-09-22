@@ -78,11 +78,6 @@ async function charge(env: Env, keys: readonly string[], counts: number[]): Prom
 
 // ── the password ──
 
-/** Whether this deployment signs people in with the password: `login.password` is set. */
-export function passwordSignInOffered(env: Env): boolean {
-  return Boolean(appConfigOf(env).login.password.exposeSecret());
-}
-
 /** `password` for `email`: right → the user (created on first sign-in); wrong → `{ error }`, one
  *  more wrong attempt on the books. Five wrong attempts per email, twenty per client (`client` is the
  *  caller's address, `cf-connecting-ip`), in ten minutes; over either cap the attempt is refused
@@ -128,11 +123,6 @@ async function challengeOf(
   return stored.success && stored.data.expiresAt > Date.now()
     ? { id, challenge: stored.data }
     : null;
-}
-
-/** Whether this deployment mails codes at all: the binding and `login.emailCode` (a from address). */
-export function emailSignInOffered(env: Env): boolean {
-  return Boolean(env.EMAIL && appConfigOf(env).login.emailCode);
 }
 
 /** How often a code may go OUT: three to one address, and twenty from one client, in ten minutes. */

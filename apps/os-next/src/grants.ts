@@ -9,13 +9,11 @@ import { RpcTarget } from "capnweb";
 import { codedError, isLocalOrigin } from "iterate/next/lib";
 import { authorizationCodeRequest } from "iterate/next/oauth";
 import { type GrantEnded, type GrantMinted } from "./account/contract.ts";
-import { DurableObjectNameCodec } from "./iterate-context.ts";
-import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
+import type { PlatformAddresses } from "./app-config.ts";
 import type { Env } from "./control-plane.ts";
 import { directory } from "./directory.ts";
 import {
   authorizationOf,
-  oauthAddresses,
   oauthHelpers,
   parseAuthorization,
   providerOptions,
@@ -23,6 +21,7 @@ import {
   type GrantProps,
   type Authorization,
 } from "./oauth.ts";
+import { publishGlobalFact } from "./session.ts";
 
 const DisplayMetadata = z.object({
   clientName: z.string().optional(),
@@ -50,14 +49,14 @@ export class Grants extends RpcTarget {
   readonly #env: Env;
   readonly #ctx: ExecutionContext;
   readonly #auth: Authorization;
-  /** the platform origin this session reached the platform on (app-config.ts `platformOriginOf`) */
-  readonly #platformOrigin: string;
-  constructor(env: Env, ctx: ExecutionContext, auth: Authorization, platformOrigin: string) {
+  /** where this session reached the platform (app-config.ts `platformAddressesOf`) */
+  readonly #addresses: PlatformAddresses;
+  constructor(env: Env, ctx: ExecutionContext, auth: Authorization, addresses: PlatformAddresses) {
     super();
     this.#env = env;
     this.#ctx = ctx;
     this.#auth = auth;
-    this.#platformOrigin = platformOrigin;
+    this.#addresses = addresses;
   }
   #account() {
     const grant = this.#auth.grant;
@@ -72,31 +71,22 @@ export class Grants extends RpcTarget {
    *  caller; best-effort and async, as session.ts `publishGlobalFact` says: the provider is the
    *  truth for the grant, this is the person's record of it. */
   #publishAccountFact(userId: string, fact: StreamEventInput): void {
-    const name = DurableObjectNameCodec.stringify({
-      projectId: GLOBAL_PROJECT_ID,
-      path: `/users/${userId}`,
-    });
-    const caller = { principal: this.#auth.principal, grant: this.#auth.grant?.grantId };
-    this.#ctx.waitUntil(
-      // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the append's
-      // answer is not read.
-      (
-        this.#env.ITERATE_CONTEXT.getByName(name).invoke(
-          ["itx", ["append", fact]],
-          [],
-          caller,
-        ) as Promise<unknown>
-      ).then(
-        () => undefined,
-        () => undefined,
-      ),
+    publishGlobalFact(
+      {
+        contextNamespace: this.#env.ITERATE_CONTEXT,
+        waitUntil: (promise) => this.#ctx.waitUntil(promise),
+      },
+      `/users/${userId}`,
+      "account",
+      fact,
+      { principal: this.#auth.principal, grant: this.#auth.grant?.grantId },
     );
   }
   /** Any client can end its own grant. It cannot address another user's session. */
   async endCurrent() {
     const grant = this.#auth.grant;
     if (!grant) throw codedError("FORBIDDEN", "The administrator credential has no user session.");
-    const ended = await revokeGrant(this.#env, this.#platformOrigin, grant);
+    const ended = await revokeGrant(this.#env, this.#addresses, grant);
     this.#publishAccountFact(grant.userId, {
       type: "events.iterate.com/account/grant-ended",
       idempotencyKey: `account/grant-ended/${grant.grantId}`,
@@ -109,7 +99,7 @@ export class Grants extends RpcTarget {
   async list(cursor?: string) {
     const env = this.#env;
     const session = this.#account();
-    const page = await oauthHelpers(env, this.#platformOrigin).listUserGrants(session.sub, {
+    const page = await oauthHelpers(env, this.#addresses).listUserGrants(session.sub, {
       limit: 50,
       cursor,
     });
@@ -174,7 +164,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
       items: [...items, ...cleanup],
       cursor: page.cursor,
       projects: await directory(env.DB).reachableProjects(session.reach),
-      canMintToken: mintsPersonalAccessTokens(this.#platformOrigin),
+      canMintToken: mintsPersonalAccessTokens(this.#addresses.platformOrigin),
     };
   }
 
@@ -192,7 +182,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
       let owned: GrantSummary | undefined;
       let cursor: string | undefined;
       do {
-        const page = await oauthHelpers(env, this.#platformOrigin).listUserGrants(session.sub, {
+        const page = await oauthHelpers(env, this.#addresses).listUserGrants(session.sub, {
           cursor,
         });
         owned = page.items.find((grant) => grant.id === grantId);
@@ -200,7 +190,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
       } while (!owned && cursor);
       if (!owned) throw codedError("GRANT_NOT_FOUND", "Session not found");
     }
-    const ended = await revokeGrant(env, this.#platformOrigin, { userId: session.sub, grantId });
+    const ended = await revokeGrant(env, this.#addresses, { userId: session.sub, grantId });
     this.#publishAccountFact(session.sub, {
       type: "events.iterate.com/account/grant-ended",
       idempotencyKey: `account/grant-ended/${grantId}`,
@@ -217,7 +207,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
    * reads the row three times — so the id is returned only once the provider sees it. */
   async #consoleClientId(issuer: string, redirectUri: string): Promise<string> {
     if (!isLocalOrigin(issuer)) return `${issuer}/.auth/client.json`;
-    const helpers = oauthHelpers(this.#env, this.#platformOrigin);
+    const helpers = oauthHelpers(this.#env, this.#addresses);
     const client = await helpers.createClient({
       clientName: new URL(issuer).host,
       redirectUris: [redirectUri],
@@ -246,7 +236,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
     if (!(await authorizationOf(env, session.grant)))
       throw codedError("UNAUTHENTICATED", "This session has ended. Sign in again.");
     const data = MintInput.parse(input);
-    const { issuer, api, mcp } = oauthAddresses(env, this.#platformOrigin);
+    const { platformOrigin: issuer, api, mcp } = this.#addresses;
     if (!mintsPersonalAccessTokens(issuer))
       throw codedError("FORBIDDEN", "Personal access tokens require an HTTPS deployment.");
     const projects = (await directory(env.DB).reachableProjects(session.reach))
@@ -255,7 +245,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
     if (!projects.length) throw codedError("FORBIDDEN", "Choose a project you can access.");
     const redirectUri = `${data.clientId ? new URL(data.clientId).origin : issuer}/.auth/callback`;
     const clientId = data.clientId || (await this.#consoleClientId(issuer, redirectUri));
-    const helpers = oauthHelpers(env, this.#platformOrigin);
+    const helpers = oauthHelpers(env, this.#addresses);
     const client = data.clientId
       ? await helpers.lookupClient(clientId).catch((error: unknown) => {
           if (!(error instanceof CimdFetchError)) throw error;
@@ -305,7 +295,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
     if (!code) throw new Error("The token authorization did not produce a code.");
     // Personal token minting runs the code→token exchange through the SAME provider gate in process
     // (browser apps hit its public endpoint instead).
-    const response = await new OAuthProvider(providerOptions(env, this.#platformOrigin)).fetch(
+    const response = await new OAuthProvider(providerOptions(env, this.#addresses)).fetch(
       new Request(`${issuer}/oauth2/token`, {
         method: "POST",
         body: new URLSearchParams({

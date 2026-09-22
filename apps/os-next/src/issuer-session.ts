@@ -1,9 +1,9 @@
 import { startAppSession } from "iterate/next/app-server";
 import { sameOriginPath } from "iterate/next/lib";
-import { appConfigOf, platformOriginOf } from "./app-config.ts";
+import { platformAddressesOf } from "./app-config.ts";
 import type { Env } from "./control-plane.ts";
 import type { User } from "./directory.ts";
-import { oauthAddresses, oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
+import { oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
 
 /** Verified Google login and explicitly enabled test/administrator login call this tail.
  * Its grant is the issuer's sole browser identity: ordinary storage, public token
@@ -18,21 +18,21 @@ export async function startIssuerSession(
   /** what the identity provider said about the person (Google's profile); an email sign-in has none */
   profile: { picture?: string; name?: string } = {},
 ) {
-  const platformOrigin = platformOriginOf(appConfigOf(env), request);
-  const { issuer, api } = oauthAddresses(env, platformOrigin);
+  const addresses = platformAddressesOf(env, request);
+  const { platformOrigin, api } = addresses;
   // The issuer's own session holds every scope: it is the person at the issuer, and the consent
   // page creates organizations and projects through it.
   const flow = await startAppSession(
     env.BROWSER_SESSION,
     {
-      origin: issuer,
-      issuer,
+      origin: platformOrigin,
+      issuer: platformOrigin,
       resource: api,
       scopes: ["iterate", "account", "organizations:write"],
     },
-    sameOriginPath(next, issuer),
+    sameOriginPath(next, platformOrigin),
   );
-  const helpers = oauthHelpers(env, platformOrigin);
+  const helpers = oauthHelpers(env, addresses);
   const authorization = await parseAuthorization(env, new Request(flow.location));
   const approved = await helpers.completeAuthorization({
     request: authorization,

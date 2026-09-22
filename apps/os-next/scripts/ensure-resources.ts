@@ -2,8 +2,9 @@ import { createCli } from "trpc-cli";
 import { osNextEnvs } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { ensureD1, ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
+import { registrableDomainOf } from "../../../scripts/lib/start-app.ts";
 import { reconcileResources } from "../../../scripts/lib/wrangler-config.ts";
-import { ownZonesOf, registrableDomainOf } from "./generate-wrangler-config.ts";
+import { ownZonesOf } from "./generate-wrangler-config.ts";
 
 export default async function ensureResources(options: { env?: string } = {}) {
   const ctx = await resolveEnvContext({
