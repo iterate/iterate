@@ -1,7 +1,13 @@
 import type { IterateContextApi } from "iterate/next/api";
 
 /** Install the app into a project root. Its code and catalog remain project-owned userspace. */
-export async function installAgents(itx: Pick<IterateContextApi, "whoami" | "kv" | "processors" | "append">, source: string) {
+export async function installAgents(
+  itx: Pick<IterateContextApi, "whoami" | "append" | "invoke"> & {
+    kv: Pick<IterateContextApi["kv"], "put">;
+    processors: Pick<IterateContextApi["processors"], "enable">;
+  },
+  source: string,
+) {
   const { path } = await itx.whoami();
   if (path !== "/") throw new Error("Install agents at the project root");
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(source));
@@ -29,4 +35,5 @@ export async function installAgents(itx: Pick<IterateContextApi, "whoami" | "kv"
         "The project's installed agents app: list(), create(path), get(path).message(text), delete(path)",
     },
   });
+  await itx.invoke(["itx", "agents", ["upgrade"]]);
 }

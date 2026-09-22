@@ -1,4 +1,3 @@
-import { openAgentItx } from "./support.ts";
 // e2e/agents.e2e.test.ts — AN AGENT IS A DOMAIN OBJECT (src/agent/): a conversation on the context at
 // any path, driven by a model that acts by writing scripts against that context's `itx`.
 // `itx.agents.create(path)` births it — the processor row, `agent/create-requested`, then the saga
@@ -13,12 +12,12 @@ import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import {
   freshCtx,
-  openItx,
   processorNames,
   readAll,
   sleep,
   until,
 } from "../../os-next/e2e/support/client.ts";
+import { openAgentItx } from "./support.ts";
 import {
   RED_PNG_BASE64,
   ScriptedAi,

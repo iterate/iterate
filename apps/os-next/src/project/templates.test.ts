@@ -43,7 +43,7 @@ async function create(fixture: ReturnType<typeof project>, template?: string) {
       creation: {
         status: "requested",
         offset: 1,
-        ...(template && { configRepoTemplate: template }),
+        configRepoTemplate: template,
       },
     },
     delivery: { caughtUp: true },

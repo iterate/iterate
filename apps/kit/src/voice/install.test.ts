@@ -9,8 +9,8 @@ const bundle = {
   cacheKey: `voice-worker:${"a".repeat(64)}`,
 };
 const project = () => ({
-  whoami: vi.fn().mockResolvedValue({path: "/"}),
-  processors: {enable: vi.fn().mockResolvedValue(undefined), disable: vi.fn(), list: vi.fn()},
+  whoami: vi.fn().mockResolvedValue({ path: "/" }),
+  processors: { enable: vi.fn().mockResolvedValue(undefined), disable: vi.fn(), list: vi.fn() },
   secrets: {
     list: vi.fn().mockResolvedValue([{ path: "/secrets/openai" }]),
     set: vi.fn(),
@@ -34,7 +34,10 @@ test("a failed upload never publishes a broken voice service and retry completes
   expect(root.append).not.toHaveBeenCalled();
   expect(await ensureVoiceAgent(root, async () => bundle)).toBe("ready");
   expect(root.append).toHaveBeenCalledTimes(2);
-  expect(root.processors.enable).toHaveBeenCalledWith("agents", expect.objectContaining({className: "AgentCollectionDurableObject"}));
+  expect(root.processors.enable).toHaveBeenCalledWith(
+    "agents",
+    expect.objectContaining({ className: "AgentCollectionDurableObject" }),
+  );
 });
 
 test("a broken existing voice service is reported without replacing it", async () => {

@@ -50,7 +50,7 @@ export async function downloadPublicGithubTemplate(
 ): Promise<Array<{ content: string; path: string }>> {
   const repository = `${encodeURIComponent(reference.owner)}/${encodeURIComponent(reference.repo)}`;
   const endpoint = `https://github.com/${repository}.git/git-upload-pack`;
-  const requestedRef = reference.ref ?? "HEAD";
+  const requestedRef = reference.ref || "HEAD";
   const commitOid = SHA_PATTERN.test(requestedRef)
     ? requestedRef
     : await resolveGithubRef(githubFetch, endpoint, requestedRef);
@@ -79,7 +79,7 @@ export async function downloadPublicGithubTemplate(
   const pending = [{ path: "", tree: selectedTree }];
   while (pending.length > 0) {
     const current = pending.pop();
-    if (current === undefined) break;
+    if (!current) break;
     for (const entry of parseTree(current.tree.payload)) {
       const path = current.path === "" ? entry.name : `${current.path}/${entry.name}`;
       if (entry.mode === "40000") {
@@ -141,7 +141,7 @@ async function resolveGithubRef(
   const refs = parseLsRefs(body);
   const match = prefixes.map((prefix) => refs.find((entry) => entry.name === prefix)).find(Boolean);
   if (!match) throw new Error(`GitHub ref ${JSON.stringify(requestedRef)} was not found.`);
-  return match.peeledOid ?? match.oid;
+  return match.peeledOid || match.oid;
 }
 
 function requireTree(objectsByOid: Map<string, RawGitObject>, oid: string): RawGitObject {
@@ -200,7 +200,7 @@ async function fetchGithub(
     }
     throw new Error(message);
   }
-  if (response.body === null) return new Uint8Array();
+  if (!response.body) return new Uint8Array();
 
   const chunks: Uint8Array[] = [];
   let totalBytes = 0;

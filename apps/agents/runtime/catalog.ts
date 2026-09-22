@@ -71,6 +71,9 @@ export class AgentCollectionDurableObject extends StreamProcessorDurableObject<A
     );
   }
   #collection = this.at("/");
+  upgrade() {
+    return this.#collection.upgrade();
+  }
   list() {
     return this.#collection.list();
   }

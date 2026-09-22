@@ -4,7 +4,6 @@ import {
   formatConfigRepoTemplateReference,
 } from "@iterate-com/shared/config-repo-template/reference";
 import { pinPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
-import { templates } from "./generated/config-templates.js";
 // Public /api starts with a session: the OAuth gate's, resolved on the upgrade, or one a bare
 // socket authenticates IN-BAND — a bearer token, or the operator's admin secret. Sessions vend
 // project contexts and own their teardown.
@@ -15,6 +14,7 @@ import type { IterateApi } from "iterate/next/api";
 import { codedError } from "iterate/next/lib";
 import { verifyAdminSecret, type Caller, type Principal } from "iterate/next/principal";
 import type { StreamEventInput } from "iterate/next/stream/processor";
+import { templates } from "./generated/config-templates.js";
 import type { ConsentRpcTarget } from "./consent.ts";
 import type { GrantsRpcTarget } from "./grants.ts";
 import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
@@ -559,7 +559,7 @@ class ProjectCollectionRpcTarget extends RpcTarget {
           payload: {
             slug: project.slug,
             orgId: project.orgId,
-            ...(configRepoTemplate && { configRepoTemplate }),
+            configRepoTemplate,
           },
         },
       ],

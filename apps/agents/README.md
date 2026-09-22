@@ -7,7 +7,7 @@ and storage; this app owns the agent catalog, lifecycle, model loop, sandbox set
 - `src/` — the web app: chat, attachments, live state, events and traces.
 - `runtime/` — the collection and agent processors, loaded through the public `iterate/next/sdk`.
 - `voice/` — the voice relay, delegate, screen renderer and their tests.
-- `scripts/` — runtime bundling and voice installation/call/device tools.
+- `scripts/` — runtime bundling and voice call/device tools.
 - `e2e/` and `__workers-tests__/` — integration tests using os-next's generic worker harness.
 
 Choose **With agents** when creating a project, or open this app on a minimal project and click
@@ -20,9 +20,8 @@ narrowing the sandbox's rewrite rules. Keep explicit grants for `run` and `rewri
 masking its parent: the userspace runtime uses those capabilities for execution and introspection.
 
 `pnpm runtime:build` rebuilds the committed runtime in `configs-next/with-agents/agents.js`.
-After changing runtime code, rebuild before testing the template or web installer. Existing normal
-agents can be rebound to an installed runtime by calling `create(path)` again; their grants and
-history are retained. Existing projects are not silently migrated by a platform deployment.
+After changing runtime code, rebuild before testing the template or web installer. Installation also rebinds existing normal agents to the current runtime; their grants and
+history are retained. Reinstalling is safe. Existing projects are not silently migrated by a platform deployment.
 
 `pnpm test` runs app unit tests. From the repository root, integration tests run with:
 

@@ -1,6 +1,6 @@
 import type { IterateContextApi } from "iterate/next/api";
-import { installAgents } from "../../../agents/runtime/install.ts";
 import { z } from "zod";
+import { installAgents } from "../../../agents/runtime/install.ts";
 
 const VoiceFileKey = z.string().regex(/^kit\/voice\/[a-f0-9]{64}\/[a-z-]+\.(js|css)$/);
 export const VoiceInstall = z.object({
@@ -14,10 +14,9 @@ const VoiceHealth = z.object({ ok: z.literal(true) });
 /** No device grant is minted until this succeeds. Partial uploads are safe to retry:
  * content-addressed files are written first, then one durable rule publishes the service. */
 export async function ensureVoiceAgent(
-  project: Pick<IterateContextApi, "append" | "invoke" | "whoami" | "processors"> & {
+  project: Parameters<typeof installAgents>[0] & {
     secrets: Pick<IterateContextApi["secrets"], "list" | "set">;
     rewriteRules: Pick<IterateContextApi["rewriteRules"], "get">;
-    kv: IterateContextApi["kv"];
   },
   loadInstall: () => Promise<z.infer<typeof VoiceInstall>>,
   openaiKey?: string,

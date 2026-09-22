@@ -1,11 +1,11 @@
-import { openAgentItx } from "./support.ts";
 // e2e/agents-deployed.e2e.test.ts — the deployed-only agent rows: ONE real turn through Workers AI and the
 // default model seeing an attached image. In a file of their own so their model round trips run beside
 // the scripted stories instead of after them.
 import { expect } from "vitest";
-import { collector, freshCtx, openItx, readAll, until } from "../../os-next/e2e/support/client.ts";
-import { RED_PNG_BASE64, assistantWords, onWorkersAi } from "./fixtures.ts";
+import { collector, freshCtx, readAll, until } from "../../os-next/e2e/support/client.ts";
 import { deployedOnly } from "../../os-next/e2e/support/project-host.ts";
+import { RED_PNG_BASE64, assistantWords, onWorkersAi } from "./fixtures.ts";
+import { openAgentItx } from "./support.ts";
 
 deployedOnly(
   "DEPLOYED: one real turn through the default model, OpenAI's astra streamed from the Responses API on Cloudflare's billing — chunk windows fly, the settlement carries the usage",

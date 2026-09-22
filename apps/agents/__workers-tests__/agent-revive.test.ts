@@ -1,5 +1,3 @@
-import agentRuntime from "../../../configs-next/with-agents/agents.js?raw";
-import { installAgents } from "../runtime/install.ts";
 // __workers-tests__/agent-revive.test.ts — THE GUARANTEE: an agent's open LLM request survives the
 // death of its context. The model call runs in the facet's BACKGROUND (rule 3, packages/iterate
 // stream/processor.ts: never awaited by a batch), so no batch, cursor or push remembers it; what does
@@ -13,6 +11,8 @@ import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "c
 import { RpcTarget } from "capnweb";
 import { beforeAll, expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/next/stream/processor";
+import { installAgents } from "../runtime/install.ts";
+import agentRuntime from "../../../configs-next/with-agents/agents.js?raw";
 import {
   adminCredentials,
   applyDirectorySchema,

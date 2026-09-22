@@ -1,8 +1,8 @@
-import { openAgentItx } from "./support.ts";
 // e2e/agents-streamed.e2e.test.ts — the streamed answer, in a file of its own: it waits out whole chunk
 // windows (one of the suite's longest rows) and runs beside the other agent stories.
 import { expect, test } from "vitest";
-import { collector, freshCtx, openItx, readAll, until } from "../../os-next/e2e/support/client.ts";
+import { collector, freshCtx, readAll, until } from "../../os-next/e2e/support/client.ts";
+import { openAgentItx } from "./support.ts";
 import { ScriptedAi, onWorkersAi } from "./fixtures.ts";
 
 test("streamed: the answer reaches a live subscriber as ephemeral chunk windows before it settles — never a stored row", async () => {

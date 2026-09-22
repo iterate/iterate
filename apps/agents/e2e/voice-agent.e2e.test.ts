@@ -1,13 +1,13 @@
-import { buildAgentRuntime } from "../scripts/build-runtime.ts";
 // The shipped voice bundles, loaded exactly as the installer loads them. Only the provider URL
 // is replaced: a real deployed WebSocket fixture speaks the small GPT-Live audio protocol below.
 // This pins loaded-code admission, agent birth, inherited KV/egress, secret substitution,
 // delegated scripts and audio in both directions. It does not test the model, microphones or speakers.
 import { build } from "esbuild";
 import { expect } from "vitest";
+import { buildAgentRuntime } from "../scripts/build-runtime.ts";
 import { createVoiceInstall } from "../../kit/scripts/build-voice-install.ts";
 import { ensureVoiceAgent } from "../../kit/src/voice/install.ts";
-import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../src/agent/system-prompt.ts";
+import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../runtime/system-prompt.ts";
 import { openItx, readAll, runId, until } from "../../os-next/e2e/support/client.ts";
 import { oauthSession } from "../../os-next/e2e/support/principal.ts";
 import {

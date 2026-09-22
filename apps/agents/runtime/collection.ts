@@ -3,9 +3,9 @@ import { RpcTarget } from "cloudflare:workers";
 import type { WithItx } from "iterate/next/sdk";
 import type { StreamEvent } from "iterate/next/stream/processor";
 import type { ItxScope as ItxEntrypointScope } from "iterate/next/sdk";
-import type { AgentCatalogState } from "./catalog.ts";
 import { resolveContextPath } from "iterate/next/lib";
 import type { FacetSpec } from "iterate/next/api";
+import type { AgentCatalogState } from "./catalog.ts";
 import type { AgentState } from "./contract.ts";
 
 export class AgentCollectionRpcTarget extends RpcTarget {
@@ -22,6 +22,20 @@ export class AgentCollectionRpcTarget extends RpcTarget {
     return this.withItx((itx) =>
       itx.invoke(["itx", "facets", ["get", "agents"], ["announce", input]]),
     );
+  }
+
+  /** Rebind existing normal agents when this app is installed or updated. Voice processors
+   * keep their own code; grants, sandbox rules and conversation history are untouched. */
+  async upgrade(): Promise<void> {
+    const spec = await this.spec();
+    for (const { path } of await this.list()) {
+      await this.withItx(async (itx) => {
+        const context = itx.cd(path);
+        const rows = await context.processors.list();
+        if (rows.some((row) => row.name === "agent"))
+          await context.processors.enable("agent", spec);
+      });
+    }
   }
 
   get(path: string): AgentReference {

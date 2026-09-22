@@ -472,8 +472,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
    *  stamp, never a client's (src/principal.ts): the session's verified principal, or none. */
   const append = (...events: StreamEventInput[]) => {
     const caller = deps.caller();
-    // LOADED CODE's rows are walled on their targets (itx-expression-rewriting.ts): the same wall its
-    // A loaded parent may delegate its scope to descendants; child code keeps its own ceiling.
+    // Loaded code can delegate its scope to descendants through durable rows; child code
+    // keeps its own ceiling. The append boundary validates the rest of each control event.
     if (caller.app) for (const event of events) admitLoadedCodeRow(event, caller.path || path);
     return ownContext().append(...events.map((event) => stampCaller(event, caller)));
   };

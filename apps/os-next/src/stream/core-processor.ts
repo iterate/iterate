@@ -1,5 +1,4 @@
 import { RunRequested, RunSettled } from "iterate/next/stream/run";
-export { RunRequested, RunSettled, type RunSettlement } from "iterate/next/stream/run";
 // core-processor.ts — THE CORE REDUCE: the one processor the context DO reduces INLINE at its commit
 // point. Its reduced state is everything the DO needs SYNCHRONOUSLY at its doors, event-sourced from
 // the context's own control events and nothing else:
@@ -61,6 +60,8 @@ import {
   reduceScheduledAppends,
   type ScheduledAppend,
 } from "./scheduled-appends.ts";
+
+export { RunRequested, RunSettled, type RunSettlement } from "iterate/next/stream/run";
 
 /** A hosting spec, read off a RESOLVED target. */
 type HostingFacetSpec = {

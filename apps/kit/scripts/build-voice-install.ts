@@ -19,9 +19,7 @@ export async function buildVoiceInstall() {
   const bundles = await Promise.all(
     ["voice-agent.ts", "voice-delegate.ts", "worker.ts"].map(async (file) => {
       const result = await build({
-        entryPoints: [
-          new URL(`../../agents/voice/${file}`, import.meta.url).pathname,
-        ],
+        entryPoints: [new URL(`../../agents/voice/${file}`, import.meta.url).pathname],
         bundle: true,
         write: false,
         format: "esm",
@@ -77,7 +75,12 @@ export function createVoiceInstall(sources: {
     files[worker.key]!.includes('"voice-delegate:dev"')
   )
     throw new Error("Voice cache keys were not substituted");
-  return { agentsRuntime: sources.agentsRuntime, files, workerKey: worker.key, cacheKey: `voice-worker:${worker.hash}` };
+  return {
+    agentsRuntime: sources.agentsRuntime,
+    files,
+    workerKey: worker.key,
+    cacheKey: `voice-worker:${worker.hash}`,
+  };
 }
 
 export async function writeVoiceInstall() {

@@ -1,5 +1,5 @@
-import { build } from "esbuild";
 import { readFile, writeFile } from "node:fs/promises";
+import { build } from "esbuild";
 
 /** The committed template asset is rebuilt from this app's runtime. The platform's SDK is injected. */
 export async function buildAgentRuntime(): Promise<string> {

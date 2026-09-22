@@ -4,7 +4,9 @@ import { StreamProcessorDurableObject } from "./processor.js";
 
 // runtime/processor.ts
 import { z as z2 } from "./processor.js";
-import { StreamProcessor } from "./processor.js";
+import {
+  StreamProcessor
+} from "./processor.js";
 
 // runtime/contract.ts
 import { z } from "./processor.js";
@@ -13,29 +15,28 @@ import { RunContract } from "./processor.js";
 var Actor = z.discriminatedUnion("type", [
   z.object({ type: z.literal("user") }),
   z.object({ type: z.literal("script"), requestOffset: z.number().int().positive() }),
-  z.object({ type: z.literal("agent") }),
+  z.object({ type: z.literal("agent") })
 ]);
 var Role = z.enum(["system", "developer", "user", "assistant"]);
 var FileAttachment = z.object({
   contentType: z.string().min(1),
   filename: z.string().min(1),
   path: z.string().min(1),
-  size: z.number().int().nonnegative(),
+  size: z.number().int().nonnegative()
 });
 var TriggerSource = z.enum(["external", "agent-loop"]);
 var LlmUsage = z.object({
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
   cachedInputTokens: z.number().int().nonnegative().optional(),
-  reasoningOutputTokens: z.number().int().nonnegative().optional(),
+  reasoningOutputTokens: z.number().int().nonnegative().optional()
 });
 var AgentContract = defineProcessorContract({
   slug: "agent",
   // 2: the script obligation moved to the context (core state `runs`); the state lost its slot.
   // 3: `path` became `creation` (the saga's offset); `agents/…` events became `agent/…`.
   version: "5",
-  description:
-    "An agent: a conversation on its own context, driven by a model that acts by writing scripts against itx.",
+  description: "An agent: a conversation on its own context, driven by a model that acts by writing scripts against itx.",
   /** THE REDUCED STATE — what the reduce keeps between events: where creation stands (as the OFFSET
    *  of the event that says so — the request, the certificate, or the failure; read that event for
    *  the error), where deletion stands the same way (the request, or the certificate — set, the loop
@@ -45,137 +46,104 @@ var AgentContract = defineProcessorContract({
    *  `snapshot()` and `liveSnapshot()` answer, the guard `message()` reads before it speaks, and
    *  what the agents app renders as the live status beside the log. */
   stateSchema: z.object({
-    creation: z
-      .object({
-        status: z.enum(["requested", "created", "failed"]),
-        offset: z.number().int().positive(),
-        /** The context that asked (`create-requested.creator`): the saga writes the parent link to it. */
-        creator: z.string().optional(),
-      })
-      .nullable()
-      .default(null),
+    creation: z.object({
+      status: z.enum(["requested", "created", "failed"]),
+      offset: z.number().int().positive(),
+      /** The context that asked (`create-requested.creator`): the saga writes the parent link to it. */
+      creator: z.string().optional()
+    }).nullable().default(null),
     /** Where deletion stands, as the offset of the event that says so; null while the agent lives. */
-    deletion: z
-      .object({
-        status: z.enum(["requested", "deleted"]),
-        offset: z.number().int().positive(),
-      })
-      .nullable()
-      .default(null),
+    deletion: z.object({
+      status: z.enum(["requested", "deleted"]),
+      offset: z.number().int().positive()
+    }).nullable().default(null),
     /** The knobs `agent/configured` patches; every one defaulted, so `{}` is a whole config. */
-    config: z
-      .object({
-        llm: z.object({ model: z.string().min(1).default("gpt-6-astra") }).prefault({}),
-        /** Consecutive self-triggered turns (script results, corrections) before the loop pauses. */
-        maxAutonomousTurns: z.number().int().positive().default(20),
-        /** How long a recorded request stays runnable; past it, settled as expired. */
-        llmRequestExpiryMs: z
-          .number()
-          .int()
-          .positive()
-          .default(10 * 6e4),
-        /** apps/os's window: a request waits this long after its trigger for more content — a second
-         *  message inside the window moves the trigger and ONE request answers both. */
-        llmRequestDebounceMs: z.number().int().nonnegative().default(250),
-        /** THE PLAIN-RESPONSE HANDLER: an itx expression (a callable, dotted) invoked with a response
-         *  that carries no `<codemode>` block — the whole point being that the agent only ever writes
-         *  code, and a bare-prose reply is sugar for `<codemode>await <this>(<the prose>)</codemode>`.
-         *  The default sends the text to web chat; a Slack-connected agent points it at its Slack
-         *  reply instead. Blank drops a bare reply (an agent that only acts). */
-        /** Consecutive model failures before the loop pauses; between attempts, apps/os's backoff —
-         *  `backoffBaseMs · 2^(failures−1)`, capped at `backoffMaxMs` — folded into the debounce window. */
-        llmRequestRetryPolicy: z
-          .object({
-            maxAttempts: z.number().int().positive().default(3),
-            backoffBaseMs: z.number().int().nonnegative().default(1e4),
-            backoffMaxMs: z.number().int().nonnegative().default(6e4),
-          })
-          .prefault({}),
-      })
-      .prefault({}),
+    config: z.object({
+      llm: z.object({ model: z.string().min(1).default("gpt-6-astra") }).prefault({}),
+      /** Consecutive self-triggered turns (script results, corrections) before the loop pauses. */
+      maxAutonomousTurns: z.number().int().positive().default(20),
+      /** How long a recorded request stays runnable; past it, settled as expired. */
+      llmRequestExpiryMs: z.number().int().positive().default(10 * 6e4),
+      /** apps/os's window: a request waits this long after its trigger for more content — a second
+       *  message inside the window moves the trigger and ONE request answers both. */
+      llmRequestDebounceMs: z.number().int().nonnegative().default(250),
+      /** THE PLAIN-RESPONSE HANDLER: an itx expression (a callable, dotted) invoked with a response
+       *  that carries no `<codemode>` block — the whole point being that the agent only ever writes
+       *  code, and a bare-prose reply is sugar for `<codemode>await <this>(<the prose>)</codemode>`.
+       *  The default sends the text to web chat; a Slack-connected agent points it at its Slack
+       *  reply instead. Blank drops a bare reply (an agent that only acts). */
+      /** Consecutive model failures before the loop pauses; between attempts, apps/os's backoff —
+       *  `backoffBaseMs · 2^(failures−1)`, capped at `backoffMaxMs` — folded into the debounce window. */
+      llmRequestRetryPolicy: z.object({
+        maxAttempts: z.number().int().positive().default(3),
+        backoffBaseMs: z.number().int().nonnegative().default(1e4),
+        backoffMaxMs: z.number().int().nonnegative().default(6e4)
+      }).prefault({})
+    }).prefault({}),
     /** Every model-visible item, in offset order — the conversation the next request is built from. */
-    contextItems: z
-      .array(
-        z.object({
-          offset: z.number().int().positive(),
-          role: Role,
-          content: z.string(),
-          actor: Actor.optional(),
-          llmRequestOffset: z.number().int().positive().optional(),
-          files: z.array(FileAttachment).optional(),
-        }),
-      )
-      .default([]),
-    /** The ONE trigger the next request answers; null once a request has been recorded for it. */
-    pendingLlmRequestTrigger: z
-      .object({ offset: z.number().int().positive(), atMs: z.number(), source: TriggerSource })
-      .nullable()
-      .default(null),
-    /** The one recorded request not yet settled: the loop's obligation, whichever incarnation runs it. */
-    openRequest: z
-      .object({
-        requestedAtOffset: z.number().int().positive(),
-        expiresAt: z.number(),
-        model: z.string(),
-        triggerSource: TriggerSource,
+    contextItems: z.array(
+      z.object({
+        offset: z.number().int().positive(),
+        role: Role,
+        content: z.string(),
+        actor: Actor.optional(),
+        llmRequestOffset: z.number().int().positive().optional(),
+        files: z.array(FileAttachment).optional()
       })
-      .nullable()
-      .default(null),
+    ).default([]),
+    /** The ONE trigger the next request answers; null once a request has been recorded for it. */
+    pendingLlmRequestTrigger: z.object({ offset: z.number().int().positive(), atMs: z.number(), source: TriggerSource }).nullable().default(null),
+    /** The one recorded request not yet settled: the loop's obligation, whichever incarnation runs it. */
+    openRequest: z.object({
+      requestedAtOffset: z.number().int().positive(),
+      expiresAt: z.number(),
+      model: z.string(),
+      triggerSource: TriggerSource
+    }).nullable().default(null),
     consecutiveLlmFailures: z.number().int().nonnegative().default(0),
     autonomousTurnCount: z.number().int().nonnegative().default(0),
     /** Set by `agent/paused` (the breakers, or an operator); cleared by `agent/resumed`. */
-    paused: z
-      .object({ reason: z.string(), atOffset: z.number().int().positive() })
-      .nullable()
-      .default(null),
+    paused: z.object({ reason: z.string(), atOffset: z.number().int().positive() }).nullable().default(null)
   }),
   events: {
     "events.iterate.com/agent/create-requested": {
-      description:
-        "Someone asked for this agent (`itx.agents.create(path)`). The context it lands on IS the agent; `creator` is the context that asked \u2014 the saga writes the child's parent link `itx \u21D2 itx.builtins.cd(creator)` before the certificate, so the link is part of the birth and nothing re-points a born context. The processor lands created (with the default system prompt beside it) or create-failed; a request after a failure is a new attempt, one after the certificate a harmless fact.",
-      payloadSchema: z.object({ creator: z.string().optional() }),
+      description: "Someone asked for this agent (`itx.agents.create(path)`). The context it lands on IS the agent; `creator` is the context that asked \u2014 the saga writes the child's parent link `itx \u21D2 itx.builtins.cd(creator)` before the certificate, so the link is part of the birth and nothing re-points a born context. The processor lands created (with the default system prompt beside it) or create-failed; a request after a failure is a new attempt, one after the certificate a harmless fact.",
+      payloadSchema: z.object({ creator: z.string().optional() })
     },
     "events.iterate.com/agent/created": {
-      description:
-        "The birth certificate: on the agent's path, and cross-posted to / for the project catalog \u2014 hence it names the path.",
-      payloadSchema: z.object({ path: z.string().min(1) }),
+      description: "The birth certificate: on the agent's path, and cross-posted to / for the project catalog \u2014 hence it names the path.",
+      payloadSchema: z.object({ path: z.string().min(1) })
     },
     "events.iterate.com/agent/create-failed": {
       description: "What the birth reported. Terminal until a new request.",
-      payloadSchema: z.object({ error: z.string() }),
+      payloadSchema: z.object({ error: z.string() })
     },
     "events.iterate.com/agent/delete-requested": {
-      description:
-        "Someone asked for this agent to go (`itx.agents.delete(path)`). No payload: the context it lands on IS the agent. Nothing to tear down \u2014 the processor lands deleted, and the loop runs no more turns from here on; a request after the certificate is a harmless fact.",
-      payloadSchema: z.object({}),
+      description: "Someone asked for this agent to go (`itx.agents.delete(path)`). No payload: the context it lands on IS the agent. Nothing to tear down \u2014 the processor lands deleted, and the loop runs no more turns from here on; a request after the certificate is a harmless fact.",
+      payloadSchema: z.object({})
     },
     "events.iterate.com/agent/deleted": {
-      description:
-        "The death certificate: on the agent's path, and cross-posted to / for the project catalog, which drops the entry \u2014 hence it names the path. Terminal: a deleted agent is not re-creatable.",
-      payloadSchema: z.object({ path: z.string().min(1) }),
+      description: "The death certificate: on the agent's path, and cross-posted to / for the project catalog, which drops the entry \u2014 hence it names the path. Terminal: a deleted agent is not re-creatable.",
+      payloadSchema: z.object({ path: z.string().min(1) })
     },
     "events.iterate.com/agent/configured": {
-      description:
-        "Merges a partial configuration into the agent's config; omitted keys keep their values.",
+      description: "Merges a partial configuration into the agent's config; omitted keys keep their values.",
       payloadSchema: z.object({
         config: z.object({
           llm: z.object({ model: z.string().min(1).optional() }).optional(),
           maxAutonomousTurns: z.number().int().positive().optional(),
           llmRequestExpiryMs: z.number().int().positive().optional(),
           llmRequestDebounceMs: z.number().int().nonnegative().optional(),
-          llmRequestRetryPolicy: z
-            .object({
-              maxAttempts: z.number().int().positive().optional(),
-              backoffBaseMs: z.number().int().nonnegative().optional(),
-              backoffMaxMs: z.number().int().nonnegative().optional(),
-            })
-            .optional(),
-        }),
-      }),
+          llmRequestRetryPolicy: z.object({
+            maxAttempts: z.number().int().positive().optional(),
+            backoffBaseMs: z.number().int().nonnegative().optional(),
+            backoffMaxMs: z.number().int().nonnegative().optional()
+          }).optional()
+        })
+      })
     },
     "events.iterate.com/agent/context-added": {
-      description:
-        "Words into the model's context \u2014 the everyday event. A user or developer item raises the pending trigger unless its policy says not to; the assistant's own output carries llmRequestOffset.",
+      description: "Words into the model's context \u2014 the everyday event. A user or developer item raises the pending trigger unless its policy says not to; the assistant's own output carries llmRequestOffset.",
       payloadSchema: z.object({
         role: Role,
         content: z.string(),
@@ -185,54 +153,47 @@ var AgentContract = defineProcessorContract({
         /** apps/os's policies: `dont-trigger-request` (words that raise no turn), `after-current-request`
          *  (the default: the next turn), `interrupt-current-request` (cut the running answer short —
          *  the request settles cancelled with what streamed so far, and these words start the next). */
-        llmRequestPolicy: z
-          .object({
-            behaviour: z.enum([
-              "dont-trigger-request",
-              "after-current-request",
-              "interrupt-current-request",
-            ]),
-          })
-          .optional(),
-        llmRequestOffset: z.number().int().positive().optional(),
-      }),
+        llmRequestPolicy: z.object({
+          behaviour: z.enum([
+            "dont-trigger-request",
+            "after-current-request",
+            "interrupt-current-request"
+          ])
+        }).optional(),
+        llmRequestOffset: z.number().int().positive().optional()
+      })
     },
     "events.iterate.com/agent/web-message-sent": {
-      description:
-        "THE assistant-message fact: the markdown outside the tag, what a person is shown; llmRequestOffset names the answer it came from.",
+      description: "THE assistant-message fact: the markdown outside the tag, what a person is shown; llmRequestOffset names the answer it came from.",
       payloadSchema: z.object({
         message: z.string().min(1),
-        llmRequestOffset: z.number().int().positive().optional(),
-      }),
+        llmRequestOffset: z.number().int().positive().optional()
+      })
     },
     "events.iterate.com/agent/summary-updated": {
-      description:
-        "The tag's status attribute as the live activity label \u2014 apps/os's summary vocabulary, the one field this loop speaks.",
-      payloadSchema: z.object({ activity: z.string().min(1) }),
+      description: "The tag's status attribute as the live activity label \u2014 apps/os's summary vocabulary, the one field this loop speaks.",
+      payloadSchema: z.object({ activity: z.string().min(1) })
     },
     "events.iterate.com/agent/llm-request-requested": {
-      description:
-        "The loop recorded its intent to run the model for ONE trigger (the offset it names); the event's offset is the request's identity. An intent whose trigger has moved on is a harmless fact.",
+      description: "The loop recorded its intent to run the model for ONE trigger (the offset it names); the event's offset is the request's identity. An intent whose trigger has moved on is a harmless fact.",
       payloadSchema: z.object({
         model: z.string().min(1),
         expiresAt: z.number(),
-        triggerOffset: z.number().int().positive(),
-      }),
+        triggerOffset: z.number().int().positive()
+      })
     },
     "events.iterate.com/agent/llm-response-chunks": {
-      description:
-        "EPHEMERAL, never stored: one coalescing window of the provider's streamed events for the request it names \u2014 what a feed renders as the answer being written. The settled event carries the durable text.",
+      description: "EPHEMERAL, never stored: one coalescing window of the provider's streamed events for the request it names \u2014 what a feed renders as the answer being written. The settled event carries the durable text.",
       ephemeral: true,
       payloadSchema: z.object({
         llmRequestOffset: z.number().int().positive(),
         chunks: z.array(z.unknown()).min(1),
         /** The window's ordinal within the response — a redelivered window is told from a new one. */
-        sequence: z.number().int().nonnegative(),
-      }),
+        sequence: z.number().int().nonnegative()
+      })
     },
     "events.iterate.com/agent/llm-request-settled": {
-      description:
-        "The request's terminal fact: the model's text (and what it cost), its failure, its expiry, or the person's interruption \u2014 the two last with whatever streamed before.",
+      description: "The request's terminal fact: the model's text (and what it cost), its failure, its expiry, or the person's interruption \u2014 the two last with whatever streamed before.",
       payloadSchema: z.object({
         requestOffset: z.number().int().positive(),
         durationMs: z.number().nonnegative().optional(),
@@ -240,43 +201,41 @@ var AgentContract = defineProcessorContract({
           z.object({
             status: z.literal("succeeded"),
             text: z.string(),
-            usage: LlmUsage.optional(),
+            usage: LlmUsage.optional()
           }),
           z.object({
             status: z.literal("failed"),
             errorMessage: z.string(),
-            partialText: z.string().optional(),
+            partialText: z.string().optional()
           }),
           z.object({
             status: z.literal("cancelled"),
             reason: z.enum(["expired", "interrupted-by-user-input"]),
-            partialText: z.string().optional(),
-          }),
-        ]),
-      }),
+            partialText: z.string().optional()
+          })
+        ])
+      })
     },
     "events.iterate.com/agent/token-usage-reported": {
-      description:
-        "What the last successful request cost against the model's context window (apps/os's vocabulary; a feed shows the context's fullness).",
+      description: "What the last successful request cost against the model's context window (apps/os's vocabulary; a feed shows the context's fullness).",
       payloadSchema: z.object({
         model: z.string().min(1),
         maxContextTokens: z.number().int().positive(),
         inputTokens: z.number().int().nonnegative(),
-        outputTokens: z.number().int().nonnegative(),
-      }),
+        outputTokens: z.number().int().nonnegative()
+      })
     },
     "events.iterate.com/agent/paused": {
-      description:
-        "New turns stay parked until agent/resumed: a breaker tripped, or an operator paused.",
+      description: "New turns stay parked until agent/resumed: a breaker tripped, or an operator paused.",
       payloadSchema: z.object({
         reason: z.string(),
-        triggerOffset: z.number().int().positive().optional(),
-      }),
+        triggerOffset: z.number().int().positive().optional()
+      })
     },
     "events.iterate.com/agent/resumed": {
       description: "Turns run again; the breakers' counts start over.",
-      payloadSchema: z.object({ reason: z.string().optional() }),
-    },
+      payloadSchema: z.object({ reason: z.string().optional() })
+    }
   },
   // The script events are the CONTEXT's (`context/run-requested` / `run-settled`): the agent asks,
   // the context runs, the agent reads the settlement as the next developer item.
@@ -293,7 +252,7 @@ var AgentContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-settled",
     "events.iterate.com/agent/paused",
     "events.iterate.com/agent/resumed",
-    "events.iterate.com/context/run-settled",
+    "events.iterate.com/context/run-settled"
   ],
   emits: [
     "events.iterate.com/agent/created",
@@ -308,8 +267,8 @@ var AgentContract = defineProcessorContract({
     "events.iterate.com/agent/token-usage-reported",
     "events.iterate.com/agent/paused",
     "events.iterate.com/agent/resumed",
-    "events.iterate.com/context/run-requested",
-  ],
+    "events.iterate.com/context/run-requested"
+  ]
 });
 
 // runtime/codemode-format.ts
@@ -317,17 +276,16 @@ var OPEN_LINE_RE = /^[ \t]*<codemode(\s[^>]*)?>[ \t]*$/;
 var CLOSE_LINE_RE = /^[ \t]*<\/codemode>[ \t]*$/;
 var STATUS_ATTR_RE = /\bstatus="([^"]*)"/;
 var ASYNC_FUNCTION_BODY_RE = /^(?:async\s*(?:function|\()|\(?async\s*\()/;
-var GRAMMAR_REMINDER =
-  'Format reminder \u2014 `<codemode status="...">` on its own line, TypeScript statements (top-level `await`/`return` allowed), then `</codemode>` on its own line. Markdown outside the tag is sent to the user; the status attribute is shown while the code runs.';
+var GRAMMAR_REMINDER = 'Format reminder \u2014 `<codemode status="...">` on its own line, JavaScript statements (top-level `await`/`return` allowed), then `</codemode>` on its own line. Markdown outside the tag is sent to the user; the status attribute is shown while the code runs.';
 function parseCodemodeResponse(content) {
   const lines = content.split("\n");
-  const openIndexes = lines.flatMap((line, index) => (OPEN_LINE_RE.test(line) ? [index] : []));
-  const closeIndexes = lines.flatMap((line, index) => (CLOSE_LINE_RE.test(line) ? [index] : []));
+  const openIndexes = lines.flatMap((line, index) => OPEN_LINE_RE.test(line) ? [index] : []);
+  const closeIndexes = lines.flatMap((line, index) => CLOSE_LINE_RE.test(line) ? [index] : []);
   if (openIndexes.length === 0) {
     if (closeIndexes.length > 0) {
       return {
         kind: "malformed",
-        feedback: `Your code did NOT run: the response has a </codemode> line with no opening <codemode> line before it. ${GRAMMAR_REMINDER}`,
+        feedback: `Your code did NOT run: the response has a </codemode> line with no opening <codemode> line before it. ${GRAMMAR_REMINDER}`
       };
     }
     const prose2 = content.trim();
@@ -336,7 +294,7 @@ function parseCodemodeResponse(content) {
   if (openIndexes.length > 1) {
     return {
       kind: "multiple",
-      feedback: `Your response contained ${String(openIndexes.length)} <codemode> tags, so NOTHING was executed. Use at most ONE <codemode> tag per turn \u2014 your script's return value arrives as your next input and you write the next step then. Resend just the FIRST step as a single tag.`,
+      feedback: `Your response contained ${String(openIndexes.length)} <codemode> tags, so NOTHING was executed. Use at most ONE <codemode> tag per turn \u2014 your script's return value arrives as your next input and you write the next step then. Resend just the FIRST step as a single tag.`
     };
   }
   const openIndex = openIndexes[0];
@@ -344,45 +302,37 @@ function parseCodemodeResponse(content) {
   if (closeIndexes.some((index) => index < openIndex) || closersAfterOpen.length === 0) {
     return {
       kind: "malformed",
-      feedback: `Your code did NOT run: the <codemode> tag was never closed (or a stray </codemode> line appeared before it). ${GRAMMAR_REMINDER}`,
+      feedback: `Your code did NOT run: the <codemode> tag was never closed (or a stray </codemode> line appeared before it). ${GRAMMAR_REMINDER}`
     };
   }
   const closeIndex = closersAfterOpen[closersAfterOpen.length - 1];
-  const body = lines
-    .slice(openIndex + 1, closeIndex)
-    .join("\n")
-    .trim();
+  const body = lines.slice(openIndex + 1, closeIndex).join("\n").trim();
   if (body === "") {
     return {
       kind: "malformed",
-      feedback: `Your code did NOT run: the <codemode> tag was empty. ${GRAMMAR_REMINDER}`,
+      feedback: `Your code did NOT run: the <codemode> tag was empty. ${GRAMMAR_REMINDER}`
     };
   }
   const statusMatch = lines[openIndex].match(STATUS_ATTR_RE);
   const status = (statusMatch?.[1] || "").trim() || void 0;
   const beforeProse = lines.slice(0, openIndex).join("\n").trim();
-  const afterProse = lines
-    .slice(closeIndex + 1)
-    .join("\n")
-    .trim();
+  const afterProse = lines.slice(closeIndex + 1).join("\n").trim();
   const prose = [beforeProse, afterProse].filter((part) => part !== "").join("\n\n");
   return {
     kind: "script",
     // Bare statements (the normal case: top-level await/return) get the standard codemode envelope;
     // a body that is already a complete async function passes through untouched.
-    code: ASYNC_FUNCTION_BODY_RE.test(body)
-      ? body
-      : `async (itx) => {
+    code: ASYNC_FUNCTION_BODY_RE.test(body) ? body : `async (itx) => {
 ${body}
 }`,
     status,
-    prose: prose || void 0,
+    prose: prose || void 0
   };
 }
 
 // runtime/system-prompt.ts
 var DEFAULT_AGENT_SYSTEM_PROMPT = [
-  "You are an agent on the iterate platform. You live at a context path inside a project; the conversation you see is that context's history, and everything you do is an event on it.",
+  "You are an agent on the iterate platform. This internal agent loop runs your scripts in the agent's sandbox context. The CAPABILITY TREE message describes its current grants; use only those capabilities. The conversation and actions are recorded as events.",
   "HOW YOU ACT: respond with markdown, and embed AT MOST ONE `<codemode>` block when you want to run code:",
   "",
   "Good question! Let me look into it.",
@@ -392,22 +342,22 @@ var DEFAULT_AGENT_SYSTEM_PROMPT = [
   "return { count: files.paths.length }",
   "</codemode>",
   "",
-  "- Markdown OUTSIDE the tag is delivered to the person as your message \u2014 that is how you talk. Text inside the tag is TypeScript statements (top-level `await` and `return` allowed); the opening `<codemode ...>` and closing `</codemode>` must each sit alone on their own line.",
+  "- Markdown OUTSIDE the tag is delivered to the person as your message \u2014 that is how you talk. Text inside the tag is JavaScript statements (top-level `await` and `return` allowed; no TypeScript annotations); the opening `<codemode ...>` and closing `</codemode>` must each sit alone on their own line.",
   '- The `status` attribute is a short present-tense label ("Checking the files", "Writing the report") shown while your code runs. Set it whenever you include a tag; update it each turn as the phase changes.',
   "- Whatever your code RETURNS (JSON-serializable) arrives as your next input, and you get another turn to act on it. A thrown error arrives the same way \u2014 read it and adapt. Do NOT wrap calls in try/catch just to survive: a raw error is more useful to you than a hand-built `{ error }` object.",
   "- Multi-step work is one tag per response: each result comes back to you, and you write the next step having seen it. A response with more than one `<codemode>` tag \u2014 or an unclosed one \u2014 is rejected with feedback and NOTHING runs; never queue future steps as extra tags.",
   "- To finish: write your final message with NO tag \u2014 prose alone ends your turn. Inside a tag, `return;` with no value (or falling off the end) also ends the loop; `return null` counts as a value and buys a pointless extra turn.",
-  "- Each script runs fresh \u2014 no variable survives between scripts. Carry state by returning it or writing it. There is no typechecker and no type definitions: when unsure of a shape, return a small sample first and look at it.",
+  "- Treat each script as independent. Carry state between calls by returning it or writing it; do not rely on worker globals persisting. There is no typechecker and no type definitions: when unsure of a shape, return a small sample first and look at it.",
   "- Scripts have a live clock: use new Date() or Date.now() for the current time, and Intl.DateTimeFormat with the requested IANA timeZone for local time. Read the clock instead of guessing or claiming that live time is unavailable.",
   "- Images a person attaches are shown to you directly. Any other attachment is named in the message with its path \u2014 read it with `await itx.files.get(path).bytes()`.",
   "",
   "WORKING ON THE PROJECT'S WEBSITE (the surface itself is the CAPABILITY TREE message):",
   "Start website work with `await itx.whoami()` and use its `projectUrl`; never guess a hostname from the opaque projectId. Ingress means this project's website, not the Ingress game.",
   "WEBSITE INGRESS: `<project-slug>.<ingress-base>` dispatches to the full worker expression stored by `project/ingress-configured` on `/`; `<app>--<project-slug>.<ingress-base>` dispatches through `itx.apps.<app>`. An unconfigured project apex returns 404.",
-  "A COMMIT TO /repos/config IS THE PUBLICATION: the platform points the website at the new commit within a moment (the project follows the config repo's main). You never append `project/ingress-configured` yourself \u2014 your scripts run in a sandbox that cannot reach `/`, and an append there does nothing. `commitFiles` and `writeFile` write to main.",
-  'The worker loader executes JavaScript modules directly, even when the repo file is named worker.ts. Keep the saved source valid JavaScript: no TypeScript type annotations, unresolved package imports, or unbundled dependencies. For a simple site use `import { WorkerEntrypoint } from "cloudflare:workers"; export default class extends WorkerEntrypoint { fetch(request) { return new Response("Hello"); } }`. The whole repo is the worker: worker.ts may import any .js file in the repo by its relative path (`import { page } from "./site/page.js"`), each run as a JavaScript module \u2014 name sibling modules .js (the loader takes a module under no other name; worker.ts is the name the seed uses and runs as the main module); other file types (.md, .css, .json) are not modules \u2014 a worker that serves one exports its text from a .js file. A broken commit takes the site down until the next one, so PROBE THE CANDIDATE BEFORE COMMITTING: `await itx.workers.get({ source: { "worker.js": candidateSource } }).fetch(new Request(projectUrl))` runs the source as a worker without committing anything; commit only when its status and body are what you want.',
+  "A COMMIT TO /repos/config IS THE PUBLICATION: the platform points the website at the new commit within a moment (the project follows the config repo's main). For config-repo website updates, let the project processor configure ingress from the commit; no manual `project/ingress-configured` event is needed. `commitFiles` and `writeFile` write to main.",
+  'The worker loader executes JavaScript modules directly, even when the repo file is named worker.ts. Keep the saved source valid JavaScript: no TypeScript type annotations, unresolved package imports, or unbundled dependencies. For a simple site use `import { WorkerEntrypoint } from "cloudflare:workers"; export default class extends WorkerEntrypoint { fetch(request) { return new Response("Hello"); } }`. The whole repo is the worker: worker.ts may import any .js file in the repo by its relative path (`import { page } from "./site/page.js"`), each run as a JavaScript module \u2014 name sibling modules .js (the loader takes a module under no other name; worker.ts is the name the seed uses and runs as the main module); other file types (.md, .css, .json) are not modules \u2014 a worker that serves one exports its text from a .js file. A broken commit takes the site down until the next one, so PROBE THE CANDIDATE BEFORE COMMITTING: `await itx.workers.get({ source: { "cap.js": candidateSource } }).fetch(new Request(projectUrl))` runs the source as a worker without committing anything; commit only when its status and body are what you want.',
   "List files and read existing source before editing; repo paths are repo-relative.",
-  "After committing, fetch the actual projectUrl with itx.fetch(new Request(projectUrl)) and inspect its HTTP status and response body \u2014 the publication lands a moment after the commit, so fetch again a few times over a few seconds if the page is still the old one. Report success only after the returned page contains the requested change. A commit receipt is not publication proof. A new verification request requires a new fetch, regardless of conversation history.",
+  "After committing, fetch the actual projectUrl with itx.fetch(new Request(projectUrl)) and inspect its HTTP status and response body \u2014 the publication lands a moment after the commit, so fetch again a few times over a few seconds if the page is still the old one. Report success only after the returned page contains the requested change. A commit receipt is not publication proof. A new verification request requires a new fetch, regardless of conversation history."
 ].join("\n");
 
 // runtime/processor.ts
@@ -428,7 +378,7 @@ function buildChatMessages(items, images, tree = []) {
       if (image)
         parts.push({
           type: "image_url",
-          image_url: { url: `data:${image.contentType};base64,${image.base64}` },
+          image_url: { url: `data:${image.contentType};base64,${image.base64}` }
         });
       else hints.push(fileHintLine(file));
     }
@@ -441,7 +391,7 @@ function buildChatMessages(items, images, tree = []) {
     const firstNonSystem = messages.findIndex((message) => message.role !== "system");
     messages.splice(firstNonSystem === -1 ? messages.length : firstNonSystem, 0, {
       role: "system",
-      content: rendered,
+      content: rendered
     });
   }
   return messages;
@@ -452,13 +402,11 @@ function renderCapabilityTree(rows) {
   const contexts = [...new Set(visible.map((row) => row.context))];
   const body = contexts.flatMap((context) => [
     `from ${context}:`,
-    ...visible
-      .filter((row) => row.context === context)
-      .map((row) => `${row.match} \u2014 ${row.description || `\u21D2 ${row.target}`}`),
+    ...visible.filter((row) => row.context === context).map((row) => `${row.match} \u2014 ${row.description || `\u21D2 ${row.target}`}`)
   ]);
   return [
     "`itx` IS THIS CONTEXT'S CAPABILITY TREE (`await itx.rewriteRules.list()`) \u2014 every name below is one you can spell inside a tag; nothing else resolves:",
-    ...body,
+    ...body
   ].join("\n");
 }
 function fileHintLine(file) {
@@ -493,27 +441,17 @@ function base64Of(bytes) {
 }
 var ChatAnswer = z2.union([
   z2.object({ response: z2.string() }),
-  z2.object({
-    choices: z2.array(z2.object({ message: z2.object({ content: z2.string() }) })).min(1),
-  }),
+  z2.object({ choices: z2.array(z2.object({ message: z2.object({ content: z2.string() }) })).min(1) })
 ]);
 var ProviderUsage = z2.looseObject({
   prompt_tokens: z2.number().int().nonnegative().optional(),
   completion_tokens: z2.number().int().nonnegative().optional(),
   input_tokens: z2.number().int().nonnegative().optional(),
   output_tokens: z2.number().int().nonnegative().optional(),
-  prompt_tokens_details: z2
-    .looseObject({ cached_tokens: z2.number().int().nonnegative().optional() })
-    .optional(),
-  completion_tokens_details: z2
-    .looseObject({ reasoning_tokens: z2.number().int().nonnegative().optional() })
-    .optional(),
-  input_tokens_details: z2
-    .looseObject({ cached_tokens: z2.number().int().nonnegative().optional() })
-    .optional(),
-  output_tokens_details: z2
-    .looseObject({ reasoning_tokens: z2.number().int().nonnegative().optional() })
-    .optional(),
+  prompt_tokens_details: z2.looseObject({ cached_tokens: z2.number().int().nonnegative().optional() }).optional(),
+  completion_tokens_details: z2.looseObject({ reasoning_tokens: z2.number().int().nonnegative().optional() }).optional(),
+  input_tokens_details: z2.looseObject({ cached_tokens: z2.number().int().nonnegative().optional() }).optional(),
+  output_tokens_details: z2.looseObject({ reasoning_tokens: z2.number().int().nonnegative().optional() }).optional()
 });
 function normalizeUsage(raw) {
   const parsed = ProviderUsage.safeParse(raw);
@@ -521,12 +459,8 @@ function normalizeUsage(raw) {
   const inputTokens = parsed.data.prompt_tokens ?? parsed.data.input_tokens;
   const outputTokens = parsed.data.completion_tokens ?? parsed.data.output_tokens;
   if (inputTokens === void 0 || outputTokens === void 0) return void 0;
-  const cachedInputTokens =
-    parsed.data.prompt_tokens_details?.cached_tokens ??
-    parsed.data.input_tokens_details?.cached_tokens;
-  const reasoningOutputTokens =
-    parsed.data.completion_tokens_details?.reasoning_tokens ??
-    parsed.data.output_tokens_details?.reasoning_tokens;
+  const cachedInputTokens = parsed.data.prompt_tokens_details?.cached_tokens ?? parsed.data.input_tokens_details?.cached_tokens;
+  const reasoningOutputTokens = parsed.data.completion_tokens_details?.reasoning_tokens ?? parsed.data.output_tokens_details?.reasoning_tokens;
   return { inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens };
 }
 var ResponsesEvent = z2.looseObject({ type: z2.string() });
@@ -538,11 +472,7 @@ async function drainSse(body, signal, onEvent) {
   const decoder = new TextDecoder();
   let buffered = "";
   const frame = (text) => {
-    const data = text
-      .split("\n")
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice("data:".length).trim())
-      .join("\n");
+    const data = text.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice("data:".length).trim()).join("\n");
     if (data === "" || data === "[DONE]") return;
     try {
       onEvent(JSON.parse(data));
@@ -551,7 +481,7 @@ async function drainSse(body, signal, onEvent) {
     }
   };
   try {
-    for (;;) {
+    for (; ; ) {
       const { done, value } = await reader.read();
       if (done) break;
       buffered += decoder.decode(value, { stream: true });
@@ -575,17 +505,13 @@ function raceAbort(signal, work) {
   });
 }
 function responsesInput(messages) {
-  return messages.map((message) =>
-    typeof message.content === "string"
-      ? { role: message.role, content: message.content }
-      : {
-          role: message.role,
-          content: message.content.map((part) =>
-            part.type === "text"
-              ? { type: "input_text", text: part.text }
-              : { type: "input_image", image_url: part.image_url.url, detail: "auto" },
-          ),
-        },
+  return messages.map(
+    (message) => typeof message.content === "string" ? { role: message.role, content: message.content } : {
+      role: message.role,
+      content: message.content.map(
+        (part) => part.type === "text" ? { type: "input_text", text: part.text } : { type: "input_image", image_url: part.image_url.url, detail: "auto" }
+      )
+    }
   );
 }
 function renderScriptSettlement(settlement) {
@@ -622,31 +548,25 @@ var AgentProcessor = class extends StreamProcessor {
   #identityRead;
   /** Which context this is — its project and path — read once. */
   async #identity() {
-    return (this.#identityRead ??= await this.deps.withItx((itx) => itx.whoami()));
+    return this.#identityRead ??= await this.deps.withItx((itx) => itx.whoami());
   }
   reduce({ state, event }) {
     switch (event.type) {
       case "events.iterate.com/agent/create-requested":
-        return state.creation?.status === "created"
-          ? void 0
-          : {
-              ...state,
-              creation: {
-                status: "requested",
-                offset: event.offset,
-                creator: event.payload.creator,
-              },
-            };
+        return state.creation?.status === "created" ? void 0 : {
+          ...state,
+          creation: {
+            status: "requested",
+            offset: event.offset,
+            creator: event.payload.creator
+          }
+        };
       case "events.iterate.com/agent/created":
         return { ...state, creation: { status: "created", offset: event.offset } };
       case "events.iterate.com/agent/create-failed":
-        return state.creation?.status === "created"
-          ? void 0
-          : { ...state, creation: { status: "failed", offset: event.offset } };
+        return state.creation?.status === "created" ? void 0 : { ...state, creation: { status: "failed", offset: event.offset } };
       case "events.iterate.com/agent/delete-requested":
-        return state.deletion?.status === "deleted"
-          ? void 0
-          : { ...state, deletion: { status: "requested", offset: event.offset } };
+        return state.deletion?.status === "deleted" ? void 0 : { ...state, deletion: { status: "requested", offset: event.offset } };
       case "events.iterate.com/agent/deleted":
         return { ...state, deletion: { status: "deleted", offset: event.offset } };
       case "events.iterate.com/agent/configured": {
@@ -659,17 +579,11 @@ var AgentProcessor = class extends StreamProcessor {
             llmRequestExpiryMs: patch.llmRequestExpiryMs ?? state.config.llmRequestExpiryMs,
             llmRequestDebounceMs: patch.llmRequestDebounceMs ?? state.config.llmRequestDebounceMs,
             llmRequestRetryPolicy: {
-              maxAttempts:
-                patch.llmRequestRetryPolicy?.maxAttempts ??
-                state.config.llmRequestRetryPolicy.maxAttempts,
-              backoffBaseMs:
-                patch.llmRequestRetryPolicy?.backoffBaseMs ??
-                state.config.llmRequestRetryPolicy.backoffBaseMs,
-              backoffMaxMs:
-                patch.llmRequestRetryPolicy?.backoffMaxMs ??
-                state.config.llmRequestRetryPolicy.backoffMaxMs,
-            },
-          },
+              maxAttempts: patch.llmRequestRetryPolicy?.maxAttempts ?? state.config.llmRequestRetryPolicy.maxAttempts,
+              backoffBaseMs: patch.llmRequestRetryPolicy?.backoffBaseMs ?? state.config.llmRequestRetryPolicy.backoffBaseMs,
+              backoffMaxMs: patch.llmRequestRetryPolicy?.backoffMaxMs ?? state.config.llmRequestRetryPolicy.backoffMaxMs
+            }
+          }
         };
       }
       case "events.iterate.com/agent/context-added": {
@@ -684,24 +598,21 @@ var AgentProcessor = class extends StreamProcessor {
               content,
               actor,
               llmRequestOffset,
-              files: event.payload.files,
-            },
-          ],
+              files: event.payload.files
+            }
+          ]
         };
-        const triggers =
-          (role === "user" || role === "developer") &&
-          llmRequestPolicy?.behaviour !== "dont-trigger-request";
+        const triggers = (role === "user" || role === "developer") && llmRequestPolicy?.behaviour !== "dont-trigger-request";
         if (!triggers) return next;
-        const source =
-          actor?.type === "script" || actor?.type === "agent" ? "agent-loop" : "external";
+        const source = actor?.type === "script" || actor?.type === "agent" ? "agent-loop" : "external";
         return {
           ...next,
           pendingLlmRequestTrigger: {
             offset: event.offset,
             atMs: Date.parse(event.createdAt),
-            source,
+            source
           },
-          ...(source === "external" && { autonomousTurnCount: 0 }),
+          ...source === "external" && { autonomousTurnCount: 0 }
         };
       }
       case "events.iterate.com/agent/llm-request-requested": {
@@ -715,12 +626,9 @@ var AgentProcessor = class extends StreamProcessor {
             requestedAtOffset: event.offset,
             expiresAt: event.payload.expiresAt,
             model: event.payload.model,
-            triggerSource: trigger.source,
+            triggerSource: trigger.source
           },
-          autonomousTurnCount:
-            trigger.source === "agent-loop"
-              ? state.autonomousTurnCount + 1
-              : state.autonomousTurnCount,
+          autonomousTurnCount: trigger.source === "agent-loop" ? state.autonomousTurnCount + 1 : state.autonomousTurnCount
         };
       }
       case "events.iterate.com/agent/llm-request-settled": {
@@ -737,23 +645,19 @@ var AgentProcessor = class extends StreamProcessor {
             pendingLlmRequestTrigger: {
               offset: open.requestedAtOffset,
               atMs: Date.parse(event.createdAt),
-              source: open.triggerSource,
-            },
+              source: open.triggerSource
+            }
           };
         return { ...state, openRequest: null };
       }
       case "events.iterate.com/agent/paused":
-        return state.paused
-          ? void 0
-          : {
-              ...state,
-              paused: { reason: event.payload.reason, atOffset: event.offset },
-              pendingLlmRequestTrigger: null,
-            };
+        return state.paused ? void 0 : {
+          ...state,
+          paused: { reason: event.payload.reason, atOffset: event.offset },
+          pendingLlmRequestTrigger: null
+        };
       case "events.iterate.com/agent/resumed":
-        return state.paused
-          ? { ...state, paused: null, autonomousTurnCount: 0, consecutiveLlmFailures: 0 }
-          : void 0;
+        return state.paused ? { ...state, paused: null, autonomousTurnCount: 0, consecutiveLlmFailures: 0 } : void 0;
       default:
         return void 0;
     }
@@ -764,51 +668,40 @@ var AgentProcessor = class extends StreamProcessor {
       this.#atHead(args);
       return;
     }
-    if (
-      event?.type === "events.iterate.com/agent/context-added" &&
-      event.payload.llmRequestPolicy?.behaviour === "interrupt-current-request" &&
-      (event.payload.role === "user" || event.payload.role === "developer") &&
-      state.openRequest
-    ) {
+    if (event?.type === "events.iterate.com/agent/context-added" && event.payload.llmRequestPolicy?.behaviour === "interrupt-current-request" && (event.payload.role === "user" || event.payload.role === "developer") && state.openRequest) {
       const open = state.openRequest;
       const inFlight = this.#llmRequestsInFlight.get(open.requestedAtOffset);
       inFlight?.controller.abort(new InterruptedError());
       const partialText = inFlight?.partialText || void 0;
-      blockProcessorWhile(() =>
-        appendUnlessLost(
+      blockProcessorWhile(
+        () => appendUnlessLost(
           append,
-          ...(partialText
-            ? [
-                {
-                  type: "events.iterate.com/agent/context-added",
-                  idempotencyKey: this.idempotencyKey(
-                    `interrupted/${String(open.requestedAtOffset)}`,
-                  ),
-                  payload: {
-                    role: "assistant",
-                    content: `[Response interrupted by the user's next message; partial output follows]
-${partialText}`,
-                  },
-                },
-              ]
-            : []),
+          ...partialText ? [
+            {
+              type: "events.iterate.com/agent/context-added",
+              idempotencyKey: this.idempotencyKey(
+                `interrupted/${String(open.requestedAtOffset)}`
+              ),
+              payload: {
+                role: "assistant",
+                content: `[Response interrupted by the user's next message; partial output follows]
+${partialText}`
+              }
+            }
+          ] : [],
           {
             type: "events.iterate.com/agent/llm-request-settled",
             idempotencyKey: this.idempotencyKey(`settle/${String(open.requestedAtOffset)}`),
             payload: {
               requestOffset: open.requestedAtOffset,
-              result: { status: "cancelled", reason: "interrupted-by-user-input", partialText },
-            },
-          },
-        ),
+              result: { status: "cancelled", reason: "interrupted-by-user-input", partialText }
+            }
+          }
+        )
       );
       return;
     }
-    if (
-      event?.type === "events.iterate.com/agent/context-added" &&
-      event.payload.role === "assistant" &&
-      event.payload.llmRequestOffset !== void 0
-    ) {
+    if (event?.type === "events.iterate.com/agent/context-added" && event.payload.role === "assistant" && event.payload.llmRequestOffset !== void 0) {
       const { llmRequestOffset } = event.payload;
       const outcome = parseCodemodeResponse(event.payload.content);
       const consequences = [];
@@ -816,42 +709,42 @@ ${partialText}`,
         consequences.push({
           type: "events.iterate.com/agent/context-added",
           idempotencyKey: this.idempotencyKey("format-feedback", event),
-          payload: { role: "developer", content: outcome.feedback, actor: { type: "agent" } },
+          payload: { role: "developer", content: outcome.feedback, actor: { type: "agent" } }
         });
       if (outcome.kind === "script") {
         if (outcome.status)
           consequences.push({
             type: "events.iterate.com/agent/summary-updated",
             idempotencyKey: this.idempotencyKey("codemode-status", event),
-            payload: { activity: outcome.status },
+            payload: { activity: outcome.status }
           });
         consequences.push({
           type: "events.iterate.com/context/run-requested",
           idempotencyKey: this.idempotencyKey("run-requested", event),
-          payload: { code: outcome.code },
+          payload: { code: outcome.code }
         });
       }
       if ((outcome.kind === "script" || outcome.kind === "none") && outcome.prose)
         consequences.push({
           type: "events.iterate.com/agent/web-message-sent",
           idempotencyKey: this.idempotencyKey("codemode-prose", event),
-          payload: { message: outcome.prose, llmRequestOffset },
+          payload: { message: outcome.prose, llmRequestOffset }
         });
       if (consequences.length > 0) blockProcessorWhile(() => append(...consequences));
     }
     if (event?.type === "events.iterate.com/context/run-settled") {
       const rendered = renderScriptSettlement(event.payload.settlement);
       if (rendered)
-        blockProcessorWhile(() =>
-          append({
+        blockProcessorWhile(
+          () => append({
             type: "events.iterate.com/agent/context-added",
             idempotencyKey: this.idempotencyKey("script-result", event),
             payload: {
               role: "developer",
               content: rendered,
-              actor: { type: "script", requestOffset: event.payload.requestOffset },
-            },
-          }),
+              actor: { type: "script", requestOffset: event.payload.requestOffset }
+            }
+          })
         );
     }
     this.#atHead(args);
@@ -869,10 +762,10 @@ ${partialText}`,
           const certificate = {
             type: "events.iterate.com/agent/created",
             payload: { path },
-            idempotencyKey: `agent/created:${path}`,
+            idempotencyKey: `agent/created:${path}`
           };
-          await this.deps.withItx((itx) =>
-            itx.invoke(["itx", "agents", ["announce", certificate]]),
+          await this.deps.withItx(
+            (itx) => itx.invoke(["itx", "agents", ["announce", certificate]])
           );
           await append(certificate, {
             // this path last: the certificate closes the obligation, the prompt rides with it
@@ -881,13 +774,13 @@ ${partialText}`,
             payload: {
               role: "system",
               content: `${DEFAULT_AGENT_SYSTEM_PROMPT}
-CURRENT PROJECT: ${JSON.stringify(whoami)}`,
-            },
+CURRENT PROJECT: ${JSON.stringify(whoami)}`
+            }
           });
         } catch (error) {
           await append({
             type: "events.iterate.com/agent/create-failed",
-            payload: { error: error instanceof Error ? error.message : String(error) },
+            payload: { error: error instanceof Error ? error.message : String(error) }
           });
         } finally {
           this.#creating = false;
@@ -905,10 +798,10 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`,
           const certificate = {
             type: "events.iterate.com/agent/deleted",
             payload: { path },
-            idempotencyKey: `agent/deleted:${path}`,
+            idempotencyKey: `agent/deleted:${path}`
           };
-          await this.deps.withItx((itx) =>
-            itx.invoke(["itx", "agents", ["announce", certificate]]),
+          await this.deps.withItx(
+            (itx) => itx.invoke(["itx", "agents", ["announce", certificate]])
           );
           await append(certificate);
         } finally {
@@ -920,30 +813,25 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`,
     const now = this.#now();
     const trigger = state.pendingLlmRequestTrigger;
     if (state.paused && trigger?.source === "external") {
-      runInBackground(() =>
-        append({
+      runInBackground(
+        () => append({
           type: "events.iterate.com/agent/resumed",
           idempotencyKey: this.idempotencyKey(`resume/${String(trigger.offset)}`),
-          payload: { reason: "external input" },
-        }),
+          payload: { reason: "external input" }
+        })
       );
       return;
     }
     if (trigger && !state.openRequest && !state.paused) {
       const { maxAutonomousTurns, llmRequestRetryPolicy, llmRequestExpiryMs, llm } = state.config;
-      const breaker =
-        trigger.source === "agent-loop" && state.autonomousTurnCount >= maxAutonomousTurns
-          ? `autonomous turn limit reached (${String(maxAutonomousTurns)} consecutive turns without external input)`
-          : state.consecutiveLlmFailures >= llmRequestRetryPolicy.maxAttempts
-            ? `the model failed ${String(state.consecutiveLlmFailures)} times in a row`
-            : null;
+      const breaker = trigger.source === "agent-loop" && state.autonomousTurnCount >= maxAutonomousTurns ? `autonomous turn limit reached (${String(maxAutonomousTurns)} consecutive turns without external input)` : state.consecutiveLlmFailures >= llmRequestRetryPolicy.maxAttempts ? `the model failed ${String(state.consecutiveLlmFailures)} times in a row` : null;
       if (breaker) {
-        runInBackground(() =>
-          append({
+        runInBackground(
+          () => append({
             type: "events.iterate.com/agent/paused",
             idempotencyKey: this.idempotencyKey(`pause/${String(trigger.offset)}`),
-            payload: { reason: breaker, triggerOffset: trigger.offset },
-          }),
+            payload: { reason: breaker, triggerOffset: trigger.offset }
+          })
         );
         return;
       }
@@ -955,8 +843,8 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`,
         payload: {
           model: llm.model,
           expiresAt: trigger.atMs + llmRequestExpiryMs,
-          triggerOffset: trigger.offset,
-        },
+          triggerOffset: trigger.offset
+        }
       };
       runInBackground(async () => {
         if (windowClosesInMs > 0) await this.#sleep(windowClosesInMs);
@@ -967,15 +855,15 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`,
     const open = state.openRequest;
     if (open && !this.#llmRequestsInFlight.has(open.requestedAtOffset)) {
       if (now >= open.expiresAt)
-        runInBackground(() =>
-          append({
+        runInBackground(
+          () => append({
             type: "events.iterate.com/agent/llm-request-settled",
             idempotencyKey: this.idempotencyKey(`settle/${String(open.requestedAtOffset)}`),
             payload: {
               requestOffset: open.requestedAtOffset,
-              result: { status: "cancelled", reason: "expired" },
-            },
-          }),
+              result: { status: "cancelled", reason: "expired" }
+            }
+          })
         );
       else {
         const inFlight = { controller: new AbortController(), partialText: "" };
@@ -994,11 +882,11 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`,
     const { controller } = inFlight;
     const expiry = setTimeout(
       () => controller.abort(new Error("the model did not finish before the request expired")),
-      Math.max(1e3, open.expiresAt - startedAt),
+      Math.max(1e3, open.expiresAt - startedAt)
     );
     let idle = setTimeout(
       () => controller.abort(new Error("the model stream stalled")),
-      STREAM_IDLE_BUDGET_MS,
+      STREAM_IDLE_BUDGET_MS
     );
     try {
       const { path } = await this.#identity();
@@ -1011,9 +899,10 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`,
           try {
             images.set(file.path, {
               contentType: file.contentType,
-              base64: base64Of(await this.deps.withItx((itx) => itx.files.get(file.path).bytes())),
+              base64: base64Of(await this.deps.withItx((itx) => itx.files.get(file.path).bytes()))
             });
-          } catch {}
+          } catch {
+          }
         }
       const messages = buildChatMessages(items, images, tree);
       const llmRequestOffset = open.requestedAtOffset;
@@ -1029,19 +918,17 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`,
         window = [];
         windowChars = 0;
         const payload = { llmRequestOffset, chunks, sequence: sequence++ };
-        windows = windows
-          .then(() =>
-            append({
-              type: "events.iterate.com/agent/llm-response-chunks",
-              ephemeral: true,
-              payload,
-            }),
-          )
-          .then(
-            () => void 0,
-            () => void 0,
-            // a lost window loses only its repaint; the settlement is the truth
-          );
+        windows = windows.then(
+          () => append({
+            type: "events.iterate.com/agent/llm-response-chunks",
+            ephemeral: true,
+            payload
+          })
+        ).then(
+          () => void 0,
+          () => void 0
+          // a lost window loses only its repaint; the settlement is the truth
+        );
       };
       const settle = async (result, ...alongside) => {
         closeWindow();
@@ -1054,10 +941,10 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`,
             payload: {
               requestOffset: llmRequestOffset,
               durationMs: this.#now() - startedAt,
-              result,
-            },
+              result
+            }
           },
-          ...alongside,
+          ...alongside
         );
       };
       let answer;
@@ -1071,7 +958,7 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`,
             clearTimeout(idle);
             idle = setTimeout(
               () => controller.abort(new Error("the model stream stalled")),
-              STREAM_IDLE_BUDGET_MS,
+              STREAM_IDLE_BUDGET_MS
             );
             inFlight.partialText += textDelta;
             window.push(chunk);
@@ -1080,14 +967,14 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`,
             if (windowOpen) return;
             windowOpen = true;
             void this.#sleep(CHUNK_WINDOW_MS).then(closeWindow);
-          },
+          }
         });
       } catch (error) {
         if (controller.signal.reason instanceof InterruptedError) return;
         await settle({
           status: "failed",
           errorMessage: String(error instanceof Error ? error.message : error).slice(0, 4e3),
-          partialText: inFlight.partialText || void 0,
+          partialText: inFlight.partialText || void 0
         });
         return;
       }
@@ -1098,22 +985,20 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`,
         {
           type: "events.iterate.com/agent/context-added",
           idempotencyKey: this.idempotencyKey(`assistant/${String(llmRequestOffset)}`),
-          payload: { role: "assistant", content: text, llmRequestOffset },
+          payload: { role: "assistant", content: text, llmRequestOffset }
         },
-        ...(usage
-          ? [
-              {
-                type: "events.iterate.com/agent/token-usage-reported",
-                idempotencyKey: this.idempotencyKey(`usage/${String(llmRequestOffset)}`),
-                payload: {
-                  model: open.model,
-                  maxContextTokens: contextWindowTokens(open.model),
-                  inputTokens: usage.inputTokens,
-                  outputTokens: usage.outputTokens,
-                },
-              },
-            ]
-          : []),
+        ...usage ? [
+          {
+            type: "events.iterate.com/agent/token-usage-reported",
+            idempotencyKey: this.idempotencyKey(`usage/${String(llmRequestOffset)}`),
+            payload: {
+              model: open.model,
+              maxContextTokens: contextWindowTokens(open.model),
+              inputTokens: usage.inputTokens,
+              outputTokens: usage.outputTokens
+            }
+          }
+        ] : []
       );
     } finally {
       clearTimeout(expiry);
@@ -1131,11 +1016,21 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`,
    *  Anything else is OpenAI's Responses API as a Workers AI partner model on Cloudflare's billing
    *  — no key, ours or a project's — the FAST reading of a reasoning model: low effort, with its
    *  summary streamed. */
-  async #stream({ model, messages, signal, onChunk }) {
+  async #stream({
+    model,
+    messages,
+    signal,
+    onChunk
+  }) {
     if (model.startsWith("@cf/")) {
       const raw2 = await raceAbort(
         signal,
-        this.deps.withItx((itx) => itx.ai.run(model, { messages, stream: true })),
+        this.deps.withItx(
+          (itx) => itx.ai.run(
+            model,
+            { messages, stream: true }
+          )
+        )
       );
       if (raw2 instanceof ReadableStream) {
         let text3 = "";
@@ -1153,9 +1048,7 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`,
         return { text: text3.trim(), usage: usage2 };
       }
       const answer = ChatAnswer.parse(raw2);
-      const text2 = (
-        "response" in answer ? answer.response : answer.choices[0].message.content
-      ).trim();
+      const text2 = ("response" in answer ? answer.response : answer.choices[0].message.content).trim();
       if (text2 === "") throw new Error("the model answered with no text");
       onChunk(raw2, text2);
       return { text: text2 };
@@ -1163,14 +1056,14 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`,
     const { projectId, path } = await this.#identity();
     const raw = await raceAbort(
       signal,
-      this.deps.withItx((itx) =>
-        itx.ai.run(
+      this.deps.withItx(
+        (itx) => itx.ai.run(
           `openai/${model}`,
           {
             input: responsesInput(messages),
             stream: true,
             store: false,
-            reasoning: { effort: "low", summary: "auto" },
+            reasoning: { effort: "low", summary: "auto" }
           },
           {
             returnRawResponse: true,
@@ -1180,19 +1073,19 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`,
               metadata: {
                 projectId,
                 streamPath: path,
-                context: "agent-turn",
-              },
-            },
-          },
-        ),
-      ),
+                context: "agent-turn"
+              }
+            }
+          }
+        )
+      )
     );
     if (!(raw instanceof Response))
       throw new Error(`model ${model}: Workers AI did not answer with the raw response`);
     const response = raw;
     if (!response.ok || !response.body)
       throw new Error(
-        `openai/${model} ${String(response.status)}: ${(await response.text()).slice(0, 400)}`,
+        `openai/${model} ${String(response.status)}: ${(await response.text()).slice(0, 400)}`
       );
     let text = "";
     let usage;
@@ -1206,21 +1099,15 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`,
         onChunk(raw2, delta);
       } else if (type === "response.reasoning_summary_text.delta") onChunk(raw2, "");
       else if (type === "response.completed" || type === "response.incomplete") {
-        const done = z2
-          .looseObject({ response: z2.looseObject({ usage: z2.unknown() }) })
-          .safeParse(raw2);
+        const done = z2.looseObject({ response: z2.looseObject({ usage: z2.unknown() }) }).safeParse(raw2);
         if (done.success) usage = normalizeUsage(done.data.response.usage) ?? usage;
       } else if (type === "response.failed" || type === "error") {
-        const failure = z2
-          .looseObject({
-            error: z2.looseObject({ message: z2.string() }).optional(),
-            response: z2
-              .looseObject({ error: z2.looseObject({ message: z2.string() }).optional() })
-              .optional(),
-          })
-          .safeParse(raw2);
+        const failure = z2.looseObject({
+          error: z2.looseObject({ message: z2.string() }).optional(),
+          response: z2.looseObject({ error: z2.looseObject({ message: z2.string() }).optional() }).optional()
+        }).safeParse(raw2);
         throw new Error(
-          `openai: ${failure.success ? failure.data.error?.message || failure.data.response?.error?.message || type : type}`,
+          `openai: ${failure.success ? failure.data.error?.message || failure.data.response?.error?.message || type : type}`
         );
       }
     });
@@ -1238,7 +1125,7 @@ var AgentDurableObject = class extends StreamProcessorDurableObject {
   async #path() {
     if (this.#pathRead) return this.#pathRead;
     const { path } = await this.withItx((itx) => itx.whoami());
-    return (this.#pathRead = path);
+    return this.#pathRead = path;
   }
   /** A person's words: ONE `context-added`, the trigger of the next turn — with their attachments,
    *  each stored first under this agent's path (`itx.files`, apps/os's `<path>/<8 of a uuid>-<name>`)
@@ -1251,26 +1138,26 @@ var AgentDurableObject = class extends StreamProcessorDurableObject {
     for (const file of files) {
       const filename = file.filename.replace(/[^A-Za-z0-9._-]+/g, "-");
       const storedAt = `${path}/${crypto.randomUUID().slice(0, 8)}-${filename}`;
-      const stored = await this.withItx((itx) =>
-        itx.files.get(storedAt).put({ contentType: file.contentType, data: file.data }),
+      const stored = await this.withItx(
+        (itx) => itx.files.get(storedAt).put({ contentType: file.contentType, data: file.data })
       );
       attachments.push({
         contentType: stored.contentType,
         filename: file.filename,
         path: stored.path,
-        size: stored.size,
+        size: stored.size
       });
     }
-    const appended = await this.withItx((itx) =>
-      itx.append({
+    const appended = await this.withItx(
+      (itx) => itx.append({
         type: "events.iterate.com/agent/context-added",
         payload: {
           role: "user",
           content: message,
           actor: { type: "user" },
-          ...(attachments.length > 0 && { files: attachments }),
-        },
-      }),
+          ...attachments.length > 0 && { files: attachments }
+        }
+      })
     );
     return appended[0];
   }
@@ -1283,7 +1170,7 @@ var AgentDurableObject = class extends StreamProcessorDurableObject {
     if (state.deletion) throw new Error(`agent ${path}: deleted`);
     if (state.creation?.status !== "created")
       throw new Error(
-        `agent ${path}: not created \u2014 itx.agents.create(${JSON.stringify(path)}) first`,
+        `agent ${path}: not created \u2014 itx.agents.create(${JSON.stringify(path)}) first`
       );
     return path;
   }
@@ -1293,7 +1180,7 @@ var AgentDurableObject = class extends StreamProcessorDurableObject {
 import { z as z3 } from "./processor.js";
 import {
   defineProcessorContract as defineProcessorContract2,
-  StreamProcessor as StreamProcessor2,
+  StreamProcessor as StreamProcessor2
 } from "./processor.js";
 import { StreamProcessorDurableObject as StreamProcessorDurableObject2 } from "./processor.js";
 
@@ -1321,9 +1208,22 @@ var AgentCollectionRpcTarget = class extends RpcTarget {
     this.base = base;
   }
   announce(input) {
-    return this.withItx((itx) =>
-      itx.invoke(["itx", "facets", ["get", "agents"], ["announce", input]]),
+    return this.withItx(
+      (itx) => itx.invoke(["itx", "facets", ["get", "agents"], ["announce", input]])
     );
+  }
+  /** Rebind existing normal agents when this app is installed or updated. Voice processors
+   * keep their own code; grants, sandbox rules and conversation history are untouched. */
+  async upgrade() {
+    const spec = await this.spec();
+    for (const { path } of await this.list()) {
+      await this.withItx(async (itx) => {
+        const context = itx.cd(path);
+        const rows = await context.processors.list();
+        if (rows.some((row) => row.name === "agent"))
+          await context.processors.enable("agent", spec);
+      });
+    }
   }
   get(path) {
     path = resolveContextPath(this.base, path);
@@ -1351,7 +1251,7 @@ var AgentCollectionRpcTarget = class extends RpcTarget {
         "itx",
         "facets",
         ["get", "agent", spec],
-        ["snapshot"],
+        ["snapshot"]
       ]);
       if (state.deletion) throw new Error(`agent ${path}: deleted \u2014 not re-creatable`);
       await context.processors.enable("agent", spec);
@@ -1363,40 +1263,38 @@ var AgentCollectionRpcTarget = class extends RpcTarget {
         const rule = (match, target, key) => ({
           type: "events.iterate.com/itx/rewrite-rule-configured",
           idempotencyKey: key,
-          payload: { match, target },
+          payload: { match, target }
         });
         await context.append(
           rule(
             "itx",
             `itx.cd(${JSON.stringify(options.creator || this.base)})`,
-            `agent-parent:${path}`,
+            `agent-parent:${path}`
           ),
           rule("itx.run", `itx.cd(${JSON.stringify(sandbox)}).run`, `agent-sandbox:${path}`),
           rule(
             "itx.agents",
             `itx.cd('/').agents.at(${JSON.stringify(path)})`,
-            `agent-collection:${path}`,
-          ),
+            `agent-collection:${path}`
+          )
         );
-        await itx
-          .cd(sandbox)
-          .append(
-            rule("itx", `itx.cd(${JSON.stringify(path)})`, `agent-parent:${sandbox}`),
-            rule(
-              "itx.agents",
-              `itx.cd('/').agents.at(${JSON.stringify(sandbox)})`,
-              `agent-collection:${sandbox}`,
-            ),
-          );
+        await itx.cd(sandbox).append(
+          rule("itx", `itx.cd(${JSON.stringify(path)})`, `agent-parent:${sandbox}`),
+          rule(
+            "itx.agents",
+            `itx.cd('/').agents.at(${JSON.stringify(sandbox)})`,
+            `agent-collection:${sandbox}`
+          )
+        );
         const [requested] = await context.append({
           type: "events.iterate.com/agent/create-requested",
-          payload: { creator: options.creator || this.base },
+          payload: { creator: options.creator || this.base }
         });
         requestedAtOffset = requested.offset;
       }
       const settled = await context.waitForEvent({
         type: ["events.iterate.com/agent/created", "events.iterate.com/agent/create-failed"],
-        afterOffset: requestedAtOffset,
+        afterOffset: requestedAtOffset
       });
       if (settled.type === "events.iterate.com/agent/create-failed")
         throw new Error(`agent ${path}: creation failed \u2014 ${String(settled.payload?.error)}`);
@@ -1420,7 +1318,7 @@ var AgentCollectionRpcTarget = class extends RpcTarget {
         "itx",
         "facets",
         ["get", "agent", spec],
-        ["snapshot"],
+        ["snapshot"]
       ]);
       if (state.deletion?.status !== "deleted") {
         if (state.creation?.status !== "created")
@@ -1430,13 +1328,13 @@ var AgentCollectionRpcTarget = class extends RpcTarget {
         else {
           const [requested] = await context.append({
             type: "events.iterate.com/agent/delete-requested",
-            payload: {},
+            payload: {}
           });
           requestedAtOffset = requested.offset;
         }
         await context.waitForEvent({
           type: "events.iterate.com/agent/deleted",
-          afterOffset: requestedAtOffset,
+          afterOffset: requestedAtOffset
         });
       }
       const rows = await context.processors.list();
@@ -1454,8 +1352,8 @@ var AgentReference = class extends RpcTarget {
   }
   async message(input) {
     const spec = await this.spec();
-    return this.withItx((itx) =>
-      itx.cd(this.path).invoke(["itx", "facets", ["get", "agent", spec], ["message", input]]),
+    return this.withItx(
+      (itx) => itx.cd(this.path).invoke(["itx", "facets", ["get", "agent", spec], ["message", input]])
     );
   }
   append(...events) {
@@ -1469,16 +1367,19 @@ var AgentCatalogContract = defineProcessorContract2({
   version: "1",
   description: "The agents installed in this project by the userspace agents app.",
   stateSchema: z3.object({
-    agents: z3.record(z3.string(), z3.object({ createdAt: z3.string() })).default({}),
+    agents: z3.record(z3.string(), z3.object({ createdAt: z3.string() })).default({})
   }),
   events: {},
   processorDeps: [AgentContract],
   consumes: ["events.iterate.com/agent/created", "events.iterate.com/agent/deleted"],
-  emits: [],
+  emits: []
 });
 var AgentCatalogProcessor = class extends StreamProcessor2 {
   contract = AgentCatalogContract;
-  reduce({ state, event }) {
+  reduce({
+    state,
+    event
+  }) {
     const path = event.payload.path;
     if (event.type === "events.iterate.com/agent/created") {
       if (state.agents[path]) return;
@@ -1492,12 +1393,12 @@ var AgentCatalogProcessor = class extends StreamProcessor2 {
 var Certificate = z3.discriminatedUnion("type", [
   z3.object({
     type: z3.literal("events.iterate.com/agent/created"),
-    payload: z3.object({ path: z3.string().startsWith("/").min(2) }),
+    payload: z3.object({ path: z3.string().startsWith("/").min(2) })
   }),
   z3.object({
     type: z3.literal("events.iterate.com/agent/deleted"),
-    payload: z3.object({ path: z3.string().startsWith("/").min(2) }),
-  }),
+    payload: z3.object({ path: z3.string().startsWith("/").min(2) })
+  })
 ]);
 var AgentCollectionDurableObject = class extends StreamProcessorDurableObject2 {
   processor = new AgentCatalogProcessor();
@@ -1512,10 +1413,13 @@ var AgentCollectionDurableObject = class extends StreamProcessorDurableObject2 {
         if (!source) throw new Error(`The installed agents runtime is missing: ${cacheKey}`);
         return { cacheKey, source: { "cap.js": source }, className: "AgentDurableObject" };
       },
-      base,
+      base
     );
   }
   #collection = this.at("/");
+  upgrade() {
+    return this.#collection.upgrade();
+  }
   list() {
     return this.#collection.list();
   }
@@ -1530,8 +1434,8 @@ var AgentCollectionDurableObject = class extends StreamProcessorDurableObject2 {
   }
   async announce(input) {
     const event = Certificate.parse(input);
-    await this.withItx((itx) =>
-      itx.append({ ...event, idempotencyKey: `${event.type}:${event.payload.path}` }),
+    await this.withItx(
+      (itx) => itx.append({ ...event, idempotencyKey: `${event.type}:${event.payload.path}` })
     );
   }
 };
@@ -1541,19 +1445,20 @@ async function installAgents(itx, source) {
   const { path } = await itx.whoami();
   if (path !== "/") throw new Error("Install agents at the project root");
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(source));
-  const cacheKey = Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0"),
+  const cacheKey = Array.from(
+    new Uint8Array(digest),
+    (byte) => byte.toString(16).padStart(2, "0")
   ).join("");
   await itx.kv.put(`agents/runtime/${cacheKey}.js`, source);
   await itx.kv.put("agents/runtime-key", cacheKey);
   const spec = {
     cacheKey,
     source: { "cap.js": source },
-    className: "AgentCollectionDurableObject",
+    className: "AgentCollectionDurableObject"
   };
   await itx.processors.enable("agents", {
     ...spec,
-    consumes: ["events.iterate.com/agent/created", "events.iterate.com/agent/deleted"],
+    consumes: ["events.iterate.com/agent/created", "events.iterate.com/agent/deleted"]
   });
   await itx.append({
     type: "events.iterate.com/itx/rewrite-rule-configured",
@@ -1561,9 +1466,13 @@ async function installAgents(itx, source) {
     payload: {
       match: "itx.agents",
       target: ["itx", "facets", ["get", "agents", spec]],
-      description:
-        "The project's installed agents app: list(), create(path), get(path).message(text), delete(path)",
-    },
+      description: "The project's installed agents app: list(), create(path), get(path).message(text), delete(path)"
+    }
   });
+  await itx.invoke(["itx", "agents", ["upgrade"]]);
 }
-export { AgentCollectionDurableObject, AgentDurableObject, installAgents };
+export {
+  AgentCollectionDurableObject,
+  AgentDurableObject,
+  installAgents
+};

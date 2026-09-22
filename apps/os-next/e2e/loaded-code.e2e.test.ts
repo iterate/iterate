@@ -7,7 +7,7 @@
 // `itx.fetch(request)` at the worker's context, through the table — no row below the owner root, no
 // egress. The chain a child inherits: own rows → the parent link → … → the root's rows → the built-ins.
 import { expect, test } from "vitest";
-import { freshCtx, openItx, rejection } from "./support/client.ts";
+import { freshCtx, openItx } from "./support/client.ts";
 
 /** A loaded worker that hands its `env.ITX` whatever the test asks it to say, and reports the refusal. */
 const PROBE = {

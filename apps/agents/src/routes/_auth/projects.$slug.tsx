@@ -1,5 +1,3 @@
-import agentRuntime from "../../../../../configs-next/with-agents/agents.js?raw";
-import { installAgents } from "../../../runtime/install.ts";
 import type { IterateContextApi } from "iterate/next/api";
 import { createFileRoute, useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -30,6 +28,8 @@ import {
   ContextViewState,
   RIGHT_EDGE_CLOSED,
 } from "@iterate-com/ui/components/context-view/context-view-search";
+import { installAgents } from "../../../runtime/install.ts";
+import agentRuntime from "../../../../../configs-next/with-agents/agents.js?raw";
 import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
 import { InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
 import { LiveStateValue } from "../../components/live-state-value.tsx";

@@ -95,6 +95,8 @@ export function parseConfigRepoTemplateReference(input: string): ConfigRepoTempl
   let path: string | undefined;
   if (fragment?.startsWith("path:") === true) {
     path = fragment.slice("path:".length);
+    // An explicit empty fragment is invalid; absence selects the default branch.
+    // eslint-disable-next-line iterate/simple-truthiness-check -- Reject an explicit empty fragment below.
   } else if (fragment !== undefined) {
     const pathSeparator = fragment.indexOf("&path:");
     if (pathSeparator === -1) ref = fragment;
@@ -104,6 +106,7 @@ export function parseConfigRepoTemplateReference(input: string): ConfigRepoTempl
     }
   }
 
+  // eslint-disable-next-line iterate/simple-truthiness-check -- An explicit empty ref must be rejected.
   if (ref !== undefined) {
     if (
       ref.length === 0 ||
@@ -122,6 +125,7 @@ export function parseConfigRepoTemplateReference(input: string): ConfigRepoTempl
     }
   }
 
+  // eslint-disable-next-line iterate/simple-truthiness-check -- An explicit empty path must be rejected.
   if (path !== undefined) {
     if (!isSafeConfigRepoTemplatePath(path)) {
       throw new Error(`Invalid path in config template reference: ${JSON.stringify(path)}.`);
@@ -130,19 +134,19 @@ export function parseConfigRepoTemplateReference(input: string): ConfigRepoTempl
 
   return {
     owner,
-    ...(path === undefined ? {} : { path }),
-    ...(ref === undefined ? {} : { ref }),
+    path,
+    ref,
     repo,
   };
 }
 
 export function formatConfigRepoTemplateReference(reference: ConfigRepoTemplateReference): string {
   const repository = `github:${reference.owner}/${reference.repo}`;
-  if (reference.ref !== undefined && reference.path !== undefined) {
+  if (reference.ref && reference.path) {
     return `${repository}#${reference.ref}&path:${reference.path}`;
   }
-  if (reference.ref !== undefined) return `${repository}#${reference.ref}`;
-  if (reference.path !== undefined) return `${repository}#path:${reference.path}`;
+  if (reference.ref) return `${repository}#${reference.ref}`;
+  if (reference.path) return `${repository}#path:${reference.path}`;
   return repository;
 }
 

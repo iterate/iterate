@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { downloadPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
 import { parseConfigRepoTemplateReference } from "@iterate-com/shared/config-repo-template/reference";
-import { defaultFiles } from "../generated/config-templates.js";
 // src/project/processor.ts — THE PROJECT PROCESSOR: the reduce of the project's own creation facts
 // and of the certificates cross-posted to `/` (the catalog: first certificate wins — a repo, a
 // workspace is born once; a secret's latest `set` is its
@@ -27,6 +26,7 @@ import {
   StreamProcessor,
 } from "iterate/next/stream/processor";
 import type { WithItx } from "iterate/next/sdk";
+import { defaultFiles } from "../generated/config-templates.js";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { reduceSecretCatalog } from "../secret/contract.ts";
 import { ProjectContract, type ProjectState } from "./contract.ts";
@@ -87,9 +87,7 @@ export class ProjectProcessor extends StreamProcessor<
               creation: {
                 status: "requested",
                 offset: event.offset,
-                ...(event.payload.configRepoTemplate && {
-                  configRepoTemplate: event.payload.configRepoTemplate,
-                }),
+                configRepoTemplate: event.payload.configRepoTemplate,
               },
             };
       case "events.iterate.com/project/created":
