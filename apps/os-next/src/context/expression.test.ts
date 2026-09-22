@@ -1,3 +1,10 @@
+import {
+  InvokeHandle,
+  RpcStubHandle,
+  ITX_HANDLE_REFERENCE_KEY,
+  itxHandleReferenceOf,
+  materializeItxHandleReference,
+} from "iterate/next/expression";
 // Executable spec for the expression codec — two directions over one table.
 import { describe, expect, test, it } from "vitest";
 import { RpcStub, RpcTarget } from "capnweb";
@@ -457,5 +464,72 @@ describe("prototype-chain dynamic fallback", () => {
     expect(proxy.alpha.then).toBeUndefined();
     expect(proxy.alpha.beta.then).toBeUndefined();
     expect(target.calls).toEqual([]);
+  });
+});
+
+describe("a handle on the wire is the expression that names it", () => {
+  const handle = new InvokeHandle(() => undefined);
+  const reference = { [ITX_HANDLE_REFERENCE_KEY]: ["itx", "repos", ["get", "/repos/x"]] };
+  test.each<[string, unknown, ItxExpression, unknown[], ItxExpression | undefined]>([
+    [
+      "a path-shaped handle",
+      handle,
+      ["itx", "repos", ["get", "/repos/x"]],
+      [],
+      ["itx", "repos", ["get", "/repos/x"]],
+    ],
+    [
+      "a reference from a hop below, re-rooted to this caller's call",
+      reference,
+      ["itx", ["cd", "/b"], "repos", ["get", "/repos/x"]],
+      [],
+      ["itx", ["cd", "/b"], "repos", ["get", "/repos/x"]],
+    ],
+    [
+      "a lent client stub stays live",
+      new RpcStubHandle(() => undefined),
+      ["itx", "rpcStubs", ["get", "k"]],
+      [],
+      undefined,
+    ],
+    ["data", { ok: true }, ["itx", ["whoami"]], [], undefined],
+    ["a primitive", 7, ["itx", "kv", ["get", "k"]], [], undefined],
+    [
+      "runtime args fold into a terminal name, as the resolver folds them",
+      handle,
+      ["itx", "repos", "get"],
+      ["/repos/x"],
+      ["itx", "repos", ["get", "/repos/x"]],
+    ],
+    [
+      "runtime args left over apply to the value and never name a handle",
+      handle,
+      ["itx", "repos", ["get", "/repos/x"]],
+      ["extra"],
+      undefined,
+    ],
+  ])("%s", (_, result, expression, args, expected) => {
+    expect(itxHandleReferenceOf(result, expression, args)).toEqual(
+      expected ? { [ITX_HANDLE_REFERENCE_KEY]: expected } : undefined,
+    );
+  });
+
+  test("the holder mints its own handle: a dotted call is the reference plus the steps, a whole call is itself", async () => {
+    const calls: unknown[] = [];
+    const materialized = materializeItxHandleReference(
+      { [ITX_HANDLE_REFERENCE_KEY]: ["itx", "repos", ["get", "/repos/x"]] },
+      (expression) => {
+        calls.push(expression);
+        return "answered";
+      },
+    ) as any;
+    expect(materialized).toBeInstanceOf(InvokeHandle);
+    expect(await materialized.readFile("worker.ts")).toBe("answered");
+    expect(await materialized.invoke("itx.whoami()")).toBe("answered");
+    expect(calls).toEqual([
+      ["itx", "repos", ["get", "/repos/x"], ["readFile", "worker.ts"]],
+      ["itx", ["whoami"]],
+    ]);
+    expect(materializeItxHandleReference({ ok: true }, () => undefined)).toEqual({ ok: true });
   });
 });

@@ -26,6 +26,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import {
   InvokeHandle,
   canonicalItxExpressionPrefix,
+  materializeItxHandleReference,
   normalizedItxExpression,
   type ItxExpression,
   type ItxExpressionInput,
@@ -140,11 +141,18 @@ export class IterateContextRpcTarget extends RpcTarget {
     return this.#contextNamespace.getByName(this.#durableObjectAddress.name);
   }
 
-  /** Dispatch on the DO under this context's caller — the one place the edge dispatches. */
-  #invokeOnDurableObject(itxExpression: ItxExpression, args: unknown[] = []): Promise<unknown> {
+  /** Dispatch on the DO under this context's caller — the one place the edge dispatches. A handle the
+   *  DO names by expression (expression.ts) becomes a handle of THIS edge object: every dotted call on
+   *  it is one whole expression back through `invoke`, so what the client holds is an object of this
+   *  stateless worker, and no session onto the actor outlives a call. */
+  async #invokeOnDurableObject(
+    itxExpression: ItxExpression,
+    args: unknown[] = [],
+  ): Promise<unknown> {
     // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the call denotes
     // whatever expression the caller spelled, so `unknown` is the honest contract here.
-    return this.#durableObject.invoke(itxExpression, args, this.#caller) as Promise<unknown>;
+    const result = (await this.#durableObject.invoke(itxExpression, args, this.#caller)) as unknown;
+    return materializeItxHandleReference(result, (expression) => this.invoke(expression));
   }
 
   /** Another context of THIS project. Absolute by convention (`cd("/agents/support")`); relative
