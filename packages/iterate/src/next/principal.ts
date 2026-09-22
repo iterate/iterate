@@ -37,6 +37,8 @@ export const ITX_GRANT_HEADER = "x-itx-grant";
 /** The header a loaded worker's `env.ITX.fetch` sets on the Request it forwards, so the context's
  *  fetch runs the call as app code; stripped from every Request that arrives from outside. */
 export const ITX_APP_HEADER = "x-itx-app";
+/** Originating context of a native fetch forwarded by a trusted context. */
+export const ITX_CALLER_PATH_HEADER = "x-itx-caller-path";
 
 /** The event as the log stores it: `source.principal` and `source.grant` are the platform's — set
  *  from the admitted caller, client-supplied ones dropped (an anonymous session's event carries

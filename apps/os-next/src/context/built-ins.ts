@@ -11,7 +11,14 @@
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
 import { codedError, jsonEqual, resolveContextPath } from "iterate/next/lib";
-import { stampCaller, type Caller } from "iterate/next/principal";
+import {
+  ITX_APP_HEADER,
+  ITX_CALLER_PATH_HEADER,
+  ITX_GRANT_HEADER,
+  ITX_PRINCIPAL_HEADER,
+  stampCaller,
+  type Caller,
+} from "iterate/next/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
 import {
   print,
@@ -43,6 +50,7 @@ import {
 } from "../secrets.ts";
 import type { SecretState } from "../secret/contract.ts";
 import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.ts";
+import { ITX_EXPRESSION_FETCH_HEADER, terminalFetchOf } from "./rpc-stubs.ts";
 import { admitLoadedCodeRow, refuseSelfLoopRow } from "./itx-expression-rewriting.ts";
 import { GLOBAL_PROJECT_ID, resourceScope } from "./paths.ts";
 import {
@@ -794,6 +802,25 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         // The caller crosses with the call — the sibling runs it under the same Caller, so an event
         // appended there is attributed too — stamped with the context it originated at (once, at the
         // first hop) so a relative path there still means the caller's.
+        const terminalFetch = terminalFetchOf(["itx", ...itxExpressionSteps], []);
+        if (terminalFetch) {
+          // A socket-bearing Response must cross a native fetch, never Workers RPC.
+          const headers = new Headers(terminalFetch.request.headers);
+          for (const name of [
+            ITX_PRINCIPAL_HEADER,
+            ITX_GRANT_HEADER,
+            ITX_APP_HEADER,
+            "x-itx-platform-origin",
+          ])
+            headers.delete(name);
+          headers.set(ITX_EXPRESSION_FETCH_HEADER, JSON.stringify(terminalFetch.steps));
+          headers.set(ITX_CALLER_PATH_HEADER, caller.path || path);
+          if (caller.principal) headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(caller.principal));
+          if (caller.grant) headers.set(ITX_GRANT_HEADER, caller.grant);
+          if (caller.app) headers.set(ITX_APP_HEADER, "1");
+          if (caller.platformOrigin) headers.set("x-itx-platform-origin", caller.platformOrigin);
+          return context.fetch(new Request(terminalFetch.request, { headers }));
+        }
         return context.invoke(["itx", ...itxExpressionSteps], [], {
           ...caller,
           path: caller.path || path,

@@ -5,6 +5,8 @@ import { readFileSync } from "node:fs";
 import { build } from "esbuild";
 import { beforeAll, expect, test, vi } from "vitest";
 
+import { admitLoadedCodeRow } from "../../src/context/itx-expression-rewriting.ts";
+
 let VoiceWorker: any;
 
 beforeAll(async () => {
@@ -105,11 +107,15 @@ function harness(image = png(3, 0), infoOverride = {}) {
   });
   const status = vi.fn(async () => ({ uploadId, state: "shown" }));
   const screen = { setImage, status, info: vi.fn(async () => info) };
-  const append = vi.fn(async (..._events: any[]) => []);
+  const append = vi.fn(async (...events: any[]) => {
+    for (const event of events) admitLoadedCodeRow(event, "/agents/voice/test");
+    return [];
+  });
   const itx = {
+    agents: { create: vi.fn(async () => ({})) },
     browser: { quickAction },
     clients: { waveshare_rlcd_4_2: { screen }, zectrix_note4: { screen }, tiny: { screen } },
-    cd: vi.fn(() => ({ append })),
+    cd: vi.fn(() => ({ append, processors: { disable: vi.fn(async () => undefined) } })),
   };
   return {
     worker: new VoiceWorker({ ITX: { get: () => itx } }),

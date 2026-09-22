@@ -1269,7 +1269,12 @@ async function dialProviderSocket(): Promise<WebSocket | null> {
     headers: { Upgrade: "websocket", Authorization: 'Bearer getSecret("/secrets/openai")' },
   });
   const socket = response.webSocket || null;
-  if (!socket) return null;
+  if (!socket) {
+    const detail = await response.text().catch(() => "response body unavailable");
+    throw new Error(
+      `Voice provider upgrade returned HTTP ${response.status}: ${detail.slice(0, 500)}`,
+    );
+  }
   socket.binaryType = "arraybuffer"; // before accept(): the current default is Blob
   socket.accept();
   return socket;

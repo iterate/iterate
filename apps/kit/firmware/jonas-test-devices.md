@@ -52,6 +52,25 @@ Flash hashes and all 64 host tests passed. The voice check opened a call in
 its counting and returned “Stopped.” Both checks reported no errors, and
 final health showed an idle call, ready transport, XMOS 1.0.3 and an unmuted mic.
 
+## Voice backend repair — 2026-09-22
+
+Immediate `call ended` came from backend changes: loaded voice subscriptions
+still named forbidden `builtins`, fresh conversations lacked their creator
+link, `/secrets/openai` was missing after the secret migration, and inherited
+WebSocket fetches crossed Workers RPC, which cannot serialize the socket.
+Repair the service, project secret and native fetch forwarding; reflashing
+does not repair these failures. `apps/os-next/e2e/voice-agent.e2e.test.ts` runs
+the real voice bundles against a WebSocket provider fixture and requires call
+acceptance plus two microphone-to-speaker audio round trips. It failed on the
+broken production version and passed on the fixed preview and production.
+
+Satellite1's physical proof accepted in 5.33 s, heard the prompt and replied
+“Banana.”, with 55 speaker writes and no reported errors. HAVPE needed a USB
+reset after its capability stopped responding; no flash was written. A first
+retry produced transcripts without speaker writes; the subsequent complete
+proof accepted in 3.90 s, heard “What is two plus two?”, replied “Four.” and
+recorded 240 speaker writes with no errors. Both calls were ended afterwards.
+
 ## Bench website backend repair — 2026-09-21
 
 - Website: https://prj-kit-bench.iterate2.app

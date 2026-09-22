@@ -121,8 +121,14 @@ async function main(): Promise<void> {
   await run("say", ["-r", "170", PROMPT]);
 
   let after: Health = before;
+  let framesSent = 0;
+  let spkWrites = 0;
   for (let attempt = 0; attempt < 40; attempt++) {
     after = await healthWithRetry(kit);
+    if (after.conversation === streamPath) {
+      framesSent = Math.max(framesSent, Number(after.framesSent ?? 0));
+      spkWrites = Math.max(spkWrites, Number(after.spkWrites ?? 0));
+    }
     if (EXPECT.test(saidBack) && answers > 0) break;
     await sleep(1000);
   }
@@ -133,13 +139,16 @@ async function main(): Promise<void> {
     errors.push(`end: ${String(error).slice(0, 100)}`);
   }
 
-  // The words are the verdict. The board's frame and speaker counters are per call and the
-  // last health read may land in the next one, so they are reported, not judged.
-  const framesSent = Number(after.framesSent ?? 0);
-  const spkWrites = Number(after.spkWrites ?? 0);
-  const verdict = EXPECT.test(saidBack)
-    ? "PASS"
-    : `FAIL: heard "${heardUs.trim()}", said "${saidBack.trim()}" (expected /${EXPECT.source}/i)`;
+  // A transcript alone does not prove playback. Only count health observations from this call.
+  const failures = [
+    ...errors,
+    ...(!heardUs.trim() ? ["no microphone transcript"] : []),
+    ...(!EXPECT.test(saidBack) ? [`reply did not match /${EXPECT.source}/i`] : []),
+    ...(!framesSent ? ["no microphone frames sent"] : []),
+    ...(!spkWrites ? ["no speaker writes"] : []),
+    ...(!answers ? ["no completed speaker answer"] : []),
+  ];
+  const verdict = failures.length ? `FAIL: ${failures.join("; ")}` : "PASS";
   console.log(
     JSON.stringify(
       {

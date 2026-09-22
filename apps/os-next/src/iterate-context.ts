@@ -34,6 +34,7 @@ import {
 import type { IterateContextApi, RewriteRuleConfigured } from "iterate/next/api";
 import {
   ITX_APP_HEADER,
+  ITX_CALLER_PATH_HEADER,
   ITX_GRANT_HEADER,
   ITX_PRINCIPAL_HEADER,
   type Caller,
@@ -208,6 +209,8 @@ export class IterateContextRpcTarget extends RpcTarget {
       if (this.#caller.principal)
         headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(this.#caller.principal));
       if (this.#caller.grant) headers.set(ITX_GRANT_HEADER, this.#caller.grant);
+      headers.delete(ITX_CALLER_PATH_HEADER);
+      if (this.#caller.path) headers.set(ITX_CALLER_PATH_HEADER, this.#caller.path);
       headers.delete(ITX_APP_HEADER); // likewise this handle's, never the Request's own
       if (this.#caller.app) headers.set(ITX_APP_HEADER, "1");
       if (this.#caller.platformOrigin)
@@ -553,6 +556,7 @@ export class ItxEntrypoint extends WorkerEntrypoint<
     headers.delete(ITX_PRINCIPAL_HEADER);
     headers.delete(ITX_GRANT_HEADER);
     headers.delete(ITX_APP_HEADER);
+    headers.delete(ITX_CALLER_PATH_HEADER);
     headers.delete(ITX_PLATFORM_ORIGIN_HEADER);
     if (!this.ctx.props.platform) {
       // A raw `fetch(url)` from loaded code IS `itx.fetch(request)` at its context — through the
