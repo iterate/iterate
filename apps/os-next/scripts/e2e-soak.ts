@@ -27,13 +27,12 @@ function parseArgs(argv: string[]) {
   return { runs, filter };
 }
 
-type Outcome = "passed" | "failed" | "skipped" | "todo" | "pending";
 type VitestJson = {
   testResults: {
     name: string;
     assertionResults: {
       fullName: string;
-      status: Outcome;
+      status: "passed" | "failed" | "skipped" | "todo" | "pending";
       duration?: number;
       failureMessages?: string[];
     }[];
