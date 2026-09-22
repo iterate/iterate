@@ -2,8 +2,9 @@
 // end to end): the sign-in page's own states, the invalid-request page, and a consent page whose
 // session ends underneath it. Like auth.spec.ts these run against the local worker or, with
 // DEMO_BASE_URL, a deployment.
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import { authorizationCodeRequest } from "iterate/next/oauth";
+import { test } from "./test.ts";
 
 const claudeClient = "https://claude.ai/oauth/claude-code-client-metadata";
 const stamp = () => `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}`;
@@ -67,7 +68,7 @@ test("an invalid authorization request is a page with a way back, not a raw erro
 }) => {
   const origin = new URL(baseURL!).origin;
   await signIn(page, origin, `invalid-${stamp()}@example.com`);
-  await page.goto(`${origin}/authorize?client_id=nope&response_type=code`);
+  await page.goto(`${origin}/oauth2/auth?client_id=nope&response_type=code`);
   await page.getByRole("heading", { name: "Invalid authorization request", exact: true }).waitFor();
   await page.getByText(/could not be accepted: .*client_id/).waitFor();
   await page.getByText("Nothing was granted.").waitFor();
@@ -75,7 +76,7 @@ test("an invalid authorization request is a page with a way back, not a raw erro
     await page.getByRole("link", { name: "Back to iterate", exact: true }).getAttribute("href"),
   ).toBe("/");
   // typed by hand, with nothing at all
-  await page.goto(`${origin}/authorize`);
+  await page.goto(`${origin}/oauth2/auth`);
   await page.getByRole("heading", { name: "Invalid authorization request", exact: true }).waitFor();
   await page.getByText(/client_id is required/).waitFor();
 });
@@ -115,8 +116,8 @@ test("a consent page whose session ends underneath it returns to sign-in", async
   // the page acts on its open socket; the platform refuses; the page leaves for sign-in, bound
   // for this very request
   await page.getByRole("textbox", { name: "Project slug", exact: true }).fill(`ended-${stamp()}`);
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
-  await page.waitForURL(/\/login\?next=%2Fauthorize%3F/);
+  await page.getByRole("button", { name: "Review permissions", exact: true }).click();
+  await page.waitForURL(/\/login\?next=%2Foauth2%2Fauth%3F/);
   expect(errors).toEqual([]);
 });
 
@@ -139,4 +140,81 @@ test("a consent page that cannot reach the platform says so instead of loading f
   await page.getByRole("alert").waitFor();
   expect(await page.getByText("Loading…", { exact: true }).count()).toBe(0);
   await page.getByRole("link", { name: "Try again", exact: true }).waitFor();
+});
+
+// These are presentation fixtures for deployment options, not proofs of Google/email identity.
+// The password flow above and the OAuth browser test exercise the real server.
+for (const variant of [
+  { name: "password", password: true, emailSignIn: false, google: null },
+  { name: "email code", password: false, emailSignIn: true, google: null },
+  { name: "Google", password: false, emailSignIn: false, google: "/.auth/identity" },
+  { name: "password and code", password: true, emailSignIn: true, google: null },
+  { name: "password and Google", password: true, emailSignIn: false, google: "/.auth/identity" },
+  { name: "code and Google", password: false, emailSignIn: true, google: "/.auth/identity" },
+  { name: "all methods", password: true, emailSignIn: true, google: "/.auth/identity" },
+  { name: "unconfigured", password: false, emailSignIn: false, google: null },
+]) {
+  test(`login layout: ${variant.name}`, async ({ page }) => {
+    await page.route("**/login.json*", (route) =>
+      route.fulfill({ json: { ...variant, next: "/login", email: "", signedInAs: null } }),
+    );
+    await page.goto("/login");
+    await page.getByRole("heading", { name: "Sign in to iterate" }).waitFor();
+    await expect(page.getByLabel("Email", { exact: true })).toHaveCount(
+      variant.password || variant.emailSignIn ? 1 : 0,
+    );
+    await expect(page.getByLabel("Password", { exact: true })).toHaveCount(
+      variant.password ? 1 : 0,
+    );
+    await expect(page.getByRole("link", { name: "Continue with Google" })).toHaveCount(
+      variant.google ? 1 : 0,
+    );
+    if (!variant.password && !variant.emailSignIn && !variant.google)
+      await page.getByText("Sign-in is not configured for this deployment.").waitFor();
+    // Catch the original missing password styles and narrow-screen overflow.
+    if (variant.password) {
+      const email = await page.getByLabel("Email", { exact: true }).boundingBox();
+      const password = await page.getByLabel("Password", { exact: true }).boundingBox();
+      expect(password?.width).toBe(email?.width);
+      expect(password?.height).toBe(email?.height);
+      const submit = await page.getByRole("button", { name: "Sign in", exact: true }).boundingBox();
+      expect(submit!.y - (password!.y + password!.height)).toBeGreaterThanOrEqual(16);
+    }
+    await expect(page.locator("body")).toHaveJSProperty("scrollWidth", page.viewportSize()!.width);
+    await page.screenshot({ path: test.info().outputPath("login.png"), fullPage: true });
+  });
+}
+
+test("email-code entry preserves the destination and supports retrying another email", async ({
+  page,
+}) => {
+  await page.route("**/login.json*", (route) =>
+    route.fulfill({
+      json: {
+        next: "/oauth2/auth?client_id=example",
+        codeSentTo: "alex@example.com",
+        error: "That code was not accepted. Try again.",
+      },
+    }),
+  );
+  const submissions: URLSearchParams[] = [];
+  await page.route("**/login", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    submissions.push(new URLSearchParams(route.request().postData() || ""));
+    await route.fulfill({ contentType: "text/html", body: "<h1>Submitted</h1>" });
+  });
+  await page.goto("/login");
+  await page.getByRole("heading", { name: "Check your inbox" }).waitFor();
+  await expect(page.getByRole("alert")).toContainText("That code was not accepted");
+  await page.getByRole("textbox", { name: "Code", exact: true }).fill("123456");
+  await page.screenshot({ path: test.info().outputPath("code-entry.png"), fullPage: true });
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("heading", { name: "Submitted" }).waitFor();
+  expect(submissions[0]?.get("code")).toBe("123456");
+  expect(submissions[0]?.get("next")).toBe("/oauth2/auth?client_id=example");
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Use a different email" }).click();
+  await page.getByRole("heading", { name: "Submitted" }).waitFor();
+  expect(submissions[1]?.get("restart")).toBe("1");
+  expect(submissions[1]?.get("next")).toBe("/oauth2/auth?client_id=example");
 });

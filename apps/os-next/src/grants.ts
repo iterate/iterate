@@ -276,7 +276,7 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
     // Personal token minting runs the code→token exchange through the SAME provider gate in process
     // (browser apps hit its public endpoint instead).
     const response = await new OAuthProvider(providerOptions(env, this.#platformOrigin)).fetch(
-      new Request(`${issuer}/oauth/token`, {
+      new Request(`${issuer}/oauth2/token`, {
         method: "POST",
         body: new URLSearchParams({
           grant_type: "authorization_code",

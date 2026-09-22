@@ -50,7 +50,7 @@ export async function oauthSession(projectId: string, user: { email: string }) {
   if (!("redirectTo" in approved)) throw new Error(JSON.stringify(approved));
   const callback = new URL(approved.redirectTo);
   if (callback.searchParams.get("state") !== flow.state) throw new Error("OAuth state changed");
-  const exchange = await fetch(workerUrl("/oauth/token"), {
+  const exchange = await fetch(workerUrl("/oauth2/token"), {
     method: "POST",
     body: new URLSearchParams({
       grant_type: "authorization_code",

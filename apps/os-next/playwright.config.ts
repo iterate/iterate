@@ -22,7 +22,12 @@ export default defineConfig({
   workers: process.env.CI ? 6 : undefined,
   retries: process.env.CI ? 1 : 0,
   reporter: "list",
-  use: { baseURL, trace: "on-first-retry" },
+  use: {
+    baseURL,
+    trace: "on-first-retry",
+    video:
+      process.env.VIDEO_MODE === "1" ? { mode: "on", size: { width: 1280, height: 720 } } : "off",
+  },
   // Boot a local worker only for a localhost target; a DEMO_BASE_URL to a deployment skips it.
   webServer: process.env.DEMO_BASE_URL
     ? undefined
@@ -35,6 +40,10 @@ export default defineConfig({
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
     // the consent flow once more at a phone's width, with touch — Chromium, the same worker
-    { name: "phone", use: { ...devices["Pixel 7"] }, testMatch: "**/auth.spec.ts" },
+    {
+      name: "phone",
+      use: { ...devices["Pixel 7"] },
+      testMatch: ["**/auth.spec.ts", "**/issuer-pages.spec.ts"],
+    },
   ],
 });

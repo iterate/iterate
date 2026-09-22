@@ -44,7 +44,7 @@ client copies the issuer's CIMD ID or asks for account scope. PAT issuance mints
 
 ## First consent and capabilities
 
-The client-only `/authorize` page authenticates with the shared app SDK.
+The client-only `/oauth2/auth` page authenticates with the shared app SDK.
 An issuer session alone receives `session.consent.describe/approve`. Organization
 creation and project creation use the ordinary `Session` capabilities, including
 explicit organization selection. The original client's OAuth query remains in

@@ -405,7 +405,7 @@ export default {
     // files (control-plane.ts `issuerPagePaths`), the token and registration endpoints, discovery.
     const issuerRoute =
       issuerPagePaths.includes(url.pathname) ||
-      ["/oauth/token", "/oauth/register"].includes(url.pathname) ||
+      ["/oauth2/token", "/oauth2/register"].includes(url.pathname) ||
       url.pathname.startsWith("/.well-known/");
     if (!issuerRoute) {
       const authorization = await browserAuthorization(env, request, ctx);

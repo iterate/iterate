@@ -1,5 +1,5 @@
 // The fixed issuer shell: the OAuth AS's bindings, the sign-in POST, and THE ISSUER'S TWO PAGES —
-// /login and the /authorize consent. The pages are FILES — public/login.html and public/authorize.html,
+// /login and the /oauth2/auth consent. The pages are FILES — public/login.html and public/oauth2/auth.html,
 // with the stylesheet and a script each beside them — served through the assets binding: no
 // framework, no build. The sign-in page asks /login.json what to show and signs in with plain form
 // posts to /login — the password, or an email then its mailed code (login-code.ts) — or the Google
@@ -59,7 +59,7 @@ export const issuerPagePaths = [
   "/login",
   "/login.json",
   "/login.js",
-  "/authorize",
+  "/oauth2/auth",
   "/authorize.js",
   "/capnweb.js",
   "/issuer.css",
@@ -154,14 +154,14 @@ async function loginFormPost(request: Request, env: Env): Promise<Response | nul
   }
 }
 
-/** GET /authorize is the consent page (public/authorize.html) for a signed-in browser — no session ⇒
+/** GET /oauth2/auth is the consent page (public/oauth2/auth.html) for a signed-in browser — no session ⇒
  *  sign in first, and come back to this very URL. The page itself is a capnweb client of `/api`
  *  like any app, the cookie riding the handshake: `consent.describe` for what to show, `createOrg`
  *  and `projects.create` for a project made on the spot, `consent.approve` for the client's
  *  redirect — this worker only gates the page. */
 async function authorizePage(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (await browserAuthorization(env, request, ctx)) return env.ASSETS.fetch(request);
-  const login = `/login?next=${encodeURIComponent(`/authorize${new URL(request.url).search}`)}`;
+  const login = `/login?next=${encodeURIComponent(`/oauth2/auth${new URL(request.url).search}`)}`;
   return new Response(null, {
     status: 303,
     headers: { Location: login, "Cache-Control": "no-store" },
@@ -239,7 +239,7 @@ export const issuerHandler: Handler = {
     const { pathname } = new URL(request.url);
     if (!["GET", "HEAD", "POST"].includes(request.method))
       return new Response("Method not allowed", { status: 405 });
-    if (pathname === "/authorize" && request.method !== "POST")
+    if (pathname === "/oauth2/auth" && request.method !== "POST")
       return authorizePage(request, env, ctx);
     if (request.method === "POST") return new Response("Not found", { status: 404 });
     if (pathname === "/") return landingPage(request, env);

@@ -327,8 +327,8 @@ describe("public protocol origins", () => {
       ).json(),
     ).toMatchObject({
       issuer: "https://os.iterate2.com",
-      authorization_endpoint: "https://os.iterate2.com/authorize",
-      token_endpoint: "https://os.iterate2.com/oauth/token",
+      authorization_endpoint: "https://os.iterate2.com/oauth2/auth",
+      token_endpoint: "https://os.iterate2.com/oauth2/token",
     });
   });
 
@@ -379,12 +379,12 @@ describe("public protocol origins", () => {
       await (await request("https://os.test/.well-known/oauth-authorization-server", paths)).json(),
     ).toMatchObject({
       issuer: "https://os.test",
-      authorization_endpoint: "https://os.test/authorize",
+      authorization_endpoint: "https://os.test/oauth2/auth",
     });
     // the pages: sign-in and consent are the issuer's, never a project's (projects live under
     // `/projects/`) — the page, or a redirect to it, not a 421 and not a project lookup
     expect((await request("https://os.test/login", paths)).status).toBe(200);
-    const consent = await request("https://os.test/authorize?client_id=x", paths);
+    const consent = await request("https://os.test/oauth2/auth?client_id=x", paths);
     expect(consent.status).toBe(303); // no session: sign in first, and come back
     expect(consent.headers.get("location")).toMatch(/^\/login\?next=/);
   });
