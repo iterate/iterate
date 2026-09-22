@@ -540,6 +540,15 @@ async function deployPreview(
     const appPreviews = await Promise.all(
       apps.map((app) => deployAppPreview(app, previewName, url, wrangler.command)),
     );
+    const notesPreview = appPreviews.find((app) => app.name === "notes");
+    if (notesPreview) {
+      if (process.env.CI)
+        await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], { cwd: ROOT });
+      await runAsync("pnpm", ["spec"], {
+        cwd: path.resolve(ROOT, "../notes"),
+        env: { DEMO_BASE_URL: url, NOTES_BASE_URL: notesPreview.url },
+      });
+    }
     const slug = data.preview?.slug || previewName;
     const summary = {
       previewName,
