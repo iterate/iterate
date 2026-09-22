@@ -41,13 +41,8 @@ admin secret is a bearer on `/mcp` too (it reaches every project, so `run` must 
 
 - [Scheduled appends](docs/scheduled-appends.md) — durable deadlines for userspace facets, cancellation, and executable examples
 
-- `docs/itx-surface-as-built.md` — every signature, transcribed from source (start here)
-- `docs/clean-room-api-walkthrough.md` — the long-form walkthrough, module by module
-- `docs/design-onion-subscriptions-processors.md` — the design of record for subscriptions + processors
-- `LAYERS.md` — the layer map (the build log that used to sit beside it lives on the `backup/kernel-wayfinder-2026-07-30-presquash-*` branch)
-- [Archived experiments](../../../docs/archived-experiments.md) — the single backup of retired implementations and research
-- [Design research](docs/research/README.md) — OAuth research, implementation reviews, and deployment evidence
-- [Archived history](docs/history/README.md) — earlier plans, reviews, proposals, and logs on GitHub
+- `LAYERS.md` — the layer map
+- [Archived experiments](../../docs/archived-experiments.md) — the single backup of retired implementations and research
 
 ## Configuration
 
@@ -130,11 +125,6 @@ organization and project through `session.createOrg` and `session.projects.creat
 approve the pending client's access without leaving the flow — over `/api`, as any client would. Other apps may request account
 permission through explicit consent, but cannot approve grants. All apps use the same
 `/.auth/*` adapter, opaque HttpOnly cookie, public token exchange and `/api` proxy.
-
-See [the current OAuth design](docs/unified-oauth-architecture.md) for boundaries,
-revocation and the deferred impersonation design. Dated design and review docs under `docs/`
-may still describe the pre-unification project credentials; they are history, not the public
-authorization contract.
 
 ## Build, run, deploy
 

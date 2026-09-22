@@ -166,7 +166,7 @@ export async function fetchProjectHost(
 }
 
 /** What one eyeball WebSocket round trip saw: `opened` (the 101), the first message, the close code. */
-export type WebSocketRoundTrip = {
+type WebSocketRoundTrip = {
   opened: boolean;
   echo?: string;
   closeCode?: number;
