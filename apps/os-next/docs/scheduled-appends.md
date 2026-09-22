@@ -106,48 +106,9 @@ is ever a reason to wake.
 | Subscription delivery | per cursor row (a target that, through the rules, resolves to neither a facet nor a lent rpc stub — decided statically, never by evaluating it): EXACTLY the time its persisted cursor carries — written the instant its loop starts on a row behind the durable mark, inside the commit's own hook ("an attempt begins: come back by now + 20 s", the attempt counted; fifteen without an ack or a failure halt the row), written by the retry ladder as the rung, cleared by the ack, spent when the loop finds nothing owed or a target nothing resolves; a halted row owes nothing |
 | Hosted processors     | per facet row: the claim its engine holds while a `runInBackground` attempt is in flight (`processors.claim`, a kv row: "revive me by T", 20 s out); the pass spends a due claim and calls the facet's `revive()` — catch up, run the at-head pass — and an attempt still in flight claims again, later each time (40 s, 80 s, … 30 min), so a hung attempt costs a few wakes an hour and a settled one releases the claim                                                                                                                                                             |
 
-A wake makes no loop: `stream/woken` is a durable event like any other, and every `*` subscription
-receives it (`consumesEvent`, the one consumes rule, has no carve-out). What keeps it from looping is
-that delivering it creates no reason to wake again: the config row's delivery is claimed only while
-owed and acked at once; a request — a loaded worker's `env.ITX` loopback included — claims
-nothing. The alarm handler records the wake itself
-(`stream/woken { reason: "alarm" }`, inside its pass — workerd hides a firing alarm from `getAlarm()`
-for the whole run, so no constructor can tell; every other door records `"request"`), and its
-delivery acks within the pass, so an alarm wake that finds nothing else owed writes no alarm at all.
-A facet is not a pin. On the edge a live facet does not keep an actor resident — it hibernates within
-seconds like any other, and the facet dies with it — so nothing arms an alarm for a facet: such an
-alarm could only construct the next incarnation, whose wake record would materialize the facet again,
-a wake per quiet period. A `*` processor facet therefore costs a wake nothing beyond its own
-materialization. Only a borrowed rpc stub or an open capnweb socket (measured: both keep the actor
-resident; an HTTP client does not) is ever released, by a 30 s timer after its last use — no alarm.
-Where the runtime does keep a facet-hosting actor resident (workerd's harness) a test releases the
-facets too, through the DO-only door (`releasePins`).
-
-One hold keeps the alarm from being moved under a handler: nothing is written while `alarm()` runs —
-its alarm stays stored, so a pass that throws is retried by the runtime (2s·2ⁿ, six tries), and a
-completed pass sets the next deadline once. The alarm read at construction is only the dedupe seed:
-every reason is derived again by the constructor's first reconcile — a due schedule or claim derives
-the same time (no write). No past delivery claim leaves a pass: a pass joins and awaits every loop
-it finds running, and a row an unreadable event stops is halted. There is no clamp (the
-runtime clamps a past time to now and refuses one at or before the epoch, which schedule validation
-rejects) and no keep-earlier rule; every `setAlarm` is a billed write, so the only dedupe is "the
-wanted time is what we last wrote".
-
-Every alarm pass is traced as ephemeral `events.iterate.com/stream/trace/alarm` events whose
-payload is an `AlarmTrace` (`src/iterate-context-durable-object.ts`): `alarm-fired` with what was
-armed and every deadline the pass found (each source's, with the claiming delivery rows and
-processors), `alarm-pass` with what it armed next or `alarm-abandoned` with what it threw — plus
-the durable head and what is pinned. Only a pass traces:
-a reconcile outside one consumes no offset. `waitForEvent({ type })`
-sees a trace live; `itx.readEvents(afterOffset, limit, { includeEphemeral: true })` reads it back
-afterwards, merged in offset order with the durable rows — the stream keeps the current
-incarnation's ephemerals of every kind (live-state deltas, rpc-stub presence, traces) in a ring of
-`APP_CONFIG_RECENT_EPHEMERALS_BUDGET_CHARS` serialized characters, 1 MiB by default. The page's
-proof stays the log's: `scannedThroughOffset` never names an ephemeral, and an ephemeral past the
-durable mark comes back on every at-head read until a durable takes the head or the ring evicts it.
-A trace is never subscription input and never activity, so observing a context cannot keep it
-awake. The durable `stream/woken { incarnation, reason }` says what woke each incarnation:
-`"alarm"` when the alarm handler was the first door to open, `"request"` otherwise.
+How a pass runs, the hold that keeps the alarm from moving under a handler, the retry, and the
+alarm trace are described where they live: `src/alarm-coordinator.ts`,
+`src/iterate-context-durable-object.ts` (`AlarmTrace`) and `src/stream/stream.ts` (the ephemerals ring).
 
 ## Bounds
 

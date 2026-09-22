@@ -135,9 +135,6 @@ export function parseCommit(payload: Uint8Array): {
   return { tree, parents, author, timestamp, message };
 }
 
-/** Pure and namespace-injected: unit-tests alone (repos.test.ts). Every `path` is a repo's context
- *  path (`/repos/config`); `boundName` is the one step from it to the bound Artifacts name. */
-
 // ── git wire ──
 
 /**

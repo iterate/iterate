@@ -12,8 +12,10 @@
     "specs",
     "__workers-tests__",
     "examples/voice-agent",
-    "src/sql.d.ts",
-    "scripts/memory-budget-scenarios.ts"
+    "scripts/voice-*.ts",
+    "scripts/inspect-context.ts",
+    "scripts/memory-budget-scenarios.ts",
+    "src/sql.d.ts"
   ],
   "exclude": []
 }
