@@ -86,7 +86,7 @@ reads: the WHOLE event — no policies, no flags.
 
 One dispatch path: parse → RULES FIRST: the most SPECIFIC matching row — the context's own, and
 the implicit rows `itx.<root> ⇒ itx.builtins.<root>` (every root at the owner root; only the
-fourteen context roots — `CONTEXT_ROOTS`, listed in docs/itx-surface-as-built.md §5 — everywhere
+fourteen context roots — `CONTEXT_ROOTS` in src/context/itx-expression-rewriting.ts — everywhere
 else) — rewrites the call (longest match, then most pinned args; a match step may pin
 literal args — `itx.ai.run('gpt-5')` — which are CONSUMED; a bare `itx` row with a target claims
 what no implicit row claims, which is how a child reaches its creator: `itx ⇒

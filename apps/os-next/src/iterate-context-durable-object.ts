@@ -166,11 +166,6 @@ export interface Env extends AppConfigEnv {
  *  expression did not. */
 const ITERATE_APP_HEADER = "x-iterate-app";
 
-/** WHO is calling, as this DO runs a call: the SDK's `Caller` (the principal) plus THE PLATFORM
- *  ORIGIN the caller reached the platform on (iterate-context.ts; the fetch lane's header) — what a
- *  public URL is composed from (`itx.url`, a signed file URL), because a DO isolate knows no origin
- *  of its own. Null/absent for a caller with none (a loaded worker, the delivery loop, an alarm). */
-
 export class IterateContextDurableObject extends DurableObject<Env> {
   /** WHO THIS DO IS: the DO name parsed ONCE into `{ name, projectId, path }`. A context is only
    *  ever reached `getByName`; an id-addressed instance fails right here, before it can touch anything. */
