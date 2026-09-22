@@ -27,13 +27,20 @@ TOKEN — `session.grants.mint({ name, projects })` on the dash's sessions page 
 (30 days, scoped to the projects named, shown once, revocable from `session.grants.list()`/`end`)
 whose bearer opens `/api`, `/mcp` and a covered project host as the user.
 
-An MCP client connects to `https://<worker>/mcp` through the same login: the OAuth 2.1 AS is the
-worker itself (`/oauth2/auth`, `/oauth2/token`, `/oauth2/register`, `/.well-known/*`), the consent page
-picks the projects the token may reach, and it exposes ONE tool, `run({ project?, script })`
-— the text of `async (itx) => …` evaluated in that project's context under the caller's
-principal (`run(script)` when the token reaches exactly one project). Whatever a caller might read —
-who it is, which projects — is a one-line script; a project is created on the OS, in consent, or over `/api`. The
-admin secret is a bearer on `/mcp` too (it reaches every project, so `run` must name one).
+An MCP client connects to `https://mcp.iterate2.com/` in production, or `/mcp` on a deployment
+without a dedicated MCP origin. OAuth consent selects the projects the token may reach. The server
+exposes one tool, `run({ project?, script })`: a JavaScript function, `async (itx) => …`, evaluated
+with the selected project's root handle at `/`. Requests and settlements are recorded on the root
+log with the caller's principal and grant. `project` may be omitted when the token reaches exactly
+one project; an admin bearer always requires it.
+
+Start with `async (itx) => ({ identity: await itx.whoami(), capabilities: await itx.rewriteRules.list() })`.
+Read the config repo through `itx.repos.get("/repos/config")`; inspect its `AGENTS.md` when present.
+A config-repo commit publishes the website. [Working MCP examples](e2e/mcp-project-root.e2e.test.ts)
+show reads, commits and verification through the real endpoint. The tool description links their
+[public raw source](https://raw.githubusercontent.com/iterate/iterate/main/apps/os-next/e2e/mcp-project-root.e2e.test.ts).
+The `<codemode>` response format in `src/agent/system-prompt.ts` belongs to the internal agent loop;
+MCP accepts the function text in `script`.
 
 ## Read next
 

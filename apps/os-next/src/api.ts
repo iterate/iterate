@@ -1,8 +1,8 @@
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { OAuthScope } from "iterate/next/oauth-scopes";
-import { appConfigOf, platformOriginOf } from "./app-config.ts";
+import { platformAddressesOf } from "./app-config.ts";
 import type { Env, Handler } from "./control-plane.ts";
-import { authorizationOf, recordGrantUse, oauthAddresses, providerOptions } from "./oauth.ts";
+import { authorizationOf, recordGrantUse, providerOptions } from "./oauth.ts";
 import { rpcResponse } from "./rpc.ts";
 import { mcpResponse } from "./mcp.ts";
 
@@ -28,18 +28,18 @@ export function oauthResponse(
   defaultHandler?: Handler,
 ) {
   const url = new URL(request.url);
-  const platformOrigin = platformOriginOf(appConfigOf(env), request);
-  const { issuer, api, mcp } = oauthAddresses(env, platformOrigin);
+  const addresses = platformAddressesOf(env, request);
+  const { platformOrigin, api, mcp } = addresses;
   if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
     const resource =
-      url.origin === new URL(mcp).origin && mcp !== `${issuer}/mcp`
+      url.origin === new URL(mcp).origin && mcp !== `${platformOrigin}/mcp`
         ? mcp
         : url.pathname.endsWith("/mcp")
           ? mcp
           : api;
     return Response.json({
       resource,
-      authorization_servers: [issuer],
+      authorization_servers: [platformOrigin],
       scopes_supported: resource === mcp ? ["iterate"] : OAuthScope.options,
       bearer_methods_supported: ["header"],
     });
@@ -56,7 +56,9 @@ export function oauthResponse(
     request.headers.get("upgrade")?.toLowerCase() === "websocket"
   )
     return rpcResponse(request, env, ctx, null);
-  return new OAuthProvider(
-    providerOptions(env, platformOrigin, protectedApi, defaultHandler),
-  ).fetch(request, env, ctx);
+  return new OAuthProvider(providerOptions(env, addresses, protectedApi, defaultHandler)).fetch(
+    request,
+    env,
+    ctx,
+  );
 }

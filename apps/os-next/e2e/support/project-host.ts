@@ -6,8 +6,7 @@
 // wildcard DNS is real and the default dispatcher does. One test runs both ways.
 import { Agent, buildConnector, fetch as undiciFetch, WebSocket as UndiciWebSocket } from "undici";
 import { test } from "vitest";
-import { projectUrlOf } from "iterate/next/project-ingress";
-import type { IngressRouting } from "../../src/app-config.ts";
+import { projectUrlOf, type IngressRouting } from "iterate/next/project-ingress";
 import { adminCredentials, runId, session, workerSlot, workerUrl } from "./client.ts";
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);

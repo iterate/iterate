@@ -2,11 +2,8 @@
 // (`Stream` in stream/stream.ts, whose mechanics are src/stream/stream.test.ts; this file proves the
 // doors end to end through the real DO). Pins:
 //   • the WAKE RECORD: the DO's constructor appends `stream/created` @1 and `stream/woken` @2 before
-//     any door opens, the config-worker funnel's `subscription-configured` lands @4, and the first user
-//     append lands @6 (3 and 5 are ephemeral core live-state deltas); the core reduce carries identity
-//     + incarnation; woken exactly once per incarnation, created once ever
-//   • the ONE inline reduced state is live under ONE key, `core`: a rewrite rule and a subscription row
-//     both reach a live-state subscriber as `core` deltas, and nothing publishes under another key
+//     any door opens, and the first user append lands @3; the core reduce carries identity +
+//     incarnation; woken exactly once per incarnation, created once ever
 //   • the append door's runtime guards; idempotency at the commit point (an in-batch hit reduced ONCE
 //     by the commit-point reduce, a mid-batch conflict rolling the whole batch back and burning no
 //     offset, a hit interleaved with fresh events, two sessions' concurrent appends keeping offsets
@@ -28,12 +25,10 @@
 //     delivery on a dormant context self-wakes on the DO's alarm and the circuit breaker halts it
 
 import { expect, test } from "vitest";
-import type { LiveStateDelta } from "iterate/next/client";
 import type { StreamEvent } from "iterate/next/stream/processor";
 import type { AlarmTrace } from "../src/iterate-context-durable-object.ts";
 import {
   append,
-  collector,
   disposeSessions,
   freshCtx,
   openItx,
@@ -46,7 +41,7 @@ import {
 import { projectHostsAreLocal } from "./support/project-host.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
 
-// ── the wake record and the inline live state ──
+// ── the wake record ──
 
 test("any door materializes a fresh context: readEvents(0) starts with created then woken; the first append lands past them; core's reduced state carries identity + incarnation", async () => {
   const ctx = freshCtx("woken");
@@ -61,11 +56,11 @@ test("any door materializes a fresh context: readEvents(0) starts with created t
   const incarnation = page.events[1].payload.incarnation;
   expect(incarnation).toBeGreaterThanOrEqual(1);
 
-  // The first user append follows created, woken and the ephemeral core delta.
+  // The first user append follows created and woken.
   const receipts = await itx.invoke(`itx.append({ type: 'hello' })`);
   expect(receipts).toHaveLength(1);
   expect(receipts[0].type).toBe("hello");
-  expect(receipts[0].offset).toBe(4);
+  expect(receipts[0].offset).toBe(3);
 
   // the core reduce reduced both records — runtime state IS reduced state
   const snap = await itx.invoke("itx.facets.get('core').snapshot()");
@@ -77,44 +72,6 @@ test("any door materializes a fresh context: readEvents(0) starts with created t
   const types = (await itx.invoke("itx.readEvents(0)")).events.map((e: { type: string }) => e.type);
   expect(types.filter((t: string) => t === "events.iterate.com/stream/woken")).toHaveLength(1);
   expect(types.filter((t: string) => t === "events.iterate.com/stream/created")).toHaveLength(1);
-});
-
-test("the inline reduced state is live under ONE key, `core`: a rewrite rule and a subscription row both reach a live-state subscriber as `core` deltas", async () => {
-  const itx = openItx(freshCtx("inlinelive"));
-  await itx.invoke(`itx.append({ type: 'seed' })`);
-
-  // ONE event type carries every key's deltas; a subscriber keeps its key. One collector sees them
-  // all, so it can also prove nothing publishes under any key but `core` (its slices — rewrite rules,
-  // subscriptions — are never keys of their own).
-  const deltas = collector();
-  await itx.subscribe({
-    name: "corewatch",
-    target: deltas.fn,
-    consumes: ["events.iterate.com/live-state/changed"],
-  });
-  const delivered = (): LiveStateDelta[] =>
-    deltas.invocations.flatMap((i) => i.events.map((e) => e.payload as LiveStateDelta));
-
-  // a REWRITE RULE (a rewrite) → a delta keyed "core" whose patch touches /itxExpressionRewriteRules
-  await itx.provide("itx.zzz", "itx.whoami");
-  const ruleDelta = await until("core delta for the rewrite rule", () =>
-    delivered().find((d) =>
-      d.patch?.some((op) => op.path.startsWith("/itxExpressionRewriteRules")),
-    ),
-  );
-  expect(ruleDelta.key).toBe("core");
-  expect(ruleDelta.to).toBe(ruleDelta.from + 1); // each emission chains its producer revision
-
-  // a SUBSCRIPTION ROW (a subscribe) → a delta keyed "core" whose patch touches /subscriptions
-  await itx.subscribe({ name: "bystander", target: "itx.whoami", consumes: ["never"] });
-  const rowDelta = await until("core delta for the row", () =>
-    delivered().find((d) => d.patch?.some((op) => op.path.startsWith("/subscriptions/bystander"))),
-  );
-  expect(rowDelta.key).toBe("core");
-  expect(rowDelta.to).toBe(rowDelta.from + 1);
-
-  // and nothing ever published under any other key
-  expect(new Set(delivered().map((d) => d.key))).toEqual(new Set(["core"]));
 });
 
 // ── the commit point: guards, idempotency, depth, the pause slice, paging ──
