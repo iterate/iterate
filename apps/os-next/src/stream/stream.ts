@@ -51,8 +51,9 @@ const READ_PAGE_MAX_EVENTS = 1000;
 /** THE RECENT-EPHEMERALS RING's size, in serialized JS chars: what an incarnation keeps of its
  *  ephemerals after the moment they were appended — the one way to see one after the fact, since no
  *  ephemeral ever reaches a row. Oldest out first; an event over the whole budget is not kept. Per
- *  incarnation, like every ephemeral offset. */
-const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
+ *  incarnation, like every ephemeral offset. The delivery loop reserves this much cursor-read
+ *  room before a read that can return nothing else (subscription-delivery.ts). */
+export const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
 
 /** THE ALARM TRACE — the DO's ephemeral record of one alarm pass (iterate-context-durable-object.ts
  *  `AlarmTrace`); pause-exempt, so a paused context's passes stay observable. */
