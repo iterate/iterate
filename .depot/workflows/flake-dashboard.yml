@@ -1,14 +1,17 @@
 # THE FLAKE DASHBOARD'S WRITER (scripts/ci/flake-dashboard/update.ts): folds the flake-records-*
 # artifacts that the Test and Preview OS jobs finished since its last run and rewrites issue #2580.
-# The fold's state is this job's own artifact, read back by the next run. A dispatch with
-# dry-run=true renders without writing the issue or the state.
+# The fold's state is this job's own artifact, read back by the next run, kept even when the issue
+# write fails. A dispatch with dry-run=true renders without writing the issue or the state.
+#
+# PAUSED: dispatch only. The job's token is the Depot GitHub App's, which has no Issues permission,
+# so the first scheduled run (2026-09-23) got 403 "Resource not accessible by integration" on
+# PATCH issues/2580. The legacy writer used the iterate app's own token. Restore the schedule
+# ("7,22,37,52 * * * *") once the writer has a token that can write #2580.
 name: Flake dashboard
 permissions:
   contents: read
   issues: write
 on:
-  schedule:
-    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
     inputs:
       dry-run:
@@ -47,11 +50,13 @@ jobs:
             --state-out test-results/flake-dashboard/state.json \
             --body-out test-results/flake-dashboard/body.md \
             ${{ inputs.dry-run == 'true' && '--dry-run' || '' }}
+      # Also after a failed issue write: the script keeps the fold before it writes the issue. A run
+      # that failed before folding has no state to keep.
       - name: Keep the fold state for the next run
-        if: inputs.dry-run != 'true'
+        if: always() && inputs.dry-run != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: flake-dashboard-state
           path: test-results/flake-dashboard/state.json
-          if-no-files-found: error
+          if-no-files-found: ignore
           overwrite: true

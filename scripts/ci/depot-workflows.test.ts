@@ -274,7 +274,7 @@ describe("Depot credential boundaries", () => {
     );
     expect(writer?.run).toContain("--state-out test-results/flake-dashboard/state.json");
     expect(keep).toMatchObject({
-      if: "inputs.dry-run != 'true'",
+      if: "always() && inputs.dry-run != 'true'",
       uses: "actions/upload-artifact@v4",
       with: expect.objectContaining({ path: "test-results/flake-dashboard/state.json" }),
     });

@@ -231,6 +231,9 @@ async function main() {
       `[flake-dashboard] listed ${unlisted.length} new workflow(s), folded ${artifacts.length} artifact(s) into offsets ${writer.nextOffset}–${next.nextOffset - 1}`,
     );
 
+    // The fold is kept before the issue is written: a failed write must not lose it, or the next
+    // run would start over.
+    if (stateOut && !dryRun) await writeOut(stateOut, JSON.stringify(next));
     const body = renderBody(next.state);
     if (bodyOut) await writeOut(bodyOut, `${body}\n`);
     const issue = await findDashboardIssue(github, { owner, repo });
@@ -251,13 +254,15 @@ async function main() {
       });
       console.log(`[flake-dashboard] opened ${created.data.html_url}`);
     }
-    if (stateOut && !dryRun) await writeOut(stateOut, JSON.stringify(next));
   } finally {
     await rm(downloads, { recursive: true, force: true });
   }
 }
 
-/** The newest successful writer run's state artifact, if Depot still has one. */
+/**
+ * The newest writer run's state artifact, if Depot still has one. A run whose issue write failed
+ * still kept its fold, so failed runs count too.
+ */
 async function readPreviousState(): Promise<WriterState | undefined> {
   const repository = process.env.GITHUB_REPOSITORY || "iterate/iterate";
   const runs = await depotJson<DepotWorkflow[]>([
@@ -270,6 +275,8 @@ async function readPreviousState(): Promise<WriterState | undefined> {
     "Flake dashboard",
     "--status",
     "finished",
+    "--status",
+    "failed",
     "-n",
     "20",
   ]);
