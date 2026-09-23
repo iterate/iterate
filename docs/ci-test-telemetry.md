@@ -1,16 +1,19 @@
 # CI And Test Telemetry
 
 > **What still runs.** PostHog delivery has been off on purpose since #2494:
-> `scripts/ci/posthog-events.ts` drops every event. The finalizers and the
-> scheduled sync still validate, normalize and retain their evidence as Depot
-> artifacts, but nothing reaches the PostHog dashboards below. The legacy
+> `scripts/ci/posthog-events.ts` drops every event. The test finalizers still
+> validate, normalize and retain their evidence as Depot artifacts, but nothing
+> reaches the PostHog dashboards below. The GitHub, Depot and review-bot
+> collector (`.depot/workflows/ci-telemetry.yml`) runs only when dispatched and
+> delivers nothing today: PostHog is its only output, and it keeps no artifact.
+> Its schedule returns in the change that restores delivery. The legacy
 > preview pipeline described here (`preview-run.yml`, `scripts/preview/*`,
 > six Playwright shards, the agent smoke and TUI lanes, `node:test`) went with
 > #2837. The Preview OS workflow's `e2e` job now runs one Vitest e2e runner and
 > one Playwright runner and finalizes them with
 > `upload-test-telemetry.ts --flake-suites preview`. The flake dashboard
 > (issue #2580) is written by `.depot/workflows/flake-dashboard.yml`
-> every 15 minutes (`scripts/ci/flake-dashboard/`, the legacy starter app's
+> hourly (`scripts/ci/flake-dashboard/`, the legacy starter app's
 > fold), as the iterate GitHub App with a token limited to this repository's
 > issues,
 > following the rules in [Current unknown flakes](#current-unknown-flakes).
@@ -257,14 +260,16 @@ while PostHog events remain the query representation used by this repository.
 ## GitHub Actions, Depot, And Review Bots
 
 `.depot/workflows/ci-telemetry.yml` runs
-`scripts/ci/sync-ci-telemetry.ts` every 15 minutes over a rolling window.
+`scripts/ci/sync-ci-telemetry.ts` over a rolling window. It is dispatch-only
+while PostHog delivery is off, since a run would collect and drop everything;
+restoring delivery brings back its 15-minute schedule over the last day.
 Stable insert IDs make overlapping windows and manual backfills of immutable
 completion events idempotent. Review-state events are periodic snapshots and
 therefore use the sync's actual observation time. Event timestamps are the
 provider's completion time or the snapshot's observation time, not an
 unrelated PR-updated timestamp.
 
-The scheduled collector reads `github-actions`, `github-reviews`, and `depot` as
+The collector reads `github-actions`, `github-reviews`, and `depot` as
 independent sources. A failed provider cannot erase healthy events from either
 of the others: the collector sends every successful source plus one health
 event per source, then fails the job. All three health rows share
@@ -281,7 +286,7 @@ run serially on their shared token while Depot collects concurrently.
 | `ci job attempt finished`           | Depot metrics                 | retries, availability, queue/run time, average/peak CPU and memory        |
 | `ci review finished`                | GitHub checks/reviews         | immutable completion/duration for Cursor Bugbot and Iterate Review        |
 | `ci review state observed`          | GitHub review threads         | current findings and unresolved findings by provider and PR head          |
-| `ci telemetry source sync finished` | scheduled collector           | freshness, success/failure, event count, error, and collector version     |
+| `ci telemetry source sync finished` | collector                     | freshness, success/failure, event count, error, and collector version     |
 
 Finding counts are mutable and therefore belong only to the state snapshot;
 they are not rewritten into immutable review-completion events. Iterate Review
@@ -303,7 +308,7 @@ doppler --silent secrets set DEPOT_CI_TELEMETRY_TOKEN \
   --visibility masked
 ```
 
-The scheduled collector reads only that credential from `_shared/preview`,
+The collector reads only that credential from `_shared/preview`,
 then runs the uploader under `_shared/prd`. This split is deliberate:
 `_shared/preview` and `_shared/prd` belong to different PostHog projects, and
 running the whole collector under preview would silently send CI history away
@@ -355,7 +360,8 @@ healthy zero never renders as a blank table:
 
 `EMPTY COLLECTION` means the provider call succeeded but returned no events;
 inspect it whenever repository activity was expected. `STALE` means the newest
-health event is more than 30 minutes old (twice the schedule interval). Blank,
+health event is more than 30 minutes old (twice the collector's 15-minute
+schedule, which is off while delivery is). Blank,
 missing, stale, unknown, incomplete, and foreign evidence are never success
 states.
 

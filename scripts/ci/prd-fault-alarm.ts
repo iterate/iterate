@@ -9,6 +9,7 @@
 //
 //   doppler run --project project-worker --config prd -- pnpm tsx scripts/ci/prd-fault-alarm.ts run
 //   … run --at 2026-09-23T07:30:00Z --dry-run    # replay a window, post nothing
+import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
 import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
 import { getSlackClient, slackChannelIds } from "./slack.ts";
@@ -16,22 +17,42 @@ import { getSlackClient, slackChannelIds } from "./slack.ts";
 /** One window's rows per signal: [label, count], biggest first. */
 export type FaultReading = Record<"serverErrors" | "heals" | "errors", [string, number][]>;
 
+/** Reads the last half hour of os-next-prd's Workers Logs and pages #error-pulse on a fault. */
 export async function run(options: { at?: string; dryRun?: boolean } = {}) {
-  const windowEnd = options.at ? new Date(options.at) : new Date();
-  const reading = await readWindow(windowEnd);
-  const page = renderFaultPage(reading, windowEnd);
-  console.log(JSON.stringify({ windowEnd, reading }));
-  if (!page || options.dryRun) return page || "os-next-prd is quiet";
-  const slack = getSlackClient();
+  const now = new Date();
+  return alarm({
+    now,
+    windowEnd: options.at ? new Date(options.at) : now,
+    // A dry run posts nothing, so it needs no Slack token.
+    slack: options.dryRun ? null : getSlackClient,
+  });
+}
+
+/**
+ * Reads the half hour to `windowEnd` and, on a fault, pages #error-pulse unless a prd fault page
+ * went out in the hour before `now`: a fault that lasts pages hourly, not every run. `slack: null`
+ * posts nothing. Paged, it resolves to the page, so the run ends green: a scheduled run reports on
+ * main's head commit, where red reads as "this commit broke". It throws only when it could not read
+ * prd (readWindow) or post (the Slack client throws on an error).
+ */
+export async function alarm(input: {
+  now: Date;
+  windowEnd: Date;
+  slack: (() => WebClient) | null;
+}) {
+  const reading = await readWindow(input.windowEnd);
+  const page = renderFaultPage(reading, input.windowEnd);
+  console.log(JSON.stringify({ windowEnd: input.windowEnd, reading }));
+  if (!page || !input.slack) return page || "os-next-prd is quiet";
+  const slack = input.slack();
   const channel = slackChannelIds["#error-pulse"];
-  // A fault that lasts pages hourly, not every run.
   const history = await slack.conversations.history({
     channel,
-    oldest: String(Date.now() / 1000 - 3600),
+    oldest: String(input.now.getTime() / 1000 - 3600),
   });
   if (!history.messages?.some((m) => m.bot_id && m.text?.includes("prd fault page:")))
     await slack.chat.postMessage({ channel, text: page });
-  throw new Error(`prd fault alarm tripped:\n${page}`); // a red run too, like the DO duration alarm
+  return page;
 }
 
 /** The page for one window, or null when prd is quiet. Pure. */
@@ -49,7 +70,7 @@ export function renderFaultPage(reading: FaultReading, windowEnd: Date): string 
     return rows.length && `• ${total(rows)} ${what}: ${top.map((row) => row.join(" ")).join(", ")}`;
   };
   return [
-    // "prd fault page:" is how `run` finds the last page; the mention is Jonas (./slack.ts).
+    // "prd fault page:" is how `alarm` finds the last page; the mention is Jonas (./slack.ts).
     `🚨 prd fault page: os-next-prd, 30 min to ${windowEnd.toISOString().slice(11, 16)} UTC <@U067G4QRFK2>`,
     line("5xx responses", reading.serverErrors, (url) =>
       url.replace(/^https?:\/\/([^/]+).*$/, "$1"),

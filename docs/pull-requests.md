@@ -117,7 +117,7 @@ These rules apply whenever an agent is asked to open, babysit, address review, o
 ### CI and merge
 
 - **Never merge when required CI is red** unless the human **explicitly** asked to merge despite failures.
-- Autofix / preview flakiness: investigate; re-run or fix when you can. Do not use a red check as “close enough.”
+- Preview flakiness: investigate; re-run or fix when you can. Do not use a red check as “close enough.”
 - If an unrelated flaky or pathologically slow test is quarantined under the
   [testing protocol](./testing.md#flaky-test-quarantine-protocol), the PR body
   must prominently name the skipped test/lane and link its tracking issue. A hidden skip

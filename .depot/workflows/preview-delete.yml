@@ -1,0 +1,105 @@
+# A CLOSED PULL REQUEST'S PREVIEW, DELETED (`pnpm preview delete`, apps/os/scripts/preview.ts): the
+# os-next preview Preview OS (preview-os-next.yml) deployed for the PR, everything it owned (D1,
+# Artifacts namespace, KV namespaces, R2 bucket) and the client previews.
+#
+# Its own workflow, triggered only when a PR closes, so no push to an open PR carries it as a skipped
+# job. It runs for the PRs that got a preview: its `paths` are Preview OS's
+# (scripts/ci/depot-workflows.test.ts keeps them equal). It shares Preview OS's per-PR concurrency
+# group, so a delete waits for that PR's in-flight deploy and e2e to settle instead of racing them.
+# A delete that never ran or failed is the nightly sweep's (preview-sweep.yml).
+#
+# Delete a PR's preview by hand:
+#   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
+#     --workflow preview-delete.yml --ref main --input pull-request-number=<pr>
+# Depot registers the `closed` trigger once this file is on the default branch. The only Depot
+# secret is DOPPLER_TOKEN; Doppler project-worker/preview supplies the Cloudflare credentials.
+
+name: Preview delete
+
+permissions:
+  contents: read
+  # The PR's head branch, which names its preview, on a dispatch.
+  pull-requests: read
+
+on:
+  pull_request:
+    types:
+      - closed
+    # Preview OS's pull_request paths, verbatim (preview-os-next.yml says why each is there).
+    paths:
+      - .depot/workflows/deploy-os-next.yml
+      - .depot/workflows/deploy-dash.yml
+      - .depot/workflows/deploy-agents.yml
+      - .depot/workflows/deploy-notes.yml
+      - .depot/workflows/deploy-voice.yml
+      - .depot/workflows/deploy-kit.yml
+      - .depot/workflows/preview-os-next.yml
+      - apps/os/**
+      - configs-next/**
+      - apps/dash/**
+      - apps/agents/**
+      - apps/notes/**
+      - apps/voice/**
+      - apps/kit/**
+      - "!apps/kit/firmware/**"
+      - specs/**
+      - playwright.config.ts
+      - packages/iterate/**
+      - packages/shared/**
+      - packages/ui/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - envs.ts
+      - scripts/lib/**
+      - scripts/depot-ci/**
+  workflow_dispatch:
+    inputs:
+      pull-request-number:
+        description: PR number
+        required: true
+        type: string
+
+concurrency:
+  group: preview-os-next-${{ github.event.pull_request.number || inputs.pull-request-number || 'none' }}
+  cancel-in-progress: false
+
+env:
+  # The store the image was baked with (preview-os-next.yml says why).
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+  PR_NUMBER: ${{ github.event.pull_request.number || inputs.pull-request-number }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  delete:
+    name: delete
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 15
+    steps:
+      # The PR's own head, not the default branch: the teardown reads the config that created the
+      # preview (cloudflare-os does the same).
+      - name: Checkout the PR head
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config preview --project project-worker
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Delete the preview
+        working-directory: apps/os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PREVIEW_NAME: ${{ github.head_ref }}
+          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
+        run: doppler run -- pnpm preview delete

@@ -12,8 +12,8 @@ runtime logic in normal scripts under `scripts/ci` instead of embedding large
 Historical workflow/job/attempt timing, queueing, CPU/memory utilization, and
 failure-rate analysis lives in PostHog; see
 [CI and test telemetry](ci-test-telemetry.md) for the dashboards, event model,
-scheduled backfill, Doppler-managed Depot organization token and its scope
-caveat, and CLI/MCP queries.
+backfill (dispatch-only while PostHog delivery is off), Doppler-managed Depot
+organization token and its scope caveat, and CLI/MCP queries.
 
 ## Time budget
 
@@ -22,6 +22,12 @@ caveat, and CLI/MCP queries.
 - No job sleeps or waits minutes for analytics or logs to settle. Put slow-arriving signals
   (Durable Object cost, prd faults) in a scheduled alarm (`do-duration-probe.yml`,
   `prd-fault-alarm.yml`), not in a gate on the merge path.
+- A scheduled run reports on main's head commit, so an alarm stays green unless it is broken: it
+  pages and passes, and fails only when it could not measure or could not post. The nightly crash
+  hunt (`os-next-crash-hunt.yml`) is the exception: a crash it finds is a red run, and the red run
+  is what posts to #error-pulse.
+- A job that only runs on a schedule lives in a schedule-only workflow, so no push or PR carries it
+  as a skipped check (`scripts/ci/depot-workflows.test.ts` enforces it).
 - Build expensive artifacts once and consume them, instead of rebuilding them on every deploy.
 - Run a suite on one account, not repeated on others.
 
@@ -49,8 +55,9 @@ caveat, and CLI/MCP queries.
 
 The only GitHub Actions workflow left is `.github/workflows/pkg-pr-new.yml`. It
 is not CI; it publishes the `iterate` SDK package to
-[pkg.pr.new](https://pkg.pr.new) for every PR and `main` push (the **publish** and
-**Continuous Releases** checks). Anything else that needs GitHub-only triggers,
+[pkg.pr.new](https://pkg.pr.new) for every `main` push, and for a PR that changes
+the SDK's inputs (`packages/iterate`, the root manifests and lockfile, or the
+workflow itself): the **publish** and **Continuous Releases** checks. Anything else that needs GitHub-only triggers,
 such as `issues`, `issue_comment`, or PR review comment events, which Depot CI
 does not support, belongs there too.
 
@@ -252,9 +259,12 @@ depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
   --input action=deploy
 ```
 
-`action` is `deploy | reset | e2e | delete | sweep` and `apps` is
+`action` is `deploy | reset | e2e` and `apps` is
 `all | auto | none` (the clients on top of the platform preview); the header of
-`.depot/workflows/preview-os-next.yml` documents each.
+`.depot/workflows/preview-os-next.yml` documents each. Deleting a PR's preview
+and the nightly preview sweep are workflows of their own: dispatch
+`preview-delete.yml` (`--input pull-request-number=<pr-number>`) to delete one
+now, `preview-sweep.yml` (no inputs) to sweep now.
 
 Deploy a branch manually:
 
@@ -302,7 +312,7 @@ freshness:
   `cancel-in-progress: false`. The checked-out branch is not the destination,
   so it must not appear in that group name. An active rollout finishes; if
   several newer commits queue behind it, Depot keeps the newest pending run.
-- Tests, lint/typecheck, and autofix use the source branch (falling back to
+- Tests and lint/typecheck use the source branch (falling back to
   `ref_name`) and `cancel-in-progress: true`. A newer commit makes an older
   validation result obsolete, including on `main`.
 - Every mainline job has `timeout-minutes`. This is a watchdog, not a retry:
@@ -317,14 +327,16 @@ freshness:
   peaks on `8x32` were ~3 cores / ~2.5GB, and a second large sandbox next to
   lint is the common trigger for no-log `Sandbox terminated before worker
 reported completion` on main. Deploy OS and Deploy Kit use `4x16`; the client
-  deploys (Dash, Agents, Notes, Voice, SPA, dummy-petshop), notification, and
-  autofix jobs use `2x8`. Re-check with `depot ci metrics --run <run-id>`
+  deploys (Dash, Agents, Notes, Voice, SPA, dummy-petshop), notification jobs,
+  and the jobs that only call APIs (LOC report, PR dashboard, Release) use
+  `2x8`. Re-check with `depot ci metrics --run <run-id>`
   before increasing a size.
 
-These defaults keep a normal all-app main push to 34 requested vCPUs before
-notification jobs (lint 8, test 4, autofix 2, Deploy OS 4, Deploy Kit 4, and
-2 for each of the six client deploys), without reducing the parallel lint lane
-that uses the larger machine. The sizing pass that set them cut the then-larger
+These defaults keep a normal all-app main push to 36 requested vCPUs before
+notification jobs (lint 8, test 4, Deploy OS 4, Deploy Kit 4, 2 for each of the
+six client deploys, and 4 for Main OS e2e, whose parent, deploy and e2e jobs run
+one after another), without reducing the parallel lint lane that uses the larger
+machine. The sizing pass that set them cut the then-larger
 workflow set from 72 requested vCPUs to 28.
 
 If an attempt receives a sandbox but produces no logs or metrics before
@@ -344,16 +356,15 @@ browser. A snapshot is independent of sandbox size: choose `2x8`, `4x16`,
 `4x16`; the e2e job runs Vitest and Playwright concurrently against the one
 preview. The image rebuilds when
 dependency manifests or its bake inputs land on `main`, with a weekly scheduled
-rebuild as drift repair. The Preview OS, Deploy OS, Main OS e2e, Lint and
-Typecheck, OS crash hunt and OS e2e soak jobs run
+rebuild as drift repair. The Preview OS, Preview sweep, Deploy OS, Main OS e2e,
+Lint and Typecheck, OS crash hunt and OS e2e soak jobs run
 `node scripts/depot-ci/dependencies.mjs install`: an exact
 baked fingerprint reuses the installed tree without starting pnpm. A mismatch
 or missing receipt runs `pnpm install --frozen-lockfile --prefer-offline`.
 Other workflows still always run that pnpm command. The Test job does so
 deliberately: the image loads
 lazily, and the install is what pages the tree in before the first tests (with
-reuse, 5 s test rows timed out in three of three runs). Autofix installs
-without a frozen lockfile so it can commit lockfile fixes. Jobs that consume the
+reuse, 5 s test rows timed out in three of three runs). Jobs that consume the
 image must keep the image and checkout behavior, and set the store the image was
 baked with (`PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store`), because every
 `pnpm_config_*` variable is part of the fingerprint:
@@ -410,22 +421,19 @@ not be visible until the workflow file lands on `main`. Use `depot ci run` for
 local workflow validation and `depot ci dispatch` for `workflow_dispatch`
 coverage.
 
-`workflow_dispatch` and automatic PR runs can share concurrency groups. For the
-Preview OS workflow, a manual dispatch and an automatic PR run for the same PR
-share `preview-os-next-<pr>` with `cancel-in-progress: false`: neither cancels
-the running one, but a newer pending run replaces an older pending one, so a
-dispatch queued behind a push can silently disappear. When validating previews,
-use one path at a time.
+`workflow_dispatch` and automatic PR runs can share concurrency groups, and so
+can two workflows that name the same group: Depot wakes "a peer workflow in the
+same concurrency group" when the slot frees
+([Depot's orchestrator](https://depot.dev/blog/building-ci-with-durable-lambda)),
+as GitHub does. For the Preview OS workflow, a manual dispatch, an automatic PR
+run and the Preview delete run for the same PR share `preview-os-next-<pr>` with
+`cancel-in-progress: false`: neither cancels the running one, but a newer
+pending run replaces an older pending one, so a dispatch queued behind a push
+can silently disappear. When validating previews, use one path at a time.
 
 `depot ci logs` accepts a run id, job id, or attempt id. When a run has multiple
 jobs, pass `--job <job-key>` or use `depot ci status <run-id> --output json` to
 find the exact job/attempt id.
-
-When the autofix job fails with `pull request parse error: cannot find workflow
-run named "autofix.ci"`, the real signal is that autofix found a diff to apply
-(the apply step only contacts GitHub when there is one) and could not correlate
-the Depot run with a GitHub Actions run. Look at the `git diff` output in the
-job logs, apply the same fix locally (usually `pnpm format`), and push.
 
 ## Which PRs get a preview
 
@@ -437,7 +445,10 @@ cloudflare-os) selects PRs by its `pull_request.paths` list: `apps/os`,
 `scripts/depot-ci`, and its own and the production OS/Notes deploy workflows
 (a production-workflow change must exercise the isolated deployment). A PR that
 touches none of them, such as docs, lint rules or Kit firmware, gets no preview
-checks at all: they never appear, rather than reporting a skip.
+checks at all: they never appear, rather than reporting a skip. The Preview
+delete workflow (`.depot/workflows/preview-delete.yml`) runs on the same list
+when such a PR closes; `scripts/ci/depot-workflows.test.ts` keeps the two lists
+equal.
 
 ## Preview job shape
 

@@ -25,7 +25,7 @@ on:
 jobs:
   release:
     runs-on:
-      size: 8x32
+      size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     steps:
       - name: Checkout code
