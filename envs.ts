@@ -160,6 +160,10 @@ export const osEnvs: Record<string, OsEnv> = {
     },
   },
 };
+/** The PostHog project every app reports to — "iterate (prd)" in PostHog EU. A project key is public:
+ *  it ships in every page that loads posthog-js. Only prd entries carry it, so previews send nothing. */
+export const ITERATE_POSTHOG_PROJECT_KEY = "phc_2MGb9SEJABGj4sCx4grFIbzMR7NjbcUgP5YmhSXfcr7";
+
 /** apps/dash — THE DASH: sessions and personal access tokens, projects and organizations — the
  *  fat first-party TanStack Start app (README there), an ordinary OAuth client of the headless
  *  platform at os.iterate.com, on the one custom domain among the apps. */
@@ -177,6 +181,7 @@ export const dashEnvs = {
     dopplerConfig: "prd",
     workerName: "dash",
     baseUrl: "https://dash.iterate.com",
+    posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
   },
 };
 

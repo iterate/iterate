@@ -32,6 +32,9 @@ import { OBSERVABILITY, writeGeneratedWranglerConfig } from "./wrangler-config.t
 export interface StartAppEnv extends DeployableEnv {
   workerName: string;
   baseUrl: string;
+  /** PostHog's project key (envs.ts `ITERATE_POSTHOG_PROJECT_KEY`): the worker's
+   *  `POSTHOG_PROJECT_KEY`, and the app's pages start posthog-js with it. Unset ⇒ no PostHog. */
+  posthogProjectKey?: string;
 }
 
 /** What apps/<app>/scripts/app.ts declares; everything in this module is the same program over it. */
@@ -124,6 +127,11 @@ export function writeWranglerConfig(app: StartApp) {
             account_id: env.cloudflareAccountId,
             workers_dev: true,
             ...bindings,
+            vars: {
+              ...bindings.vars,
+              // unset ⇒ undefined, which the JSON config drops: no var, no PostHog
+              POSTHOG_PROJECT_KEY: env.posthogProjectKey,
+            },
             // A workers.dev baseUrl is served by workers_dev itself — no custom route. A custom
             // domain (a real zone) gets a route bound to that zone.
             ...(new URL(env.baseUrl).hostname.endsWith(".workers.dev")

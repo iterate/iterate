@@ -211,6 +211,9 @@ importers:
 
   apps/dash:
     dependencies:
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@iterate-com/ui':
         specifier: workspace:*
         version: link:../../packages/ui
