@@ -315,6 +315,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         this.#appConfig.urls.os ||
         ((this.ctx.storage.kv.get("platform-origin") as string | undefined) ?? null);
       this.#stream.appendBirthRecord();
+      // THE BIRTH RESET (FacetHost `resetUnclaimedLoadedFacets`): a loaded facet the last incarnation
+      // left running without a claim ends here, before this incarnation reaches it. Named on this
+      // incarnation's wake record, and logged: the residency watchdog's own wake writes no record.
+      this.#facetsResetAtBirth = this.#facetHost.resetUnclaimedLoadedFacets();
+      if (this.#facetsResetAtBirth.length > 0)
+        console.log({
+          event: "context.facets-reset-at-birth",
+          namespace: "iterate-context",
+          name: this.#durableObjectAddress.name,
+          facets: this.#facetsResetAtBirth,
+        });
       // Retire only the subscription installed by older runtime versions. This durable
       // removal runs once per existing context; explicit user subscriptions are preserved.
       const config = this.#stream.coreReducedState.subscriptions.config;
@@ -334,6 +345,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     });
   }
 
+  /** The loaded facets this incarnation's birth reset (FacetHost `resetUnclaimedLoadedFacets`) —
+   *  named on its wake record. */
+  #facetsResetAtBirth: string[] = [];
+
   /** THE STREAM (stream/stream.ts): the commit pipeline and the core reduce. Its one callback,
    *  `onCommit`, is the post-commit fan-out — the delivery loop, run as THE KERNEL: under
    *  `{ principal: null }` explicitly, whatever the committing call's caller was. The commit lands
@@ -344,6 +359,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     storage: this.ctx.storage,
     path: this.#durableObjectAddress.path,
     projectId: this.#durableObjectAddress.projectId,
+    wakeRecordDetail: () =>
+      this.#facetsResetAtBirth.length > 0 ? { facetsReset: this.#facetsResetAtBirth } : {},
     onCommit: (freshEvents, afterOffset, throughOffset) => {
       // An alarm trace answers waitForEvent, never a subscription (AlarmTrace says why).
       const events = freshEvents.filter((event) => event.type !== STREAM_ALARM_TRACE_EVENT);
@@ -795,7 +812,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  the pin itself keeps the actor resident until the timer fires. A pending timer holds off
    *  eviction AND hibernation, billed, for its whole length (measured 2026-09-23) — harmless only
    *  because this one is armed while a pin already holds the actor, and for 30 s; nothing pinned
-   *  means nothing to release. A live facet is not a pin: on the edge it dies with the actor. */
+   *  means nothing to release. A live facet is not a pin: it does not hold this actor — it runs on
+   *  after the actor is evicted, and the next incarnation's birth resets it unless it is claimed
+   *  (FacetHost `resetUnclaimedLoadedFacets`). */
   #pinReleaseTimer: ReturnType<typeof setTimeout> | undefined;
   #pinCallsInFlight = 0;
   #pinCallStarted(): void {
@@ -921,9 +940,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** THE RELEASE (the pins' timer, `#pinCallEnded`): every borrowed stub returned, every library
-   *  connection closed — the pins. Never a facet: on the edge a facet is not a pin (it dies with the
+   *  connection closed — the pins. Never a facet: a facet is not a pin (it does not hold this
    *  actor), and one may be mid-attempt — an LLM call in its background — that an abort would kill
-   *  for nothing. */
+   *  for nothing; the claimed ones outlive this incarnation on purpose. */
   #releasePins(): void {
     this.#rpcStubs.returnBorrowedRpcStubs();
     this.#library.releaseConnections();

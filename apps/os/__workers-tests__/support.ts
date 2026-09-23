@@ -142,8 +142,9 @@ export async function signedInSession(email: string): Promise<any> {
  *  precondition here: workerd keeps a DO with a materialized facet or a borrowed stub
  *  non-hibernatable (workerd#6800), and evicting such a DO times out after 30s on "still has active
  *  references". You must release BEFORE you can evict. Run directly: in production the pins'
- *  30 s timer releases them, and a facet is released by nothing but the actor's own end (on the
- *  edge it does not keep the actor resident); a test that wants the alarm PASS itself fakes Date
+ *  30 s timer releases them, and a facet does not keep the actor resident on the edge (it runs on
+ *  after it; the next incarnation's birth resets it when loaded and unclaimed — FacetHost
+ *  `resetUnclaimedLoadedFacets`); a test that wants the alarm PASS itself fakes Date
  *  and calls `runDurableObjectAlarm`. */
 export async function releasePins(ctx: string): Promise<void> {
   await runInDurableObject(stub(ctx), (instance) => {

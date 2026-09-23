@@ -78,6 +78,12 @@ export { LiveState, type LiveStateSink } from "../stream/processor.ts";
 // `runInBackground` attempt is in flight the context owes this facet a `revive()`, so a host that
 // dies mid-attempt is re-materialized and runs its at-head pass again
 // (__workers-tests__/agent-revive.test.ts: an LLM call survives its context's death).
+//
+// THE CLAIM IS ALSO WHAT KEEPS A FACET RUNNING: a loaded facet that holds none when its context
+// starts a new incarnation is reset then (os FacetHost `resetUnclaimedLoadedFacets`). So work that
+// must outlive the call that started it — a model request, a retry's backoff sleep, an open
+// provider socket — runs through `runInBackground` (ProcessEventArgs), never as a bare floating
+// promise, a `ctx.waitUntil` or a timer the facet keeps on its own.
 
 /** What the parent mints a facet's class with — the whole identity. */
 export type FacetProps = { iterateContextName: string; name: string };
