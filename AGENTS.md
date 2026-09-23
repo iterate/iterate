@@ -16,6 +16,10 @@ pnpm test
 pnpm spec                # platform browser specs
 ```
 
-[Repository map](README.md) · [Platform](apps/os-next/README.md) · [Testing](docs/testing.md) · [Kit firmware](apps/kit/firmware/AGENTS.md)
+Read when relevant:
 
-`AGENTS.md` is canonical; `CLAUDE.md` links to it. [Instruction maintenance](docs/writing-agent-docs.md).
+- [Repository map](README.md) · [Platform](apps/os-next/README.md) · [Kit firmware](apps/kit/firmware/AGENTS.md)
+- [Testing](docs/testing.md) · [Vitest patterns](docs/vitest-patterns.md)
+- TypeScript style: [coding style](docs/coding-style.md) · [conventions](docs/typescript-conventions.md) · [code rules](docs/jonasland-rules.md) · [identifiers](docs/identifiers.md)
+- [Brand and tone of voice](docs/brand-and-tone-of-voice.md) for user-facing copy
+- [Instruction maintenance](docs/writing-agent-docs.md): instructions live in `AGENTS.md` files only

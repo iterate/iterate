@@ -1,7 +1,7 @@
 // Defense-in-depth probe for the Durable Objects billable-duration leak class of
-// bug (see apps/os/tasks/do-duration-leak/). Two independent checks against
-// Cloudflare's GraphQL analytics, either of which prints a report and exits
-// non-zero so a cron / CI step / monitoring job can alert:
+// bug (see https://github.com/iterate/iterate/tree/6a9a48e2a/apps/os/tasks/do-duration-leak).
+// Two independent checks against Cloudflare's GraphQL analytics, either of which
+// prints a report and exits non-zero so a cron / CI step / monitoring job can alert:
 //
 // 1. The pinned-DO signature — a single DO invocation running for HOURS of
 //    wall-clock at ~0 CPU — which is how a leaked cross-isolate RPC session
@@ -268,7 +268,7 @@ async function main(): Promise<void> {
       `🚨 DO active-time probe: ${breachedHours.length} hour(s) in the last ${lookbackHours}h ` +
         `exceeded ${maxAccountDoHours} account-wide DO-hours — the runaway-fleet signature ` +
         `(alarm/wake loops keeping whole DO populations resident; see the 2026-09-01 preview ` +
-        `incident in apps/os/tasks/do-duration-leak/). At $12.50/M GB-s, 1000 DO-hours ≈ $5.60.`,
+        `incident, https://github.com/iterate/iterate/tree/6a9a48e2a/apps/os/tasks/do-duration-leak). At $12.50/M GB-s, 1000 DO-hours ≈ $5.60.`,
     );
     for (const row of breachedHours) {
       report(
@@ -345,7 +345,7 @@ async function main(): Promise<void> {
     report(
       `🚨 DO duration probe: ${flagged.length} ${prefix}* script-day(s) show a DO invocation running ` +
         `longer than ${thresholdHours}h of wall-clock — the signature of a leaked cross-isolate RPC ` +
-        `session pinning a Durable Object resident (see apps/os/tasks/do-duration-leak/).`,
+        `session pinning a Durable Object resident (see https://github.com/iterate/iterate/tree/6a9a48e2a/apps/os/tasks/do-duration-leak).`,
     );
     for (const row of flagged) {
       report(
