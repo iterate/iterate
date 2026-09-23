@@ -1,8 +1,9 @@
 // src/organization/processor.ts — THE ORGANIZATION PROCESSOR: the reduce of the organization's
-// facts into its record, and of its own secrets' certificates (cross-posted from
-// `/organizations/<orgId>/secrets/<name>`) into their catalog. No effect: nothing is provisioned for
-// an organization, the directory holds its row. Pure, so a unit test constructs it with `new` and
-// reduces rows (processor.test.ts).
+// facts into its record — its name, its members, its projects — and of its own secrets'
+// certificates (cross-posted from `/organizations/<orgId>/secrets/<name>`) into their catalog. No
+// effect: a PURE FOLD. The facts are landed by the control plane on the root
+// (src/control-plane/durable-object.ts) after it writes them. Pure, so a unit test constructs it
+// with `new` and reduces rows (processor.test.ts).
 import {
   type ConsumedEvent,
   type ReduceArgs,
@@ -29,6 +30,24 @@ export class OrganizationProcessor extends StreamProcessor<
         return { ...state, name: event.payload.name };
       case "events.iterate.com/organization/deleted":
         return state.deletedAt ? undefined : { ...state, deletedAt: event.createdAt };
+      case "events.iterate.com/organization/member-added": {
+        // The latest role is the row; the first membership's time stays. The same role again is a no-op.
+        const { userId, role } = event.payload;
+        const known = state.members[userId];
+        if (known?.role === role) return undefined;
+        return {
+          ...state,
+          members: {
+            ...state.members,
+            [userId]: { role, since: known?.since ?? event.createdAt },
+          },
+        };
+      }
+      case "events.iterate.com/organization/member-removed": {
+        if (!state.members[event.payload.userId]) return undefined;
+        const { [event.payload.userId]: _gone, ...members } = state.members;
+        return { ...state, members };
+      }
       case "events.iterate.com/organization/project-created": {
         const { projectId, slug } = event.payload;
         if (state.projects[projectId]) return undefined; // created once

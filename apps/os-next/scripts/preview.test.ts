@@ -117,18 +117,12 @@ describe("the preview's wrangler config (a pure transform of wrangler.base.jsonc
     },
     r2_buckets: [{ binding: "FILES", bucket_name: "os-next-files" }],
     artifacts: [{ binding: "ARTIFACTS", namespace: "os-next-dev-repos" }],
-    d1_databases: [{ binding: "DB", database_name: "x", database_id: "y" }],
     kv_namespaces: [
       { binding: "ITX_KV", id: "1" },
       { binding: "OAUTH_KV", id: "2" },
     ],
-    rules: [{ type: "ESModule", globs: ["**/*.js"] }],
   };
-  const config = previewWranglerConfig({
-    template,
-    previewName: "pr123-feature-foo",
-    d1DatabaseId: "d1-id",
-  });
+  const config = previewWranglerConfig({ template, previewName: "pr123-feature-foo" });
 
   test("the top level provisions live classes, excluding deleted exports, as a legacy migrations entry", () => {
     expect(config.name).toBe("os-next-preview");
@@ -137,20 +131,13 @@ describe("the preview's wrangler config (a pure transform of wrangler.base.jsonc
     ]);
     expect(config).not.toHaveProperty("exports");
     expect(config).not.toHaveProperty("vars");
-    expect(config.rules).toEqual([{ type: "ESModule", globs: ["**/*.js"] }]);
     expect(config).not.toHaveProperty("kv_namespaces");
   });
 
-  test("KV and R2 are binding-only (auto-provisioned per preview); D1 and Artifacts are the preview's own", () => {
+  test("KV and R2 are binding-only (auto-provisioned per preview); the Artifacts namespace is the preview's own", () => {
     expect(config.previews.kv_namespaces).toEqual([{ binding: "ITX_KV" }, { binding: "OAUTH_KV" }]);
     expect(config.previews.r2_buckets).toEqual([{ binding: "FILES" }]);
-    expect(config.previews.d1_databases).toEqual([
-      {
-        binding: "DB",
-        database_name: "os-next-preview-pr123-feature-foo-db",
-        database_id: "d1-id",
-      },
-    ]);
+    expect(config.previews).not.toHaveProperty("d1_databases");
     expect(config.previews.artifacts).toEqual([
       { binding: "ARTIFACTS", namespace: "os-next-preview-pr123-feature-foo-repos" },
     ]);
@@ -172,7 +159,6 @@ describe("the preview's wrangler config (a pure transform of wrangler.base.jsonc
     const withDash = previewWranglerConfig({
       template,
       previewName: "pr123-feature-foo",
-      d1DatabaseId: "d1-id",
       dashOrigin,
     });
     expect(withDash.previews.vars.APP_CONFIG_URLS__DASH).toBe(dashOrigin);

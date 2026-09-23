@@ -292,7 +292,6 @@ export interface GrantRecord {
   createdAt: number;
   expiresAt: number | null;
   lastUsedAt: number | null;
-  cleanupPending: boolean;
   expired: boolean;
   /** The grant this very session rides on. */
   current?: boolean;
@@ -324,7 +323,7 @@ export type ConsentAnswer =
 export interface OrgRecord {
   id: string;
   name: string;
-  role?: string;
+  role?: "owner" | "member";
   projects: number;
 }
 
@@ -350,14 +349,6 @@ export interface IterateSessionApi {
     /** the MCP server's origin (the dash's connect page) — "" when this deployment serves none */
     mcpOrigin: string;
   };
-  /** The organizations this session reaches. */
-  orgs(): Promise<OrgRecord[]>;
-  /** A new organization — `organizations:write`; the person is its owner. */
-  createOrg(name: string): Promise<OrgRecord>;
-  /** Rename an organization the person owns — `organizations:write`. */
-  updateOrg(orgId: string, input: { name: string }): Promise<OrgRecord>;
-  /** Delete an organization the person owns, while it holds no project — `organizations:write`. */
-  deleteOrg(orgId: string): Promise<void>;
   /** OAuth grants this session may manage (a signed-in person's): list, end, mint one for a device. */
   grants: {
     list(cursor?: string): Promise<{
@@ -394,7 +385,24 @@ export interface IterateSessionApi {
       restoreProjectId?: string;
     }): Promise<IterateContextApi>;
   };
-  organizations: { get(orgId: string): Promise<IterateContextApi> };
+  /** The organizations this session reaches — the person's memberships (a grant narrowed to
+   *  projects sees only their organizations, unless it holds `organizations:write`): the rows, the
+   *  organization's context by membership, and the verbs (`organizations:write`; the person is the
+   *  owner of what they create, and only an owner renames, deletes or changes members). Each verb is
+   *  a request the control plane answers; a refusal is a coded error (FORBIDDEN, INVALID_INPUT). */
+  organizations: {
+    list(): Promise<OrgRecord[]>;
+    /** the organization's context — `session.user` for an organization — by membership */
+    get(orgId: string): Promise<IterateContextApi>;
+    create(input: { name: string }): Promise<OrgRecord>;
+    rename(orgId: string, input: { name: string }): Promise<OrgRecord>;
+    /** only while it holds no project */
+    delete(orgId: string): Promise<void>;
+    addMember(orgId: string, input: { userId: string; role?: "owner" | "member" }): Promise<void>;
+    removeMember(orgId: string, input: { userId: string }): Promise<void>;
+    /** the members with their emails — the operator's alone (the project-seed CLI) */
+    members(orgId: string): Promise<{ userId: string; email: string; role: "owner" | "member" }[]>;
+  };
   user: IterateContextApi;
   logout(): unknown;
 }

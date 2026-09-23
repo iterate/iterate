@@ -2,7 +2,7 @@ import { newWorkersRpcResponse, RpcSession, WebSocketTransport } from "capnweb";
 import type { Env } from "./env.ts";
 import { ConsentRpcTarget } from "./consent.ts";
 import { GrantsRpcTarget } from "./grants.ts";
-import { directory } from "./directory.ts";
+import { ControlPlane } from "./control-plane/edge.ts";
 import {
   authorizationForToken,
   authorizationOf,
@@ -53,7 +53,7 @@ export async function rpcResponse(
   const input: SessionInput = {
     contextNamespace: env.ITERATE_CONTEXT,
     waitUntil: (promise) => ctx.waitUntil(promise),
-    directory: directory(env.DB),
+    controlPlane: new ControlPlane(env.ITERATE_CONTEXT),
     appConfig: appConfigOf(env),
     platformOrigin,
     onProjectAccess: (projectId) => projects.add(projectId),
@@ -137,7 +137,7 @@ export async function rpcResponse(
       try {
         const [current, reachable] = await Promise.all([
           authorizationOf(env, grant),
-          held.length ? input.directory.reachableProjects(authorization.reach) : [],
+          held.length ? input.controlPlane.reachableProjects(authorization.reach) : [],
         ]);
         const reachableIds = new Set(reachable.map((project) => project.id));
         if (!current || held.some((id) => !reachableIds.has(id))) {

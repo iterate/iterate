@@ -75,7 +75,6 @@ export class RepoProcessor extends StreamProcessor<RepoState, ConsumedEvent<type
     state,
     delivery,
     append,
-    appendTo,
     runInBackground,
   }: ProcessEventArgs<
     RepoState,
@@ -113,7 +112,7 @@ export class RepoProcessor extends StreamProcessor<RepoState, ConsumedEvent<type
             payload: { path },
             idempotencyKey: `repo/created:${path}`,
           };
-          await appendTo("/", certificate); // the project catalog first
+          await this.withItx((itx) => itx.cd("/").append(certificate)); // the project catalog first
           await append(certificate); // this path last: closes the obligation
         } catch (error) {
           await append({
@@ -151,7 +150,7 @@ export class RepoProcessor extends StreamProcessor<RepoState, ConsumedEvent<type
             payload: { path },
             idempotencyKey: `repo/deleted:${path}`,
           };
-          await appendTo("/", certificate); // the project catalog first
+          await this.withItx((itx) => itx.cd("/").append(certificate)); // the project catalog first
           await append(certificate); // this path last: closes the obligation
         } finally {
           this.#deleting = false;

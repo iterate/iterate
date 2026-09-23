@@ -25,8 +25,8 @@ export const E2E_LOGIN_PASSWORD = "e2e-password";
 export const E2E_INGRESS_ROUTING: IngressRouting = { type: "subdomains", hostname: "localhost" };
 
 /** wrangler.jsonc's top-level block patched for the harness: an absolute main, the e2e
- *  configuration, the deployments' `env` blocks left out. The directory D1 + OAuth KV are the local
- *  ones (a fresh namespace; the worker applies the schema at boot). The DO lifecycle is declarative
+ *  configuration, the deployments' `env` blocks left out. The OAuth KV is the local one (a fresh
+ *  namespace); the catalog is the `control-plane` facet's own SQLite. The DO lifecycle is declarative
  *  (`exports`), so there is no migration history to replay. `ingressRouting` picks how this worker
  *  reaches projects — subdomains under `localhost` by default, paths for the file that proves that
  *  shape. */

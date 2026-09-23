@@ -1,8 +1,13 @@
 # Project creation
 
-`session.projects.create({ project, orgId?, configRepoTemplate? })` registers the directory entry,
-enables the project processor on `/`, and records `project/create-requested`. It returns the root
-context; the dashboard follows the creation state until success or failure.
+**The saga is implemented** (2026-09-21, PR #2760 and its follow-up; the control plane moved off D1 on
+2026-09-22). `session.projects.create({ project, orgId?, configRepoTemplate? })` pins the template to a
+commit and calls the control plane (`src/control-plane/`): one synchronous SQLite block on `global:/`
+resolves the organization, refuses a slug another organization holds (`PROJECT_NAME_TAKEN`, before
+anything is made), mints the id and writes the row; `organization/project-created` lands on the
+organization's record, and the project's `/` gets its `project` processor row and
+`project/create-requested { slug, orgId, configRepoTemplate }` under the caller. The verb returns the
+root context. The project processor (`src/project/processor.ts`) runs the saga from state at head:
 
 An optional config template works like `apps/os`: a public GitHub repository or subdirectory is
 copied into the project's independent config repository. Both platforms use the same reference

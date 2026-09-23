@@ -9,20 +9,17 @@
 // its alarm on demand (runDurableObjectAlarm).
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "capnweb";
-import { beforeAll, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/next/stream/processor";
 import { installAgents } from "../runtime/install.ts";
 import agentRuntime from "../../../configs-next/with-agents/agents.js?raw";
 import {
   adminCredentials,
-  applyDirectorySchema,
   openSession,
   releasePins,
   stub,
   until,
 } from "../../os-next/__workers-tests__/support.ts";
-
-beforeAll(applyDirectorySchema);
 
 /** A model whose FIRST answer waits until the test releases it (the context dies mid-call, so it
  *  arrives with nobody left to hear it) and whose second is the answer. */

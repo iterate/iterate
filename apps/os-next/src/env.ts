@@ -1,6 +1,7 @@
 // env.ts — the one worker's bindings: the context DO's (iterate-context-durable-object.ts `Env`)
-// plus what the in-process control plane needs — the OAuth provider's store and helpers, the D1
-// directory, the browser sessions, the issuer's page files and the mailbox.
+// plus what the in-process control plane needs — the OAuth provider's store and helpers, the
+// browser sessions, the issuer's page files and the mailbox (the catalog itself is the `control-plane`
+// facet on the global root context, reached over ITERATE_CONTEXT: src/control-plane/edge.ts).
 
 import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import type { BrowserSession } from "iterate/next/app-session";
@@ -11,8 +12,6 @@ export interface Env extends DurableObjectEnv {
   BROWSER_SESSION: DurableObjectNamespace<BrowserSession>;
   /** Provider-owned store: grants, tokens, DCR clients. Required by @cloudflare/workers-oauth-provider. */
   OAUTH_KV: KVNamespace;
-  /** The directory: users, orgs, org_members, projects (control-plane.sql). Strongly consistent (D1). */
-  DB: D1Database;
   /** Injected by the provider — the OAuth helper surface (parseAuthRequest / completeAuthorization / …). */
   OAUTH_PROVIDER: OAuthHelpers;
   /** The issuer's pages and their files — public/ (wrangler.jsonc `assets`, `run_worker_first`: this

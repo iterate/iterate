@@ -39,6 +39,9 @@ export const factRenderers: EventRenderers = {
   "events.iterate.com/account/grant-ended": (e) => (
     <>Ended the grant {mono(str(record(e.payload).grantId))}</>
   ),
+  "events.iterate.com/account/grant-used": (e) => (
+    <>Used the grant {mono(str(record(e.payload).grantId))}</>
+  ),
   "events.iterate.com/account/consent-approved": (e) => {
     const p = record(e.payload);
     const projects =
@@ -61,6 +64,22 @@ export const factRenderers: EventRenderers = {
     </>
   ),
   "events.iterate.com/organization/deleted": () => <>Deleted the organization</>,
+  "events.iterate.com/organization/member-added": (e) => {
+    const p = record(e.payload);
+    return (
+      <>
+        Added {mono(str(p.userId))} as <strong>{str(p.role)}</strong> of {mono(str(p.orgId))}
+      </>
+    );
+  },
+  "events.iterate.com/organization/member-removed": (e) => {
+    const p = record(e.payload);
+    return (
+      <>
+        Removed {mono(str(p.userId))} from {mono(str(p.orgId))}
+      </>
+    );
+  },
   "events.iterate.com/organization/project-created": (e) => {
     const p = record(e.payload);
     return (

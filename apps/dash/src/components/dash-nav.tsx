@@ -1,5 +1,6 @@
 // The dash's own navigation inside the shared shell (`AppShell`, packages/ui): inside a project its
-// overview, MCP, secrets and its site; outside one the projects, organizations and sessions pages and the other
+// overview, MCP, secrets and its site; outside one the account's pages, THE TREE — the person's
+// organizations, each with its projects (components/organization-tree.tsx, live) — and the other
 // first-party apps.
 import { Link, useMatchRoute } from "@tanstack/react-router";
 import {
@@ -19,8 +20,13 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSkeleton,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
 } from "@iterate-com/ui/components/sidebar";
 import { APPS } from "../apps.ts";
+import { useOrganizationTree } from "./organization-tree.tsx";
 
 export function DashNav({
   project,
@@ -139,8 +145,8 @@ function ProjectNav({
   );
 }
 
-/** Outside a project: the projects and organizations lists, the account pages, and the other
- *  first-party apps. */
+/** Outside a project: the projects and organizations lists, the account pages; the tree — every
+ *  organization the person belongs to, its projects under it; and the other first-party apps. */
 function TopLevelNav() {
   const matchRoute = useMatchRoute();
   return (
@@ -161,7 +167,7 @@ function TopLevelNav() {
             <SidebarMenuItem>
               <SidebarMenuButton
                 tooltip="Organizations"
-                isActive={Boolean(matchRoute({ to: "/organizations", fuzzy: true }))}
+                isActive={Boolean(matchRoute({ to: "/organizations", fuzzy: false }))}
                 render={<Link to="/organizations" />}
               >
                 <Building2 />
@@ -191,6 +197,7 @@ function TopLevelNav() {
           </SidebarMenu>
         </SidebarGroupContent>
       </SidebarGroup>
+      <OrganizationTreeNav />
       <SidebarGroup>
         <SidebarGroupLabel>Apps</SidebarGroupLabel>
         <SidebarGroupContent>
@@ -212,5 +219,81 @@ function TopLevelNav() {
         </SidebarGroupContent>
       </SidebarGroup>
     </>
+  );
+}
+
+/** The tree: each organization the person belongs to (→ its settings), its projects under it
+ *  (→ each overview). Skeleton rows while the account's memberships are still connecting. */
+function OrganizationTreeNav() {
+  const tree = useOrganizationTree();
+  const matchRoute = useMatchRoute();
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel>Your organizations</SidebarGroupLabel>
+      <SidebarGroupContent>
+        <SidebarMenu>
+          {!tree.loaded && !tree.organizations.length ? (
+            <SidebarMenuItem>
+              <SidebarMenuSkeleton showIcon />
+            </SidebarMenuItem>
+          ) : null}
+          {tree.error ? (
+            <SidebarMenuItem className="px-2 text-xs text-destructive">
+              {tree.error}
+            </SidebarMenuItem>
+          ) : null}
+          {tree.loaded && !tree.organizations.length && !tree.error ? (
+            <SidebarMenuItem className="px-2 text-xs text-muted-foreground">
+              No organizations yet
+            </SidebarMenuItem>
+          ) : null}
+          {tree.organizations.map((org) => (
+            <SidebarMenuItem key={org.id}>
+              <SidebarMenuButton
+                tooltip={org.name}
+                isActive={Boolean(
+                  matchRoute({
+                    to: "/organizations/$orgId",
+                    params: { orgId: org.id },
+                    fuzzy: true,
+                  }),
+                )}
+                render={<Link to="/organizations/$orgId" params={{ orgId: org.id }} />}
+              >
+                <Building2 />
+                <span>{org.name}</span>
+              </SidebarMenuButton>
+              {org.error ? (
+                <SidebarMenuSub>
+                  <SidebarMenuSubItem className="px-2 text-xs text-destructive">
+                    {org.error}
+                  </SidebarMenuSubItem>
+                </SidebarMenuSub>
+              ) : org.projects.length ? (
+                <SidebarMenuSub>
+                  {org.projects.map((project) => (
+                    <SidebarMenuSubItem key={project.id}>
+                      <SidebarMenuSubButton
+                        isActive={Boolean(
+                          matchRoute({
+                            to: "/projects/$slug",
+                            params: { slug: project.slug },
+                            fuzzy: true,
+                          }),
+                        )}
+                        className="font-mono"
+                        render={<Link to="/projects/$slug" params={{ slug: project.slug }} />}
+                      >
+                        <span>{project.slug}</span>
+                      </SidebarMenuSubButton>
+                    </SidebarMenuSubItem>
+                  ))}
+                </SidebarMenuSub>
+              ) : null}
+            </SidebarMenuItem>
+          ))}
+        </SidebarMenu>
+      </SidebarGroupContent>
+    </SidebarGroup>
   );
 }

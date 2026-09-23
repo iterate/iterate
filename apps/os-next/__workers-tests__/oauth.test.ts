@@ -1,16 +1,16 @@
 import { env, SELF, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { newWebSocketRpcSession, RpcTarget, RpcStub } from "capnweb";
-import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { appSession } from "iterate/next/app-server";
 import { platformAddressesOf } from "../src/app-config.ts";
-import { directory } from "../src/directory.ts";
+import type { GrantEnded } from "../src/account/contract.ts";
 import { browserAuthorization } from "../src/browser-client.ts";
-import { oauthHelpers } from "../src/oauth.ts";
+import { ControlPlane } from "../src/control-plane/edge.ts";
+import { accountStateOf, oauthHelpers } from "../src/oauth.ts";
 import type { Env } from "../src/env.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
-import definitions from "../src/control-plane.sql?raw";
-import { loginPassword } from "./support.ts";
+import { loginPassword, stub } from "./support.ts";
 
 const bindings = env as unknown as Env;
 const ORIGIN = "https://control.test";
@@ -23,17 +23,9 @@ const call = (path: string, init?: RequestInit) => {
 };
 const helpers = () =>
   oauthHelpers(bindings, platformAddressesOf(bindings, new Request(`${ORIGIN}/`)));
+/** The control plane as the edge holds it (src/control-plane/edge.ts): the catalog's rows. */
+const controlPlane = () => new ControlPlane(bindings.ITERATE_CONTEXT);
 
-beforeAll(async () => {
-  await bindings.DB.batch(
-    definitions
-      .replace(/--.*$/gm, "")
-      .split(";")
-      .map((sql) => sql.replace(/\s+/g, " ").trim())
-      .filter(Boolean)
-      .map((sql) => bindings.DB.prepare(sql)),
-  );
-});
 beforeEach(() => {
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
     SELF.fetch(new Request(input, init)),
@@ -68,6 +60,54 @@ async function rpc(
   const boundAt = Date.now();
   const root = transport.authenticate({ type: credential });
   return { root, closed, boundAt };
+}
+
+/** A bare `/api` socket authenticated in-band with the admin secret — the operator, or `as` a
+ *  person (src/session.ts): how the fixture makes a person's projects and changes a membership. */
+async function actingAs(email?: string) {
+  const response = await call("/api", { headers: { Upgrade: "websocket" } });
+  expect(response.status).toBe(101);
+  response.webSocket!.accept();
+  const transport = newWebSocketRpcSession<IterateRpcTarget>(
+    response.webSocket! as unknown as WebSocket,
+  );
+  sessions.push(transport);
+  return transport.authenticate({
+    type: "admin-secret",
+    secret: adminSecret,
+    ...(email && { as: { email } }),
+  });
+}
+
+/** THE REVOCATION TRUTH, landed by hand: `account/grant-ended` on the person's account — the fact
+ *  grants.ts `end` awaits before it touches the provider — with the provider's rows left as they
+ *  are, so what denies the token next is the account alone (oauth.ts `grantIsRevoked`). */
+async function endGrantOnAccount(userId: string, grantId: string): Promise<void> {
+  const account = stub(`global.iterate/users/${userId}`);
+  await account.invoke(["itx", "processors", ["enable", "account"]]);
+  await account.invoke([
+    "itx",
+    [
+      "append",
+      {
+        type: "events.iterate.com/account/grant-ended",
+        idempotencyKey: `account/grant-ended/${grantId}`,
+        payload: { grantId } satisfies GrantEnded,
+      },
+    ],
+  ]);
+}
+
+/** A person's membership of `orgId` removed by the operator — the org given a second owner first
+ *  when the person is its last (the control plane keeps at least one). */
+async function removeMembership(orgId: string, userId: string): Promise<void> {
+  const admin = await actingAs();
+  const standIn = await admin.users.create({ email: "oauth-stand-in-owner@example.com" });
+  await admin.organizations.addMember(orgId, { userId: standIn.id, role: "owner" });
+  await admin.organizations.removeMember(orgId, { userId });
+}
+async function restoreMembership(orgId: string, userId: string): Promise<void> {
+  await (await actingAs()).organizations.addMember(orgId, { userId, role: "owner" });
 }
 
 async function tool(token: string, name: string, args: object = {}) {
@@ -116,9 +156,13 @@ async function grant(resources: string[], projects: string[] = ["oauth-a"]) {
     }),
   });
   const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
-  const user = await directory(bindings.DB).upsertUser("oauth-new@example.com");
-  const oauthA = await directory(bindings.DB).createProject({ userId: user.id }, "oauth-a");
-  const oauthB = await directory(bindings.DB).createProject({ userId: user.id }, "oauth-b");
+  // the sign-in found-or-created the person; their projects are made as them
+  const user = await controlPlane().ensureUser("oauth-new@example.com");
+  const theirs = await actingAs(user.email);
+  using _a = await theirs.projects.create({ project: "oauth-a" });
+  using _b = await theirs.projects.create({ project: "oauth-b" });
+  const oauthA = (await controlPlane().getProject("oauth-a"))!;
+  const oauthB = (await controlPlane().getProject("oauth-b"))!;
   const client = await helpers().createClient({
     clientName: "OAuth integration",
     redirectUris: ["https://client.test/callback"],
@@ -256,9 +300,7 @@ test("one provider grant can cover MCP and Cap'n Web while retaining membership 
   expect((await bySlug.whoami()).projectId).toBe(flow.oauthA.id);
   expect((await tool(token, "run", { script: "async () => 1" })).status).toBe(200);
   const org = flow.oauthA.orgId;
-  await bindings.DB.prepare("DELETE FROM org_members WHERE user_id = ? AND org_id = ?")
-    .bind(flow.user.id, org)
-    .run();
+  await removeMembership(org, flow.user.id);
   expect(await root.projects.list()).toEqual([]);
   expect(
     (
@@ -268,9 +310,8 @@ test("one provider grant can cover MCP and Cap'n Web while retaining membership 
       })
     ).body.result.isError,
   ).toBe(true);
-  await bindings.DB.prepare("INSERT INTO org_members (user_id, org_id) VALUES (?, ?)")
-    .bind(flow.user.id, org)
-    .run();
+  await restoreMembership(org, flow.user.id);
+  expect((await root.projects.list()).map((project) => project.id)).toEqual([flow.oauthA.id]);
 });
 
 test("resource narrowing, refresh and the revocation marker use the provider lifecycle", async () => {
@@ -314,12 +355,8 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
     ).status,
   ).toBe(200);
   const [userId, grantId] = renewed.access_token.split(":");
-  // Deliberately retain all valid KV records to prove D1 denial despite KV propagation.
-  await bindings.DB.prepare(
-    "INSERT INTO oauth_activity (user_id, grant_id, revoked_at) VALUES (?, ?, ?) ON CONFLICT(user_id, grant_id) DO UPDATE SET revoked_at = excluded.revoked_at",
-  )
-    .bind(userId, grantId, Date.now())
-    .run();
+  // Deliberately retain all valid KV records to prove the account's denial despite KV propagation.
+  await endGrantOnAccount(userId!, grantId!);
   expect(
     (await tool(renewed.access_token, "run", { project: "x", script: "async () => 1" })).status,
   ).toBe(401);
@@ -387,17 +424,8 @@ test.each(["revoked", "membership"])(
     expect(await lent.ping()).toBe("lent");
     const org = flow.oauthA.orgId;
     const [, grantId] = flow.token!.access_token.split(":");
-    if (reason === "revoked") {
-      await bindings.DB.prepare(
-        "INSERT INTO oauth_activity (user_id, grant_id, revoked_at) VALUES (?, ?, ?) ON CONFLICT(user_id, grant_id) DO UPDATE SET revoked_at = excluded.revoked_at",
-      )
-        .bind(flow.user.id, grantId, Date.now())
-        .run();
-    } else {
-      await bindings.DB.prepare("DELETE FROM org_members WHERE user_id = ? AND org_id = ?")
-        .bind(flow.user.id, org)
-        .run();
-    }
+    if (reason === "revoked") await endGrantOnAccount(flow.user.id, grantId!);
+    else await removeMembership(org, flow.user.id);
     try {
       // Real elapsed time: the guard's own timer closes the socket — no sooner than 30 s after the
       // bind (less a second of timer slack), within its 60 s hard bound — and only then are the
@@ -420,12 +448,7 @@ test.each(["revoked", "membership"])(
       await expect(native.ping()).rejects.toThrow(/Session|closed|RPC|revoked/i);
       await expect(lent.ping()).rejects.toThrow(/Session|closed|RPC|revoked/i);
     } finally {
-      if (reason === "membership")
-        await bindings.DB.prepare(
-          "INSERT OR IGNORE INTO org_members (user_id, org_id) VALUES (?, ?)",
-        )
-          .bind(flow.user.id, org)
-          .run();
+      if (reason === "membership") await restoreMembership(org, flow.user.id);
     }
   },
 );
@@ -434,16 +457,15 @@ test("a socket holding no project re-checks its grant every thirty seconds and r
   const flow = await grant([`${ORIGIN}/api`]);
   const { root } = await rpc(flow.token!.access_token);
   expect((await root.whoami()).actor).toBe(flow.user.id);
-  // The worker under test runs in this isolate on these bindings: its D1 statements pass this spy.
-  const prepare = vi.spyOn(bindings.DB, "prepare");
+  // The worker under test runs in this isolate: the guard's membership read (rpc.ts —
+  // `controlPlane.reachableProjects`, the one read behind every reach check) passes this spy.
+  const membershipReads = vi.spyOn(ControlPlane.prototype, "reachableProjects");
   // Real elapsed time: one tick of the deployed 30 s interval, nothing test-only.
   await new Promise((resolve) => setTimeout(resolve, 31_000));
-  const statements = prepare.mock.calls.map(([sql]) => sql);
-  prepare.mockRestore();
+  membershipReads.mockRestore();
   // Every socket in this test holds no project (this one, and `grant()`'s issuer session that
-  // approved the consent): each tick reads its grant's revocation row and nothing else.
-  expect(statements.filter((sql) => sql.includes("FROM oauth_activity"))).not.toEqual([]);
-  expect(statements.filter((sql) => sql.includes("JOIN org_members"))).toEqual([]);
+  // approved the consent): each tick reads its grant on the account and no membership at all.
+  expect(membershipReads).not.toHaveBeenCalled();
   expect((await root.whoami()).actor).toBe(flow.user.id); // still live: it holds nothing to lose
 });
 
@@ -479,9 +501,12 @@ test("console and project browsers use the same CIMD flow and independent grants
     }),
   });
   const issuerCookie = issuerLogin.headers.get("set-cookie")!.split(";")[0]!;
-  const user = await directory(bindings.DB).upsertUser("browser@example.com");
-  const browserA = await directory(bindings.DB).createProject({ userId: user.id }, "browser-a");
-  const browserB = await directory(bindings.DB).createProject({ userId: user.id }, "browser-b");
+  const user = await controlPlane().ensureUser("browser@example.com");
+  const theirs = await actingAs(user.email);
+  using _a = await theirs.projects.create({ project: "browser-a" });
+  using _b = await theirs.projects.create({ project: "browser-b" });
+  const browserA = (await controlPlane().getProject("browser-a"))!;
+  const browserB = (await controlPlane().getProject("browser-b"))!;
   const logins = [];
   try {
     for (const origin of [ORIGIN, "https://notes--browser-a.projects.test"]) {
@@ -673,12 +698,16 @@ test("console and project browsers use the same CIMD flow and independent grants
     await expect(consoleLogin.root.grants.end("foreign-grant")).rejects.toThrow(
       /Session not found/,
     );
-    expect(
-      await bindings.DB.prepare("SELECT 1 FROM oauth_activity WHERE user_id = ? AND grant_id = ?")
-        .bind(user.id, "foreign-grant")
-        .first(),
-    ).toBeNull();
+    // a foreign grant ends nothing: no end lands on the account
+    expect((await accountStateOf(bindings, user.id)).endedGrants["foreign-grant"]).toBeUndefined();
     await consoleLogin.root.grants.end(personalId!);
+    // the end is on the account — the revocation truth — and the list no longer carries the grant
+    expect((await accountStateOf(bindings, user.id)).endedGrants[personalId!]).toEqual({
+      at: expect.any(String),
+    });
+    expect(
+      (await consoleLogin.root.grants.list()).items.find((item) => item.id === personalId),
+    ).toBeUndefined();
     expect(
       (await tool(personal.token, "run", { project: browserA.id, script: "async () => 1" })).status,
     ).toBe(401);

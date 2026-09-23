@@ -1,13 +1,13 @@
 // __workers-tests__/support.ts — what every file in the workers lane (the vitest project that runs
-// INSIDE workerd, next to the worker) shares: the context DO stub by ctx name, a capnweb session
-// over SELF's /api (disposed at teardown — importing this module registers the afterAll), a live
-// value to lend (`Echo`, tagged per instance), the directory schema into this lane's empty D1, the
+// INSIDE workerd, next to the worker) shares: the context DO stub by ctx name (the control plane's
+// root among them), a capnweb session over SELF's /api (disposed at teardown — importing this
+// module registers the afterAll), a live value to lend (`Echo`, tagged per instance), the
 // production pins' release on demand, and the one poll-until.
 import { runInDurableObject, SELF } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { afterAll } from "vitest";
-import definitionsSql from "../src/control-plane.sql?raw";
+import { GLOBAL_PROJECT_ID } from "../src/context/paths.ts";
 import { DurableObjectNameCodec } from "../src/iterate-context.ts";
 import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 
@@ -33,18 +33,12 @@ export class Echo extends RpcTarget {
   }
 }
 
-/** THE DIRECTORY SCHEMA (src/control-plane.sql) into this lane's D1 — fresh and empty per file — the
- *  same split-and-batch the e2e global-setup does; a file whose sessions create or list projects
- *  runs it in `beforeAll`. Idempotent (IF NOT EXISTS). */
-export async function applyDirectorySchema(): Promise<void> {
-  const db = (env as unknown as { DB: D1Database }).DB;
-  const statements = definitionsSql
-    .replace(/--.*$/gm, "")
-    .split(";")
-    .map((statement) => statement.replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-  await db.batch(statements.map((statement) => db.prepare(statement)));
-}
+/** THE CONTROL PLANE'S OWN CONTEXT, `global:/` (src/control-plane/): the raw DO stub, so a test
+ *  reads the root log (every request and its answer) and the `control-plane` facet's tables —
+ *  `invoke(["itx", "facets", ["get", "control-plane"], ["projects"], ["get", ref]])` — with no
+ *  session between. Nothing is seeded: the catalog is the fold of the log, empty per test. */
+export const controlPlaneStub = () =>
+  stub(DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path: "/" }));
 
 /** This lane's admin bearer (wrangler.test.jsonc `APP_CONFIG_SECRETS__ADMIN_BEARER`). */
 const adminApiSecret = (): string =>

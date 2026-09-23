@@ -16,7 +16,7 @@ import {
 } from "./password-and-code-sign-in.ts";
 import { appConfigOf, platformAddressesOf } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
-import type { User } from "./directory.ts";
+import type { UserRecord } from "./control-plane/catalog.ts";
 import type { Env, Handler } from "./env.ts";
 
 /** The paths the issuer's pages own on the platform origin, every one open to a browser that is not
@@ -98,7 +98,7 @@ async function loginFormPost(request: Request, env: Env): Promise<Response | nul
     return new Response(null, { status: 303, headers });
   };
   /** The person is signed in: the issuer session's cookie, any pending code dropped, onward. */
-  const signedIn = async (user: User) => {
+  const signedIn = async (user: UserRecord) => {
     const { setCookie, location } = await startIssuerSession(env, request, user, next);
     const headers = new Headers({ location });
     headers.append("set-cookie", setCookie);

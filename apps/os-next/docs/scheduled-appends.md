@@ -145,5 +145,5 @@ pnpm --dir apps/os-next e2e e2e/scheduled-appends.e2e.test.ts
 ```
 
 The `preview` deployment (`os-next-preview.iterate-dev-preview.workers.dev`, the `project-worker/preview`
-Doppler config) is the parent of every per-PR Worker Preview (README, "Previews"); it has its own D1/KV/DO
+Doppler config) is the parent of every per-PR Worker Preview (README, "Previews"); it has its own KV/DO
 state and no project-host routes. Deploy with `pnpm --dir apps/os-next run deploy --env preview`.

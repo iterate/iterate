@@ -1,9 +1,9 @@
 // e2e/support/global-setup.ts — boots the REAL project-worker ONCE for the whole vitest E2E run
 // (the apps/os shape: one worker, addressed by URL, shared by every file — no per-file boot). It
-// builds through the production build hook, runs in local workerd with local KV / D1 / Durable
+// builds through the production build hook, runs in local workerd with local KV / Durable
 // Objects / the Worker Loader, and tests speak to it EXACTLY like production clients — capnweb over
 // WebSocket at /api. The control plane is in-process (worker.ts's catch-all), so nothing else boots;
-// the worker applies the directory schema itself at boot.
+// the catalog is the `control-plane` facet's own SQLite (src/control-plane/).
 //
 // The URL is handed to tests via vitest `provide`/`inject` (see support/setup.ts + support/client.ts).
 

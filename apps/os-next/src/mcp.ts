@@ -3,7 +3,7 @@ import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/valida
 import { errorCode } from "iterate/next/lib";
 import { platformAddressesOf } from "./app-config.ts";
 import type { Env } from "./env.ts";
-import { directory, type Directory, type Reach } from "./directory.ts";
+import { ControlPlane, type Reach } from "./control-plane/edge.ts";
 import { DurableObjectNameCodec } from "./iterate-context.ts";
 import type { Authorization } from "./oauth.ts";
 
@@ -13,7 +13,7 @@ import type { Authorization } from "./oauth.ts";
 
 /** Resolve a project slug or id within this token's grant before obtaining its root context. */
 async function projectOfToolCall(
-  d1Directory: Directory,
+  controlPlane: ControlPlane,
   reach: Reach,
   requested: string,
 ): Promise<string> {
@@ -23,13 +23,13 @@ async function projectOfToolCall(
       throw new Error(
         `project: got a context name ${JSON.stringify(requested)} — pass the project and cd(path) in the expression`,
       );
-    const id = await d1Directory.projectIdOf(projectId);
-    if (!(await d1Directory.reachesProject(reach, id)))
+    const id = await controlPlane.projectIdOf(projectId);
+    if (!(await controlPlane.reachesProject(reach, id)))
       throw new Error(`project ${JSON.stringify(requested)} is outside this token's grant`);
     return id;
   }
   if (reach === "every") throw new Error("the admin secret reaches every project — pass project");
-  const reachable = (await d1Directory.reachableProjects(reach)).map((project) => project.id);
+  const reachable = (await controlPlane.reachableProjects(reach)).map((project) => project.id);
   if (reachable.length === 1) return reachable[0]!;
   throw new Error(
     reachable.length
@@ -57,14 +57,14 @@ const runInstructions = [
 ].join("\n\n");
 
 /** Initialization includes usage guidance and the projects this token reaches, so the client can
- *  select one before running a script. Read from the directory, like the tool's project check. */
-async function serverInstructions(d1Directory: Directory, reach: Reach): Promise<string> {
+ *  select one before running a script. Read from the control plane, like the tool's project check. */
+async function serverInstructions(controlPlane: ControlPlane, reach: Reach): Promise<string> {
   if (reach === "every")
     return [
       runInstructions,
       "This token is the admin secret: pass `project` (slug or id) on every call.",
     ].join("\n");
-  const projects = await d1Directory.reachableProjects(reach);
+  const projects = await controlPlane.reachableProjects(reach);
   const reachable =
     projects.length === 0
       ? "This token reaches no project."
@@ -84,12 +84,12 @@ async function buildServer(
   authorization: Authorization,
   platformOrigin: string,
 ): Promise<McpServer> {
-  const d1Directory = directory(env.DB);
+  const controlPlane = new ControlPlane(env.ITERATE_CONTEXT);
   const { reach, principal, grant } = authorization;
   const caller = { principal, grant: grant?.grantId, platformOrigin };
   const mcpServer = new McpServer(
     { name: "control-plane", version: "0.1.0" },
-    { instructions: await serverInstructions(d1Directory, reach) },
+    { instructions: await serverInstructions(controlPlane, reach) },
   );
 
   mcpServer.registerTool(
@@ -123,7 +123,7 @@ async function buildServer(
       const toolArguments = raw as { project?: string; script: string };
       try {
         const projectId = await projectOfToolCall(
-          d1Directory,
+          controlPlane,
           reach,
           toolArguments.project?.trim() ?? "",
         );

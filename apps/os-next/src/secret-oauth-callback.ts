@@ -7,7 +7,7 @@ import { verifyClaims } from "iterate/next/principal";
 import { appConfigOf, sessionSigningSecretOf, type PlatformAddresses } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import { GLOBAL_PROJECT_ID, resourceScope } from "./context/paths.ts";
-import { directory, type Directory, type Reach } from "./directory.ts";
+import { ControlPlane, type Reach } from "./control-plane/edge.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec } from "./iterate-context.ts";
 import { authorizationForToken } from "./oauth.ts";
@@ -37,16 +37,17 @@ function secretOwnerOf(context: string): {
  *  member; the admin reaches every one. A project-bound bearer reaches no user's or organization's
  *  own secrets; nothing but the admin reaches the global root's. */
 async function reachesSecretOwner(
-  directory: Directory,
+  controlPlane: ControlPlane,
   reach: Reach,
   owner: ReturnType<typeof secretOwnerOf>,
 ): Promise<boolean> {
   if (reach === "every") return true;
   if (owner.kind === "project")
-    return owner.id !== GLOBAL_PROJECT_ID && directory.reachesProject(reach, owner.id);
-  if (!("userId" in reach)) return false;
+    return owner.id !== GLOBAL_PROJECT_ID && controlPlane.reachesProject(reach, owner.id);
+  // a grant bound to projects reaches those projects and nothing of the person's own (session.user)
+  if (!("userId" in reach) || "projectIds" in reach) return false;
   if (owner.kind === "users") return reach.userId === owner.id;
-  return (await directory.listOrgs(reach.userId)).some((org) => org.id === owner.id);
+  return controlPlane.reachesOrg(reach, owner.id);
 }
 
 /** A secret's OAuth callback: the provider redirected the human here with `code` and the
@@ -89,7 +90,9 @@ export async function secretOAuthCallback(
   } catch (error) {
     return answer(400, error instanceof Error ? error.message : String(error));
   }
-  if (!(await reachesSecretOwner(directory(env.DB), authorization.reach, owner)))
+  if (
+    !(await reachesSecretOwner(new ControlPlane(env.ITERATE_CONTEXT), authorization.reach, owner))
+  )
     return answer(403, `Your session cannot access the secrets of ${owner.kind} ${owner.id}.`);
   const denied = url.searchParams.get("error");
   if (denied) return answer(400, `The provider declined: ${denied}`);

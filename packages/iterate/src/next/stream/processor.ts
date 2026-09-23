@@ -69,9 +69,6 @@ export type ProcessorContract<State = unknown> = {
  *  says whether the page was cut; its length says nothing (a budget cut is short of `limit`). */
 export type ProcessorStream = {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]> | StreamEvent[];
-  /** Append onto ANOTHER context of the same project, by path — how an entity's processor lands its
-   *  birth certificate on `/` for the project catalog. A stand-in with one path may omit it. */
-  appendTo?(path: string, ...events: StreamEventInput[]): Promise<StreamEvent[]> | StreamEvent[];
   read(
     afterOffset?: number,
     limit?: number,
@@ -95,8 +92,8 @@ export type ReduceArgs<State, Event = StreamEvent> = { event: Event; state: Stat
 export type ProcessEventArgs<
   State,
   Event = StreamEvent,
-  /** What `append`/`appendTo` take: `EmittedEventInput<typeof Contract>` for a processor that
-   *  declares one — each type the contract `emits`, its payload as the catalog spells it. */
+  /** What `append` takes: `EmittedEventInput<typeof Contract>` for a processor that declares one —
+   *  each type the contract `emits`, its payload as the catalog spells it. */
   Emitted extends StreamEventInput = StreamEventInput,
 > = {
   /** The consumed event — or `null` for the eventless at-head pass. */
@@ -108,8 +105,6 @@ export type ProcessEventArgs<
    *  assignable to `StreamProcessor<State>` (the host's field), and only method parameters are
    *  compared bivariantly. */
   append(...events: Emitted[]): Promise<StreamEvent[]>;
-  /** The same, onto the context at `path` (apps/os's `appendTo`): a certificate cross-posted to `/`. */
-  appendTo(path: string, ...events: Emitted[]): Promise<StreamEvent[]>;
   /** Hold the cursor until `work` settles; FIFO with other blockers of the SAME event. */
   blockProcessorWhile: (work: () => Promise<unknown>) => void;
   /** Fire-and-forget attempt; may overtake later events; outcome must be state-recoverable. */
@@ -152,7 +147,7 @@ export abstract class StreamProcessor<State, Event extends StreamEvent = StreamE
   }
 
   /** Side-effect hook. Synchronous by design: register async work via the two helpers on args.
-   *  `append`/`appendTo` take what THIS class's `contract` emits (`EmittedEventInput<this["contract"]>`:
+   *  `append` takes what THIS class's `contract` emits (`EmittedEventInput<this["contract"]>`:
    *  a subclass whose `contract` is a defined one gets each emitted type's payload as its catalog
    *  spells it; the base, and a hand-built contract, take any input). */
   processEvent(
@@ -599,8 +594,9 @@ export class ProcessorEngine<State> {
     }
     // FIFO blocker chain for THIS event (rule 2); background work escapes it (rule 3).
     let blockers: Promise<unknown> = Promise.resolve();
-    // Validated against the declared `emits` and stamped with provenance — here, or on another
-    // context of the project (`appendTo`), the same way.
+    // Validated against the declared `emits` and stamped with provenance. A certificate an entity
+    // cross-posts to ANOTHER context (`/`, the project catalog) is its own `itx.cd(path).append(...)`
+    // through the host's `withItx` — the context's own append, no second verb here.
     const stamped = (emittedEvents: StreamEventInput[]): StreamEventInput[] => {
       for (const emitted of emittedEvents) {
         if (!emits.includes(emitted.type))
@@ -622,11 +618,6 @@ export class ProcessorEngine<State> {
       state,
       previousState,
       append: async (...emittedEvents) => await this.#stream.append(...stamped(emittedEvents)),
-      appendTo: async (path, ...emittedEvents) => {
-        if (!this.#stream.appendTo)
-          throw new Error(`processor "${slug}": this host reaches no other context (appendTo)`);
-        return await this.#stream.appendTo(path, ...stamped(emittedEvents));
-      },
       blockProcessorWhile: (work) => {
         blockers = blockers.then(() => work());
       },
@@ -1052,7 +1043,7 @@ type EventInputForType<
       : never
   : never;
 
-/** What a processor's `append`/`appendTo` take: one input per type the contract `emits` — its own
+/** What a processor's `append` takes: one input per type the contract `emits` — its own
  *  events and its deps' as their catalogs spell them (`z.input`), a type no catalog defines as the
  *  plain input under that name. A contract whose `emits` is not a literal tuple gets every input. */
 export type EmittedEventInput<Contract> = Contract extends {

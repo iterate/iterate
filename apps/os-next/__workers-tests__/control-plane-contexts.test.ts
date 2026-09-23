@@ -13,11 +13,9 @@
 // `test.fails` here: the body asserts the SECURE outcome, so while the code is insecure the assertion
 // fails and the expected-fail passes; whoever wires the fix deletes the `.fails`.
 import { runInDurableObject } from "cloudflare:test";
-import { beforeAll, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import { AccountProcessor } from "../src/account/processor.ts";
-import { adminCredentials, applyDirectorySchema, openSession, stub, until } from "./support.ts";
-
-beforeAll(applyDirectorySchema);
+import { adminCredentials, openSession, stub, until } from "./support.ts";
 
 /** A signed-in human's session: the admin fixture with `as` upserts the user and vends their session
  *  (src/session.ts `IterateRpcTarget.authenticate`). */
@@ -62,7 +60,7 @@ describe("shape — a global context is an ordinary context (passing)", () => {
 
   test("session.organizations.get vends the org's context at (global, /organizations/<id>) — by membership", async () => {
     const s = await userSession("org-shape@sec.test");
-    const org = (await s.createOrg("org-shape")) as { id: string };
+    const org = (await s.organizations.create({ name: "org-shape" })) as { id: string };
     expect(await s.organizations.get(org.id).whoami()).toEqual({
       projectId: "global",
       path: `/organizations/${org.id}`,
@@ -225,7 +223,7 @@ describe("security requirements — the global namespace is not navigable", () =
   test("a user cannot reach an organization they do not belong to", async () => {
     const a = await userSession("org-a@sec.test");
     const b = await userSession("org-b@sec.test");
-    const org = (await a.createOrg("a's org")) as { id: string };
+    const org = (await a.organizations.create({ name: "a's org" })) as { id: string };
     await refuses(() => b.organizations.get(org.id).invoke(["itx", ["readEvents"]]));
   });
 

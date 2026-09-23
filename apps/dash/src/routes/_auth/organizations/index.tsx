@@ -1,8 +1,9 @@
-// /organizations — every organization the session reaches, in the projects page's layout: a table
-// (the name → its settings, the id, the person's role, how many projects), and "New organization"
-// (`?new=1`, a sheet: a name) when the grant holds `organizations:write`, a step-up link otherwise.
+// /organizations — every organization in the tree (components/organization-tree.tsx, live), in the
+// projects page's layout: a table (the name → its settings, the id, the person's role, how many
+// projects), and "New organization" (`?new=1`, a sheet: a name) when the grant holds
+// `organizations:write`, a step-up link otherwise.
 import { useState, type FormEvent } from "react";
-import { createFileRoute, getRouteApi, Link, useNavigate, useRouter } from "@tanstack/react-router";
+import { createFileRoute, getRouteApi, Link, useNavigate } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
@@ -29,6 +30,10 @@ import {
 } from "@iterate-com/ui/components/table";
 import { AllowOrganizations } from "../../../components/allow-organizations.tsx";
 import { ListPage } from "../../../components/list-page.tsx";
+import {
+  reloadOrganizationTree,
+  useOrganizationTree,
+} from "../../../components/organization-tree.tsx";
 
 const shell = getRouteApi("/_auth");
 
@@ -40,7 +45,7 @@ export const Route = createFileRoute("/_auth/organizations/")({
 });
 
 function OrganizationsPage() {
-  const { orgs } = shell.useLoaderData();
+  const tree = useOrganizationTree();
   const { info } = shell.useRouteContext();
   const search = Route.useSearch();
   const navigate = useNavigate();
@@ -56,7 +61,13 @@ function OrganizationsPage() {
           </Button>
         }
         empty={
-          orgs.length ? undefined : "No organizations yet — “New organization” creates the first."
+          tree.organizations.length ? undefined : tree.loaded ? (
+            tree.error || "No organizations yet — “New organization” creates the first."
+          ) : (
+            <span className="flex items-center gap-2">
+              <Spinner /> Loading your organizations…
+            </span>
+          )
         }
       >
         <Table>
@@ -69,7 +80,7 @@ function OrganizationsPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {orgs.map((org) => (
+            {tree.organizations.map((org) => (
               <TableRow key={org.id}>
                 <TableCell className="font-medium">
                   <Link
@@ -84,7 +95,13 @@ function OrganizationsPage() {
                   <Identifier value={org.id} textClassName="text-xs" />
                 </TableCell>
                 <TableCell className="text-muted-foreground">{org.role || "—"}</TableCell>
-                <TableCell className="text-right tabular-nums">{org.projects}</TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {org.status === "connecting" ? (
+                    <Spinner className="ml-auto" />
+                  ) : (
+                    org.projects.length
+                  )}
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -116,7 +133,8 @@ function OrganizationsPage() {
 }
 
 /** The sheet's body — mounted with the sheet, so every opening starts blank. A created
- *  organization opens on its settings. */
+ *  organization opens on its settings: the control plane answered once the person's membership
+ *  was on their account, so the tree has it. */
 function NewOrganizationForm({
   canWrite,
   pending,
@@ -127,7 +145,6 @@ function NewOrganizationForm({
   setPending: (pending: boolean) => void;
 }) {
   const { api } = shell.useRouteContext();
-  const router = useRouter();
   const navigate = useNavigate();
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -136,8 +153,8 @@ function NewOrganizationForm({
     setError(null);
     setPending(true);
     try {
-      const created = await api.createOrg(name.trim());
-      await router.invalidate();
+      const created = await api.organizations.create({ name: name.trim() });
+      reloadOrganizationTree();
       await navigate({ to: "/organizations/$orgId", params: { orgId: created.id } });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));

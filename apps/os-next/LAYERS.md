@@ -170,7 +170,7 @@ on exhaustion, appends `stream/paused { reason }`; an operator appends `stream/r
 — `from-server-cookie` is the OAuth grant the transport already resolved (the browser's cookie on a
 same-origin request, or a bearer access token — a personal access token is one such grant,
 `session.grants.mint`), `admin-secret` every project (with `as`, a user's session without a login);
-membership is the in-process directory's, `src/directory.ts`;
+membership is the control plane's, `src/control-plane/`;
 `iterate-context.ts`: `IterateContext`, `cd(path)` for the rest). The edge is A PROXY IN FRONT OF
 THE DO: every DO built-in root (`itx.append`, `itx.readEvents`, `itx.waitForEvent`, `itx.kv.get`,
 `itx.rpcStubs.list`, `itx.rewriteRules.list`, …) rides the prototype hop into ONE

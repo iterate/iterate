@@ -53,7 +53,7 @@ on:
       - scripts/lib/**
   schedule:
     # Nightly, off the hour: what stops a force-closed PR, or a failed cleanup, from leaking a
-    # preview and its D1 (cloudflare-os runs theirs at 04:37 too).
+    # preview (cloudflare-os runs theirs at 04:37 too).
     - cron: "37 4 * * *"
   workflow_dispatch:
     inputs:
@@ -108,7 +108,7 @@ jobs:
         run: doppler setup --config preview --project project-worker
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      # `deploy` redeploys in place; `reset` deletes the preview and its D1 first. Either way the
+      # `deploy` redeploys in place; `reset` deletes the preview first. Either way the
       # script ends by writing the URL and the operations into the PR body (GITHUB_TOKEN).
       - name: Deploy (or reset) the preview
         working-directory: apps/os-next
@@ -188,7 +188,7 @@ jobs:
         run: doppler setup --config preview --project project-worker
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Delete the preview and its D1
+      - name: Delete the preview
         working-directory: apps/os-next
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}

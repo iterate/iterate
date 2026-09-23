@@ -42,8 +42,8 @@ tree, the project processor's published commit and membership roles. Reapplying
 converges on the same project and config tree. A slug with a different ID, an archived
 ID held by another project, existing projects in another organization, ambiguous organization names
 and failed project creation are refused. Membership restoration adds/updates the requested members; it does not
-remove unrelated memberships from an existing organization. OS-Next currently
-has no member-management API, so the CLI uses parameterized D1 membership writes.
+remove unrelated memberships from an existing organization; the CLI writes them through the
+operator's `organizations.create` and `organizations.addMember`.
 
 `--organization` changes the destination organization. `--owners` replaces the
 archive's requested member list with explicit owners. Without these flags, the

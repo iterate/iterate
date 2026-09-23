@@ -80,24 +80,14 @@ export async function capture(options: {
     const project = (await api.projects.list()).find((project) => project.slug === options.project);
     if (!project) throw new Error(`Project ${options.project} does not exist.`);
     const root = await api.projects.get(project.id);
-    const query = z
-      .array(
-        z.object({
-          results: z.array(
-            z.object({ name: z.string(), email: z.email(), role: z.enum(["owner", "member"]) }),
-          ),
-        }),
-      )
-      .parse(
-        await context.cf(`/d1/database/${context.env.resources.directoryDbId}/query`, {
-          method: "POST",
-          body: JSON.stringify({
-            sql: "SELECT o.name,u.email,m.role FROM orgs o JOIN org_members m ON m.org_id=o.id JOIN users u ON u.id=m.user_id WHERE o.id=? ORDER BY u.email",
-            params: [project.orgId],
-          }),
-        }),
-      );
-    const members = query.flatMap((row) => row.results);
+    // the organization's record and its members, off the operator's index (src/control-plane/)
+    const organization = (await api.organizations.list()).find((org) => org.id === project.orgId);
+    if (!organization) throw new Error(`Organization ${project.orgId} does not exist.`);
+    const members = (await api.organizations.members(project.orgId)).map(({ email, role }) => ({
+      name: organization.name,
+      email: z.email().parse(email),
+      role,
+    }));
     if (!members.length)
       throw new Error(
         "Project organization has no members; supply an owned organization before capturing.",
@@ -271,20 +261,9 @@ export async function apply(options: {
       secret: context.adminSecret,
       as: { email: owner.email },
     });
-    // orgs() lists the actor's memberships, even for the platform admin. Query the
-    // directory so reruns find existing organizations and reject duplicate names.
-    const orgs = z
-      .array(z.object({ results: z.array(z.object({ id: z.string() })) }))
-      .parse(
-        await context.cf(`/d1/database/${context.env.resources.directoryDbId}/query`, {
-          method: "POST",
-          body: JSON.stringify({
-            sql: "SELECT id FROM orgs WHERE name=?",
-            params: [organization],
-          }),
-        }),
-      )
-      .flatMap((row) => row.results);
+    // the operator's listing is every organization (src/control-plane/), so reruns find an
+    // existing organization by name and reject an ambiguous one
+    const orgs = (await admin.organizations.list()).filter((org) => org.name === organization);
     if (orgs.length > 1) throw new Error(`Organization name ${organization} is ambiguous.`);
     const projects = await admin.projects.list();
     const existing = projects.find((project) => project.slug === seed.project);
@@ -299,7 +278,7 @@ export async function apply(options: {
       throw new Error(
         `Project ${seed.project} exists with id ${existing.id}, not archived id ${seed.source.projectId}.`,
       );
-    const org = orgs[0] || (await operator.createOrg(organization));
+    const org = orgs[0] || (await operator.organizations.create({ name: organization }));
     for (const member of members) {
       const user = await rpc
         .authenticate({
@@ -308,14 +287,8 @@ export async function apply(options: {
           as: { email: member.email },
         })
         .whoami();
-      // The directory is authoritative; os-next currently has no public member-management command.
-      await context.cf(`/d1/database/${context.env.resources.directoryDbId}/query`, {
-        method: "POST",
-        body: JSON.stringify({
-          sql: "INSERT INTO org_members(org_id,user_id,role) VALUES(?,?,?) ON CONFLICT(org_id,user_id) DO UPDATE SET role=excluded.role",
-          params: [org.id, user.actor, member.role],
-        }),
-      });
+      // the owner's session adds each member (the owner again is a no-op on the record)
+      await operator.organizations.addMember(org.id, { userId: user.actor, role: member.role });
     }
     if (!existing)
       await admin.projects.create({
@@ -403,7 +376,7 @@ export async function apply(options: {
           secret: context.adminSecret,
           as: { email: member.email },
         })
-        .orgs();
+        .organizations.list();
       if (!orgs.some((entry) => entry.id === org.id && entry.role === member.role))
         throw new Error(`Membership readback failed for ${member.email}.`);
     }

@@ -5,8 +5,10 @@ For selected-project backups and recovery after an erase, see [Project seeds](do
 One Cloudflare Worker, one package: `src/worker.ts` is the stateless edge (capnweb at `/api`;
 project-host ingress — `<app>--<project>.<base>`, `<app>.<project>.<base>`, the apex
 `<project>.<base>` — the one HTTP way into a project) with
-the control plane in-process as its catch-all (`src/{api,oauth,directory,mcp,issuer-pages}.ts`: OAuth AS + a D1 directory +
-`/mcp`, the ONE MCP server for every project + the issuer's server half) and THE ISSUER'S TWO PAGES —
+the control plane in-process as its catch-all (`src/{api,oauth,mcp,issuer-pages}.ts`: OAuth AS +
+`/mcp`, the ONE MCP server for every project + the issuer's server half; the catalog — users,
+organizations, projects — is the `control-plane` facet on the global root context (`src/control-plane/`),
+read at the edge through `src/control-plane/edge.ts`) and THE ISSUER'S TWO PAGES —
 `/login` and the `/oauth2/auth` consent, files in `public/` the assets binding serves (no framework, no
 build): sign-in asks `/login.json` what to show and posts plain forms; consent is a capnweb client of `/api`;
 `src/iterate-context-durable-object.ts` is THE CONTEXT — one Durable Object per `{ projectId, path }`
@@ -107,7 +109,7 @@ for their CSP), served by the assets binding. The sign-in page's script asks `/l
 (`issuer-pages.ts`) what to show and signs in with plain form posts to `/login`. The consent page is
 a capnweb client of `/api` like any app — `public/capnweb.js`, the fork's browser bundle copied
 beside it by `scripts/build.ts`, one WebSocket the session cookie rides in on: `consent.describe`
-for what to show, `createOrg` and `projects.create` for a project made on the spot,
+for what to show, `organizations.create` and `projects.create` for a project made on the spot,
 `consent.approve` for the client's redirect; the worker only gates the page.
 Consent has two steps: choose or create projects, then review permissions and authorize.
 All current and future projects are selected by default for clients that are not bound to one project.
@@ -154,7 +156,7 @@ shipped to customer-controlled Workers. The two Iterate clients are currently pr
 only members of their respective parent Cloudflare accounts can authorize them.
 
 Only that issuer grant receives `session.consent`. The `/oauth2/auth` page can create an
-organization and project through `session.createOrg` and `session.projects.create`, then
+organization and project through `session.organizations.create` and `session.projects.create`, then
 approve the pending client's access without leaving the flow — over `/api`, as any client would. Other apps may request account
 permission through explicit consent, but cannot approve grants. All apps use the same
 `/.auth/*` adapter, opaque HttpOnly cookie, public token exchange and `/api` proxy.
@@ -171,8 +173,8 @@ build at all. Every lane runs the build first.
 
 ```bash
 pnpm dev -- --port 8788         # the build, then wrangler dev on wrangler.jsonc (project hosts under
-                                # `<project>.localhost:8788`; the password `dev` — scripts/dev.ts; the
-                                # worker applies the directory schema to the local D1 at boot)
+                                # `<project>.localhost:8788`; the password `dev` — scripts/dev.ts;
+                                # state in .wrangler/state)
 pnpm build                      # scripts/build.ts: wrangler.jsonc + wrangler.self-host.jsonc + src/generated/*.js
 pnpm run typecheck              # the three tsconfigs (worker · tests · scripts)
 pnpm test                       # every lane: unit (node), workers (workerd, src/worker.ts), e2e (one real worker), bench
@@ -187,7 +189,7 @@ Every PR that touches os-next gets its own preview of the worker on Cloudflare W
 (`wrangler preview`, private beta), the way [cloudflare/cloudflare-os](https://github.com/cloudflare/cloudflare-os)
 previews itself: a preview named `pr<n>-<branch slug>` is a branch of the parent worker
 `os-next-preview` (`envs.ts` `osNextEnvs.preview`; nothing reads its data) with Durable Object namespaces,
-KV, R2, D1 and an Artifacts namespace of its own (all deleted with it), at `https://pr<n>-<slug>-os-next-preview.iterate-dev-preview.workers.dev`.
+KV, R2 and an Artifacts namespace of its own (all deleted with it), at `https://pr<n>-<slug>-os-next-preview.iterate-dev-preview.workers.dev`.
 `.depot/workflows/preview-os-next.yml` deploys it on every push, runs `pnpm e2e` against it, writes the
 URL and the operations below into the PR body, deletes it when the PR closes, and sweeps nightly.
 Previews live on workers.dev and have no project hosts; the e2e rows that need one skip.

@@ -21,7 +21,7 @@ npx wrangler deploy --config apps/os-next/wrangler.self-host.jsonc --secrets-fil
 rm .secrets
 ```
 
-The first deploy creates the D1 database, the two KV namespaces and the R2 bucket by name in your
+The first deploy creates the two KV namespaces and the R2 bucket by name in your
 account and prints the Worker's URL, `https://iterate.<your-subdomain>.workers.dev`. Everything
 below is on that origin.
 
@@ -75,8 +75,9 @@ pnpm --filter os-next build
 npx wrangler deploy --config apps/os-next/wrangler.self-host.jsonc
 ```
 
-A deploy without `--secrets-file` keeps the secrets already on the Worker. The directory schema is
-applied by the Worker itself at boot, so there is no migration step.
+A deploy without `--secrets-file` keeps the secrets already on the Worker. There is no migration
+step: the catalog (users, orgs, projects) is the `control-plane` Durable Object facet's own SQLite,
+which the facet migrates itself.
 
 ## Custom domain (optional)
 

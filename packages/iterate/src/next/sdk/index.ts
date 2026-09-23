@@ -92,10 +92,11 @@ export type ProcessorScope = {
   readEvents(afterOffset?: number, limit?: number): Promise<unknown>;
   /** The engine's claim on the context's alarm (processor.ts rule 3): "come back by `at`", or null. */
   processors: { claim(name: string, at: number | null): Promise<unknown> };
-  /** Another context of the project — where `appendTo` lands — by its dotted surface (`.append`),
-   *  which the platform's handle and a loaded worker's alike answer. Through the table like every
-   *  other word here: a loaded processor's `cd` goes down only (the app wall), the platform's own
-   *  go anywhere. */
+  /** Another context of the project by its dotted surface (`.append`), which the platform's handle
+   *  and a loaded worker's alike answer — how an entity's processor cross-posts its certificate to
+   *  `/` (`withItx((itx) => itx.cd("/").append(certificate))`). Through the table like every other
+   *  word here: a loaded processor's `cd` goes down only (the app wall), the platform's own go
+   *  anywhere within the project. */
   cd(path: string): { append(...events: StreamEventInput[]): Promise<unknown> };
 };
 
@@ -177,15 +178,12 @@ export abstract class StreamProcessorDurableObject<
       // `processors.claim` — implicit in every context (itx-expression-rewriting.ts rule 3), so they
       // resolve to this log with no row and no hop; a row at `itx.append` is the OWNER's deliberate
       // wall (a jailed processor halts visibly), never a loaded worker's — the fixed point is not a
-      // loaded worker's word. `appendTo` is `cd` through the same table: a first-party saga (the
-      // platform's mint) reaches `/`; a loaded processor's `cd` goes down only.
+      // loaded worker's word.
       stream: {
         // A stub scope's answers are pipelined shapes by type and plain data on the wire (the
         // engine awaits them): the engine's own types, asserted.
         append: (...events) =>
           this.withItx((itx) => itx.append(...events)) as Promise<StreamEvent[]>,
-        appendTo: (path, ...events) =>
-          this.withItx((itx) => itx.cd(path).append(...events)) as Promise<StreamEvent[]>,
         read: (after, limit) =>
           this.withItx((itx) => itx.readEvents(after, limit)) as Promise<StreamPage>,
         claim: (at) => this.withItx((itx) => itx.processors.claim(this.ctx.props.name, at)),

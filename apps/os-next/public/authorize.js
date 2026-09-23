@@ -125,7 +125,7 @@ const createProject = () =>
     }
     const onboarding = !state.view.projects.length;
     try {
-      if (!draft.org) draft.org = (await api.createOrg(draft.newOrg || "")).id;
+      if (!draft.org) draft.org = (await api.organizations.create({ name: draft.newOrg || "" })).id;
       // the new project's root context is the platform's to hold, not this page's
       (await api.projects.create({ project: draft.slug, orgId: draft.org }))[Symbol.dispose]();
       state.creating = false;

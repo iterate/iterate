@@ -532,7 +532,7 @@ const launcherProcedures = {
     list: os.input(z.object({})).handler(async () => {
       const { connection } = await connectConfigured();
       using owned = connection;
-      return await owned.session.orgs();
+      return await owned.session.organizations.list();
     }),
   },
   projects: {

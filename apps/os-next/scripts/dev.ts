@@ -1,8 +1,8 @@
 // scripts/dev.ts — `pnpm dev`: THE BUILD once (scripts/build.ts — wrangler.jsonc, the generated
 // modules), then `wrangler dev` on wrangler.jsonc's top-level block (local dev: `routes: []`,
 // localhost vars), which bundles and reloads src/worker.ts itself and serves public/ (the issuer's
-// pages) through the assets binding. The worker applies the directory schema to the persisted local
-// D1 at boot (src/control-plane.sql — IF NOT EXISTS); state lives in .wrangler/state. Project hosts
+// pages) through the assets binding. State lives in .wrangler/state (the catalog is the
+// `control-plane` facet's own SQLite, src/control-plane/). Project hosts
 // hang under `localhost` (`<project>.localhost:<port>` — Chromium resolves them to loopback) and the
 // deployment's configuration is the same two secrets a deployment has, as plain dev values: the
 // `APP_CONFIG` object (the password `dev`, the operator bearer) and the key alone. Extra arguments go

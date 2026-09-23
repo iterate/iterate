@@ -11,17 +11,17 @@ import type { Env as WorkerEnv } from "./env.ts";
 import { identityResponse } from "./identity.ts";
 import { SECRET_OAUTH_CALLBACK_PATH } from "./secret-oauth.ts";
 import { secretOAuthCallback } from "./secret-oauth-callback.ts";
+import { ControlPlane } from "./control-plane/edge.ts";
 import { oauthResponse } from "./api.ts";
 import { issuerHandler } from "./issuer-pages.ts";
 import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-config.ts";
 import { FILES_APP_LABEL, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
-import { directory, ensureDirectorySchema } from "./directory.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
 import { DurableObjectNameCodec, ITX_PLATFORM_ORIGIN_HEADER } from "./iterate-context.ts";
 import { resourceScope } from "./context/paths.ts";
 import type { SessionInput } from "./session.ts";
-import { authorizationForToken, recordGrantUse, cleanGrantActivity } from "./oauth.ts";
+import { authorizationForToken, recordGrantUse } from "./oauth.ts";
 
 /** A project host's re-entry count — THE COUNT THE APP FORWARDS: an app that fetches its own host
  *  and forwards the headers it was handed re-enters with the count on them, each pass adds one, and
@@ -113,6 +113,7 @@ export { BrowserSession } from "iterate/next/app-session";
 // `ctx.exports` (first-party-facets.ts FIRST_PARTY_FACET_CLASSES) — ordinary bundled
 // worker code with the worker's real env, never a loaded source.
 export { AccountDurableObject } from "./account/durable-object.ts";
+export { ControlPlaneDurableObject } from "./control-plane/durable-object.ts";
 export { OrganizationDurableObject } from "./organization/durable-object.ts";
 export { ProjectDurableObject } from "./project/durable-object.ts";
 export { RepoDurableObject } from "./repo/durable-object.ts";
@@ -121,10 +122,6 @@ export { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 export { ItxEntrypoint } from "./iterate-context.ts";
 
 export default {
-  async scheduled(_event: ScheduledController, env: WorkerEnv) {
-    await ensureDirectorySchema(env.DB);
-    await cleanGrantActivity(env);
-  },
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     // THE HOP COUNT — what the app forwards: a request carrying the count it was handed re-enters
@@ -146,9 +143,6 @@ export default {
     // issuer's under paths, where the app shares the platform's origin.
     const appConfig = appConfigOf(env);
     const { deployId } = appConfig;
-    // THE DIRECTORY SCHEMA, at boot (directory.ts): the first request of an isolate awaits it, so a
-    // deployment has no migration step.
-    await ensureDirectorySchema(env.DB);
     if (appConfig.urls.mcp && url.origin === appConfig.urls.mcp) {
       // MCP's public root is its protocol endpoint; /api remains Cap'n Web.
       if (url.pathname !== "/" && !url.pathname.startsWith("/.well-known/"))
@@ -163,7 +157,7 @@ export default {
     const sessionInput: SessionInput = {
       contextNamespace: env.ITERATE_CONTEXT,
       waitUntil: (promise) => ctx.waitUntil(promise),
-      directory: directory(env.DB),
+      controlPlane: new ControlPlane(env.ITERATE_CONTEXT),
       appConfig,
       platformOrigin,
     };
@@ -176,12 +170,12 @@ export default {
       projectAddressOf(routing, url, platformOrigin) ??
       (customHost && { ...customHost, basePath: "" });
     if (projectHost) {
-      // ADMISSION, before any Durable Object is dialled: a context is created on first touch, so a
-      // hostname whose project the in-process directory does not know must never reach one — else
-      // any label under the wildcard would mint durable storage from the public internet. One
-      // directory read — the row resolves the host's label (a slug, an id would do too) to the
-      // project's id; an unknown label is 421.
-      const project = await sessionInput.directory.getProject(projectHost.project);
+      // ADMISSION, before any PROJECT Durable Object is dialled: a context is created on first
+      // touch, so a hostname whose project the control plane does not know must never reach one —
+      // else any label under the wildcard would mint durable storage from the public internet. One
+      // catalog read (memoized per isolate: a slug's project never changes) — the row resolves the
+      // host's label (a slug, an id would do too) to the project's id; an unknown label is 421.
+      const project = await sessionInput.controlPlane.getProject(projectHost.project);
       if (!project)
         return new Response(
           `421: no project ${JSON.stringify(projectHost.project)} is served here\n`,
@@ -220,7 +214,7 @@ export default {
         });
       if (
         authorization &&
-        !(await sessionInput.directory.reachesProject(authorization.reach, projectId))
+        !(await sessionInput.controlPlane.reachesProject(authorization.reach, projectId))
       )
         return new Response("This session cannot access this project", { status: 403 });
       if (authorization?.grant) ctx.waitUntil(recordGrantUse(env, authorization.grant));

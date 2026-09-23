@@ -11,8 +11,8 @@ export function ListPage({
 }: {
   title: string;
   action?: ReactNode;
-  /** what to say instead of the table when there is nothing to list */
-  empty?: string;
+  /** what to show instead of the table when there is nothing to list (or nothing yet) */
+  empty?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -22,7 +22,7 @@ export function ListPage({
         {action}
       </div>
       {empty ? (
-        <p className="text-sm text-muted-foreground">{empty}</p>
+        <div className="text-sm text-muted-foreground">{empty}</div>
       ) : (
         <div className="overflow-x-auto rounded-lg border">{children}</div>
       )}

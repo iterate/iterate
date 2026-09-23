@@ -2,9 +2,9 @@
 // (their scripts/preview/preview.ts: eighteen workers in three tiers collapsed to one). The effects
 // half; the pure half — naming, the PR body's section, the preview's wrangler config — is
 // scripts/preview-config.ts (preview.test.ts). Commands: config (write wrangler.preview.jsonc),
-// deploy (build, the D1 and the Artifacts namespace, the secrets, `wrangler preview`, the PR body),
+// deploy (build, the Artifacts namespace, the secrets, `wrangler preview`, the PR body),
 // e2e (vitest and Playwright against the live preview), reset (delete, then deploy), delete (the
-// preview, its D1 and Artifacts namespace, the apps on top), sweep (every preview whose PR is closed
+// preview, its Artifacts namespace, the apps on top), sweep (every preview whose PR is closed
 // or missing, or older than 7 days, and the resources left behind). `--dry-run` prints the plan.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -144,7 +144,7 @@ function parseWranglerJson(raw: string): {
   return JSON.parse(raw.slice(jsonStart));
 }
 
-/** Every row of a paged account listing — D1, Artifacts namespaces and a worker's previews all page
+/** Every row of a paged account listing — Artifacts namespaces and a worker's previews both page
  *  the same way (`per_page`, `page`; the previews list hands out ten a page unless asked, measured). */
 async function listAll<T>(cf: Cf, route: string): Promise<T[]> {
   const rows: T[] = [];
@@ -204,33 +204,6 @@ async function writePullRequestSection(prNumber: string, section: string): Promi
   throw new Error(
     `could not write the preview section into PR #${prNumber}'s body: it kept changing`,
   );
-}
-
-// ── the D1 (not auto-provisioned: created here, deleted here) ──────────────────────────────────
-
-type D1Row = { uuid: string; name: string; created_at?: string };
-
-/** The list API's `name` filter matches by prefix (measured), so the exact match is made here. */
-async function findDatabase(cf: Cf, name: string): Promise<D1Row | undefined> {
-  return (await listAll<D1Row>(cf, "/d1/database")).find((row) => row.name === name);
-}
-
-/** Create the preview's D1 if missing. The directory schema is the worker's own business — applied
- *  at boot, idempotent (src/control-plane.sql) — so a schema change is proven by the next request. */
-async function ensureDatabase(cf: Cf, name: string): Promise<string> {
-  const existing = await findDatabase(cf, name);
-  const row =
-    existing ||
-    (await cf<D1Row>("/d1/database", { method: "POST", body: JSON.stringify({ name }) }));
-  console.log(`${existing ? "found" : "created"} D1 ${name} (${row.uuid})`);
-  return row.uuid;
-}
-
-async function deleteDatabase(cf: Cf, name: string): Promise<void> {
-  const row = await findDatabase(cf, name);
-  if (!row) return console.warn(`D1 ${name} did not exist; continuing.`);
-  await cf(`/d1/database/${row.uuid}`, { method: "DELETE" });
-  console.log(`deleted D1 ${name}`);
 }
 
 // ── the Artifacts namespace (not auto-provisioned: created here, deleted here) ─────────────────
@@ -493,15 +466,13 @@ async function deployPreview(
   apps: StartApp[],
 ) {
   assertFreshInstall();
-  // The apps' vite builds run beside os-next's build, the D1 and the wrangler install.
+  // The apps' vite builds run beside os-next's build, the Artifacts namespace and the wrangler install.
   const appBuilds = Promise.all(apps.map((app) => buildStartApp(app, "preview")));
   await build();
-  const databaseId = await ensureDatabase(ctx.cf, previewResourceName(previewName, "db"));
   await ensureArtifactsNamespace(ctx.cf, previewResourceName(previewName, "repos"));
   const dash = apps.find((app) => app.name === "dash");
   writePreviewWranglerConfig({
     previewName,
-    d1DatabaseId: databaseId,
     dashOrigin: dash && `https://${previewName}-${new URL(dash.envs.preview!.baseUrl).hostname}`,
   });
   const wrangler = preparePreviewWrangler();
@@ -573,16 +544,15 @@ async function deployPreview(
   }
 }
 
-/** The preview, then its D1 and its Artifacts namespace (wrangler deletes the auto-provisioned KV
- *  and R2 with the preview; these two it never knew). */
+/** The preview, then its Artifacts namespace (wrangler deletes the auto-provisioned KV and R2 with
+ *  the preview; the namespace it never knew). */
 async function deletePreview(cf: Cf, previewName: string, wrangler: string): Promise<void> {
   await deleteWorkerPreview(PREVIEW_PARENT, previewName, wrangler);
-  await deleteDatabase(cf, previewResourceName(previewName, "db"));
   await deleteArtifactsNamespace(cf, previewResourceName(previewName, "repos"));
 }
 
-/** os-next's preview, its D1 and its Artifacts namespace, then every app on top's preview (whether
- *  or not it exists). */
+/** os-next's preview and its Artifacts namespace, then every app on top's preview (whether or not
+ *  it exists). */
 async function deleteAll(cf: Cf, previewName: string): Promise<void> {
   const wrangler = preparePreviewWrangler();
   try {
@@ -688,23 +658,11 @@ async function sweep(cf: Cf, dryRun: boolean): Promise<void> {
         `  keep ${preview.name} (${state}, ${Number.isNaN(age) ? "age unknown" : `${age.toFixed(1)} days`})`,
       );
   }
-  // A D1 whose preview is gone (a cleanup that failed after `preview delete`, a hand-deleted preview).
-  const live = new Set(previews.map((preview) => previewResourceName(preview.name, "db")));
-  // A D1 named for a preview that no longer exists — but only when its pull request is closed or
-  // missing, or the database is older than a day: a deploy in flight creates its D1 BEFORE the
-  // preview exists, and a sweep running at that moment must not take it.
-  const orphanDatabases: D1Row[] = [];
-  for (const row of await listAll<D1Row>(cf, "/d1/database")) {
-    const previewName = previewNameOfResource(row.name, "db");
-    if (!previewName?.startsWith("pr") || live.has(row.name)) continue;
-    const number = previewPullRequestNumber(previewName);
-    const state = number === undefined ? "unknown" : await pullRequestState(number);
-    const ageDays = row.created_at ? (Date.now() - Date.parse(row.created_at)) / 86_400_000 : NaN;
-    if (state === "closed" || state === "missing" || ageDays > 1) orphanDatabases.push(row);
-  }
-  // An Artifacts namespace whose preview is gone, judged exactly as the D1 is (the deploy creates
-  // both before the preview exists; deletePreview takes both with it): one still here outlived a
-  // failed delete, or a delete from before this script deleted namespaces (2026-09-22).
+  // An Artifacts namespace whose preview is gone (a cleanup that failed after `preview delete`, a
+  // hand-deleted preview, a delete from before this script deleted namespaces, 2026-09-22) — but
+  // only when its pull request is closed or missing, or the namespace is older than a day: a deploy
+  // in flight creates it BEFORE the preview exists, and a sweep running at that moment must not
+  // take it.
   const liveArtifactsNamespaces = new Set(
     previews.map((preview) => previewResourceName(preview.name, "repos")),
   );
@@ -724,7 +682,6 @@ async function sweep(cf: Cf, dryRun: boolean): Promise<void> {
     ({ name }) => staleNames.has(name) || !liveNames.has(name),
   );
   for (const { name, reasons } of stale) console.log(`  delete ${name}: ${reasons.join("; ")}`);
-  for (const row of orphanDatabases) console.log(`  delete orphan D1 ${row.name}`);
   for (const row of orphanArtifactsNamespaces)
     console.log(
       `  delete orphan Artifacts namespace ${row.namespace} (${row.repo_count ?? "?"} repos)`,
@@ -733,10 +690,7 @@ async function sweep(cf: Cf, dryRun: boolean): Promise<void> {
     console.log(`  delete apps/${app.name} preview ${name}`);
   if (
     dryRun ||
-    (stale.length === 0 &&
-      orphanDatabases.length === 0 &&
-      orphanArtifactsNamespaces.length === 0 &&
-      staleAppPreviews.length === 0)
+    (stale.length === 0 && orphanArtifactsNamespaces.length === 0 && staleAppPreviews.length === 0)
   )
     return;
   const wrangler = preparePreviewWrangler();
@@ -746,11 +700,6 @@ async function sweep(cf: Cf, dryRun: boolean): Promise<void> {
     for (const { name } of stale) {
       await deletePreview(cf, name, wrangler.command).catch((error) =>
         failures.push(`${name}: ${describe(error)}`),
-      );
-    }
-    for (const row of orphanDatabases) {
-      await cf(`/d1/database/${row.uuid}`, { method: "DELETE" }).catch((error) =>
-        failures.push(`${row.name}: ${describe(error)}`),
       );
     }
     for (const row of orphanArtifactsNamespaces) {
@@ -822,12 +771,10 @@ async function main(argv: string[]): Promise<void> {
   const branch = await resolveBranch(pr, parsed.name);
   const previewName = resolvePreviewName({ name: branch, prNumber: pr });
   console.log(
-    `preview ${previewName} → ${previewUrl(previewName)} (D1 ${previewResourceName(previewName, "db")})`,
+    `preview ${previewName} → ${previewUrl(previewName)} (Artifacts ${previewResourceName(previewName, "repos")})`,
   );
   if (parsed.command === "config" || parsed.dryRun) {
-    console.log(
-      `wrote ${writePreviewWranglerConfig({ previewName, d1DatabaseId: "<created at deploy>" })}`,
-    );
+    console.log(`wrote ${writePreviewWranglerConfig({ previewName })}`);
     return;
   }
   if (parsed.command === "e2e") return runE2e(previewName);

@@ -633,7 +633,7 @@ export interface OsNextEnv {
    *  serves `<baseUrl>/projects/<project>/<app>/…` from the one origin. Unset ⇒ no ingress. */
   ingressRouting?: NonNullable<IngressRouting>;
   artifactsNamespace: string;
-  /** The name the Cloudflare resources were CREATED under (D1 `<prefix>-directory`, KV `<prefix>-oauth|-itx`) —
+  /** The name the Cloudflare resources were CREATED under (KV `<prefix>-oauth|-itx`, R2 `<prefix>-files`) —
    *  pinned apart from `workerName` because the worker was renamed after they existed; `ensure-resources` and
    *  the wrangler generator derive names from this, never from the worker name. */
   resourceNamePrefix: string;
@@ -653,7 +653,7 @@ export interface OsNextEnv {
    *  HOSTNAME on the first of these (ensure-resources creates it; the owner CNAMEs their apex to the
    *  fallback origin), reached through the one `*\/*` route the generator adds per SaaS zone. */
   cloudflareForSaasProjectHostnameBases?: string[];
-  resources: { directoryDbId: string; oauthKvId: string; itxKvId: string };
+  resources: { oauthKvId: string; itxKvId: string };
 }
 export const osNextEnvs: Record<string, OsNextEnv> = {
   // THE PARENT OF EVERY PER-PR PREVIEW (apps/os-next/scripts/preview.ts, the cloudflare-os recipe): a
@@ -672,7 +672,6 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
     artifactsNamespace: "os-next-preview-repos",
     resourceNamePrefix: "os-next-preview",
     resources: {
-      directoryDbId: "3c78dee6-80e5-49ed-a157-003278405ad0",
       oauthKvId: "f032a76654144557b48de0f86563a1db",
       itxKvId: "82406b38cf9949048097dde599a0087c",
     },
@@ -706,7 +705,6 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
     artifactsNamespace: "project-worker-prd-repos",
     resourceNamePrefix: "project-worker-prd",
     resources: {
-      directoryDbId: "be6a3789-726a-4786-8b50-ef150c583b4e",
       oauthKvId: "a1a12d1cf1c342f8a389e5bf9dc5b760",
       itxKvId: "02d9483f71b84a9f9fae588f0ad9b3bd",
     },

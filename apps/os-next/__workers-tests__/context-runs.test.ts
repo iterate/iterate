@@ -6,11 +6,9 @@
 // settled `interrupted` by the wake record — never re-run — which only the workers project can
 // prove (the context is aborted mid-run).
 import { runInDurableObject } from "cloudflare:test";
-import { beforeAll, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/next/stream/processor";
-import { adminCredentials, applyDirectorySchema, openSession, stub, until } from "./support.ts";
-
-beforeAll(applyDirectorySchema);
+import { adminCredentials, openSession, stub, until } from "./support.ts";
 
 const PROJECT = "prj_context_runs";
 const ROOT = `${PROJECT}.iterate/`;

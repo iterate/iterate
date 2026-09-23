@@ -20,8 +20,8 @@ export default async function deploy(options: { env?: string } = {}) {
     requiredSecrets: ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"],
     // wrangler bundles src/worker.ts itself: the deploy is `wrangler deploy --config wrangler.jsonc
     // --env <name>` on the generated config's env block; `prepare` writes that config and the
-    // generated modules (scripts/build.ts) first. The directory schema is the worker's own business:
-    // applied at boot, idempotent (src/control-plane.sql).
+    // generated modules (scripts/build.ts) first. There is no schema step: the catalog is the
+    // `control-plane` facet's own SQLite (src/control-plane/), migrated by the facet itself.
     build: "checked-in-config",
     async prepare() {
       await build();

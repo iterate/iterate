@@ -326,7 +326,7 @@ test("first Claude consent creates the organization and project on the consent p
     const session = api.authenticate({ type: "from-server-cookie" });
     const [inventory, orgs, listed] = await Promise.all([
       session.grants.list(),
-      session.orgs(),
+      session.organizations.list(),
       session.projects.list(),
     ]);
     expect(inventory.items).toHaveLength(2);

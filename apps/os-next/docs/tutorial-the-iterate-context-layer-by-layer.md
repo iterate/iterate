@@ -63,8 +63,9 @@ the **context** (things you can call, in both directions), **fetch** (in both di
 one-label wildcard certificate does not cover it), or the apex `<project>.<base>`, `<project>` an
 id or a slug — is routed by hostname into the project's root context, the app label riding as a
 trusted `x-iterate-app` header the DO's fetch lane ALWAYS overwrites; and everything else on the worker's own
-hostname is the control plane, in-process (`src/control-plane.ts`: an OAuth 2.1 Authorization
-Server, a D1 directory of users, orgs and projects, `/mcp`, a console with a login form). A project
+hostname is the control plane, in-process (`src/oauth.ts`, `src/control-plane/`: an OAuth 2.1
+Authorization Server, the catalog of users, organizations and projects in the root context's
+SQLite, `/mcp`, a console with a login form). A project
 host is the one HTTP way in: an app host answers with the app, and a host naming no app with the
 project's config worker (chapter 7), whose `fetch` routes by hostname.
 `src/iterate-context-durable-object.ts` is THE CONTEXT: one Durable Object per `{ projectId, path }`,
@@ -1684,8 +1685,8 @@ expect((await fetchProjectHost(`site--${unknown}.${base}`, "/")).status).toBe(42
 > and a lookup by hostname, then the same `x-iterate-app` and the same config-worker `fetch`.
 
 Admission comes first: a context is created on first touch, so before the edge dials a Durable
-Object for a project host it asks the in-process directory whether the project exists — one D1 read
-— and a stranger's label under the wildcard mints nothing; a hostname under the base that fails the
+Object for a project host it asks the control plane whether the project exists — one read of its
+catalog, remembered for the isolate's life — and a stranger's label under the wildcard mints nothing; a hostname under the base that fails the
 grammar at all is 421 too, never the control plane. A visitor's credential is read as chapter
 10 says — this project's token, its secret or the admin secret as the bearer, or the host cookie a
 token was turned into; never the platform's login cookie — and the platform's own credential is
@@ -1891,8 +1892,8 @@ each screen acting through its own server functions, with `POST /login`, `/logou
 `/authorize` beside them as plain form doors — for a script, and for the screens' own forms until the
 page hydrates; the OAuth 2.1
 Authorization Server (`/authorize`, `/oauth/token`, `/oauth/register`, `/.well-known/*`) whose ONLY
-protected route — and ONE resource, `<origin>/mcp` — is `/mcp`. The directory is D1 — users → orgs →
-projects, access is org membership — and a project's id IS its DNS-safe slug: the directory row, the
+protected route — and ONE resource, `<origin>/mcp` — is `/mcp`. The directory is the control plane's catalog on
+`global:/` — users → organizations → projects, access is organization membership — and a project's id IS its DNS-safe slug: the directory row, the
 DO name and the host label are one name.
 
 `/mcp` is the ONE MCP server for every project, and it authenticates through that one login. An MCP

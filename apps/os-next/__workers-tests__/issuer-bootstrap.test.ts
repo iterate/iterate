@@ -1,20 +1,17 @@
 import { env, SELF, runInDurableObject } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
-import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { appSession, startAppSession } from "iterate/next/app-server";
 import { authorizationCodeRequest } from "iterate/next/oauth";
 import { platformAddressesOf } from "../src/app-config.ts";
 import type { Env } from "../src/env.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { directory } from "../src/directory.ts";
 import { startIssuerSession } from "../src/issuer-session.ts";
 import { oauthHelpers, parseAuthorization } from "../src/oauth.ts";
-import { applyDirectorySchema } from "./support.ts";
 
 const bindings = env as unknown as Env;
 const origin = "https://control.test";
 const sessions: Disposable[] = [];
-beforeAll(applyDirectorySchema);
 beforeEach(() => {
   // DNS transport only. Provider metadata, PKCE, exchange, storage and API are real.
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
@@ -37,13 +34,34 @@ async function connect(headers: Record<string, string>) {
   sessions.push(transport);
   return transport.authenticate({ type: "from-server-cookie" });
 }
+/** A bare `/api` socket authenticated in-band with the admin secret — the operator, or `as` a
+ *  person (src/session.ts): how a fixture makes a user, or acts as one before they have signed in. */
+async function operator(email?: string) {
+  const response = await SELF.fetch(`${origin}/api`, { headers: { Upgrade: "websocket" } });
+  expect(response.status).toBe(101);
+  response.webSocket!.accept();
+  const transport = newWebSocketRpcSession<IterateRpcTarget>(
+    response.webSocket! as unknown as WebSocket,
+  );
+  sessions.push(transport);
+  return transport.authenticate({
+    type: "admin-secret",
+    secret: bindings.APP_CONFIG_SECRETS__ADMIN_BEARER!,
+    ...(email && { as: { email } }),
+  });
+}
+/** The person `email` names, found or created by the control plane — what an issuer session is
+ *  started for (the sign-in's own find-or-create). */
+const person = async (email: string) => (await operator()).users.create({ email });
 
 test("first consent creates organization and project through the ordinary session, then grants only the chosen project", async () => {
-  const user = await directory(bindings.DB).upsertIdentityUser(
-    "google",
-    "1357924680",
-    "bootstrap@example.com",
-  );
+  const user = await (
+    await operator()
+  ).users.linkIdentity({
+    provider: "google",
+    subject: "1357924680",
+    email: "bootstrap@example.com",
+  });
   const helpers = oauthHelpers(bindings, platformAddressesOf(bindings, new Request(`${origin}/`)));
   const client = await helpers.createClient({
     clientName: "Claude fixture",
@@ -69,7 +87,7 @@ test("first consent creates organization and project through the ordinary sessio
   const headers = { Cookie: login.setCookie.split(";")[0]!, Origin: origin };
   const api = await connect(headers);
   expect((await api.info()).principal).toEqual({ actor: user.id, email: user.email });
-  expect(await api.orgs()).toEqual([]);
+  expect(await api.organizations.list()).toEqual([]);
   expect(await api.projects.list()).toEqual([]);
   expect(await api.consent.describe(flow.url.search)).toMatchObject({
     kind: "consent",
@@ -81,10 +99,10 @@ test("first consent creates organization and project through the ordinary sessio
     orgs: [],
     projects: [],
   });
-  const org = await api.createOrg("First organization");
+  const org = await api.organizations.create({ name: "First organization" });
   using project = await api.projects.create({ project: "first-consent-project", orgId: org.id });
   const projectId = (await project.whoami()).projectId;
-  const other = await api.createOrg("Other organization");
+  const other = await api.organizations.create({ name: "Other organization" });
   using excluded = await api.projects.create({
     project: "unselected-consent-project",
     orgId: other.id,
@@ -104,7 +122,7 @@ test("first consent creates organization and project through the ordinary sessio
     { id: projectId, slug: "first-consent-project" },
     { id: excludedId, slug: "unselected-consent-project" },
   ]);
-  expect((await api.orgs()).map((org) => org.name)).toEqual([
+  expect((await api.organizations.list()).map((org) => org.name)).toEqual([
     "First organization",
     "Other organization",
   ]);
@@ -162,7 +180,8 @@ test("first consent creates organization and project through the ordinary sessio
     clientDomain: "studio.example",
   });
   await api.logout();
-  // These calls land before the 30s live lease refresh: issuance still reads D1 now.
+  // These calls land before the 30s live lease refresh: issuance reads the account's ended grants
+  // on every admission (oauth.ts `authorizationOf`), so the logout denies at once.
   await expect(api.consent.approve({ query: flow.url.search, projects: ["*"] })).rejects.toThrow(
     /session has ended/,
   );
@@ -178,7 +197,7 @@ test("first consent creates organization and project through the ordinary sessio
 });
 
 test("copied issuer client metadata and every scope confer app permissions but never consent authority", async () => {
-  const user = await directory(bindings.DB).upsertUser("copied-client@example.com");
+  const user = await person("copied-client@example.com");
   const login = await startIssuerSession(bindings, new Request(origin), user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
   const flow = await authorizationCodeRequest({
@@ -207,8 +226,8 @@ test("copied issuer client metadata and every scope confer app permissions but n
   const app = await connect({ Authorization: `Bearer ${token.access_token}` });
   expect((await app.info()).scopes).toEqual(["iterate", "account", "organizations:write"]);
   expect((await app.grants.list()).items).toHaveLength(2);
-  const org = await app.createOrg("Clone organization");
-  expect((await app.orgs()).map((org) => org.id)).toContain(org.id);
+  const org = await app.organizations.create({ name: "Clone organization" });
+  expect((await app.organizations.list()).map((org) => org.id)).toContain(org.id);
   await expect(app.consent.describe(flow.url.search)).rejects.toThrow(/Sign in to iterate/);
   await expect(app.consent.approve({ query: flow.url.search, projects: ["*"] })).rejects.toThrow(
     /Sign in to iterate/,
@@ -217,7 +236,7 @@ test("copied issuer client metadata and every scope confer app permissions but n
 
 test("an issuer session minted before a scope existed still holds every scope — its list is not a consent", async () => {
   // the shape of startIssuerSession, with the two scopes an older cookie was minted with
-  const user = await directory(bindings.DB).upsertUser("old-issuer-cookie@example.com");
+  const user = await person("old-issuer-cookie@example.com");
   const { platformOrigin: issuerOrigin, api: apiResource } = platformAddressesOf(
     bindings,
     new Request("https://control.test/"),
@@ -255,8 +274,8 @@ test("an issuer session minted before a scope existed still holds every scope �
   expect(result.error).toBeUndefined();
   const old = await connect({ Cookie: flow.setCookie.split(";")[0]!, Origin: origin });
   expect((await old.info()).scopes).toEqual(["iterate", "account", "organizations:write"]);
-  const org = await old.createOrg("Made with an old cookie");
-  expect((await old.orgs()).map((candidate) => candidate.id)).toContain(org.id);
+  const org = await old.organizations.create({ name: "Made with an old cookie" });
+  expect((await old.organizations.list()).map((candidate) => candidate.id)).toContain(org.id);
 });
 
 test("a browser landing on the platform origin is told it is headless and where the dash is", async () => {
@@ -287,12 +306,11 @@ test("the setup prompt an agent follows is served beside the pages, and the land
 });
 
 test("a client on a project's custom apex is bound to that project at consent, like one under the hostname base", async () => {
-  const user = await directory(bindings.DB).upsertUser("custom-apex@example.com");
-  const apexProject = await directory(bindings.DB).createProject(
-    { userId: user.id },
-    "custom-apex-project",
-  );
-  await directory(bindings.DB).createProject({ userId: user.id }, "custom-apex-other");
+  const user = await person("custom-apex@example.com");
+  const theirs = await operator(user.email);
+  using apexProject = await theirs.projects.create({ project: "custom-apex-project" });
+  using _other = await theirs.projects.create({ project: "custom-apex-other" });
+  const apexProjectId = (await apexProject.whoami()).projectId;
   const login = await startIssuerSession(bindings, new Request(origin), user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
   const flow = await authorizationCodeRequest({
@@ -306,15 +324,15 @@ test("a client on a project's custom apex is bound to that project at consent, l
   expect(view.projectBound).toBe(true);
   // the apex map names the project by slug; the view's row carries the id a ticked box submits
   expect(view.projects.map(({ id, slug }) => ({ id, slug }))).toEqual([
-    { id: apexProject.id, slug: "custom-apex-project" },
+    { id: apexProjectId, slug: "custom-apex-project" },
   ]);
 });
 
 test("consent grants only the scopes left ticked; organizations:write, not project reach, is what creates an organization", async () => {
-  const user = await directory(bindings.DB).upsertUser("ticked-scopes@example.com");
+  const user = await person("ticked-scopes@example.com");
   const login = await startIssuerSession(bindings, new Request(origin), user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
-  const org = await issuer.createOrg("Ticked scopes organization");
+  const org = await issuer.organizations.create({ name: "Ticked scopes organization" });
   using project = await issuer.projects.create({ project: "ticked-scopes-project", orgId: org.id });
   const projectId = (await project.whoami()).projectId;
   // the same request three scopes wide, approved for ONE project with the scopes given
@@ -351,24 +369,37 @@ test("consent grants only the scopes left ticked; organizations:write, not proje
   // account and organizations:write unticked — and a scope the request never asked for is no scope
   const narrow = await grant(["iterate", "made-up"]);
   expect((await narrow.info()).scopes).toEqual(["iterate"]);
-  await expect(narrow.createOrg("Refused organization")).rejects.toThrow(/organizations:write/);
+  await expect(narrow.organizations.create({ name: "Refused organization" })).rejects.toThrow(
+    /organizations:write/,
+  );
   await expect(narrow.grants.list()).rejects.toThrow(/Account permission/);
   // without the scope a project-narrowed grant sees only its projects' organizations
-  expect((await narrow.orgs()).map((candidate) => candidate.id)).toEqual([org.id]);
+  expect((await narrow.organizations.list()).map((candidate) => candidate.id)).toEqual([org.id]);
   // every scope ticked: the grant is narrowed to one project and still creates an organization —
   // and, holding organizations:write, lists every organization of the person, the new one included
   const full = await grant(["iterate", "account", "organizations:write"]);
   expect((await full.info()).scopes).toEqual(["iterate", "account", "organizations:write"]);
-  const created = await full.createOrg("Created by a project-narrowed grant");
-  expect((await issuer.orgs()).map((candidate) => candidate.id)).toContain(created.id);
-  expect((await full.orgs()).map((candidate) => candidate.id)).toContain(created.id);
+  const created = await full.organizations.create({ name: "Created by a project-narrowed grant" });
+  expect((await issuer.organizations.list()).map((candidate) => candidate.id)).toContain(
+    created.id,
+  );
+  expect((await full.organizations.list()).map((candidate) => candidate.id)).toContain(created.id);
+  // `organizations.get` is narrowed exactly as `list()` is: the project-bound grant without
+  // organizations:write opens its project's organization and no other of the person's
+  using narrowOwn = await narrow.organizations.get(org.id);
+  expect((await narrowOwn.whoami()).path).toBe(`/organizations/${org.id}`);
+  await expect(narrow.organizations.get(created.id)).rejects.toThrow(
+    /not an organization this session belongs to/,
+  );
+  using fullOther = await full.organizations.get(created.id);
+  expect((await fullOther.whoami()).path).toBe(`/organizations/${created.id}`);
   expect((await full.projects.list()).map(({ id, slug }) => ({ id, slug }))).toEqual([
     { id: projectId, slug: "ticked-scopes-project" },
   ]);
 });
 
 test("consent requires PKCE, defaults empty scopes, rejects empty reach and returns a cancellable request", async () => {
-  const user = await directory(bindings.DB).upsertUser("consent-checks@example.com");
+  const user = await person("consent-checks@example.com");
   const login = await startIssuerSession(bindings, new Request(origin), user, "/");
   const headers = { Cookie: login.setCookie.split(";")[0]!, Origin: origin };
   const api = await connect(headers);
@@ -428,7 +459,7 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
 });
 
 test("consent omits missing, insecure and credential-bearing branding URLs", async () => {
-  const user = await directory(bindings.DB).upsertUser("branding-urls@example.com");
+  const user = await (await operator()).users.create({ email: "branding-urls@example.com" });
   const login = await startIssuerSession(bindings, new Request(origin), user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
   for (const url of [
@@ -479,7 +510,7 @@ test("CIMD consent shows the metadata host even when the client declares a diffe
       );
     return SELF.fetch(request);
   });
-  const user = await directory(bindings.DB).upsertUser("branding-cimd@example.com");
+  const user = await (await operator()).users.create({ email: "branding-cimd@example.com" });
   const login = await startIssuerSession(bindings, new Request(origin), user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: origin });
   const flow = await authorizationCodeRequest({

@@ -94,22 +94,13 @@
     // The removed built-in was hosted as a facet of IterateContextDurableObject. Retire its
     // unused standalone namespace; agent streams and facet storage belong to the context.
     "AgentDurableObject": { "type": "durable-object", "state": "deleted" },
+    "ControlPlaneDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "OrganizationDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "ProjectDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "RepoDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "SecretDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "WorkspaceDurableObject": { "type": "durable-object", "storage": "sqlite" },
   },
-
-  // The in-process control plane's directory (src/control-plane.sql: users, orgs,
-  // org_members, projects — a project's id IS its slug).
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "control-plane-directory",
-      "database_id": "fb3502bf-da4c-42e7-8e70-6f75765f7a4d",
-    },
-  ],
 
   // OAUTH_KV = the in-process OAuth AS's provider store (grants/tokens/DCR clients).
   "kv_namespaces": [
@@ -118,9 +109,6 @@
     { "binding": "OAUTH_KV", "id": "b8efbdc3253840fa95331a80efbeb03d" },
   ],
 
-  // The directory schema (src/control-plane.sql) is imported as text and applied at boot
-  // (src/worker.ts) — idempotent, so every deployment, local or not, brings its own D1 up to date.
-  "rules": [{ "type": "Text", "globs": ["**/*.sql"] }],
   // CONFIGURATION (src/app-config.ts): ONE JSON object, the `APP_CONFIG` Worker secret —
   // `{ urls, login, secrets }` — plus `APP_CONFIG_SECRETS__KEY` standing alone so it can rotate with
   // `previousKey` beside it. Any key can be set alone as `APP_CONFIG_<PATH>__<KEY>`; the generator

@@ -3,19 +3,26 @@ import { expect, test } from "vitest";
 import { appConfigOf, atRestKeysOf } from "../src/app-config.ts";
 import { decryptSecretMaterial } from "../src/secret-at-rest.ts";
 import { EncryptedSecretSeed } from "../scripts/project-seed-format.ts";
-import { adminCredentials, applyDirectorySchema, openSession, stub } from "./support.ts";
+import { adminCredentials, openSession, stub } from "./support.ts";
 
 test("operator exports the current encrypted secret outside rewrites; fresh project restores it through set", async () => {
-  await applyDirectorySchema();
-  const db = (env as unknown as { DB: D1Database }).DB;
   const oldId = "prj_seed_old";
   const newId = "prj_seed_new";
-  await db.batch([
-    db.prepare("INSERT INTO orgs(id,name) VALUES ('org_seed','Seed')"),
-    ...[oldId, newId].map((id) =>
-      db.prepare("INSERT INTO projects(id,slug,org_id) VALUES (?,?,?)").bind(id, id, "org_seed"),
-    ),
-  ]);
+  // the organization and the two projects, pinned by the operator (the replay's way in)
+  const session = await openSession();
+  const admin = session.authenticate(adminCredentials());
+  await admin.organizations.create({ name: "Seed", id: "org_seed" });
+  for (const [id, slug] of [
+    [oldId, "seed-old"],
+    [newId, "seed-new"],
+  ] as const) {
+    using project = await admin.projects.create({
+      project: slug,
+      orgId: "org_seed",
+      restoreProjectId: id,
+    });
+    expect((await project.whoami()).projectId).toBe(id);
+  }
   const path = "/secrets/stripe";
   const root = stub(oldId);
   const old = stub(`${oldId}.iterate${path}`);
@@ -35,8 +42,6 @@ test("operator exports the current encrypted secret outside rewrites; fresh proj
       },
     ],
   ]);
-  const session = await openSession();
-  const admin = session.authenticate(adminCredentials());
   const exported = EncryptedSecretSeed.parse(await admin.exportProjectSecretForSeed(oldId, path));
   expect(JSON.stringify(exported)).not.toContain(material.apiKey);
   expect(exported.context).toBe(`${oldId}.iterate${path}`);

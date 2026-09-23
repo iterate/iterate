@@ -16,6 +16,8 @@
     "scripts/deploy.ts",
     "scripts/ensure-resources.ts",
     "scripts/erase-data.ts",
+    "scripts/replay-directory.ts",
+    "scripts/control-plane-load.ts",
     "scripts/erase-data.test.ts",
     "scripts/generate-wrangler-config.ts",
     "scripts/preview.ts",

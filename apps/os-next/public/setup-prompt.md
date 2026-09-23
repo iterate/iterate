@@ -29,7 +29,7 @@ npx wrangler deploy --config apps/os-next/wrangler.self-host.jsonc --secrets-fil
 rm .secrets
 ```
 
-The first deploy creates the D1 database, the two KV namespaces and the R2 bucket by name and prints
+The first deploy creates the two KV namespaces and the R2 bucket by name and prints
 the Worker's URL — `https://iterate.<their-subdomain>.workers.dev`, `<origin>` below. Tell the person
 to keep a copy of `APP_CONFIG_SECRETS__KEY` somewhere safe: it encrypts their projects' secrets at rest.
 

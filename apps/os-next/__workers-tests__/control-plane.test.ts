@@ -1,11 +1,15 @@
 import { env, SELF } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
-import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+import type { StreamEvent } from "iterate/next/stream/processor";
+import type { AccountState } from "../src/account/contract.ts";
 import type { Env } from "../src/env.ts";
+import { GLOBAL_PROJECT_ID } from "../src/context/paths.ts";
+import { DurableObjectNameCodec } from "../src/iterate-context.ts";
 import { startLoginCode } from "../src/password-and-code-sign-in.ts";
+import type { OrganizationState } from "../src/organization/contract.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { directory } from "../src/directory.ts";
-import { applyDirectorySchema, SRC_ECHO_APP } from "./support.ts";
+import { controlPlaneStub, SRC_ECHO_APP, stub } from "./support.ts";
 
 const origin = "https://control.test";
 const secret = (env as unknown as Env).APP_CONFIG_SECRETS__ADMIN_BEARER!;
@@ -19,7 +23,6 @@ const postLogin = (form: Record<string, string>, cookie?: string) =>
     headers: cookie ? { Origin: origin, cookie } : { Origin: origin },
     body: new URLSearchParams(form),
   });
-beforeAll(applyDirectorySchema);
 afterEach(() => {
   for (const session of sessions.splice(0)) session[Symbol.dispose]();
   vi.restoreAllMocks();
@@ -37,6 +40,54 @@ async function operator(email?: string) {
   );
   sessions.push(root);
   return root.authenticate({ type: "admin-secret", secret, ...(email && { as: { email } }) });
+}
+type Session = Awaited<ReturnType<typeof operator>>;
+
+/** A read of the catalog — the `control-plane` facet's tables on `global:/` (src/control-plane/) —
+ *  with no session between: `catalog("project", ref)`, `catalog("organization", orgId)`. */
+const catalog = (method: string, ...args: unknown[]) =>
+  controlPlaneStub().invoke(["itx", "facets", ["get", "control-plane"], [method, ...args]]);
+/** A global context's log, whole — the root's (the control plane's record), an organization's. */
+const globalLog = async (path: string) =>
+  (
+    (await stub(DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path })).invoke([
+      "itx",
+      ["readEvents", 0, 1000],
+    ])) as { events: StreamEvent[] }
+  ).events;
+/** The person's account, folded (src/account/contract.ts) — read through their own context. */
+const accountState = async (session: Session) =>
+  (
+    (await session.user.invoke(["itx", "facets", ["get", "account"], ["snapshot"]])) as {
+      state: AccountState;
+    }
+  ).state;
+/** The organization's record, folded (src/organization/contract.ts) — read by membership. */
+const organizationState = async (session: Session, orgId: string) =>
+  (
+    (await (
+      await session.organizations.get(orgId)
+    ).invoke(["itx", "facets", ["get", "organization"], ["snapshot"]])) as {
+      state: OrganizationState;
+    }
+  ).state;
+/** `thunk` is REFUSED with `code`: an entity's refusal crosses its own log as
+ *  `request-failed { code }` and is rethrown coded at the edge; the edge's own refusal is coded
+ *  before anything lands. try/catch, not `.rejects`: a capnweb stub is a custom thenable. */
+async function refused(
+  thunk: () => Promise<unknown>,
+  code: string,
+  message?: RegExp,
+): Promise<void> {
+  let refusal: unknown;
+  try {
+    await thunk();
+  } catch (error) {
+    refusal = error;
+  }
+  expect(refusal, `expected a ${code} refusal, but it was allowed`).toBeDefined();
+  expect((refusal as { code?: string }).code).toBe(code);
+  if (message) expect((refusal as Error).message).toMatch(message);
 }
 
 // Public OAuth lifecycle and browser clients are covered by oauth.test.ts.
@@ -102,121 +153,195 @@ test("the directory keeps creation, listing, membership and event attribution co
   });
 });
 
-test("onboarding creates owned organizations atomically and checks the selected organization", async () => {
-  const db = (env as unknown as Env).DB;
-  const catalog = directory(db);
-  const user = await catalog.upsertUser("onboarding@directory.test");
-  const reach = { userId: user.id };
-  const first = await catalog.createOrg(user.id, "A first organization");
-  const chosen = await catalog.createOrg(user.id, "Z selected organization");
-  const selected = await catalog.createProject(reach, "selected-org-project", chosen.id);
-  expect(selected).toEqual({
-    id: expect.stringMatching(/^prj_[0-9a-f]{32}$/),
-    slug: "selected-org-project",
-    orgId: chosen.id,
+test("organizations.create writes the catalog row, lands the facts on the organization and the owner's account under the asker, and records the write on the root", async () => {
+  const ada = await operator("Orgs-Owner@directory.test");
+  const principal = await ada.whoami();
+  const org = await ada.organizations.create({ name: "  Ada's organization " });
+  expect(org).toEqual({
+    id: expect.stringMatching(/^org_[0-9a-f]{32}$/),
+    name: "Ada's organization",
+    role: "owner",
+    projects: 0,
   });
-  // the same name in its own organization is the same project; the id reads it, so does the slug
-  expect(await catalog.createProject(reach, "selected-org-project", chosen.id)).toEqual(selected);
-  expect(await catalog.getProject(selected.id)).toEqual(selected);
-  expect(await catalog.getProject("selected-org-project")).toEqual(selected);
-  expect((await catalog.listOrgs(user.id)).map((org) => org.id)).toEqual([first.id, chosen.id]);
-  const other = await catalog.upsertUser("other-onboarding@directory.test");
-  await expect(
-    catalog.createProject({ userId: other.id }, "foreign-org-project", chosen.id),
-  ).rejects.toThrow(/cannot create/);
-  await expect(
-    catalog.createProject({ ...reach, projectIds: [selected.id] }, "bound-new-project", chosen.id),
-  ).rejects.toThrow(/creating a project needs/);
-  expect(await catalog.getProject("foreign-org-project")).toBeNull();
-  expect(await catalog.getProject("bound-new-project")).toBeNull();
-  await expect(catalog.createOrg("missing-owner", "No orphan organization")).rejects.toThrow();
-  expect(
-    await db.prepare("SELECT id FROM orgs WHERE name = ?").bind("No orphan organization").first(),
-  ).toBeNull();
-  // rename and delete are the owner's: a member who owns nothing is refused, and an organization
-  // that still holds a project stays
-  expect(await catalog.renameOrg(user.id, first.id, "  A renamed organization ")).toEqual({
-    ...first,
-    name: "A renamed organization",
+  expect(await ada.organizations.list()).toEqual([org]);
+  // the membership is folded on the person's account; the name and the members on the organization
+  expect((await accountState(ada)).memberships).toEqual({
+    [org.id]: { role: "owner", since: expect.any(String) },
   });
-  expect((await catalog.listOrgs(user.id)).map((org) => org.name)).toEqual([
-    "A renamed organization",
-    "Z selected organization",
+  const record = await organizationState(ada, org.id);
+  expect(record.name).toBe("Ada's organization");
+  expect(record.members).toEqual({
+    [principal.actor]: { role: "owner", since: expect.any(String) },
+  });
+  // the facts on the organization's own log, stamped with who asked
+  const facts = (await globalLog(`/organizations/${org.id}`)).filter((event) =>
+    event.type.startsWith("events.iterate.com/organization/"),
+  );
+  expect(facts.map(({ type, payload }) => ({ type, payload }))).toEqual([
+    { type: "events.iterate.com/organization/created", payload: { name: "Ada's organization" } },
+    {
+      type: "events.iterate.com/organization/member-added",
+      payload: { orgId: org.id, userId: principal.actor, role: "owner" },
+    },
   ]);
-  await expect(catalog.renameOrg(other.id, first.id, "Not mine")).rejects.toThrow(/owner/);
-  await expect(catalog.deleteOrg(user.id, chosen.id)).rejects.toThrow(/still holds 1 project/);
-  await catalog.deleteOrg(user.id, first.id);
-  expect((await catalog.listOrgs(user.id)).map((org) => org.id)).toEqual([chosen.id]);
+  expect(facts.every((event) => event.source?.principal?.actor === principal.actor)).toBe(true);
+  // the write recorded on the root, after the fact
+  const recorded = (await globalLog("/")).find(
+    (event) =>
+      event.type === "events.iterate.com/control-plane/organization-created" &&
+      (event.payload as { orgId: string }).orgId === org.id,
+  );
+  expect(recorded?.payload).toEqual({
+    orgId: org.id,
+    name: "Ada's organization",
+    ownerId: principal.actor,
+  });
+  expect(recorded?.source?.principal?.actor).toBe(principal.actor);
+  // the catalog — the facet's tables — answers the same rows
+  expect(await catalog("organization", org.id)).toEqual({
+    id: org.id,
+    name: "Ada's organization",
+    projects: 0,
+  });
+  expect(await catalog("reach", principal.actor)).toEqual({
+    orgs: [{ id: org.id, name: "Ada's organization", role: "owner", projects: 0 }],
+    projects: [],
+  });
+});
+
+test("the operator pins ids — the replay of an older directory: the user, the organization with its owner, the project answer the pinned ids, and again without error; a person pinning is refused", async () => {
+  const admin = await operator();
+  const pinned = {
+    user: { email: "pinned@directory.test", id: "user_pinned1" },
+    org: { name: "Pinned organization", id: "org_pinned1", ownerId: "user_pinned1" },
+    project: { project: "pinned-slug", orgId: "org_pinned1", restoreProjectId: "prj_pinned1" },
+  };
+  for (const round of [1, 2]) {
+    expect(await admin.users.create(pinned.user)).toEqual({
+      id: "user_pinned1",
+      email: "pinned@directory.test",
+    });
+    // the second round answers the organization as it is: its project made in the first
+    expect(await admin.organizations.create(pinned.org)).toEqual({
+      id: "org_pinned1",
+      name: "Pinned organization",
+      projects: round - 1,
+    });
+    using project = await admin.projects.create(pinned.project);
+    expect(await project.whoami()).toMatchObject({
+      projectId: "prj_pinned1",
+      projectSlug: "pinned-slug",
+    });
+  }
+  expect(await admin.users.get("user_pinned1")).toEqual(pinned.user);
+  expect(await admin.users.get("pinned@directory.test")).toEqual(pinned.user);
+  expect(await admin.users.list()).toEqual(expect.arrayContaining([pinned.user]));
+  // the pinned person signs in as themselves and owns what was pinned for them
+  const person = await operator("pinned@directory.test");
+  expect(await person.whoami()).toEqual({ actor: "user_pinned1", email: "pinned@directory.test" });
+  expect(await person.organizations.list()).toEqual([
+    { id: "org_pinned1", name: "Pinned organization", role: "owner", projects: 1 },
+  ]);
+  expect(await person.projects.list()).toEqual([
+    { id: "prj_pinned1", slug: "pinned-slug", orgId: "org_pinned1", role: "owner" },
+  ]);
+  // the pin is the operator's alone; so is naming an owner, and the user catalog
+  await refused(() => person.users.create({ email: "someone@directory.test" }), "FORBIDDEN");
+  await refused(
+    () => person.organizations.create({ name: "Mine", id: "org_pinned2" }),
+    "FORBIDDEN",
+    /operator/,
+  );
+  await refused(
+    () => person.organizations.create({ name: "Theirs", ownerId: "user_pinned1" }),
+    "FORBIDDEN",
+    /operator/,
+  );
+  await refused(
+    () => person.projects.create({ project: "mine-pinned", restoreProjectId: "prj_pinned2" }),
+    "FORBIDDEN",
+    /admin secret/,
+  );
+  // an owner the catalog never heard of makes no organization
+  await refused(
+    () => admin.organizations.create({ name: "No orphan organization", ownerId: "user_missing" }),
+    "INVALID_INPUT",
+    /No user/,
+  );
+  expect(
+    ((await catalog("organizations")) as { name: string }[]).map((org) => org.name),
+  ).not.toContain("No orphan organization");
 });
 
 test("only the administrator can restore an archived project id, and neither slug nor id may be rebound", async () => {
-  const catalog = directory((env as unknown as Env).DB);
   const email = `restore-owner-${Date.now()}@directory.test`;
-  const owner = await catalog.upsertUser(email);
-  const org = await catalog.createOrg(owner.id, "restore target");
-  const archivedId = `prj_restore_${Date.now().toString(36)}`;
   const ownerSession = await operator(email);
-
-  await expect(
-    ownerSession.projects.create({
-      project: "restored",
-      orgId: org.id,
-      restoreProjectId: archivedId,
-    }),
-  ).rejects.toThrow(/admin secret/);
-
+  const org = await ownerSession.organizations.create({ name: "restore target" });
+  const archivedId = `prj_restore_${Date.now().toString(36)}`;
+  await refused(
+    () =>
+      ownerSession.projects.create({
+        project: "restored",
+        orgId: org.id,
+        restoreProjectId: archivedId,
+      }),
+    "FORBIDDEN",
+    /admin secret/,
+  );
   const admin = await operator();
-  await expect(
-    admin.projects.create({ project: "invalid-restore", orgId: org.id, restoreProjectId: "" }),
-  ).rejects.toThrow(/restored project id is invalid/);
+  await refused(
+    () =>
+      admin.projects.create({ project: "invalid-restore", orgId: org.id, restoreProjectId: "" }),
+    "INVALID_INPUT",
+    /restored project id is invalid/,
+  );
   using restored = await admin.projects.create({
     project: "restored",
     orgId: org.id,
     restoreProjectId: archivedId,
   });
   expect(await restored.whoami()).toMatchObject({ projectId: archivedId, projectSlug: "restored" });
-  await expect(
-    admin.projects.create({ project: "restored", orgId: org.id, restoreProjectId: "prj_other" }),
-  ).rejects.toThrow(/not restored id/);
-  await expect(
-    admin.projects.create({ project: "other", orgId: org.id, restoreProjectId: archivedId }),
-  ).rejects.toThrow(/already belongs/);
+  await refused(
+    () =>
+      admin.projects.create({ project: "restored", orgId: org.id, restoreProjectId: "prj_other" }),
+    "IDENTITY_CONFLICT",
+    /not the restored id/,
+  );
+  await refused(
+    () => admin.projects.create({ project: "other", orgId: org.id, restoreProjectId: archivedId }),
+    "IDENTITY_CONFLICT",
+    /already belongs/,
+  );
 });
 
-test("concurrent restores of one slug never return a different archived id", async () => {
-  const catalog = directory((env as unknown as Env).DB);
-  const owner = await catalog.upsertUser(`restore-race-${Date.now()}@directory.test`);
-  const org = await catalog.createOrg(owner.id, "restore race target");
+test("concurrent restores through the control plane: one slug never answers a different archived id, and the same archive converges", async () => {
+  const admin = await operator();
+  const org = await admin.organizations.create({ name: "restore race target" });
   const slug = `restore-race-${Date.now().toString(36)}`;
-  const firstId = `prj_${slug}_first`;
-  const secondId = `prj_${slug}_second`;
+  const restore = (restoreProjectId: string) =>
+    admin.projects
+      .create({ project: slug, orgId: org.id, restoreProjectId })
+      .then(async (context) => (await context.whoami()).projectId);
+  // two archives racing on one slug: the first write wins, the second is refused
   const attempts = await Promise.allSettled([
-    catalog.createProject("every", slug, org.id, firstId),
-    catalog.createProject("every", slug, org.id, secondId),
+    restore(`prj_${slug}_first`),
+    restore(`prj_${slug}_second`),
   ]);
-
-  const restored = attempts.filter((attempt) => attempt.status === "fulfilled");
-  const rejected = attempts.filter((attempt) => attempt.status === "rejected");
-  expect(restored).toHaveLength(1);
-  expect(rejected).toHaveLength(1);
-  expect(restored[0]!.value.id).toMatch(new RegExp(`^prj_${slug}_(?:first|second)$`));
-  expect(String(rejected[0]!.reason)).toMatch(/not restored id|already belongs/);
-});
-
-test("concurrent replays of the same archived identity converge", async () => {
-  const catalog = directory((env as unknown as Env).DB);
-  const owner = await catalog.upsertUser(`restore-replay-${Date.now()}@directory.test`);
-  const org = await catalog.createOrg(owner.id, "restore replay target");
-  const slug = `restore-replay-${Date.now().toString(36)}`;
-  const archivedId = `prj_${slug}_id`;
-  const restored = await Promise.all([
-    catalog.createProject("every", slug, org.id, archivedId),
-    catalog.createProject("every", slug, org.id, archivedId),
-  ]);
-
-  expect(restored).toEqual([
-    { id: archivedId, slug, orgId: org.id },
-    { id: archivedId, slug, orgId: org.id },
+  const won = attempts.filter((attempt) => attempt.status === "fulfilled");
+  expect(won).toHaveLength(1);
+  expect(won[0]!.value).toMatch(new RegExp(`^prj_${slug}_(?:first|second)$`));
+  expect(String(attempts.find((attempt) => attempt.status === "rejected")!.reason)).toMatch(
+    /not the restored id|already belongs/,
+  );
+  // the same archive twice at once converges on it
+  const replayed = `restore-replay-${Date.now().toString(36)}`;
+  const replay = () =>
+    admin.projects
+      .create({ project: replayed, orgId: org.id, restoreProjectId: `prj_${replayed}_id` })
+      .then(async (context) => (await context.whoami()).projectId);
+  expect(await Promise.all([replay(), replay()])).toEqual([
+    `prj_${replayed}_id`,
+    `prj_${replayed}_id`,
   ]);
 });
 

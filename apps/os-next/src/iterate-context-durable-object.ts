@@ -21,7 +21,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { errorCode, reportIssue, resolveContextPath } from "iterate/next/lib";
 import { DurableObject } from "cloudflare:workers";
-import { z } from "zod";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
 import {
   canonicalItxExpressionPrefix,
@@ -80,7 +79,7 @@ import {
   type ItxExpressionRewriteRule,
 } from "./context/itx-expression-rewriting.ts";
 import { signedFileUrl } from "./context/file-urls.ts";
-import { directory, ensureDirectorySchema } from "./directory.ts";
+import { ControlPlane } from "./control-plane/edge.ts";
 import { buildBuiltIns, type SubscriptionListEntry } from "./context/built-ins.ts";
 import { FacetHost } from "./context/facet-host.ts";
 import type { ArtifactsNamespace } from "./context/repos.ts";
@@ -139,8 +138,8 @@ export type AlarmTrace = {
 
 /** The bindings THE DO reads (wrangler.jsonc): the DO namespace, the Worker Loader, the kv namespaces,
  *  Workers AI, Browser Run, Artifacts — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
- *  vars worker.ts's `parseAppConfig` parses. control-plane.ts's `Env` extends this with the
- *  in-process control plane's own (D1, OAuth KV, …): the one worker's env. */
+ *  vars worker.ts's `parseAppConfig` parses. env.ts's `Env` extends this with the issuer's own
+ *  (OAuth KV, the browser sessions, the page files, the mailbox): the one worker's env. */
 export interface Env extends AppConfigEnv {
   ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
   LOADER: WorkerLoader;
@@ -151,8 +150,6 @@ export interface Env extends AppConfigEnv {
   BROWSER: BrowserRun;
   /** The one R2 bucket — the built-in root `itx.r2`, every owner under its own prefix (context/built-ins.ts). */
   FILES: R2Bucket;
-  /** The directory (directory.ts) — read for a project's slug, the host a signed file URL hangs under. */
-  DB: D1Database;
   /** Cloudflare Artifacts (beta) — the ONE bound namespace behind `itx.cfArtifacts`, project-scoped. */
   ARTIFACTS: ArtifactsNamespace;
 }
@@ -539,16 +536,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       ),
   };
 
+  /** The control plane as this context reads it: its own project's row (slug, organization). */
+  readonly #controlPlane = new ControlPlane(this.env.ITERATE_CONTEXT);
+
   /** `itx.builtins` — the physical scope this context resolves against (context/built-ins.ts). */
   readonly #builtIns: Record<string, unknown> = buildBuiltIns({
     projectInfo: async () => {
       if (this.#durableObjectAddress.projectId === "global") return {};
-      await ensureDirectorySchema(this.env.DB);
-      const row = await this.env.DB.prepare("SELECT * FROM projects WHERE id = ?")
-        .bind(this.#durableObjectAddress.projectId)
-        .first();
-      if (!row) return {};
-      const project = z.object({ id: z.string(), slug: z.string().optional() }).parse(row);
+      // the control plane's row (control-plane/edge.ts, memoized per isolate: a project's slug never changes)
+      const project = await this.#controlPlane.getProject(this.#durableObjectAddress.projectId);
+      if (!project) return {};
       const projectSlug = project.slug || project.id;
       // the apex URL, when the caller carries the platform origin to compose it with
       const platformOrigin = this.#platformOrigin;
@@ -575,8 +572,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         );
       // the URL carries the project's slug (the edge admits a project by it); the claim carries
       // the id — a global context (a user's, an organization's) has no URL
-      await ensureDirectorySchema(this.env.DB);
-      const project = await directory(this.env.DB).getProject(input.project);
+      const project = await this.#controlPlane.getProject(input.project);
       if (!project)
         throw new Error("files: only a project's context can sign a file URL — it has the host");
       return signedFileUrl({
@@ -1023,7 +1019,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           headers.get(ITX_PRINCIPAL_HEADER) ?? "null",
         ) as Principal | null;
         const grant = headers.get(ITX_GRANT_HEADER) || undefined;
-        // The platform origin the caller reached the platform on (app-config.ts `platformOriginOf`): the edge's
+        // The platform origin the caller reached the platform on (app-config.ts `platformAddressesOf`): the edge's
         // stamp, stripped before the app sees the Request (an app composes URLs through `itx.url`).
         const platformOrigin = headers.get(ITX_PLATFORM_ORIGIN_HEADER);
         headers.delete(ITX_PLATFORM_ORIGIN_HEADER);

@@ -1,7 +1,8 @@
 /** Erase all OS-Next data while retaining the worker, routes and resource identities.
  * Run `pnpm erase-data --env prd --yes-i-mean-prd --dry-run` before the real erase.
  * The worker is parked and its Durable Objects retired first, stopping writers and alarms.
- * D1, both KV namespaces, R2 files and Artifacts repositories are then emptied and verified.
+ * Both KV namespaces, R2 files and Artifacts repositories are then emptied and verified; the catalog
+ * (users, organizations, projects) lives in Durable Objects, retired with the rest.
  * A failed or incomplete erase throws; rerunning is safe. Deploy again to restore service.
  */
 import { readFileSync } from "node:fs";
@@ -24,7 +25,6 @@ const WorkerSettings = z.object({
   bindings: z.array(z.looseObject({ name: z.string(), type: z.string() })),
 });
 const dataBindings = new Set([
-  "d1",
   "kv_namespace",
   "r2_bucket",
   "artifacts",
@@ -54,48 +54,6 @@ export default async function eraseData(options: {
   console.log(
     `Durable Objects: ${namespaces.length} namespaces (${namespaces.map((n) => n.className).join(", ")})`,
   );
-
-  const schema = readFileSync(new URL("../src/control-plane.sql", import.meta.url), "utf8");
-  const tables = [...schema.matchAll(/create table if not exists (\w+)/g)].map(
-    (match) => match[1]!,
-  );
-  if (!tables.length)
-    throw new Error("The directory schema contains no tables; refusing an incomplete erase.");
-  const catalog = await cf<{ results: { name: string }[] }[]>(
-    `/d1/database/${env.resources.directoryDbId}/query`,
-    {
-      method: "POST",
-      body: JSON.stringify({ sql: "SELECT name FROM sqlite_master WHERE type = 'table'" }),
-    },
-  );
-  const unknownTables = catalog.flatMap((result) =>
-    result.results
-      .map((row) => row.name)
-      .filter(
-        (name) =>
-          !tables.includes(name) &&
-          !name.startsWith("sqlite_") &&
-          !name.startsWith("_cf_") &&
-          name !== "d1_migrations",
-      ),
-  );
-  if (unknownTables.length)
-    throw new Error(
-      `Unrecognized directory tables: ${unknownTables.join(", ")}. Account for their data before erasing.`,
-    );
-  const countRows = () =>
-    cf<{ results: { row_count: number }[] }[]>(
-      `/d1/database/${env.resources.directoryDbId}/query`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          sql: tables.map((table) => `SELECT count(*) AS row_count FROM "${table}"`).join("; "),
-        }),
-      },
-    );
-  const counts = await countRows();
-  for (const [index, table] of tables.entries())
-    console.log(`D1 before: ${table} — ${counts[index]!.results[0]!.row_count} rows`);
 
   const stores = [
     {
@@ -220,7 +178,7 @@ export default async function eraseData(options: {
   });
   if ((await getWorkerDoNamespaces(context, env.workerName)).length)
     throw new Error(
-      "Durable Object namespaces remain after retirement; refusing to clear the directory while writers may survive.",
+      "Durable Object namespaces remain after retirement; refusing to erase while writers may survive.",
     );
   const parked = WorkerSettings.parse(
     await cf(`/workers/scripts/${encodeURIComponent(env.workerName)}/settings`),
@@ -229,19 +187,6 @@ export default async function eraseData(options: {
     throw new Error(
       "Worker still has data bindings; refusing to erase data while requests may still write.",
     );
-
-  await cf(`/d1/database/${env.resources.directoryDbId}/query`, {
-    method: "POST",
-    body: JSON.stringify({
-      sql: [...tables]
-        .reverse()
-        .map((table) => `DELETE FROM "${table}"`)
-        .join("; "),
-    }),
-  });
-  if ((await countRows()).some((result) => result.results[0]!.row_count !== 0))
-    throw new Error("D1 still contains rows after erase.");
-  console.log("D1 after: every directory table is empty");
 
   for (const store of stores) {
     const deadline = Date.now() + 30 * 60_000;
@@ -290,7 +235,7 @@ export default async function eraseData(options: {
     console.log(`${store.label} after: empty`);
   }
   console.log(
-    `✅ ${context.name}: all Durable Objects retired; D1, both KV namespaces, R2 and Artifacts verified empty. Deploy to restore service.`,
+    `✅ ${context.name}: all Durable Objects retired; both KV namespaces, R2 and Artifacts verified empty. Deploy to restore service.`,
   );
 }
 if (process.argv[1]?.endsWith("erase-data.ts"))
