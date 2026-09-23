@@ -127,4 +127,20 @@ describe("stampCaller — the platform's attribution on an event", () => {
       source: { processor: { slug: "p", version: "1" } },
     });
   });
+  test("a client's claim that the platform wrote its event is dropped, whoever it is", () => {
+    const claimed = { ...event, source: { platform: true } };
+    expect(stampCaller(claimed, { principal: { actor: "user_1" }, grant: "g" })).toEqual({
+      ...event,
+      source: { principal: { actor: "user_1" }, grant: "g" },
+    });
+    expect(stampCaller(claimed, { principal: null, app: true })).toEqual(event);
+  });
+  test("the platform writing a fact on a person's behalf: attributed to them, and stamped `platform`", () => {
+    expect(
+      stampCaller(event, { principal: { actor: "user_1" }, grant: "g", platform: true }),
+    ).toEqual({
+      ...event,
+      source: { principal: { actor: "user_1" }, grant: "g", platform: true },
+    });
+  });
 });

@@ -86,7 +86,7 @@ export type FacetProps = { iterateContextName: string; name: string };
  *  className })`, a rule naming it, or a processor's row. A caller reaches a facet by itx expression
  *  (`itx.facets.get(name).<method>(…)`) only through what its class lists in `publicMethods`: the
  *  context refuses any other first step FORBIDDEN before the call reaches the facet
- *  (os-next's context/facet-public-methods.ts). The platform's own calls — the delivery loop's push
+ *  (apps/os context/facet-public-methods.ts). The platform's own calls — the delivery loop's push
  *  and catch-up, the alarm's revive — never go through the list. A loaded class that does not
  *  extend this shell lists nothing, so no caller reaches it by expression. */
 export abstract class FacetDurableObject<Env = unknown> extends DurableObject<Env, FacetProps> {

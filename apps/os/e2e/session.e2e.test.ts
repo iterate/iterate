@@ -358,8 +358,13 @@ test("a personal access token — one OAuth grant the account mints — is the u
     projects: [projectId],
     expiresAt,
   });
-  // stamped with the CONNECTION that minted it — the browser session's grant, the provider's 16 characters
-  expect(minted.source).toEqual({ principal, grant: expect.stringMatching(/^[A-Za-z0-9_-]{16}$/) });
+  // stamped with the CONNECTION that minted it — the browser session's grant, the provider's 16
+  // characters — and as the platform's own fact, the only kind the account folds
+  expect(minted.source).toEqual({
+    principal,
+    grant: expect.stringMatching(/^[A-Za-z0-9_-]{16}$/),
+    platform: true,
+  });
   // … and ends it: the same bearer is refused on /api, /mcp and the project host at once
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded revocation on the account session.
   using ender = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
@@ -379,7 +384,11 @@ test("a personal access token — one OAuth grant the account mints — is the u
       (e) => e.type === "events.iterate.com/account/grant-ended" && e.payload.grantId === grant!.id,
     ),
   );
-  expect(ended.source).toEqual({ principal, grant: expect.stringMatching(/^[A-Za-z0-9_-]{16}$/) });
+  expect(ended.source).toEqual({
+    principal,
+    grant: expect.stringMatching(/^[A-Za-z0-9_-]{16}$/),
+    platform: true,
+  });
 });
 
 // ── the doors ──

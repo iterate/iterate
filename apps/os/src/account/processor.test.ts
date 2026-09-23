@@ -8,15 +8,19 @@ import { reduceProcessor } from "../stream/test-support.ts";
 import { AccountProcessor } from "./processor.ts";
 import { type AccountState } from "./contract.ts";
 
+/** Every fact the account folds is the platform's: stamped `source.platform` as its writers stamp it
+ *  (session.ts `publishGlobalFact`). */
+const platform = { platform: true } as const;
 const authenticated = (operationId: string, credential: "from-server-cookie" | "admin-secret") => ({
   type: "events.iterate.com/account/authenticated",
   payload: { credential, at: 1, operationId },
+  source: platform,
 });
 
 describe("AccountProcessor — the account state folded from facts", () => {
   const rows: {
     name: string;
-    events: { type: string; payload?: unknown }[];
+    events: { type: string; payload?: unknown; source?: typeof platform }[];
     state: AccountState;
   }[] = [
     {
@@ -51,18 +55,33 @@ describe("AccountProcessor — the account state folded from facts", () => {
         {
           type: "events.iterate.com/account/grant-minted",
           payload: { grantId: "grant_a", name: "laptop", projects: ["prj_1"], expiresAt: 9 },
+          source: platform,
         },
         {
           type: "events.iterate.com/account/grant-minted",
           payload: { grantId: "grant_a", name: "again", projects: [], expiresAt: 1 },
+          source: platform,
         },
-        { type: "events.iterate.com/account/grant-ended", payload: { grantId: "grant_b" } },
-        { type: "events.iterate.com/account/grant-ended", payload: { grantId: "grant_a" } },
-        { type: "events.iterate.com/account/grant-ended", payload: { grantId: "grant_a" } },
+        {
+          type: "events.iterate.com/account/grant-ended",
+          payload: { grantId: "grant_b" },
+          source: platform,
+        },
+        {
+          type: "events.iterate.com/account/grant-ended",
+          payload: { grantId: "grant_a" },
+          source: platform,
+        },
+        {
+          type: "events.iterate.com/account/grant-ended",
+          payload: { grantId: "grant_a" },
+          source: platform,
+        },
         // the end landed before the mint (both are published after the fact): born closed
         {
           type: "events.iterate.com/account/grant-minted",
           payload: { grantId: "grant_b", name: "phone", projects: [], expiresAt: 5 },
+          source: platform,
         },
         {
           type: "events.iterate.com/account/consent-approved",
@@ -72,6 +91,7 @@ describe("AccountProcessor — the account state folded from facts", () => {
             projects: null,
             scopes: ["iterate"],
           },
+          source: platform,
         },
       ],
       state: {
@@ -165,6 +185,7 @@ describe("AccountProcessor — the account state folded from facts", () => {
         {
           type: "events.iterate.com/account/authenticated",
           payload: { credential: "not-a-kind" },
+          source: platform,
         },
         authenticated("op-2", "from-server-cookie"),
       ],
@@ -175,6 +196,31 @@ describe("AccountProcessor — the account state folded from facts", () => {
         grantUses: {},
         consents: [],
         memberships: {},
+        secrets: {},
+      },
+    },
+    {
+      name: "a fact the platform did not write — the person appended it to their own context, a claimed `source.platform` stripped at the append — is folded by nothing",
+      events: [
+        {
+          type: "events.iterate.com/account/authenticated",
+          payload: { credential: "admin-secret", at: 1, operationId: "forged" },
+        },
+        {
+          type: "events.iterate.com/account/grant-minted",
+          payload: { grantId: "grant_f", name: "forged", projects: [], expiresAt: 9 },
+        },
+        {
+          type: "events.iterate.com/secret/set",
+          payload: { path: "/secrets/forged", urls: ["https://evil.example.test"] },
+        },
+        authenticated("op-1", "from-server-cookie"),
+      ],
+      state: {
+        authentications: [{ credential: "from-server-cookie", at: 1, operationId: "op-1" }],
+        personalAccessTokens: {},
+        endedGrants: {},
+        consents: [],
         secrets: {},
       },
     },

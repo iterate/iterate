@@ -592,9 +592,12 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
    *  inside `onSecretContext`'s `here`, which runs on the secret's own context. */
   const secretFacet = (call: ItxExpressionStep) => deps.callFacetAsPlatform("secret", [call]);
   /** The fact of a write or a deletion: on the secret's own path (`secret`), attributed to the
-   *  caller, then cross-posted to the owner's root for the catalog. */
+   *  caller, then cross-posted to the owner's root for the catalog — stamped `source.platform`, which
+   *  a person's or an organization's catalog fold requires (principal.ts `Caller.platform`). */
   const crossPostSecretFact = (event: StreamEventInput) =>
-    deps.context(owner.rootPath).invoke(["itx", "builtins", ["append", event]], [], hopCaller());
+    deps
+      .context(owner.rootPath)
+      .invoke(["itx", "builtins", ["append", event]], [], { ...hopCaller(), platform: true });
   const secretFact = async (secret: ReachableContext, event: StreamEventInput): Promise<void> => {
     await secret.append(stampCaller(event, deps.caller()));
     await crossPostSecretFact(event);

@@ -181,7 +181,9 @@ export class IterateRpcTarget extends RpcTarget {
 /** AN ACCOUNT FACT, appended to the person's own context (`/users/<id>`: authenticated here;
  *  grants.ts and consent.ts add a token minted, a grant used, a consent approved) — stamped with
  *  the caller, principal and grant: the audit lives where it happened, attributed to who did it and
- *  through which connection. Best-effort and ASYNC (waitUntil), off the verb's own path: a fact
+ *  through which connection — and `source.platform`, the one thing the processor folding it trusts
+ *  (a person can append any type to their own context; the platform's fixed point, which no rewrite
+ *  rule redirects, is the only writer of the stamp). Best-effort and ASYNC (waitUntil), off the verb's own path: a fact
  *  lost to an eviction is a gap in the record, never a failed action. (A grant's END is not
  *  published this way: grants.ts AWAITS it — it is the revocation truth.) The organization's own
  *  facts land the same way, on its context (`publishOrganizationFact`).
@@ -209,7 +211,13 @@ export function publishAccountFact(
     // read, so `unknown` is all the promises need to be. Several facts are appended in ONE call,
     // so they land in the order given.
     (context.invoke(["itx", "processors", ["enable", "account"]], [], caller) as Promise<unknown>)
-      .then(() => context.invoke(["itx", ["append", ...events]], [], caller) as Promise<unknown>)
+      .then(
+        () =>
+          context.invoke(["itx", "builtins", ["append", ...events]], [], {
+            ...caller,
+            platform: true,
+          }) as Promise<unknown>,
+      )
       .then(
         () => undefined,
         () => undefined,
@@ -221,7 +229,8 @@ export function publishAccountFact(
  *  creation, rename, deletion, and each membership change — the fold the dash renders (src/organization/)
  *  and the organization's activity. Best-effort and ASYNC (waitUntil), off the verb's own path: the
  *  control-plane database (src/control-plane/) already decided the write; this is the record of it on
- *  the stream. A membership also lands on the person's account (`publishAccountFact`). */
+ *  the stream, stamped `source.platform` as `publishAccountFact`'s are. A membership also lands on the
+ *  person's account (`publishAccountFact`). */
 function publishOrganizationFact(
   input: Pick<SessionInput, "contextNamespace" | "waitUntil">,
   organizationId: string,
@@ -242,7 +251,13 @@ function publishOrganizationFact(
         caller,
       ) as Promise<unknown>
     )
-      .then(() => context.invoke(["itx", ["append", ...events]], [], caller) as Promise<unknown>)
+      .then(
+        () =>
+          context.invoke(["itx", "builtins", ["append", ...events]], [], {
+            ...caller,
+            platform: true,
+          }) as Promise<unknown>,
+      )
       .then(
         () => undefined,
         () => undefined,

@@ -1036,8 +1036,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  for the whole call so every append it makes stamps `source.principal`, and threaded across each
    *  sibling `cd` hop. A DO-only Workers-RPC verb (never capnweb-exposed), so a client cannot forge
    *  the caller. `args`/`caller` default, so a bare `invoke(call)` is an anonymous probe. What READS
-   *  the caller: `append` (the stamp) and, in the global namespace, `cd` (built-ins.ts — a person's
-   *  path hop is refused there; the append type-gate is the security spec's remaining expected-fail). */
+   *  the caller: `append` (the stamp — `source.platform` too, which an account's and an
+   *  organization's facts need to be folded) and, in the global namespace, `cd` (built-ins.ts — a
+   *  person's path hop is refused there). */
   async invoke(
     call: ItxExpressionInput,
     args: unknown[] = [],

@@ -98,9 +98,12 @@ export class GrantsRpcTarget extends RpcTarget {
     const caller = { principal: this.#auth.principal, grant: this.#auth.grant?.grantId };
     const context = this.#env.ITERATE_CONTEXT.getByName(name);
     await context.invoke(["itx", "processors", ["enable", "account"]], [], caller);
+    // Stamped `source.platform` through the fixed point, as session.ts `publishAccountFact` says: the
+    // account folds nothing else, so an end a person appends themselves revokes nothing.
     await context.invoke(
       [
         "itx",
+        "builtins",
         [
           "append",
           {
@@ -111,7 +114,7 @@ export class GrantsRpcTarget extends RpcTarget {
         ],
       ],
       [],
-      caller,
+      { ...caller, platform: true },
     );
   }
   /** Any client can end its own grant. It cannot address another user's session. */

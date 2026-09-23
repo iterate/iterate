@@ -165,9 +165,11 @@ export async function recordGrantUse(env: Env, grant: AccessGrant): Promise<void
   const context = contextNamespace.getByName(name);
   try {
     await context.invoke(["itx", "processors", ["enable", "account"]], [], caller);
+    // Stamped `source.platform` through the fixed point, as session.ts `publishAccountFact` says.
     await context.invoke(
       [
         "itx",
+        "builtins",
         [
           "append",
           {
@@ -177,7 +179,7 @@ export async function recordGrantUse(env: Env, grant: AccessGrant): Promise<void
         ],
       ],
       [],
-      caller,
+      { ...caller, platform: true },
     );
   } catch (error) {
     grantUseRecordedAt.delete(key); // the next use tries again

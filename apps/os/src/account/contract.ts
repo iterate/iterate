@@ -21,8 +21,9 @@ import { SecretCatalog, SecretContract } from "../secret/contract.ts";
 // Each fact's payload is spelled once and used twice — by its event and by the state that keeps it.
 
 /** `events.iterate.com/account/authenticated` (idempotency key `authenticated/<operationId>`): NO
- *  credential material — only which KIND, when, and a stable op id (dedup on retry). Once the append
- *  type-gate is enforced a client cannot forge this type. */
+ *  credential material — only which KIND, when, and a stable op id (dedup on retry). A client can
+ *  append this type to its own account, but only the platform's is stamped `source.platform`, and
+ *  the account processor folds nothing else (processor.ts). */
 const AuthenticationFact = z.object({
   credential: z.enum(["from-server-cookie", "admin-secret"]),
   at: z.number(),

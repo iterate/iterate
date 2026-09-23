@@ -9,9 +9,12 @@
 // nobody can NAME another user's path. Beneath it, every project-scoped RESOURCE (`itx.kv`, the
 // secrets and their catalog, the Artifacts repos) is keyed by the RESOURCE OWNER — a project, or in
 // the global namespace the user's/organization's subtree (`resourceScope`, src/iterate-context.ts)
-// — so a name is never shared across users. What remains open is the append type-gate, still a
-// `test.fails` here: the body asserts the SECURE outcome, so while the code is insecure the assertion
-// fails and the expected-fail passes; whoever wires the fix deletes the `.fails`.
+// — so a name is never shared across users. And a person can append any event type to a context
+// they hold, their own account included, so an account's and an organization's facts are believed
+// only when the platform wrote them: the platform stamps `source.platform` on the facts it writes
+// (principal.ts `Caller.platform`), a client's claim to it is dropped, and the account and
+// organization processors fold nothing else — a forged fact stays on the log, attributed to whoever
+// appended it, and changes nothing.
 import { runInDurableObject } from "cloudflare:test";
 import type { RpcStub } from "capnweb";
 import { describe, expect, test } from "vitest";
@@ -101,6 +104,7 @@ describe("account — foundation shape (passing)", () => {
       event: {
         type: "events.iterate.com/account/authenticated" as const,
         payload: { credential, at: 1, operationId },
+        source: { platform: true },
       } as never,
     });
     const one =
@@ -175,14 +179,98 @@ describe("security requirements — the global namespace is not navigable", () =
     );
   });
 
-  test.fails("a client cannot forge a platform fact in its own user context (append type-gate)", async () => {
+  test("a client cannot forge a platform fact in its own user context: its account folds only what the platform wrote, and a claimed `source.platform` is dropped", async () => {
     const a = await userSession("forge@sec.test");
-    await refuses(() =>
+    type AccountSnapshot = {
+      state: {
+        authentications: { operationId: string }[];
+        personalAccessTokens: Record<string, unknown>;
+        secrets: Record<string, unknown>;
+      };
+    };
+    const account = () =>
       a.user.invoke([
         "itx",
-        ["append", { type: "events.iterate.com/account/authenticated", payload: { forged: true } }],
-      ]),
+        "facets",
+        ["get", "account"],
+        ["snapshot"],
+      ]) as Promise<AccountSnapshot>;
+    // The platform's own fact folds: this session's authentication (session.ts `publishGlobalFact`).
+    await until("the platform's authentication fact is folded", async () =>
+      (await account()).state.authentications.length > 0 ? true : undefined,
     );
+    const claimed = { platform: true };
+    const forged = (await a.user.invoke([
+      "itx",
+      [
+        "append",
+        {
+          type: "events.iterate.com/account/authenticated",
+          payload: { credential: "admin-secret", at: 1, operationId: "forged" },
+          source: claimed,
+        },
+        {
+          type: "events.iterate.com/account/grant-minted",
+          payload: { grantId: "grant_forged", name: "forged", projects: [], expiresAt: 9 },
+          source: claimed,
+        },
+        {
+          type: "events.iterate.com/secret/set",
+          payload: { path: "/secrets/forged", urls: ["https://evil.example.test"] },
+          source: claimed,
+        },
+      ],
+    ])) as { source?: { platform?: true; principal?: { actor: string } } }[];
+    const { actor } = await a.whoami();
+    expect
+      .soft(forged.map((event) => event.source))
+      .toEqual([
+        { principal: expect.objectContaining({ actor }) },
+        { principal: expect.objectContaining({ actor }) },
+        { principal: expect.objectContaining({ actor }) },
+      ]);
+    const { state } = await account();
+    expect.soft(state.authentications.map((fact) => fact.operationId)).not.toContain("forged");
+    expect.soft(state.personalAccessTokens).not.toHaveProperty("grant_forged");
+    expect(state.secrets).not.toHaveProperty("/secrets/forged");
+  });
+
+  test("a member cannot forge their organization's facts: it folds only what the platform wrote", async () => {
+    const s = await userSession("forge-org@sec.test");
+    const org = (await s.createOrg("the real name")) as { id: string };
+    const organization = s.organizations.get(org.id);
+    type OrganizationSnapshot = {
+      state: { name: string | null; deletedAt: string | null; projects: Record<string, unknown> };
+    };
+    const snapshot = () =>
+      organization.invoke([
+        "itx",
+        "facets",
+        ["get", "organization"],
+        ["snapshot"],
+      ]) as Promise<OrganizationSnapshot>;
+    // The platform's own fact folds: the organization's creation (session.ts `publishGlobalFact`).
+    await until("the platform's creation fact is folded", async () =>
+      (await snapshot()).state.name === "the real name" ? true : undefined,
+    );
+    await organization.invoke([
+      "itx",
+      [
+        "append",
+        { type: "events.iterate.com/organization/renamed", payload: { name: "forged" } },
+        { type: "events.iterate.com/organization/deleted", payload: {} },
+        {
+          type: "events.iterate.com/organization/project-created",
+          payload: { projectId: "prj_forged", slug: "forged" },
+          source: { platform: true },
+        },
+      ],
+    ]);
+    expect((await snapshot()).state).toMatchObject({
+      name: "the real name",
+      deletedAt: null,
+      projects: {},
+    });
   });
 
   test("a user cannot reach the global ROOT context — not by cd, not through the project catalog", async () => {
