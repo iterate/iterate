@@ -16,7 +16,7 @@ const mono = (text: string) => (
   <span className="font-mono text-xs text-muted-foreground">{text}</span>
 );
 
-export const factRenderers: EventRenderers = {
+const platformFactRenderers: EventRenderers = {
   "events.iterate.com/account/authenticated": (e) => {
     const p = record(e.payload);
     return (
@@ -89,3 +89,12 @@ export const factRenderers: EventRenderers = {
     );
   },
 };
+
+/** Only a fact the platform wrote (`source.platform`) reads as a sentence: one a person appended to
+ *  their own context under the same type shows as the raw event it is. */
+export const factRenderers: EventRenderers = Object.fromEntries(
+  Object.entries(platformFactRenderers).map(([type, render]) => [
+    type,
+    (event) => (event.source?.platform ? render(event) : null),
+  ]),
+);

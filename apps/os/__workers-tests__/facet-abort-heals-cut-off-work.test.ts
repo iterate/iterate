@@ -43,6 +43,7 @@ class HangingCounterProcessor extends StreamProcessor {
   reduce({ state }) { return { n: state.n + 1 }; }
 }
 export class HangingCounterDurableObject extends StreamProcessorDurableObject {
+  static publicMethods = [...super.publicMethods, "probe", "armCatchUpHang"];
   processor = new HangingCounterProcessor();
   #tables() {
     this.ctx.storage.sql.exec(

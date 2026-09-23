@@ -3,8 +3,10 @@
 //
 //   import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 //
-// The two workerd HOSTS live here too (this file imports cloudflare:workers; the node lane never imports it):
-//   StreamProcessorDurableObject — the `DurableObject` shell that hosts ONE `StreamProcessor` as a facet
+// The workerd HOSTS live here too (this file imports cloudflare:workers; the node lane never imports it):
+//   FacetDurableObject           — the `DurableObject` shell a context hosts as a facet: its class lists
+//                                  the methods a caller reaches by itx expression (`publicMethods`)
+//   StreamProcessorDurableObject — the facet shell that hosts ONE `StreamProcessor`
 //   ConfigWorker                 — the stateless `WorkerEntrypoint` a project's one event handler extends
 
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
@@ -62,7 +64,8 @@ export { LiveState, type LiveStateSink } from "../stream/processor.ts";
 // hosted through the ordinary `itx.facets.get('presence', { source, className: 'PresenceDurableObject' })`
 // — a processor is a named facet that additionally gets pushed every commit. `processor` is a FIELD
 // so it can take what its effects need from this object (`new Notifier(this.env.ITX)`), and so the
-// same class is constructed bare in a test.
+// same class is constructed bare in a test. A method of the host's own that callers reach by itx
+// expression goes on its list: `static override publicMethods = [...super.publicMethods, "message"]`.
 //
 // IDENTITY is `ctx.props` — `{ iterateContextName, name }`, minted by the parent, the only party
 // that knows it (pinned in __workers-tests__/facet-props.test.ts). THE STREAM is the itx scope
@@ -76,8 +79,30 @@ export { LiveState, type LiveStateSink } from "../stream/processor.ts";
 // dies mid-attempt is re-materialized and runs its at-head pass again
 // (__workers-tests__/agent-revive.test.ts: an LLM call survives its context's death).
 
-/** What the parent mints the class with — the whole identity. */
-export type StreamProcessorProps = { iterateContextName: string; name: string };
+/** What the parent mints a facet's class with — the whole identity. */
+export type FacetProps = { iterateContextName: string; name: string };
+
+/** THE FACET SHELL: a `DurableObject` a context hosts as a facet — `itx.facets.get(name, { source,
+ *  className })`, a rule naming it, or a processor's row. A caller reaches a facet by itx expression
+ *  (`itx.facets.get(name).<method>(…)`) only through what its class lists in `publicMethods`: the
+ *  context refuses any other first step FORBIDDEN before the call reaches the facet
+ *  (apps/os context/facet-public-methods.ts). The platform's own calls — the delivery loop's push
+ *  and catch-up, the alarm's revive — never go through the list. A loaded class that does not
+ *  extend this shell lists nothing, so no caller reaches it by expression. */
+export abstract class FacetDurableObject<Env = unknown> extends DurableObject<Env, FacetProps> {
+  /** What a caller may reach by itx expression: the FIRST step of `itx.facets.get(name).<step>…`, a
+   *  method or a property of this class. A subclass lists its own on top of its parent's:
+   *  `static override publicMethods = [...super.publicMethods, "send"]`. */
+  static publicMethods: readonly string[] = ["fetch"];
+
+  /** This class's `publicMethods`, for the context that loaded it — a static does not cross the
+   *  isolate. On no list: only the context asks it. */
+  listPublicMethods(): readonly string[] {
+    // `this.constructor` is the concrete facet class, a subclass of this one; TypeScript types it as
+    // `Function`, which has no `publicMethods`.
+    return (this.constructor as typeof FacetDurableObject).publicMethods;
+  }
+}
 
 /** The itx scope as `env.ITX.get()` hands it over: a context's declared API (api.ts) — a capnweb stub
  *  of os-next's `IterateContextRpcTarget`, which satisfies it. */
@@ -111,7 +136,17 @@ export abstract class StreamProcessorDurableObject<
   State = unknown,
   Env extends { ITX?: ItxEntrypointService } = { ITX: ItxEntrypointService },
   Scope extends ProcessorScope = ItxScope,
-> extends DurableObject<Env, StreamProcessorProps> {
+> extends FacetDurableObject<Env> {
+  /** The reads a caller reaches on every processor: `fetch`, and the state caught up through the log
+   *  (`snapshot`, `liveSnapshot`) or awaited (`waitUntilProcessed`). What feeds the processor —
+   *  `processEventBatch`, `catchUpFromLog`, `revive` — is the platform's, never a caller's. */
+  static override publicMethods = [
+    ...super.publicMethods,
+    "snapshot",
+    "liveSnapshot",
+    "waitUntilProcessed",
+  ];
+
   /** The processor this object hosts — `processor = new PresenceProcessor()` at the top of the subclass. */
   abstract readonly processor: StreamProcessor<State>;
 
@@ -123,13 +158,13 @@ export abstract class StreamProcessorDurableObject<
     this.#engine.publishLiveState();
   }
 
-  // ── the doors the delivery loop and `itx.facets.get(name)` reach ──
+  // ── what the platform calls: the delivery loop's push and catch-up, the alarm's revive ──
 
-  /** THE push door: the context hands over each committed batch with its scanned-range proof. */
+  /** THE push: the context hands over each committed batch with its scanned-range proof. */
   processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
     return this.#engine.processEventBatch(events, range);
   }
-  /** Catch up from the log (the read-your-writes entry after an eviction). */
+  /** Catch up from the log (the delivery loop's, when a row is configured or resumed). */
   catchUpFromLog(): Promise<void> {
     return this.#engine.catchUpFromLog();
   }
@@ -138,6 +173,9 @@ export abstract class StreamProcessorDurableObject<
   revive(): Promise<void> {
     return this.#engine.revive();
   }
+
+  // ── what a caller reaches by itx expression (`publicMethods`) ──
+
   /** Caught up through the log, then `{ offset, state }`. */
   snapshot(): Promise<{ offset: number; state: State }> {
     return this.#engine.snapshot();

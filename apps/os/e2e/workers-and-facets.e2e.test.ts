@@ -44,8 +44,9 @@ test("itx.workers.get({ source: src }) (stateless) + itx.facets.get(name, spec) 
     "cap.js": entrypoint("async run(name) { return `hi ${name}`; }"),
   });
   const SRC_COUNTER = JSON.stringify({
-    "cap.js": `import { DurableObject } from "cloudflare:workers";
-export class CounterDurableObject extends DurableObject {
+    "cap.js": `import { FacetDurableObject } from "./processor.js";
+export class CounterDurableObject extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "bump", "value"];
   async bump() { const n = ((await this.ctx.storage.get('n')) ?? 0) + 1; await this.ctx.storage.put('n', n); return n; }
   async value() { return (await this.ctx.storage.get('n')) ?? 0; }
 }`,
@@ -158,8 +159,9 @@ test("a source EXPRESSION with a cacheKey is produced ONCE per cold isolate — 
     get(): Record<string, string> {
       this.produced++;
       return {
-        "cap.js": `import { DurableObject } from "cloudflare:workers";
-export class CounterDurableObject extends DurableObject {
+        "cap.js": `import { FacetDurableObject } from "./processor.js";
+export class CounterDurableObject extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "bump"];
   async bump() { const n = ((await this.ctx.storage.get('n')) ?? 0) + 1; await this.ctx.storage.put('n', n); return n; }
 }`,
       };
@@ -217,7 +219,7 @@ test("facets.get: a facet whose producer threw once materializes on the next att
     [
       "put",
       "build:door.js",
-      `import { DurableObject } from "cloudflare:workers";\nexport class Door extends DurableObject { hello() { return "hi"; } }`,
+      `import { FacetDurableObject } from "./processor.js";\nexport class Door extends FacetDurableObject { static publicMethods = [...super.publicMethods, "hello"]; hello() { return "hi"; } }`,
     ],
   ]);
   expect(await hello()).toBe("hi");
@@ -275,7 +277,8 @@ test("a userspace worker dials a remote capnweb API with the url in ctx.props, b
 // ── worker A: a stateful DO with a getter chain that bottoms out at callLater(ms, cb) ──
 const SRC_WORKER_A = {
   "cap.js": `
-import { DurableObject, RpcTarget } from "cloudflare:workers";
+import { RpcTarget } from "cloudflare:workers";
+import { FacetDurableObject } from "./processor.js";
 class Timer extends RpcTarget {
   async callLater(ms, cb) {
     const run = cb.dup();                       // retain past this call (a param stub is disposed on return)
@@ -287,7 +290,8 @@ class Timer extends RpcTarget {
 class Demo extends RpcTarget {
   get timer() { return new Timer(); }
 }
-export class CounterDurableObject extends DurableObject {
+export class CounterDurableObject extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "demo"];
   get demo() { return new Demo(); }
 }
 export default CounterDurableObject;`,

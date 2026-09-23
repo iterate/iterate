@@ -65,6 +65,19 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
   { ITX?: ItxEntrypointService },
   ItxEntrypointScope
 > {
+  /** The processor's reads, and the repo's own verbs — what `itx.repos.get(path)` reaches (library.ts). */
+  static override publicMethods = [
+    ...super.publicMethods,
+    "tip",
+    "readFile",
+    "readModules",
+    "modules",
+    "listFiles",
+    "commitFiles",
+    "writeFile",
+    "log",
+  ];
+
   processor = new RepoProcessor((call) => this.withItx(call));
 
   /** The context this facet is hosted on IS the repo: its path is the one name it goes by, here and

@@ -24,6 +24,7 @@ class FlakyProcessor extends StreamProcessor {
   reduce({ state }) { return { n: state.n + 1 }; }
 }
 export class FlakyDurableObject extends StreamProcessorDurableObject {
+  static publicMethods = [...super.publicMethods, "tries"];
   processor = new FlakyProcessor();
   #tries() {
     this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS tries (seq INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER)");
@@ -107,8 +108,9 @@ for (const [label, message] of Object.entries(platformFailures)) {
 test("concurrent stale start failures do not retire the replacement generation twice", async () => {
   const source = {
     "cap.js": `
-import { DurableObject } from "cloudflare:workers";
-export class Racing extends DurableObject {
+import { FacetDurableObject } from "./processor.js";
+export class Racing extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "run"];
   #releaseBothStarts = function () {};
   #bothStarts = new Promise(
     function (resolve) {
@@ -149,8 +151,9 @@ export class Racing extends DurableObject {
 test("on a runtime whose facet starts answer one call each, concurrent calls on a running facet each answer", async () => {
   const source = {
     "cap.js": `
-import { DurableObject } from "cloudflare:workers";
-export class OneCallPerStart extends DurableObject {
+import { FacetDurableObject } from "./processor.js";
+export class OneCallPerStart extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "run"];
   #answered = false;
   #releasePair = () => {};
   #pairArrived = new Promise((resolve) => (this.#releasePair = resolve));
@@ -194,8 +197,9 @@ export class OneCallPerStart extends DurableObject {
 test("on a runtime whose facet starts answer one call each, a call killed by a peer's restart answers on a start of its own", async () => {
   const source = {
     "cap.js": `
-import { DurableObject } from "cloudflare:workers";
-export class OneCallPerStart extends DurableObject {
+import { FacetDurableObject } from "./processor.js";
+export class OneCallPerStart extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "run", "inFlight"];
   #answered = false;
   inFlight() {
     return this.ctx.storage.kv.get("in-flight") === true;
@@ -234,8 +238,9 @@ export class OneCallPerStart extends DurableObject {
 test("one platform failure while other calls are in flight restarts the facet once; every call answers", async () => {
   const source = {
     "cap.js": `
-import { DurableObject } from "cloudflare:workers";
-export class Steady extends DurableObject {
+import { FacetDurableObject } from "./processor.js";
+export class Steady extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "slow", "failOnce"];
   async slow() {
     await new Promise((resolve) => setTimeout(resolve, 50));
     return "slow";

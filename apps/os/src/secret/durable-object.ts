@@ -13,7 +13,8 @@
 // the frames round-trip; the facet's abort closes it, 1006).
 //
 // The verbs `itx.secrets` runs (context/built-ins.ts — ON THIS PATH, so the log's order is the
-// storage's): `write(record)` and `clear()` store and forget the value; the FACTS (`secret/set`,
+// storage's, and through the facet host's platform entry: a caller's itx expression reaches the reads
+// alone, `publicMethods`): `write(record)` and `clear()` store and forget the value; the FACTS (`secret/set`,
 // `secret/deleted`, on this path and cross-posted to the owner's root) are the built-in's, attributed
 // to the caller — a facet's own appends speak for the project, so they are not made here.
 // `beginOAuth` keeps the pending attempt and hands back the authorize URL; `completeOAuth` exchanges
@@ -81,6 +82,13 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
   { ITX?: ItxEntrypointService } & AppConfigEnv,
   ItxEntrypointScope
 > {
+  /** The secret's READS alone — whether material was set and whether it was deleted, by the offsets
+   *  of the facts that say so. Everything else here is the platform's: `write`, `clear`,
+   *  `beginOAuth`, `completeOAuth` and `verifyHmac` are `itx.secrets`'s (context/built-ins.ts, whose
+   *  verbs append the attributed facts), `fetch` is egress's and `exportForProjectSeed` the operator's
+   *  native RPC — each reaches this facet through the facet host's platform entry. */
+  static override publicMethods = ["snapshot", "liveSnapshot", "waitUntilProcessed"];
+
   processor = new SecretProcessor();
 
   /** The one refresh in flight, keyed by the revision it read (single-flight: N callers who 401

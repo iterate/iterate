@@ -1,5 +1,5 @@
 // __workers-tests__/facet-push-timeout-heals.test.ts — a facet push the watchdog TIMES OUT is not
-// lost. `FacetHost#invoke` bounds every facet call at FACET_CALL_WATCHDOG_MS
+// lost. `FacetHost#callFacet` bounds every facet call at FACET_CALL_WATCHDOG_MS
 // (60 s) and aborts the facet when it fires; the timed-out batch was never checkpointed, and a
 // facet push is on no retry ladder (subscription-delivery.ts: at-least-once for facets is the
 // facet's own gap repair on its NEXT push). Before this pin, with no later event the row's state
@@ -43,6 +43,7 @@ class SlowCounterProcessor extends StreamProcessor {
   reduce({ state }) { return { n: state.n + 1 }; }
 }
 export class SlowCounterDurableObject extends StreamProcessorDurableObject {
+  static publicMethods = [...super.publicMethods, "probe"];
   processor = new SlowCounterProcessor();
   #seen() {
     this.ctx.storage.sql.exec(

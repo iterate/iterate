@@ -695,6 +695,10 @@ export type StreamEventInput = {
      *  connected client (a Claude Code install, a dash sign-in, a personal token). Stamped beside
      *  `principal` by the DO's append root (src/principal.ts); absent for the admin secret and the kernel. */
     grant?: string;
+    /** THE PLATFORM WROTE THIS FACT, on the principal's behalf (`Caller.platform`, src/principal.ts):
+     *  what a processor folding an account's or an organization's facts requires — a client can
+     *  append any type to a context it holds, never this. */
+    platform?: true;
   };
   /** Same key + same body = dedupe (the existing event is returned); different body = loud error. */
   idempotencyKey?: string;

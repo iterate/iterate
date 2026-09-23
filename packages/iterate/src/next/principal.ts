@@ -29,6 +29,14 @@ export type Caller = {
    *  public URL is composed from (`itx.url`, a signed file URL). Absent for a caller with none (a
    *  loaded worker's `env.ITX`, the kernel); the context then uses the last one it was reached on. */
   platformOrigin?: string | null;
+  /** Set ONLY by the platform's own code, on the one `itx.builtins.append` of a fact it vouches for
+   *  on the principal's behalf — an account's or an organization's (apps/os session.ts
+   *  `publishAccountFact` and `publishOrganizationFact`, grants.ts's awaited grant end, oauth.ts's
+   *  grant use, the secrets built-ins' catalog cross-post) — never by a client, who never
+   *  supplies a Caller. `stampCaller` stamps it as `source.platform`, which the processors folding
+   *  those facts require; the fixed point is what no rewrite rule redirects, so nothing else runs
+   *  under it. */
+  platform?: true;
 };
 /** The header the edge sets on a Request it forwards on a principal's behalf — the ingress after
  *  the cookie check, a session's terminal `fetch` — and strips from every inbound Request. */
@@ -42,21 +50,25 @@ export const ITX_APP_HEADER = "x-itx-app";
 /** Originating context of a native fetch forwarded by a trusted context. */
 export const ITX_CALLER_PATH_HEADER = "x-itx-caller-path";
 
-/** The event as the log stores it: `source.principal` and `source.grant` are the platform's — set
- *  from the admitted caller, client-supplied ones dropped (an anonymous session's event carries
- *  neither, the kernel's none). */
+/** The event as the log stores it: `source.principal`, `source.grant` and `source.platform` are the
+ *  platform's — set from the admitted caller, client-supplied ones dropped (an anonymous session's
+ *  event carries none, the kernel's none). */
 export function stampCaller<E extends { source?: Record<string, unknown> }>(
   event: E,
   caller: Caller,
 ): E {
-  const { principal: _clientPrincipal, grant: _clientGrant, ...source } = event.source || {};
-  if (caller.principal) {
-    const stamped: Record<string, unknown> = { ...source, principal: caller.principal };
-    if (caller.grant) stamped.grant = caller.grant;
-    return { ...event, source: stamped };
-  }
-  return Object.keys(source).length > 0
-    ? { ...event, source }
+  const {
+    principal: _clientPrincipal,
+    grant: _clientGrant,
+    platform: _clientPlatform,
+    ...source
+  } = event.source || {};
+  const stamped: Record<string, unknown> = { ...source };
+  if (caller.principal) stamped.principal = caller.principal;
+  if (caller.principal && caller.grant) stamped.grant = caller.grant;
+  if (caller.platform) stamped.platform = true;
+  return Object.keys(stamped).length > 0
+    ? { ...event, source: stamped }
     : (({ source: _dropped, ...rest }) => rest as E)(event);
 }
 const encoder = new TextEncoder();

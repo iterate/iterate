@@ -6,11 +6,12 @@
 import { runInDurableObject, SELF } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
-import { afterAll } from "vitest";
+import { afterAll, vi } from "vitest";
 import { RESIDENCY_WATCHDOG_WINDOW_MS } from "../src/context/residency-watchdog.ts";
 import type { ControlPlaneDurableObject } from "../src/control-plane/durable-object.ts";
 import { DurableObjectNameCodec } from "../src/iterate-context.ts";
 import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
+import type { IterateRpcTarget } from "../src/session.ts";
 
 /** The context DO for a ctx name (a project id or a full codec name), through the ITERATE_CONTEXT
  *  binding — the raw Workers-RPC stub, which is this lane's whole point: the DO's verbs with no
@@ -104,6 +105,37 @@ afterAll(async () => {
     }
   }
 });
+
+/** A person signed in through the login form (email + the deployment's password), then on `/api`
+ *  with the browser's session cookie: an ordinary user session — no admin credential anywhere. The
+ *  issuer fetches its own client metadata while it signs someone in; `fetch` reaches this worker for
+ *  that one request (as control-plane.test.ts does), the network being out of reach here. */
+export async function signedInSession(email: string): Promise<any> {
+  const origin = "https://control.test";
+  const issuerFetch = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation((input, init) => SELF.fetch(new Request(input, init)));
+  const login = await SELF.fetch(`${origin}/login`, {
+    method: "POST",
+    redirect: "manual",
+    headers: { Origin: origin },
+    body: new URLSearchParams({ email, password: loginPassword(), next: "/" }),
+  });
+  issuerFetch.mockRestore();
+  const sessionCookie = login.headers
+    .getSetCookie()
+    .find((cookie) => cookie.startsWith("__Host-itx-session="))!
+    .split(";")[0]!;
+  const response = await SELF.fetch(`${origin}/api`, {
+    headers: { Upgrade: "websocket", Origin: origin, Cookie: sessionCookie },
+  });
+  response.webSocket!.accept();
+  const transport = newWebSocketRpcSession<IterateRpcTarget>(
+    response.webSocket! as unknown as WebSocket,
+  );
+  sessions.push(transport);
+  return transport.authenticate({ type: "from-server-cookie" });
+}
 
 /** The pins' RELEASE, run directly, plus every live facet aborted: every borrowed stub returned,
  *  every library connection closed — making the DO dormant, which is evictDurableObject's de-facto

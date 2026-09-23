@@ -12,6 +12,10 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
   { ITX: ItxEntrypointService },
   ItxEntrypointScope
 > {
+  /** The processor's reads, and a person's words (`message`) — `itx.agents.get(path).message(…)`
+   *  reaches it through the collection (collection.ts). */
+  static override publicMethods = [...super.publicMethods, "message"];
+
   processor = new AgentProcessor({
     withItx: (call) => this.withItx(call),
     runModel: (path, model, input, options, signal) =>

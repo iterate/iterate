@@ -211,8 +211,9 @@ test("DISABLE deletes the facet's storage; RE-ENABLE rebuilds from the log (no s
 
 /** A facet that counts bumps in its OWN kv — state a processor's checkpoint stands in for. */
 const BUMP_COUNTER_SRC = /* js */ `
-import { DurableObject } from "cloudflare:workers";
-export class BumpCounterDurableObject extends DurableObject {
+import { FacetDurableObject } from "./processor.js";
+export class BumpCounterDurableObject extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "bump", "count"];
   bump() { const n = (this.ctx.storage.kv.get("n") ?? 0) + 1; this.ctx.storage.kv.put("n", n); return n; }
   count() { return this.ctx.storage.kv.get("n") ?? 0; }
   processEventBatch() {}

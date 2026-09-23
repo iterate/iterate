@@ -331,7 +331,9 @@ export interface BuiltInScope extends LibraryRoots {
    *  hosts it as the durable facet `name` (own storage) — the mirror of Cloudflare's
    *  `ctx.facets.get(name, startupCallback)`; `source`/`cacheKey` as for `workers.get` (a new key
    *  restarts the facet, its storage surviving). A facet leaves with the subscription that hosted it
-   *  (`subscription-configured { name, target: null }`) — there is no delete verb. */
+   *  (`subscription-configured { name, target: null }`) — there is no delete verb. A caller reaches
+   *  only what the facet's class lists in `static publicMethods` (context/facet-public-methods.ts);
+   *  anything else is refused FORBIDDEN. */
   facets: {
     get(name: string, spec?: FacetSpec): FacetHandle;
     /** RESET ONE FACET — `ctx.facets.abort(name)` from the HOST (facet-host.ts `abort`), so it works
@@ -496,6 +498,10 @@ interface BuildBuiltInsDeps {
     get: BuiltInScope["facets"]["get"];
     abort(name: string, reason: string | undefined): void;
   };
+  /** The platform's own call into a facet of this context, past the methods its class lists for
+   *  callers (context/facet-host.ts `callFacetAsPlatform`): the `itx.secrets` verbs' way to the
+   *  `secret` facet. */
+  callFacetAsPlatform: (name: string, itxExpressionSteps: ItxExpression) => Promise<unknown>;
   /** THE CONTEXT'S RESET, once the call that asked for it has its answer (the DO's
    *  `#abortAfterTheAnswer`): resolves when every write so far is durable; the reset follows. */
   abortAfterTheAnswer: (message: string) => Promise<void>;
@@ -580,14 +586,18 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
    *  engine pushes it every fact (idempotent at the door: a second enable of the same row is a no-op). */
   const enableSecretRow = (secret: ReachableContext) =>
     secret.invoke(["itx", "builtins", "processors", ["enable", "secret"]], [], hopCaller());
-  /** The secret's facet on its own context — `write`, `clear`, `beginOAuth`, `completeOAuth`
-   *  (secret/durable-object.ts) — reached through the facet door; hosted on its first call. */
-  const secretFacet = (secret: ReachableContext, call: ItxExpressionStep) =>
-    secret.invoke(["itx", "facets", ["get", "secret"], call], [], hopCaller());
+  /** The secret's facet on its own context — `write`, `clear`, `beginOAuth`, `completeOAuth`,
+   *  `verifyHmac`, `snapshot` (secret/durable-object.ts) — reached through the platform's own call:
+   *  a caller's itx expression reaches its reads alone. Hosted on its first call. Every verb runs it
+   *  inside `onSecretContext`'s `here`, which runs on the secret's own context. */
+  const secretFacet = (call: ItxExpressionStep) => deps.callFacetAsPlatform("secret", [call]);
   /** The fact of a write or a deletion: on the secret's own path (`secret`), attributed to the
-   *  caller, then cross-posted to the owner's root for the catalog. */
+   *  caller, then cross-posted to the owner's root for the catalog — stamped `source.platform`, which
+   *  a person's or an organization's catalog fold requires (principal.ts `Caller.platform`). */
   const crossPostSecretFact = (event: StreamEventInput) =>
-    deps.context(owner.rootPath).invoke(["itx", "builtins", ["append", event]], [], hopCaller());
+    deps
+      .context(owner.rootPath)
+      .invoke(["itx", "builtins", ["append", event]], [], { ...hopCaller(), platform: true });
   const secretFact = async (secret: ReachableContext, event: StreamEventInput): Promise<void> => {
     await secret.append(stampCaller(event, deps.caller()));
     await crossPostSecretFact(event);
@@ -710,7 +720,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               ...(record.refresh && { refresh: record.refresh.kind }),
             },
           });
-          await secretFacet(secret, ["write", record]);
+          await secretFacet(["write", record]);
           return { path: secretPath };
         }),
       // No fact here: the log learns of the secret when the exchange succeeds, so an abandoned
@@ -725,7 +735,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           );
         return onSecretContext(secretPath, ["beginOAuth", secretPath, options], async (secret) => {
           await enableSecretRow(secret);
-          return (await secretFacet(secret, [
+          return (await secretFacet([
             "beginOAuth",
             normalizeSecretOAuth(options),
             platformOrigin,
@@ -741,7 +751,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // catches the log up. Until then `list()` does not show the secret while egress already honours it.
       completeOAuth: (secretPath, input) =>
         onSecretContext(secretPath, ["completeOAuth", secretPath, input], async (secret) => {
-          const { urls } = (await secretFacet(secret, ["completeOAuth", input])) as {
+          const { urls } = (await secretFacet(["completeOAuth", input])) as {
             urls: string[];
             exchanged: boolean;
           };
@@ -764,11 +774,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         onSecretContext(secretPath, ["delete", secretPath], async (secret) => {
           // The facet is the platform's own SecretDurableObject and `snapshot()` the engine's
           // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted.
-          const { state } = (await secret.invoke(
-            ["itx", "facets", ["get", "secret"], ["snapshot"]],
-            [],
-            hopCaller(),
-          )) as { state: SecretState };
+          const { state } = (await secretFacet(["snapshot"])) as { state: SecretState };
           if (!state.material && !state.deletion)
             throw new Error(`secret ${secretPath}: never set — nothing to delete`);
           const deleted: StreamEventInput = {
@@ -777,7 +783,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           };
           const rowStands = (await secretRows(secret)).some((row) => row.name === "secret");
           if (state.material) {
-            await secretFacet(secret, ["clear"]);
+            await secretFacet(["clear"]);
             await secretFact(secret, deleted);
           } else if (rowStands) await crossPostSecretFact(deleted);
           if (rowStands)
@@ -858,7 +864,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         onSecretContext(
           secretPath,
           ["verifyHmac", secretPath, input],
-          (secret) => secretFacet(secret, ["verifyHmac", input]) as Promise<boolean>,
+          () => secretFacet(["verifyHmac", input]) as Promise<boolean>,
         ),
     },
     ai: env.AI, // the binding object itself — dispatch walks its methods

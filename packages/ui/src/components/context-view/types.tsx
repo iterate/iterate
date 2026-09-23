@@ -14,6 +14,8 @@ export type ContextViewEvent = {
     principal?: { actor: string; email?: string };
     grant?: string;
     processor?: { slug: string; version: string };
+    /** The platform wrote this fact on the principal's behalf (iterate/next principal.ts `Caller.platform`). */
+    platform?: true;
   };
 };
 

@@ -187,8 +187,9 @@ export default class LiveMaker extends WorkerEntrypoint { make() { made += 1; re
 /** The careless holder, the Keeper fixture's manners (support/sources.ts): it keeps its `env.ITX`
  *  scope and every answer, and releases none of them. */
 const CARELESS_HOLDER_SOURCE = {
-  "cap.js": `import { DurableObject } from "cloudflare:workers";
-export class CarelessHolderDurableObject extends DurableObject {
+  "cap.js": `import { FacetDurableObject } from "./processor.js";
+export class CarelessHolderDurableObject extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "keepData", "keepSiblingSnapshot", "keepLiveAndPing"];
   kept = [];
   async keepData(source) {
     const itx = this.env.ITX.get();
@@ -347,6 +348,7 @@ class ReacherProcessor extends StreamProcessor {
   reduce() {}
 }
 export class ReacherDurableObject extends StreamProcessorDurableObject {
+  static publicMethods = [...super.publicMethods, "reach"];
   processor = new ReacherProcessor();
   async reach(path) {
     await this.withItx((itx) => itx.cd(path).whoami());

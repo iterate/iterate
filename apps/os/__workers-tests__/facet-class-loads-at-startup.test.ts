@@ -1,11 +1,11 @@
-// __workers-tests__/facet-class-loads-at-startup.test.ts — `FacetHost#invoke`
+// __workers-tests__/facet-class-loads-at-startup.test.ts — `FacetHost#callFacet`
 // (the one method every `itx.facets.get(...)` call lands in) mints a facet's class ONLY for a facet
 // that STARTS, so a facet that is already RUNNING never touches the Worker Loader (Cloudflare's
 // facet lifecycle; one isolate
 // lookup per warm call, and a running facet unreachable for as long as the loader is unhealthy).
 //
 // Pinned in the `workers` vitest project (it runs inside workerd) because it needs the real LOADER,
-// the real `ctx.facets` and the DO's LIVE instance: `FacetHost#invoke` reads the DO's `env` at call time
+// the real `ctx.facets` and the DO's LIVE instance: `FacetHost#callFacet` reads the DO's `env` at call time
 // and `env` is the DurableObject base class's plain field, so inside `runInDurableObject` the test
 // replaces `instance.env` with a copy whose `LOADER` COUNTS (a plain delegating object — a Proxy
 // would hand the native method a foreign `this`): every `LOADER.get`, every
@@ -28,8 +28,9 @@ import { releasePins, stub, until } from "./support.ts";
 /** A facet with in-memory state only: a call counter and a per-instance id. A restart shows as
  *  `calls` back to 1 and a new `instance`. */
 const HELLO_SRC = /* js */ `
-import { DurableObject } from "cloudflare:workers";
-export class Hello extends DurableObject {
+import { FacetDurableObject } from "./processor.js";
+export class Hello extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "hello"];
   calls = 0;
   instance = crypto.randomUUID();
   hello() { this.calls++; return { calls: this.calls, instance: this.instance }; }
@@ -41,8 +42,9 @@ const HELLO_SPEC = { source: { "cap.js": HELLO_SRC }, className: "Hello" };
  *  on a facet row (subscription-delivery.ts): `catchUpFromLog` once at enable, `processEventBatch`
  *  per batch. In-memory tallies, read back through `stats()`. */
 const TALLY_SRC = /* js */ `
-import { DurableObject } from "cloudflare:workers";
-export class Tally extends DurableObject {
+import { FacetDurableObject } from "./processor.js";
+export class Tally extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "stats"];
   batches = 0;
   events = 0;
   catchUpFromLog() {}
@@ -63,7 +65,7 @@ type LoaderTap = {
 };
 
 /** Install the counting LOADER on the context DO's live instance (see the header). Returns the tap
- *  `FacetHost#invoke` writes into from then on — same isolate, same heap. */
+ *  `FacetHost#callFacet` writes into from then on — same isolate, same heap. */
 async function tapLoader(ctx: string): Promise<LoaderTap> {
   const tap: LoaderTap = { gets: [], classGets: 0, codeCallbacks: 0, refuseAfterFirst: undefined };
   await runInDurableObject(stub(ctx), (instance) => {
@@ -103,7 +105,7 @@ const warmHello = (ctx: string) =>
   stub(ctx).invoke("itx.facets.get('x').hello()") as Promise<Hello>;
 
 /** `gets.length` unchanged for `quietMs` — the push path has drained (nothing else calls
- *  `FacetHost#invoke`). */
+ *  `FacetHost#callFacet`). */
 async function untilLoaderQuiet(tap: LoaderTap, quietMs = 400, timeoutMs = 8_000): Promise<void> {
   let last = tap.gets.length;
   let quietSince = Date.now();
@@ -175,7 +177,7 @@ test("20 durable events pushed to a hosted facet's processEventBatch add no LOAD
   const enableClassGets = tap.classGets;
 
   // 20 durable events, one at a time, each awaited (committed). Every one is delivered — pushed,
-  // awaited, in order — to the running tally facet through `FacetHost#invoke`.
+  // awaited, in order — to the running tally facet through `FacetHost#callFacet`.
   for (let i = 0; i < 20; i++) await stub(ctx).append({ type: `pin/${i}` });
   await untilLoaderQuiet(tap);
   const stats = (await stub(ctx).invoke("itx.facets.get('tally').stats()")) as {
@@ -200,7 +202,7 @@ test("a RUNNING facet is not coupled to loader availability: with the loader ref
   expect(tap.gets.length).toBe(1); // never asked
 
   // After the release the facet must start again — THAT needs the loader, and gets its refusal,
-  // on this call and the next: a startup callback that threw is aborted by `FacetHost#invoke`, so every
+  // on this call and the next: a startup callback that threw is aborted by `FacetHost#callFacet`, so every
   // attempt asks the loader again instead of replaying the first failure from a broken container.
   await releasePins(ctx);
   // A rejected RPC promise consumed through `expect(…).rejects` is reported UNHANDLED by the workers

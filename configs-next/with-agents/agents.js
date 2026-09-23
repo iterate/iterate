@@ -1226,6 +1226,9 @@ export default class AgentAiTransport extends WorkerEntrypoint {
 
 // runtime/durable-object.ts
 var AgentDurableObject = class extends StreamProcessorDurableObject {
+  /** The processor's reads, and a person's words (`message`) — `itx.agents.get(path).message(…)`
+   *  reaches it through the collection (collection.ts). */
+  static publicMethods = [...super.publicMethods, "message"];
   processor = new AgentProcessor({
     withItx: (call) => this.withItx(call),
     runModel: (path, model, input, options, signal) => this.#runModel(path, model, input, options, signal)
@@ -1543,6 +1546,19 @@ var Certificate = z3.discriminatedUnion("type", [
   })
 ]);
 var AgentCollectionDurableObject = class extends StreamProcessorDurableObject2 {
+  /** The processor's reads, and `itx.agents`: the collection's verbs, `at(base)` (the collection an
+   *  agent's own `itx.agents` rule reaches, collection.ts) and `announce` (a certificate from an
+   *  agent context). */
+  static publicMethods = [
+    ...super.publicMethods,
+    "list",
+    "get",
+    "create",
+    "delete",
+    "upgrade",
+    "at",
+    "announce"
+  ];
   processor = new AgentCatalogProcessor();
   at(base) {
     return new AgentCollectionRpcTarget(

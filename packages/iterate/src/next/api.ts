@@ -209,6 +209,8 @@ export interface IterateContextApi {
     get(match: string): Promise<RewriteRuleListEntry | null>;
     resolve(call: ItxExpressionInput): string[];
   };
+  /** A facet of this context: a caller reaches only what its class lists in `static publicMethods`
+   *  (sdk/index.ts `FacetDurableObject`); anything else is refused FORBIDDEN. */
   facets: {
     get(name: string, spec?: FacetSpec): FacetHandle;
     /** RESET one facet of this context, from the context that hosts it — any facet, whether or not
