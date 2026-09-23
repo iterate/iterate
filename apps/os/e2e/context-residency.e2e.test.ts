@@ -523,6 +523,57 @@ deployedOnly(
   240_000,
 );
 
+// A CLAIM'S RELEASE is the last thing the facet's work did, so it arms the sweep again: the sweep
+// may already have run — and disarmed — while the claim held the facet (the voice call that hangs up
+// after a quiet minute is the real case). Here the facet keeps its env.ITX answer and beats a timer
+// into its own storage; its claim holds past the first sweep and is released at 70 s.
+const RELEASER_SOURCE = {
+  "cap.js": `import { FacetDurableObject } from "./processor.js";
+export class ReleaserDurableObject extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "start", "beats"];
+  kept = [];
+  async released(call) {
+    const itx = this.env.ITX.get();
+    const answer = call(itx);
+    try { return await answer; } finally { answer?.[Symbol.dispose]?.(); itx[Symbol.dispose]?.(); }
+  }
+  async start(holdMs) {
+    const name = this.ctx.props.name;
+    await this.released((itx) => itx.processors.claim(name, Date.now() + 600_000));
+    const itx = this.env.ITX.get();
+    this.kept.push(itx, await itx.whoami());
+    const beat = () => { this.ctx.storage.kv.put("lastBeat", Date.now()); setTimeout(beat, 5_000); };
+    beat();
+    setTimeout(async () => {
+      await this.released((itx) => itx.processors.claim(name, null));
+      this.ctx.storage.kv.put("releasedAt", Date.now());
+    }, holdMs);
+    return Date.now();
+  }
+  beats() {
+    return { lastBeat: this.ctx.storage.kv.get("lastBeat"), releasedAt: this.ctx.storage.kv.get("releasedAt") };
+  }
+}`,
+};
+
+test("a careless facet whose claim ends stops a quiet minute after the release, though the sweep ran while the claim held it", async () => {
+  const ctx = freshCtx("residency_released");
+  const releaser = (method: string, ...args: unknown[]) =>
+    openItx(ctx).invoke([
+      "itx",
+      "facets",
+      ["get", "releaser", { source: RELEASER_SOURCE, className: "ReleaserDurableObject" }],
+      [method, ...args],
+    ]);
+  await releaser("start", 70_000);
+  disposeSessions();
+  await sleep(180_000); // nothing from here: the sweep runs at ~60 s, the release lands at 70 s
+  const { lastBeat, releasedAt } = await releaser("beats");
+  // It beat on through its claim and stopped at the sweep the release armed, long before this call.
+  expect(lastBeat - releasedAt).toBeGreaterThan(30_000);
+  expect(lastBeat - releasedAt).toBeLessThan(90_000);
+}, 270_000);
+
 // ── CLAIMED WORK OUTLIVES ITS CONTEXT ON PURPOSE ──
 // Work that must outlive the call that started it runs through `runInBackground`: the processor's
 // claim on the context's alarm keeps the facet running across the context's incarnations — the

@@ -631,6 +631,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     claimFacetAlarm: (name, at) => {
       this.#lastOutsideActivityEndedAt = Date.now(); // a claim restarts the sweep's quiet clock
       this.#facetHost.claim(name, at);
+      // A RELEASE is the last thing the facet's work did: its instance is unclaimed from here, and
+      // the sweep may have run (and disarmed) while the claim held it — so the release arms it.
+      if (at === null) this.#armUnclaimedFacetSweep();
     },
     facets: {
       get: (name, spec) => this.#facetHost.handle(name, spec),
@@ -1064,8 +1067,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  has none, so the alarm an evicted one left wakes it only for its birth, which did the reset. */
   #unclaimedFacetSweepArmedFor: number | null = null;
 
-  /** A loaded facet was materialized: the sweep is owed once this context has been quiet for
-   *  `UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS`. Armed when none is: one alarm write per quiet period. */
+  /** A loaded facet was materialized, or a claim released: the sweep is owed once this context has
+   *  been quiet for `UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS`. Armed when none is: one alarm write per
+   *  quiet period. */
   #armUnclaimedFacetSweep(): void {
     if (this.#unclaimedFacetSweepArmedFor !== null) return;
     this.#unclaimedFacetSweepArmedFor = Date.now() + UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS;
