@@ -1114,6 +1114,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const itxExpressionHeader = request.headers.get(ITX_EXPRESSION_FETCH_HEADER);
     // oxlint-disable-next-line iterate/simple-truthiness-check -- an untrusted HTTP header: present (even empty) selects the fetch lane, absent (null) routes to egress — that distinction must not collapse
     if (itxExpressionHeader !== null) {
+      const bodyPipe = new AbortController();
       try {
         // The JSON form is an edge-set (worker.ts) or self-addressed (env.ITX.fetch) expression; the
         // resolver below canonicalizes it and rejects a malformed shape, so this parse trusts the JSON.
@@ -1158,7 +1159,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         headers.delete(ITX_PLATFORM_ORIGIN_HEADER);
         const callerPath = headers.get(ITX_CALLER_PATH_HEADER) || undefined;
         headers.delete(ITX_CALLER_PATH_HEADER);
-        const forwarded = new Request(request, { headers, body: this.#fetchLaneBody(request) });
+        const forwarded = new Request(request, {
+          headers,
+          body: this.#fetchLaneBody(request, bodyPipe.signal),
+        });
         const caller = this.#withPlatformOrigin({
           principal,
           grant,
@@ -1169,10 +1173,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         const result = await this.#callerStorage.run(caller, () =>
           this.#itxExpressionResolver.invoke(itxExpressionEndingInFetch(itxExpression), forwarded),
         );
-        return result instanceof Response
-          ? result
-          : new Response(`fetch lane: ${JSON.stringify(result)}\n`);
+        if (result instanceof Response) return abortBodyPipeWhenResponseEnds(result, bodyPipe);
+        bodyPipe.abort();
+        return new Response(`fetch lane: ${JSON.stringify(result)}\n`);
       } catch (error) {
+        bodyPipe.abort();
         // A project host makes this lane public: default-deny is a 404 (a visitor's "no such app" is
         // no issue), a WebSocket upgrade aimed at a facet-hosted app is the caller's 400 (context/facet-host.ts),
         // anything else a 500 — the message alone every way, the stack REPORTED, never served.
@@ -1199,12 +1204,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  https://github.com/cloudflare/workerd/issues/918; https://github.com/cloudflare/workerd/issues/1730;
    *  Cloudflare's own advice is to drain the body: https://github.com/cloudflare/workers-sdk/issues/5095).
    *  An app may ignore its body (a scanner POSTing to a static site, prd 2026-09-23), so the pending
-   *  read is this pipe's, and its end is recorded here instead of thrown uncaught. Streamed, never
-   *  buffered: an app that proxies uploads or echoes the body still streams. */
-  #fetchLaneBody(request: Request): ReadableStream | null {
+   *  read is this pipe's: the lane ABORTS it once the app's response has ended
+   *  (`abortBodyPipeWhenResponseEnds`) — before the runtime shuts the stream, so no read is left to
+   *  fail — and records the unread body here. Catching the failed read alone still let the runtime
+   *  log it (prd 2026-09-23, 1 in 3 chunked bodies). Streamed, never buffered: an app that proxies
+   *  uploads or echoes the body still streams. */
+  #fetchLaneBody(request: Request, signal: AbortSignal): ReadableStream | null {
     if (!request.body) return null;
     const { readable, writable } = new IdentityTransformStream();
-    request.body.pipeTo(writable).catch((error: unknown) => {
+    request.body.pipeTo(writable, { signal }).catch((error: unknown) => {
       console.info({
         event: "fetch-lane.request-body-unread",
         namespace: "iterate-context",
@@ -1292,4 +1300,21 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       stub: input.stub as BorrowedRpcStub,
     });
   }
+}
+
+/** The app's Response, passed through unchanged except that `bodyPipe` is aborted when its body has
+ *  been fully handed to the runtime (at once for a bodiless or WebSocket Response): the app has
+ *  answered, so an unread request body is abandoned before the runtime shuts its stream
+ *  (`#fetchLaneBody`). */
+function abortBodyPipeWhenResponseEnds(response: Response, bodyPipe: AbortController): Response {
+  if (!response.body || response.webSocket) {
+    bodyPipe.abort();
+    return response;
+  }
+  const { readable, writable } = new IdentityTransformStream();
+  void response.body
+    .pipeTo(writable)
+    .catch(() => {})
+    .finally(() => bodyPipe.abort());
+  return new Response(readable, response);
 }
