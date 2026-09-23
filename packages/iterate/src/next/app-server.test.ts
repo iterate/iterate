@@ -58,6 +58,10 @@ describe("/.auth/login with a session the platform honours", () => {
     expect(html).toContain("Permissions: your projects.");
     // the button ends this app's session and comes back to this same login URL
     expect(html).toContain(`action="/.auth/logout?next=${encodeURIComponent(path)}"`);
+    // Chromium checks form-action along the submission's whole redirect chain, which ends at the issuer
+    expect(response?.headers.get("content-security-policy")).toContain(
+      `form-action 'self' ${ISSUER};`,
+    );
   });
 
   test("the permissions line names every held scope", async () => {
@@ -144,6 +148,17 @@ describe("a browser CONNECTED to another issuer stays there", () => {
       })}`,
     );
     expect(calls).toEqual(["end"]);
+  });
+
+  test("the connect page lets its form redirect on to the issuer it names", async () => {
+    // Chromium checks form-action along the submission's whole redirect chain: Continue POSTs here,
+    // then 302s to that issuer's authorize endpoint
+    const { response } = connected(`/.auth/connect?${new URLSearchParams({ issuer: CONNECTED })}`);
+    const answer = await response;
+    expect(answer?.status).toBe(200);
+    expect(answer?.headers.get("content-security-policy")).toContain(
+      `form-action 'self' ${CONNECTED};`,
+    );
   });
 
   test("a sign-out from a connected issuer bound for an ordinary page carries no scope", async () => {

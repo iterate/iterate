@@ -166,20 +166,24 @@ function gatePage(input: {
 }
 
 /** The head and the CSP of a gate page: the deployment's own issuer dresses it (its stylesheet, its
- *  logo); any other issuer gets the inline dress and nothing of its own on this origin. */
+ *  logo); any other issuer gets the inline dress and nothing of its own on this origin. `formIssuer`
+ *  is the issuer the page's form ends up at: Chromium applies `form-action` to a submission's WHOLE
+ *  redirect chain, and the gate's POSTs 303 onward to that issuer's authorize endpoint. */
 function dressOf(
   issuer: string,
   defaultIssuer: string,
+  formIssuer: string = issuer,
 ): { head: string; csp: string; mark: string } {
+  const formAction = `form-action 'self' ${formIssuer}`;
   if (issuer === defaultIssuer)
     return {
       head: `<link rel="stylesheet" href="${issuer}/issuer.css"><link rel="icon" href="${issuer}/iterate-logo.svg" type="image/svg+xml">`,
-      csp: `default-src 'none'; style-src ${issuer}; img-src ${issuer}; form-action 'self'; frame-ancestors 'none'`,
+      csp: `default-src 'none'; style-src ${issuer}; img-src ${issuer}; ${formAction}; frame-ancestors 'none'`,
       mark: `<img class="issuer-mark" src="${issuer}/iterate-logo.svg" alt="" width="56" height="56">`,
     };
   return {
     head: `<style>${inlinePageCss}</style>`,
-    csp: "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+    csp: `default-src 'none'; style-src 'unsafe-inline'; ${formAction}; frame-ancestors 'none'`,
     mark: "",
   };
 }
@@ -253,7 +257,7 @@ function connectPage(input: {
     held && held.issuer !== origin
       ? `<p class="muted">This ends your current sign-in through <strong>${text(new URL(held.issuer).host)}</strong>.</p>`
       : "";
-  const dress = dressOf(defaultIssuer, defaultIssuer);
+  const dress = dressOf(defaultIssuer, defaultIssuer, origin);
   return gatePage({
     title: `Connect to ${host}`,
     head: dress.head,
