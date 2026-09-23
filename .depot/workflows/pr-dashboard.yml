@@ -1,0 +1,41 @@
+name: Daily PR dashboard
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - ready_for_review
+      - converted_to_draft
+      - closed
+  push:
+    branches:
+      - "**/*pr-dashboard*"
+      - "*pr-dashboard*"
+concurrency:
+  group: pr-dashboard
+  cancel-in-progress: false
+jobs:
+  update_dashboard:
+    runs-on:
+      size: 8x32
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    env:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Notify PR update
+        if: github.event_name == 'pull_request'
+        run: pnpm tsx scripts/ci/notify.ts pr-update
+      - name: Update PR dashboard
+        run: pnpm tsx scripts/ci/pr-dashboard.ts
