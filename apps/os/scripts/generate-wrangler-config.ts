@@ -132,7 +132,8 @@ export function wranglerConfig() {
             { binding: "OAUTH_KV", id: env.resources.oauthKvId },
             { binding: "ITX_KV", id: env.resources.itxKvId },
           ],
-          vars: urlVars(env),
+          // unset ⇒ undefined, which the JSON config drops: no var, no PostHog on the pages
+          vars: { ...urlVars(env), POSTHOG_PROJECT_KEY: env.posthogProjectKey },
         },
       ]),
     ),

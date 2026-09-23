@@ -500,6 +500,9 @@ importers:
       pako:
         specifier: ^3.0.1
         version: 3.0.1
+      posthog-js:
+        specifier: 1.404.0
+        version: 1.404.0(preact-render-to-string@6.6.5(preact@11.0.0-beta.0))
       react:
         specifier: ^19.2.7
         version: 19.2.7
