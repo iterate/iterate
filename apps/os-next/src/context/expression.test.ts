@@ -2,11 +2,11 @@ import {
   InvokeHandle,
   RpcStubHandle,
   ITX_HANDLE_REFERENCE_KEY,
-  itxHandleReferenceOf,
+  itxAnswerDetachedFromSession,
   materializeItxHandleReference,
 } from "iterate/next/expression";
 // Executable spec for the expression codec — two directions over one table.
-import { describe, expect, test, it } from "vitest";
+import { describe, expect, test, it, vi } from "vitest";
 import { RpcStub, RpcTarget } from "capnweb";
 import {
   normalizedItxExpression,
@@ -15,11 +15,14 @@ import {
   print,
   type ItxExpression,
   registerPipelinedRpcBrand,
+  registerRpcSessionBrand,
+  releaseRpcSessions,
   walkSteps,
   installPrototypeInvokeFallback,
 } from "iterate/next/expression";
 import type { ItxExpressionRewriteRule } from "./itx-expression-rewriting.ts";
 import { BUILT_IN_ROOTS, ItxExpressionResolver } from "./itx-expression-rewriting.ts";
+import { ScopedArtifactRepoRpcTarget, type ArtifactsNamespace } from "./repos.ts";
 
 // Plausible itx expressions in CANONICAL form — exactly what `print` emits (single-quoted strings,
 // unquoted identifier keys, no spaces). Each row is checked BOTH directions.
@@ -237,6 +240,16 @@ describe("pipelined RPC promise threading", () => {
     }
   }
   registerPipelinedRpcBrand(FakeRpcPromise);
+  /** A stub an awaited call answered with (a facet's collection): not a promise, but it holds its
+   *  session until disposed — as iterate-context.ts registers the native RpcStub. */
+  class FakeRpcStub {
+    constructor(readonly chain: string) {}
+    list(): unknown {
+      return new FakeRpcPromise(`${this.chain}.list()`);
+    }
+  }
+  registerRpcSessionBrand(FakeRpcPromise);
+  registerRpcSessionBrand(FakeRpcStub);
 
   test("a registered brand threads UNAWAITED through call-then-call — the terminal settles once", async () => {
     FakeRpcPromise.awaited = [];
@@ -254,21 +267,76 @@ describe("pipelined RPC promise threading", () => {
     expect(FakeRpcPromise.awaited).toEqual(["dial.svc(x).add(2,3)"]);
   });
 
-  test("pipelinedIntermediates collects every pipelined value stepped past — never the start, never the answer", async () => {
-    // facet-host.ts `#call` disposes these: each held its session (and the facet's actor) open until
-    // GC — `repos()` of `facet.repos().create(path)` kept a project's root resident (2026-09-23).
-    const itx = { dial: () => new FakeRpcPromise("dial") };
-    const pipelinedIntermediates: unknown[] = [];
-    const { value } = await walkSteps(
-      { value: itx, receiver: undefined },
-      parse("itx.dial().svc('x').add(2, 3)").slice(1),
-      pipelinedIntermediates,
-    );
-    expect(pipelinedIntermediates.map((step) => (step as FakeRpcPromise).chain)).toEqual([
-      "dial",
-      "dial.svc(x)",
-    ]);
-    expect((value as FakeRpcPromise).chain).toBe("dial.svc(x).add(2,3)");
+  test("rpcSessionsSteppedPast collects every session-holding value stepped past, pipelined or awaited — never the start, never the answer", async () => {
+    // The resolver's `invoke` and facet-host.ts `#call` release these once the answer is in: each held
+    // its session, and the actor at its far end, open until GC — the collection stub a facet answered
+    // `repos()` with, walked on for `.create(path)`, kept a project's root resident (2026-09-23).
+    const itx = {
+      dial: () => new FakeRpcPromise("dial"),
+      collection: async () => new FakeRpcStub("collection"), // awaited: a facet call's answer
+      local: { twice: (n: number) => n * 2 }, // holds no session
+    };
+    const walk = async (source: string) => {
+      const rpcSessionsSteppedPast: unknown[] = [];
+      const { value } = await walkSteps(
+        { value: itx, receiver: undefined },
+        parse(source).slice(1),
+        rpcSessionsSteppedPast,
+      );
+      return { value, steppedPast: rpcSessionsSteppedPast.map((s) => (s as FakeRpcStub).chain) };
+    };
+    expect(await walk("itx.dial().svc('x').add(2, 3)")).toMatchObject({
+      steppedPast: ["dial", "dial.svc(x)"],
+      value: { chain: "dial.svc(x).add(2,3)" },
+    });
+    expect(await walk("itx.collection().list()")).toMatchObject({
+      steppedPast: ["collection"],
+      value: { chain: "collection.list()" },
+    });
+    expect(await walk("itx.local.twice(2)")).toEqual({ steppedPast: [], value: 4 });
+  });
+
+  test("the resolver releases what its walk stepped past once the answer is in; the answer stays the caller's", async () => {
+    const order: string[] = [];
+    // the project facet's collection, as `facets.get('project').repos()` answers it: awaited, a stub
+    const collection = Object.assign(new FakeRpcStub("repos"), {
+      list: () => ({
+        then(resolve: (paths: string[]) => void) {
+          order.push("answer settled");
+          resolve(["/repos/a"]);
+        },
+      }),
+      [Symbol.dispose]: () => order.push("collection released"),
+    });
+    const resolver = new ItxExpressionResolver({
+      builtIns: { facets: { get: () => ({ repos: async () => collection }) } },
+      rewriteRules: () => [],
+      implicitRoots: new Set(BUILT_IN_ROOTS),
+      path: "/",
+      caller: () => ({ principal: null }),
+    });
+    expect(await resolver.invoke("itx.facets.get('project').repos().list()")).toEqual(["/repos/a"]);
+    expect(order).toEqual(["answer settled", "collection released"]);
+  });
+
+  test("releaseRpcSessions releases each once, the last first; one that throws is reported, the rest still released", () => {
+    const released: string[] = [];
+    const session = (name: string, fail = false) => ({
+      [Symbol.dispose]() {
+        released.push(name);
+        if (fail) throw new Error(`${name} already gone`);
+      },
+    });
+    const reported = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(() =>
+        releaseRpcSessions([session("first"), session("middle", true), session("last")]),
+      ).not.toThrow();
+      expect(released).toEqual(["last", "middle", "first"]);
+      expect(reported).toHaveBeenCalled();
+    } finally {
+      reported.mockRestore();
+    }
   });
 
   test("an UNREGISTERED thenable keeps the default: awaited at every step", async () => {
@@ -484,51 +552,131 @@ describe("prototype-chain dynamic fallback", () => {
   });
 });
 
-describe("a handle on the wire is the expression that names it", () => {
-  const handle = new InvokeHandle(() => undefined);
-  const reference = { [ITX_HANDLE_REFERENCE_KEY]: ["itx", "repos", ["get", "/repos/x"]] };
-  test.each<[string, unknown, ItxExpression, unknown[], ItxExpression | undefined]>([
+// ── an answer leaves a context holding nothing of its session ── what the context's RPC `invoke`
+// hands back (expression.ts `itxAnswerDetachedFromSession`): the table the careless-caller rows of
+// e2e/context-residency.e2e.test.ts prove on the deployed worker.
+describe("an answer leaves a context holding nothing of its session", () => {
+  /** A Workers-RPC stub a hop below answered with — registered as iterate-context.ts registers the
+   *  native RpcStub — counting its releases. */
+  class FakeHopRpcStub {
+    released = 0;
+    [Symbol.dispose](): void {
+      this.released++;
+    }
+  }
+  registerRpcSessionBrand(FakeHopRpcStub);
+  /** What workerd hands a caller for a hop's answer: the data, plus a non-enumerable disposer that
+   *  releases what the hop left open. */
+  const answeredByHop = <T extends object>(data: T): { answer: T; released: () => number } => {
+    let released = 0;
+    Object.defineProperty(data, Symbol.dispose, { value: () => released++, enumerable: false });
+    return { answer: data, released: () => released };
+  };
+  class BuiltHereRpcTarget extends RpcTarget {
+    hello(): string {
+      return "hello";
+    }
+  }
+  const repoHandleExpression: ItxExpression = ["itx", "repos", ["get", "/repos/x"]];
+
+  test.each<[string, unknown, ItxExpression, unknown[], ItxExpression]>([
     [
       "a path-shaped handle",
-      handle,
-      ["itx", "repos", ["get", "/repos/x"]],
+      new InvokeHandle(() => undefined),
+      repoHandleExpression,
       [],
-      ["itx", "repos", ["get", "/repos/x"]],
+      repoHandleExpression,
     ],
     [
-      "a reference from a hop below, re-rooted to this caller's call",
-      reference,
-      ["itx", ["cd", "/b"], "repos", ["get", "/repos/x"]],
-      [],
-      ["itx", ["cd", "/b"], "repos", ["get", "/repos/x"]],
-    ],
-    [
-      "a lent client stub stays live",
+      "a lent stub's handle: it dispatches by its key, so its expression reaches the same stub",
       new RpcStubHandle(() => undefined),
       ["itx", "rpcStubs", ["get", "k"]],
       [],
-      undefined,
+      ["itx", "rpcStubs", ["get", "k"]],
     ],
-    ["data", { ok: true }, ["itx", ["whoami"]], [], undefined],
-    ["a primitive", 7, ["itx", "kv", ["get", "k"]], [], undefined],
+    [
+      "an RpcTarget built here (a library connection)",
+      new BuiltHereRpcTarget(),
+      ["itx", ["connectToMcp", "https://mcp.example"]],
+      [],
+      ["itx", ["connectToMcp", "https://mcp.example"]],
+    ],
+    [
+      // prd 2026-09-23: a root session held one for 24 min, `remote`/`createToken` called on it live
+      "the scoped Artifacts repo `cfArtifacts.get(path)` answers",
+      new ScopedArtifactRepoRpcTarget({} as ArtifactsNamespace, "repos--x", "https://git/x.git"),
+      ["itx", "cfArtifacts", ["get", "/repos/x"]],
+      [],
+      ["itx", "cfArtifacts", ["get", "/repos/x"]],
+    ],
+    ["a function", () => "called", ["itx", "kv", "get"], [], ["itx", "kv", "get"]],
+    [
+      "a Workers-RPC stub a hop below answered with (a loaded worker's RpcTarget)",
+      new FakeHopRpcStub(),
+      ["itx", "workers", ["get", { source: {} }], ["make"]],
+      [],
+      ["itx", "workers", ["get", { source: {} }], ["make"]],
+    ],
+    [
+      "a reference from a hop below, re-rooted to this caller's call",
+      { [ITX_HANDLE_REFERENCE_KEY]: repoHandleExpression },
+      ["itx", ["cd", "/b"], "repos", ["get", "/repos/x"]],
+      [],
+      ["itx", ["cd", "/b"], "repos", ["get", "/repos/x"]],
+    ],
     [
       "runtime args fold into a terminal name, as the resolver folds them",
-      handle,
+      new InvokeHandle(() => undefined),
       ["itx", "repos", "get"],
       ["/repos/x"],
-      ["itx", "repos", ["get", "/repos/x"]],
+      repoHandleExpression,
     ],
     [
-      "runtime args left over apply to the value and never name a handle",
-      handle,
-      ["itx", "repos", ["get", "/repos/x"]],
+      "runtime args left over are the anonymous call on the value, as the resolver applies them",
+      new InvokeHandle(() => undefined),
+      repoHandleExpression,
       ["extra"],
-      undefined,
+      [...repoHandleExpression, ["", "extra"]],
     ],
-  ])("%s", (_, result, expression, args, expected) => {
-    expect(itxHandleReferenceOf(result, expression, args)).toEqual(
-      expected ? { [ITX_HANDLE_REFERENCE_KEY]: expected } : undefined,
+  ])("live, named by its expression: %s", (_, result, expression, args, expected) => {
+    expect(itxAnswerDetachedFromSession(result, expression, args)).toEqual({
+      [ITX_HANDLE_REFERENCE_KEY]: expected,
+    });
+  });
+
+  test("a stub a hop below answered with is released once as it is named", () => {
+    const stub = new FakeHopRpcStub();
+    itxAnswerDetachedFromSession(stub, ["itx", "workers", ["get", {}], ["make"]]);
+    expect(stub.released).toBe(1);
+  });
+
+  test("data a hop below answered with leaves as a copy with no disposer; the original is released", () => {
+    const { answer, released } = answeredByHop({ a: 1, nested: { b: [2] } });
+    const copy = itxAnswerDetachedFromSession(answer, ["itx", "workers", ["get", {}], ["data"]]);
+    expect(copy).not.toBe(answer);
+    expect(copy).toEqual({ a: 1, nested: { b: [2] } });
+    expect(Symbol.dispose in (copy as object)).toBe(false);
+    expect(released()).toBe(1);
+  });
+
+  test("data built here and primitives cross as they are, uncopied", () => {
+    const page = { events: [{ offset: 1 }], scannedThroughOffset: 1 };
+    expect(itxAnswerDetachedFromSession(page, ["itx", ["readEvents"]])).toBe(page);
+    expect(itxAnswerDetachedFromSession(7, ["itx", "kv", ["get", "k"]])).toBe(7);
+    expect(itxAnswerDetachedFromSession(null, ["itx", "kv", ["get", "k"]])).toBe(null);
+  });
+
+  test("what can neither be copied nor named — a stream, data holding a function — crosses as it is, unreleased", () => {
+    const stream = answeredByHop(new ReadableStream());
+    expect(
+      itxAnswerDetachedFromSession(stream.answer, ["itx", "files", ["get", "a"], ["stream"]]),
+    ).toBe(stream.answer);
+    expect(stream.released()).toBe(0);
+    const holdingAFunction = answeredByHop({ callback: () => "live" });
+    expect(itxAnswerDetachedFromSession(holdingAFunction.answer, ["itx", ["x"]])).toBe(
+      holdingAFunction.answer,
     );
+    expect(holdingAFunction.released()).toBe(0);
   });
 
   test("the holder mints its own handle: a dotted call is the reference plus the steps, a whole call is itself", async () => {

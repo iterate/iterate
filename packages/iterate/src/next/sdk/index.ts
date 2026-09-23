@@ -18,7 +18,6 @@ import {
   type StreamEventInput,
 } from "../stream/processor.ts";
 import { auth } from "./auth.ts";
-import { recordPipelinedSteps } from "./record-pipelined-steps.ts";
 export { auth };
 export {
   StreamProcessor,
@@ -195,24 +194,19 @@ export abstract class StreamProcessorDurableObject<
     }));
   }
 
-  /** ONE pipelined round trip on the itx scope, then RELEASE it: `env.ITX.get()` and EVERY call
-   *  pipelined on it PIN THE PARENT DO until GC (the "GC is too late" defect the DO's facet door
-   *  fixes in the other direction). Await the answer — plain data, the wire already copied it —
-   *  then dispose every step the call reached AND the get. Not only the last: the `itx.cd(path)` in
-   *  `itx.cd(path).append(…)` (and `repos.get(p)`, `cfArtifacts.get(p)`) is a stub of its own, and
-   *  one left undisposed held facet → ItxEntrypoint → context resident until the next deploy
-   *  (2026-09-21/22: every project an os-next preview's e2e run created stayed billed for hours).
-   *  Protected: a host with methods of its own (the workspace, src/workspace/durable-object.ts)
-   *  reaches its context the same way. */
+  /** ONE pipelined round trip on the itx scope, then release it: await the answer — plain data, the
+   *  wire already copied it — then dispose the call AND the get. Hygiene, not what keeps the context
+   *  evictable: the context's own `invoke` ends every inbound session with the call, whatever a
+   *  caller keeps (expression.ts `itxAnswerDetachedFromSession`), so an intermediate left undisposed
+   *  here holds only the stateless loopback call. Protected: a host with methods of its own (the
+   *  workspace, src/workspace/durable-object.ts) reaches its context the same way. */
   protected async withItx<T>(call: (itx: Scope) => T): Promise<Awaited<T>> {
-    const steps: unknown[] = [];
     const itx = this.#itxEntrypoint().get();
+    const result = call(itx);
     try {
-      return await call(recordPipelinedSteps(itx, steps));
+      return await result;
     } finally {
-      // A step is whatever a call answered — a Workers-RPC promise (disposable), or a void call's undefined.
-      for (const step of steps.reverse())
-        (step as Partial<Disposable> | undefined)?.[Symbol.dispose]?.();
+      (result as unknown as Disposable)[Symbol.dispose]?.();
       (itx as unknown as Disposable)[Symbol.dispose]?.();
     }
   }

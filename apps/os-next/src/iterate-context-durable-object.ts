@@ -32,7 +32,7 @@ import {
   type ItxExpressionInput,
   InvokeHandle,
   RpcStubHandle,
-  itxHandleReferenceOf,
+  itxAnswerDetachedFromSession,
   normalizedItxExpression,
 } from "iterate/next/expression";
 import {
@@ -921,11 +921,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   ): Promise<unknown> {
     this.#stream.appendWakeRecord("request");
     const result = await this.#invokeInProcess(call, args, caller);
-    // A HANDLE LEAVES AS THE EXPRESSION THAT NAMES IT (expression.ts `itxHandleReferenceOf`): a live
-    // handle crossing this door would hold a Workers-RPC session — and this actor — open for as long as
-    // the caller kept it. The caller mints its own over the reference; every later verb is one whole
-    // call back through here. A lent client stub is the one handle that crosses as itself.
-    return itxHandleReferenceOf(result, normalizedItxExpression(call), args) ?? result;
+    // THE CALLER'S SESSION ENDS WITH THE CALL, WHATEVER IT KEEPS (expression.ts
+    // `itxAnswerDetachedFromSession`): every Workers-RPC caller of this actor — the edge (capnweb
+    // /api, a loaded worker's or a facet's `env.ITX`), /mcp, a sibling's `cd` — arrives through this
+    // method, so this actor enforces it here, whatever the caller disposes: a live answer leaves as
+    // the expression that names it, data a hop below answered with leaves as a copy.
+    return itxAnswerDetachedFromSession(result, normalizedItxExpression(call), args);
   }
 
   /** The same call for THIS isolate's own callers — the library's itx, a facet's or a loaded worker's
