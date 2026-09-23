@@ -1,6 +1,6 @@
 # MAIN'S E2E RUN on the dev/preview account: every push to main (the paths a PR preview runs for)
 # deploys a THROWAWAY Worker Preview of apps/os named `main-<short sha>`, with fresh resources of its
-# own (D1, KV, R2, Artifacts namespace, Durable Object namespaces) and the four clients on top, runs
+# own (KV, R2, Artifacts namespace, Durable Object namespaces) and the four clients on top, runs
 # the e2e suite, the browser specs and the residency gate against it, then DELETES the preview and
 # everything it created. Nothing it makes outlives the run: a cancelled or failed run still deletes
 # (the `delete` job runs always), and the nightly sweep of preview-os-next.yml deletes a PR-less
@@ -36,6 +36,8 @@ on:
       - apps/agents/**
       - apps/notes/**
       - apps/voice/**
+      - specs/**
+      - playwright.config.ts
       - packages/iterate/**
       - packages/shared/**
       - packages/ui/**
@@ -56,8 +58,40 @@ env:
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 
 jobs:
+  # THE PREVIEW PARENT FROM MAIN: every preview branches from os-next-preview (envs.ts
+  # osEnvs.preview), and nothing else redeployed it when main changed: after #2888 it ran code from
+  # before ControlPlaneDurableObject (2026-09-23). Its own group, so two pushes never deploy it at
+  # once. The start-app parents need no such job: their one Durable Object class never changes.
+  parent:
+    name: deploy the preview parent from main
+    runs-on:
+      size: 4x16
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 30
+    concurrency:
+      group: os-next-preview-parent
+      cancel-in-progress: false
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config preview --project project-worker
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Deploy os-next-preview from main
+        working-directory: apps/os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run -- pnpm run-script deploy --env preview
+
   deploy:
     name: deploy
+    needs: parent
     runs-on:
       size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
@@ -199,7 +233,7 @@ jobs:
           PREVIEW_SUITE_ENDED: ${{ needs.e2e.outputs.suite-ended }}
         run: doppler run -- pnpm preview residency
 
-  # ALWAYS, whatever happened before, cancelled included: the preview, its D1, Artifacts
+  # ALWAYS, whatever happened before, cancelled included: the preview, its Artifacts
   # namespace, KV namespaces and R2 bucket, and the clients' previews of the same name.
   delete:
     name: delete
@@ -221,7 +255,7 @@ jobs:
         run: doppler setup --config preview --project project-worker
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      # The name is derived here too: a deploy cancelled before it named anything still created a D1.
+      # The name is derived here too: a deploy cancelled before it set its output may still have created resources.
       - name: Delete the throwaway preview and everything it created
         working-directory: apps/os
         env:
@@ -231,7 +265,7 @@ jobs:
   # Main's state changes only: red once, green again once. Not for a superseded (cancelled) run.
   alert:
     name: alert
-    needs: [deploy, e2e, residency, delete]
+    needs: [parent, deploy, e2e, residency, delete]
     if: ${{ !cancelled() && github.event_name == 'push' }}
     runs-on:
       size: 2x8

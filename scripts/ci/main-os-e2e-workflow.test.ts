@@ -12,6 +12,7 @@ type MainWorkflow = {
     {
       if?: string;
       needs?: string | string[];
+      concurrency?: { group: string; "cancel-in-progress": boolean };
       steps?: Array<{ run?: string; env?: Record<string, string> }>;
     }
   >;
@@ -32,6 +33,14 @@ test("runs on every main push a PR preview would run for, the latest push only",
   expect(main).toMatchObject({
     concurrency: { group: "main-os-e2e", "cancel-in-progress": true },
   });
+});
+
+test("first deploys the preview parent from main, one push at a time", () => {
+  expect(runs("parent")).toContain("doppler run -- pnpm run-script deploy --env preview");
+  expect(main.jobs.parent).toMatchObject({
+    concurrency: { group: "os-next-preview-parent", "cancel-in-progress": false },
+  });
+  expect(main.jobs.deploy?.needs).toBe("parent");
 });
 
 test("deploys, tests and reads residency on a throwaway preview named for the commit", () => {
@@ -55,7 +64,13 @@ test("always deletes the preview and everything it created, cancelled or failed"
 
 test("pages on main's change of state, never for a superseded run", () => {
   expect(main.jobs.alert?.if).toBe("${{ !cancelled() && github.event_name == 'push' }}");
-  expect([main.jobs.alert?.needs].flat()).toEqual(["deploy", "e2e", "residency", "delete"]);
+  expect([main.jobs.alert?.needs].flat()).toEqual([
+    "parent",
+    "deploy",
+    "e2e",
+    "residency",
+    "delete",
+  ]);
   expect(runs("alert")).toContain("pnpm tsx scripts/ci/main-e2e-alert.ts alert");
 });
 
