@@ -199,6 +199,7 @@ export const agentsEnvs = {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
     workerName: "agents",
+    posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
     baseUrl: "https://agents.iterate.workers.dev",
   },
 };
@@ -216,6 +217,7 @@ export const notesEnvs = {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
     workerName: "notes",
+    posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
     // Its own workers.dev subdomain — NOT a custom domain (iterate.com is the iterate project's
     // apex, osEnvs.prd.temporaryCustomHostnames). A workers.dev baseUrl adds no custom route (below).
     baseUrl: "https://notes.iterate.workers.dev",
@@ -235,6 +237,7 @@ export const voiceEnvs = {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
     workerName: "voice",
+    posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
     // This exact Worker route takes precedence over the iterate project's *.iterate.com route.
     baseUrl: "https://voice.iterate.com",
   },

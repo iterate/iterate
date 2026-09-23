@@ -1,3 +1,4 @@
+import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
 import { appAuth } from "iterate/next/app-server";
 import type { BrowserSession } from "iterate/next/app-session";
 import entry from "@tanstack/react-start/server-entry";
@@ -17,6 +18,9 @@ export default {
     },
   ) {
     if (new URL(request.url).pathname === "/healthz") return new Response("ok");
+    // posthog-js's `api_host` (packages/ui posthog.tsx): PostHog EU through our own origin
+    if (new URL(request.url).pathname.startsWith("/e/"))
+      return proxyPosthogRequest({ request, proxyPrefix: "/e" });
     const auth = await appAuth(request, {
       client: { name: "Iterate Agents", logoUri: "/client-logo.svg" },
       sessions: env.BROWSER_SESSION,
