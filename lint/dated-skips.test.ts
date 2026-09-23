@@ -45,14 +45,9 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     note: "env-gated: runs where the deployment offers email-code sign-in (login.emailCode), which a local worker does not",
   },
   {
-    file: "specs/os/auth.spec.ts",
-    match: "This acceptance case needs the independently deployed Notes worker",
-    note: "env-gated: needs NOTES_BASE_URL pointing at the independently deployed Notes worker (the os-next ↔ Notes acceptance case)",
-  },
-  {
     file: "specs/notes/notes.spec.ts",
     match: "The Notes specs need the Notes app deployed against the platform under test",
-    note: "env-gated: the notes project's baseURL is NOTES_BASE_URL; the preview deploy runs it (`pnpm spec --project notes`) once the Notes preview is up",
+    note: "env-gated, local runs only: the notes project's baseURL is NOTES_BASE_URL; in CI (the preview's e2e job sets it) a missing Notes app fails",
   },
   // -- Structural (fixture): the skip is the subject of the test, not a parked bug.
   {

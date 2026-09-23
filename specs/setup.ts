@@ -44,6 +44,7 @@ function osTargetEnv(): Record<string, string> {
       LOGIN_PASSWORD: "dev",
       PROJECT_INGRESS_ROUTING: JSON.stringify({ type: "subdomains", hostname: "localhost" }),
       MCP_BASE_URL: `${origin}/mcp`,
+      OS_BASE_URL: origin,
     };
   }
   const target = deployedTarget(origin);
@@ -52,5 +53,6 @@ function osTargetEnv(): Record<string, string> {
     LOGIN_PASSWORD: target.loginPassword,
     PROJECT_INGRESS_ROUTING: target.ingressRouting,
     MCP_BASE_URL: target.mcpBaseUrl,
+    OS_BASE_URL: origin,
   };
 }

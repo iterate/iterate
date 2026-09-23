@@ -5,10 +5,12 @@ test("sign in, create a project, save a note and read it after reload", async ({
   page,
   baseURL,
 }) => {
+  // Locally, no Notes app is a skip; in CI it is a failure (the preview's e2e job always has one).
   test.skip(
-    !process.env.NOTES_BASE_URL,
+    !process.env.CI && !process.env.NOTES_BASE_URL,
     "The Notes specs need the Notes app deployed against the platform under test",
   );
+  expect(process.env.NOTES_BASE_URL, "NOTES_BASE_URL: the preview's Notes app").toBeTruthy();
   const stamp = `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}`;
   const slug = `notes-proof-${stamp}`;
   const errors: string[] = [];

@@ -16,6 +16,8 @@ export const OsPlaywrightAuthEnv = z.object({
   }, "must be the deployment's ingress routing as a JSON string"),
   /** The MCP resource the OAuth specs request tokens for. */
   MCP_BASE_URL: z.url(),
+  /** The OS platform under test, for specs whose own project's baseURL is another app. */
+  OS_BASE_URL: z.url(),
 });
 
 // Suite setup supplies these values before Playwright creates its workers.
@@ -30,6 +32,7 @@ export function readOsPlaywrightAuthConfig() {
       hostname?: string;
     } | null,
     mcpBaseUrl: env.MCP_BASE_URL,
+    osBaseUrl: env.OS_BASE_URL,
   };
 }
 

@@ -641,18 +641,6 @@ async function deployPreview(
     const appPreviews = await Promise.all(
       apps.map((app) => deployAppPreview(app, previewName, url, wrangler.command)),
     );
-    const notesPreview = appPreviews.find((app) => app.name === "notes");
-    if (notesPreview) {
-      if (process.env.CI)
-        await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], {
-          cwd: path.resolve(ROOT, "../.."),
-        });
-      // the root suite's notes project (specs/AGENTS.md), against this preview's Notes app
-      await runAsync("pnpm", ["spec", "--project", "notes"], {
-        cwd: path.resolve(ROOT, "../.."),
-        env: { DEMO_BASE_URL: url, NOTES_BASE_URL: notesPreview.url },
-      });
-    }
     const summary = {
       previewName,
       url,
@@ -729,20 +717,26 @@ const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, st
  *  deployed-target mode against the preview, side by side — the same two suites deploy-os-next.yml
  *  and `pnpm spec` know. Each runner derives the deployed target itself
  *  (e2e/support/deployed-target.ts, from the `APP_CONFIG` in this process's environment and the
- *  parent's envs.ts entry): the vitest suite in its global-setup, the specs in specs/setup.ts. The
- *  notes project ran after the deploy, against the Notes preview. vitest streams; Playwright's
- *  report prints after it. */
+ *  parent's envs.ts entry): the vitest suite in its global-setup, the specs in specs/setup.ts. Every
+ *  spec project runs, the notes project against this preview's Notes app (NOTES_BASE_URL; the Notes
+ *  specs fail in CI without it). vitest streams; Playwright's report prints after it. */
 async function runE2e(previewName: string): Promise<void> {
   const url = previewUrl(previewName);
   const env = { WORKER_BASE_URL: url, DEMO_BASE_URL: url };
+  const notes = APPS.find((app) => app.name === "notes")!;
   const spec = (async () => {
     if (process.env.CI)
       await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], {
         cwd: path.resolve(ROOT, "../.."),
       });
-    return run("pnpm", ["spec", "--project", "os", "--project", "os-phone", "--project", "suite"], {
+    return run("pnpm", ["spec"], {
       cwd: path.resolve(ROOT, "../.."),
-      env: { ...process.env, ...env, ...PREVIEW_SUITE_TELEMETRY.specs },
+      env: {
+        ...process.env,
+        ...env,
+        NOTES_BASE_URL: appPreviewUrl(notes, previewName),
+        ...PREVIEW_SUITE_TELEMETRY.specs,
+      },
     });
   })();
   // The deployed target needs no local Vite build. Keep the preview's built dist/ intact while

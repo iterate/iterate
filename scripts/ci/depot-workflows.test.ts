@@ -146,8 +146,9 @@ describe("Depot deployment safety", () => {
         "playwright.config.ts",
       ]),
     );
-    expect(previewScript).toContain('["spec", "--project", "notes"]');
-    expect(previewScript).toContain("NOTES_BASE_URL: notesPreview.url");
+    // one `pnpm spec` in the e2e job runs every project, the notes one against the Notes preview
+    expect(previewScript).toContain('run("pnpm", ["spec"], {');
+    expect(previewScript).toContain("NOTES_BASE_URL: appPreviewUrl(notes, previewName)");
   });
 
   test("installs the pinned ESP-IDF release before preparing Kit firmware", () => {
