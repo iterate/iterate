@@ -263,7 +263,8 @@ jobs:
     runs-on:
       size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 30
+    # the gate waits up to 26 minutes after the suite (apps/os/scripts/preview.ts residencyGate)
+    timeout-minutes: 40
     steps:
       - name: Checkout the PR head
         uses: actions/checkout@v4
