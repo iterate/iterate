@@ -39,18 +39,32 @@ const callerOf = (caller: Caller) => ({ principal: caller.principal, grant: call
 /** The control plane as the edge holds it — ONE per request (worker.ts, rpc.ts), over the
  *  `CONTROL_PLANE` binding. */
 export class ControlPlane {
-  readonly #stub;
+  readonly #namespace: DurableObjectNamespace<ControlPlaneDurableObject>;
+  #stub: DurableObjectStub<ControlPlaneDurableObject>;
   constructor(namespace: DurableObjectNamespace<ControlPlaneDurableObject>) {
+    this.#namespace = namespace;
     this.#stub = namespace.getByName("global");
   }
 
   /** ONE method of the registry DO, awaited here so a pipelined RPC promise is never held (a copy of
    *  a refusal would go unhandled); the answer is the plain data the method returns (catalog.ts),
    *  which the wire copies. Typed loosely here; the method name and args are pinned by the callers'
-   *  own generics. */
+   *  own generics.
+   *
+   *  A BROKEN STUB is replaced: workerd stamps `retryable: true` on a call cut at the transport — a
+   *  deploy resetting this Durable Object for its new code — and the stub that threw fails every
+   *  later call the same way (Cloudflare: create a new stub after an exception). A holder that
+   *  outlives one call (rpc.ts: one per socket, for its whole life) would otherwise stay broken
+   *  until it closed; the call that failed still throws, and the next one reaches the new object. */
   async #call<T>(method: string, ...args: unknown[]): Promise<T> {
     const stub = this.#stub as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
-    return (await stub[method]!(...args)) as T;
+    try {
+      return (await stub[method]!(...args)) as T;
+    } catch (error) {
+      if ((error as { retryable?: unknown } | null)?.retryable === true)
+        this.#stub = this.#namespace.getByName("global");
+      throw error;
+    }
   }
 
   // ── the reads ──

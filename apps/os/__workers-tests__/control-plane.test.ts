@@ -3,6 +3,8 @@ import { newWebSocketRpcSession } from "capnweb";
 import { afterEach, expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/next/stream/processor";
 import type { AccountState } from "../src/account/contract.ts";
+import type { ControlPlaneDurableObject } from "../src/control-plane/durable-object.ts";
+import { ControlPlane } from "../src/control-plane/edge.ts";
 import type { Env } from "../src/env.ts";
 import { GLOBAL_PROJECT_ID } from "../src/context/paths.ts";
 import { DurableObjectNameCodec } from "../src/iterate-context.ts";
@@ -481,6 +483,35 @@ test("password sign-in rests an address after five wrong tries: the sixth is ref
   expect((await postLogin({ email: "unlimited@directory.test", password, next: "/" })).status).toBe(
     302,
   );
+});
+
+test("a control plane holder replaces the stub a deploy's reset broke; a refusal keeps it", async () => {
+  // What a deploy does to a holder that outlives one call (rpc.ts: one per socket): workerd cuts the
+  // in-flight call with `retryable: true`, and that stub fails every later call the same way.
+  const reset = Object.assign(new Error("Durable Object reset because its code was updated."), {
+    retryable: true,
+    durableObjectReset: true,
+  });
+  const refusal = new Error("no such user");
+  const broken = { projects: vi.fn(() => Promise.reject(reset)) };
+  const fresh = {
+    projects: vi
+      .fn()
+      .mockImplementationOnce(() => Promise.resolve([]))
+      .mockImplementationOnce(() => Promise.reject(refusal))
+      .mockImplementationOnce(() => Promise.resolve([])),
+  };
+  const getByName = vi.fn().mockReturnValueOnce(broken).mockReturnValue(fresh);
+  const controlPlane = new ControlPlane({
+    getByName,
+  } as unknown as DurableObjectNamespace<ControlPlaneDurableObject>);
+  await expect(controlPlane.reachableProjects("every")).rejects.toBe(reset);
+  await expect(controlPlane.reachableProjects("every")).resolves.toEqual([]);
+  await expect(controlPlane.reachableProjects("every")).rejects.toBe(refusal);
+  await expect(controlPlane.reachableProjects("every")).resolves.toEqual([]);
+  // one stub at construction, one after the reset — none after the refusal
+  expect(getByName).toHaveBeenCalledTimes(2);
+  expect(broken.projects).toHaveBeenCalledTimes(1);
 });
 
 test("project ingress strips forged internal authority and never exposes platform credentials", async () => {
