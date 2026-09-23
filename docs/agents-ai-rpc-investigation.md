@@ -78,14 +78,18 @@ masks. It forwards response metadata and awaits each byte write into a caller-ow
 The remote call remains active until provider I/O finishes. No provider Response, stream, or
 reader is returned to the Durable Object.
 
-Initial response and individual provider reads have a 45-second timeout. Interrupting a turn
-rejects the local body immediately. A provider read already in flight stops when the next sink
-write observes cancellation or the idle timeout expires; provider cancellation is bounded, but
-is not necessarily immediate. Ordinary local interruption does not become a waitUntil exception.
+Initial response, individual provider reads, and each sink write have a 45-second timeout.
+Interrupting a turn rejects the local body immediately. Cleanup cancellation is best-effort and
+is never awaited during error unwinding, so a stalled peer cannot escape that bound. A provider
+read already in flight stops when the next sink write observes cancellation or the idle timeout
+expires; provider cancellation is bounded, but is not necessarily immediate. Ordinary local
+interruption does not become a waitUntil exception.
 
 The processor retains incremental chunk events, final settlement, nonstreaming JSON replies,
-provider HTTP errors, and null response bodies. Local regression tests cover partner Response
-streams, Workers AI ReadableStreams, path-scoped overrides, explicit masks, and interruption.
+provider HTTP errors, and null response bodies. Its SSE decoder only falls back when JSON parsing
+fails; errors raised by a decoded provider event propagate and terminate the active transport.
+Local regression tests cover partner Response streams, Workers AI ReadableStreams, path-scoped
+overrides, explicit masks, in-band provider stream failures, and interruption.
 Real-AI verification on the restored Garple preview additionally checks the deployed runtime
 defect: a complete public-shaped chat and a tail observed for at least 70 seconds after reply
 completion. Fake providers alone cannot prove this transport avoids the Cloudflare exception.

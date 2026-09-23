@@ -2,9 +2,16 @@
 // transport. Whole-JSON fixtures cannot cover incremental delivery or Response metadata.
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { collector, freshCtx, readAll, until } from "../../os-next/e2e/support/client.ts";
+import {
+  collector,
+  freshCtx,
+  readAll,
+  rejection,
+  until,
+} from "../../os-next/e2e/support/client.ts";
 import { startLoggedWorker } from "../../os-next/e2e/support/log-harness.ts";
 import { buildAgentRuntime } from "../scripts/build-runtime.ts";
+import { AI_TRANSPORT_SOURCE } from "../runtime/ai-transport-source.ts";
 import { installAgents } from "../runtime/install.ts";
 import { assistantWords, onWorkersAi } from "./fixtures.ts";
 
@@ -54,6 +61,52 @@ class NullBodyResponsesAi extends RpcTarget {
     this.calls += 1;
     return new Response(null, { status: 204 });
   }
+}
+
+class FailedSseThenMoreResponsesAi extends RpcTarget {
+  calls = 0;
+
+  run() {
+    this.calls += 1;
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            'data: {"type":"response.failed","response":{"error":{"message":"provider stopped"}}}\n\n',
+          ),
+        );
+        // A second byte arrives after the failure. It must not turn the failed request into a
+        // later successful answer.
+        setTimeout(() => {
+          controller.enqueue(
+            encoder.encode('data: {"type":"response.output_text.delta","delta":"late"}\n\n'),
+          );
+          controller.close();
+        }, 25);
+      },
+    });
+    return new Response(body, { headers: { "content-type": "text/event-stream" } });
+  }
+}
+
+class OneChunkThenStallAi extends RpcTarget {
+  run() {
+    const bytes = new TextEncoder().encode(
+      'data: {"type":"response.output_text.delta","delta":"stalled"}\n\n',
+    );
+    return new Response(
+      new ReadableStream<Uint8Array>({ start: (controller) => controller.enqueue(bytes) }),
+    );
+  }
+}
+
+class NeverWritingSink extends RpcTarget {
+  start() {}
+  write() {
+    return new Promise<void>(() => {});
+  }
+  error() {}
 }
 
 class DelayedWorkersAi extends RpcTarget {
@@ -206,8 +259,56 @@ test("the installed agent settles delayed model streams through env.ITX.get", as
     ).toMatchObject({
       result: { status: "failed", errorMessage: "openai/gpt-5.6-terra 204: " },
     });
+
+    const failedSse = itx.cd("/agents/failed-sse-partner");
+    const failedSseAi = new FailedSseThenMoreResponsesAi();
+    await failedSse.provide("itx.ai", failedSseAi);
+    await itx.agents.create("/agents/failed-sse-partner");
+    await onWorkersAi(failedSse, "gpt-5.6-terra");
+    await itx.agents.get("/agents/failed-sse-partner").message("This must stop promptly.");
+    const failedSseEvents = await until("the failed SSE settlement", async () => {
+      const all = await readAll(failedSse);
+      return all.some((event) => event.type === "events.iterate.com/agent/llm-request-settled")
+        ? all
+        : undefined;
+    });
+    expect(failedSseAi.calls).toBe(1);
+    expect(
+      failedSseEvents.find(
+        (event) => event.type === "events.iterate.com/agent/llm-request-settled",
+      )!.payload,
+    ).toMatchObject({
+      result: { status: "failed", errorMessage: "openai: provider stopped" },
+    });
     expect(worker.logs()).not.toMatch(/hung and would never generate a response/i);
   } finally {
     await worker.stop();
   }
 }, 120_000);
+
+test("the byte transport bounds a stalled sink write", async () => {
+  const worker = await startLoggedWorker();
+  try {
+    const itx = worker.itx(freshCtx("agent-transport-write-timeout"));
+    const modelPath = "/agents/transport-write-timeout";
+    await itx.cd(modelPath).provide("itx.ai", new OneChunkThenStallAi());
+    const error = await rejection(
+      itx.workers
+        .get({ source: AI_TRANSPORT_SOURCE })
+        .run(
+          modelPath,
+          "gpt-5.6-terra",
+          {},
+          { returnRawResponse: true },
+          new NeverWritingSink(),
+          1_000,
+        ),
+      "the transport's stalled sink write",
+      5_000,
+    );
+    expect(error.message).toContain("model transport sink timeout");
+    expect(worker.logs()).not.toMatch(/hung and would never generate a response/i);
+  } finally {
+    await worker.stop();
+  }
+}, 30_000);

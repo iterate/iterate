@@ -485,6 +485,7 @@ function normalizeUsage(raw) {
 var ResponsesEvent = z2.looseObject({ type: z2.string() });
 async function drainSse(body, signal, onEvent) {
   const reader = body.getReader();
+  let completed = false;
   const cancel = () => void reader.cancel().catch(() => void 0);
   if (signal.aborted) cancel();
   signal.addEventListener("abort", cancel, { once: true });
@@ -493,11 +494,13 @@ async function drainSse(body, signal, onEvent) {
   const frame = (text) => {
     const data = text.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice("data:".length).trim()).join("\n");
     if (data === "" || data === "[DONE]") return;
+    let event;
     try {
-      onEvent(JSON.parse(data));
+      event = JSON.parse(data);
     } catch {
-      onEvent(data);
+      event = data;
     }
+    onEvent(event);
   };
   try {
     for (; ; ) {
@@ -510,8 +513,11 @@ async function drainSse(body, signal, onEvent) {
     }
     buffered += decoder.decode();
     if (buffered.trim()) frame(buffered);
+    completed = true;
   } finally {
     signal.removeEventListener("abort", cancel);
+    if (!completed) void reader.cancel().catch(() => void 0);
+    reader.releaseLock();
   }
   if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
 }
@@ -985,6 +991,7 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`
         });
       } catch (error) {
         if (controller.signal.reason instanceof InterruptedError) return;
+        controller.abort(error);
         await settle({
           status: "failed",
           errorMessage: String(error instanceof Error ? error.message : error).slice(0, 4e3),
@@ -1154,6 +1161,8 @@ var AgentAiSink = class extends RpcTarget {
     return this.writer.abort(error);
   }
 };
+
+// runtime/ai-transport-source.ts
 var AI_TRANSPORT_SOURCE = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class AgentAiTransport extends WorkerEntrypoint {
@@ -1162,20 +1171,22 @@ export default class AgentAiTransport extends WorkerEntrypoint {
     const scoped = itx.cd(path);
     let call, reader, initialTimedOut = false;
     const idle = Math.max(1_000, Number(idleBudgetMs) || 45_000);
-    const read = async () => {
+    const withinIdle = async (operation, message) => {
       let timer;
       try {
         return await Promise.race([
-          reader.read(),
-          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("model transport idle timeout")), idle); }),
+          operation,
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), idle); }),
         ]);
       } finally { if (timer) clearTimeout(timer); }
     };
+    const read = () => withinIdle(reader.read(), "model transport idle timeout");
+    const write = (bytes) => withinIdle(sink.write(bytes), "model transport sink timeout");
     const drain = async (body) => {
       reader = body.getReader();
       try {
-        for (;;) { const next = await read(); if (next.done) break; await sink.write(next.value); }
-      } finally { try { await reader.cancel(); } catch {} reader.releaseLock(); }
+        for (;;) { const next = await read(); if (next.done) break; await write(next.value); }
+      } finally { void reader.cancel().catch(() => {}); reader.releaseLock(); }
     };
     try {
       call = scoped.ai.run(model, input, options);
@@ -1201,8 +1212,10 @@ export default class AgentAiTransport extends WorkerEntrypoint {
       } else await sink.start({ kind: "value", value: raw });
       return { kind: "complete" };
     } catch (error) {
-      try { await reader?.cancel(error); } catch {}
-      try { await sink.error(error instanceof Error ? error.message : String(error)); } catch {}
+      // Cleanup may itself depend on the stalled peer. Start it, but preserve the watchdog's
+      // bounded failure by never awaiting that peer during error unwinding.
+      void reader?.cancel(error).catch(() => {});
+      void sink.error(error instanceof Error ? error.message : String(error)).catch(() => {});
       throw error;
     } finally {
       call?.[Symbol.dispose]?.(); scoped[Symbol.dispose]?.(); itx[Symbol.dispose]?.();

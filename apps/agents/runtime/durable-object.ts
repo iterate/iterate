@@ -4,7 +4,8 @@ import type { StreamEvent } from "iterate/next/stream/processor";
 import type { ItxScope as ItxEntrypointScope } from "iterate/next/sdk";
 import type { AgentState, FileAttachment } from "./contract.ts";
 import { AgentProcessor } from "./processor.ts";
-import { AgentAiSink, AI_TRANSPORT_SOURCE } from "./ai-transport.ts";
+import { AgentAiSink } from "./ai-transport.ts";
+import { AI_TRANSPORT_SOURCE } from "./ai-transport-source.ts";
 
 export class AgentDurableObject extends StreamProcessorDurableObject<
   AgentState,

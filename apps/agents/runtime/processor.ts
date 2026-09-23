@@ -226,6 +226,7 @@ async function drainSse(
   onEvent: (event: unknown) => void,
 ): Promise<void> {
   const reader = body.getReader();
+  let completed = false;
   const cancel = () => void reader.cancel().catch(() => undefined);
   if (signal.aborted) cancel();
   signal.addEventListener("abort", cancel, { once: true });
@@ -238,11 +239,13 @@ async function drainSse(
       .map((line) => line.slice("data:".length).trim())
       .join("\n");
     if (data === "" || data === "[DONE]") return;
+    let event: unknown;
     try {
-      onEvent(JSON.parse(data));
+      event = JSON.parse(data);
     } catch {
-      onEvent(data);
+      event = data;
     }
+    onEvent(event);
   };
   try {
     for (;;) {
@@ -255,8 +258,16 @@ async function drainSse(
     }
     buffered += decoder.decode();
     if (buffered.trim()) frame(buffered);
+    completed = true;
   } finally {
     signal.removeEventListener("abort", cancel);
+    // A parser error (for example, a `response.failed` event) stops this consumer before the
+    // producer has necessarily finished.  Cancel the local body in that case: otherwise the
+    // byte bridge can be left waiting forever on its next backpressured write.
+    // Do not await this cancellation. The producer may be awaiting the write whose chunk this
+    // reader just rejected, and awaiting both sides would turn the error path into a deadlock.
+    if (!completed) void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
   if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
 }
@@ -908,6 +919,10 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       } catch (error) {
         // The interrupt path's story — it settled the request itself.
         if (controller.signal.reason instanceof InterruptedError) return;
+        // `#stream` can reject after it has handed the byte transport a local Response (for
+        // example, on an in-band provider failure). Stop that producer before recording the
+        // settlement, rather than leaving its next backpressured write alive in waitUntil.
+        controller.abort(error);
         await settle({
           status: "failed",
           errorMessage: String(error instanceof Error ? error.message : error).slice(0, 4_000),
