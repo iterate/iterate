@@ -176,7 +176,7 @@ describe("the preview's wrangler config (a pure transform of wrangler.base.jsonc
       dashOrigin,
     });
     expect(withDash.previews.vars.APP_CONFIG_URLS__DASH).toBe(dashOrigin);
-    expect(config.previews.vars).not.toHaveProperty("APP_CONFIG_URLS__DASH");
+    expect(config.previews.vars.APP_CONFIG_URLS__DASH).toBeUndefined();
   });
 });
 

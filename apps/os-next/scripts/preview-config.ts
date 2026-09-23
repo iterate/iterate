@@ -218,7 +218,7 @@ export function previewWranglerConfig(input: {
       })),
       vars: {
         APP_CONFIG_URLS__OS: previewUrl(previewName),
-        ...(input.dashOrigin && { APP_CONFIG_URLS__DASH: input.dashOrigin }),
+        APP_CONFIG_URLS__DASH: input.dashOrigin,
         APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify(PREVIEW_PARENT.ingressRouting),
       },
     },
