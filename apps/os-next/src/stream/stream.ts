@@ -50,9 +50,10 @@ const READ_PAGE_BUDGET_BYTES = 8 * 1024 * 1024;
 const READ_PAGE_MAX_EVENTS = 1000;
 /** THE RECENT-EPHEMERALS RING's size, in serialized JS chars: what an incarnation keeps of its
  *  ephemerals after the moment they were appended — the one way to see one after the fact, since no
- *  ephemeral ever reaches a row. Oldest out first; an event over the whole budget is not kept. Per
- *  incarnation, like every ephemeral offset. The delivery loop reserves this much cursor-read
- *  room before a read that can return nothing else (subscription-delivery.ts). */
+ *  ephemeral ever reaches a row. Oldest out first, never the newest: an event over the whole budget
+ *  is kept alone until the next arrives (the append ceiling bounds it). Per incarnation, like every
+ *  ephemeral offset. The delivery loop reserves at least this much cursor-read room before a read
+ *  that can return nothing else (subscription-delivery.ts). */
 export const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
 
 /** THE ALARM TRACE — the DO's ephemeral record of one alarm pass (iterate-context-durable-object.ts
@@ -123,6 +124,8 @@ export class Stream {
   /** This incarnation's newest ephemerals, oldest first, within the budget. */
   readonly #recentEphemerals: { event: StreamEvent; chars: number }[] = [];
   #recentEphemeralsChars = 0;
+  /** Per ephemeral type, the highest offset the ring has let go of this incarnation. */
+  readonly #evictedEphemeralThroughOffsetByType = new Map<string, number>();
   // ── THE CORE REDUCE's state: rehydrated by the constructor from the versioned checkpoint and caught
   // up to the durable mark, reduced inside every durable commit and checkpointed with it (the cursor
   // every batch, the state on change). Durable events only, so it rebuilds bit-identically. ──
@@ -247,14 +250,26 @@ export class Stream {
   }
 
   #rememberEphemeral(event: StreamEvent, chars: number) {
-    if (chars > RECENT_EPHEMERALS_BUDGET_CHARS) return;
     this.#recentEphemerals.push({ event, chars });
     this.#recentEphemeralsChars += chars;
-    while (this.#recentEphemeralsChars > RECENT_EPHEMERALS_BUDGET_CHARS) {
-      const oldest = this.#recentEphemerals.shift();
-      if (!oldest) break;
+    while (
+      this.#recentEphemeralsChars > RECENT_EPHEMERALS_BUDGET_CHARS &&
+      this.#recentEphemerals.length > 1
+    ) {
+      const oldest = this.#recentEphemerals.shift()!;
       this.#recentEphemeralsChars -= oldest.chars;
+      this.#evictedEphemeralThroughOffsetByType.set(oldest.event.type, oldest.event.offset);
     }
+  }
+
+  /** The ring's size now: what a read that can return only the ring holds. */
+  recentEphemeralsChars() {
+    return this.#recentEphemeralsChars;
+  }
+
+  /** The highest offset of `type` the ring has let go of this incarnation, if any. */
+  evictedEphemeralThroughOffset(type: string) {
+    return this.#evictedEphemeralThroughOffsetByType.get(type);
   }
 
   highestAssignedOffset(): number {

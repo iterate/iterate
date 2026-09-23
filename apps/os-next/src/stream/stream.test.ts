@@ -238,19 +238,35 @@ test("a refused batch leaves no phantom in the ring: an ephemeral is remembered 
   ]);
 });
 
-test("the ring is byte-bounded (1 MiB): oldest out first, an event over the whole budget is not kept", () => {
+test("the ring is byte-bounded (1 MiB): oldest out first", () => {
   const stream = bareStream();
   stream.append({ type: "seed" });
   for (let i = 0; i < 6; i++)
     stream.append({ type: "big", ephemeral: true, payload: { i, blob: "x".repeat(300 * 1024) } });
-  const kept = () =>
-    stream
-      .read(0, 500, { includeEphemeral: true })
-      .events.filter((e) => e.ephemeral)
-      .map((e) => e.payload?.i);
-  expect(kept()).toEqual([3, 4, 5]); // ~300 KiB each: three fit under 1 MiB
-  stream.append({ type: "huge", ephemeral: true, payload: { blob: "x".repeat(2 * 1024 * 1024) } });
-  expect(kept()).toEqual([3, 4, 5]); // not kept, evicted nothing
+  const kept = stream
+    .read(0, 500, { includeEphemeral: true })
+    .events.filter((e) => e.ephemeral)
+    .map((e) => e.payload?.i);
+  expect(kept).toEqual([3, 4, 5]); // ~300 KiB each: three fit under 1 MiB
+});
+
+test("an ephemeral over the ring's whole budget is kept as its only event: older ones make room, the newest is never dropped", () => {
+  const stream = bareStream();
+  stream.append({ type: "seed" });
+  for (let i = 0; i < 3; i++)
+    stream.append({ type: "big", ephemeral: true, payload: { i, blob: "x".repeat(300 * 1024) } });
+  const [huge] = stream.append({
+    type: "huge",
+    ephemeral: true,
+    payload: { blob: "x".repeat(2 * 1024 * 1024) },
+  });
+  const kept = stream
+    .read(0, 500, { includeEphemeral: true })
+    .events.filter((event) => event.ephemeral)
+    .map((event) => event.offset);
+  expect(kept, "the ring should keep the newest ephemeral whatever its size").toEqual([
+    huge.offset,
+  ]);
 });
 
 test("waitForEvent: one event resolves MULTIPLE waiters, in registration order", async () => {
