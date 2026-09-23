@@ -16,4 +16,15 @@ The platform's [Vitest config](../apps/os-next/vitest.config.ts) defines unit, W
 
 Tests own their project state. Retry only at the test boundary, keep recovery bounded, and report first-attempt failures through test telemetry. Fix product regressions; do not widen timeouts or silently skip tests to make them green. A fake must state which runtime behavior it cannot prove.
 
+## Parked tests expire
+
+A `skip`, `fixme`, or `todo` marker that parks a known issue carries its terms beside the marker:
+
+```ts
+// parked: <what is broken, with evidence> — revisit by 2026-11-15
+test.skip("…", () => {});
+```
+
+Undated markers are for structural reasons only: env- or platform-gated cases that cannot run against a given target. They are allowlisted with a note in [`lint/dated-skips.test.ts`](../lint/dated-skips.test.ts), which runs in `pnpm test` and fails on any `revisit by` date in the past. An expired date is a decision: fix and un-park the test, or renew the date with the reason re-argued. `test.fails` needs no date; it runs, and turns red once the bug is fixed.
+
 The Depot Test workflow runs workspace tests and uploads normalized telemetry. Production deployment runs the integration suite against the deployed platform. The Preview OS-Next workflow deploys a per-PR platform and all four hosted clients, then runs integration and browser tests. Operational changes require coherent preview state and telemetry as well as passing tests; see the [engineering invariant](engineering-invariants.md).
