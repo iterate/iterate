@@ -565,6 +565,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     env: this.env,
     deployId: this.#appConfig.deployId,
     ingressRouting: this.#appConfig.urls.ingressRouting,
+    dashOrigin: this.#appConfig.urls.dash,
     platformOrigin: () => this.#platformOrigin,
     signFileUrl: async (input) => {
       const platformOrigin = this.#platformOrigin;

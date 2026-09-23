@@ -11,6 +11,7 @@
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
 import { codedError, jsonEqual, resolveContextPath } from "iterate/next/lib";
+import { z } from "zod";
 import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
@@ -30,7 +31,13 @@ import {
   RpcStubHandle,
   materializeItxHandleReference,
 } from "iterate/next/expression";
-import type { RewriteRuleListEntry, StreamPage, WaitForEventFilter } from "iterate/next/api";
+import type {
+  CollectSecretInput,
+  CollectSecretLink,
+  RewriteRuleListEntry,
+  StreamPage,
+  WaitForEventFilter,
+} from "iterate/next/api";
 import { projectUrlOf, type IngressRouting } from "iterate/next/project-ingress";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
@@ -44,6 +51,7 @@ import type { LibraryRoots } from "../library.ts";
 import {
   assertSecretPath,
   normalizeSecretRecord,
+  originsOf,
   type SecretCatalogEntry,
   type SecretHmacVerification,
   type SecretMaterial,
@@ -218,6 +226,7 @@ export interface BuiltInScope extends LibraryRoots {
      *  set again. */
     delete(path: string): Promise<{ path: string }>;
     list(): Promise<SecretCatalogEntry[]>;
+    collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink>;
     /** THE VERIFY LANE — a webhook's signature checked against a secret WITHOUT revealing it: is
      *  `signature` (hex, either case) the HMAC-SHA256 of `payload` (a string is its UTF-8 bytes)
      *  under the secret's material — the whole value, or the string at `field` of a JSON value?
@@ -409,6 +418,8 @@ interface BuildBuiltInsDeps {
   deployId: string;
   /** How projects are reached over HTTP (app-config.ts `urls.ingressRouting`) — `itx.url`. */
   ingressRouting: IngressRouting;
+  /** The Dash that this platform instance names for human administration. */
+  dashOrigin: string;
   /** THE PLATFORM ORIGIN the current call's caller reached the platform on (the DO's caller record)
    *  — null when the call carries none: a processor's own turn, a loaded worker's `env.ITX`, the
    *  delivery loop, an alarm. */
@@ -743,6 +754,62 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           state: { secrets: SecretCatalog };
         };
         return Object.entries(state.secrets).map(([path, row]) => ({ path, ...row }));
+      },
+      collectFromUser: async (input: CollectSecretInput): Promise<CollectSecretLink> => {
+        const collected = z
+          .object({
+            path: z.string(),
+            egress: z.object({ urls: z.array(z.string()) }),
+            description: z.string().optional(),
+          })
+          .parse(input);
+        const secretPath = assertSecretPath(collected.path);
+        const urls = originsOf(collected.egress.urls);
+        if (urls.length === 0)
+          throw new Error("itx.secrets.collectFromUser: egress.urls must name at least one URL");
+        const unsafeUrl = collected.egress.urls.find((value) => {
+          const url = new URL(value);
+          return (
+            !["http:", "https:"].includes(url.protocol) || Boolean(url.username || url.password)
+          );
+        });
+        if (unsafeUrl)
+          throw new Error(
+            `itx.secrets.collectFromUser: egress URL ${JSON.stringify(unsafeUrl)} must be an http(s) URL without credentials`,
+          );
+        if (!deps.dashOrigin)
+          throw new Error(
+            "itx.secrets.collectFromUser: this platform has no Dash (set APP_CONFIG_URLS__DASH)",
+          );
+        const platformOrigin = deps.platformOrigin();
+        if (!platformOrigin)
+          throw new Error(
+            "itx.secrets.collectFromUser: this platform has no public origin yet — call it after a person has reached this instance",
+          );
+        const project = await deps.projectInfo?.();
+        if (!project?.projectSlug)
+          throw new Error(
+            "itx.secrets.collectFromUser: only a project's context can collect a secret",
+          );
+        const url = new URL(
+          `/projects/${encodeURIComponent(project.projectSlug)}/secrets`,
+          deps.dashOrigin,
+        );
+        url.searchParams.set("collect", "1");
+        url.searchParams.set("project", projectId);
+        url.searchParams.set("platform", platformOrigin);
+        url.searchParams.set("path", secretPath);
+        url.searchParams.set("urls", JSON.stringify(urls));
+        if (collected.description)
+          url.searchParams.set("description", JSON.stringify(collected.description));
+        const callingPath = deps.caller().path;
+        // Agent scripts always run in exactly one child sandbox. The parent is the agent whose
+        // `message()` wakes the next turn; an ordinary `/agents/**` caller is already that agent.
+        const requestingAgent = callingPath?.endsWith("/sandbox")
+          ? callingPath.slice(0, -"/sandbox".length)
+          : callingPath;
+        if (requestingAgent?.startsWith("/agents/")) url.searchParams.set("agent", requestingAgent);
+        return { path: secretPath, url: url.href };
       },
       verifyHmac: (secretPath, input) =>
         onSecretContext(

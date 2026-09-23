@@ -498,7 +498,12 @@ async function deployPreview(
   await build();
   const databaseId = await ensureDatabase(ctx.cf, previewResourceName(previewName, "db"));
   await ensureArtifactsNamespace(ctx.cf, previewResourceName(previewName, "repos"));
-  writePreviewWranglerConfig({ previewName, d1DatabaseId: databaseId });
+  const dash = apps.find((app) => app.name === "dash");
+  writePreviewWranglerConfig({
+    previewName,
+    d1DatabaseId: databaseId,
+    dashOrigin: dash && `https://${previewName}-${new URL(dash.envs.preview!.baseUrl).hostname}`,
+  });
   const wrangler = preparePreviewWrangler();
   try {
     await wrangler.ready;

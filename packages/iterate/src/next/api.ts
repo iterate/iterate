@@ -119,6 +119,19 @@ export type SecretCatalogEntry = {
   createdAt: string;
 };
 
+/** The input an agent gives `itx.secrets.collectFromUser`: the write-only secret path, the
+ * origins its material may reach, and the short explanation the authenticated collection form
+ * shows its user. */
+export type CollectSecretInput = {
+  path: string;
+  egress: { urls: string[] };
+  description?: string;
+};
+
+/** A secret collection link. Sending this asks the person to authenticate to the intended
+ * Iterate instance; it is not itself permission to write a secret. */
+export type CollectSecretLink = { path: string; url: string };
+
 /** A context (a project, a user, an organization): every `itx` root, reached through `invoke`. */
 
 export interface IterateContextApi {
@@ -171,6 +184,10 @@ export interface IterateContextApi {
     ): Promise<{ path: string }>;
     delete(path: string): Promise<{ path: string }>;
     list(): Promise<SecretCatalogEntry[]>;
+    /** Build the authenticated Dash link where a person enters a value an agent must never see in
+     * chat. The link fixes the project, platform instance, secret path and egress pin. If called
+     * from an agent context, a successful submission messages that same agent with the path only. */
+    collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink>;
   };
   /** The table this context resolves against, described — the tree a model reads. `list()` follows a
    *  bare hop row into the context it names (a Durable Object hop, hence async). */
