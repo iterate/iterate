@@ -369,7 +369,10 @@ function LlmResponseText({ llm }: { llm: AgentUiLlmStep }) {
         </div>
       )}
       {llm.errorMessage ? (
-        <pre className="max-w-2xl whitespace-pre-wrap px-1.5 font-mono text-xs text-destructive">
+        <pre
+          data-type="error"
+          className="max-w-2xl whitespace-pre-wrap px-1.5 font-mono text-xs text-destructive"
+        >
           {llm.errorMessage}
         </pre>
       ) : null}
@@ -429,7 +432,10 @@ function RoundTabs({
           <SourceCodeBlock code={code.code} language="typescript" showLineNumbers={false} />
         </div>
         {!hasResult && code.errorMessage ? (
-          <pre className="whitespace-pre-wrap px-1.5 font-mono text-xs text-destructive">
+          <pre
+            data-type="error"
+            className="whitespace-pre-wrap px-1.5 font-mono text-xs text-destructive"
+          >
             {code.errorMessage}
           </pre>
         ) : null}
@@ -481,7 +487,10 @@ export function ScriptResult({ code }: { code: AgentUiCodeStep }) {
   return (
     <>
       {code.errorMessage ? (
-        <pre className="whitespace-pre-wrap rounded-lg bg-destructive/5 px-3 py-2 font-mono text-xs leading-relaxed text-destructive">
+        <pre
+          data-type="error"
+          className="whitespace-pre-wrap rounded-lg bg-destructive/5 px-3 py-2 font-mono text-xs leading-relaxed text-destructive"
+        >
           {code.errorMessage}
         </pre>
       ) : null}

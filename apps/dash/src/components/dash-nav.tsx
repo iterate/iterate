@@ -238,7 +238,7 @@ function OrganizationTreeNav() {
             </SidebarMenuItem>
           ) : null}
           {tree.error ? (
-            <SidebarMenuItem className="px-2 text-xs text-destructive">
+            <SidebarMenuItem data-type="error" className="px-2 text-xs text-destructive">
               {tree.error}
             </SidebarMenuItem>
           ) : null}
@@ -265,7 +265,7 @@ function OrganizationTreeNav() {
               </SidebarMenuButton>
               {org.error ? (
                 <SidebarMenuSub>
-                  <SidebarMenuSubItem className="px-2 text-xs text-destructive">
+                  <SidebarMenuSubItem data-type="error" className="px-2 text-xs text-destructive">
                     {org.error}
                   </SidebarMenuSubItem>
                 </SidebarMenuSub>

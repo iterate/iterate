@@ -74,7 +74,7 @@ export function FirmwareInstallButton({
           <UsbIcon data-icon="inline-start" />
           Retry firmware
         </Button>
-        <p role="alert" className="text-xs text-destructive">
+        <p role="alert" data-type="error" className="text-xs text-destructive">
           {state.message}
         </p>
       </div>
@@ -118,7 +118,7 @@ export function FirmwareInstallButton({
         </p>
       </esp-web-install-button>
       {activationError && (
-        <p role="alert" className="text-xs text-destructive">
+        <p role="alert" data-type="error" className="text-xs text-destructive">
           {activationError}
         </p>
       )}

@@ -126,7 +126,11 @@ export function AgentPillComposer({
   return (
     <div className="w-full">
       {error ? (
-        <p className="mb-2 ml-4 truncate font-mono text-xs text-destructive" role="alert">
+        <p
+          className="mb-2 ml-4 truncate font-mono text-xs text-destructive"
+          role="alert"
+          data-type="error"
+        >
           {error}
         </p>
       ) : null}

@@ -212,7 +212,11 @@ export function ContextView({
           </div>
         </div>
       ) : null}
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {error ? (
+        <p data-type="error" className="text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
       <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
         {shown.length === 0 && caughtUp && !error ? (
           <p className="px-2 py-6 text-sm text-muted-foreground">

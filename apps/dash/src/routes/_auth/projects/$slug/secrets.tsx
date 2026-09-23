@@ -154,7 +154,7 @@ function ProjectSecrets() {
         </p>
       </div>
       {error && (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" data-type="error" className="text-sm text-destructive">
           {error}
         </p>
       )}
@@ -244,6 +244,7 @@ function ProjectSecrets() {
       {collecting && !collectionTargetMatches && (
         <p
           role="alert"
+          data-type="error"
           className="rounded-lg border border-destructive p-4 text-sm text-destructive"
         >
           This collection link is for a different Iterate instance or project. It cannot write to
@@ -253,6 +254,7 @@ function ProjectSecrets() {
       {collecting && collectionTargetMatches && !collectionIsValid && (
         <p
           role="alert"
+          data-type="error"
           className="rounded-lg border border-destructive p-4 text-sm text-destructive"
         >
           This collection link is incomplete or invalid. Ask the requesting agent for a new link.
@@ -494,7 +496,7 @@ function SecretForm({
           </p>
         )}
         {error && (
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" data-type="error" className="text-sm text-destructive">
             {error}
           </p>
         )}

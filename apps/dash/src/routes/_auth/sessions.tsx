@@ -133,7 +133,7 @@ function SessionsPage() {
         </p>
       </div>
       {error && (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" data-type="error" className="text-sm text-destructive">
           {error}
         </p>
       )}

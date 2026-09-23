@@ -434,7 +434,11 @@ function AgentConversation({ project, path }: { project: string; path: string })
           </TabsList>
         </Tabs>
       </div>
-      {error ? <p className="px-4 py-2 text-sm text-destructive">{error}</p> : null}
+      {error ? (
+        <p data-type="error" className="px-4 py-2 text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
       {view === "events" ? (
         <div className="min-h-0 flex-1 overflow-y-auto">
           <ContextView
