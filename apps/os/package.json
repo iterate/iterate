@@ -46,7 +46,6 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
     "esbuild": "^0.27.4",
-    "middlewright": "https://pkg.pr.new/middlewright@e3f2374",
     "trpc-cli": "0.15.1",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
