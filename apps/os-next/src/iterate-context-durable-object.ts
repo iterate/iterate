@@ -1158,7 +1158,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         headers.delete(ITX_PLATFORM_ORIGIN_HEADER);
         const callerPath = headers.get(ITX_CALLER_PATH_HEADER) || undefined;
         headers.delete(ITX_CALLER_PATH_HEADER);
-        const forwarded = new Request(request, { headers });
+        const forwarded = new Request(request, { headers, body: this.#fetchLaneBody(request) });
         const caller = this.#withPlatformOrigin({
           principal,
           grant,
@@ -1189,6 +1189,30 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // always names an expression (`ItxEntrypoint.fetch`), so an app Request without one is refused.
     if (app) return new Response("loaded code's fetch names no expression\n", { status: 404 });
     return this.#egress(request);
+  }
+
+  /** THE FETCH LANE'S BODY: the visitor's body, streamed to the app through a pipe this DO owns. A
+   *  Durable Object that responds while a body is still unread gets its request stream shut after
+   *  the response is sent, and a read left pending then surfaces as an uncaught
+   *  `TypeError: Can't read from request stream after response has been sent.` — the client got its
+   *  response; the runtime logs an error anyway (workerd bug, open:
+   *  https://github.com/cloudflare/workerd/issues/918; https://github.com/cloudflare/workerd/issues/1730;
+   *  Cloudflare's own advice is to drain the body: https://github.com/cloudflare/workers-sdk/issues/5095).
+   *  An app may ignore its body (a scanner POSTing to a static site, prd 2026-09-23), so the pending
+   *  read is this pipe's, and its end is recorded here instead of thrown uncaught. Streamed, never
+   *  buffered: an app that proxies uploads or echoes the body still streams. */
+  #fetchLaneBody(request: Request): ReadableStream | null {
+    if (!request.body) return null;
+    const { readable, writable } = new IdentityTransformStream();
+    request.body.pipeTo(writable).catch((error: unknown) => {
+      console.info({
+        event: "fetch-lane.request-body-unread",
+        namespace: "iterate-context",
+        name: this.#durableObjectAddress.name,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return readable;
   }
 
   /** IN-MEMORY TRANSPORT FACTS for the hibernation/release probes — a DO-only Workers-RPC verb,
