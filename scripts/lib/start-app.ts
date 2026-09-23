@@ -55,11 +55,20 @@ export function registrableDomainOf(urlOrHostname: string): string {
   return labels.slice(hostname.endsWith(".workers.dev") ? -3 : -2).join(".");
 }
 
+/** The zone one of our own ORIGINS denies: its registrable domain — except on workers.dev, where that
+ *  is the whole account's `<subdomain>.workers.dev`, shared with every worker anyone on the account
+ *  deploys (a self-host tried out on it included). Nothing there is userspace: a workers.dev host is
+ *  a worker script, and projects on one are paths on its origin. So the host itself. */
+function ownOriginZone(url: string): string {
+  const hostname = new URL(url).hostname;
+  return hostname.endsWith(".workers.dev") ? hostname : registrableDomainOf(hostname);
+}
+
 /** THE ZONES THAT ARE OURS, from envs.ts: every os-next deployment's origins, its project wildcard
  *  and custom apexes, and the first-party apps' origins — deduped and sorted. The browser-auth gate
  *  (`appAuth` `denyZones`) refuses to connect an app to an issuer under any of them: a project host
  *  or a custom apex is userspace and could serve a look-alike issuer. */
-function ownZones(): string[] {
+export function ownZones(): string[] {
   // These existing userspace hosts remain untrusted issuers even after their deployment code is removed.
   const zones = new Set([
     "iterate.app",
@@ -67,15 +76,15 @@ function ownZones(): string[] {
     ...Array.from({ length: 19 }, (_, i) => `iterate-preview-${i + 1}.app`),
   ]);
   for (const env of Object.values(osEnvs)) {
-    zones.add(registrableDomainOf(env.baseUrl));
-    zones.add(registrableDomainOf(env.mcpBaseUrl));
-    if (env.dashBaseUrl) zones.add(registrableDomainOf(env.dashBaseUrl));
+    zones.add(ownOriginZone(env.baseUrl));
+    zones.add(ownOriginZone(env.mcpBaseUrl));
+    if (env.dashBaseUrl) zones.add(ownOriginZone(env.dashBaseUrl));
     if (env.ingressRouting?.type === "subdomains") zones.add(env.ingressRouting.hostname);
     for (const hostname of Object.keys(env.temporaryCustomHostnames || {})) zones.add(hostname);
   }
   for (const envs of [dashEnvs, agentsEnvs, notesEnvs, voiceEnvs])
     for (const env of Object.values(envs) as { baseUrl: string }[])
-      zones.add(registrableDomainOf(env.baseUrl));
+      zones.add(ownOriginZone(env.baseUrl));
   return [...zones].sort();
 }
 

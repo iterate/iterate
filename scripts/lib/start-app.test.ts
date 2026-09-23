@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { startAppPreviewConfig } from "./start-app.ts";
+import { ownZones, startAppPreviewConfig } from "./start-app.ts";
 
 describe("a start app's preview config (a pure transform of the built wrangler.json)", () => {
   const built = {
@@ -57,4 +57,21 @@ describe("a start app's preview config (a pure transform of the built wrangler.j
       },
     });
   });
+});
+
+test("on workers.dev our own zones are our apps' hosts, not the accounts they share with anyone's worker", () => {
+  const zones = ownZones();
+  // a worker anyone deploys to these accounts (a self-host tried out on one) is not under any of them
+  expect(zones.filter((zone) => zone.endsWith(".workers.dev"))).toEqual([
+    "agents-preview.iterate-dev-preview.workers.dev",
+    "agents.iterate.workers.dev",
+    "dash-preview.iterate-dev-preview.workers.dev",
+    "notes-preview.iterate-dev-preview.workers.dev",
+    "notes.iterate.workers.dev",
+    "os-next-preview.iterate-dev-preview.workers.dev",
+    "voice-preview.iterate-dev-preview.workers.dev",
+    "voice.iterate.workers.dev",
+  ]);
+  // elsewhere, still the whole zone: our origins' and our project wildcard's
+  expect(zones).toEqual(expect.arrayContaining(["iterate.com", "iterate.app"]));
 });
