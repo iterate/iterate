@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import {
+  mainE2eFailedJobs,
   mainE2eFailingRows,
   mainE2ePage,
   mainE2eVerdict,
@@ -24,10 +25,15 @@ test.each<{ results: Record<string, string>; verdict: string | undefined }>([
     results: { deploy: "success", e2e: "success", delete: "failure" },
     verdict: "red",
   },
-  // a newer push superseded the run: no verdict either way
+  // a job that hit its timeout, which Depot reports as cancelled: red (a run cancelled by hand
+  // never reaches the alert)
   {
     results: { deploy: "success", e2e: "cancelled", delete: "success" },
-    verdict: undefined,
+    verdict: "red",
+  },
+  {
+    results: { parent: "cancelled", deploy: "skipped", e2e: "skipped", delete: "success" },
+    verdict: "red",
   },
   {
     results: { deploy: "success", e2e: "skipped", delete: "success" },
@@ -36,6 +42,17 @@ test.each<{ results: Record<string, string>; verdict: string | undefined }>([
   { results: {}, verdict: undefined },
 ])("jobs $results → $verdict", ({ results, verdict }) => {
   expect(mainE2eVerdict(results)).toBe(verdict);
+});
+
+test("a red page names each failed job, and each cancelled one as timed out", () => {
+  expect(
+    mainE2eFailedJobs({
+      parent: "success",
+      deploy: "success",
+      e2e: "cancelled",
+      delete: "failure",
+    }),
+  ).toEqual(["e2e (timed out)", "delete"]);
 });
 
 test.each([

@@ -15,11 +15,23 @@ on:
     paths:
       - .depot/workflows/deploy-os-next.yml
       - apps/os/**
+      # Never in the Worker or its deploy: the app's docs (not public/setup-prompt.md, which prd
+      # serves), its tests and benches, and the preview and soak scripts. Preview OS and Main OS
+      # e2e still run for them.
+      - "!apps/os/*.md"
+      - "!apps/os/docs/**"
+      - "!apps/os/e2e/**"
+      - "!apps/os/**/*.test.ts"
+      - "!apps/os/__workers-tests__/**"
+      - "!apps/os/bench/**"
+      - "!apps/os/scripts/preview*.ts"
+      - "!apps/os/scripts/e2e-soak.ts"
       - configs-next/**
       - packages/iterate/**
       - envs.ts
       - scripts/lib/**
-      - scripts/depot-ci/**
+      # Not scripts/depot-ci: it reconciles installs from the frozen lockfile and never changes the
+      # bundle. Preview OS and Main OS e2e run for it.
       - packages/shared/**
       - packages/ui/**
       # A root dependency resolution can change the Worker bundle even when no

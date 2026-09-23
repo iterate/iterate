@@ -23,15 +23,16 @@ const preview = readWorkflow("preview-os-next.yml") as {
   on: { pull_request: { paths: string[] } };
 };
 
-test("runs on every main push a PR preview would run for, the latest push only", () => {
+test("runs on every main push a PR preview would run for, one run at a time, never cancelled", () => {
   expect(main.on.push?.branches).toEqual(["main"]);
   expect(main.on.push?.paths).toEqual(
     expect.arrayContaining(
       preview.on.pull_request.paths.filter((path) => !path.includes("preview-os-next.yml")),
     ),
   );
+  // every started run reaches delete and alert; Depot keeps only the newest pending push
   expect(main).toMatchObject({
-    concurrency: { group: "main-os-e2e", "cancel-in-progress": true },
+    concurrency: { group: "main-os-e2e", "cancel-in-progress": false },
   });
 });
 
@@ -57,14 +58,14 @@ test("always deletes the preview and everything it created, cancelled or failed"
   expect(runs("delete")).toContain(
     'PREVIEW_NAME="main-${GITHUB_SHA::7}" doppler run -- pnpm preview delete',
   );
-  // a cancelled run's delete is cancelled with it: the next run deletes its preview first
+  // a run cancelled by hand has its delete cancelled with it: the next run deletes its preview first
   expect(runs("deploy").indexOf("doppler run -- pnpm preview delete-superseded")).toBeLessThan(
     runs("deploy").indexOf("doppler run -- pnpm preview deploy"),
   );
   expect(runs("deploy")).toContain("doppler run -- pnpm preview delete-superseded");
 });
 
-test("pages on main's change of state, never for a superseded run", () => {
+test("pages on main's change of state, never for a run cancelled by hand", () => {
   expect(main.jobs.alert?.if).toBe("${{ !cancelled() && github.event_name == 'push' }}");
   expect([main.jobs.alert?.needs].flat()).toEqual(["parent", "deploy", "e2e", "delete"]);
   expect(runs("alert")).toContain("pnpm tsx scripts/ci/main-e2e-alert.ts alert");

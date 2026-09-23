@@ -363,8 +363,11 @@ names the new version, GETs each production project host and pages
 clear (`scripts/ci/prd-post-deploy-check.ts`). In parallel, **Main OS e2e**
 (`main-os-e2e.yml`) deploys a throwaway preview of the pushed commit, runs the
 e2e suite and the browser specs against it, deletes it, and pages #error-pulse
-only when main goes red or green again. The full mutating proof is each PR's
-preview. The legacy fleet's main preview runs (a `main-preview` lease,
+only when main goes red or green again. Its runs never cancel each other: the
+pushes that land during a run queue behind it, collapsed to the newest, so
+every run that starts reaches a verdict unless someone cancels it by hand. A
+job that hangs until its timeout counts as red. The full mutating proof is each
+PR's preview. The legacy fleet's main preview runs (a `main-preview` lease,
 `preview-main.yml`) went with it in #2837.
 
 What still exercises deployed code on a schedule: the nightly **OS crash hunt**

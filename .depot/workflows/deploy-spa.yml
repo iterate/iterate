@@ -7,15 +7,14 @@ concurrency:
 on:
   push:
     branches: [main]
+    # No root manifests or lockfile: what ships is public/ and the zipped extension, with no npm
+    # dependency inside.
     paths:
       - .depot/workflows/deploy-spa.yml
       - apps/spa/**
       - apps/browser-extension/**
       - envs.ts
       - scripts/lib/**
-      - package.json
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
   workflow_dispatch:
 jobs:
   deploy:

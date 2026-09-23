@@ -17,7 +17,8 @@ organization token and its scope caveat, and CLI/MCP queries.
 
 ## Time budget
 
-- A merge to main just deploys: each app's deploy workflow finishes in about two minutes.
+- A merge to main just deploys: each app's deploy workflow finishes in about two minutes, and
+  runs only when the merge touches what that app ships ([Which main pushes deploy](#which-main-pushes-deploy)).
 - A throwaway preview plus e2e (Main OS e2e) may run in parallel, but nothing waits on it.
 - No job sleeps or waits minutes for analytics or logs to settle. Put slow-arriving signals
   (Durable Object cost, prd faults) in a scheduled alarm (`do-duration-probe.yml`,
@@ -315,28 +316,33 @@ freshness:
 - Tests and lint/typecheck use the source branch (falling back to
   `ref_name`) and `cancel-in-progress: true`. A newer commit makes an older
   validation result obsolete, including on `main`.
+- Main OS e2e is the exception: one fixed group, `main-os-e2e`, with
+  `cancel-in-progress: false`. A run creates a throwaway preview and deletes it
+  in a later job, and cancelling a run cancels that `always()` delete too, so
+  every started run finishes, delete and alert included. Pushes that land
+  meanwhile collapse to the newest pending run.
 - Every mainline job has `timeout-minutes`. This is a watchdog, not a retry:
   jobs fail at the outer edge and an operator decides whether a rerun is safe.
   Deploy OS gets 30 minutes: its bounded worst case is the build, the rollout,
   the deploy script's readiness probes, the host check (≤ 60 s for `/version`
   to name the new version, then four tries of each production project host)
   and its Slack notice, all in the one job. Deploy Kit also gets 30, the other
-  client deploys 15–20, and notification jobs 10.
+  client deploys 15–20.
 - Runner size follows observed peak CPU and memory, with headroom. Lint stays
   on `8x32` (parallel oxlint/typecheck/format check/knip). Unit tests use `4x16` — measured
   peaks on `8x32` were ~3 cores / ~2.5GB, and a second large sandbox next to
   lint is the common trigger for no-log `Sandbox terminated before worker
 reported completion` on main. Deploy OS and Deploy Kit use `4x16`; the client
-  deploys (Dash, Agents, Notes, Voice, SPA, dummy-petshop), notification jobs,
-  and the jobs that only call APIs (LOC report, PR dashboard, Release) use
-  `2x8`. Re-check with `depot ci metrics --run <run-id>`
+  deploys (Dash, Agents, Notes, Voice, SPA, dummy-petshop), Main OS e2e's
+  delete and alert jobs, and the jobs that only call APIs (LOC report, PR
+  dashboard, Release) use `2x8`. Re-check with `depot ci metrics --run <run-id>`
   before increasing a size.
 
-These defaults keep a normal all-app main push to 36 requested vCPUs before
-notification jobs (lint 8, test 4, Deploy OS 4, Deploy Kit 4, 2 for each of the
-six client deploys, and 4 for Main OS e2e, whose parent, deploy and e2e jobs run
-one after another), without reducing the parallel lint lane that uses the larger
-machine. The sizing pass that set them cut the then-larger
+These defaults keep a normal all-app main push to 36 requested vCPUs (lint 8,
+test 4, Deploy OS 4, Deploy Kit 4, 2 for each of the six client deploys, and 4
+for Main OS e2e, whose parent, deploy and e2e jobs run one after another; its
+delete and alert jobs follow them), without reducing the parallel lint lane that
+uses the larger machine. The sizing pass that set them cut the then-larger
 workflow set from 72 requested vCPUs to 28.
 
 If an attempt receives a sandbox but produces no logs or metrics before
@@ -449,6 +455,31 @@ checks at all: they never appear, rather than reporting a skip. The Preview
 delete workflow (`.depot/workflows/preview-delete.yml`) runs on the same list
 when such a PR closes; `scripts/ci/depot-workflows.test.ts` keeps the two lists
 equal.
+
+## Which main pushes deploy
+
+Each `deploy-<app>.yml` runs on a push to `main` that touches what its app
+ships: the app, the workspace packages it depends on, `envs.ts`, `scripts/lib`
+and `pnpm-lock.yaml`, and for OS and the five hosted clients the root
+`package.json` and `pnpm-workspace.yaml` too. `scripts/ci/depot-workflows.test.ts`
+pins the exceptions:
+
+- No client deploy runs for `apps/os`: no client imports it.
+- Deploy Kit and Deploy Voice also run for `apps/agents`: their
+  `vite.config.ts` builds `voice-install.json` from it.
+- Deploy OS skips what never reaches the Worker: the markdown at the app root,
+  `apps/os/docs`, `apps/os/e2e`, `apps/os/__workers-tests__`, `*.test.ts`,
+  `apps/os/bench`, the preview and soak scripts, and `scripts/depot-ci` (it
+  reconciles installs from the frozen lockfile and never changes the bundle).
+  Markdown that ships still deploys: `apps/os/public/setup-prompt.md` (prd
+  serves it) and everything in `configs-next` (the build bakes the default
+  template's files in). Preview OS and Main OS e2e still run for all of it.
+- Deploy SPA ignores the root manifests and lockfile: it ships static files
+  and the zipped extension, with no npm dependency inside.
+
+Each deploy is one job. Every app but SPA and dummy-petshop posts to #ci from
+that job's last step, with the deploy step's result: a failed, cancelled or
+timed-out deploy posts failure.
 
 ## Preview job shape
 

@@ -1,16 +1,20 @@
 # MAIN'S E2E RUN on the dev/preview account, in parallel with Deploy OS, which waits for none of
-# it: every push to main (the paths a PR preview runs for) deploys a THROWAWAY Worker Preview of
+# it: a push to main (the paths a PR preview runs for) deploys a THROWAWAY Worker Preview of
 # apps/os named `main-<short sha>`, with fresh resources of its own (KV, R2, Artifacts namespace,
 # Durable Object namespaces) and the clients on top, runs the e2e suite and the browser specs
 # against it, then DELETES the preview and everything it created. A failed run still deletes (the
-# `delete` job runs always). A cancelled run's queued jobs are cancelled with it, `delete`
-# included, so the run that superseded it deletes every other `main-<sha>` preview before it
-# deploys; the nightly sweep (preview-sweep.yml) deletes a PR-less preview a day after its last
-# deploy as the backstop.
+# `delete` job runs always).
 #
-# A newer push cancels the run in progress: only the latest main is tested. The `alert` job pages
-# #error-pulse only when main changes state — once when it goes red, naming the failing rows, once
-# when it is green again (scripts/ci/main-e2e-alert.ts). Nothing is written to any PR.
+# Runs never cancel each other: one at a time, and a push that lands meanwhile queues, where Depot
+# keeps only the newest (a burst of merges tests its last commit). So every started run that is not
+# cancelled by hand reaches `delete` and a verdict, a job that hits its timeout counting as red. The
+# `alert` job pages #error-pulse only when main changes state — once when it goes red, naming the
+# failed jobs and the failing rows, once when it is green again (scripts/ci/main-e2e-alert.ts).
+# Nothing is written to any PR.
+#
+# A run cancelled by hand has its queued jobs cancelled with it, `delete` included, so each run
+# deletes every other `main-<sha>` preview before it deploys; the nightly sweep
+# (preview-sweep.yml) deletes a PR-less preview a day after its last deploy as the backstop.
 #
 # The script is apps/os/scripts/preview.ts (the same commands as a PR's preview, keyed by name).
 # The only Depot secret is DOPPLER_TOKEN; Doppler project-worker/preview supplies the Cloudflare
@@ -57,7 +61,7 @@ on:
 
 concurrency:
   group: main-os-e2e
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   # The store the image was baked with (preview-os-next.yml says why).
@@ -120,7 +124,7 @@ jobs:
         run: doppler setup --config preview --project project-worker
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      # cancel-in-progress cancels a superseded run's queued jobs, its `always()` delete included
+      # A cancelled run's queued jobs are cancelled with it, its `always()` delete included
       # (main-44db0e6, 2026-09-23): this run deletes every other `main-<sha>` preview first.
       - name: Delete superseded runs' previews
         working-directory: apps/os
@@ -236,7 +240,8 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: PREVIEW_NAME="main-${GITHUB_SHA::7}" doppler run -- pnpm preview delete
 
-  # Main's state changes only: red once, green again once. Not for a superseded (cancelled) run.
+  # Main's state changes only: red once, green again once. A job that hit its timeout is red; a run
+  # cancelled by hand gets no alert.
   alert:
     name: alert
     needs: [parent, deploy, e2e, delete]

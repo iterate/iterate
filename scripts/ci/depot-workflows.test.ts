@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, matchesGlob, relative, resolve } from "node:path";
 import { describe, expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { SUITE_WORKFLOWS } from "./flake-dashboard/update.ts";
@@ -15,6 +15,7 @@ type WorkflowJob = {
   "timeout-minutes"?: number;
   steps?: Array<{
     env?: Record<string, string>;
+    id?: string;
     name?: string;
     if?: string;
     run?: string;
@@ -47,6 +48,16 @@ type Workflow = {
 
 function loadWorkflow(file: string): Workflow {
   return parseYaml(readFileSync(resolve(repoRoot, file), "utf8")) as Workflow;
+}
+
+/** GitHub's `paths` filter: the last pattern a file matches decides, and a `!` pattern excludes. */
+function triggers(paths: string[], file: string) {
+  let included = false;
+  for (const pattern of paths) {
+    const negated = pattern.startsWith("!");
+    if (matchesGlob(file, negated ? pattern.slice(1) : pattern)) included = !negated;
+  }
+  return included;
 }
 
 function readPackageJson(directory: string) {
@@ -126,6 +137,94 @@ describe("Depot deployment safety", () => {
     },
   );
 
+  test.each(deploymentWorkflows.filter(({ app }) => app !== "os-next"))(
+    "$file does not redeploy for the platform's source, which no client imports",
+    ({ file }) => {
+      expect(triggers(loadWorkflow(file).on?.push?.paths ?? [], "apps/os/src/worker.ts")).toBe(
+        false,
+      );
+    },
+  );
+
+  test.each(["kit", "voice"])(
+    "deploy-%s.yml redeploys when apps/agents changes: vite.config.ts builds voice-install.json from it",
+    (app) => {
+      const paths = loadWorkflow(`.depot/workflows/deploy-${app}.yml`).on?.push?.paths ?? [];
+      expect(triggers(paths, "apps/agents/runtime/index.ts")).toBe(true);
+      expect(triggers(paths, "apps/agents/voice/screen-context.md")).toBe(true);
+    },
+  );
+
+  test("deploy-spa.yml ignores the root manifests and lockfile: no npm dependency ships", () => {
+    const paths = loadWorkflow(".depot/workflows/deploy-spa.yml").on?.push?.paths ?? [];
+    for (const file of ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]) {
+      expect(triggers(paths, file), `${file} does not deploy`).toBe(false);
+    }
+    expect(triggers(paths, "apps/spa/public/index.html")).toBe(true);
+  });
+
+  test("deploy-os-next.yml runs for what reaches the Worker, not the app's docs, tests or preview tooling", () => {
+    const paths = loadWorkflow(".depot/workflows/deploy-os-next.yml").on?.push?.paths ?? [];
+    const shipped = ["apps/os/src", "apps/os/public"].flatMap((directory) =>
+      readdirSync(resolve(repoRoot, directory), { recursive: true, withFileTypes: true })
+        .filter((entry) => entry.isFile() && !entry.name.endsWith(".test.ts"))
+        .map((entry) => relative(repoRoot, join(entry.parentPath, entry.name))),
+    );
+
+    expect(shipped.length).toBeGreaterThan(0);
+    expect(shipped.filter((file) => !triggers(paths, file))).toEqual([]);
+    for (const file of [
+      "apps/os/public/setup-prompt.md", // served at os.iterate.com/setup-prompt.md
+      "apps/os/scripts/build.ts",
+      "apps/os/scripts/deploy.ts",
+      "apps/os/scripts/generate-wrangler-config.ts",
+      "apps/os/vite.config.ts",
+      "apps/os/wrangler.base.jsonc",
+      "configs-next/default/AGENTS.md", // build.ts bakes it into the Worker
+      "scripts/lib/deploy-app.ts",
+    ]) {
+      expect(triggers(paths, file), `${file} deploys`).toBe(true);
+    }
+    for (const file of [
+      "apps/os/README.md",
+      "apps/os/SELF-HOSTING.md",
+      "apps/os/docs/project-seeds.md",
+      "apps/os/e2e/AGENTS.md",
+      "apps/os/e2e/support/client.ts",
+      "apps/os/src/project/templates.test.ts",
+      "apps/os/__workers-tests__/support.ts",
+      "apps/os/bench/api.bench.ts",
+      "apps/os/scripts/preview.ts",
+      "apps/os/scripts/preview-config.ts",
+      "apps/os/scripts/e2e-soak.ts",
+      "scripts/depot-ci/dependencies.mjs",
+    ]) {
+      expect(triggers(paths, file), `${file} does not deploy`).toBe(false);
+    }
+  });
+
+  test.each(
+    deploymentWorkflows.filter(({ app }) =>
+      ["os-next", "dash", "agents", "notes", "voice", "kit"].includes(app),
+    ),
+  )("$file posts the deploy's own result to #ci as the deploy job's last step", ({ file }) => {
+    const workflow = loadWorkflow(file);
+    const steps = workflow.jobs.deploy?.steps ?? [];
+
+    expect(Object.keys(workflow.jobs)).toEqual(["deploy"]);
+    expect(steps.filter((step) => step.id === "deploy")).toHaveLength(1);
+    expect(steps.at(-1)).toMatchObject({
+      name: "Notify Slack",
+      if: "${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}",
+      env: expect.objectContaining({
+        DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+        APP_DISPLAY_NAME: expect.any(String),
+        PUBLIC_URL: expect.stringMatching(/^https:\/\//),
+      }),
+      run: "pnpm tsx scripts/ci/notify.ts deploy-${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}",
+    });
+  });
+
   test("runs OS-Next and Notes stateful proofs only against an isolated preview", () => {
     const preview = loadWorkflow(".depot/workflows/preview-os-next.yml");
     const previewScript = readFileSync(resolve(repoRoot, "apps/os/scripts/preview.ts"), "utf8");
@@ -172,7 +271,6 @@ describe("Depot deployment safety", () => {
     expect(deployKit?.run).toContain('source "$IDF_PATH/export.sh"');
     expect(workflow.on?.push?.paths).toEqual(
       expect.arrayContaining([
-        "apps/os/**", // the page is an app of OS (workspace dependency)
         "package.json",
         "pnpm-lock.yaml",
         "pnpm-workspace.yaml",
