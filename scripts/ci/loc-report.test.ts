@@ -169,6 +169,7 @@ test.for([
 ])("$path counts as $group", ({ path, group }) => {
   const file = {
     path,
+    previousPath: path,
     added: 1,
     removed: 0,
     significantAdded: 1,
