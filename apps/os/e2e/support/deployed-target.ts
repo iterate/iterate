@@ -3,7 +3,7 @@
 // environment under `doppler run`), its project routing and MCP origin out of the envs.ts entry the
 // URL falls under, so a per-PR preview inherits its parent's. An explicit ADMIN_API_SECRET,
 // LOGIN_PASSWORD, PROJECT_INGRESS_ROUTING or MCP_BASE_URL still wins. The vitest suite's
-// global-setup and playwright.config.ts both read it, each for its own worker processes.
+// global-setup and the root Playwright suite's specs/setup.ts both read it, each for its own workers.
 
 import { osEnvs } from "../../../../envs.ts";
 import { parseAppConfig } from "../../src/app-config.ts";

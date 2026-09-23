@@ -142,7 +142,7 @@ function Editor({
         </span>
       </div>
       {error ? (
-        <p role="alert" className="text-sm break-words text-destructive">
+        <p role="alert" data-type="error" className="text-sm break-words text-destructive">
           {error}
         </p>
       ) : null}

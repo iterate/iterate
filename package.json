@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "pnpm --dir apps/os dev",
     "build": "pnpm -r --parallel build",
-    "typecheck": "pnpm -r --parallel typecheck",
+    "typecheck": "pnpm -r --parallel typecheck && pnpm typecheck:specs",
+    "typecheck:specs": "tsc --noEmit -p specs/tsconfig.json",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "os": "pnpm --dir apps/os",
@@ -16,7 +17,7 @@
     "knip": "knip --workspace apps/os --workspace apps/kit --workspace packages/shared --workspace packages/ui --workspace packages/iterate",
     "test:oxlint-plugin": "pnpm --dir lint test",
     "prepare": "is-ci || husky",
-    "spec": "pnpm --dir apps/os spec",
+    "spec": "playwright test --config playwright.config.ts",
     "e2e": "pnpm --dir apps/os e2e",
     "test": "pnpm -r --parallel test"
   },
@@ -26,7 +27,9 @@
     "@tanstack/eslint-plugin-router": "^1.139.0",
     "@tanstack/router-generator": "1.166.17",
     "@types/node": "^24.10.1",
+    "capnweb": "npm:@iterate-com/capnweb@^0.12.2",
     "dedent": "^1.7.0",
+    "esbuild": "^0.27.4",
     "eslint-plugin-codegen": "0.34.1",
     "eslint-plugin-eslint-comments": "^3.2.0",
     "eslint-plugin-import": "^2.32.0",
@@ -45,7 +48,8 @@
     "playwright": "1.60.0",
     "trpc-cli": "0.15.1",
     "tsx": "^4.20.6",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "zod": "4.5.4"
   },
   "packageManager": "pnpm@10.24.0",
   "private": true

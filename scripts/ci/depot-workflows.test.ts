@@ -141,10 +141,14 @@ describe("Depot deployment safety", () => {
       expect.arrayContaining([
         ".depot/workflows/deploy-os-next.yml",
         ".depot/workflows/deploy-notes.yml",
+        // the root Playwright suite (specs/AGENTS.md) runs only here
+        "specs/**",
+        "playwright.config.ts",
       ]),
     );
-    expect(previewScript).toContain('cwd: path.resolve(ROOT, "../notes")');
-    expect(previewScript).toContain("NOTES_BASE_URL: notesPreview.url");
+    // one `pnpm spec` in the e2e job runs every project, the notes one against the Notes preview
+    expect(previewScript).toContain('run("pnpm", ["spec"], {');
+    expect(previewScript).toContain("NOTES_BASE_URL: appPreviewUrl(notes, previewName)");
   });
 
   test("installs the pinned ESP-IDF release before preparing Kit firmware", () => {
@@ -343,7 +347,7 @@ describe("Depot validation capacity", () => {
     expect(readFileSync(resolve(repoRoot, "apps/os/scripts/preview.ts"), "utf8")).toContain(
       "--reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     );
-    expect(readFileSync(resolve(repoRoot, "apps/os/playwright.config.ts"), "utf8")).toContain(
+    expect(readFileSync(resolve(repoRoot, "playwright.config.ts"), "utf8")).toContain(
       "scripts/ci/playwright-telemetry-reporter.ts",
     );
   });

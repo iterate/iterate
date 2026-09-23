@@ -168,6 +168,12 @@ export function ConsentCard({
           onEditProjects={() => showStep("projects")}
         />
       )}
+      {/* Creating a project takes the platform a few seconds; say so while the controls wait. */}
+      {pending ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Creating project…
+        </p>
+      ) : null}
     </IssuerPage>
   );
 }

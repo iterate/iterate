@@ -38,6 +38,7 @@ export function ConsentFooter({
       {error ? (
         <p
           role="alert"
+          data-type="error"
           tabIndex={-1}
           ref={focusOnMount}
           className="text-sm text-destructive outline-none"

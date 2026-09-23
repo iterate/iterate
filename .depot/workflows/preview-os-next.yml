@@ -58,6 +58,8 @@ on:
       - apps/agents/**
       - apps/notes/**
       - apps/voice/**
+      - specs/**
+      - playwright.config.ts
       - packages/iterate/**
       - packages/shared/**
       - packages/ui/**
