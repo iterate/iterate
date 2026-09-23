@@ -149,6 +149,77 @@ test("onboarding creates owned organizations atomically and checks the selected 
   expect((await catalog.listOrgs(user.id)).map((org) => org.id)).toEqual([chosen.id]);
 });
 
+test("only the administrator can restore an archived project id, and neither slug nor id may be rebound", async () => {
+  const catalog = directory((env as unknown as Env).DB);
+  const email = `restore-owner-${Date.now()}@directory.test`;
+  const owner = await catalog.upsertUser(email);
+  const org = await catalog.createOrg(owner.id, "restore target");
+  const archivedId = `prj_restore_${Date.now().toString(36)}`;
+  const ownerSession = await operator(email);
+
+  await expect(
+    ownerSession.projects.create({
+      project: "restored",
+      orgId: org.id,
+      restoreProjectId: archivedId,
+    }),
+  ).rejects.toThrow(/admin secret/);
+
+  const admin = await operator();
+  await expect(
+    admin.projects.create({ project: "invalid-restore", orgId: org.id, restoreProjectId: "" }),
+  ).rejects.toThrow(/restored project id is invalid/);
+  using restored = await admin.projects.create({
+    project: "restored",
+    orgId: org.id,
+    restoreProjectId: archivedId,
+  });
+  expect(await restored.whoami()).toMatchObject({ projectId: archivedId, projectSlug: "restored" });
+  await expect(
+    admin.projects.create({ project: "restored", orgId: org.id, restoreProjectId: "prj_other" }),
+  ).rejects.toThrow(/not restored id/);
+  await expect(
+    admin.projects.create({ project: "other", orgId: org.id, restoreProjectId: archivedId }),
+  ).rejects.toThrow(/already belongs/);
+});
+
+test("concurrent restores of one slug never return a different archived id", async () => {
+  const catalog = directory((env as unknown as Env).DB);
+  const owner = await catalog.upsertUser(`restore-race-${Date.now()}@directory.test`);
+  const org = await catalog.createOrg(owner.id, "restore race target");
+  const slug = `restore-race-${Date.now().toString(36)}`;
+  const firstId = `prj_${slug}_first`;
+  const secondId = `prj_${slug}_second`;
+  const attempts = await Promise.allSettled([
+    catalog.createProject("every", slug, org.id, firstId),
+    catalog.createProject("every", slug, org.id, secondId),
+  ]);
+
+  const restored = attempts.filter((attempt) => attempt.status === "fulfilled");
+  const rejected = attempts.filter((attempt) => attempt.status === "rejected");
+  expect(restored).toHaveLength(1);
+  expect(rejected).toHaveLength(1);
+  expect(restored[0]!.value.id).toMatch(new RegExp(`^prj_${slug}_(?:first|second)$`));
+  expect(String(rejected[0]!.reason)).toMatch(/not restored id|already belongs/);
+});
+
+test("concurrent replays of the same archived identity converge", async () => {
+  const catalog = directory((env as unknown as Env).DB);
+  const owner = await catalog.upsertUser(`restore-replay-${Date.now()}@directory.test`);
+  const org = await catalog.createOrg(owner.id, "restore replay target");
+  const slug = `restore-replay-${Date.now().toString(36)}`;
+  const archivedId = `prj_${slug}_id`;
+  const restored = await Promise.all([
+    catalog.createProject("every", slug, org.id, archivedId),
+    catalog.createProject("every", slug, org.id, archivedId),
+  ]);
+
+  expect(restored).toEqual([
+    { id: archivedId, slug, orgId: org.id },
+    { id: archivedId, slug, orgId: org.id },
+  ]);
+});
+
 test("a bare /api socket carries no session until a credential is verified in-band; issuer login is the page's password post, never the bearer", async () => {
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
     SELF.fetch(new Request(input, init)),

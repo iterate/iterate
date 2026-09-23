@@ -371,6 +371,8 @@ export interface IterateSessionApi {
       project: string;
       orgId?: string;
       configRepoTemplate?: string;
+      /** Operator-only recovery: retain the source project identity from a project seed. */
+      restoreProjectId?: string;
     }): Promise<IterateContextApi>;
   };
   organizations: { get(orgId: string): Promise<IterateContextApi> };
