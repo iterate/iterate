@@ -213,14 +213,14 @@ it("routes Cloudflare for SaaS custom hostnames through the project provider zon
   });
 });
 
-it("routes the owned iterate.com apex and single-label apps to the production os worker", () => {
+it("keeps legacy single-label apps on iterate.com without reclaiming its handed-off apex", () => {
   const productionRoutes = config.env.prd.routes ?? [];
   expect(productionRoutes).toContainEqual({
-    pattern: "iterate.com/*",
+    pattern: "*.iterate.com/*",
     zone_name: "iterate.com",
   });
-  expect(productionRoutes).toContainEqual({
-    pattern: "*.iterate.com/*",
+  expect(productionRoutes).not.toContainEqual({
+    pattern: "iterate.com/*",
     zone_name: "iterate.com",
   });
 });

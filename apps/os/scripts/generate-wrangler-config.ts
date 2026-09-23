@@ -406,7 +406,8 @@ function workerBindings(input: {
  * (observed 2026-06) — kept verbatim; collapse only with an edge experiment
  * proving it.
  *
- * Owned custom apexes get apex/* + *.apex/* only (not a SaaS catch-all).
+ * Owned custom apexes get apex/* + *.apex/* only (not a SaaS catch-all). A
+ * handed-off apex keeps only *.apex/* on legacy OS.
  * More-specific routes on that zone (os., auth., mcp., …) stay owned by
  * other workers and win by specificity.
  */
@@ -434,6 +435,10 @@ function routes(env: DeployedEnv) {
       { pattern: `${apex}/*`, zone_name: apex },
       { pattern: `*.${apex}/*`, zone_name: apex },
     ]),
+    ...(env.ownedProjectCustomApexSubdomainsOnly || []).map((apex) => ({
+      pattern: `*.${apex}/*`,
+      zone_name: apex,
+    })),
   ];
 }
 

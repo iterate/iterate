@@ -49,7 +49,7 @@ export default async function ensureResources(options: { env?: string } = {}) {
     ...(ctx.env.ingressRouting?.type === "subdomains"
       ? [`*.${ctx.env.ingressRouting.hostname}`]
       : []),
-    // this account's own custom apexes (iterate2.com); the SaaS ones are custom hostnames, below
+    // this account's own custom apexes; the SaaS ones are custom hostnames, below
     ...Object.keys(ctx.env.temporaryCustomHostnames || {}).filter((hostname) =>
       ownZonesOf(ctx.env).has(registrableDomainOf(hostname)),
     ),

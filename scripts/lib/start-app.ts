@@ -83,6 +83,7 @@ function ownZones(): string[] {
   for (const env of Object.values(osEnvs)) {
     for (const base of env.projectHostnameBases) zones.add(base);
     for (const apex of env.ownedProjectCustomApexes) zones.add(apex);
+    for (const apex of env.ownedProjectCustomApexSubdomainsOnly || []) zones.add(apex);
   }
   return [...zones].sort();
 }
