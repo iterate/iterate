@@ -15,7 +15,15 @@
 // more wakes, exactly as the control row that holds nothing does. The handle must still answer at
 // the end: a path outlives every incarnation.
 import { expect, test } from "vitest";
-import { freshCtx, openItx, readAll, sleep } from "./support/client.ts";
+import {
+  disposeSessions,
+  freshCtx,
+  openItx,
+  readAll,
+  runId,
+  sleep,
+  workerSlot,
+} from "./support/client.ts";
 
 const IDLES = 3;
 const IDLE_MS = 12_000; // the platform evicts an idle actor in ~10 s (measured 2026-09-22: 0/6 at 10 s, 48/48 at 12 s+)
@@ -74,3 +82,46 @@ test("a held cd(path) handle does not keep the context resident", async () => {
     /Session|closed|RPC_STUB_OFFLINE|disposed/i,
   );
 }, 90_000);
+
+// A FACET reaches its own context the other way round: through the SDK's `withItx` on the loopback
+// entrypoint — the repo facet's `itx.cfArtifacts.get(path).remote()`, the collection's
+// `itx.cd(path)…waitForEvent`. Every step such a round trip pipelined must be released, not only the
+// last: one left open held facet → ItxEntrypoint → context resident UNTIL THE NEXT DEPLOY (every
+// project an os-next preview's e2e run created stayed billed for hours, 2026-09-21/22).
+let repoCounter = 0;
+/** A repo born through the collection and read through its facet, then the client's session closed:
+ *  what stays behind is the platform's own doing, not a handle this test holds. */
+async function repoBornAndRead(prefix: string): Promise<{ ctx: string; path: string }> {
+  const ctx = freshCtx(prefix);
+  // Per run and per worker process, inside Artifacts' name grammar (cfartifacts.e2e.test.ts).
+  const path = `/e2e/residency-${runId()}-${workerSlot()}-${repoCounter++}`;
+  const itx = openItx(ctx);
+  expect(await itx.repos.create(path)).toEqual({ path });
+  expect(await itx.repos.get(path).tip()).toBeNull(); // the facet's remote + token, via withItx
+  disposeSessions();
+  return { ctx, path };
+}
+
+test("a repo read through its facet does not keep its own context resident", async () => {
+  const { ctx, path } = await repoBornAndRead("residency_facet");
+  const itx = openItx(ctx);
+  try {
+    expect(await wakesAcrossIdles(await itx.cd(path))).toBeGreaterThanOrEqual(IDLES);
+  } finally {
+    await itx.cfArtifacts.delete(path); // teardown — the repo, by its path
+  }
+}, 120_000);
+
+// OPEN (2026-09-23): the root's facet door walks `facet.repos().create(path)` and the returned
+// collection stub keeps the `project` facet — and so the root — resident for ~2 min after a create
+// (measured: evicted by 150 s; before the withItx fix, held until the next deploy). The fix is a flat
+// data method on the project facet; when it lands this row passes and `.fails` must go.
+test.fails("creating a repo does not keep the project root resident", async () => {
+  const { ctx, path } = await repoBornAndRead("residency_root");
+  const itx = openItx(ctx);
+  try {
+    expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(IDLES);
+  } finally {
+    await itx.cfArtifacts.delete(path);
+  }
+}, 120_000);
