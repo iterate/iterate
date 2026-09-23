@@ -69,10 +69,10 @@ jobs:
         # canonical production PostHog project shared with preview telemetry.
         run: doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites unit ${{ cancelled() && '--cancelled' || '' }}
       # The whole flake-reporting contract from CI's side: publish the
-      # recorder lines as a workflow artifact. The platform ingests it when
-      # GitHub's workflow_run webhook lands (flake-dashboard starter app),
-      # authenticated entirely with the App's own installation token — CI
-      # holds no iterate credential.
+      # recorder lines and the finalizer's suite-summary.json as a workflow
+      # artifact for the flake dashboard to pull
+      # (docs/testing.md#flakes-and-pinned-failures). CI holds no dashboard
+      # credential.
       - name: Upload flake records
         if: always()
         uses: actions/upload-artifact@v4
