@@ -15,7 +15,8 @@ const videoArtifactsEnabled = videoMode || !process.env.CI;
 const configuredOsBaseUrl = process.env.DEMO_BASE_URL?.replace(/\/+$/, "");
 const localOsPort = Number(process.env.DEMO_PORT || 8788);
 const osBaseUrl = configuredOsBaseUrl || `http://localhost:${localOsPort}`;
-/** The Notes app deployed against that OS; unset skips the notes project's specs. */
+/** The Notes app deployed against that OS: the notes project's baseURL. Its session specs also
+ *  sign in to the Dash (DASH_BASE_URL). Locally, unset skips them; in CI, unset fails them. */
 const notesBaseUrl = process.env.NOTES_BASE_URL?.replace(/\/+$/, "");
 /** The Voice app deployed against that OS; unset skips the voice project's specs. */
 const voiceBaseUrl = process.env.VOICE_BASE_URL?.replace(/\/+$/, "");

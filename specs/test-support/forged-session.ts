@@ -17,13 +17,12 @@ export type MintedIterateSession = {
 export async function createProjectFixture(
   slugPrefix: string,
   input: {
-    baseURL: string | undefined;
     page: Page;
     projectCount?: number;
   },
 ) {
-  const baseUrl = input.baseURL;
-  if (!baseUrl) throw new Error("Playwright baseURL fixture is required.");
+  // the OS platform, whichever app host the spec's project targets
+  const baseUrl = readOsPlaywrightAuthConfig().osBaseUrl;
 
   const projectSlug = uniqueFixtureSlug(slugPrefix);
   const session = await mintIterateSession({
@@ -58,12 +57,11 @@ export async function createProjectFixture(
 export async function createSessionFixture(
   slugPrefix: string,
   input: {
-    baseURL: string | undefined;
     page: Page;
   },
 ) {
-  const baseUrl = input.baseURL;
-  if (!baseUrl) throw new Error("Playwright baseURL fixture is required.");
+  // the OS platform, whichever app host the spec's project targets
+  const baseUrl = readOsPlaywrightAuthConfig().osBaseUrl;
   return mintIterateSession({
     baseUrl,
     email: `forged-${uniqueFixtureSlug(slugPrefix)}@example.com`,

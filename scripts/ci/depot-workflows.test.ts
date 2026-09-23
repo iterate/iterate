@@ -148,8 +148,9 @@ describe("Depot deployment safety", () => {
     );
     // one `pnpm spec` in the e2e job runs every project, the notes one against the Notes preview
     expect(previewScript).toContain('run("pnpm", ["spec"], {');
-    expect(previewScript).toContain("NOTES_BASE_URL: appPreviewUrl(notes, previewName)");
-    expect(previewScript).toContain("VOICE_BASE_URL: appPreviewUrl(voice, previewName)");
+    expect(previewScript).toContain('NOTES_BASE_URL: appUrl("notes")');
+    expect(previewScript).toContain('VOICE_BASE_URL: appUrl("voice")');
+    expect(previewScript).toContain('DASH_BASE_URL: appUrl("dash")');
   });
 
   test("installs the pinned ESP-IDF release before preparing Kit firmware", () => {

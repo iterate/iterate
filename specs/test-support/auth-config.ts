@@ -1,3 +1,4 @@
+import type { IngressRouting } from "iterate/next/project-ingress";
 import { z } from "zod/v4";
 
 export const OsPlaywrightAuthEnv = z.object({
@@ -27,10 +28,8 @@ export function readOsPlaywrightAuthConfig() {
   return {
     adminApiSecret: env.ADMIN_API_SECRET,
     loginPassword: env.LOGIN_PASSWORD,
-    ingressRouting: JSON.parse(env.PROJECT_INGRESS_ROUTING) as {
-      type: string;
-      hostname?: string;
-    } | null,
+    // the deployment's own `urls.ingressRouting`, as setup.ts read it (deployed-target.ts)
+    ingressRouting: JSON.parse(env.PROJECT_INGRESS_ROUTING) as IngressRouting,
     mcpBaseUrl: env.MCP_BASE_URL,
     osBaseUrl: env.OS_BASE_URL,
   };
