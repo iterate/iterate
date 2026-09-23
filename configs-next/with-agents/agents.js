@@ -515,14 +515,6 @@ async function drainSse(body, signal, onEvent) {
   }
   if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
 }
-function raceAbort(signal, work) {
-  if (signal.aborted) return Promise.reject(signal.reason || new Error("aborted"));
-  return new Promise((resolve, reject) => {
-    const onAbort = () => reject(signal.reason || new Error("aborted"));
-    signal.addEventListener("abort", onAbort, { once: true });
-    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
-  });
-}
 function responsesInput(messages) {
   return messages.map(
     (message) => typeof message.content === "string" ? { role: message.role, content: message.content } : {
@@ -1033,8 +1025,9 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`
    *  event); the call answers the whole text once the stream ends, with the usage the provider
    *  reported. Aborting `signal` stops the stream; the call then rejects.
    *
-   *  Two routes by the model's name. A `@cf/…` model is Workers AI through `itx.ai` (the binding
-   *  under THIS context's rules — a test lends a fake there), streamed when the binding streams.
+   *  Two routes by the model's name. The host invokes Workers AI under this context's rules and
+   *  relays any raw body through an app-owned byte transport. A `@cf/…` answer may be streamed or
+   *  whole JSON.
    *  Anything else is OpenAI's Responses API as a Workers AI partner model on Cloudflare's billing
    *  — no key, ours or a project's — the FAST reading of a reasoning model: low effort, with its
    *  summary streamed. */
@@ -1045,14 +1038,13 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`
     onChunk
   }) {
     if (model.startsWith("@cf/")) {
-      const raw2 = await raceAbort(
-        signal,
-        this.deps.withItx(
-          (itx) => itx.ai.run(
-            model,
-            { messages, stream: true }
-          )
-        )
+      const { path: path2 } = await this.#identity();
+      const raw2 = await this.deps.runModel(
+        path2,
+        model,
+        { messages, stream: true },
+        void 0,
+        signal
       );
       if (raw2 instanceof ReadableStream) {
         let text3 = "";
@@ -1076,31 +1068,24 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`
       return { text: text2 };
     }
     const { projectId, path } = await this.#identity();
-    const raw = await raceAbort(
-      signal,
-      this.deps.withItx(
-        (itx) => itx.ai.run(
-          `openai/${model}`,
-          {
-            input: responsesInput(messages),
-            stream: true,
-            store: false,
-            reasoning: { effort: "low", summary: "auto" }
-          },
-          {
-            returnRawResponse: true,
-            gateway: {
-              id: AI_GATEWAY_ID,
-              skipCache: true,
-              metadata: {
-                projectId,
-                streamPath: path,
-                context: "agent-turn"
-              }
-            }
-          }
-        )
-      )
+    const raw = await this.deps.runModel(
+      path,
+      `openai/${model}`,
+      {
+        input: responsesInput(messages),
+        stream: true,
+        store: false,
+        reasoning: { effort: "low", summary: "auto" }
+      },
+      {
+        returnRawResponse: true,
+        gateway: {
+          id: AI_GATEWAY_ID,
+          skipCache: true,
+          metadata: { projectId, streamPath: path, context: "agent-turn" }
+        }
+      },
+      signal
     );
     if (!(raw instanceof Response))
       throw new Error(`model ${model}: Workers AI did not answer with the raw response`);
@@ -1138,9 +1123,145 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`
   }
 };
 
+// runtime/ai-transport.ts
+import { RpcTarget } from "cloudflare:workers";
+var AgentAiSink = class extends RpcTarget {
+  stream = new TransformStream();
+  writer = this.stream.writable.getWriter();
+  #resolve;
+  #reject;
+  started = new Promise((resolve, reject) => {
+    this.#resolve = resolve;
+    this.#reject = reject;
+  });
+  start(value) {
+    this.#resolve(value);
+  }
+  write(bytes) {
+    return this.writer.write(bytes);
+  }
+  close() {
+    return this.writer.close();
+  }
+  error(message) {
+    const error = new Error(message);
+    this.#reject(error);
+    return this.writer.abort(error);
+  }
+  abort(reason) {
+    const error = reason instanceof Error ? reason : new Error(String(reason));
+    this.#reject(error);
+    return this.writer.abort(error);
+  }
+};
+var AI_TRANSPORT_SOURCE = {
+  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class AgentAiTransport extends WorkerEntrypoint {
+  async run(path, model, input, options, sink, idleBudgetMs) {
+    const itx = this.env.ITX.get();
+    const scoped = itx.cd(path);
+    let call, reader, initialTimedOut = false;
+    const idle = Math.max(1_000, Number(idleBudgetMs) || 45_000);
+    const read = async () => {
+      let timer;
+      try {
+        return await Promise.race([
+          reader.read(),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("model transport idle timeout")), idle); }),
+        ]);
+      } finally { if (timer) clearTimeout(timer); }
+    };
+    const drain = async (body) => {
+      reader = body.getReader();
+      try {
+        for (;;) { const next = await read(); if (next.done) break; await sink.write(next.value); }
+      } finally { try { await reader.cancel(); } catch {} reader.releaseLock(); }
+    };
+    try {
+      call = scoped.ai.run(model, input, options);
+      // A provider can stall before it produces headers, where no reader exists to watchdog.
+      // Race that dial too, and cancel a late body so a timed-out call cannot keep provider I/O open.
+      void call
+        .then((late) => {
+          if (!initialTimedOut) return;
+          if (late instanceof Response) return late.body?.cancel();
+          if (late instanceof ReadableStream) return late.cancel();
+        })
+        .catch(() => undefined);
+      let initialTimer;
+      const raw = await Promise.race([
+        call,
+        new Promise((_, reject) => { initialTimer = setTimeout(() => { initialTimedOut = true; reject(new Error("model transport initial response timeout")); }, idle); }),
+      ]).finally(() => clearTimeout(initialTimer));
+      if (raw instanceof Response) {
+        await sink.start({ kind: "response", status: raw.status, statusText: raw.statusText, headers: [...raw.headers], hasBody: raw.body !== null });
+        if (raw.body) await drain(raw.body);
+      } else if (raw instanceof ReadableStream) {
+        await sink.start({ kind: "stream" }); await drain(raw);
+      } else await sink.start({ kind: "value", value: raw });
+      return { kind: "complete" };
+    } catch (error) {
+      try { await reader?.cancel(error); } catch {}
+      try { await sink.error(error instanceof Error ? error.message : String(error)); } catch {}
+      throw error;
+    } finally {
+      call?.[Symbol.dispose]?.(); scoped[Symbol.dispose]?.(); itx[Symbol.dispose]?.();
+    }
+  }
+}`
+};
+
 // runtime/durable-object.ts
 var AgentDurableObject = class extends StreamProcessorDurableObject {
-  processor = new AgentProcessor({ withItx: (call) => this.withItx(call) });
+  processor = new AgentProcessor({
+    withItx: (call) => this.withItx(call),
+    runModel: (path, model, input, options, signal) => this.#runModel(path, model, input, options, signal)
+  });
+  /**
+   * The loaded stateless worker drains the provider response and awaits every byte handed to this
+   * sink. It returns only a plain completion; this DO gives the processor a fresh local body as
+   * soon as headers arrive, then closes that body only after the remote call has completed.
+   */
+  async #runModel(path, model, input, options, signal) {
+    const sink = new AgentAiSink();
+    const remote = this.withItx(
+      async (itx) => await itx.workers.get({ source: AI_TRANSPORT_SOURCE }).invoke([["run", path, model, input, options, sink, 45e3]])
+    );
+    let locallyAborted = false;
+    const finished = remote.then(
+      () => locallyAborted ? void 0 : sink.close(),
+      async (error) => {
+        if (locallyAborted) return;
+        await sink.error(error instanceof Error ? error.message : String(error));
+        throw error;
+      }
+    );
+    this.ctx.waitUntil(finished);
+    const abort = () => {
+      locallyAborted = true;
+      void sink.abort(signal.reason || new Error("model stream aborted")).catch(() => void 0);
+    };
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+    void finished.then(
+      () => signal.removeEventListener("abort", abort),
+      () => signal.removeEventListener("abort", abort)
+    );
+    const started = await sink.started;
+    if (started.kind === "value") return started.value;
+    if (started.kind === "stream") return sink.stream.readable;
+    if (!started.hasBody)
+      return new Response(null, {
+        status: started.status,
+        statusText: started.statusText,
+        headers: started.headers
+      });
+    return new Response(sink.stream.readable, {
+      status: started.status,
+      statusText: started.statusText,
+      headers: started.headers
+    });
+  }
   /** The context this facet is hosted on IS the agent: its path is the one name it goes by, here
    *  and under `itx.files` (attachments are stored beneath it). Read once per incarnation. */
   #pathRead;
@@ -1207,8 +1328,8 @@ import {
 import { StreamProcessorDurableObject as StreamProcessorDurableObject2 } from "./processor.js";
 
 // runtime/collection.ts
-import { RpcTarget } from "cloudflare:workers";
-var AgentCollectionRpcTarget = class extends RpcTarget {
+import { RpcTarget as RpcTarget2 } from "cloudflare:workers";
+var AgentCollectionRpcTarget = class extends RpcTarget2 {
   constructor(withItx, catalog, spec, base = "/") {
     super();
     this.withItx = withItx;
@@ -1351,7 +1472,7 @@ var AgentCollectionRpcTarget = class extends RpcTarget {
     });
   }
 };
-var AgentReference = class extends RpcTarget {
+var AgentReference = class extends RpcTarget2 {
   constructor(withItx, path, spec) {
     super();
     this.withItx = withItx;

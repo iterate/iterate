@@ -19,6 +19,7 @@ import { parseCodemodeResponse } from "./codemode-format.ts";
 const processor = () =>
   new AgentProcessor({
     withItx: () => Promise.reject(new Error("the reduce reaches no itx")),
+    runModel: () => Promise.reject(new Error("the reduce reaches no model transport")),
     now: () => 0,
     sleep: () => Promise.resolve(),
   });
