@@ -679,8 +679,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     evaluateItxExpression: (itxExpression) => this.#itxExpressionResolver.invoke(itxExpression),
     // A facet row's push and catch-up: the facet host's platform entries, past the facet's list.
     pushEventBatchToFacet: (facetHandle, events, range) =>
-      this.#facetHost.pushEventBatchToFacet(facetHandle, events, range),
-    catchUpFacetFromLog: (facetHandle) => this.#facetHost.catchUpFacetFromLog(facetHandle),
+      this.#facetHost.callFacetAsPlatform(facetHandle, [["processEventBatch", events, range]]),
+    catchUpFacetFromLog: (facetHandle) =>
+      this.#facetHost.callFacetAsPlatform(facetHandle, [["catchUpFromLog"]]),
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
   });
 

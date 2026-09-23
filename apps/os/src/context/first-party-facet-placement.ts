@@ -5,7 +5,7 @@
 // where the platform's own code hosts it, never wherever a caller reaches `itx.facets.get(name)` (a
 // signed-in person reaches their own `global:/users/<id>`, their organizations and every path of
 // their projects). Loaded code — a person's own source — runs only inside a project. Enforced where
-// every facet is created, context/facet-host.ts `FacetHost#admitFacetCall`; where every stateless worker is
+// every facet is created, context/facet-host.ts `FacetHost#callFacet`; where every stateless worker is
 // loaded, context/built-ins.ts `workers.get` (`itx.run`'s script loads there too); and before a
 // hosting row is appended, built-ins.ts `processors.enable`. A context is `(projectId, path)`, the
 // path canonical (iterate-context.ts `DurableObjectNameCodec`), its owner root `resourceScope`'s

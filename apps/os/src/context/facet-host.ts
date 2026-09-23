@@ -6,19 +6,16 @@
 // wires the deps and forwards; nothing here reaches past `ctx.facets`, `ctx.storage.kv`,
 // `ctx.exports` and what it is handed.
 //
-// TWO WAYS INTO A FACET. A caller's itx expression reaches one only through `handle` — what
-// `itx.facets.get` hands out — whose every walk is checked against the methods the facet's class
-// lists (context/facet-public-methods.ts). The platform's own calls take the entries no walk can land
-// on: the delivery loop's push and catch-up (`pushEventBatchToFacet`, `catchUpFacetFromLog`), the
-// alarm's revive (`reviveDueClaims`), and `callFacetAsPlatform` for the `itx.secrets` built-ins,
-// egress and the operator's export.
+// TWO WAYS INTO A FACET, one call beneath both. A caller's itx expression reaches one only through
+// `handle` — what `itx.facets.get` hands out — whose every walk is checked against the methods the
+// facet's class lists (context/facet-public-methods.ts). The platform's own calls take
+// `callFacetAsPlatform`, which no walk can land on, and are checked against nothing.
 
 import { z } from "zod";
 import { codedError, errorCode, reportIssue, withTimeout } from "iterate/next/lib";
 import {
   REVIVE_AFTER_MAX_MS,
   REVIVE_AFTER_MS,
-  type ScannedRange,
   type StreamEvent,
 } from "iterate/next/stream/processor";
 import {
@@ -84,14 +81,6 @@ const FIRST_PARTY_FACET_PUBLIC_METHODS = {
   workspace: WorkspaceDurableObject.publicMethods,
 } satisfies Record<keyof typeof FIRST_PARTY_FACET_CLASSES, readonly string[]>;
 
-/** What a loaded facet answers `listPublicMethods()` with — loaded code's answer, so parsed. */
-const LoadedFacetPublicMethods = z.array(z.string());
-
-/** workerd's refusal of a Workers-RPC call to a method the class does not have: what a loaded class
- *  that extends neither SDK facet shell answers `listPublicMethods()` with. */
-const isRpcMethodNotImplemented = (error: unknown): boolean =>
-  error instanceof TypeError && error.message.includes("does not implement the method");
-
 type FacetHostDeps = {
   /** `ctx.facets` (the containers), `ctx.storage.kv` (memos, restart markers, restart counts,
    *  claims), `ctx.exports` (the first-party classes). */
@@ -133,12 +122,6 @@ type MaterializedFacet = {
   generation: number;
 };
 
-/** A facet call past `#admitFacetCall`: the first-party class it hosts, or the loaded facet's
- *  startup memo. */
-type AdmittedFacetCall =
-  | { firstPartyClassName: string; facetStartupMemo: undefined }
-  | { firstPartyClassName: undefined; facetStartupMemo: FacetSpec };
-
 export class FacetHost {
   readonly #deps: FacetHostDeps;
   /** EVERY facet materialized this incarnation — what a release aborts. In memory on purpose:
@@ -169,8 +152,8 @@ export class FacetHost {
    *  the ladder over and a facet that cannot be revived would cost a wake every 40 s for good.
    *  Cleared by the facet's own next claim (its engine reached it) and by a revive that returned. */
   readonly #facetReviveFailures = new Map<string, number>();
-  /** What each handle `handle` minted names — read only by the delivery loop's entries, never by a
-   *  walk: the handle itself carries nothing but its walk. */
+  /** What each handle `handle` minted names — read only by `callFacetAsPlatform` (the delivery loop
+   *  hands it a row target's handle), never by a walk: the handle carries nothing but its walk. */
   readonly #facetAddressByFacetHandle = new WeakMap<
     FacetHandle,
     { name: string; spec: FacetSpec | undefined }
@@ -229,7 +212,7 @@ export class FacetHost {
       if (at > Date.now()) continue;
       this.#claimFacetAlarm(name, null);
       try {
-        await this.#callFacet(name, undefined, [["revive"]]);
+        await this.callFacetAsPlatform(name, [["revive"]]);
         this.#facetRevived(name);
       } catch (error) {
         // A revive `itx.facets.abort` cut off (FACET_ABORTED) failed at nothing: the reset was asked
@@ -365,15 +348,14 @@ export class FacetHost {
     }
   }
 
-  // ── the two ways in: a caller's walk, and the platform's calls ──
+  // ── the facets: two ways in; admit, materialize, call, retry once ──
 
-  /** `itx.facets.get(name, spec?)`, as the built-in hands it out — THE ONE ENTRY AN ITX EXPRESSION
+  /** `itx.facets.get(name, spec?)`, as the built-in hands it out — THE ONE WAY IN AN ITX EXPRESSION
    *  REACHES: a branded FacetHandle whose every walk is checked against the facet class's
-   *  `publicMethods` (context/facet-public-methods.ts) before it lands in the facet call. What it
-   *  names is kept beside it (`#facetAddressByFacetHandle`) for the delivery loop, which evaluates a
-   *  row's target to this handle and calls the facet through its own entries below — never through
-   *  the handle's walk. The facets view is PARENT-LOCAL — the facets live here and can never move
-   *  (workerd#6702: sockets never leave the parent). */
+   *  `publicMethods`. What it names is kept beside it (`#facetAddressByFacetHandle`) for the delivery
+   *  loop, which evaluates a row's target to this handle and calls the facet through
+   *  `callFacetAsPlatform` — never through the handle's walk. The facets view is PARENT-LOCAL — the
+   *  facets live here and can never move (workerd#6702: sockets never leave the parent). */
   handle(name: string, spec?: FacetSpec): FacetHandle {
     const facetHandle = new FacetHandle((itxExpressionSteps) => {
       // A FACET REACHED BY ITX EXPRESSION ANSWERS RPC AND PLAIN HTTP — NEVER A WEBSOCKET. A
@@ -394,138 +376,61 @@ export class FacetHost {
           "FACET_NO_UPGRADE",
           `facet "${name}": a facet answers RPC and plain HTTP, never a WebSocket — a socket terminates at the edge; reach the facet by itx expression`,
         );
-      return this.#callFacetByItxExpression(name, spec, itxExpressionSteps);
+      return this.#callFacet(name, spec, itxExpressionSteps, { byItxExpression: true });
     });
     this.#facetAddressByFacetHandle.set(facetHandle, { name, spec });
     return facetHandle;
   }
 
-  /** THE PLATFORM'S CALL into the facet `name`, past every list — the `itx.secrets` built-ins
-   *  (context/built-ins.ts), egress and the operator's export (the DO). No walk lands here. */
-  async callFacetAsPlatform(name: string, itxExpressionSteps: ItxExpression): Promise<unknown> {
-    return this.#callFacet(name, undefined, itxExpressionSteps);
-  }
-
-  /** The delivery loop's push: `processEventBatch(events, range)` on the facet a row's target
-   *  evaluated to — `facetHandle`, which `handle` minted. */
-  async pushEventBatchToFacet(
-    facetHandle: FacetHandle,
-    events: StreamEvent[],
-    range: ScannedRange,
-  ): Promise<unknown> {
-    const { name, spec } = this.#facetAddressOf(facetHandle);
-    return this.#callFacet(name, spec, [["processEventBatch", events, range]]);
-  }
-
-  /** The delivery loop's catch-up: `catchUpFromLog()` on the facet a row's target evaluated to. */
-  async catchUpFacetFromLog(facetHandle: FacetHandle): Promise<unknown> {
-    const { name, spec } = this.#facetAddressOf(facetHandle);
-    return this.#callFacet(name, spec, [["catchUpFromLog"]]);
-  }
-
-  #facetAddressOf(facetHandle: FacetHandle): { name: string; spec: FacetSpec | undefined } {
-    const facetAddress = this.#facetAddressByFacetHandle.get(facetHandle);
-    if (!facetAddress)
-      throw new Error("facet: a FacetHandle this context's facet host never minted");
-    return facetAddress;
-  }
-
-  /** A caller's walk: admitted as every facet call is, its FIRST step checked against the class's
-   *  `publicMethods` (context/facet-public-methods.ts), then the call. The core reduce's facet-shaped
-   *  address is no facet and lists nothing: it answers `snapshot()` alone. */
-  async #callFacetByItxExpression(
-    name: string,
-    spec: FacetSpec | undefined,
+  /** THE PLATFORM'S WAY IN, checked against no list, which no walk can land on: the facet `name`, or
+   *  the one a FacetHandle names — the delivery loop's row target, pushed `processEventBatch(events,
+   *  range)` and caught up with `catchUpFromLog()`. Also the alarm's revive, the `itx.secrets`
+   *  built-ins, egress and the operator's export. */
+  async callFacetAsPlatform(
+    facet: string | FacetHandle,
     itxExpressionSteps: ItxExpression,
   ): Promise<unknown> {
-    if (name === CoreContract.slug) return this.#callCoreReduce(spec, itxExpressionSteps);
-    const admittedFacetCall = this.#admitFacetCall(name, spec, itxExpressionSteps);
-    assertFacetMethodIsPublic(
-      name,
-      admittedFacetCall.facetStartupMemo
-        ? await this.#loadedFacetPublicMethods(name, admittedFacetCall)
-        : // Admitted as first-party: `name` is one of the table's keys, which the type system cannot see.
-          FIRST_PARTY_FACET_PUBLIC_METHODS[name as keyof typeof FIRST_PARTY_FACET_PUBLIC_METHODS],
-      itxExpressionSteps,
-    );
-    return this.#callAdmittedFacet(name, admittedFacetCall, itxExpressionSteps);
+    if (typeof facet === "string") return this.#callFacet(facet, undefined, itxExpressionSteps);
+    const facetAddress = this.#facetAddressByFacetHandle.get(facet);
+    if (!facetAddress)
+      throw new Error("facet: a FacetHandle this context's facet host never minted");
+    return this.#callFacet(facetAddress.name, facetAddress.spec, itxExpressionSteps);
   }
 
-  /** A LOADED facet's `publicMethods`, asked of the facet itself — `listPublicMethods()`, which the
-   *  SDK's facet shells answer (a static does not cross the isolate) — once per startup memo. A class
-   *  that extends neither shell has no such method, and lists nothing. */
-  async #loadedFacetPublicMethods(
-    name: string,
-    admittedFacetCall: { firstPartyClassName: undefined; facetStartupMemo: FacetSpec },
-  ): Promise<readonly string[]> {
-    const { facetStartupMemo } = admittedFacetCall;
-    const known = this.#publicMethodsByLoadedFacetStartupMemo.get(facetStartupMemo);
-    if (known) return known;
-    let publicMethods: readonly string[] = [];
-    try {
-      publicMethods = LoadedFacetPublicMethods.parse(
-        await this.#callAdmittedFacet(name, admittedFacetCall, [["listPublicMethods"]]),
-      );
-    } catch (error) {
-      if (!isRpcMethodNotImplemented(error)) throw error;
-    }
-    this.#publicMethodsByLoadedFacetStartupMemo.set(facetStartupMemo, publicMethods);
-    return publicMethods;
-  }
-
-  // ── the facets: admit, materialize, call, retry once ──
-
-  /** THE facet call, both ways in — `itx.facets.get(name).m()` (address a running facet) and
-   *  `itx.facets.get(name, { source, className }).m()` (load and host) once a walk is checked, and
-   *  every platform call. Facet stubs are non-transferable, so the walk happens where the stub lives. */
+  /** THE facet call — `itx.facets.get(name).m()` (address a running facet) and
+   *  `itx.facets.get(name, { source, className }).m()` (load and host) both land here; facet stubs
+   *  are non-transferable, so the walk happens where the stub lives. Top to bottom: the startup memo
+   *  → for a caller's walk, the class's `publicMethods` (context/facet-public-methods.ts) →
+   *  `#materialize` (the loaded identity, resolved not loaded; the racing-delete/reconfigure check;
+   *  the restart marker; the facet, its class minted only when it STARTS) → `#call` (the watchdog,
+   *  copy + dispose the answer) — and on the platform failure at facet start, a restart and the same
+   *  two steps once more. */
   async #callFacet(
     name: string,
     spec: FacetSpec | undefined,
     itxExpressionSteps: ItxExpression,
+    { byItxExpression } = { byItxExpression: false },
   ): Promise<unknown> {
-    if (name === CoreContract.slug) return this.#callCoreReduce(spec, itxExpressionSteps);
-    return this.#callAdmittedFacet(
-      name,
-      this.#admitFacetCall(name, spec, itxExpressionSteps),
-      itxExpressionSteps,
-    );
-  }
-
-  /** The core reduce answers at its facet-shaped address with a synthesized view — it is not a
-   *  facet, pins nothing, needs no watchdog, and can never be hosted. */
-  async #callCoreReduce(
-    spec: FacetSpec | undefined,
-    itxExpressionSteps: ItxExpression,
-  ): Promise<unknown> {
-    if (itxExpressionSteps.length === 0) throw new Error(`facet: name a method`);
-    if (spec) throw new Error(`"${CoreContract.slug}" is the core reduce — never a facet name`);
-    return (
-      await walkSteps(
-        {
-          value: { snapshot: () => this.#deps.stream.coreReducedStateSnapshot() },
-          receiver: undefined,
-        },
-        itxExpressionSteps,
-      )
-    ).value;
-  }
-
-  /** What every facet call passes before anything is materialized, synchronously: a facet and a
-   *  method named; a first-party name never with a spec; WHERE it may be hosted
-   *  (first-party-facet-placement.ts — a first-party class runs with the worker's real env on this
-   *  context, so only where the platform hosts it; loaded code only inside a project; every facet is
-   *  created here, so this is where that holds); and a loaded facet's startup memo. */
-  #admitFacetCall(
-    name: string,
-    spec: FacetSpec | undefined,
-    itxExpressionSteps: ItxExpression,
-  ): AdmittedFacetCall {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- name arrives as a client-authored itx expression argument; the static string type is the API contract, not a runtime guarantee, so a non-string is rejected with a usage error
     if (typeof name !== "string")
       throw new Error(
         "itx.facets.get(name, spec?): name the facet; pass { source, className } to load and host it",
       );
     if (itxExpressionSteps.length === 0) throw new Error(`facet: name a method`);
+    // The core reduce answers at its facet-shaped address with a synthesized view — it is not a
+    // facet, pins nothing, needs no watchdog, lists nothing, and can never be hosted.
+    if (name === CoreContract.slug) {
+      if (spec) throw new Error(`"${name}" is the core reduce — never a facet name`);
+      return (
+        await walkSteps(
+          {
+            value: { snapshot: () => this.#deps.stream.coreReducedStateSnapshot() },
+            receiver: undefined,
+          },
+          itxExpressionSteps,
+        )
+      ).value;
+    }
     // A FIRST-PARTY facet (first-party-facets.ts) is this worker's own class: no memo, no loader,
     // no loaded identity to watch — it changes with the deploy — and never a spec.
     const firstPartyClassName = firstPartyFacetClassOf(name);
@@ -533,24 +438,25 @@ export class FacetHost {
       throw new Error(
         `facet "${name}" is first-party — hosted from this worker's own ${firstPartyClassName}, never a loaded source; call itx.facets.get("${name}") without a spec`,
       );
+    // WHERE it may be hosted (first-party-facet-placement.ts): a first-party class runs with the
+    // worker's real env on this context, so only where the platform hosts it; loaded code only
+    // inside a project. Every facet is created here, so this is where that holds.
     assertFacetPlacement(name, {
       projectId: this.#deps.projectId,
       path: this.#deps.path,
     });
-    return firstPartyClassName
-      ? { firstPartyClassName, facetStartupMemo: undefined }
-      : { firstPartyClassName: undefined, facetStartupMemo: this.#facetStartupMemoFor(name, spec) };
-  }
-
-  /** An admitted call, top to bottom: `#materialize` (the loaded identity, resolved not loaded; the
-   *  racing-delete/reconfigure check; the restart marker; the facet, its class minted only when it
-   *  STARTS) → `#call` (the watchdog, copy + dispose the answer) — and on the platform failure at
-   *  facet start, a restart and the same two steps once more. */
-  async #callAdmittedFacet(
-    name: string,
-    { firstPartyClassName, facetStartupMemo }: AdmittedFacetCall,
-    itxExpressionSteps: ItxExpression,
-  ): Promise<unknown> {
+    const facetStartupMemo = firstPartyClassName
+      ? undefined
+      : this.#facetStartupMemoFor(name, spec);
+    if (byItxExpression)
+      assertFacetMethodIsPublic(
+        name,
+        facetStartupMemo
+          ? await this.#loadedFacetPublicMethods(name, facetStartupMemo)
+          : // `name` hosts a first-party class, so it is one of the table's keys; the type system cannot see it.
+            FIRST_PARTY_FACET_PUBLIC_METHODS[name as keyof typeof FIRST_PARTY_FACET_PUBLIC_METHODS],
+        itxExpressionSteps,
+      );
     this.#facetWorkInFlight++;
     try {
       const materialized = await this.#materialize(name, firstPartyClassName, facetStartupMemo);
@@ -570,6 +476,26 @@ export class FacetHost {
     } finally {
       this.#facetWorkInFlight--;
     }
+  }
+
+  /** A LOADED facet's `publicMethods`, asked of the facet once per startup memo —
+   *  `listPublicMethods()`, which the SDK's facet shells answer (a static does not cross the
+   *  isolate). A class that extends neither shell has no such method (workerd's TypeError), and
+   *  lists nothing. */
+  async #loadedFacetPublicMethods(name: string, facetStartupMemo: FacetSpec) {
+    let publicMethods = this.#publicMethodsByLoadedFacetStartupMemo.get(facetStartupMemo);
+    if (publicMethods) return publicMethods;
+    try {
+      publicMethods = z
+        .array(z.string())
+        .parse(await this.#callFacet(name, undefined, [["listPublicMethods"]]));
+    } catch (error) {
+      if (!(error instanceof TypeError && error.message.includes("does not implement the method")))
+        throw error;
+      publicMethods = [];
+    }
+    this.#publicMethodsByLoadedFacetStartupMemo.set(facetStartupMemo, publicMethods);
+    return publicMethods;
   }
 
   /** A failed call's recovery, bounded: at most ONE retry on a start a peer already put in place,

@@ -21,11 +21,11 @@
 // retried by the next incarnation within 20 s, a batch that keeps killing its caller halts after
 // fifteen attempts, as fifteen refusals would, and NOTHING IN MEMORY IS A REASON TO WAKE.
 //
-// A FACET IS PUSHED THROUGH THE PLATFORM'S OWN ENTRIES: a row's target evaluates to the facet's
-// FacetHandle, and the loop hands that handle to the facet host's push and catch-up
-// (context/facet-host.ts `pushEventBatchToFacet`, `catchUpFacetFromLog`) — never the handle's own walk,
-// which reaches only what the facet's class lists for callers (context/facet-public-methods.ts). A
-// facet row whose target names any other method is walked like any caller's call.
+// A FACET IS PUSHED THE PLATFORM'S WAY: a row's target evaluates to the facet's FacetHandle, and the
+// loop's push and catch-up hand that handle to the facet host's `callFacetAsPlatform`
+// (context/facet-host.ts) — never the handle's own walk, which reaches only what the facet's class
+// lists for callers (context/facet-public-methods.ts). A facet row whose target names any other
+// method is walked like any caller's call.
 //
 // Nothing here reads a "kind" off an event: the kind is the evaluated value's brand, minted by the
 // built-in that produced it. Every delivery carries `{ after, through }`; per subscription the loop
@@ -180,14 +180,14 @@ type SubscriptionDeliveryDeps = {
   stream: Stream;
   /** Evaluate an itx expression through the context's own dispatch — a handle, a function, a value. */
   evaluateItxExpression: (expression: ItxExpression) => Promise<unknown>;
-  /** A facet row's push: `processEventBatch(events, range)` on the facet a target evaluated to, through
-   *  the facet host's platform entry. */
+  /** A facet row's push: `processEventBatch(events, range)` on the facet a target evaluated to, the
+   *  platform's way (the facet host's `callFacetAsPlatform`). */
   pushEventBatchToFacet: (
     facetHandle: FacetHandle,
     events: StreamEvent[],
     range: ScannedRange,
   ) => Promise<unknown>;
-  /** A facet row's catch-up from the log, through the facet host's platform entry. */
+  /** A facet row's catch-up from the log, the platform's way. */
   catchUpFacetFromLog: (facetHandle: FacetHandle) => Promise<unknown>;
   /** A row's claim changed OFF the commit path (a commit's own tail reconciles): the DO
    *  reconciles its alarm against `deadlines()`. */
