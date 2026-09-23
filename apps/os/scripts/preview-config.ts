@@ -79,6 +79,17 @@ export function previewPullRequestNumber(previewName: string): number | undefine
   return match ? Number(match[1]) : undefined;
 }
 
+/** Cloudflare's 10061 from `wrangler preview`: "Cannot create binding for class
+ *  'ControlPlaneDurableObject' that is not exported by the script. [code: 10061]" — the build binds
+ *  a Durable Object class the preview does not have. An existing Worker Preview cannot gain a class
+ *  it lacked when it was created (2026-09-23, #2888's ControlPlaneDurableObject: every existing PR
+ *  preview failed, a new one passed), so scripts/preview.ts deletes the preview and creates it again. */
+export function isDurableObjectClassNotExportedError(wranglerOutput: string): boolean {
+  return /Cannot create binding for class .* not exported by the script|\[code: 10061\]/.test(
+    wranglerOutput,
+  );
+}
+
 /** `https://<name>-<worker>.<subdomain>.workers.dev` — Cloudflare derives it from the preview's slug
  *  and the worker name, so every URL the config needs is known before anything deploys. */
 export function previewUrl(previewName: string): string {

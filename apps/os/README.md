@@ -67,6 +67,13 @@ has its own Durable Objects, KV, R2, and Artifacts namespace. Closing the PR del
 preview and its resources. The nightly sweep also removes stale previews and orphaned resources;
 see `scripts/preview-sweep.ts` for the rules. Previews use workers.dev and have no project hosts.
 
+A new Durable Object class needs care. An existing preview cannot gain a class it lacked when it was
+created: `wrangler preview` fails with Cloudflare 10061 ("Cannot create binding for class … not
+exported by the script"). The deploy then deletes that preview and its resources and creates it
+again, once. If the new preview fails the same way, the parent itself lacks the class. Deploy the
+parent from main with `pnpm --dir apps/os run deploy --env preview` (`run`, because `pnpm deploy` is
+pnpm's own command). A PR that itself adds a class needs the parent deployed from its branch first.
+
 After every suite, the `residency` job (`scripts/preview-residency.ts`) reads Cloudflare's Durable
 Object analytics for the five minutes starting five minutes after the suite ended, and fails if any
 object of the preview was still resident with every client closed. It writes the table into the PR
