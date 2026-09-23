@@ -4,6 +4,7 @@
 // `/api` and `/.auth/*`) and, last, the OAuth provider with the issuer's pages as its catch-all.
 // Cap’n Web terminates at `/api`; a project host's request rides into the context DO.
 
+import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
 import { ITX_GRANT_HEADER, ITX_PRINCIPAL_HEADER, type Principal } from "iterate/next/principal";
 import { customProjectHostOf, projectAddressOf } from "iterate/next/project-ingress";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
@@ -266,6 +267,9 @@ export default {
     // `<deployId> <platformOrigin>`: Cloudflare's version id of this deploy — the stamp a smoke
     // waits for (`wrangler deploy` prints it) — and the origin this deployment answers on.
     if (url.pathname === "/version") return new Response(`${deployId} ${platformOrigin}\n`);
+    // posthog-js's `api_host` on the issuer's own pages (routes/__root.tsx): PostHog EU through
+    // this origin.
+    if (url.pathname.startsWith("/e/")) return proxyPosthogRequest({ request, proxyPrefix: "/e" });
 
     // A project secret's OAuth callback (secret-oauth.ts): the provider sends the human back here
     // with the code. Its own reserved path, `/.secrets/`, beside `/version`.

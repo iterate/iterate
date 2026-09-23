@@ -51,12 +51,19 @@ export const kitEnvs = {
   },
 } satisfies Record<string, KitEnv>;
 
+/** The PostHog project every app reports to — "iterate (prd)" in PostHog EU. A project key is public:
+ *  it ships in every page that loads posthog-js. Only prd entries carry it, so previews send nothing. */
+export const ITERATE_POSTHOG_PROJECT_KEY = "phc_2MGb9SEJABGj4sCx4grFIbzMR7NjbcUgP5YmhSXfcr7";
+
 export interface OsEnv {
   cloudflareAccountId: string;
   dopplerConfig: string;
   workerName: string;
   baseUrl: string;
   mcpBaseUrl: string;
+  /** PostHog's project key (`ITERATE_POSTHOG_PROJECT_KEY`): the worker's `POSTHOG_PROJECT_KEY`, and
+   *  the issuer's own pages start posthog-js with it. Unset ⇒ no PostHog. */
+  posthogProjectKey?: string;
   /** The dash's origin for this deployment (apps/dash) — where the platform's landing page `/` sends
    *  a person, the platform being headless. Unset ⇒ the page names no dash (a preview has none). */
   dashBaseUrl?: string;
@@ -122,6 +129,7 @@ export const osEnvs: Record<string, OsEnv> = {
     baseUrl: "https://os.iterate.com",
     mcpBaseUrl: "https://mcp.iterate.com",
     dashBaseUrl: "https://dash.iterate.com",
+    posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
     ingressRouting: { type: "subdomains", hostname: "iterate.app" },
     // Each apex is its project's: the config worker's `fetch` serves it. Every zone must exist in
     // the prd account for the route to deploy; the DNS record appears on `ensure-resources --env prd`.
@@ -158,10 +166,6 @@ export const osEnvs: Record<string, OsEnv> = {
     },
   },
 };
-/** The PostHog project every app reports to — "iterate (prd)" in PostHog EU. A project key is public:
- *  it ships in every page that loads posthog-js. Only prd entries carry it, so previews send nothing. */
-export const ITERATE_POSTHOG_PROJECT_KEY = "phc_2MGb9SEJABGj4sCx4grFIbzMR7NjbcUgP5YmhSXfcr7";
-
 /** apps/dash — THE DASH: sessions and personal access tokens, projects and organizations — the
  *  fat first-party TanStack Start app (README there), an ordinary OAuth client of the headless
  *  platform at os.iterate.com, on the one custom domain among the apps. */
