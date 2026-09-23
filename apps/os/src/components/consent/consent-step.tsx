@@ -1,10 +1,16 @@
 import type { ReactNode, Ref } from "react";
 import { buttonVariants } from "@iterate-com/ui/components/button";
+import { cn } from "@iterate-com/ui/lib/utils";
+import { focusOnMount } from "../focus-on-mount.ts";
 
-/** Module-level so its identity is stable: React calls it once, as the alert appears, and the
- *  refusal is read where the person acted. */
-function focusOnMount(node: HTMLElement | null) {
-  node?.focus();
+/** What every step's panel shows beside the step itself: who is signed in, what went wrong (if
+ *  anything), what the platform is busy with (if anything), and where Cancel goes — the client's
+ *  own refusal URL, so the app learns the person declined. */
+export interface ConsentFrame {
+  account: ReactNode;
+  error: string | null;
+  status: string | null;
+  denyLocation: string;
 }
 
 /** A step's heading. It takes focus when the person moves between steps, so the change is read. */
@@ -22,36 +28,51 @@ export function StepHeading({
   );
 }
 
-/** Each step's last lines: what went wrong, if anything, then its action and Cancel — the
- *  client's own refusal URL, so the app learns the person declined. */
-export function ConsentFooter({
+/** One step of the consent page, in one bordered panel: the step itself on the left; on the right
+ *  the signed-in account, the step's summary (if any) and, at the bottom, its action above Cancel.
+ *  Below `md` the two stack, the step first. */
+export function ConsentPanel({
+  account,
   error,
+  status,
   denyLocation,
+  summary,
+  action,
   children,
-}: {
-  error: string | null;
-  denyLocation: string;
-  children: ReactNode;
-}) {
+}: ConsentFrame & { summary?: ReactNode; action: ReactNode; children: ReactNode }) {
   return (
-    <div className="flex flex-col gap-3">
-      {error ? (
-        <p
-          role="alert"
-          data-type="error"
-          tabIndex={-1}
-          ref={focusOnMount}
-          className="text-sm text-destructive outline-none"
-        >
-          {error}
-        </p>
-      ) : null}
-      <div className="flex flex-wrap gap-2 *:flex-1">
-        {children}
-        <a href={denyLocation} className={buttonVariants({ variant: "outline", size: "lg" })}>
-          Cancel
-        </a>
-      </div>
+    <div className="rounded-2xl border p-5 md:grid md:min-h-100 md:grid-cols-2 md:p-8">
+      <div className="flex min-w-0 flex-col gap-5 md:pr-8">{children}</div>
+      <aside className="flex min-w-0 flex-col gap-4 pt-6 md:gap-6 md:pt-0 md:pl-8">
+        {account}
+        {summary}
+        <div className="mt-auto flex flex-col gap-2.5">
+          {error ? (
+            <p
+              role="alert"
+              data-type="error"
+              tabIndex={-1}
+              ref={focusOnMount}
+              className="text-sm text-destructive outline-none"
+            >
+              {error}
+            </p>
+          ) : null}
+          {status ? (
+            <p role="status" className="text-sm text-muted-foreground">
+              {status}
+            </p>
+          ) : null}
+          {action}
+          <a
+            href={denyLocation}
+            // cn() lets outline's border beat the base's transparent one, as <Button> does
+            className={cn(buttonVariants({ variant: "outline", size: "lg" }), "h-11")}
+          >
+            Cancel
+          </a>
+        </div>
+      </aside>
     </div>
   );
 }

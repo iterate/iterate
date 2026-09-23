@@ -14,30 +14,30 @@ export function ClientHeading({
   clientDomain?: string;
 }) {
   return (
-    <header className="flex flex-col items-center gap-4 text-center">
-      <div className="flex items-center gap-3" aria-hidden="true">
-        <IterateLogo alt="" className="size-12" />
-        <span className="text-muted-foreground">⇄</span>
+    <header className="flex flex-col items-center gap-3 text-center">
+      <div className="mb-3 flex items-center gap-4" aria-hidden="true">
+        <IterateLogo alt="" className="size-16 rounded-[22px]" />
+        <span className="text-xl text-muted-foreground">⇄</span>
         <Avatar
           data-testid="client-logo"
-          className="size-12 rounded-[22.37%] after:rounded-[22.37%]"
+          className="size-16 rounded-[22px] bg-muted after:rounded-[22px]"
         >
           {clientLogoUri ? (
             <AvatarImage
               src={clientLogoUri}
               referrerPolicy="no-referrer"
-              className="rounded-[22.37%]"
+              className="rounded-[22px] object-contain p-2"
             />
           ) : null}
-          <AvatarFallback className="rounded-[22.37%] font-semibold">
+          <AvatarFallback className="rounded-[22px] text-xl font-semibold text-foreground">
             {clientName.slice(0, 2).toUpperCase()}
           </AvatarFallback>
         </Avatar>
       </div>
-      <h1 className="text-xl font-semibold text-balance">
+      <h1 className="text-2xl leading-tight font-semibold tracking-tight text-balance md:text-[2rem]">
         {clientName} wants to access your account
       </h1>
-      {clientDomain ? <p className="-mt-2 text-sm text-muted-foreground">{clientDomain}</p> : null}
+      {clientDomain ? <p className="text-sm text-muted-foreground">{clientDomain}</p> : null}
     </header>
   );
 }

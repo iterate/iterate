@@ -17,12 +17,12 @@ export function SelectedProjects({
   onEdit: () => void;
 }) {
   return (
-    <section aria-label="Selected projects" className="flex flex-col gap-2">
-      <div className="flex items-center justify-between">
+    <section aria-label="Selected projects" className="flex flex-col gap-3 rounded-xl border p-4">
+      <div className="flex items-center justify-between gap-4">
         <h3 className="text-sm font-medium">Project access</h3>
         <Button
           type="button"
-          variant="ghost"
+          variant="outline"
           size="sm"
           aria-label="Edit selected projects"
           disabled={disabled}
@@ -36,9 +36,9 @@ export function SelectedProjects({
       ) : (
         <ul className="flex flex-col gap-1 text-sm">
           {projects.map((project) => (
-            <li key={project.id} className="flex items-baseline gap-2">
-              <strong className="font-mono font-medium">{project.slug}</strong>
-              <span className="text-xs text-muted-foreground">{project.orgName}</span>
+            <li key={project.id} className="flex min-w-0 items-baseline gap-2">
+              <strong className="truncate font-mono font-medium">{project.slug}</strong>
+              <span className="truncate text-xs text-muted-foreground">{project.orgName}</span>
             </li>
           ))}
         </ul>
@@ -66,14 +66,14 @@ export function PermissionChoices({
     onDeclinedChange(next);
   }
   return (
-    <section aria-label="Permissions" className="flex flex-col gap-1">
+    <section aria-label="Permissions" className="flex flex-col divide-y">
       {scopes.map((scope) => (
         <Label
           key={scope.name}
-          className="items-start gap-3 rounded-lg px-2 py-2 leading-normal font-normal"
+          className="items-start gap-3 py-4 leading-normal font-normal first:pt-0 last:pb-0"
         >
           <Checkbox
-            className="mt-0.5"
+            className="mt-0.5 border-foreground/30 data-disabled:opacity-50"
             aria-label={scope.title}
             checked={scope.required || !declined.has(scope.name)}
             disabled={disabled || scope.required}
@@ -81,7 +81,7 @@ export function PermissionChoices({
           />
           <span className="flex flex-col gap-0.5">
             <strong className="font-medium">{scope.title}</strong>
-            <span className="text-muted-foreground">{scope.note}</span>
+            <span className="text-xs text-muted-foreground">{scope.note}</span>
           </span>
         </Label>
       ))}

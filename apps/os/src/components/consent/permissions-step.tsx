@@ -1,59 +1,76 @@
-import { useState, type Ref } from "react";
+import { useId, useState, type Ref } from "react";
 import { Button } from "@iterate-com/ui/components/button";
 import type { ConsentScope } from "iterate/next/oauth-scopes";
-import { ConsentFooter, StepHeading } from "./consent-step.tsx";
+import { ConsentPanel, StepHeading, type ConsentFrame } from "./consent-step.tsx";
 import type { ProjectRow } from "./project-choices.tsx";
 import { PermissionChoices, SelectedProjects } from "./review-summary.tsx";
 
-/** The last step: the projects chosen, the permissions to grant, and Authorize — a plain POST to
- *  this very authorization URL carrying the choices as `project` and `scope` fields. */
+/** The last step: the permissions to grant beside the projects chosen, and Authorize — a plain POST
+ *  to this very authorization URL carrying the choices as `project` and `scope` fields. Authorize
+ *  sits in the panel's other column, joined to the form by `form`. */
 export function PermissionsStep({
   headingRef,
+  frame,
   all,
   selected,
   scopes,
   declined,
-  error,
-  denyLocation,
   disabled,
   onDeclinedChange,
   onEditProjects,
 }: {
   headingRef: Ref<HTMLHeadingElement>;
+  frame: ConsentFrame;
   all: boolean;
   selected: ProjectRow[];
   scopes: ConsentScope[];
   declined: ReadonlySet<string>;
-  error: string | null;
-  denyLocation: string;
   disabled: boolean;
   onDeclinedChange: (declined: ReadonlySet<string>) => void;
   onEditProjects: () => void;
 }) {
+  const formId = useId();
   const [authorizing, setAuthorizing] = useState(false);
   const projectFields = all ? ["*"] : selected.map((project) => project.id);
   const granted = scopes.filter((scope) => scope.required || !declined.has(scope.name));
   return (
-    <form method="post" onSubmit={() => setAuthorizing(true)} className="flex flex-col gap-4">
-      <StepHeading ref={headingRef}>Review permissions</StepHeading>
-      <SelectedProjects all={all} projects={selected} disabled={disabled} onEdit={onEditProjects} />
-      <PermissionChoices
-        scopes={scopes}
-        declined={declined}
-        disabled={disabled}
-        onDeclinedChange={onDeclinedChange}
-      />
-      {projectFields.map((project) => (
-        <input key={project} type="hidden" name="project" value={project} />
-      ))}
-      {granted.map((scope) => (
-        <input key={scope.name} type="hidden" name="scope" value={scope.name} />
-      ))}
-      <ConsentFooter error={error} denyLocation={denyLocation}>
-        <Button type="submit" size="lg" disabled={disabled || authorizing}>
+    <ConsentPanel
+      {...frame}
+      summary={
+        <SelectedProjects
+          all={all}
+          projects={selected}
+          disabled={disabled}
+          onEdit={onEditProjects}
+        />
+      }
+      action={
+        <Button
+          type="submit"
+          form={formId}
+          size="lg"
+          className="h-11"
+          disabled={disabled || authorizing}
+        >
           Authorize
         </Button>
-      </ConsentFooter>
-    </form>
+      }
+    >
+      <StepHeading ref={headingRef}>Review permissions</StepHeading>
+      <form id={formId} method="post" onSubmit={() => setAuthorizing(true)}>
+        <PermissionChoices
+          scopes={scopes}
+          declined={declined}
+          disabled={disabled}
+          onDeclinedChange={onDeclinedChange}
+        />
+        {projectFields.map((project) => (
+          <input key={project} type="hidden" name="project" value={project} />
+        ))}
+        {granted.map((scope) => (
+          <input key={scope.name} type="hidden" name="scope" value={scope.name} />
+        ))}
+      </form>
+    </ConsentPanel>
   );
 }

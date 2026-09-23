@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { Card } from "@iterate-com/ui/components/card";
 import { FieldSeparator } from "@iterate-com/ui/components/field";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import { ErrorMessage, IssuerPage } from "../components/issuer-page.tsx";
@@ -32,21 +33,23 @@ function LoginPage() {
       ? "Check your inbox"
       : "Sign in to iterate";
   return (
-    <IssuerPage>
-      <header className="flex items-center gap-3">
-        <IterateLogo alt="" className="size-8" />
-        <h1 className="text-xl font-semibold">{title}</h1>
-      </header>
-      {state.signedInAs ? (
-        <SignedIn
-          email={state.signedInAs}
-          next={state.next}
-          dash={state.dash}
-          switchAccount={state.switchAccount}
-        />
-      ) : (
-        <SignInOptions state={state} />
-      )}
+    <IssuerPage className="max-w-100">
+      <Card className="gap-5 p-5 shadow-xs sm:p-6">
+        <header className="flex items-center gap-3">
+          <IterateLogo alt="" className="size-8" />
+          <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+        </header>
+        {state.signedInAs ? (
+          <SignedIn
+            email={state.signedInAs}
+            next={state.next}
+            dash={state.dash}
+            switchAccount={state.switchAccount}
+          />
+        ) : (
+          <SignInOptions state={state} />
+        )}
+      </Card>
     </IssuerPage>
   );
 }
@@ -73,7 +76,9 @@ function SignInOptions({ state }: { state: Awaited<ReturnType<typeof getLoginSta
         />
       ) : null}
       {providersEnabled && (formEnabled || state.codeSentTo) ? (
-        <FieldSeparator>or continue with</FieldSeparator>
+        <FieldSeparator className="text-xs *:data-[slot=field-separator-content]:bg-card">
+          or continue with
+        </FieldSeparator>
       ) : null}
       {providersEnabled ? (
         <SignInProviders google={state.google} cloudflare={state.cloudflare} />
