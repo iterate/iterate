@@ -208,8 +208,9 @@ test("secretPathsReferenced: the distinct secret PATHS a request's URL and heade
     ),
   ).toEqual(["/secrets/q", "/secrets/tok"]);
   expect(secretPathsReferenced(new Request("https://api.example.com/"))).toEqual([]);
-  // `.` and `..` name no secret — `/secrets/..` would resolve onto the owner's root — so the
-  // placeholder never names one; `...` is an ordinary name.
+});
+
+test("secretPathsReferenced: a placeholder never names `/secrets/..` or `/secrets/.` — they resolve onto the owner's root, never a secret's own context; `...` is an ordinary name", () => {
   expect(
     secretPathsReferenced(
       new Request('https://api.example.com/?k=getSecret("/secrets/..")', {

@@ -70,12 +70,10 @@ export const Route = createFileRoute("/_auth/projects/$slug/secrets")({
   component: ProjectSecrets,
 });
 
-/** The name's grammar (os-next secrets.ts `SECRET_NAME`): what `getSecret("/secrets/<name>")`
- *  can spell — never `.` or `..`, which resolve onto the project's root. The input's `pattern`, so
- *  the browser says so before the platform has to. */
-const SECRET_NAME_PATTERN = "(?!\\.\\.?$)[a-zA-Z0-9._\\-]+";
+/** The name's grammar (os-next secrets.ts `assertSecretPath`): what `getSecret("/secrets/<name>")`
+ *  can spell. The input's `pattern`, so the browser says so before the platform has to. */
+const SECRET_NAME_PATTERN = "[a-zA-Z0-9._\\-]+";
 const SECRETS_PREFIX = "/secrets/";
-const SECRET_PATH = new RegExp(`^${SECRETS_PREFIX}(?:${SECRET_NAME_PATTERN})$`);
 
 function ProjectSecrets() {
   const { api, info, project } = Route.useRouteContext();
@@ -113,7 +111,7 @@ function ProjectSecrets() {
     collecting && search.project === project.id && search.platform === info.platformOrigin;
   const collectionIsValid =
     collectionTargetMatches &&
-    Boolean(search.path && SECRET_PATH.test(search.path)) &&
+    Boolean(search.path && /^\/secrets\/[a-zA-Z0-9._-]+$/.test(search.path)) &&
     Boolean(collectionUrls) &&
     (!search.agent || search.agent.startsWith("/agents/"));
   /** The row `?update=<name>` names — none when the name is not (or no longer) a secret. */
@@ -426,7 +424,7 @@ function SecretForm({
               value={name}
               onChange={(event) => setName(event.target.value)}
               pattern={SECRET_NAME_PATTERN}
-              title="Letters, digits, dots, underscores and dashes — never . or .. alone"
+              title="Letters, digits, dots, underscores and dashes"
               placeholder="stripe"
               autoComplete="off"
               spellCheck={false}
