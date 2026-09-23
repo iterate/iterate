@@ -2,12 +2,13 @@
 // INSIDE workerd, next to the worker) shares: the context DO stub by ctx name, a capnweb session
 // over SELF's /api (disposed at teardown — importing this module registers the afterAll), a live
 // value to lend (`Echo`, tagged per instance), the directory schema into this lane's empty D1, the
-// production pins' release on demand, and the one poll-until.
+// production pins' release on demand, the alarm a context owes, and the one poll-until.
 import { runInDurableObject, SELF } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { afterAll } from "vitest";
 import definitionsSql from "../src/control-plane.sql?raw";
+import { RESIDENCY_WATCHDOG_WINDOW_MS } from "../src/context/residency-watchdog.ts";
 import { DurableObjectNameCodec } from "../src/iterate-context.ts";
 import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 
@@ -117,6 +118,13 @@ export async function releasePins(ctx: string): Promise<void> {
     (instance as IterateContextDurableObject).releasePins();
   });
 }
+
+/** THE ALARM A CONTEXT OWES, from its physical alarm: null when there is none or it is only the
+ *  residency watchdog's (src/context/residency-watchdog.ts), which every inbound call arms a whole
+ *  window out. A row here runs for seconds and every obligation it can create is owed within
+ *  minutes, so an alarm more than half a window out is the watchdog's. */
+export const owedAlarm = (alarm: number | null): number | null =>
+  alarm !== null && alarm - Date.now() < RESIDENCY_WATCHDOG_WINDOW_MS / 2 ? alarm : null;
 
 /** Poll `fn` until it returns a defined, non-false value (bounded). Physical facts arrive a beat
  *  after the RPC that triggered them: a pager leaves the census when its CLOSE lands at the DO, a

@@ -38,7 +38,15 @@ import type { ItxExpression } from "iterate/next/expression";
 import type { StreamEvent } from "iterate/next/stream/processor";
 import type { AlarmTrace } from "../src/iterate-context-durable-object.ts";
 import { STREAM_ALARM_TRACE_EVENT } from "../src/stream/stream.ts";
-import { adminCredentials, Echo, openSession, releasePins, stub, until } from "./support.ts";
+import {
+  adminCredentials,
+  Echo,
+  openSession,
+  owedAlarm,
+  releasePins,
+  stub,
+  until,
+} from "./support.ts";
 
 /** A tiny userspace processor: counts every durable event. The tally fixture's shape
  *  (e2e/support/sources.ts), reduced to one number — the pure `CounterProcessor` plus its host
@@ -106,10 +114,11 @@ const stateOf = (ctx: string): Promise<Record<string, any>> =>
   runInDurableObject(stub(ctx), async (inst) =>
     (inst as unknown as { rpcStubTransportState(): Record<string, any> }).rpcStubTransportState(),
   );
-/** The DO's scheduled alarm instant, or null — only this lane can read it, and it is the ONE proof
- *  that a release pin below is exercising the alarm instead of firing into an empty schedule. */
-const alarmAt = (ctx: string): Promise<number | null> =>
-  runInDurableObject(stub(ctx), (_inst, state) => state.storage.getAlarm());
+/** The alarm the context OWES (support.ts `owedAlarm` — the residency watchdog's deadline is no
+ *  obligation), or null: only a test inside workerd can read the alarm, and it is the ONE proof that
+ *  a release pin below is exercising the alarm instead of firing into an empty schedule. */
+const owedAlarmAt = async (ctx: string): Promise<number | null> =>
+  owedAlarm(await runInDurableObject(stub(ctx), (_inst, state) => state.storage.getAlarm()));
 /** Poll the census until `stubs` reaches `n` (bounded). A transport leaves the census when its
  *  pager socket's CLOSE lands at the DO — a physical fact that arrives a beat after the edge
  *  disposes its relay, never inside the RPC that triggered it. */
@@ -292,8 +301,8 @@ test("A BARE PROBE ON A DORMANT CONTEXT LEAVES NO ALARM: nothing is subscribed o
   const s = stub(ctx);
   // The probe creates no subscription or outstanding delivery.
   await s.invoke("itx.schedules.list()");
-  await until("no alarm", async () => (await alarmAt(ctx)) === null);
-  expect(await alarmAt(ctx)).toBeNull();
+  await until("no alarm", async () => (await owedAlarmAt(ctx)) === null);
+  expect(await owedAlarmAt(ctx)).toBeNull();
 });
 
 test("AN OBSERVED PASS: an exact waitForEvent observer receives one ephemeral trace, a read with includeEphemeral holds the whole pass, and the durable log holds only what the pass appended", async () => {
@@ -305,7 +314,7 @@ test("AN OBSERVED PASS: an exact waitForEvent observer receives one ephemeral tr
     "schedules",
     ["set", { key: "tick", when: { afterMs: 61_000 }, events: [{ type: "tick" }] }],
   ]);
-  expect(await alarmAt(ctx)).not.toBeNull();
+  expect(await owedAlarmAt(ctx)).not.toBeNull();
   const rowsBefore = await durableCount(ctx);
   const observed = s.invoke([
     "itx",
@@ -333,7 +342,7 @@ test("AN OBSERVED PASS: an exact waitForEvent observer receives one ephemeral tr
   // The tick and its completion are the pass's two durable rows; the traces took none.
   expect(await durableCount(ctx)).toBe(rowsBefore + 2);
   // The one-shot schedule spent and the tick's delivery acked: no deadline left, no alarm.
-  await until("no alarm", async () => (await alarmAt(ctx)) === null);
+  await until("no alarm", async () => (await owedAlarmAt(ctx)) === null);
 });
 test(
   "NO PIN ARMS AN ALARM: a facet arms nothing, a borrowed stub arms nothing — the stub is returned by a TIMER 30 s after its last use, and a call after that borrows it again",
@@ -345,8 +354,8 @@ test(
     await s.append({ type: "a/1" }); // the push materializes the facet
     await new Promise((r) => setTimeout(r, 300));
     await snapCounter(ctx); // and a direct facet call
-    await until("config acked", async () => (await alarmAt(ctx)) === null);
-    expect(await alarmAt(ctx)).toBeNull(); // a facet does not keep the actor resident on the edge: no deadline, no alarm
+    await until("config acked", async () => (await owedAlarmAt(ctx)) === null);
+    expect(await owedAlarmAt(ctx)).toBeNull(); // a facet does not keep the actor resident on the edge: no deadline, no alarm
     // A borrowed stub DOES pin the actor — and still arms nothing: a pin is memory, released by a
     // timer that is memory too (the stub keeps the actor resident until it fires).
     const clientItx = await (
@@ -359,10 +368,10 @@ test(
     const usedAt = Date.now();
     expect(await caller.invoke("itx.p0.echo('warm')")).toBe("echo-0:warm");
     expect((await stateOf(ctx)).borrowedRpcStubs).toBeGreaterThanOrEqual(1);
-    expect(await alarmAt(ctx)).toBeNull();
+    expect(await owedAlarmAt(ctx)).toBeNull();
     await s.invoke("itx.schedules.list()"); // a request, not a pin's use
     await snapCounter(ctx); // a facet call: not a pin's use either
-    expect(await alarmAt(ctx)).toBeNull();
+    expect(await owedAlarmAt(ctx)).toBeNull();
     // THE TIMER: the quiet period after the stub's last use ends with the stub returned.
     await until(
       "released by the timer",
@@ -370,13 +379,13 @@ test(
       45_000,
     );
     expect(Date.now() - usedAt).toBeGreaterThanOrEqual(30_000);
-    expect(await alarmAt(ctx)).toBeNull();
+    expect(await owedAlarmAt(ctx)).toBeNull();
     // A call after the release borrows again (the pager re-dials): a fresh quiet period.
     expect(await caller.invoke("itx.p0.echo('again')")).toBe("echo-0:again");
     expect((await stateOf(ctx)).borrowedRpcStubs).toBeGreaterThanOrEqual(1);
     await releasePins(ctx);
     expect((await stateOf(ctx)).borrowedRpcStubs).toBe(0);
-    expect(await alarmAt(ctx)).toBeNull();
+    expect(await owedAlarmAt(ctx)).toBeNull();
   },
 );
 test("A '*' FACET WAKE ARMS NOTHING: a facet-hosting context holds no alarm after a request, and an alarm-woken incarnation whose wake record materializes the facet leaves none either — one woken, then quiet", async () => {
@@ -385,20 +394,27 @@ test("A '*' FACET WAKE ARMS NOTHING: a facet-hosting context holds no alarm afte
   await enableCounter(ctx); // a "*" facet: every incarnation's wake record is pushed to it
   await s.append({ type: "a/1" });
   await new Promise((r) => setTimeout(r, 300));
-  await until("config acked", async () => (await alarmAt(ctx)) === null);
-  expect(await alarmAt(ctx)).toBeNull(); // the live facet armed nothing: it is not a pin
+  await until("config acked", async () => (await owedAlarmAt(ctx)) === null);
+  expect(await owedAlarmAt(ctx)).toBeNull(); // the live facet armed nothing: it is not a pin
   const wokens = async () =>
     ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events.filter(
       (event) => event.type === "events.iterate.com/stream/woken",
     );
   const before = (await wokens()).length;
-  // A stale alarm fires into an evicted actor: the fresh incarnation's wake record materializes
-  // the counter for the push, and the pass arms nothing for it.
+  // A due schedule fires into an evicted actor: the fresh incarnation's wake record materializes
+  // the counter for the push, and the pass arms nothing for it. (An alarm with nothing durable due
+  // wakes nothing at all — residency-watchdog.test.ts.) The schedule's own event is pushed to the
+  // counter first, so its push settles before the release un-pins the facet.
+  await s.invoke([
+    "itx",
+    "schedules",
+    ["set", { key: "wake", when: { afterMs: 1_500 }, events: [{ type: "wake" }] }],
+  ]);
+  await new Promise((r) => setTimeout(r, 300));
   await releasePins(ctx); // un-pin the facet so the eviction below can happen (workerd pins, the edge does not)
-  await runInDurableObject(s, (_inst, state) => state.storage.setAlarm(Date.now() + 300));
   await evictDurableObject(s);
   await new Promise((r) => setTimeout(r, 2_500));
-  expect(await alarmAt(ctx)).toBeNull(); // (a read constructs nothing: the alarm is storage)
+  expect(await owedAlarmAt(ctx)).toBeNull(); // (a read constructs nothing: the alarm is storage)
   await new Promise((r) => setTimeout(r, 1_500));
   const woken = await wokens(); // this read is a request: at most one more incarnation, by request
   expect(woken.slice(before).map((event) => (event.payload as { reason: string }).reason)).toEqual(
@@ -415,25 +431,29 @@ test("A WAKE MAKES NO LOOP: an incarnation the alarm woke delivers its own wake 
   const ctx = "prj_q_wake_no_loop";
   const s = stub(ctx);
   await s.invoke("itx.schedules.list()"); // born: created, woken, the config row
-  await until("no alarm", async () => (await alarmAt(ctx)) === null);
+  await until("no alarm", async () => (await owedAlarmAt(ctx)) === null);
   const wokens = async () =>
     ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events.filter(
       (event) => event.type === "events.iterate.com/stream/woken",
     );
   const before = (await wokens()).length;
-  // An alarm with no reason left behind (a stray one a dead incarnation left, say — set here on the
-  // quiet incarnation, which is then evicted) fires for real and wakes a FRESH incarnation: its
-  // constructor reads the alarm, so its wake record says so.
-  await runInDurableObject(s, (_inst, state) => state.storage.setAlarm(Date.now() + 300));
+  // A due schedule (set on the quiet incarnation, which is then evicted) fires for real and wakes a
+  // FRESH incarnation, whose wake record says so. (An alarm with nothing durable due — a stray one a
+  // dead incarnation left — wakes nothing at all: residency-watchdog.test.ts.)
+  await s.invoke([
+    "itx",
+    "schedules",
+    ["set", { key: "wake", when: { afterMs: 300 }, events: [{ type: "wake" }] }],
+  ]);
   await evictDurableObject(s);
   await new Promise((r) => setTimeout(r, 1_500)); // the alarm has fired; nothing else has touched the context
   const woken = await wokens();
   expect(woken).toHaveLength(before + 1);
   expect(woken.at(-1)!.payload).toMatchObject({ reason: "alarm" });
   // Its own wake record delivered and acked, nothing pinned: no alarm — and none appears.
-  await until("no alarm", async () => (await alarmAt(ctx)) === null);
+  await until("no alarm", async () => (await owedAlarmAt(ctx)) === null);
   await new Promise((r) => setTimeout(r, 1_500));
-  expect(await alarmAt(ctx)).toBeNull();
+  expect(await owedAlarmAt(ctx)).toBeNull();
   expect(await wokens()).toHaveLength(before + 1);
 });
 
@@ -454,8 +474,8 @@ test("A BORROW ARMS NOTHING: the first call through a stub — a live '*' subscr
   await stub(ctx).append({ type: "mark" });
   expect(await caller.invoke("itx.p0.echo('first')")).toBe("echo-0:first"); // and a direct borrow
   await new Promise((r) => setTimeout(r, 800)); // an alarm armed for the borrow would show by now
-  await until("config acked", async () => (await alarmAt(ctx)) === null);
-  expect(await alarmAt(ctx)).toBeNull();
+  await until("config acked", async () => (await owedAlarmAt(ctx)) === null);
+  expect(await owedAlarmAt(ctx)).toBeNull();
   const ring = (
     (await stub(ctx).invoke(["itx", ["readEvents", 0, 500, { includeEphemeral: true }]])) as {
       events: StreamEvent[];
@@ -501,7 +521,7 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a DISPOSED live provide stays gone; t
 
   // Warm one stub: that borrow is what the release then has to return — and it arms nothing.
   expect(await caller.invoke("itx.k0.echo('warm')")).toBe("echo-0:warm");
-  expect(await alarmAt(ctx)).toBeNull();
+  expect(await owedAlarmAt(ctx)).toBeNull();
   await releasePins(ctx);
   const q = await stateOf(ctx);
   expect(q.borrowedRpcStubs).toBe(0); // the release returned every borrowed stub (evict precondition)
@@ -623,5 +643,5 @@ test("ALARM PUMPS THE CURSOR LANE: a failed at-least-once delivery is retried fr
   expect(after.halted).toBeUndefined();
   expect(await s.invoke(["itx", "kv", ["get", "flaky-digested"]])).toBe("1");
   // Caught up, nothing pinned: the pass left no alarm behind.
-  expect(await alarmAt(ctx)).toBeNull();
+  expect(await owedAlarmAt(ctx)).toBeNull();
 });
