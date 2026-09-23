@@ -29,7 +29,7 @@ import { SlackReplayTarget, Tools } from "./support/targets.ts";
 subdomainsOnly(
   "a project label outside the DNS grammar is not a project host: the edge names no DO for it — 421, never the control plane",
   async () => {
-    // A project host is the one HTTP way into a project, and `projectHostOf` (src/worker.ts) admits a
+    // A project host is the one HTTP way into a project, and `projectHostOf` (src/app-config.ts) admits a
     // DNS label only — `prj_evil` (an `_`, legal in a DO name) is no project host. Under the base there
     // is nothing else, so the edge answers 421 (a fall-through to the control plane would be a working
     // platform origin on a name the platform never chose) and no Durable Object is ever named or

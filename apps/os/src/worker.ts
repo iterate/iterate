@@ -7,7 +7,6 @@
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
 import { ITX_GRANT_HEADER, ITX_PRINCIPAL_HEADER, type Principal } from "iterate/next/principal";
 import { forwardIssues } from "iterate/next/lib";
-import { customProjectHostOf, projectAddressOf } from "iterate/next/project-ingress";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import type { Env as WorkerEnv } from "./env.ts";
 import { identityResponse } from "./identity.ts";
@@ -16,7 +15,12 @@ import { secretOAuthCallback } from "./secret-oauth-callback.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import { oauthResponse } from "./api.ts";
 import { issuerHandler } from "./issuer-pages.ts";
-import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-config.ts";
+import {
+  appConfigOf,
+  platformAddressesOf,
+  projectHostOf,
+  sessionSigningSecretOf,
+} from "./app-config.ts";
 import { captureIssueInPosthog } from "./posthog.ts";
 import { FILES_APP_LABEL, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
@@ -169,21 +173,7 @@ export default {
       platformOrigin,
     };
     const routing = appConfig.urls.ingressRouting;
-    // A project under the ingress routing (iterate/next/project-ingress: subdomains — a host under
-    // the wildcard; paths — `/<project>[/<app>]` on the platform origin), or one of the deployment's
-    // custom hostnames (a project's apex).
-    // The issuer has a more specific route on the same Worker; keep it on the control plane.
-    const customHost =
-      url.origin === platformOrigin
-        ? null
-        : customProjectHostOf(
-            url.hostname,
-            appConfig.urls.temporaryCustomHostnames,
-            appConfig.urls.projectWildcard,
-          );
-    const projectHost =
-      projectAddressOf(routing, url, platformOrigin) ??
-      (customHost && { ...customHost, basePath: "" });
+    const projectHost = projectHostOf(appConfig, url, platformOrigin);
     if (projectHost) {
       // ADMISSION, before any PROJECT Durable Object is dialled: a context is created on first
       // touch, so a hostname whose project the control plane does not know must never reach one —

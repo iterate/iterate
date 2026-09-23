@@ -9,16 +9,12 @@ import {
   OAuthScopes,
   type ConsentScope,
 } from "iterate/next/oauth-scopes";
-import {
-  customProjectHostOf,
-  projectAddressOf,
-  type IngressRouting,
-} from "iterate/next/project-ingress";
+import type { IngressRouting } from "iterate/next/project-ingress";
 import { type ConsentApproved } from "./account/contract.ts";
 import type { Env } from "./env.ts";
 import type { OrganizationRecord, ProjectRecord } from "./control-plane/catalog.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
-import { appConfigOf, type PlatformAddresses } from "./app-config.ts";
+import { appConfigOf, projectHostOf, type PlatformAddresses } from "./app-config.ts";
 import {
   authorizationOf,
   oauthHelpers,
@@ -59,9 +55,8 @@ export type ConsentView =
   | { kind: "redirect"; location: string }
   | { kind: "invalid"; description: string };
 
-/** A platform-served project CIMD client can receive only that project's authority — on a host
- *  under the project hostname base or on a project's custom apex (the same two hostname checks
- *  worker.ts admits a project host with). */
+/** A platform-served project CIMD client can receive only that project's authority — its
+ *  client.json on a project host (app-config.ts `projectHostOf`, as the edge admits one). */
 export async function projectsForClient(
   env: Env,
   platformOrigin: string,
@@ -71,17 +66,9 @@ export async function projectsForClient(
   const controlPlane = new ControlPlane(env.CONTROL_PLANE);
   const projects = await controlPlane.reachableProjects({ userId });
   const url = URL.canParse(clientId) ? new URL(clientId) : null;
-  const config = appConfigOf(env);
   const host =
     url?.pathname === "/.auth/client.json"
-      ? (projectAddressOf(config.urls.ingressRouting, url, platformOrigin) ??
-        (url.origin === platformOrigin || url.origin === config.urls.mcp
-          ? null
-          : customProjectHostOf(
-              url.hostname,
-              config.urls.temporaryCustomHostnames,
-              config.urls.projectWildcard,
-            )))
+      ? projectHostOf(appConfigOf(env), url, platformOrigin)
       : null;
   if (!host) return { projects, projectBound: false };
   const project = await controlPlane.getProject(host.project);
