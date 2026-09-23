@@ -7,7 +7,13 @@ import { parse as parseYaml } from "yaml";
 type PreviewWorkflow = {
   jobs: Record<
     string,
-    { if?: string; name?: string; needs?: string | string[]; steps?: Array<{ run?: string }> }
+    {
+      if?: string;
+      name?: string;
+      needs?: string | string[];
+      "runs-on"?: { size?: string };
+      steps?: Array<{ run?: string; if?: string }>;
+    }
   >;
 };
 
@@ -24,6 +30,18 @@ describe("the OS-Next preview workflow", () => {
     expect(preview.jobs.e2e.steps?.map((step) => step.run)).toContain(
       "doppler run -- pnpm preview e2e",
     );
+  });
+
+  it("reads the preview's residency after every suite, then always releases it, in that order", () => {
+    const steps = preview.jobs.residency.steps || [];
+    expect([preview.jobs.residency.needs].flat()).toEqual(["e2e"]);
+    expect(preview.jobs.residency["runs-on"]?.size).toBe("2x8");
+    // a redeploy before the reading would end the very sessions the gate looks for
+    expect(steps.map((step) => step.run).filter((run) => run?.includes("pnpm preview"))).toEqual([
+      "doppler run -- pnpm preview residency",
+      "doppler run -- pnpm preview release",
+    ]);
+    expect(steps.at(-1)?.if).toBe("always()");
   });
 
   // After every deploy that succeeded, never after one that did not, and alone (deploy skipped) on

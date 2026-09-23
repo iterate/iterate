@@ -3,10 +3,12 @@
 // half; the pure half — naming, the PR body's section, the preview's wrangler config — is
 // scripts/preview-config.ts (preview.test.ts). Commands: config (build and write preview config),
 // deploy (build, the D1 and the Artifacts namespace, the secrets, `wrangler preview`, the PR body),
-// e2e (vitest and Playwright against the live preview), reset (delete, then deploy), delete (the
-// preview, its D1, Artifacts namespace, KV namespaces and R2 bucket, the apps on top), sweep (the
-// stale previews and the resources that outlived theirs — the rules are scripts/preview-sweep.ts).
-// `--dry-run` prints the plan.
+// e2e (vitest and Playwright against the live preview), residency (after e2e: fail on any Durable
+// Object still resident with no client connected; scripts/preview-residency.ts), release (after
+// residency: redeploy — never a reset — ending the sessions the run left open), reset (delete, then
+// deploy), delete (the preview, its D1, Artifacts namespace, KV namespaces and R2 bucket, the apps on
+// top), sweep (the stale previews and the resources that outlived theirs — the rules are
+// scripts/preview-sweep.ts). `--dry-run` prints the plan.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -41,10 +43,22 @@ import {
   previewResourceSuffixes,
   previewUrl,
   renderPullRequestSection,
+  RESIDENCY_SECTION_MARKERS,
   resolvePreviewName,
   splicePullRequestBody,
   writePreviewWranglerConfig,
 } from "./preview-config.ts";
+import {
+  DURABLE_OBJECT_RESIDENCY_QUERY,
+  DurableObjectNamespace,
+  DurableObjectResidencyAnswer,
+  durableObjectAnalyticsCoverWindow,
+  durableObjectResidencyVariables,
+  durableObjectResidencyVerdict,
+  durableObjectResidencyWindow,
+  previewDurableObjectNamespaces,
+  renderDurableObjectResidency,
+} from "./preview-residency.ts";
 import {
   planPreviewSweep,
   previewNameOfSweptResource,
@@ -63,7 +77,16 @@ const OUTPUT_DIR = path.join(ROOT, "output");
  *  mentions preview auto-provisioning. */
 const WRANGLER_PACKAGE = "https://pkg.pr.new/wrangler@14416";
 
-const Command = z.enum(["config", "deploy", "e2e", "reset", "delete", "sweep"]);
+const Command = z.enum([
+  "config",
+  "deploy",
+  "e2e",
+  "residency",
+  "release",
+  "reset",
+  "delete",
+  "sweep",
+]);
 type Command = z.infer<typeof Command>;
 /** The apps on top: every one by default, none, or (auto) the ones whose paths this PR changes. */
 const AppsMode = z.enum(["all", "auto", "none"]);
@@ -197,11 +220,15 @@ const repository = () => requireEnv("GITHUB_REPOSITORY");
 /** Read, splice, write, read back: the PR body has no conditional update, so a person editing the
  *  description in the same seconds could lose one write or the other. Reading it back and
  *  re-splicing onto whatever is there now converges on both edits within a few rounds. */
-async function writePullRequestSection(prNumber: string, section: string): Promise<void> {
+async function writePullRequestSection(
+  prNumber: string,
+  section: string,
+  markers?: typeof RESIDENCY_SECTION_MARKERS,
+): Promise<void> {
   const route = `/repos/${repository()}/pulls/${prNumber}`;
   for (let attempt = 1; attempt <= 3; attempt++) {
     const before = (await github<{ body: string | null }>(route)).body || "";
-    const body = splicePullRequestBody(before, section);
+    const body = splicePullRequestBody(before, section, markers);
     if (body === before)
       return console.log(`PR #${prNumber}'s body already carries this preview section`);
     await github(route, { method: "PATCH", body: { body } });
@@ -548,23 +575,11 @@ function assertFreshInstall() {
     throw new Error("pnpm-lock.yaml is newer than node_modules: run `pnpm install` first");
 }
 
-async function deployPreview(
-  ctx: EnvContext<OsEnv>,
-  previewName: string,
-  prNumber: string | undefined,
-  apps: StartApp[],
-) {
-  assertFreshInstall();
-  // The apps' vite builds run beside os-next's build, the D1 and the wrangler install.
-  // Attach rejection handlers immediately: OS Next's build and deployment can take minutes, and
-  // an app build may fail before we reach the point where its result is consumed.
-  const appBuilds = Promise.allSettled(apps.map((app) => buildStartApp(app, "preview")));
-  await buildOsNext("preview");
-  const appBuildResults = await appBuilds;
-  const failedBuilds = appBuildResults.flatMap((result, index) =>
-    result.status === "rejected" ? [`${apps[index]!.name}: ${describe(result.reason)}`] : [],
-  );
-  if (failedBuilds.length) throw new Error(`app preview build failed: ${failedBuilds.join("; ")}`);
+/** The OS's own preview, from an OS build already made — its D1 and Artifacts namespace, its config
+ *  (naming the PR's Dash preview when `apps` holds dash), the Previews secrets, `wrangler preview`,
+ *  and the smoke that the new deployment serves. What `deploy` and `release` share. The wrangler it
+ *  prepared comes back for the apps on top; the caller cleans it up (here, when this fails). */
+async function deployOsPreview(ctx: EnvContext<OsEnv>, previewName: string, apps: StartApp[]) {
   const databaseId = await ensureDatabase(ctx.cf, previewResourceName(previewName, "db"));
   await ensureArtifactsNamespace(ctx.cf, previewResourceName(previewName, "repos"));
   const dash = apps.find((app) => app.name === "dash");
@@ -610,6 +625,32 @@ async function deployPreview(
         response.status === 200 && (await response.text()).startsWith(deploymentId),
       "version names the deployment",
     );
+    return { wrangler, url, deploymentId, slug: data.preview?.slug || previewName };
+  } catch (error) {
+    wrangler.cleanup();
+    throw error;
+  }
+}
+
+async function deployPreview(
+  ctx: EnvContext<OsEnv>,
+  previewName: string,
+  prNumber: string | undefined,
+  apps: StartApp[],
+) {
+  assertFreshInstall();
+  // The apps' vite builds run beside os-next's build, the D1 and the wrangler install.
+  // Attach rejection handlers immediately: OS Next's build and deployment can take minutes, and
+  // an app build may fail before we reach the point where its result is consumed.
+  const appBuilds = Promise.allSettled(apps.map((app) => buildStartApp(app, "preview")));
+  await buildOsNext("preview");
+  const appBuildResults = await appBuilds;
+  const failedBuilds = appBuildResults.flatMap((result, index) =>
+    result.status === "rejected" ? [`${apps[index]!.name}: ${describe(result.reason)}`] : [],
+  );
+  if (failedBuilds.length) throw new Error(`app preview build failed: ${failedBuilds.join("; ")}`);
+  const { wrangler, url, deploymentId, slug } = await deployOsPreview(ctx, previewName, apps);
+  try {
     const appPreviews = await Promise.all(
       apps.map((app) => deployAppPreview(app, previewName, url, wrangler.command)),
     );
@@ -622,7 +663,6 @@ async function deployPreview(
         env: { DEMO_BASE_URL: url, NOTES_BASE_URL: notesPreview.url },
       });
     }
-    const slug = data.preview?.slug || previewName;
     const summary = {
       previewName,
       url,
@@ -745,6 +785,124 @@ async function runE2e(previewName: string): Promise<void> {
     Boolean,
   );
   if (failed.length > 0) throw new Error(`${failed.join(" and ")} failed against ${url}`);
+}
+
+// ── after the suite: the residency gate, then the release ──────────────────────────────────────
+
+/** A suite boundary the workflow recorded (`PREVIEW_SUITE_STARTED`, `PREVIEW_SUITE_ENDED`, UTC ISO). */
+function suiteTime(name: string, fallback?: Date): Date {
+  const value = process.env[name];
+  if (!value && fallback) {
+    console.warn(`${name} is unset (the e2e step never finished); using ${fallback.toISOString()}`);
+    return fallback;
+  }
+  const time = new Date(requireEnv(name));
+  if (Number.isNaN(time.getTime())) throw new Error(`${name}=${value} is not a time`);
+  return time;
+}
+
+/** THE RESIDENCY GATE (the rules: scripts/preview-residency.ts). Waits until the analytics cover the
+ *  window five minutes after the suite ended, reads which of the preview's Durable Objects were still
+ *  resident, prints the verdict, writes it into the PR body, and fails on any leak. It only reads: a
+ *  redeploy before it would end the very sessions it looks for, so `release` is the step after it. */
+async function residencyGate(
+  ctx: EnvContext<OsEnv>,
+  previewName: string,
+  prNumber: string | undefined,
+): Promise<void> {
+  // A suite killed before its end was recorded ended no later than now: every client it had is gone.
+  const suite = {
+    started: suiteTime("PREVIEW_SUITE_STARTED"),
+    ended: suiteTime("PREVIEW_SUITE_ENDED", new Date()),
+  };
+  const window = durableObjectResidencyWindow(suite.ended);
+  const namespaces = previewDurableObjectNamespaces(
+    z
+      .array(DurableObjectNamespace)
+      .parse(await listAll<unknown>(ctx.cf, "/workers/durable_objects/namespaces")),
+    { parentWorkerName: PREVIEW_PARENT.workerName, previewName },
+  );
+  if (namespaces.length === 0)
+    throw new Error(`no Durable Object namespace on the account belongs to preview ${previewName}`);
+  const sleepUntil = (time: number) =>
+    new Promise((resolve) => setTimeout(resolve, Math.max(0, time - Date.now())));
+  // A refused answer (a 5xx, a rate limit) is read again twice, 15 s apart, before it fails the gate.
+  const read = async () => {
+    for (let attempt = 1; ; attempt++) {
+      const variables = durableObjectResidencyVariables({
+        accountTag: PREVIEW_PARENT.cloudflareAccountId,
+        namespaceIds: namespaces.map((namespace) => namespace.id),
+        window,
+        suite,
+        readAt: new Date(),
+      });
+      const response = await fetch("https://api.cloudflare.com/client/v4/graphql", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${ctx.secrets.CLOUDFLARE_API_TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ query: DURABLE_OBJECT_RESIDENCY_QUERY, variables }),
+      });
+      const text = await response.text();
+      let body: unknown;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = undefined; // an HTML error page (a 502 from the edge) is a refusal like any other
+      }
+      const answer = DurableObjectResidencyAnswer.safeParse(body);
+      if (answer.success) return answer.data.data.viewer.accounts[0];
+      const refusal = `Cloudflare GraphQL answered ${response.status}: ${text.slice(0, 1000)}`;
+      if (attempt === 3) throw new Error(refusal);
+      console.warn(`${refusal}; reading again in 15 s`);
+      await sleepUntil(Date.now() + 15_000);
+    }
+  };
+  // The window's last minute is complete about two minutes after the window ends (measured
+  // 2026-09-23; durableObjectAnalyticsCoverWindow). An idle account reports no newer minute at all,
+  // so the wait also ends five minutes after the window does.
+  const firstRead = window.end.getTime() + 2 * 60_000;
+  const deadline = window.end.getTime() + 5 * 60_000;
+  console.log(
+    `suite ${suite.started.toISOString()} → ${suite.ended.toISOString()}; reading the window ${window.start.toISOString()} → ${window.end.toISOString()} over ${namespaces.length} namespaces of ${previewName}, from ${new Date(firstRead).toISOString()}`,
+  );
+  await sleepUntil(firstRead);
+  let account = await read();
+  while (!durableObjectAnalyticsCoverWindow(account, window) && Date.now() < deadline) {
+    await sleepUntil(Date.now() + 30_000);
+    account = await read();
+  }
+  console.log(
+    `the account's newest analytics minute: ${account.newestMinute[0]?.dimensions.datetimeMinute ?? "none since the window started"}`,
+  );
+  const verdict = durableObjectResidencyVerdict({ account, namespaces, window });
+  console.log(`\n${renderDurableObjectResidency(verdict)}\n`);
+  if (prNumber && process.env.GITHUB_TOKEN)
+    await writePullRequestSection(
+      prNumber,
+      renderDurableObjectResidency(verdict, { maxRows: 40 }),
+      RESIDENCY_SECTION_MARKERS,
+    );
+  if (verdict.failures.length > 0)
+    throw new Error(`the residency gate failed: ${verdict.failures.join("; ")}`);
+}
+
+/** THE RELEASE: redeploy the preview from this checkout (the commit the run deployed, the same
+ *  config), which ends the sessions the run left open instead of billing them until the next push.
+ *  Measured on PR #2849's first run: 10 of 16 resident objects were gone within a minute; the 6 that
+ *  are re-woken after a reset survived it, and the next run's gate names them again. The PR body
+ *  keeps the deploy's section; only the deployment id behind the URL changes. */
+async function releasePreview(
+  ctx: EnvContext<OsEnv>,
+  previewName: string,
+  apps: StartApp[],
+): Promise<void> {
+  assertFreshInstall();
+  await buildOsNext("preview");
+  const { wrangler, deploymentId } = await deployOsPreview(ctx, previewName, apps);
+  wrangler.cleanup();
+  console.log(`released ${previewName}: redeployed as deployment ${deploymentId}`);
 }
 
 // ── sweep (cloudflare-os: GitHub has no `environment.auto_stop_in`) ────────────────────────────
@@ -1030,6 +1188,9 @@ async function main(argv: string[]): Promise<void> {
   }
   if (parsed.command === "e2e") return runE2e(previewName);
   const ctx = await parentContext();
+  if (parsed.command === "residency") return residencyGate(ctx, previewName, pr);
+  if (parsed.command === "release")
+    return releasePreview(ctx, previewName, await appsToPreview(appsMode, pr));
   if (parsed.command === "delete") return deleteAll(ctx.cf, previewName);
   if (parsed.command === "reset") await deleteAll(ctx.cf, previewName);
   return deployPreview(ctx, previewName, pr, await appsToPreview(appsMode, pr));

@@ -9,6 +9,7 @@ import {
   previewResourceName,
   previewWranglerConfig,
   renderPullRequestSection,
+  RESIDENCY_SECTION_MARKERS,
   resolvePreviewName,
   slugifyPreviewName,
   splicePullRequestBody,
@@ -93,6 +94,22 @@ describe("the PR body's managed section", () => {
     expect(splicePullRequestBody("", "s")).toBe(
       "<!-- os-next-preview:begin -->\ns\n<!-- os-next-preview:end -->\n",
     );
+  });
+
+  test("the residency gate fills in its pending block inside the section, and a redeploy resets it", () => {
+    const deployed = splicePullRequestBody("Intro.\n", section);
+    expect(deployed).toContain("#### Residency gate: pending");
+    const gated = splicePullRequestBody(
+      deployed,
+      "#### Residency gate: passed",
+      RESIDENCY_SECTION_MARKERS,
+    );
+    expect(gated).not.toContain("pending");
+    expect(gated).toContain(
+      "<!-- os-next-preview-residency:begin -->\n#### Residency gate: passed\n<!-- os-next-preview-residency:end -->",
+    );
+    expect(gated.endsWith("\n<!-- os-next-preview:end -->\n")).toBe(true);
+    expect(splicePullRequestBody(gated, section)).toBe(deployed);
   });
 });
 
