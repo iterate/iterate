@@ -159,6 +159,28 @@ test("the PR report explains the TypeScript runtime-line filter", () => {
   );
 });
 
+test.for([
+  { path: "specs/test-support/test.ts", group: "Tests" },
+  { path: "specs/setup.ts", group: "Tests" },
+  { path: "specs/os/auth.spec.ts", group: "Tests" },
+  { path: "apps/os/__workers-tests__/support.ts", group: "Tests" },
+  { path: "apps/agents/__workers-tests__/agent-revive.test.ts", group: "Tests" },
+  { path: "apps/os/src/worker.ts", group: "Product" },
+])("$path counts as $group", ({ path, group }) => {
+  const file = {
+    path,
+    previousPath: path,
+    added: 1,
+    removed: 0,
+    significantAdded: 1,
+    significantRemoved: 0,
+    binary: false,
+    generated: false,
+  };
+
+  expect(computeReport([file]).rows).toMatchObject([{ name: group, files: 1 }]);
+});
+
 function createGitRepo() {
   const path = mkdtempSync(join(tmpdir(), "loc-report-test-"));
   execFileSync("git", ["init", "--quiet"], { cwd: path });
