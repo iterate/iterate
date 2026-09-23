@@ -892,8 +892,8 @@ async function residencyGate(
     }
   };
   // The window's last minute is complete about two minutes after the window ends, and a new
-  // preview's own data can trail the account's by a quarter of an hour (measured 2026-09-23;
-  // durableObjectAnalyticsCoverWindow). An idle account reports no newer minute at all, so the wait
+  // preview's own data, its first minutes especially, can trail the account's by a quarter of an
+  // hour (measured 2026-09-23; durableObjectAnalyticsCoverWindow). An idle account reports no newer minute at all, so the wait
   // also ends fifteen minutes after the window does.
   const firstRead = window.end.getTime() + 2 * 60_000;
   const deadline = window.end.getTime() + 15 * 60_000;
@@ -902,15 +902,12 @@ async function residencyGate(
   );
   await sleepUntil(firstRead);
   let account = await read();
-  while (
-    !durableObjectAnalyticsCoverWindow(account, window, suite.ended) &&
-    Date.now() < deadline
-  ) {
+  while (!durableObjectAnalyticsCoverWindow(account, window, suite) && Date.now() < deadline) {
     await sleepUntil(Date.now() + 30_000);
     account = await read();
   }
   console.log(
-    `the account's newest analytics minute: ${account.newestMinute[0]?.dimensions.datetimeMinute ?? "none since the window started"}; the preview's: ${account.previewNewestMinute[0]?.dimensions.datetimeMinute ?? "none since the suite started"}`,
+    `the account's newest analytics minute: ${account.newestMinute[0]?.dimensions.datetimeMinute ?? "none since the window started"}; the preview's: ${account.previewOldestMinute[0]?.dimensions.datetimeMinute ?? "none since the suite started"} → ${account.previewNewestMinute[0]?.dimensions.datetimeMinute ?? "none"}`,
   );
   const verdict = durableObjectResidencyVerdict({ account, namespaces, window });
   console.log(`\n${renderDurableObjectResidency(verdict)}\n`);
