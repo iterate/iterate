@@ -20,7 +20,7 @@
 // it). A blank var is unset. A key the schema does not name is warned about loudly at boot and
 // dropped, never silently kept.
 
-import { compileRawAppConfigFromEnv, redacted, type Redacted } from "@iterate-com/shared/config";
+import { compileRawAppConfigFromEnv, redacted } from "@iterate-com/shared/config";
 import { z } from "zod";
 import {
   customProjectHostOf,
@@ -353,5 +353,3 @@ export function projectHostOf(
   );
   return custom && { ...custom, basePath: "" };
 }
-
-export type { Redacted };
