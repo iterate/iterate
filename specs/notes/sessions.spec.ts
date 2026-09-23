@@ -36,7 +36,7 @@ test("the Notes app keeps a note on its own origin, and ending its session in th
   expect(await page.getByRole("textbox", { name: noteFile, exact: true }).inputValue()).toBe(note);
   // The Dash lists the Notes session among the person's sessions; logging it out there signs the
   // Notes app out: its next page asks for consent again. The Dash's own session carries on.
-  await endSessionInDash(page, dash, notes.host);
+  await endSessionInDash(page, dash, notes);
   await page.goto(`${notes.origin}/projects`);
   await consentPage(page, notes);
   await page.goto(`${dash.origin}/sessions`);
@@ -66,11 +66,18 @@ test("the Notes app works through a project config worker, and its session there
   // document names no app off the platform origin: the consent page names the client by its host.
   const proxied = { origin: proxiedUrl.origin, name: proxiedUrl.host, host: proxiedUrl.host };
   // The repository's actual config-worker source, preserving its auth.require gate, pointed at the
-  // Notes app under test (the source names production's).
+  // Notes app under test: its host and protocol (the source names production's, over https; a local
+  // Notes answers http).
   const source = transformSync(
     readFileSync(resolve(import.meta.dirname, "../../apps/notes/config-worker.ts"), "utf8"),
     { loader: "ts", format: "esm" },
-  ).code.replace('"notes.iterate.workers.dev"', JSON.stringify(notes.host));
+  )
+    .code.replace('"notes.iterate.workers.dev"', JSON.stringify(notes.host))
+    .replace(
+      'url.protocol = "https:"',
+      `url.protocol = ${JSON.stringify(new URL(notes.origin).protocol)}`,
+    );
+  expect(source).toContain(`url.host = ${JSON.stringify(notes.host)}`);
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- One operator fixture installs the proxy; all app interactions are real browser RPC.
   using operator = newHttpBatchRpcSession<IterateApi>(
     new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminApiSecret}` } }),
@@ -113,7 +120,7 @@ test("the Notes app works through a project config worker, and its session there
     `${note}; edited through the project proxy`,
   );
   // Ending the proxy's session leaves the independently granted Notes session usable.
-  await endSessionInDash(page, dash, proxied.host);
+  await endSessionInDash(page, dash, proxied);
   await page.goto(`${proxied.origin}/projects`);
   await consentPage(page, proxied);
   await page.goto(`${notes.origin}/projects`);
@@ -147,12 +154,15 @@ function appClients(): { notes: Client; dash: Client } {
   };
 }
 
-/** The issuer's consent page for `client`: its name in the heading, its domain beneath. */
+/** The issuer's consent page for `client`: its name in the heading, always, and beneath it the
+ *  domain its metadata came from, which the issuer shows only for an https client id
+ *  (apps/os/src/client-display.ts) — not a local app's http origin. */
 async function consentPage(page: Page, client: Client) {
   await page
     .getByRole("heading", { name: `${client.name} wants to access your account`, exact: true })
     .waitFor();
-  await page.getByText(client.host, { exact: true }).waitFor();
+  if (new URL(client.origin).protocol === "https:")
+    await page.getByText(client.host, { exact: true }).waitFor();
 }
 
 /** Consent for a signed-in person who has a project: straight to review, then Authorize, which
@@ -173,13 +183,16 @@ async function saveNote(page: Page, text: string) {
     .waitFor();
 }
 
-/** Sign in to the Dash as the same person and log out the session `clientHost` holds. */
-async function endSessionInDash(page: Page, dash: Client, clientHost: string) {
+/** Sign in to the Dash as the same person and log out the session `client` holds. Its row names
+ *  the client, always; the domain beneath follows the consent page's https rule. */
+async function endSessionInDash(page: Page, dash: Client, client: Client) {
   // the sessions page itself: signed out of the Dash, it signs in first and comes back
   await page.goto(`${dash.origin}/sessions`);
   await consent(page, dash);
   await page.getByRole("heading", { name: "Sessions", exact: true }).waitFor();
-  const session = page.getByRole("row").filter({ hasText: clientHost });
+  const session = page
+    .getByRole("row")
+    .filter({ has: page.getByText(client.name, { exact: true }) });
   await session.getByRole("button", { name: "Log out", exact: true }).click();
   // the list reloads without it
   await expect.poll(() => session.count()).toBe(0);
