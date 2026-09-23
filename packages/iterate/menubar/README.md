@@ -7,7 +7,8 @@ iterate menubar --project <id-or-slug>
 ```
 
 The launcher compiles the shipped Swift source on first use with `swiftc`, caches
-it by source hash, and writes `menubar.json` next to the CLI config. Install the
+it by source hash, and writes `menubar.json` next to the CLI config. Relaunching
+with a different project stops the old share and loads the new configuration. Install the
 Xcode command-line tools if needed (`xcode-select --install`).
 
 The app checks authentication with `iterate ping`; **Sign in** starts

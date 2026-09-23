@@ -139,15 +139,19 @@ test(
     using config = cliConfig(`http://127.0.0.1:${address.port}`);
     try {
       expect((await runCli(config.directory, ["ping"])).stdout).toContain("user_test");
-      const interactive = promisify(execFile)(process.execPath, [bin, "repl"], {
-        env: {
-          ...process.env,
-          XDG_CONFIG_HOME: config.directory,
-          APP_CONFIG_ADMIN_API_SECRET: "",
-          ITERATE_BEARER_TOKEN: "",
+      const interactive = promisify(execFile)(
+        process.execPath,
+        [bin, "repl", "--project", "demo"],
+        {
+          env: {
+            ...process.env,
+            XDG_CONFIG_HOME: config.directory,
+            APP_CONFIG_ADMIN_API_SECRET: "",
+            ITERATE_BEARER_TOKEN: "",
+          },
+          timeout: 10_000,
         },
-        timeout: 10_000,
-      });
+      );
       interactive.child.stdin!.write("await itx.run('async () => 42')\n");
       let replTranscript = "";
       let sentExit = false;
@@ -162,6 +166,26 @@ test(
       expect(replOutput).toContain("42");
       expect(replOutput).toContain("'function'");
       expect(replOutput).not.toContain("undefined");
+      const sessionRepl = promisify(execFile)(process.execPath, [bin, "repl"], {
+        env: {
+          ...process.env,
+          XDG_CONFIG_HOME: config.directory,
+          APP_CONFIG_ADMIN_API_SECRET: "",
+          ITERATE_BEARER_TOKEN: "",
+        },
+        timeout: 10_000,
+      });
+      sessionRepl.child.stdin!.write("await itx.whoami()\n");
+      let sessionOutput = "";
+      let sessionExited = false;
+      sessionRepl.child.stdout!.on("data", (chunk) => {
+        sessionOutput += chunk.toString();
+        if (!sessionExited && sessionOutput.includes("user_test")) {
+          sessionExited = true;
+          sessionRepl.child.stdin!.end(".exit\n");
+        }
+      });
+      expect((await sessionRepl).stdout).toContain("user_test");
       calls.length = 0;
       const result = await runCli(config.directory, [
         "itx",

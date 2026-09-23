@@ -80,7 +80,7 @@ export async function launchMenubarApp(input: {
     )}\n`,
   );
 
-  const open = await run("open", [APP_PATH, "--args", join(CONFIG_DIR, "menubar.json")]);
+  const open = await run("open", ["-a", APP_PATH, join(CONFIG_DIR, "menubar.json")]);
   if (open.exitCode !== 0) throw new Error(`Could not launch the app: ${open.stderr.trim()}`);
   log(`Launched Iterate for project "${input.project}" (config ${input.configName}).`);
   log(

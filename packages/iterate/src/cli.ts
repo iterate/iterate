@@ -553,15 +553,19 @@ const launcherProcedures = {
     .handler(async ({ input }) => {
       const { resolved, connection } = await connectConfigured();
       using owned = connection;
-      const project = await selectProject(owned, input.project || resolved.config.defaultProject);
-      using root = await owned.session.projects.get(project);
-      using context = await root.cd(input.context);
+      const project = input.project || resolved.config.defaultProject;
+      if (!project && input.context !== "/")
+        throw new Error("--context requires --project or a configured defaultProject.");
+      using root = project ? await owned.session.projects.get(project) : null;
+      using context = root ? await root.cd(input.context) : null;
       console.error(
-        `Connected to ${resolved.config.osBaseUrl}, project ${project}, context ${input.context}. Use .exit to quit.`,
+        `Connected to ${resolved.config.osBaseUrl}, ${project ? `project ${project}, context ${input.context}` : "session"}. Use .exit to quit.`,
       );
-      const server = repl.start({ prompt: "itx> " });
+      // capnweb identifies built-ins by prototype. Evaluate in this process's
+      // realm so objects and argument arrays use the transport's constructors.
+      const server = repl.start({ prompt: "itx> ", useGlobal: true });
       const initialize = () => {
-        server.context.itx = context;
+        server.context.itx = context || owned.session;
         server.context.RpcTarget = RpcTarget;
       };
       initialize();

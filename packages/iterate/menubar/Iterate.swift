@@ -31,8 +31,7 @@ struct MenuBarConfig: Codable {
   var xdgConfigHome: String? = nil
 
   static func load() -> MenuBarConfig {
-    let path = CommandLine.arguments.dropFirst().first
-      ?? ("~/.config/iterate/menubar.json" as NSString).expandingTildeInPath
+    let path = ("~/.config/iterate/menubar.json" as NSString).expandingTildeInPath
     guard let data = FileManager.default.contents(atPath: path),
       let config = try? JSONDecoder().decode(MenuBarConfig.self, from: data)
     else {
@@ -83,7 +82,7 @@ final class ApprovalController: ObservableObject {
   /// actionable banners; otherwise notify() falls back to osascript.
   var notificationsAuthorized = false
 
-  private let config = MenuBarConfig.load()
+  private var config = MenuBarConfig.load()
   private var process: Process?
   private var loginProcess: Process?
   private var stdinHandle: FileHandle?
@@ -93,6 +92,19 @@ final class ApprovalController: ObservableObject {
   private var sessionStart = Date()
   private var reconnectAttempts = 0
   private var generation = 0  // bumped on every stop(); voids stale queued reconnects
+
+  func configure(_ next: MenuBarConfig) {
+    stop()
+    loginProcess?.terminationHandler = nil
+    loginProcess?.terminate()
+    loginProcess = nil
+    loggedIn = false
+    principal = nil
+    project = nil
+    lastError = nil
+    config = next
+    start()
+  }
 
   // OS Next has no approval transport. Keep the legacy watcher below dormant;
   // use a bounded CLI authentication check for the menu bar's sign-in state.
@@ -441,7 +453,7 @@ final class ComputerController: ObservableObject {
   /// display list still keeps the indicator honest.
   var inUse: Bool { activeCalls > 0 }
 
-  private let config = MenuBarConfig.load()
+  private var config = MenuBarConfig.load()
   private var process: Process?
   private var stdinHandle: FileHandle?
   private var stdoutHandle: FileHandle?
@@ -459,6 +471,11 @@ final class ComputerController: ObservableObject {
         if !loggedIn { self?.stop() }
       }
       .store(in: &cancellables)
+  }
+
+  func configure(_ next: MenuBarConfig) {
+    stop()  // revoke the old project's share before accepting a new project
+    config = next
   }
 
   /// Turn sharing on or off — safe to drive straight from a Toggle binding.
@@ -811,11 +828,32 @@ enum ApprovalNotifications {
 // MARK: - App
 
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+  private var receivedConfiguration = false
+
+  // `open -a Iterate.app menubar.json` delivers this even to a running app.
+  // Unlike launch arguments it can safely retarget the existing menu bar.
+  func application(_ sender: NSApplication, openFiles filenames: [String]) {
+    do {
+      guard filenames.count == 1, let path = filenames.first else {
+        throw CocoaError(.fileReadInvalidFileName)
+      }
+      let data = try Data(contentsOf: URL(fileURLWithPath: path))
+      let config = try JSONDecoder().decode(MenuBarConfig.self, from: data)
+      ComputerController.shared.configure(config)
+      ApprovalController.shared.configure(config)
+      receivedConfiguration = true
+      sender.reply(toOpenOrPrint: .success)
+    } catch {
+      ApprovalController.shared.lastError = "Could not load configuration: \(error.localizedDescription)"
+      sender.reply(toOpenOrPrint: .failure)
+    }
+  }
+
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)  // menu-bar only, no dock icon
 
     // Approval notifications stay dormant until OS Next supports approvals.
-    ApprovalController.shared.start()  // connect at launch, not on first open
+    if !receivedConfiguration { ApprovalController.shared.start() }
     // Computer sharing is opt-in — it stays idle until the human flips it on.
   }
 

@@ -81,10 +81,10 @@ its `--project` selects the project and `--context` selects a path within it.
 
 ## Node REPL
 
-`iterate repl --project my-project --context /` opens a local Node REPL
-with the live context as `itx` and the transport's `RpcTarget` constructor in
-scope. Top-level `await`, Node APIs and `.load` are available. `.clear` restores
-the two bindings; `.exit` releases the context and connection. A lost connection
+`iterate repl` opens a local Node REPL with the authenticated session as `itx`
+(try `await itx.projects.list()`) and the transport's `RpcTarget` constructor.
+Pass `--project my-project --context /` to bind `itx` to a project context;
+a configured `defaultProject` also selects a project. Top-level `await`, Node APIs and `.load` are available. The bindings remain available after `.clear`; `.exit` releases the context and connection. A lost connection
 ends the REPL visibly; it never silently repeats your commands.
 
 ## Node connections
