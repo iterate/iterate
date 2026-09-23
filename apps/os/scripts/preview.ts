@@ -1,7 +1,7 @@
 // scripts/preview.ts — one Worker Preview per pull request of the one worker, the cloudflare-os recipe
 // (their scripts/preview/preview.ts: eighteen workers in three tiers collapsed to one). The effects
 // half; the pure half — naming, the PR body's section, the preview's wrangler config — is
-// scripts/preview-config.ts (preview.test.ts). Commands: config (write wrangler.preview.jsonc),
+// scripts/preview-config.ts (preview.test.ts). Commands: config (build and write preview config),
 // deploy (build, the D1 and the Artifacts namespace, the secrets, `wrangler preview`, the PR body),
 // e2e (vitest and Playwright against the live preview), reset (delete, then deploy), delete (the
 // preview, its D1, Artifacts namespace, KV namespaces and R2 bucket, the apps on top), sweep (the
@@ -30,7 +30,7 @@ import {
   writeStartAppPreviewConfig,
   type StartApp,
 } from "../../../scripts/lib/start-app.ts";
-import { build } from "./build.ts";
+import { buildOsNext } from "./build.ts";
 import {
   APPS,
   changedApps,
@@ -65,9 +65,10 @@ const WRANGLER_PACKAGE = "https://pkg.pr.new/wrangler@14416";
 
 const Command = z.enum(["config", "deploy", "e2e", "reset", "delete", "sweep"]);
 type Command = z.infer<typeof Command>;
-/** The apps on top: every one, none, or (auto) the ones whose paths this PR changes. */
+/** The apps on top: every one by default, none, or (auto) the ones whose paths this PR changes. */
 const AppsMode = z.enum(["all", "auto", "none"]);
 type AppsMode = z.infer<typeof AppsMode>;
+export const DEFAULT_APPS_MODE = "all" satisfies AppsMode;
 const USAGE = `Usage: preview.ts <${Command.options.join("|")}> [--pr <n>] [--name <ref>] [--apps ${AppsMode.options.join("|")}] [--dry-run]`;
 
 /** The Cloudflare API on the parent's account (scripts/lib/env-context.ts: the envelope checked,
@@ -555,8 +556,15 @@ async function deployPreview(
 ) {
   assertFreshInstall();
   // The apps' vite builds run beside os-next's build, the D1 and the wrangler install.
-  const appBuilds = Promise.all(apps.map((app) => buildStartApp(app, "preview")));
-  await build();
+  // Attach rejection handlers immediately: OS Next's build and deployment can take minutes, and
+  // an app build may fail before we reach the point where its result is consumed.
+  const appBuilds = Promise.allSettled(apps.map((app) => buildStartApp(app, "preview")));
+  await buildOsNext("preview");
+  const appBuildResults = await appBuilds;
+  const failedBuilds = appBuildResults.flatMap((result, index) =>
+    result.status === "rejected" ? [`${apps[index]!.name}: ${describe(result.reason)}`] : [],
+  );
+  if (failedBuilds.length) throw new Error(`app preview build failed: ${failedBuilds.join("; ")}`);
   const databaseId = await ensureDatabase(ctx.cf, previewResourceName(previewName, "db"));
   await ensureArtifactsNamespace(ctx.cf, previewResourceName(previewName, "repos"));
   const dash = apps.find((app) => app.name === "dash");
@@ -602,7 +610,6 @@ async function deployPreview(
         response.status === 200 && (await response.text()).startsWith(deploymentId),
       "version names the deployment",
     );
-    await appBuilds;
     const appPreviews = await Promise.all(
       apps.map((app) => deployAppPreview(app, previewName, url, wrangler.command)),
     );
@@ -680,7 +687,22 @@ async function runE2e(previewName: string): Promise<void> {
       await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], { cwd: ROOT });
     return run("pnpm", ["spec"], { env: { ...process.env, ...env } });
   })();
-  const e2e = runAsync("pnpm", ["e2e"], { cwd: ROOT, env }).then(
+  // The deployed target needs no local Vite build. Keep the preview's built dist/ intact while
+  // Playwright runs beside Vitest; the package's local `e2e` script intentionally rebuilds it.
+  const e2e = runAsync(
+    "pnpm",
+    [
+      "exec",
+      "vitest",
+      "run",
+      "--configLoader",
+      "runner",
+      "--project",
+      "e2e",
+      "--sequence.concurrent",
+    ],
+    { cwd: ROOT, env },
+  ).then(
     () => true,
     (error: unknown) => {
       console.error(describe(error));
@@ -691,7 +713,9 @@ async function runE2e(previewName: string): Promise<void> {
   process.stdout.write(
     `\n── playwright (pnpm spec) ──\n${specResult.stdout}${specResult.stderr}\n`,
   );
-  const failed = [!e2ePassed && "pnpm e2e", specResult.status !== 0 && "pnpm spec"].filter(Boolean);
+  const failed = [!e2ePassed && "vitest e2e", specResult.status !== 0 && "pnpm spec"].filter(
+    Boolean,
+  );
   if (failed.length > 0) throw new Error(`${failed.join(" and ")} failed against ${url}`);
 }
 
@@ -962,7 +986,7 @@ async function resolveBranch(pr: string | undefined, name: string | undefined): 
 async function main(argv: string[]): Promise<void> {
   const parsed = parseArgs(argv);
   const pr = parsed.pr || process.env.PREVIEW_PR_NUMBER;
-  const appsMode = parsed.apps || AppsMode.parse(process.env.PREVIEW_APPS || "all");
+  const appsMode = parsed.apps || AppsMode.parse(process.env.PREVIEW_APPS || DEFAULT_APPS_MODE);
   if (parsed.command === "sweep") return sweep((await parentContext()).cf, parsed.dryRun);
   const branch = await resolveBranch(pr, parsed.name);
   const previewName = resolvePreviewName({ name: branch, prNumber: pr });
@@ -970,6 +994,7 @@ async function main(argv: string[]): Promise<void> {
     `preview ${previewName} → ${previewUrl(previewName)} (D1 ${previewResourceName(previewName, "db")})`,
   );
   if (parsed.command === "config" || parsed.dryRun) {
+    await buildOsNext("preview");
     console.log(
       `wrote ${writePreviewWranglerConfig({ previewName, d1DatabaseId: "<created at deploy>" })}`,
     );

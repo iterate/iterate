@@ -13,7 +13,7 @@ and binds Browser Run and the Worker Loader), Node and pnpm, and `openssl`. No d
 ```bash
 git clone https://github.com/iterate/iterate && cd iterate
 pnpm install
-pnpm --filter os build                 # writes apps/os/wrangler.self-host.jsonc
+OS_NEXT_ENV=self-host pnpm --filter os build  # writes apps/os/dist/server/wrangler.json
 npx wrangler login                          # opens the browser; the person picks the account
 ```
 
@@ -25,7 +25,7 @@ cat > .secrets <<EOF
 APP_CONFIG={"login":{"password":"<the password they chose>"}}
 APP_CONFIG_SECRETS__KEY=$(openssl rand -hex 32)
 EOF
-npx wrangler deploy --config apps/os/wrangler.self-host.jsonc --secrets-file .secrets
+npx wrangler deploy --config apps/os/dist/server/wrangler.json --secrets-file .secrets
 rm .secrets
 ```
 

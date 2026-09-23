@@ -39,7 +39,10 @@ on:
       # A production-workflow change must exercise this isolated deployment:
       # production runs deploy's non-mutating readiness probes only.
       - .depot/workflows/deploy-os-next.yml
+      - .depot/workflows/deploy-dash.yml
+      - .depot/workflows/deploy-agents.yml
       - .depot/workflows/deploy-notes.yml
+      - .depot/workflows/deploy-voice.yml
       - .depot/workflows/preview-os-next.yml
       - apps/os/**
       - configs-next/**

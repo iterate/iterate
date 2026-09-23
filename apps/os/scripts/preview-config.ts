@@ -2,10 +2,11 @@
 // preview's name (`pr<n>-<branch slug>`, cloudflare-os's), the parent it branches from (envs.ts
 // `osEnvs.preview`) and the URL and resource names that follow from the two, which apps on top a
 // change touches, the PR body's managed section, and the config `wrangler preview` reads — a
-// transform of wrangler.base.jsonc, the shape of cloudflare-os's `buildPreviewConfigs`.
+// transform of Vite's built Worker config, the shape of cloudflare-os's `buildPreviewConfigs`.
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import { osEnvs } from "../../../envs.ts";
 import { agents } from "../../agents/scripts/app.ts";
@@ -13,13 +14,10 @@ import { dash } from "../../dash/scripts/app.ts";
 import { notes } from "../../notes/scripts/app.ts";
 import { voice } from "../../voice/scripts/app.ts";
 import type { StartApp } from "../../../scripts/lib/start-app.ts";
-import {
-  OBSERVABILITY,
-  writeGeneratedWranglerConfig,
-} from "../../../scripts/lib/wrangler-config.ts";
+import { OBSERVABILITY } from "../../../scripts/lib/wrangler-config.ts";
 
-/** The gitignored config `wrangler preview` reads (scripts/preview.ts). */
-export const PREVIEW_CONFIG_NAME = "wrangler.preview.jsonc";
+/** Beside Vite's built Worker config, so `main` and `assets.directory` resolve identically. */
+export const PREVIEW_CONFIG_NAME = "dist/server/wrangler.preview.json";
 
 /** THE PARENT of every per-PR preview: a Worker Preview is a branch of an existing worker
  *  (cloudflare-os `staging-config.ts`: "one must exist before a preview can be created"). This is
@@ -173,9 +171,7 @@ export function renderPullRequestSection(input: {
           "| --- | --- |",
           ...input.apps.map((app) => `| ${app.name} | ${app.url} |`),
         ]
-      : [
-          "No app on top changed in this PR (dash, agents, notes, voice deploy only when their own paths change).",
-        ]),
+      : ["No app preview was deployed in this run."]),
     "",
     "Every push redeploys it in place. Reset, e2e, delete and the laptop commands: [apps/os/README.md](https://github.com/iterate/iterate/blob/main/apps/os/README.md).",
   ].join("\n");
@@ -188,7 +184,7 @@ export function renderPullRequestSection(input: {
 const bindingOnly = (resources: { binding: string }[] | undefined) =>
   (resources || []).map(({ binding }) => ({ binding }));
 
-/** The config `wrangler preview` reads, as a pure function of the template (wrangler.base.jsonc),
+/** The config `wrangler preview` reads, as a pure function of Vite's built Worker config,
  *  the preview's name and its D1 — the shape of cloudflare-os's `buildPreviewConfigs`, unit-tested
  *  in preview.test.ts. The top level names the parent (which worker, which account, the entry, the
  *  assets) and declares the Durable Object classes as a legacy `migrations` entry: the pkg.pr.new
@@ -214,6 +210,7 @@ export function previewWranglerConfig(input: {
     compatibility_flags: base.compatibility_flags,
     workers_dev: true,
     preview_urls: true,
+    no_bundle: base.no_bundle,
     rules: base.rules,
     assets: base.assets,
     // Tombstones retire existing namespaces; a preview provisions only the live SQLite classes.
@@ -254,17 +251,21 @@ export function previewWranglerConfig(input: {
   };
 }
 
-/** Write wrangler.preview.jsonc for one preview and return its path. */
+/** Write a preview config beside Vite's built config and return its path. */
 export function writePreviewWranglerConfig(input: {
   previewName: string;
   d1DatabaseId: string;
   dashOrigin?: string;
 }) {
-  return writeGeneratedWranglerConfig({
-    configUrl: new URL(`../${PREVIEW_CONFIG_NAME}`, import.meta.url),
-    appLabel: "apps/os (one per-PR Worker Preview; scripts/preview.ts)",
-    config: previewWranglerConfig({ template: readWranglerTemplate(), ...input }),
-  });
+  const configUrl = new URL(`../${PREVIEW_CONFIG_NAME}`, import.meta.url);
+  const built = JSON.parse(
+    readFileSync(new URL("../dist/server/wrangler.json", import.meta.url), "utf8"),
+  );
+  writeFileSync(
+    configUrl,
+    `${JSON.stringify(previewWranglerConfig({ template: built, ...input }), null, 2)}\n`,
+  );
+  return fileURLToPath(configUrl);
 }
 
 /** wrangler.base.jsonc, the template every preview's config and resource names derive from. */

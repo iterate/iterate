@@ -15,9 +15,8 @@ export interface Env extends DurableObjectEnv {
   DB: D1Database;
   /** Injected by the provider — the OAuth helper surface (parseAuthRequest / completeAuthorization / …). */
   OAUTH_PROVIDER: OAuthHelpers;
-  /** The issuer's pages and their files — public/ (wrangler.jsonc `assets`, `run_worker_first`: this
-   *  worker sees every request first and asks the binding only for the issuer's page paths,
-   *  issuer-pages.ts). */
+  /** Static assets for the Start client and the consent page. The Worker handles platform requests
+   *  first, then asks this binding for public files (issuer-pages.ts). */
   ASSETS: Fetcher;
   /** Email Sending (wrangler `send_email`) — how the sign-in code reaches the person
    *  (password-and-code-sign-in.ts). Simulated by wrangler dev and the test configs; absent where a

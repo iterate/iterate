@@ -1,10 +1,5 @@
-// e2e/support/worker-config.ts — THE one place the e2e worker's config is built: read the generated
-// wrangler.jsonc (scripts/generate-wrangler-config.ts, written by the build vitest.global-setup.ts
-// runs) with wrangler's own reader, so the config is what wrangler sees — its top-level block, the
-// local one — and patch it so the real project-worker runs under createTestHarness (local workerd,
-// which bundles src/worker.ts itself). Shared by the e2e project's global-setup (the one worker every
-// file speaks to), support/log-harness.ts (the second worker the console-reading file boots) and
-// path-ingress.e2e.test.ts (a worker whose projects are paths on the one origin).
+// Read Vite's built Worker config with Wrangler's parser and patch it for createTestHarness.
+// Shared by the E2E global setup, the log harness and path ingress tests.
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,19 +19,19 @@ export const E2E_LOGIN_PASSWORD = "e2e-password";
  *  them with a Host header). */
 export const E2E_INGRESS_ROUTING: IngressRouting = { type: "subdomains", hostname: "localhost" };
 
-/** wrangler.jsonc's top-level block patched for the harness: an absolute main, the e2e
- *  configuration, the deployments' `env` blocks left out. The directory D1 + OAuth KV are the local
- *  ones (a fresh namespace; the worker applies the schema at boot). The DO lifecycle is declarative
- *  (`exports`), so there is no migration history to replay. `ingressRouting` picks how this worker
- *  reaches projects — subdomains under `localhost` by default, paths for the file that proves that
- *  shape. */
+/** Vite's local built config patched with absolute paths and test credentials. The directory D1
+ *  and OAuth KV remain local. `ingressRouting` chooses subdomains or paths for project requests. */
 export function e2eWorkerConfig(
   platformOrigin = "http://127.0.0.1",
   ingressRouting: IngressRouting = E2E_INGRESS_ROUTING,
 ): Unstable_RawConfig {
   const {
     rawConfig: { env: _deployments, ...rawConfig },
-  } = experimental_readRawConfig({ config: join(PACKAGE_DIR, "wrangler.jsonc") });
+  } = experimental_readRawConfig({ config: join(PACKAGE_DIR, "dist/server/wrangler.json") });
+  if (rawConfig.name !== "os-next-local-build")
+    throw new Error(
+      `local e2e needs a local Vite build (found ${rawConfig.name}); run pnpm e2e to rebuild first`,
+    );
   // Configuration (src/app-config.ts): the `APP_CONFIG_<PATH>__<KEY>` spellings of the one object —
   // the local block's vars replaced wholesale (a blank var is unset; a stale one would be warned
   // about), the secrets plain test values.
@@ -45,11 +40,11 @@ export function e2eWorkerConfig(
   );
   return {
     ...rawConfig,
-    main: join(PACKAGE_DIR, String(rawConfig.main)),
+    main: join(PACKAGE_DIR, "dist/server", String(rawConfig.main)),
     // the issuer's pages (public/), an absolute directory like `main`
     assets: {
       ...rawConfig.assets,
-      directory: join(PACKAGE_DIR, String(rawConfig.assets?.directory)),
+      directory: join(PACKAGE_DIR, "dist/server", String(rawConfig.assets?.directory)),
     },
     vars: {
       ...vars,

@@ -11,6 +11,7 @@
     "allowImportingTsExtensions": true
   },
   "include": [
+    "vite.config.ts",
     "scripts/build.ts",
     "scripts/dev.ts",
     "scripts/deploy.ts",

@@ -17,6 +17,11 @@ vi.mock("cloudflare:workers", () => ({
   RpcPromise: class {},
   RpcProperty: class {},
 }));
+// Routing is under test here; Start's generated server entry is exercised by the built-Worker and
+// browser suites, where its Vite virtual modules exist.
+vi.mock("@tanstack/react-start/server-entry", () => ({
+  default: { fetch: () => new Response("<html>Issuer page</html>", { status: 200 }) },
+}));
 import { customProjectHostOf } from "iterate/next/project-ingress";
 import worker from "./worker.ts";
 import {
@@ -404,9 +409,28 @@ describe("public protocol origins", () => {
     // the pages: sign-in and consent are the issuer's, never a project's (projects live under
     // `/projects/`) — the page, or a redirect to it, not a 421 and not a project lookup
     expect((await request("https://os.test/login", paths)).status).toBe(200);
-    const consent = await request("https://os.test/oauth2/auth?client_id=x", paths);
-    expect(consent.status).toBe(303); // no session: sign in first, and come back
-    expect(consent.headers.get("location")).toMatch(/^\/login\?next=/);
+    // the consent page is a Start route too (its sign-in redirect is issuer-bootstrap.test.ts's)
+    expect((await request("https://os.test/oauth2/auth?client_id=x", paths)).status).toBe(200);
+  });
+
+  test("the issuer's pages admit only their own methods, HTML requests and same-origin posts", async () => {
+    const page = (path: string, init?: RequestInit) =>
+      worker.fetch(
+        new Request(`https://os.iterate.com${path}`, init),
+        { ...bindings, ...origins } as unknown as Env,
+        { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext,
+      );
+    expect((await page("/login")).status).toBe(200);
+    expect((await page("/login", { headers: { accept: "application/json" } })).status).toBe(406);
+    expect((await page("/", { method: "POST" })).status).toBe(405);
+    expect((await page("/login", { method: "DELETE" })).status).toBe(405);
+    const crossSite = { method: "POST", headers: { origin: "https://evil.example" } };
+    expect((await page("/login", crossSite)).status).toBe(403);
+    expect((await page("/oauth2/auth?client_id=x", crossSite)).status).toBe(403);
+    // the public files beside the pages, and nothing else
+    expect((await page("/issuer.css")).status).toBe(200);
+    expect((await page("/authorize.js")).status).toBe(404);
+    expect((await page("/capnweb.js")).status).toBe(404);
   });
 });
 

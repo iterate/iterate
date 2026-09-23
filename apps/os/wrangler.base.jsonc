@@ -1,17 +1,11 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "os-next",
-  // WRANGLER BUNDLES THE WORKER ITSELF from this entry — `wrangler dev`, `wrangler deploy`, the e2e
-  // harness and the workers test lane all start from src/worker.ts. What the worker cannot import
-  // from source, scripts/build.ts writes first: the generated modules (the injected SDK's text, the
-  // demo facet's source). This template becomes wrangler.jsonc (gitignored) through
-  // scripts/generate-wrangler-config.ts: the top-level block is local dev, one `env` block per
-  // deployment from the root envs.ts.
+  // Vite builds the Worker from this entry. scripts/build.ts first prepares generated source the
+  // Worker imports; vite.config.ts combines these bindings with one environment from envs.ts.
   "main": "src/worker.ts",
-  // THE ISSUER'S PAGES are files in public/ (login.html, authorize.html, their stylesheet and
-  // scripts, public/_headers for their CSP) — the assets binding serves them. `run_worker_first`:
-  // every request reaches src/worker.ts first, which asks the binding only for the issuer's paths
-  // on the platform host — no asset ever answers on a project host.
+  // Start renders the landing and sign-in pages; consent and shared static files live in public/.
+  // Worker-first routing keeps assets off project hosts and lets the Worker gate consent.
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   // nodejs_compat, spelled out: the DO's AsyncLocalStorage (node:async_hooks) needs it. Loaded
   // userspace isolates are the pure-play half — context/worker-loader.ts mints them with
@@ -28,7 +22,7 @@
     "allow_irrevocable_stub_storage",
     "global_fetch_strictly_public",
   ],
-  // No `account_id` here: the generator sets one per block — the local block's is the dev/preview
+  // No `account_id` here: the Vite config selects one — local is the dev/preview
   // account (envs.ts PREVIEW_AND_DEV_ACCOUNT_ID), each deployment's its own. The account matters
   // locally: wrangler's local runtime PROXIES the Artifacts, AI and Browser bindings to the real
   // products on that account, under the developer's `wrangler login`.
@@ -124,7 +118,7 @@
   // CONFIGURATION (src/app-config.ts): ONE JSON object, the `APP_CONFIG` Worker secret —
   // `{ urls, login, secrets }` — plus `APP_CONFIG_SECRETS__KEY` standing alone so it can rotate with
   // `previousKey` beside it. Any key can be set alone as `APP_CONFIG_<PATH>__<KEY>`; the generator
-  // writes a deployment's `urls` that way from envs.ts (scripts/generate-wrangler-config.ts), so the
+  // computes a deployment's `urls` that way from envs.ts (scripts/generate-wrangler-config.ts), so the
   // vars below are only the local-dev defaults. (No wrangler `secrets.required` here: it is a types
   // and local-dev aid, not a deploy guard, and it collides with a harness that passes the same names
   // as vars — the e2e lane's.)

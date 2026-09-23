@@ -143,7 +143,7 @@ export type AlarmTrace = {
   libraryHoldsSocket: boolean;
 };
 
-/** The bindings THE DO reads (wrangler.jsonc): the DO namespace, the Worker Loader, the kv namespaces,
+/** The bindings THE DO reads (Vite's built Wrangler config): the DO namespace, the Worker Loader, the kv namespaces,
  *  Workers AI, Browser Run, Artifacts — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
  *  vars worker.ts's `parseAppConfig` parses, plus the in-process control plane's own D1 and OAuth
  *  KV bindings. */

@@ -129,7 +129,7 @@ async function grantSummary(resource: string, bearer: string) {
 }
 
 /** What each scope is, to the person, in one or two words — the Sign-in-again page's permissions
- *  line. The consent page (public/authorize.js) spells the same three at sentence length. */
+ *  line. The issuer's consent page spells the same three at sentence length (oauth-scopes.ts). */
 const scopeLabels: Record<string, string> = {
   iterate: "your projects",
   account: "your account",

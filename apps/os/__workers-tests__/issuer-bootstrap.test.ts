@@ -279,7 +279,8 @@ test("the setup prompt an agent follows is served beside the pages, and the land
   expect(prompt.status).toBe(200);
   expect(prompt.headers.get("content-type")).toMatch(/^text\/(markdown|plain)/);
   const text = await prompt.text();
-  expect(text).toContain("wrangler deploy --config apps/os/wrangler.self-host.jsonc");
+  expect(text).toContain("OS_NEXT_ENV=self-host pnpm --filter os build");
+  expect(text).toContain("wrangler deploy --config apps/os/dist/server/wrangler.json");
   expect(text).toContain("/mcp");
   expect(text).toContain("dash.iterate.com/.auth/connect?issuer=");
   const page = await (await SELF.fetch(`${origin}/`)).text();
@@ -398,19 +399,26 @@ test("consent requires PKCE, defaults empty scopes, rejects empty reach and retu
   expect(invalid.kind).toBe("redirect");
   if (invalid.kind !== "redirect") throw new Error("Expected validated redirect");
   expect(new URL(invalid.location).searchParams.get("error_description")).toMatch(/must use PKCE/);
-  const page = await SELF.fetch(`${origin}/oauth2/auth`);
+  // Without the issuer's session, the page and its Authorize form both send the browser to sign
+  // in and back to this very request. The page is rendered on the server: there is no browser
+  // bundle beside it and no JSON sibling (a non-page path on the platform origin is a 404).
+  const signIn = `/login?${new URLSearchParams({ next: `/oauth2/auth${flow.url.search}` })}`;
+  const page = await SELF.fetch(`${origin}/oauth2/auth${flow.url.search}`, { redirect: "manual" });
+  expect(page.status).toBe(307);
+  expect(page.headers.get("location")).toBe(signIn);
   expect(page.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
   expect(page.headers.get("X-Frame-Options")).toBe("DENY");
-  // The page is a capnweb client of /api: its bundle is a file beside it, open to anyone; there is
-  // no JSON sibling (a non-page path on the platform origin is a 404, signed in or not) and
-  // nothing to post to /authorize.
-  expect((await SELF.fetch(`${origin}/capnweb.js`)).status).toBe(200);
+  expect((await SELF.fetch(`${origin}/capnweb.js`)).status).toBe(404);
   const sibling = await SELF.fetch(`${origin}/authorize.json`, { redirect: "manual" });
   expect(sibling.status).toBe(404);
-  expect(
-    (await SELF.fetch(`${origin}/oauth2/auth`, { method: "POST", headers: { Origin: origin } }))
-      .status,
-  ).toBe(404);
+  const post = await SELF.fetch(`${origin}/oauth2/auth${flow.url.search}`, {
+    method: "POST",
+    headers: { Origin: origin },
+    body: new FormData(),
+    redirect: "manual",
+  });
+  expect(post.status).toBe(303);
+  expect(post.headers.get("location")).toBe(signIn);
   // Force the client to refresh through the real public token endpoint.
   const session = appSession(bindings.BROWSER_SESSION, new Request(origin, { headers }))!;
   const before = await session.bearer();
@@ -493,4 +501,71 @@ test("CIMD consent shows the metadata host even when the client declares a diffe
     clientDomain: "metadata.example",
     clientLogoUri: "https://images.example/app.svg",
   });
+});
+
+test("the consent page renders on the server, and Authorize posts the choice to the exact authorization URL", async () => {
+  const user = await directory(bindings.DB).upsertUser("consent-page@example.com");
+  const project = await directory(bindings.DB).createProject(
+    { userId: user.id },
+    `consent-page-${crypto.randomUUID().slice(0, 8)}`,
+  );
+  const login = await startIssuerSession(bindings, new Request(origin), user, "/");
+  const cookie = login.setCookie.split(";")[0]!;
+  const flow = await authorizationCodeRequest({
+    issuer: origin,
+    clientId: `${origin}/.auth/client.json`,
+    redirectUri: `${origin}/.auth/callback`,
+    resources: [`${origin}/api`, `${origin}/mcp`],
+    scopes: ["iterate", "account"],
+  });
+  // Repeated resource keys and a `+` in the state: the router must not canonicalize the query.
+  const state = `${flow.state} + OAuth state`;
+  flow.url.searchParams.set("state", state);
+  const page = await SELF.fetch(flow.url.href, { headers: { Cookie: cookie }, redirect: "manual" });
+  expect(page.status, page.headers.get("location") ?? "").toBe(200);
+  const html = await page.text();
+  expect(html).toContain("wants to access your account");
+  expect(html).toContain("consent-page@example.com");
+  expect(html).toContain(project.slug);
+  expect(html).toContain("See and end your sessions, and mint personal access tokens");
+  // a form from another site acts on nobody's session
+  const approval = new FormData();
+  approval.append("project", project.id);
+  approval.append("scope", "iterate");
+  const crossSite = await SELF.fetch(flow.url.href, {
+    method: "POST",
+    headers: { Cookie: cookie, Origin: "https://evil.example" },
+    body: approval,
+    redirect: "manual",
+  });
+  expect(crossSite.status).toBe(403);
+  const approved = await SELF.fetch(flow.url.href, {
+    method: "POST",
+    headers: { Cookie: cookie, Origin: origin },
+    body: approval,
+    redirect: "manual",
+  });
+  expect(approved.status).toBe(303);
+  const callback = new URL(approved.headers.get("location")!);
+  expect(callback.origin + callback.pathname).toBe(`${origin}/.auth/callback`);
+  expect(callback.searchParams.get("state")).toBe(state);
+  expect(callback.searchParams.get("iss")).toBe(origin);
+  expect(callback.searchParams.get("code")).toBeTruthy();
+  // the grant is the posted choice: the one project, and `iterate` without the declined `account`
+  const exchange = await SELF.fetch(`${origin}/oauth2/token`, {
+    method: "POST",
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      code: callback.searchParams.get("code")!,
+      client_id: `${origin}/.auth/client.json`,
+      redirect_uri: `${origin}/.auth/callback`,
+      code_verifier: flow.verifier,
+      resource: `${origin}/api`,
+    }),
+  });
+  expect(exchange.status, await exchange.clone().text()).toBe(200);
+  const token = await exchange.json<{ access_token: string }>();
+  const app = await connect({ Authorization: `Bearer ${token.access_token}` });
+  expect((await app.info()).scopes).toEqual(["iterate"]);
+  expect((await app.projects.list()).map((listed) => listed.id)).toEqual([project.id]);
 });

@@ -40,6 +40,11 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     note: "env-gated: a preview routes projects by paths on its workers.dev origin; the mini-app spec dials `<project>.<hostname>`",
   },
   {
+    file: "apps/os/specs/issuer-pages.spec.ts",
+    match: "email-code sign-in is not configured",
+    note: "env-gated: runs where the deployment offers email-code sign-in (login.emailCode), which a local worker does not",
+  },
+  {
     file: "apps/os/specs/auth.spec.ts",
     match: "This acceptance case needs the independently deployed Notes worker",
     note: "env-gated: needs NOTES_BASE_URL pointing at the independently deployed Notes worker (the os-next ↔ Notes acceptance case)",

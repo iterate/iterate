@@ -9,7 +9,7 @@
 import { newWebSocketRpcSession } from "capnweb";
 import { createTestHarness } from "wrangler";
 import { afterAll, beforeAll, expect } from "vitest";
-import { localOnly } from "./support/project-host.ts";
+import { localOnly, projectHostsAreLocal } from "./support/project-host.ts";
 import { E2E_ADMIN_API_SECRET, e2eWorkerConfig, PACKAGE_DIR } from "./support/worker-config.ts";
 
 /** An app that answers with what it was handed: the URL it saw, its base path, its app label. */
@@ -33,6 +33,7 @@ const sessions: unknown[] = [];
 const slug = `prj-paths-${Date.now().toString(36)}`;
 
 beforeAll(async () => {
+  if (!projectHostsAreLocal()) return;
   server = createTestHarness({
     root: PACKAGE_DIR,
     workers: [{ config: e2eWorkerConfig("http://127.0.0.1", { type: "paths" }) }],
