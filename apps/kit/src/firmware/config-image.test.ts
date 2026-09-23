@@ -9,7 +9,7 @@ import {
 const configuration: DeviceConfiguration = {
   wifi: { ssid: "studio", password: "correct horse battery staple" },
   iterate: {
-    baseUrl: "https://os.iterate2.com",
+    baseUrl: "https://os.iterate.com",
     projectId: "prj_voice_lab",
     projectApiKey: "itxk_secret",
   },
@@ -17,7 +17,7 @@ const configuration: DeviceConfiguration = {
 
 describe("normalizeOsBaseUrl", () => {
   it("defaults a bare host to HTTPS", () => {
-    expect(normalizeOsBaseUrl("os.iterate2.com")).toBe("https://os.iterate2.com");
+    expect(normalizeOsBaseUrl("os.iterate.com")).toBe("https://os.iterate.com");
   });
 
   it("preserves an explicit local HTTP origin", () => {
@@ -25,7 +25,7 @@ describe("normalizeOsBaseUrl", () => {
   });
 
   it("rejects paths so the device cannot silently dial the wrong endpoint", () => {
-    expect(() => normalizeOsBaseUrl("https://os.iterate2.com/not-os")).toThrow("must be an origin");
+    expect(() => normalizeOsBaseUrl("https://os.iterate.com/not-os")).toThrow("must be an origin");
   });
 });
 
@@ -68,7 +68,7 @@ describe("encodeDeviceConfiguration", () => {
 
     expect(fields.get(1)).toBe("studio");
     expect(fields.get(2)).toBe("correct horse battery staple");
-    expect(fields.get(3)).toBe("https://os.iterate2.com");
+    expect(fields.get(3)).toBe("https://os.iterate.com");
     expect(fields.get(4)).toBe("prj_voice_lab");
     expect(fields.get(5)).toBe("itxk_secret");
     // Every field the firmware requires, and nothing it would reject.

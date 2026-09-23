@@ -27,7 +27,7 @@ export const OBSERVABILITY = {
 export function writeGeneratedWranglerConfig(input: {
   /** URL of `../wrangler.jsonc` relative to the calling generator module. */
   configUrl: URL;
-  /** e.g. "apps/os-next" — names the app in the emitted header. */
+  /** e.g. "apps/os" — names the app in the emitted header. */
   appLabel: string;
   /** Extra header line(s), e.g. a pointer to the app's topology doc. */
   extraDocs?: string;

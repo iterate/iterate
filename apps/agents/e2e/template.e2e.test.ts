@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { expect, test } from "vitest";
-import { freshCtx, openItx, readAll, until } from "../../os-next/e2e/support/client.ts";
+import { freshCtx, openItx, readAll, until } from "../../os/e2e/support/client.ts";
 
 // Exercise the real config worker's lifecycle subscription using the local template tree.
 // Downloading published GitHub trees is covered by the shared downloader tests.

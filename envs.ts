@@ -1,4 +1,4 @@
-/** Deployment configuration for os-next and its first-party apps. Secrets live in Doppler. */
+/** Deployment configuration for OS and its first-party apps. Secrets live in Doppler. */
 
 import type { IngressRouting } from "./packages/iterate/src/next/project-ingress.ts";
 
@@ -51,7 +51,7 @@ export const kitEnvs = {
   },
 } satisfies Record<string, KitEnv>;
 
-export interface OsNextEnv {
+export interface OsEnv {
   cloudflareAccountId: string;
   dopplerConfig: string;
   workerName: string;
@@ -71,7 +71,7 @@ export interface OsNextEnv {
    *  the wrangler generator derive names from this, never from the worker name. */
   resourceNamePrefix: string;
   /** TEMPORARY (`APP_CONFIG urls.temporaryCustomHostnames`) — hostnames of this deployment's own that
-   *  ARE a project's apex: `{ "iterate2.com": "iterate" }` lands a request on that project's config
+   *  ARE a project's apex: `{ "iterate.com": "iterate" }` lands a request on that project's config
    *  worker `fetch`, exactly as `<project>.<hostname>` does. The generator adds one zone route per
    *  hostname (its registrable domain's zone must exist in the account), ensure-resources the proxied
    *  DNS record. Belongs in the project's own runtime config, not here. */
@@ -88,8 +88,8 @@ export interface OsNextEnv {
   cloudflareForSaasProjectHostnameBases?: string[];
   resources: { directoryDbId: string; oauthKvId: string; itxKvId: string };
 }
-export const osNextEnvs: Record<string, OsNextEnv> = {
-  // THE PARENT OF EVERY PER-PR PREVIEW (apps/os-next/scripts/preview.ts, the cloudflare-os recipe): a
+export const osEnvs: Record<string, OsEnv> = {
+  // THE PARENT OF EVERY PER-PR PREVIEW (apps/os/scripts/preview.ts, the cloudflare-os recipe): a
   // Worker Preview is a branch of an existing worker, and this is that worker on the dev/preview
   // account — `pr<n>-<branch>-os-next-preview.<subdomain>.workers.dev`. Each preview has resources of
   // its own; nothing reads this worker's data, and nobody browses to it. workers.dev only.
@@ -115,27 +115,25 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
     dopplerConfig: "prd",
     workerName: "os-next-prd",
     // THE HEADLESS PLATFORM: sign-in, consent, `/api`, the OAuth endpoints — two no-build pages and
-    // the OAuth endpoints, nothing else a person looks at. `dash.iterate2.com` is the dash (apps/dash): sessions,
+    // the OAuth endpoints, nothing else a person looks at. `dash.iterate.com` is the dash (apps/dash): sessions,
     // projects and organizations — an ordinary OAuth client of this issuer, like every other app.
-    baseUrl: "https://os.iterate2.com",
-    mcpBaseUrl: "https://mcp.iterate2.com",
-    dashBaseUrl: "https://dash.iterate2.com",
-    ingressRouting: { type: "subdomains", hostname: "iterate2.app" },
+    baseUrl: "https://os.iterate.com",
+    mcpBaseUrl: "https://mcp.iterate.com",
+    dashBaseUrl: "https://dash.iterate.com",
+    ingressRouting: { type: "subdomains", hostname: "iterate.app" },
     // Each apex is its project's: the config worker's `fetch` serves it. Every zone must exist in
     // the prd account for the route to deploy; the DNS record appears on `ensure-resources --env prd`.
     temporaryCustomHostnames: {
-      // These two zones are in this account: each has its own route and DNS record.
-      // iterate.com deliberately moves the public Iterate site from legacy OS to OS-Next.
+      // This zone is in this account and has its own route and DNS record.
       "iterate.com": "iterate",
-      "iterate2.com": "iterate",
       // these three zones live in OTHER Cloudflare accounts: Cloudflare for SaaS custom hostnames on
-      // iterate2.app (below), each apex CNAMEd by its owner to cname.iterate2.app
+      // iterate.app (below), each apex CNAMEd by its owner to cname.iterate.app
       "garple.com": "garple",
       "lispwoso.com": "lispwoso",
       "templestein.com": "templestein",
     },
     ownedProjectCustomApexes: ["iterate.com"],
-    cloudflareForSaasProjectHostnameBases: ["iterate2.app"],
+    cloudflareForSaasProjectHostnameBases: ["iterate.app"],
     artifactsNamespace: "project-worker-prd-repos",
     resourceNamePrefix: "project-worker-prd",
     resources: {
@@ -147,9 +145,9 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
 };
 /** apps/dash — THE DASH: sessions and personal access tokens, projects and organizations — the
  *  fat first-party TanStack Start app (README there), an ordinary OAuth client of the headless
- *  platform at os.iterate2.com, on the one custom domain among the apps. */
+ *  platform at os.iterate.com, on the one custom domain among the apps. */
 export const dashEnvs = {
-  // THE PARENT of dash's per-PR Worker Previews (apps/os-next/scripts/preview.ts): each preview is a
+  // THE PARENT of dash's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
   // branch of this worker, bound to the same PR's os-next preview as its issuer. Nothing reads its data.
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
@@ -161,13 +159,13 @@ export const dashEnvs = {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
     workerName: "dash",
-    baseUrl: "https://dash.iterate2.com",
+    baseUrl: "https://dash.iterate.com",
   },
 };
 
 /** apps/agents — the agents page (README there); the notes app's shape: its own workers.dev origin. */
 export const agentsEnvs = {
-  // THE PARENT of agents's per-PR Worker Previews (apps/os-next/scripts/preview.ts): each preview is a
+  // THE PARENT of agents's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
   // branch of this worker, bound to the same PR's os-next preview as its issuer. Nothing reads its data.
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
@@ -184,7 +182,7 @@ export const agentsEnvs = {
 };
 
 export const notesEnvs = {
-  // THE PARENT of notes's per-PR Worker Previews (apps/os-next/scripts/preview.ts): each preview is a
+  // THE PARENT of notes's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
   // branch of this worker, bound to the same PR's os-next preview as its issuer. Nothing reads its data.
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
@@ -196,14 +194,14 @@ export const notesEnvs = {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
     workerName: "notes",
-    // Its own workers.dev subdomain — NOT a custom domain (iterate2.com is the iterate project's
-    // apex, osNextEnvs.prd.temporaryCustomHostnames). A workers.dev baseUrl adds no custom route (below).
+    // Its own workers.dev subdomain — NOT a custom domain (iterate.com is the iterate project's
+    // apex, osEnvs.prd.temporaryCustomHostnames). A workers.dev baseUrl adds no custom route (below).
     baseUrl: "https://notes.iterate.workers.dev",
   },
 };
 
 export const voiceEnvs = {
-  // THE PARENT of voice's per-PR Worker Previews (apps/os-next/scripts/preview.ts): each preview is a
+  // THE PARENT of voice's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
   // branch of this worker, bound to the same PR's os-next preview as its issuer. Nothing reads its data.
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
@@ -215,8 +213,8 @@ export const voiceEnvs = {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
     workerName: "voice",
-    // Its own workers.dev subdomain — NOT a custom domain (iterate2.com is the iterate project's
-    // apex, osNextEnvs.prd.temporaryCustomHostnames). A workers.dev baseUrl adds no custom route (below).
+    // Its own workers.dev subdomain — NOT a custom domain (iterate.com is the iterate project's
+    // apex, osEnvs.prd.temporaryCustomHostnames). A workers.dev baseUrl adds no custom route (below).
     baseUrl: "https://voice.iterate.workers.dev",
   },
 };

@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { test } from "../../os-next/specs/test.ts";
+import { test } from "../../os/specs/test.ts";
 
 test("sign in, create a project, save a note and read it after reload", async ({
   page,

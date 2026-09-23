@@ -103,7 +103,7 @@ const config: KnipConfig = {
   // into apps that have never been configured for it.
   ignoreWorkspaces: [
     "apps/*",
-    "!apps/os-next",
+    "!apps/os",
     "!apps/kit",
     "packages/*",
     "!packages/shared",
@@ -112,10 +112,10 @@ const config: KnipConfig = {
   ],
   ignoreIssues: {
     // Loaded code: the platform injects ./processor.js into the isolate it loads this example into.
-    "apps/os-next/examples/mini-app.ts": ["unresolved"],
+    "apps/os/examples/mini-app.ts": ["unresolved"],
   },
   workspaces: {
-    "apps/os-next": makeOsNextWorkspace(),
+    "apps/os": makeOsNextWorkspace(),
     "apps/kit": makeKitWorkspace(),
     "packages/shared": makeSharedWorkspace(),
     "packages/ui": makeUiWorkspace(),

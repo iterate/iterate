@@ -173,7 +173,7 @@ the application and leaves the board looking absent rather than offline.
 ```sh
 python3 tools/make-config-image.py \
   --wifi-ssid <ssid> --wifi-password <password> \
-  --os-base-url https://os.iterate2.com \
+  --os-base-url https://os.iterate.com \
   --project-id prj-voice --project-api-key "$KIT_TOKEN" \
   --out /tmp/cfg.bin
 python -m esptool --chip esp32s3 -p /dev/cu.usbmodem2101 \
@@ -252,8 +252,8 @@ Then use a provisioned, idle device — a board or `iterate-kit-mac` — for the
 air-path proof:
 
 ```sh
-cd apps/os-next
-WORKER_BASE_URL=https://os.iterate2.com ADMIN_API_SECRET=… PROJECT=prj-voice \
+cd apps/os
+WORKER_BASE_URL=https://os.iterate.com ADMIN_API_SECRET=… PROJECT=prj-voice \
   pnpm exec tsx scripts/voice-board.ts --device <device_name> \
     --prompt "Hello there. Please reply with the single word banana." --expect banana
 ```

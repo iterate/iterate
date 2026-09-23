@@ -1,5 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
-import { deployedTarget } from "../os-next/e2e/support/deployed-target.ts";
+import { deployedTarget } from "../os/e2e/support/deployed-target.ts";
 
 const baseURL = process.env.NOTES_BASE_URL;
 const issuer = process.env.DEMO_BASE_URL;

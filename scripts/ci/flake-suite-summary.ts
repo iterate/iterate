@@ -21,7 +21,7 @@ export async function writeFlakeSuiteSummaries(input: {
       if (suite === "unit") return source.testKind === "unit";
       return suite === "specs"
         ? source.producer === "playwright-telemetry-reporter" && source.workspace === "iterate-root"
-        : source.producer === "vitest-retry-telemetry-reporter" && source.workspace === "os-next";
+        : source.producer === "vitest-retry-telemetry-reporter" && source.workspace === "os";
     };
     // Keep this suite's declarations as well as its runners. A missing sibling
     // suite must not prevent this one from proving its own test inventory.

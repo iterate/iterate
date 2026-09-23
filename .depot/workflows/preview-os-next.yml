@@ -1,6 +1,6 @@
-# ONE PREVIEW PER PULL REQUEST of apps/os-next, on Cloudflare Worker Previews — the shape of
+# ONE PREVIEW PER PULL REQUEST of apps/os, on Cloudflare Worker Previews — the shape of
 # cloudflare/cloudflare-os's .github/workflows/preview.yml, cut down to one worker and run on Depot.
-# The script is apps/os-next/scripts/preview.ts. One job per operation, named for when it runs:
+# The script is apps/os/scripts/preview.ts. One job per operation, named for when it runs:
 #   deploy              every push: deploys a preview named `pr<n>-<branch slug>` of the parent
 #                       worker os-next-preview and writes the URL and the operations into the PR body
 #   e2e                 after deploy succeeds: the e2e suite and the Playwright specs against it
@@ -22,7 +22,7 @@
 # The only Depot secret is DOPPLER_TOKEN; Doppler project-worker/preview supplies the Cloudflare
 # credentials and the two secrets the preview inherits (APP_CONFIG, APP_CONFIG_SECRETS__KEY).
 
-name: Preview OS-Next
+name: Preview OS
 
 permissions:
   contents: read
@@ -41,7 +41,7 @@ on:
       - .depot/workflows/deploy-os-next.yml
       - .depot/workflows/deploy-notes.yml
       - .depot/workflows/preview-os-next.yml
-      - apps/os-next/**
+      - apps/os/**
       - configs-next/**
       - apps/dash/**
       - apps/agents/**
@@ -116,7 +116,7 @@ jobs:
       # `deploy` redeploys in place; `reset` deletes the preview and its D1 first. Either way the
       # script ends by writing the URL and the operations into the PR body (GITHUB_TOKEN).
       - name: Deploy (or reset) the preview
-        working-directory: apps/os-next
+        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -155,7 +155,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Run the e2e suite against the preview
-        working-directory: apps/os-next
+        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -189,7 +189,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Delete the preview and its D1
-        working-directory: apps/os-next
+        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -219,7 +219,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Sweep previews whose PR is closed, or older than 7 days
-        working-directory: apps/os-next
+        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}

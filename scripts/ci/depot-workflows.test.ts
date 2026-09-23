@@ -102,7 +102,8 @@ describe("Depot deployment safety", () => {
       const workspaceByName = new Map(
         workspaceDirectories.map((directory) => [readPackageJson(directory).name, directory]),
       );
-      const packageJson = readPackageJson(`apps/${app}`);
+      const workspaceApp = app === "os-next" ? "os" : app;
+      const packageJson = readPackageJson(`apps/${workspaceApp}`);
       const workspaceDependencies = Object.entries({
         ...packageJson.dependencies,
         ...packageJson.devDependencies,
@@ -113,7 +114,7 @@ describe("Depot deployment safety", () => {
       expect(loadWorkflow(file).on?.push?.paths).toEqual(
         expect.arrayContaining([
           file,
-          `apps/${app}/**`,
+          `apps/${workspaceApp}/**`,
           ...workspaceDependencies.map((directory) => `${directory}/**`),
         ]),
       );
@@ -122,10 +123,7 @@ describe("Depot deployment safety", () => {
 
   it("runs OS-Next and Notes stateful proofs only against an isolated preview", () => {
     const preview = loadWorkflow(".depot/workflows/preview-os-next.yml");
-    const previewScript = readFileSync(
-      resolve(repoRoot, "apps/os-next/scripts/preview.ts"),
-      "utf8",
-    );
+    const previewScript = readFileSync(resolve(repoRoot, "apps/os/scripts/preview.ts"), "utf8");
 
     for (const { file } of deploymentWorkflows) {
       const runs = Object.values(loadWorkflow(file).jobs).flatMap((job) =>
@@ -163,7 +161,7 @@ describe("Depot deployment safety", () => {
     expect(deployKit?.run).toContain('source "$IDF_PATH/export.sh"');
     expect(workflow.on?.push?.paths).toEqual(
       expect.arrayContaining([
-        "apps/os-next/**", // the page is an app of os-next (workspace dependency)
+        "apps/os/**", // the page is an app of OS (workspace dependency)
         "package.json",
         "pnpm-lock.yaml",
         "pnpm-workspace.yaml",

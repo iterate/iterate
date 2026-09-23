@@ -35,12 +35,12 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
   // -- Structural (env-gated): legitimately undated — the gate describes the
   // deployment under test, not a parked bug.
   {
-    file: "apps/os-next/specs/mini-app.spec.ts",
+    file: "apps/os/specs/mini-app.spec.ts",
     match: "the deployment routes projects by paths or not at all; this spec dials a subdomain",
     note: "env-gated: a preview routes projects by paths on its workers.dev origin; the mini-app spec dials `<project>.<hostname>`",
   },
   {
-    file: "apps/os-next/specs/auth.spec.ts",
+    file: "apps/os/specs/auth.spec.ts",
     match: "This acceptance case needs the independently deployed Notes worker",
     note: "env-gated: needs NOTES_BASE_URL pointing at the independently deployed Notes worker (the os-next ↔ Notes acceptance case)",
   },

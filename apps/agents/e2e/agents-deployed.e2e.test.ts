@@ -2,8 +2,8 @@
 // default model seeing an attached image. In a file of their own so their model round trips run beside
 // the scripted stories instead of after them.
 import { expect } from "vitest";
-import { collector, freshCtx, readAll, until } from "../../os-next/e2e/support/client.ts";
-import { deployedOnly } from "../../os-next/e2e/support/project-host.ts";
+import { collector, freshCtx, readAll, until } from "../../os/e2e/support/client.ts";
+import { deployedOnly } from "../../os/e2e/support/project-host.ts";
 import { RED_PNG_BASE64, assistantWords, onWorkersAi } from "./fixtures.ts";
 import { openAgentItx } from "./support.ts";
 

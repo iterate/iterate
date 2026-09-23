@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { build } from "esbuild";
 import { beforeAll, expect, test, vi } from "vitest";
 
-import { admitLoadedCodeRow } from "../../os-next/src/context/itx-expression-rewriting.ts";
+import { admitLoadedCodeRow } from "../../os/src/context/itx-expression-rewriting.ts";
 
 let VoiceWorker: any;
 

@@ -60,9 +60,9 @@ test(
 );
 
 test("OAuth uses OS Next's API audience including the local port", () => {
-  expect(Config.parse({}).osBaseUrl).toBe("https://os.iterate2.com");
+  expect(Config.parse({}).osBaseUrl).toBe("https://os.iterate.com");
   expect(oauthResourceForOsBaseUrl("http://localhost:54896/")).toBe("http://localhost:54896/api");
-  expect(oauthResourceForOsBaseUrl("https://os.iterate2.com")).toBe("https://os.iterate2.com/api");
+  expect(oauthResourceForOsBaseUrl("https://os.iterate.com")).toBe("https://os.iterate.com/api");
 });
 
 test("refresh goes to the same OS Next issuer and rejects malformed tokens", async () => {

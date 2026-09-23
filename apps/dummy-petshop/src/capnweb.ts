@@ -16,7 +16,7 @@
  * + request-scoped catalogue through. No in-band (capnweb-level) auth yet.
  *
  * This makes the pet shop a real remote capnweb API for the clean-room's
- * `itx.connectToCapnweb` library connector (apps/os-next).
+ * `itx.connectToCapnweb` library connector (apps/os).
  */
 import { RpcTarget, newWorkersRpcResponse } from "capnweb";
 import type { Pet } from "./pets.ts";

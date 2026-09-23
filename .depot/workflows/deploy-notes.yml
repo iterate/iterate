@@ -16,7 +16,7 @@ on:
       - apps/notes/**
       - envs.ts
       - scripts/lib/**
-      - apps/os-next/**
+      - apps/os/**
       - packages/iterate/**
       - packages/ui/**
       - packages/shared/**

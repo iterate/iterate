@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { freshCtx, rejection } from "../../os-next/e2e/support/client.ts";
+import { freshCtx, rejection } from "../../os/e2e/support/client.ts";
 import { openAgentItx } from "./support.ts";
 
 test("THE CHAIN: a subagent two levels down resolves a capability provided at the root through parent links, lists it with its description and origin, and births its own children relative to itself", async () => {

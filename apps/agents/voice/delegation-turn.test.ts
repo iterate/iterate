@@ -111,7 +111,7 @@ test("a published website gets verified before the voice reports its outcome", a
       ...websiteSteps
         .filter((message) => message.role === "assistant")
         .map((message) => message.content),
-      '<codemode status="Verifying the published joke">\nconst response = await itx.fetch(new Request("https://prj-kit-bench.iterate2.app/"));\nreturn {status: response.status, body: await response.text()};\n</codemode>',
+      '<codemode status="Verifying the published joke">\nconst response = await itx.fetch(new Request("https://prj-kit-bench.iterate.app/"));\nreturn {status: response.status, body: await response.text()};\n</codemode>',
       "The horse joke is live on your website.",
     ],
     [
