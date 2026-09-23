@@ -8,14 +8,14 @@ import { buildAgentRuntime } from "../scripts/build-runtime.ts";
 import { createVoiceInstall } from "../../kit/scripts/build-voice-install.ts";
 import { ensureVoiceAgent } from "../../kit/src/voice/install.ts";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../runtime/system-prompt.ts";
-import { openItx, readAll, runId, until } from "../../os-next/e2e/support/client.ts";
-import { oauthSession } from "../../os-next/e2e/support/principal.ts";
+import { openItx, readAll, runId, until } from "../../os/e2e/support/client.ts";
+import { oauthSession } from "../../os/e2e/support/principal.ts";
 import {
   deployedOnly,
   freshDnsSafeProjectSlug,
   projectUrl,
   registerProject,
-} from "../../os-next/e2e/support/project-host.ts";
+} from "../../os/e2e/support/project-host.ts";
 
 const T = "events.iterate.com/voice-agent/";
 

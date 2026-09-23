@@ -21,7 +21,7 @@ import {
   releasePins,
   stub,
   until,
-} from "../../os-next/__workers-tests__/support.ts";
+} from "../../os/__workers-tests__/support.ts";
 
 beforeAll(applyDirectorySchema);
 

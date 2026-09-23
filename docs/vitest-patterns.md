@@ -29,7 +29,7 @@ test.for([
 });
 ```
 
-The Cloudflare refusal table in `apps/os-next/__workers-tests__/identity.test.ts`
+The Cloudflare refusal table in `apps/os/__workers-tests__/identity.test.ts`
 is a model: each refusal case as a row of data with a literal expected status,
 `$name` as the title, and one assertion body.
 

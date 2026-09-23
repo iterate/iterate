@@ -93,7 +93,6 @@ apps/mobile/expo-env.d.ts
 apps/*/wrangler.jsonc
 # ...except the pet shop's, which is hand-written and committed.
 !apps/dummy-petshop/wrangler.jsonc
-apps/os/
 apps/auth/
 apps/semaphore/
 apps/streams-example-app/

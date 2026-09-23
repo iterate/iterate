@@ -5,7 +5,7 @@
 // lent by rule).
 
 import { describe, expect, test } from "vitest";
-import { reduceProcessor } from "../../os-next/src/stream/test-support.ts";
+import { reduceProcessor } from "../../os/src/stream/test-support.ts";
 import { type AgentState } from "./contract.ts";
 import {
   AgentProcessor,

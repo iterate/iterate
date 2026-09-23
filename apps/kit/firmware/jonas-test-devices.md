@@ -26,7 +26,7 @@ apps/kit/firmware/tools/port-for-mac.sh D8:3B:DA:46:20:34
 `esptool read_mac` and serial monitors can reset a board. Identify it through
 USB metadata before opening its port; leave other attached devices alone.
 
-The HAVPE targets `https://os.iterate2.com`, project slug `prj-kit-bench`,
+The HAVPE targets `https://os.iterate.com`, project slug `prj-kit-bench`,
 canonical project ID `prj_3afc6e86c9202218ef3c6b7059e5be82`. Its provisioning
 uses the canonical ID and a project-scoped personal access token for the
 existing `kit-bench@iterate.com` bench account. Credentials belong in the
@@ -43,7 +43,7 @@ tests passed. The air-path check opened a call in 2.97 seconds, transcribed
 “Hello voice assistant, please say banana, just the word banana” and played
 “Banana.” with no reported errors.
 
-Satellite1 was also rebuilt and reflashed on 2026-09-21. It uses the same canonical bench project at `https://os.iterate2.com`,
+Satellite1 was also rebuilt and reflashed on 2026-09-21. It uses the same canonical bench project at `https://os.iterate.com`,
 with its own project-scoped grant.
 Flash hashes and all 64 host tests passed. The voice check opened a call in
 2.47 seconds and returned “Hello? Banana.”; an interruption check stopped
@@ -57,7 +57,7 @@ still named forbidden `builtins`, fresh conversations lacked their creator
 link, `/secrets/openai` was missing after the secret migration, and inherited
 WebSocket fetches crossed Workers RPC, which cannot serialize the socket.
 Repair the service, project secret and native fetch forwarding; reflashing
-does not repair these failures. `apps/os-next/e2e/voice-agent.e2e.test.ts` runs
+does not repair these failures. `apps/os/e2e/voice-agent.e2e.test.ts` runs
 the real voice bundles against a WebSocket provider fixture and requires call
 acceptance plus two microphone-to-speaker audio round trips. It failed on the
 broken production version and passed on the fixed preview and production.
@@ -71,7 +71,7 @@ recorded 240 speaker writes with no errors. Both calls were ended afterwards.
 
 ## Bench website backend repair — 2026-09-21
 
-- Website: https://prj-kit-bench.iterate2.app
+- Website: https://prj-kit-bench.iterate.app
 - `itx.whoami()` now exposes the actual project slug and public URL to agents.
 - Config repository: `/repos/config`, with `worker.ts` and publication instructions in `README.md`.
 - Apex routing uses the explicit `project/ingress-configured` worker target; source reads and cache keys pin the same Git commit.

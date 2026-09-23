@@ -1,5 +1,5 @@
-# OS-Next isolate crash hunt — nightly, against prd. The load-dependent rows of
-# apps/os-next/e2e/isolate-ceilings-deployed.e2e.test.ts (concurrent readers, a large
+# OS isolate crash hunt — nightly, against prd. The load-dependent rows of
+# apps/os/e2e/isolate-ceilings-deployed.e2e.test.ts (concurrent readers, a large
 # ephemeral fan-out, concurrent big appends, a poison facet) drive one context's Durable
 # Object up to and past its 128 MiB isolate ceiling on purpose; they are opt-in
 # (RUN_ISOLATE_CRASH_HUNT=1) so the deploy's e2e run stays deterministic. This is where
@@ -11,7 +11,7 @@
 #
 # Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN.
 
-name: OS-Next crash hunt
+name: OS crash hunt
 permissions:
   contents: read
 on:
@@ -46,14 +46,14 @@ jobs:
         run: doppler setup --config prd --project project-worker
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Hunt isolate crashes on os.iterate2.com
-        working-directory: apps/os-next
+      - name: Hunt isolate crashes on os.iterate.com
+        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          WORKER_BASE_URL: https://os.iterate2.com
+          WORKER_BASE_URL: https://os.iterate.com
           RUN_ISOLATE_CRASH_HUNT: "1"
         # The credentials come out of the deployment's APP_CONFIG in the environment
-        # (apps/os-next/e2e/support/global-setup.ts).
+        # (apps/os/e2e/support/global-setup.ts).
         run: doppler run -- pnpm e2e isolate-ceilings --no-file-parallelism
   notify:
     needs:

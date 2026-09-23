@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { Generator, getConfig } from "@tanstack/router-generator";
 import { createCli, t } from "trpc-cli";
 import { z } from "zod";
-import { agentsEnvs, dashEnvs, notesEnvs, osNextEnvs, voiceEnvs } from "../../envs.ts";
+import { agentsEnvs, dashEnvs, notesEnvs, osEnvs, voiceEnvs } from "../../envs.ts";
 import { deployApp } from "./deploy-app.ts";
 import { ensureProxiedDnsRecord } from "./deploy-helpers.ts";
 import { resolveEnvContext, type DeployableEnv } from "./env-context.ts";
@@ -46,7 +46,7 @@ export interface StartApp {
   nothingToErase: string;
 }
 
-/** The registrable domain of a URL or hostname — its last two labels (`os.iterate2.com` ⇒ `iterate2.com`;
+/** The registrable domain of a URL or hostname — its last two labels (`os.iterate.com` ⇒ `iterate.com`;
  *  a workers.dev origin ⇒ `<subdomain>.workers.dev`, the account's own). The zone a hostname routes
  *  on, for os-next's wrangler generator and ensure-resources too. */
 export function registrableDomainOf(urlOrHostname: string): string {
@@ -66,7 +66,7 @@ function ownZones(): string[] {
     "iterate.com",
     ...Array.from({ length: 19 }, (_, i) => `iterate-preview-${i + 1}.app`),
   ]);
-  for (const env of Object.values(osNextEnvs)) {
+  for (const env of Object.values(osEnvs)) {
     zones.add(registrableDomainOf(env.baseUrl));
     zones.add(registrableDomainOf(env.mcpBaseUrl));
     if (env.dashBaseUrl) zones.add(registrableDomainOf(env.dashBaseUrl));
@@ -88,7 +88,7 @@ export function writeWranglerConfig(app: StartApp) {
     vars: {
       // the default issuer: prd's platform origin (envs.ts always has a prd entry); a per-PR preview's
       // config swaps in the same PR's os-next preview (startAppPreviewConfig)
-      ITERATE_ORIGIN: osNextEnvs.prd!.baseUrl,
+      ITERATE_ORIGIN: osEnvs.prd!.baseUrl,
       // our own zones: project hosts and custom apexes are userspace and could serve a look-alike
       // issuer, so the browser-auth gate refuses to CONNECT to an issuer under them (the default
       // issuer is exempt) — derived from envs.ts, never spelled twice

@@ -1,7 +1,7 @@
 // e2e/support/agents.ts — the agent stories' shared fixtures (agents*.e2e.test.ts): a model that answers
 // from a script, the Workers AI model a local story pins, the log readers and a 1×1 PNG.
 import { RpcTarget } from "capnweb";
-import { sleep } from "../../os-next/e2e/support/client.ts";
+import { sleep } from "../../os/e2e/support/client.ts";
 
 /** A model that answers from a script of replies, in order, recording what it was asked. A reply
  *  may take its time (`{ text, afterMs }`): the request stays in flight that long — what an

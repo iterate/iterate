@@ -10,13 +10,7 @@
 // deployed lane runs ONE real turn through Workers AI.
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import {
-  freshCtx,
-  processorNames,
-  readAll,
-  sleep,
-  until,
-} from "../../os-next/e2e/support/client.ts";
+import { freshCtx, processorNames, readAll, sleep, until } from "../../os/e2e/support/client.ts";
 import { openAgentItx } from "./support.ts";
 import {
   RED_PNG_BASE64,

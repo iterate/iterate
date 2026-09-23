@@ -1,11 +1,11 @@
-# THE FLAKE HUNT for apps/os-next: run the e2e suite N times against one deployed worker (a preview of
+# THE FLAKE HUNT for apps/os: run the e2e suite N times against one deployed worker (a preview of
 # main by default, `pnpm preview deploy --name soak`) and tally every row that did not pass every time
-# (apps/os-next/scripts/e2e-soak.ts). Dispatch only — this is a measurement, not a gate:
+# (apps/os/scripts/e2e-soak.ts). Dispatch only — this is a measurement, not a gate:
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-next-e2e-soak.yml \
 #     --ref <branch> --input runs=100 --input worker-base-url=https://soak-os-next-preview.iterate-dev-preview.workers.dev
 # Runs from CI on purpose: from a laptop the OAuth-cookie rows answer 401 (an unexplained laptop-side
 # difference), and CI is the environment whose flakes matter.
-name: OS-Next e2e soak
+name: OS e2e soak
 permissions:
   contents: read
 on:
@@ -56,16 +56,16 @@ jobs:
       # An explicit worker-base-url is soaked as given.
       - name: Deploy the soak preview from this ref
         if: inputs.worker-base-url == 'https://soak-os-next-preview.iterate-dev-preview.workers.dev'
-        working-directory: apps/os-next
+        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run -- pnpm preview deploy --name soak --apps none
       # The preview inherits the parent's secrets (APP_CONFIG in Doppler project-worker/preview), so the
       # admin bearer and the sign-in password come from the same object the preview deploy uploads —
-      # apps/os-next/e2e/support/global-setup.ts reads them out of it, and the routing out of the
+      # apps/os/e2e/support/global-setup.ts reads them out of it, and the routing out of the
       # parent's envs.ts entry.
       - name: Soak
-        working-directory: apps/os-next
+        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           CI: "1"
@@ -78,5 +78,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: os-next-e2e-soak
-          path: apps/os-next/output/soak
+          path: apps/os/output/soak
           if-no-files-found: warn

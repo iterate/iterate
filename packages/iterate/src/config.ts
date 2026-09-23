@@ -26,7 +26,7 @@ export type StoredSession = z.infer<typeof StoredSession>;
 /** A named config — describes which server to talk to and how to authenticate. */
 export const Config = z.object({
   defaultProject: z.string().optional(),
-  osBaseUrl: z.string().optional().default("https://os.iterate2.com"),
+  osBaseUrl: z.string().optional().default("https://os.iterate.com"),
   session: StoredSession.optional(),
 });
 

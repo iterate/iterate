@@ -9,7 +9,7 @@ import { beginLogin, currentSession, finishLogin, freshAccessToken, logout } fro
 const issuer =
   new URL(location.href).searchParams.get("issuer") ||
   localStorage.getItem("iterate-spa:issuer") ||
-  "https://os.iterate2.com";
+  "https://os.iterate.com";
 localStorage.setItem("iterate-spa:issuer", issuer);
 
 const app = document.getElementById("app");

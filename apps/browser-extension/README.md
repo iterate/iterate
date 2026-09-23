@@ -15,7 +15,7 @@ as an extension: four finished files, no build, no package.
   `Input.dispatchMouseEvent` cover most of what an agent wants) and `detach(tabId)`.
 - `capnweb.js` — the capnweb browser bundle, copied verbatim. Chrome loads no remote code from an
   extension, so this is the one thing the SPA's CDN import map cannot give us. Refresh it from the
-  version os-next speaks: `cp "$(cd apps/os-next && node -p "require.resolve('capnweb').replace(/index\.cjs$/, 'index.js')")" apps/browser-extension/capnweb.js`.
+  version os-next speaks: `cp "$(cd apps/os && node -p "require.resolve('capnweb').replace(/index\.cjs$/, 'index.js')")" apps/browser-extension/capnweb.js`.
 
 **Which tabs.** The project drives the tabs it opened through `openPage` and the tabs the person
 lent it with the panel's **Lend the current tab** button; `cdp` on any other tab is refused. The
@@ -46,7 +46,7 @@ it). Sign in — the platform's own login and consent pages open in a Chrome ide
 project — then enter the project's slug or `prj_…` id and click **Open a page through the project**:
 the panel calls `itx.chrome.openPage` and then `itx.chrome.cdp(tabId, "Runtime.evaluate", …)`
 through the platform, which calls back into the panel, which opens the tab and reads its title. After editing a file, click **Reload** on the extension's card. Against a local
-os-next (`pnpm --dir apps/os-next dev -- --port 8797`), enter `http://localhost:8797` as the platform
+os-next (`pnpm --dir apps/os dev -- --port 8797`), enter `http://localhost:8797` as the platform
 before signing in.
 
 For an existing unpacked install, replace the files in its installed folder and click **Reload**

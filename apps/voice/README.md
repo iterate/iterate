@@ -2,7 +2,7 @@
 
 A browser phone for a project's voice agent: log in with iterate, pick a project in the sidebar's
 switcher, press Call, talk. The page frames itself in packages/ui's `AppShell`, the shell every
-os-next app shares.
+OS app shares.
 The page is the Kit device in a browser — the same three appends and one subscription the board
 makes (`apps/agents/scripts/voice-call.ts`), with the browser's microphone and speaker on either
 end and the relay's live state on screen.

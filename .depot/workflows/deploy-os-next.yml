@@ -1,10 +1,10 @@
-name: Deploy OS-Next
+name: Deploy OS
 permissions:
   contents: read
   deployments: write
 concurrency:
   # Every ref deploys to the same production Worker (os-next-prd:
-  # os.iterate2.com, mcp.iterate2.com, *.iterate2.app). Never interrupt a
+  # os.iterate.com, mcp.iterate.com, *.iterate.app). Never interrupt a
   # credentialed deployment midway through its rollout.
   group: deploy-os-next-production
   cancel-in-progress: false
@@ -14,7 +14,7 @@ on:
       - main
     paths:
       - .depot/workflows/deploy-os-next.yml
-      - apps/os-next/**
+      - apps/os/**
       - configs-next/**
       - packages/iterate/**
       - envs.ts
@@ -64,10 +64,10 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - id: metadata
-        name: Resolve OS-Next deploy URL
-        run: echo "public_url=https://os.iterate2.com" >> "$GITHUB_OUTPUT"
-      - name: Deploy apps/os-next
-        working-directory: apps/os-next
+        name: Resolve OS deploy URL
+        run: echo "public_url=https://os.iterate.com" >> "$GITHUB_OUTPUT"
+      - name: Deploy apps/os
+        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run -- pnpm run-script deploy --env prd
@@ -90,6 +90,6 @@ jobs:
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Notify Slack
         env:
-          APP_DISPLAY_NAME: OS-Next
+          APP_DISPLAY_NAME: OS
           PUBLIC_URL: ${{ needs.deploy.outputs.public_url }}
         run: pnpm tsx scripts/ci/notify.ts deploy-${{ needs.deploy.result }}

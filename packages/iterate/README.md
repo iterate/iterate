@@ -1,6 +1,6 @@
 # iterate
 
-CLI for OS Next (`apps/os-next`). Requires Node >=22.15; no Bun runtime.
+CLI for OS Next (`apps/os`). Requires Node >=22.15; no Bun runtime.
 
 ```sh
 npx iterate                       # offline help
@@ -15,7 +15,7 @@ npx iterate menubar --project my-project   # macOS app
 npx iterate logout
 ```
 
-The default server is `https://os.iterate2.com`. Login uses that server's OAuth
+The default server is `https://os.iterate.com`. Login uses that server's OAuth
 issuer, PKCE and a loopback callback. Tokens refresh automatically before a
 command when close to expiry. `ITERATE_BEARER_TOKEN` supplies a token for scripts;
 `APP_CONFIG_ADMIN_API_SECRET` supplies operator credentials and takes precedence.
@@ -62,7 +62,7 @@ order is `--config`, a parent-directory workspace mapping, the default config,
 a single saved config, then built-in `prd`.
 
 ```sh
-iterate config set --name next --os-base-url https://os.iterate2.com \
+iterate config set --name next --os-base-url https://os.iterate.com \
   --default-project my-project --set-default
 iterate --config next login
 iterate config set --name local --os-base-url http://localhost:8787 --set-workspace
@@ -95,7 +95,7 @@ providers. It uses the same protocol and cleanup as the CLI:
 import { connectOsNext } from "iterate/next/node";
 
 using connection = await connectOsNext({
-  baseUrl: "https://os.iterate2.com",
+  baseUrl: "https://os.iterate.com",
   auth: { type: "bearer", token: process.env.ITERATE_BEARER_TOKEN },
 });
 using project = await connection.session.projects.get("my-project");

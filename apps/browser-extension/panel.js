@@ -34,7 +34,7 @@ async function clientIdFor(issuer, metadata) {
     body: JSON.stringify({
       client_name: "Iterate Chrome extension",
       client_uri: "https://iterate.com",
-      logo_uri: "https://os.iterate2.com/client-logos/browser-extension.svg",
+      logo_uri: "https://os.iterate.com/client-logos/browser-extension.svg",
       redirect_uris: [redirectUri()],
       token_endpoint_auth_method: "none",
       grant_types: ["authorization_code", "refresh_token"],
@@ -237,7 +237,7 @@ class ChromeBrowser extends RpcTarget {
 /** Which platform and which project — remembered across panel openings. */
 async function settings() {
   const stored = await chrome.storage.local.get(["issuer", "project"]);
-  return { issuer: stored.issuer || "https://os.iterate2.com", project: stored.project || "" };
+  return { issuer: stored.issuer || "https://os.iterate.com", project: stored.project || "" };
 }
 
 /** An element the page holds, by id and kind — the templates below always render it. */

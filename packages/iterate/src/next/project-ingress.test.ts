@@ -10,53 +10,53 @@ import {
   customProjectHostOf,
 } from "./project-ingress.ts";
 
-const subdomains: IngressRouting = { type: "subdomains", hostname: "iterate2.app" };
+const subdomains: IngressRouting = { type: "subdomains", hostname: "iterate.app" };
 const paths: IngressRouting = { type: "paths" };
-const PRD = "https://os.iterate2.com";
+const PRD = "https://os.iterate.com";
 const DEV = "http://localhost:8788";
 
 describe("projectAddressOf — subdomains", () => {
   const rows: { url: string; names: ProjectAddress | null; why: string }[] = [
     {
-      url: "https://site--p.iterate2.app/x?y",
+      url: "https://site--p.iterate.app/x?y",
       names: { app: "site", project: "p", basePath: "" },
       why: "<app>--<project>",
     },
     {
-      url: "https://site.p.iterate2.app/",
+      url: "https://site.p.iterate.app/",
       names: { app: "site", project: "p", basePath: "" },
       why: "<app>.<project>",
     },
     {
-      url: "https://p.iterate2.app/",
+      url: "https://p.iterate.app/",
       names: { app: null, project: "p", basePath: "" },
       why: "the apex names no app",
     },
     {
-      url: "https://My-App--My-Proj.Iterate2.App./",
+      url: "https://My-App--My-Proj.Iterate.App./",
       names: { app: "my-app", project: "my-proj", basePath: "" },
       why: "lowercased, the trailing dot dropped",
     },
-    { url: "https://os.iterate2.com/site--p", names: null, why: "not under the hostname" },
-    { url: "https://iterate2.app/", names: null, why: "the hostname itself has no labels" },
-    { url: "https://a.b.c.iterate2.app/", names: null, why: "deeper than <app>.<project>" },
+    { url: "https://os.iterate.com/site--p", names: null, why: "not under the hostname" },
+    { url: "https://iterate.app/", names: null, why: "the hostname itself has no labels" },
+    { url: "https://a.b.c.iterate.app/", names: null, why: "deeper than <app>.<project>" },
     {
-      url: "https://xn--bcher-kva.iterate2.app/",
+      url: "https://xn--bcher-kva.iterate.app/",
       names: null,
       why: "an IDN label (punycode) is never <app>--<project>, and is not a DNS label",
     },
-    { url: "https://--p.iterate2.app/", names: null, why: "an empty app label" },
+    { url: "https://--p.iterate.app/", names: null, why: "an empty app label" },
     {
-      url: "https://9site--p.iterate2.app/",
+      url: "https://9site--p.iterate.app/",
       names: null,
       why: "an app label starts with a letter",
     },
     {
-      url: "https://site--p-.iterate2.app/",
+      url: "https://site--p-.iterate.app/",
       names: null,
       why: "a trailing hyphen is not a DNS label",
     },
-    { url: "https://site..iterate2.app/", names: null, why: "a present-but-empty project label" },
+    { url: "https://site..iterate.app/", names: null, why: "a present-but-empty project label" },
   ];
   test.each(rows)("$url → $why", ({ url, names }) => {
     expect(projectAddressOf(subdomains, new URL(url), PRD)).toEqual(names);
@@ -102,7 +102,7 @@ describe("projectAddressOf — paths", () => {
 
   test("the platform origin compares normalized", () => {
     expect(
-      projectAddressOf(paths, new URL(`${PRD}/projects/p/site`), "https://OS.iterate2.com:443"),
+      projectAddressOf(paths, new URL(`${PRD}/projects/p/site`), "https://OS.iterate.com:443"),
     ).toEqual({
       app: "site",
       project: "p",
@@ -123,28 +123,28 @@ describe("projectUrlOf", () => {
       routing: subdomains,
       origin: PRD,
       target: { project: "p", app: "site" },
-      url: "https://site--p.iterate2.app/",
+      url: "https://site--p.iterate.app/",
       why: "an app, the root",
     },
     {
       routing: subdomains,
       origin: PRD,
       target: { project: "p", app: "site", path: "/a/b?c=1" },
-      url: "https://site--p.iterate2.app/a/b?c=1",
+      url: "https://site--p.iterate.app/a/b?c=1",
       why: "an app, a path with a query",
     },
     {
       routing: subdomains,
       origin: PRD,
       target: { project: "p" },
-      url: "https://p.iterate2.app/",
+      url: "https://p.iterate.app/",
       why: "the apex",
     },
     {
       routing: subdomains,
       origin: PRD,
       target: { project: "p", app: null, path: "/hooks" },
-      url: "https://p.iterate2.app/hooks",
+      url: "https://p.iterate.app/hooks",
       why: "the apex, a path",
     },
     {
@@ -246,25 +246,25 @@ describe("projectUrlOf", () => {
 });
 
 describe("customProjectHostOf", () => {
-  const hostnames = { "iterate2.com": "iterate" };
+  const hostnames = { "iterate.com": "iterate" };
   test.each([
     {
-      hostname: "iterate2.com",
+      hostname: "iterate.com",
       becomes: { app: null, project: "iterate" },
       why: "the apex, as named",
     },
     {
-      hostname: "Iterate2.COM.",
+      hostname: "Iterate.COM.",
       becomes: { app: null, project: "iterate" },
       why: "case and a trailing dot forgiven",
     },
     {
-      hostname: "www.iterate2.com",
+      hostname: "www.iterate.com",
       becomes: null,
       why: "only the hostnames named — no wildcard under them",
     },
     {
-      hostname: "os.iterate2.com",
+      hostname: "os.iterate.com",
       becomes: null,
       why: "the platform's own origin is not a project",
     },

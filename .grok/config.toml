@@ -15,7 +15,7 @@ url = "https://mcp.context7.com/mcp"
 enabled = true
 
 [mcp_servers.iterate]
-url = "https://mcp.iterate2.com"
+url = "https://mcp.iterate.com"
 enabled = true
 
 [mcp_servers.posthog]

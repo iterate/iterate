@@ -1,7 +1,7 @@
 // sdk/record-pipelined-steps.ts — the one thing `StreamProcessorDurableObject.withItx` needs to RELEASE
 // a Workers-RPC round trip completely: every call it made, not only the last. No workerd import, so
 // the unit tests run it in node (record-pipelined-steps.test.ts); on native RpcPromises it is proven by
-// every os-next e2e row that reaches a facet, and pinned by apps/os-next/e2e/context-residency.e2e.test.ts
+// every os-next e2e row that reaches a facet, and pinned by apps/os/e2e/context-residency.e2e.test.ts
 // ("… does not outlive …": a facet that kept one value from its context stayed running, billed).
 
 /** `stub` as the caller sees it, except that every CALL made through it — at any depth, on the stub or
