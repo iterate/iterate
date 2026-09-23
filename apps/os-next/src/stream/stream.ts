@@ -263,12 +263,12 @@ export class Stream {
   }
 
   /** The ring's size now: what a read that can return only the ring holds. */
-  recentEphemeralsChars(): number {
+  recentEphemeralsChars() {
     return this.#recentEphemeralsChars;
   }
 
   /** The highest offset of `type` the ring has let go of this incarnation, if any. */
-  evictedEphemeralThroughOffset(type: string): number | undefined {
+  evictedEphemeralThroughOffset(type: string) {
     return this.#evictedEphemeralThroughOffsetByType.get(type);
   }
 

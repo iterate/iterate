@@ -758,25 +758,31 @@ export class SubscriptionDelivery {
         // memory, so a re-read holds only what is newer. Cursor-read room is held from BEFORE the
         // read — the READ is what allocates — THROUGH the awaited call, released once in the
         // finally: a row behind the mark reads a page of unknown size and reserves the whole
-        // CURSOR_READ_BUDGET_CHARS; a row at the mark can read nothing but the ring and reserves
-        // its size, so a row waiting for room pins no batch of its own (what the ring lets go
+        // CURSOR_READ_BUDGET_CHARS and the ring; a row at the mark can read nothing but the ring and
+        // reserves its size, so a row waiting for room pins no batch of its own (what the ring lets go
         // while it waits is not delivered, as a pending push loses what is dropped from it).
         let inFlightRoomHeld = 0;
         try {
+          // The ring rides on top of a page, and may hold one event as large as the append ceiling.
+          const ringChars = Math.max(
+            RECENT_EPHEMERALS_BUDGET_CHARS,
+            this.#stream.recentEphemeralsChars(),
+          );
           const reserveChars = behindTheDurableMark
-            ? CURSOR_READ_BUDGET_CHARS
-            : Math.max(RECENT_EPHEMERALS_BUDGET_CHARS, this.#stream.recentEphemeralsChars());
+            ? CURSOR_READ_BUDGET_CHARS + ringChars
+            : ringChars;
           await this.#cursorReadCharsInFlight.acquire(reserveChars);
           inFlightRoomHeld = reserveChars;
-          // A durable that landed while an at-mark row waited for room put it behind the mark: this
-          // attempt holds no claim and a ring-sized reserve, neither of which covers a page of
-          // durables — start the iteration over (the finally releases the room), and the next turn
-          // claims, arms the alarm for that claim, and reserves a page's worth before it reads.
+          // An at-mark row reserved the ring as it stood before the wait. A durable that landed
+          // meanwhile put it behind the mark — no claim, no page's worth of room — and an ephemeral
+          // that landed may have outgrown the reserve: start the iteration over (the finally
+          // releases the room); the next turn claims if it must, and reserves what it will read.
+          const behindNow = cursor.confirmedOffset < this.#stream.highestDurableOffset();
           if (
             !behindTheDurableMark &&
-            cursor.confirmedOffset < this.#stream.highestDurableOffset()
+            (behindNow || this.#stream.recentEphemeralsChars() > ringChars)
           ) {
-            claimArmsTheAlarm = true;
+            claimArmsTheAlarm = behindNow;
             continue;
           }
           let page: StreamPage;
@@ -799,7 +805,7 @@ export class SubscriptionDelivery {
           const owedAfterOffset = Math.max(cursor.confirmedOffset, row.configuredAtOffset);
           const lostThroughOffset = Math.max(
             0,
-            ...(row.consumes ?? []).map(
+            ...(row.consumes || []).map(
               (type) => this.#stream.evictedEphemeralThroughOffset(type) ?? 0,
             ),
           );
