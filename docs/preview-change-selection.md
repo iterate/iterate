@@ -39,11 +39,30 @@ the union of required work. Main and manual dispatch always request full work.
 
 ## Reading history
 
-Inspect head, then its first parent, and so on through the merge-base with
-main, inclusive. A merge's changed paths include everything it brought into
-the feature branch. If main is its second parent, inspect that merge and newer
-first-parent commits, then stop; substituting main would omit feature code.
-Multiple merge-bases fall back to deployment. Git/API errors remain errors.
+Plan uses an ordinary depth-one checkout for the checked-in scripts. History
+comes from GitHub's commit API through Octokit, independently of the local Git
+database. The constructor does no I/O; the planner uses `for await` to inspect
+one commit at a time. Responses are cached when a deployment search restarts.
+The only local Git operation in planning is an asynchronous checkout-SHA check.
+
+An ordinary head decision needs two API requests: its commit and one comparison
+with main. The comparison preserves the branch-wide os-next exemption, including
+reverted apps/os changes; its merge-base is also the later walk's stopping point.
+Its file list is used only for that exemption, never for per-commit classification.
+A full comparison page of 300 files cannot justify skipping. A product head then
+deploys without reading older commits; a test head can reuse its own verified
+deployment. Older searches follow first parents through the cached merge-base,
+inclusive. Both commit and comparison readers retain both paths of renames.
+
+This is deliberately conservative: encountering a merge commit, a pagination
+link, or a full page of 100 files selects deployment. The reader does not try to
+reconstruct complex merge histories or paginate large diffs. Even an already
+tested merge stops inheritance; a later docs commit may therefore do extra work.
+After 20 commits without usable evidence, deploy head. These choices have
+explicit reasons in the plan. Each API request is logged and has a 15-second
+timeout; transport, authentication and malformed-response errors fail planning.
+No metadata fetch modifies the checkout, index or local Git refs. Planning now
+requires GitHub access even in a complete local clone.
 
 For docs, look for a conclusive result **before** classifying each ancestor.
 Stop at an untested behavior change instead of walking past it to an older
@@ -113,7 +132,7 @@ registry yet.
 ## Workflow and rollout
 
 ```text
-plan:    checkout full history → install → decide → signal preview-plan
+plan:    checkout head → install → decide (read commit API as needed) → signal preview-plan
 prepare: checkout → install → wait for preview-plan → deploy/reuse → ready
                                            │                          │
              inherit: skip remaining steps │                          │
@@ -245,3 +264,34 @@ its deploy. Ordinary full runs retain the existing three-app restoration.
 `preview-restoration.json` records tested and restored SHAs and Worker versions.
 `preview-settled` is published only after the restore succeeds. Main/manual runs
 continue to request full deployment and tests.
+
+## API history acceptance
+
+[PR #2744](https://github.com/iterate/iterate/pull/2744) replaces the initial
+incremental-Git implementation with asynchronous API reads. Its merged-main
+head `749781d78` passed the [full preview workflow](https://depot.dev/orgs/0p91s0lz49/workflows/0b5xv9ksbp):
+deployment, readiness, app tests, all six browser shards, cleanup and restoration.
+Settlement recorded `tests=success; deployment=restored; check=106764525149`.
+The Plan log explicitly selected deployment because head was a merge commit.
+
+Checkout's fetch phase took 0.377s, versus 27.185s in the original full-history
+[baseline](https://depot.dev/orgs/0p91s0lz49/workflows/x103v367zm?job=8lspj90c2k&attempt=115srn7fzs).
+Separate read-only runs of the API reader against real GitHub data selected:
+
+| Revision            | Result                                   | History API requests | Elapsed |
+| ------------------- | ---------------------------------------- | -------------------- | ------- |
+| Product `ccb8f8e66` | Deploy head                              | 2                    | 1.181s  |
+| Docs `28e52ebfe`    | Inherit settled success from `e36843a25` | 3                    | 2.329s  |
+
+The docs timing includes checking the real settlement evidence. These are
+individual observations, not an averaged benchmark; the read-only probes ran
+locally, while checkout timings came from CI. Full local tests, typecheck, lint,
+formatting and unused-code checks pass. HTTP tests cover all decision paths and
+conservative limits using a real Octokit client and local server.
+
+Acceptance also exposed an existing result-parser mismatch: Depot checks have
+nested prefixes such as `Preview / Preview / deploy + e2e / App tests`. The
+reader now matches the leaf job name while retaining all provenance and
+completeness checks. Requests use `AbortSignal.timeout(15_000)`, since the
+installed Octokit request implementation does not enforce the old `timeout`
+option. Final CI results are recorded in the PR body.

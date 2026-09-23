@@ -64,7 +64,9 @@ export function previewResultFromChecks(
   if (!latest) return null;
   const jobs = new Map<string, z.infer<typeof Check>>();
   for (const check of latest.sort((a, b) => b.id - a.id)) {
-    const name = check.name.replace(/^Preview(?: Main)? \/ /, "");
+    // Depot prefixes reusable jobs with every caller's display name. Match
+    // the leaf job, keeping names such as "Playwright 3/6" intact.
+    const name = check.name.replace(/^.* \/ /, "");
     if (!jobs.has(name)) jobs.set(name, check);
   }
   const finish = jobs.get("Collect results and clean up");
