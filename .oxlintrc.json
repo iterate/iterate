@@ -119,6 +119,7 @@
     "iterate/icon-button-has-hover-text": "error",
     "iterate/relative-import-extensions": "error",
     "iterate/zod-schema-naming": "error",
+    "iterate/no-raw-durable-object-binding-access": "error",
     "iterate/no-implied-eval": "error",
     "iterate/no-single-use-helpers": "error",
     "iterate/no-shouting-constants": "error",
@@ -126,6 +127,8 @@
     "iterate/no-single-use-types": "error",
     "iterate/prefer-logical-and-spread": "error",
     "iterate/simple-truthiness-check": "error",
+    "iterate/typed-no-floating-promises": "off",
+    "iterate/mechanical-class-impl": "off",
     "prefer-const": "off",
     "iterate/prefer-const": "error",
     "iterate/isolated-codemode": [
@@ -212,7 +215,7 @@
       "plugins": ["react"]
     },
     {
-      "files": ["**/*.test.ts"],
+      "files": ["**/test/**", "**/*.test.ts"],
       "rules": {
         "no-console": "off"
       }

@@ -7,11 +7,48 @@ import type { Rule, Scope, SourceCode } from "eslint";
 import type { Program, Node } from "estree";
 
 import { simpleTruthinessCheckRule } from "./rules/simple-truthiness-check.ts";
+import { mechanicalClassImplRule } from "./rules/mechanical-class-impl.ts";
 import { tseslintRules } from "./rules/tseslint.ts";
 import type { StrictPlugin, StrictRule } from "./types.ts";
 import { grandfatherRule } from "./grandfather-rule.ts";
 
+type ImportKindNode = {
+  importKind?: string;
+};
+
 const LIFECYCLE_HOOKS = new Set(["beforeAll", "beforeEach", "afterAll", "afterEach"]);
+/** What the server-side script isolate genuinely provides: the ES builtins
+ * plus the workerd/web globals of the script runtime — kept in the same
+ * spirit as the typechecker's RUNTIME_SHIMS list
+ * (apps/os/src/domains/typecheck/virtual-project.ts). oxlint's scope manager
+ * leaves ALL globals unresolved (`scope.through` contains `Promise` and
+ * `console` alike), so the itx-script-fn-self-contained rule allowlists by
+ * name instead of relying on env resolution. */
+const SCRIPT_ISOLATE_GLOBALS = new Set([
+  // ES language builtins.
+  ...["globalThis", "undefined", "NaN", "Infinity"],
+  ...["Object", "Function", "Array", "String", "Number", "Boolean", "Symbol", "BigInt"],
+  ...["Math", "JSON", "Date", "RegExp", "Intl"],
+  ...["Promise", "Proxy", "Reflect", "eval", "globalThis"],
+  ...["Error", "AggregateError", "EvalError", "RangeError", "ReferenceError"],
+  ...["SyntaxError", "TypeError", "URIError"],
+  ...["Map", "Set", "WeakMap", "WeakSet", "WeakRef", "FinalizationRegistry"],
+  ...["ArrayBuffer", "SharedArrayBuffer", "Atomics", "DataView"],
+  ...["Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array"],
+  ...["Int32Array", "Uint32Array", "Float16Array", "Float32Array", "Float64Array"],
+  ...["BigInt64Array", "BigUint64Array", "Iterator", "AsyncIterator"],
+  ...["parseInt", "parseFloat", "isNaN", "isFinite"],
+  ...["decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent"],
+  // workerd/web runtime globals (see RUNTIME_SHIMS in virtual-project.ts).
+  ...["console", "fetch", "crypto", "performance", "navigator", "caches", "scheduler"],
+  ...["setTimeout", "clearTimeout", "setInterval", "clearInterval", "setImmediate"],
+  ...["queueMicrotask", "structuredClone", "reportError", "atob", "btoa"],
+  ...["TextEncoder", "TextDecoder", "URL", "URLSearchParams", "URLPattern"],
+  ...["AbortController", "AbortSignal", "Blob", "File", "FormData", "Headers"],
+  ...["Request", "Response", "ReadableStream", "WritableStream", "TransformStream"],
+  ...["WebSocket", "WebSocketPair", "Event", "EventTarget", "CustomEvent"],
+  ...["DOMException", "MessageChannel", "MessagePort", "Buffer", "process"],
+]);
 const VI_MOCK_CALLS = new Set(["vi.mock", "vi.doMock"]);
 const PROPERTY_MATCHERS = new Set(["toBe", "toEqual", "toStrictEqual"]);
 /** The test-style rules (no-describe … prefer-test-over-it) check every line authored after
@@ -41,6 +78,47 @@ function getPropertyName(node: Node | undefined) {
   if (!node) return undefined;
   if (node.type === "Identifier") return node.name;
   if (node.type === "Literal" && typeof node.value === "string") return node.value;
+  return undefined;
+}
+function isAllowedRawDurableObjectBindingAccessFile(filename: string) {
+  const path = filename.replaceAll("\\", "/");
+
+  if (!path.includes("/apps/os/src/")) return true;
+  if (path.includes("/apps/os/docs/")) return true;
+  // iterate-context.ts is THE capability layer: the edge's context handle and
+  // the ItxEntrypoint loaded code reaches its context through.
+  if (path.endsWith("/apps/os/src/iterate-context.ts")) return true;
+  // The worker's edge doors dial a context only after authorizing the caller:
+  // project-host ingress (worker.ts), the MCP tool call (mcp.ts) and the OAuth
+  // callback that lands a secret's tokens (secret-oauth-callback.ts).
+  if (path.endsWith("/apps/os/src/worker.ts")) return true;
+  if (path.endsWith("/apps/os/src/mcp.ts")) return true;
+  if (path.endsWith("/apps/os/src/secret-oauth-callback.ts")) return true;
+
+  return (
+    path.includes("/durable-objects/") ||
+    path.includes("/entrypoints/") ||
+    path.endsWith("/durable-object.ts") ||
+    path.endsWith("-durable-object.ts") ||
+    // Entrypoint files (WorkerEntrypoints with zod-validated inputs) are
+    // authority boundaries of the same standing as Durable Objects.
+    path.endsWith("-entrypoint.ts") ||
+    path.endsWith("/capability.ts") ||
+    path.endsWith("-capability.ts")
+  );
+}
+function getRawEnvBindingName(node: any) {
+  if (!node || node.type !== "MemberExpression") return undefined;
+  const bindingName = getPropertyName(node.property);
+  if (!bindingName) return undefined;
+  if (node.object.type === "Identifier" && node.object.name === "env") return bindingName;
+  if (
+    node.object.type === "MemberExpression" &&
+    getPropertyName(node.object.property) === "env" &&
+    node.object.object.type === "ThisExpression"
+  ) {
+    return bindingName;
+  }
   return undefined;
 }
 function getTestLintCallName(node: any): string | undefined {
@@ -432,6 +510,29 @@ const plugin: StrictPlugin = {
         };
       },
     },
+    // Dormant: registered, never armed; no retained code uses oRPC.
+    "no-public-procedure": {
+      meta: {
+        docs: {
+          description:
+            "Warn against usage of publicProcedure - prefer flexibleAuthProcedure or other auth procedures",
+        },
+        type: "suggestion",
+      },
+      create: (context) => {
+        return {
+          Identifier: (node) => {
+            if (node.name === "publicProcedure" && node.parent.type === "MemberExpression") {
+              context.report({
+                node,
+                message:
+                  "Avoid using publicProcedure unless the procedure truly must be publicly accessible - prefer one of the authenticated procedures instead",
+              });
+            }
+          },
+        };
+      },
+    },
     "no-sr-only-data-attributes": {
       meta: {
         docs: {
@@ -726,6 +827,9 @@ const plugin: StrictPlugin = {
       },
     },
     ...tseslintRules,
+    // Dormant: off in .oxlintrc.json. The legacy override named apps/os/src/rpc-targets.ts, which the
+    // rule itself skipped; the one retained `implements` class is apps/os/src/library/capnweb.ts.
+    "mechanical-class-impl": mechanicalClassImplRule,
     "isolated-codemode": isolatedCodemodeRule,
     "relative-import-extensions": {
       meta: {
@@ -1090,6 +1194,77 @@ const plugin: StrictPlugin = {
         };
       },
     }),
+    // Dormant: registered, not armed; ItxScriptBuilder went with the legacy platform in #2837.
+    "itx-script-fn-self-contained": {
+      meta: {
+        type: "problem",
+        docs: {
+          description:
+            "Function arguments of ItxScriptBuilder .execute()/.define() must be self-contained: " +
+            "they ship as compiled source into a server-side isolate where outer-scope " +
+            "identifiers and downleveled-syntax helpers do not exist.",
+        },
+      },
+      create(context) {
+        const checkScriptFunction = (node: any) => {
+          const call = node.parent;
+          if (!call || call.type !== "CallExpression" || !call.arguments.includes(node)) return;
+          if (call.callee.type !== "MemberExpression") return;
+          const method = getPropertyName(call.callee.property);
+          if (method !== "execute" && method !== "define") return;
+
+          // Outer-scope references: everything the function reads but does not
+          // define itself. Its parameters (itx, vars) resolve inside the
+          // function scope; runtime globals are allowlisted by name (oxlint's
+          // scope manager resolves no globals, so `Promise` and a test-file
+          // const look identical in `through`). What remains is test-file
+          // state the compiled source cannot reach from the script isolate.
+          const scope = context.sourceCode.getScope(node);
+          for (const reference of scope.through) {
+            const identifier = reference.identifier as Node & { parent?: Node };
+            const parentType = identifier.parent?.type as string | undefined;
+            // Type positions are erased by the transform — they never reach
+            // the isolate, so referencing test-file TYPES is fine.
+            if (parentType === "TSTypeReference" || parentType === "TSTypeQuery") continue;
+            if (SCRIPT_ISOLATE_GLOBALS.has((identifier as any).name)) continue;
+            context.report({
+              node: identifier,
+              message:
+                `\`${(identifier as any).name}\` is captured from outside the script function. ` +
+                `The function ships as compiled JavaScript into a server-side isolate where ` +
+                `only its own parameters (itx, vars) and runtime globals exist — test-file ` +
+                `bindings are dead references there. Pass values through .vars({...}).`,
+            });
+          }
+
+          // `using` declarations: the TEST-FILE transform downlevels them into
+          // module-scope helper references (__vite_ssr_import_…) that do not
+          // exist in the script isolate. The isolate itself supports `using`
+          // natively — scripts whose point is the `using` idiom go through
+          // executeSource() as strings.
+          const usingDeclarations = esquery.match(
+            node,
+            esquery.parse(
+              'VariableDeclaration[kind="using"], VariableDeclaration[kind="await using"]',
+            ),
+          );
+          for (const declaration of usingDeclarations) {
+            context.report({
+              node: declaration as never,
+              message:
+                "`using` inside a typed script function downlevels into test-isolate helper " +
+                "references that do not exist server-side. Use try/finally (or an explicit " +
+                "[Symbol.dispose]() call), or send the script as a string via " +
+                "executeSource() — the script isolate supports `using` natively.",
+            });
+          }
+        };
+        return {
+          FunctionExpression: checkScriptFunction,
+          ArrowFunctionExpression: checkScriptFunction,
+        };
+      },
+    },
     "import-rules": {
       meta: {
         fixable: "code",
@@ -1140,6 +1315,161 @@ const plugin: StrictPlugin = {
                   ),
                 ];
               },
+            });
+          },
+        };
+      },
+    },
+    // Dormant: registered, not armed since #1341. Its env.ts wrapper is gone; apps/os threads
+    // ctx.waitUntil as a WaitUntil argument (iterate-context.ts) and imports no waitUntil.
+    "no-direct-waituntil-import": {
+      meta: {
+        docs: {
+          description:
+            "Disallow importing waitUntil directly from cloudflare:workers - use the wrapper from env.ts instead",
+        },
+        type: "problem",
+      },
+      create: (context) => {
+        return {
+          ImportDeclaration: (node) => {
+            if (node.source.value === "cloudflare:workers") {
+              const waitUntilImport = node.specifiers.find(
+                (spec) =>
+                  (spec.type === "ImportSpecifier" &&
+                    getPropertyName(spec.imported) === "waitUntil") ||
+                  spec.type === "ImportNamespaceSpecifier",
+              );
+              if (waitUntilImport) {
+                context.report({
+                  node: waitUntilImport,
+                  message:
+                    'Do not import waitUntil directly from "cloudflare:workers". Use the error-handling wrapper from "../env.ts" instead: import { waitUntil } from "../env.ts"',
+                });
+              }
+            }
+          },
+        };
+      },
+    },
+    "no-raw-durable-object-binding-access": {
+      meta: {
+        type: "problem",
+        docs: {
+          description:
+            "Restrict raw env.*.getByName Durable Object namespace access to capability adapters and trusted domain internals.",
+        },
+      },
+      create: (context) => {
+        return {
+          "CallExpression[callee.type='MemberExpression']": (node: any) => {
+            if (getPropertyName(node.callee.property) !== "getByName") return;
+            const bindingName = getRawEnvBindingName(node.callee.object);
+            if (!bindingName) return;
+            if (isAllowedRawDurableObjectBindingAccessFile(context.filename || "")) return;
+
+            context.report({
+              node,
+              message:
+                `Raw env.${bindingName}.getByName(...) access is privileged platform authority. ` +
+                `Untrusted ingress should go through the root capability/capability adapter instead. ` +
+                `Allowed locations are Durable Objects, entrypoints, capability files, ` +
+                `iterate-context.ts and the edge doors (worker.ts, mcp.ts, secret-oauth-callback.ts).`,
+            });
+          },
+        };
+      },
+    },
+    // Dormant: registered, not armed; no apps/*-contract package is retained.
+    "contract-package-imports": {
+      meta: {
+        type: "problem",
+        docs: {
+          description:
+            "Restrict runtime imports in *-contract packages to a small allowlist of lightweight packages",
+        },
+      },
+      create: (context) => {
+        const ALLOWED_RUNTIME_IMPORT_PREFIXES = [
+          "zod",
+          "@orpc/contract",
+          "@orpc/zod",
+          "@iterate-com/shared/apps",
+          "@orpc/client",
+          "@orpc/openapi-client",
+        ];
+        const ALLOWED_RUNTIME_IMPORT_REGEX = [
+          // OS's contract needs to share event-stream and codemode wire
+          // schemas with the services that persist/execute those payloads.
+          // These exact entrypoints are Zod schema modules on their runtime
+          // paths; do not broaden to the package prefixes without checking
+          // for Node/server transitive imports first.
+          "@iterate-com/shared/callable/descriptor-types\\.ts",
+          "@iterate-com/shared/codemode/types",
+          "@iterate-com/shared/streams/types",
+          // Canonical Iterate auth claim schemas (zod-only module) — the auth
+          // contract's introspection output must match token claims exactly.
+          "@iterate-com/shared/auth-claims",
+        ];
+        const compiledRegex = ALLOWED_RUNTIME_IMPORT_REGEX.map(
+          (pattern) => new RegExp(`^${pattern}$`),
+        );
+
+        function isAllowedRuntimeImport(source: string) {
+          if (
+            ALLOWED_RUNTIME_IMPORT_PREFIXES.some(
+              (pkg) => source === pkg || source.startsWith(pkg + "/"),
+            )
+          ) {
+            return true;
+          }
+          return compiledRegex.some((re) => re.test(source));
+        }
+
+        const filename = context.filename || "";
+        const isTestFile = /\.(test|spec)\.[cm]?[jt]sx?$/.test(filename);
+        // A contract package may expose an explicit worker-only subpath whose
+        // shared entrypoint class must extend Cloudflare's WorkerEntrypoint.
+        // Keep this exact so browser-visible contract modules cannot acquire
+        // a Worker runtime dependency accidentally.
+        const isWorkerOnlyContractModule = /\/src\/worker\.ts$/.test(filename);
+
+        const allowedListForMessage =
+          ALLOWED_RUNTIME_IMPORT_PREFIXES.map((p) => `  • ${p} (and ${p}/…)`).join("\n") +
+          (ALLOWED_RUNTIME_IMPORT_REGEX.length > 0
+            ? "\n\n" + ALLOWED_RUNTIME_IMPORT_REGEX.map((p) => `  • /^${p}$/`).join("\n")
+            : "");
+
+        return {
+          ImportDeclaration: (node) => {
+            if (isTestFile) return;
+            if ((node as ImportKindNode).importKind === "type") return;
+
+            const allSpecifiersTypeOnly =
+              node.specifiers.length > 0 &&
+              node.specifiers.every((s) => (s as ImportKindNode).importKind === "type");
+            if (allSpecifiersTypeOnly) return;
+
+            const source = node.source.value;
+            if (typeof source !== "string") return;
+
+            if (source.startsWith(".") || source.startsWith("/")) return;
+
+            if (source === "cloudflare:workers" && isWorkerOnlyContractModule) return;
+
+            if (isAllowedRuntimeImport(source)) return;
+
+            context.report({
+              node,
+              message:
+                `Forbidden runtime import "${source}" in a contract package.\n\n` +
+                `Contract packages are imported by both server and browser code, so they ` +
+                `must stay ultra-light. Only these runtime imports are allowed:\n\n` +
+                allowedListForMessage +
+                `\n\nRelative imports and \`import type\` are always fine.\n` +
+                `If "${source}" is genuinely lightweight (zero Node/server deps), add a ` +
+                `prefix to ALLOWED_RUNTIME_IMPORT_PREFIXES or a pattern to ` +
+                `ALLOWED_RUNTIME_IMPORT_REGEX in oxlint-plugin-iterate.ts.`,
             });
           },
         };
