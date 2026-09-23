@@ -9,8 +9,9 @@
 > #2837. The Preview OS workflow's `e2e` job now runs one Vitest e2e runner and
 > one Playwright runner and finalizes them with
 > `upload-test-telemetry.ts --flake-suites preview`. The flake dashboard
-> (issue #2580) is written by `.depot/workflows/flake-dashboard.yml` every
-> 15 minutes (`scripts/ci/flake-dashboard/`, the legacy starter app's fold),
+> (issue #2580) is written by `.depot/workflows/flake-dashboard.yml`
+> (`scripts/ci/flake-dashboard/`, the legacy starter app's fold), paused to
+> dispatch-only until it has a token that can write the issue,
 > following the rules in [Current unknown flakes](#current-unknown-flakes).
 > A suite's run counts as main when its summary names `main` as its branch; a
 > workflow that uploads `flake-records-*` must be listed in the writer's
