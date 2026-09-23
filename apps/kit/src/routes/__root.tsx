@@ -8,9 +8,9 @@ export const Route = createRootRoute({
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       {
         name: "description",
-        content: "Install and configure an Iterate voice device from your browser.",
+        content: "Install and configure an iterate voice device from your browser.",
       },
-      { title: "Iterate Kit" },
+      { title: "iterate Kit" },
     ],
     links: [
       { rel: "stylesheet", href: css },

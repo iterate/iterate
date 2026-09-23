@@ -26,7 +26,7 @@ async function clientIdFor(issuer, metadata) {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      client_name: "Iterate static SPA",
+      client_name: "iterate static SPA",
       client_uri: location.origin,
       logo_uri: new URL("/client-logo.svg", location.origin).href,
       redirect_uris: [redirectUri()],

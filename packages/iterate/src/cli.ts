@@ -213,7 +213,7 @@ const registerOAuthClient = async (input: { authBaseUrl: string; redirectUri: st
     signal: AbortSignal.timeout(30_000),
     headers: { "content-type": "application/json", origin: input.authBaseUrl },
     body: JSON.stringify({
-      client_name: "Iterate CLI",
+      client_name: "iterate CLI",
       redirect_uris: [input.redirectUri],
       token_endpoint_auth_method: "none",
       grant_types: ["authorization_code", "refresh_token"],

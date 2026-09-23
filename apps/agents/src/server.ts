@@ -30,7 +30,7 @@ export default createServerEntry({
     // posthog-js's `api_host` (packages/ui posthog.tsx): PostHog EU through our own origin
     if (url.pathname.startsWith("/e/")) return proxyPosthogRequest({ request, proxyPrefix: "/e" });
     const auth = await appAuth(request, {
-      client: { name: "Iterate Agents", logoUri: "/client-logo.svg" },
+      client: { name: "iterate Agents", logoUri: "/client-logo.svg" },
       sessions: env.BROWSER_SESSION,
       issuer: env.ITERATE_ORIGIN,
       resource: `${env.ITERATE_ORIGIN}/api`,

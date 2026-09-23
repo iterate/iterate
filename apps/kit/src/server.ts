@@ -32,7 +32,7 @@ export default createServerEntry({
     const deviceLogin = await deviceAuth(request, env);
     if (deviceLogin) return deviceLogin;
     const auth = await appAuth(request, {
-      client: { name: "Iterate Kit", logoUri: "/favicon.svg" },
+      client: { name: "iterate Kit", logoUri: "/favicon.svg" },
       sessions: env.BROWSER_SESSION,
       issuer: env.ITERATE_ORIGIN,
       resource: `${env.ITERATE_ORIGIN}/api`,
