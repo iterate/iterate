@@ -126,6 +126,41 @@ test("handles renamed paths containing Git pathspec characters", () => {
   expect(fixture.lint("input[1].ts")).toMatchObject({ status: 0, names: [] });
 });
 
+test("rules sharing one blame of a file each apply their own cutoff", () => {
+  using fixture = createFixture();
+  fixture.write("const BAD_OLD = 1;\n");
+  fixture.commit("2020-01-01T00:00:00Z");
+  fixture.write("const BAD_OLD = 1;\nconst BAD_MID = 2;\n");
+  fixture.commit("2020-09-01T00:00:00Z");
+  const plugin = readFileSync(fixture.plugin, "utf8");
+  writeFileSync(
+    fixture.plugin,
+    plugin.replace(
+      "rules: { old: grandfatherRule({",
+      `rules: {
+        strict: grandfatherRule({
+          allowedUpTo: new Date("2020-06-01"),
+          create(context) {
+            return { Identifier(node) {
+              if (node.name.startsWith("BAD_")) context.report({ node, message: "Strict " + node.name });
+            } };
+          },
+        }),
+        old: grandfatherRule({`,
+    ),
+  );
+  const config = JSON.parse(readFileSync(join(fixture.root, ".oxlintrc.json"), "utf8"));
+  config.rules["fixture/strict"] = "error";
+  writeFileSync(join(fixture.root, ".oxlintrc.json"), JSON.stringify(config));
+
+  const { status, output } = fixture.lint();
+  expect({
+    status,
+    strict: [...output.matchAll(/Strict (BAD_\w+)/g)].map((match) => match[1]),
+  }).toEqual({ status: 1, strict: ["BAD_MID"] });
+  expect(fixture.lint()).toMatchObject({ names: [] });
+});
+
 test("rejects invalid cutoff dates", () => {
   expect(() => grandfatherRule({ allowedUpTo: new Date("invalid"), create: () => ({}) })).toThrow(
     "valid allowedUpTo date",

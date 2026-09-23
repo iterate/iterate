@@ -10,6 +10,13 @@ import { simpleTruthinessCheckRule } from "./rules/simple-truthiness-check.ts";
 import { tseslintRules } from "./rules/tseslint.ts";
 import type { StrictPlugin, StrictRule } from "./types.ts";
 import { grandfatherRule } from "./grandfather-rule.ts";
+
+const LIFECYCLE_HOOKS = new Set(["beforeAll", "beforeEach", "afterAll", "afterEach"]);
+const VI_MOCK_CALLS = new Set(["vi.mock", "vi.doMock"]);
+const PROPERTY_MATCHERS = new Set(["toBe", "toEqual", "toStrictEqual"]);
+/** The test-style rules (no-describe … prefer-test-over-it) check every line authored after
+ * 2026-09-23 UTC, when they were armed on every retained test file: lint/test-style-rules.md. */
+const testStyleRulesAllowedUpTo = new Date("2026-09-23T23:59:59Z");
 const getExpectedName = (name: string) => {
   const acronyms = ["API", "HTML", "JSON", "ORPC", "MCP"];
   const acronymStart = acronyms.find(
@@ -50,6 +57,35 @@ function getTestLintCallObjectName(node: any): string | undefined {
   if (node.type === "MemberExpression") return getTestLintCallName(node);
   if (node.type === "CallExpression") return getTestLintCallName(node.callee);
   return undefined;
+}
+function isDescribeCall(callee: any) {
+  const name = getTestLintCallName(callee);
+  return name === "describe" || Boolean(name?.startsWith("describe."));
+}
+function isViMockCall(callee: any) {
+  const name = getTestLintCallName(callee);
+  return Boolean(name && VI_MOCK_CALLS.has(name));
+}
+function isTestCallExpression(node: any): boolean {
+  if (!node || node.type !== "CallExpression") return false;
+  const name = getTestLintCallName(node.callee);
+  if (name === "test" || name === "it" || name?.startsWith("test.") || name?.startsWith("it.")) {
+    return true;
+  }
+  return isTestCallExpression(node.callee);
+}
+function isFunctionLikeDeclaration(node: any) {
+  if (node.type === "FunctionDeclaration" || node.type === "ClassDeclaration") return true;
+  if (node.type !== "VariableDeclaration") return false;
+  return node.declarations.some((declarator: any) => {
+    const init = declarator.init;
+    return (
+      init &&
+      (init.type === "FunctionExpression" ||
+        init.type === "ArrowFunctionExpression" ||
+        init.type === "ClassExpression")
+    );
+  });
 }
 
 function isFunctionExpressionNode(node: any) {
@@ -290,6 +326,34 @@ const isolatedCodemodeRule = {
     return original;
   },
 } as StrictRule;
+function getMatcherCall(node: any) {
+  if (node.callee.type !== "MemberExpression") return undefined;
+  const matcherName = getPropertyName(node.callee.property);
+  if (!matcherName) return undefined;
+  if (!PROPERTY_MATCHERS.has(matcherName)) return undefined;
+
+  let expectChain = node.callee.object;
+  if (expectChain.type === "MemberExpression" && getPropertyName(expectChain.property) === "not") {
+    expectChain = expectChain.object;
+  }
+
+  if (
+    expectChain.type !== "CallExpression" ||
+    expectChain.callee.type !== "Identifier" ||
+    expectChain.callee.name !== "expect"
+  ) {
+    return undefined;
+  }
+
+  const actual = expectChain.arguments[0];
+  if (!actual || actual.type !== "MemberExpression") return undefined;
+  if (actual.computed) return undefined;
+
+  const propertyName = getPropertyName(actual.property);
+  if (propertyName === "length") return undefined;
+
+  return { actual, matcherName };
+}
 
 function getRelativeTsImportWithExtension(source: string, filename: string) {
   if (!filename) return undefined;
@@ -696,6 +760,74 @@ const plugin: StrictPlugin = {
         };
       },
     },
+    "no-lifecycle-hooks": grandfatherRule({
+      allowedUpTo: testStyleRulesAllowedUpTo,
+      meta: {
+        type: "problem",
+        docs: {
+          description:
+            "Disallow beforeEach/beforeAll/afterEach/afterAll in test files; use disposable fixtures instead.",
+        },
+      },
+      create(context) {
+        return {
+          CallExpression(node) {
+            if (node.callee.type !== "Identifier" || !LIFECYCLE_HOOKS.has(node.callee.name)) {
+              return;
+            }
+            context.report({
+              node,
+              message:
+                "Avoid Vitest lifecycle hooks in test files. Prefer fixtures with Symbol.dispose or Symbol.asyncDispose.",
+            });
+          },
+        };
+      },
+    }),
+    "no-describe": grandfatherRule({
+      allowedUpTo: testStyleRulesAllowedUpTo,
+      meta: {
+        type: "suggestion",
+        docs: {
+          description:
+            "Keep test files flat so the first readable unit is the test itself, not a describe wrapper.",
+        },
+      },
+      create(context) {
+        return {
+          CallExpression(node) {
+            if (!isDescribeCall(node.callee)) return;
+            context.report({
+              node,
+              message:
+                "Avoid describe blocks. Keep tests as top-level test(...) calls unless grouping is truly necessary.",
+            });
+          },
+        };
+      },
+    }),
+    "no-vi-mock": grandfatherRule({
+      allowedUpTo: testStyleRulesAllowedUpTo,
+      meta: {
+        type: "suggestion",
+        docs: {
+          description:
+            "Avoid vi.mock in tests; prefer dependency injection and controllable fakes at the product boundary.",
+        },
+      },
+      create(context) {
+        return {
+          CallExpression(node) {
+            if (!isViMockCall(node.callee)) return;
+            context.report({
+              node,
+              message:
+                "Avoid vi.mock/vi.doMock in tests. Prefer dependency injection or a controllable fake dependency.",
+            });
+          },
+        };
+      },
+    }),
     "no-single-use-helpers": {
       meta: {
         type: "suggestion",
@@ -870,6 +1002,94 @@ const plugin: StrictPlugin = {
         };
       },
     },
+    "helpers-after-tests": grandfatherRule({
+      allowedUpTo: testStyleRulesAllowedUpTo,
+      meta: {
+        type: "suggestion",
+        docs: {
+          description:
+            "Keep helper functions and fixture builders below the top-level tests in each test file.",
+        },
+      },
+      create(context) {
+        return {
+          Program(node) {
+            const lastTestIndex = node.body.findLastIndex((statement) => {
+              return (
+                statement.type === "ExpressionStatement" &&
+                isTestCallExpression(statement.expression)
+              );
+            });
+            if (lastTestIndex === -1) return;
+
+            for (const statement of node.body.slice(0, lastTestIndex)) {
+              if (!isFunctionLikeDeclaration(statement)) continue;
+              context.report({
+                node: statement,
+                message:
+                  "Move test helpers below the tests so the file opens with behavior, not setup.",
+              });
+            }
+          },
+        };
+      },
+    }),
+    "prefer-object-property-match": grandfatherRule({
+      allowedUpTo: testStyleRulesAllowedUpTo,
+      meta: {
+        type: "suggestion",
+        docs: {
+          description:
+            "Prefer expect(object).toMatchObject({ property }) over expect(object.property).toBe(...).",
+        },
+      },
+      create(context) {
+        return {
+          CallExpression(node) {
+            const matcherCall = getMatcherCall(node);
+            if (!matcherCall) return;
+
+            const propertyName = getPropertyName(matcherCall.actual.property);
+            const sourceText = context.sourceCode.getText(matcherCall.actual.object);
+            const propertyText = propertyName ? `.${propertyName}` : ".[property]";
+            context.report({
+              node,
+              message:
+                `Prefer expect(${sourceText}).toMatchObject({ ${propertyName || "property"}: ... }) ` +
+                `over expect(${sourceText}${propertyText}).${matcherCall.matcherName}(...).`,
+            });
+          },
+        };
+      },
+    }),
+    "prefer-test-over-it": grandfatherRule({
+      allowedUpTo: testStyleRulesAllowedUpTo,
+      meta: {
+        type: "suggestion",
+        docs: {
+          description: "Use Vitest test(...) instead of it(...).",
+        },
+      },
+      create(context) {
+        return {
+          ImportSpecifier(node) {
+            if (node.imported.type !== "Identifier" || node.imported.name !== "it") return;
+            context.report({
+              node,
+              message: 'Import and use `test` from "vitest" instead of `it`.',
+            });
+          },
+          CallExpression(node) {
+            const name = getTestLintCallName(node.callee);
+            if (name !== "it" && !name?.startsWith("it.")) return;
+            context.report({
+              node,
+              message: "Use test(...) instead of it(...).",
+            });
+          },
+        };
+      },
+    }),
     "import-rules": {
       meta: {
         fixable: "code",
