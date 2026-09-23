@@ -204,7 +204,7 @@ describe("Depot credential boundaries", () => {
     },
     {
       file: ".depot/workflows/preview-os-next.yml",
-      permissions: { contents: "read", "pull-requests": "write" },
+      permissions: { contents: "read", "pull-requests": "write", statuses: "write" },
     },
     {
       file: ".depot/workflows/deploy-os-next.yml",
