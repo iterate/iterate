@@ -8,9 +8,9 @@
 // trusted code and the request is retried ONCE. One facet = one writer: a rotating refresh token is
 // never raced by two contexts. A WebSocket upgrade is a dispatch like any other: the 101 and its
 // socket ride the fetch channel back through the parent to the caller — this facet HOLDS no socket,
-// it dials one and hands it back, so the socket lives as long as the dial does, as it did through the
-// secret's former Durable Object (measured 2026-09-21, __workers-tests__/secret-facet-proxies-a-socket.test.ts:
-// the frames round-trip; the facet's abort closes it, 1006).
+// it dials one and hands it back, so the socket lives as long as the dial does (measured 2026-09-21,
+// __workers-tests__/secret-facet-proxies-a-socket.test.ts: the frames round-trip; the facet's abort
+// closes it, 1006).
 //
 // The verbs `itx.secrets` runs (context/built-ins.ts — ON THIS PATH, so the log's order is the
 // storage's, and through the facet host's platform entry: a caller's itx expression reaches the reads
@@ -99,7 +99,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
 
   /** This facet's identity, from its context's name (`ctx.props`, sdk/index.ts): the context, and
    *  the PATH THE PLACEHOLDER SPELLS — the context's path relative to the resource owner's root
-   *  (iterate-context.ts `resourceScope`): `/secrets/shop` for a project's `/secrets/shop` and for a
+   *  (context/paths.ts `resourceScope`): `/secrets/shop` for a project's `/secrets/shop` and for a
    *  user's `/users/<id>/secrets/shop` alike. */
   #address(): { context: string; path: string } {
     const context = this.ctx.props.iterateContextName;
@@ -108,8 +108,8 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     return { context, path: rootPath === "/" ? path : path.slice(rootPath.length) };
   }
 
-  /** Replace the record whole — material always travels with its complete policy
-   *  `update` rule), so a value never inherits a pin or a strategy it was not set with. The caller
+  /** Replace the record whole — material always travels with its complete policy, so a value
+   *  never inherits a pin or a strategy it was not set with. The caller
    *  (`itx.secrets.set`) has appended the fact already; this is the value. */
   async write(record: SecretRecord): Promise<void> {
     const revision = await this.#bump();

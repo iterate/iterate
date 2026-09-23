@@ -118,8 +118,6 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
       .toArray();
   }
 
-  // ── the created guard ──
-
   /** Every verb starts here: a workspace whose certificate has not landed refuses, and so does one
    *  whose deletion has been asked for. Deletion can land at any moment, so the state is read on
    *  every call (in memory once the facet is caught up). */
@@ -141,8 +139,6 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
       mounts[path] = { repo: path };
     return mounts;
   }
-
-  // ── files: the merged view ──
 
   /** The overlay's copy (a whiteout reads null), else the mounted repo's file at its tip; null when absent. */
   async readFile(path: string): Promise<string | null> {
@@ -225,8 +221,6 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
     );
     return [...paths].sort();
   }
-
-  // ── git, per mount ──
 
   /** The overlay's changes grouped by mount (every mount listed, dirty or not), plus the unmounted
    *  scratch — which is never committed. */

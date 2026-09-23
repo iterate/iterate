@@ -67,8 +67,6 @@ export class ControlPlane {
     }
   }
 
-  // ── the reads ──
-
   /** A project by id or by slug — THE lookup: a URL's `/projects/<slug>`, a hostname's label, an
    *  API call's `project`, a grant's id all resolve here. */
   async getProject(ref: string): Promise<ProjectRecord | null> {

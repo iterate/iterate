@@ -135,11 +135,9 @@ export function parseCommit(payload: Uint8Array): {
   return { tree, parents, author, timestamp, message };
 }
 
-// ── git wire ──
-
 /**
  * A minimal git protocol-v2 wire client for the Artifacts git endpoint —
- * exactly what `itx.repos`'s one-file read/write (above) needs, nothing more: `ls-refs`
+ * exactly what the repo facet's one-file read/write (repo/durable-object.ts) needs, nothing more: `ls-refs`
  * for ONE branch tip (`tipOf`), a shallow `fetch` of the tip's snapshot
  * (`fetchObjects`), `receive-pack` for one commit (`push`), and the object/pack
  * codecs between.
@@ -174,7 +172,7 @@ const OBJECT_TYPE_CODES: Record<number, GitObjectType | "ofs-delta" | "ref-delta
 };
 const CODE_BY_TYPE: Record<GitObjectType, number> = { blob: 3, commit: 1, tree: 2 };
 
-// -- pkt-line ----------------------------------------------------------------
+// ── pkt-line ──
 
 export function pktLine(line: string): Uint8Array {
   const payload = textEncoder.encode(`${line}\n`);
@@ -232,7 +230,7 @@ export function pktText(payload: Uint8Array): string {
   return textDecoder.decode(payload.subarray(0, end));
 }
 
-// -- object identity ----------------------------------------------------------
+// ── object identity ──
 
 export async function hashObject(type: GitObjectType, payload: Uint8Array): Promise<string> {
   const framed = concat([textEncoder.encode(`${type} ${payload.length}\0`), payload]);
@@ -253,7 +251,7 @@ function fromHex(oid: string): Uint8Array {
   return out;
 }
 
-// -- tree and commit codecs ----------------------------------------------------
+// ── tree and commit codecs ──
 
 interface TreeEntry {
   /** Octal mode string as git writes it: 100644, 100755, 120000, 40000, 160000. */
@@ -310,7 +308,7 @@ export function encodeCommit(input: {
   return textEncoder.encode(lines.join("\n"));
 }
 
-// -- pack parsing ---------------------------------------------------------------
+// ── pack parsing ──
 
 /** Inflate one zlib stream starting at `offset`, reporting consumed bytes. */
 function inflateAt(pack: Uint8Array, offset: number): { consumed: number; out: Uint8Array } {
@@ -573,7 +571,7 @@ export async function buildPack(
   return concat([body, digest]);
 }
 
-// -- protocol v2 requests --------------------------------------------------------
+// ── protocol v2 requests ──
 
 function encodeFetchRequest(input: { deepen: number; wants: string[] }): Uint8Array {
   const parts = [pktLine("command=fetch"), DELIM];
@@ -626,7 +624,7 @@ function demuxFetchResponse(body: Uint8Array): Uint8Array {
   return concat(packChunks);
 }
 
-// -- receive-pack (push) ----------------------------------------------------------
+// ── receive-pack (push) ──
 
 function encodeReceivePackRequest(input: {
   newOid: string;
@@ -682,7 +680,7 @@ function pushRefused(body: Uint8Array, expectedRef: string): string | null {
   return notes.join("; ");
 }
 
-// -- transport ---------------------------------------------------------------------
+// ── transport ──
 
 /**
  * HTTP transport against one Artifacts remote — the three verbs the repo facet

@@ -66,7 +66,7 @@ export type PendingSecretOAuth = {
 /** The claims the platform signs into the `state` parameter — how the callback finds the secret:
  *  `context` is the secret's context, its Durable Object name (`<projectId>.iterate/secrets/<name>`;
  *  under `/users/<id>` or `/organizations/<id>` for a user's or an organization's own secret) — the
- *  callback derives the RESOURCE OWNER from it (iterate-context.ts `resourceScope`) and admits the
+ *  callback derives the RESOURCE OWNER from it (context/paths.ts `resourceScope`) and admits the
  *  human by that. `kind` keeps these claims apart from every other claim set the same key signs. */
 export type SecretOAuthState = {
   kind: "secret-oauth";

@@ -86,7 +86,7 @@ We want to have _few_ abstractions.
 # Handling of slugs and IDs
 
 - We use "slugs" as unique identifiers in many places, because they are url-safe
-- Project slugs come from `projectSlug` in `apps/os/src/directory.ts`
+- Project slugs come from `projectSlug` in `apps/os/src/control-plane/catalog.ts`
 - On a technical level, slugs CAN be changed! Esp project slugs.
 - So for stable identifiers (e.g. for durable object names), always use IDs
-- IDs are minted with a type prefix (`prj_<hex>`, `org_<hex>`) in `apps/os/src/directory.ts`; see [identifiers](identifiers.md)
+- IDs are minted with a type prefix (`prj_<hex>`, `org_<hex>`) by `newId` in `apps/os/src/control-plane/catalog.ts`; see [identifiers](identifiers.md)

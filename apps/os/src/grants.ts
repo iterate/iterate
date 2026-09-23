@@ -194,7 +194,7 @@ export class GrantsRpcTarget extends RpcTarget {
   /** The console's own OAuth client the personal-token exchange runs through: the client id
    * metadata document at `/.auth/client.json` on an HTTPS issuer; on the local worker (a plain-http
    * client id is no CIMD client) a public client registered with the provider, as the browser
-   * session's login registers one (browser-session.ts). The local harness's KV does not promise
+   * session's login registers one. The local harness's KV does not promise
    * read-your-write (a lookup right after the put has missed under load), and the exchange below
    * reads the row three times — so the id is returned only once the provider sees it. */
   async #consoleClientId(issuer: string, redirectUri: string): Promise<string> {

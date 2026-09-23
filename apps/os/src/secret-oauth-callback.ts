@@ -12,7 +12,7 @@ import type { Env } from "./env.ts";
 import { authorizationForToken } from "./oauth.ts";
 import { isSecretOAuthState } from "./secret-oauth.ts";
 
-/** A secret's OWNER (iterate-context.ts `resourceScope`), read off the secret's context (its Durable
+/** A secret's OWNER (context/paths.ts `resourceScope`), read off the secret's context (its Durable
  *  Object name, what the callback's claims carry): a project's id, or the user's / the
  *  organization's id whose own secret it is — the callback admits the human by it. `path` is the
  *  path the placeholder spells, `/secrets/<name>`, relative to the owner's root. */

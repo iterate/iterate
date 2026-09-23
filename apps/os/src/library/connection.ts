@@ -28,7 +28,7 @@ export function subclassWithMethods<Base extends abstract new (...args: never[])
 
 /** The error for a response that refused: `<what> returned <status>: <the first 300 characters>`.
  *  The body is read only that far, then CANCELLED — a refusal's snippet must never buffer a whole
- *  error page (the v4 review's hygiene item). */
+ *  error page. */
 export async function responseRefusal(response: Response, what: string): Promise<Error> {
   const reader = response.body?.getReader();
   let snippet = "";
