@@ -3,6 +3,7 @@ import { DEFAULT_APPS_MODE } from "./preview.ts";
 import {
   APPS,
   changedApps,
+  isDurableObjectClassNotExportedError,
   MAX_PREVIEW_NAME_LENGTH,
   previewNameOfResource,
   previewPullRequestNumber,
@@ -251,3 +252,23 @@ describe("the preview a resource name encodes (previewResourceName's inverse; th
     expect(previewNameOfResource(previewResourceName("pr7-x", "db"), "db")).toBe("pr7-x");
   });
 });
+
+test.each([
+  // #2895's deploy after #2888 added ControlPlaneDurableObject (2026-09-23)
+  {
+    output:
+      "A request to the Cloudflare API (/accounts/x/workers/workers/os-next-preview/previews/y/deployments) failed.\n  Cannot create binding for class 'ControlPlaneDurableObject' that is not exported by the script. [code: 10061]",
+    recreate: true,
+  },
+  {
+    output: "Cannot create binding for class 'X' that is not exported by the script.",
+    recreate: true,
+  },
+  { output: "This Worker does not exist on your account. [code: 10007]", recreate: false },
+  { output: "Authentication error [code: 10000]", recreate: false },
+])(
+  "Cloudflare 10061 (a Durable Object class the preview lacks) is recognised: $recreate",
+  ({ output, recreate }) => {
+    expect(isDurableObjectClassNotExportedError(output)).toBe(recreate);
+  },
+);

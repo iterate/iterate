@@ -38,6 +38,7 @@ import {
   changedApps,
   PREVIEW_CONFIG_NAME,
   PREVIEW_PARENT,
+  isDurableObjectClassNotExportedError,
   previewPullRequestNumber,
   previewResourceName,
   previewResourceSuffixes,
@@ -579,7 +580,17 @@ function assertFreshInstall() {
  *  (naming the PR's Dash preview when `apps` holds dash), the Previews secrets, `wrangler preview`,
  *  and the smoke that the new deployment serves. What `deploy` and `release` share. The wrangler it
  *  prepared comes back for the apps on top; the caller cleans it up (here, when this fails). */
-async function deployOsPreview(ctx: EnvContext<OsEnv>, previewName: string, apps: StartApp[]) {
+async function deployOsPreview(
+  ctx: EnvContext<OsEnv>,
+  previewName: string,
+  apps: StartApp[],
+  recreated = false,
+): Promise<{
+  wrangler: ReturnType<typeof preparePreviewWrangler>;
+  url: string;
+  deploymentId: string;
+  slug: string;
+}> {
   await ensureArtifactsNamespace(ctx.cf, previewResourceName(previewName, "repos"));
   const dash = apps.find((app) => app.name === "dash");
   writePreviewWranglerConfig({
@@ -600,9 +611,22 @@ async function deployOsPreview(ctx: EnvContext<OsEnv>, previewName: string, apps
     ]);
     if (result.stderr) process.stderr.write(result.stderr);
     if (result.status !== 0) {
-      const hint = isMissingWorkerError(`${result.stdout}\n${result.stderr}`)
-        ? ` — the parent worker ${PREVIEW_PARENT.workerName} is missing; deploy it first: pnpm deploy --env preview`
-        : "";
+      const output = `${result.stdout}\n${result.stderr}`;
+      // An existing preview cannot gain a Durable Object class (preview-config.ts): delete it with
+      // its resources and create it again, once.
+      if (!recreated && isDurableObjectClassNotExportedError(output)) {
+        console.warn(
+          `preview ${previewName} lacks a Durable Object class this build binds (Cloudflare 10061), and an existing Worker Preview cannot gain one: deleting the preview and its resources, then creating it again`,
+        );
+        await deletePreview(ctx.cf, previewName, wrangler.command);
+        wrangler.cleanup();
+        return deployOsPreview(ctx, previewName, apps, true);
+      }
+      const hint = isMissingWorkerError(output)
+        ? ` — the parent worker ${PREVIEW_PARENT.workerName} is missing; deploy it first: pnpm --dir apps/os run deploy --env preview`
+        : isDurableObjectClassNotExportedError(output)
+          ? ` — Cloudflare 10061 on a new preview too: the parent worker ${PREVIEW_PARENT.workerName} does not export a Durable Object class this build binds. Deploy the parent from main (pnpm --dir apps/os run deploy --env preview); a PR that itself adds a class needs the parent deployed from its branch first`
+          : "";
       throw new Error(`wrangler preview failed with exit code ${result.status}${hint}`);
     }
     const data = parseWranglerJson(result.stdout);
