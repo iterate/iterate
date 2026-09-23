@@ -78,7 +78,7 @@ export interface OsEnv {
   temporaryCustomHostnames?: Record<string, string>;
   /** One first-level wildcard on an owned zone, served as the named project's config-worker apex.
    *  More specific Worker routes on that zone continue to take precedence. */
-  projectWildcard?: { hostname: string; project: string };
+  projectWildcard?: { hostname: string; project: string; excludedHostnames?: string[] };
   /** Registrable domains in this account which host entries in `temporaryCustomHostnames`.
    * They receive their own Worker route and proxied DNS record, rather than becoming a
    * Cloudflare-for-SaaS hostname on a project-host zone. */
@@ -135,7 +135,20 @@ export const osEnvs: Record<string, OsEnv> = {
       "lispwoso.com": "lispwoso",
       "templestein.com": "templestein",
     },
-    projectWildcard: { hostname: "iterate.com", project: "iterate" },
+    projectWildcard: {
+      hostname: "iterate.com",
+      project: "iterate",
+      // These first-party origins have their own routes and OAuth clients. A missing route must
+      // never make their client IDs look like clients of the cheese-game project at consent.
+      excludedHostnames: [
+        "os.iterate.com",
+        "mcp.iterate.com",
+        "dash.iterate.com",
+        "k.iterate.com",
+        "voice.iterate.com",
+        "install.iterate.com",
+      ],
+    },
     ownedProjectCustomApexes: ["iterate.com"],
     cloudflareForSaasProjectHostnameBases: ["iterate.app"],
     artifactsNamespace: "project-worker-prd-repos",

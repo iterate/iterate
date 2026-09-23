@@ -75,15 +75,16 @@ export function projectAddressOf(
 export function customProjectHostOf(
   hostname: string,
   hostnames: Record<string, string>,
-  wildcard?: { hostname: string; project: string },
+  wildcard?: { hostname: string; project: string; excludedHostnames?: string[] },
 ): { app: null; project: string } | null {
   const normalized = hostname.toLowerCase().replace(/\.$/, "");
   const exact = hostnames[normalized];
+  if (exact) return { app: null, project: exact };
+  if (wildcard?.excludedHostnames?.includes(normalized)) return null;
   const suffix = wildcard && `.${wildcard.hostname}`;
   const wildcardMatch =
     suffix && normalized.endsWith(suffix) ? normalized.slice(0, -suffix.length) : null;
-  const project =
-    exact || (wildcardMatch && !wildcardMatch.includes(".") ? wildcard?.project : null);
+  const project = wildcardMatch && !wildcardMatch.includes(".") ? wildcard?.project : null;
   return project ? { app: null, project } : null;
 }
 

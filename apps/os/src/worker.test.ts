@@ -478,13 +478,30 @@ for (const { hostname, becomes } of customRows)
     expect(customProjectHostOf(hostname, customHostnames)).toEqual(becomes);
   });
 
-const wildcard = { hostname: "iterate.com", project: "iterate" };
+const wildcard = {
+  hostname: "iterate.com",
+  project: "iterate",
+  excludedHostnames: [
+    "os.iterate.com",
+    "mcp.iterate.com",
+    "dash.iterate.com",
+    "k.iterate.com",
+    "voice.iterate.com",
+    "install.iterate.com",
+  ],
+};
 for (const [hostname, project] of [
   ["www.iterate.com", "iterate"],
   ["Blog.Iterate.com.", "iterate"],
   ["iterate.com", "iterate"],
   ["deep.www.iterate.com", null],
   ["www.iterate.app", null],
+  ["os.iterate.com", null],
+  ["mcp.iterate.com", null],
+  ["dash.iterate.com", null],
+  ["k.iterate.com", null],
+  ["voice.iterate.com", null],
+  ["install.iterate.com", null],
 ] as const)
   test(`project wildcard ${hostname} ⇒ ${project}`, () => {
     expect(customProjectHostOf(hostname, customHostnames, wildcard)?.project ?? null).toBe(project);

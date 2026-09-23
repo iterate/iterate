@@ -85,7 +85,11 @@ export const AppConfig = z.object({
       temporaryCustomHostnames: z.record(dnsName, z.string().trim().min(1, REQUIRED)).default({}),
       /** First-level subdomains of this owned zone serve one project's config worker. */
       projectWildcard: z
-        .object({ hostname: dnsName, project: z.string().trim().min(1, REQUIRED) })
+        .object({
+          hostname: dnsName,
+          project: z.string().trim().min(1, REQUIRED),
+          excludedHostnames: z.array(dnsName).optional(),
+        })
         .optional(),
     })
     .prefault({}),

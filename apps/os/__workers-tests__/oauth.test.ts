@@ -53,6 +53,14 @@ test("a first-level wildcard CIMD client is bound to its project at consent", as
     APP_CONFIG_URLS__PROJECT_WILDCARD: JSON.stringify({
       hostname: "iterate.com",
       project: "wildcard-consent",
+      excludedHostnames: [
+        "os.iterate.com",
+        "mcp.iterate.com",
+        "dash.iterate.com",
+        "k.iterate.com",
+        "voice.iterate.com",
+        "install.iterate.com",
+      ],
     }),
   } as Env;
   const bound = await projectsForClient(
@@ -70,6 +78,15 @@ test("a first-level wildcard CIMD client is bound to its project at consent", as
     user.id,
   );
   expect(issuer.projectBound).toBe(false);
+  for (const hostname of ["os", "mcp", "dash", "k", "voice", "install"]) {
+    const firstParty = await projectsForClient(
+      configured,
+      ORIGIN,
+      `https://${hostname}.iterate.com/.auth/client.json`,
+      user.id,
+    );
+    expect(firstParty.projectBound).toBe(false);
+  }
 });
 afterEach(() => {
   vi.restoreAllMocks();
