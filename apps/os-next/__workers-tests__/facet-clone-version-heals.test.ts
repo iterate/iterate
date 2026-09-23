@@ -138,3 +138,126 @@ export class Racing extends DurableObject {
     await runInDurableObject(s, (_i, state) => state.storage.kv.get("facet:race:restarts")),
   ).toBe(1);
 });
+
+// PRD 2026-09-23 06:36–09:10Z (Lispwoso and Garple homepages 500ing on a first request): a facet
+// started from this worker's own `ctx.exports` answered its FIRST call and rejected every later
+// one with "internal error; reference = …" before the method ran — each start was good for exactly
+// one call. A lone caller heals (restart, retry first on the fresh start); two callers on a running
+// facet did not: both failed, one restarted, and the other's retry became the fresh start's SECOND
+// call. The facet here plays that runtime: its instance answers once, then throws the platform's
+// text.
+test("on a runtime whose facet starts answer one call each, concurrent calls on a running facet each answer", async () => {
+  const source = {
+    "cap.js": `
+import { DurableObject } from "cloudflare:workers";
+export class OneCallPerStart extends DurableObject {
+  #answered = false;
+  #releasePair = () => {};
+  #pairArrived = new Promise((resolve) => (this.#releasePair = resolve));
+  async run() {
+    if (this.#answered) {
+      // The 2nd and 3rd rejections ever are the concurrent pair: they meet on one start first.
+      const rejected = Number(this.ctx.storage.kv.get("rejected") || 0) + 1;
+      this.ctx.storage.kv.put("rejected", rejected);
+      if (rejected === 3) this.#releasePair();
+      if (rejected === 2) await this.#pairArrived;
+      throw new Error("internal error; reference = spent");
+    }
+    this.#answered = true;
+    const n = Number(this.ctx.storage.kv.get("n") || 0) + 1;
+    this.ctx.storage.kv.put("n", n);
+    return { n };
+  }
+}`,
+  };
+  const s = stub("prj_facet_one_call_per_start");
+  const call = () =>
+    s.invoke([
+      "itx",
+      "facets",
+      ["get", "spent", { source, className: "OneCallPerStart" }],
+      ["run"],
+    ]);
+  expect(await call()).toEqual({ n: 1 }); // the start's one answer
+  expect(await call()).toEqual({ n: 2 }); // a lone caller: restarted, retried first
+  // The Lispwoso shape: a page's call and a background push on the same running facet.
+  const pair = await Promise.all([call(), call()]);
+  expect(pair.map((answer) => (answer as { n: number }).n).sort()).toEqual([3, 4]);
+  expect(
+    await runInDurableObject(s, (_i, state) => state.storage.kv.get("facet:spent:restarts")),
+  ).toBe(3); // one per failed call
+});
+
+// The same runtime, the cold shape the Lispwoso trace shows: a call in flight on the start it
+// opened is killed by a peer's restart, retries on the replacement — whose one call the peer's
+// retry spent — and then on a restart of its own.
+test("on a runtime whose facet starts answer one call each, a call killed by a peer's restart answers on a start of its own", async () => {
+  const source = {
+    "cap.js": `
+import { DurableObject } from "cloudflare:workers";
+export class OneCallPerStart extends DurableObject {
+  #answered = false;
+  inFlight() {
+    return this.ctx.storage.kv.get("in-flight") === true;
+  }
+  async run() {
+    if (this.#answered) throw new Error("internal error; reference = spent");
+    this.#answered = true;
+    if (!this.ctx.storage.kv.get("in-flight")) {
+      this.ctx.storage.kv.put("in-flight", true);
+      await new Promise(() => {}); // the first start's call hangs until a restart aborts it
+    }
+    const n = Number(this.ctx.storage.kv.get("n") || 0) + 1;
+    this.ctx.storage.kv.put("n", n);
+    return { n };
+  }
+}`,
+  };
+  const s = stub("prj_facet_one_call_per_start_cold");
+  const facet = (step: string) =>
+    s.invoke(["itx", "facets", ["get", "spent", { source, className: "OneCallPerStart" }], [step]]);
+  const first = facet("run");
+  await until("the first call is in flight", async () =>
+    (await facet("inFlight")) ? true : undefined,
+  );
+  const second = facet("run"); // the start's second call: rejected, so it restarts the facet
+  expect(
+    (await Promise.all([first, second])).map((answer) => (answer as { n: number }).n).sort(),
+  ).toEqual([1, 2]);
+  expect(
+    await runInDurableObject(s, (_i, state) => state.storage.kv.get("facet:spent:restarts")),
+  ).toBe(2);
+});
+
+// One platform failure among calls in flight restarts the facet ONCE: the calls its restart kills
+// retry on the replacement without restarting it again.
+test("one platform failure while other calls are in flight restarts the facet once; every call answers", async () => {
+  const source = {
+    "cap.js": `
+import { DurableObject } from "cloudflare:workers";
+export class Steady extends DurableObject {
+  async slow() {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return "slow";
+  }
+  failOnce() {
+    if (this.ctx.storage.kv.get("failed")) return "recovered";
+    this.ctx.storage.kv.put("failed", true);
+    throw new Error("internal error; reference = once");
+  }
+}`,
+  };
+  const s = stub("prj_facet_one_failure_in_traffic");
+  const facet = (step: string) =>
+    s.invoke(["itx", "facets", ["get", "steady", { source, className: "Steady" }], [step]]);
+  expect(await facet("slow")).toBe("slow");
+  const answers = await Promise.all([
+    ...Array.from({ length: 5 }, () => facet("slow")),
+    facet("failOnce"),
+    ...Array.from({ length: 5 }, () => facet("slow")),
+  ]);
+  expect(answers).toEqual([...Array(5).fill("slow"), "recovered", ...Array(5).fill("slow")]);
+  expect(
+    await runInDurableObject(s, (_i, state) => state.storage.kv.get("facet:steady:restarts")),
+  ).toBe(1);
+});

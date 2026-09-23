@@ -212,7 +212,8 @@ describe("the preview a resource name encodes (previewResourceName's inverse; th
     // another worker's
     ["os-preview-1-repos", "repos", undefined],
     ["project-worker-prd-repos", "repos", undefined],
-    // a former parent's: it reads as a preview name that is not `pr`-prefixed, so the sweep skips it
+    // a former parent's: it reads as a preview name; the sweep leaves it while a worker of that name
+    // exists (preview-sweep.ts rule 4)
     ["os-next-preview-2-pr1-x-repos", "repos", "2-pr1-x"],
   ])("%s as %s → %s", (resourceName, binding, expected) => {
     expect(previewNameOfResource(resourceName, binding)).toBe(expected);

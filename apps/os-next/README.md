@@ -48,9 +48,21 @@ pnpm --dir apps/os-next deploy -- --env <environment>
 The Preview OS-Next workflow deploys a platform preview and all four hosted clients (Dash,
 Agents, Notes, Voice), then runs integration and browser checks. To run it from a checkout:
 
+A platform preview is named `pr<n>-<branch slug>` under the `os-next-preview` parent Worker. It
+has its own Durable Objects, KV, R2, D1, and Artifacts namespace. Closing the PR deletes the
+preview and its resources. The nightly sweep also removes stale previews and orphaned resources;
+see `scripts/preview-sweep.ts` for the rules. Previews use workers.dev and have no project hosts.
+
+Run preview operations from this directory under the parent Doppler config:
+
 ```sh
 doppler run --project project-worker --config preview -- \
   pnpm preview deploy --pr <number> --name <branch> --apps all
+doppler run --project project-worker --config preview -- \
+  pnpm preview e2e --pr <number> --name <branch>
+doppler run --project project-worker --config preview -- \
+  pnpm preview sweep
+
 ```
 
 Use `e2e` in place of `deploy` to test an existing preview. `reset` destroys that preview's state

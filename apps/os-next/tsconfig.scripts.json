@@ -20,6 +20,8 @@
     "scripts/generate-wrangler-config.ts",
     "scripts/preview.ts",
     "scripts/preview-config.ts",
+    "scripts/preview-sweep.ts",
+    "scripts/preview-sweep.test.ts",
     "scripts/e2e-soak.ts",
     "scripts/preview.test.ts"
   ]
