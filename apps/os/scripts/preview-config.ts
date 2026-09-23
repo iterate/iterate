@@ -135,17 +135,30 @@ export function changedApps(changedPaths: string[], apps: StartApp[] = APPS): St
 
 // ── the PR body's managed section ──────────────────────────────────────────────────────────────
 
-const SECTION_BEGIN = "<!-- os-next-preview:begin -->";
-const SECTION_END = "<!-- os-next-preview:end -->";
+/** The preview's section of the PR body: the deploy writes it whole. */
+export const PREVIEW_SECTION_MARKERS = {
+  begin: "<!-- os-next-preview:begin -->",
+  end: "<!-- os-next-preview:end -->",
+};
+/** The residency gate's block inside it: the deploy writes it pending, the gate
+ *  (scripts/preview-residency.ts) fills in its verdict. */
+export const RESIDENCY_SECTION_MARKERS = {
+  begin: "<!-- os-next-preview-residency:begin -->",
+  end: "<!-- os-next-preview-residency:end -->",
+};
 
 /** Replace the managed section between the markers, or append one. Everything a person wrote
  *  around it is kept verbatim. */
-export function splicePullRequestBody(body: string, section: string): string {
-  const block = `${SECTION_BEGIN}\n${section.trim()}\n${SECTION_END}`;
-  const begin = body.indexOf(SECTION_BEGIN);
-  const end = body.indexOf(SECTION_END, begin);
+export function splicePullRequestBody(
+  body: string,
+  section: string,
+  markers = PREVIEW_SECTION_MARKERS,
+): string {
+  const block = `${markers.begin}\n${section.trim()}\n${markers.end}`;
+  const begin = body.indexOf(markers.begin);
+  const end = body.indexOf(markers.end, begin);
   if (begin >= 0 && end > begin) {
-    return body.slice(0, begin) + block + body.slice(end + SECTION_END.length);
+    return body.slice(0, begin) + block + body.slice(end + markers.end.length);
   }
   const kept = body.trimEnd();
   return `${kept ? `${kept}\n\n` : ""}${block}\n`;
@@ -172,6 +185,10 @@ export function renderPullRequestSection(input: {
           ...input.apps.map((app) => `| ${app.name} | ${app.url} |`),
         ]
       : ["No app preview was deployed in this run."]),
+    "",
+    RESIDENCY_SECTION_MARKERS.begin,
+    "#### Residency gate: pending — the residency job reads five minutes after the e2e suite ends, then redeploys the preview",
+    RESIDENCY_SECTION_MARKERS.end,
     "",
     "Every push redeploys it in place. Reset, e2e, delete and the laptop commands: [apps/os/README.md](https://github.com/iterate/iterate/blob/main/apps/os/README.md).",
   ].join("\n");

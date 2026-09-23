@@ -5,6 +5,9 @@
 #                       worker os-next-preview and writes the URL and the operations into the PR body
 #   e2e                 after deploy succeeds: the e2e suite and the Playwright specs against it,
 #                       then their test telemetry and flake records as artifacts
+#   residency           after every suite: fails if any Durable Object is still resident five minutes
+#                       after it (apps/os/scripts/preview-residency.ts), then always redeploys
+#                       the preview, which ends the sessions the run left open
 #   delete (PR closed)  deletes the preview and everything it owned
 #   sweep (nightly)     deletes previews whose PR closed without a delete, or that went stale
 # On a push, "delete" and "sweep" skip by design; "e2e" skips only when deploy did not succeed.
@@ -153,6 +156,11 @@ jobs:
       TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
       TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
       TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ env.PR_NUMBER }}
+    # The suite's boundaries, for the residency job. Written by steps that cannot fail, so a red
+    # suite still hands them over.
+    outputs:
+      suite-started: ${{ steps.suite-started.outputs.at }}
+      suite-ended: ${{ steps.suite-ended.outputs.at }}
     steps:
       - name: Checkout the PR head
         uses: actions/checkout@v4
@@ -168,6 +176,9 @@ jobs:
         run: doppler setup --config preview --project project-worker
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Record the suite's start
+        id: suite-started
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - name: Run the e2e suite against the preview
         working-directory: apps/os
         env:
@@ -178,6 +189,10 @@ jobs:
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: doppler run -- pnpm preview e2e
+      - name: Record the suite's end
+        id: suite-ended
+        if: always() && steps.suite-started.outcome == 'success'
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       # Fails when either runner left no complete artifact, and writes the specs and preview-e2e
       # suite summaries next to their flake lines. It runs under _shared/prd like the Test
       # workflow's finalizer; PostHog delivery itself is off (scripts/ci/posthog-events.ts). A
@@ -215,6 +230,59 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           overwrite: true
+
+  # AFTER EVERY SUITE, on a small runner so the big one is not held idle through the wait: the
+  # residency gate (apps/os/scripts/preview-residency.ts) waits until the Durable Object
+  # analytics cover the five minutes starting five minutes after the suite ended, then fails if any
+  # object of the preview was still resident with every client closed — the leak class that ran the
+  # dev/preview account past $1000/day on 09-21/22 behind a green suite. Then, ALWAYS, the release
+  # redeploys the preview (a redeploy, never a reset), which ends the sessions the run left open
+  # instead of billing them until the next push (an object re-woken after the redeploy survives it;
+  # the next run's gate names it). In that order: a redeploy first would end the very sessions the
+  # gate looks for. The PR's concurrency group covers this job, so the next push deploys only after
+  # the release.
+  residency:
+    name: residency
+    needs: e2e
+    if: always() && needs.e2e.outputs.suite-started != ''
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 30
+    steps:
+      - name: Checkout the PR head
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config preview --project project-worker
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Fail on any Durable Object still resident five minutes after the suite
+        working-directory: apps/os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PREVIEW_NAME: ${{ github.head_ref }}
+          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
+          PREVIEW_SUITE_STARTED: ${{ needs.e2e.outputs.suite-started }}
+          PREVIEW_SUITE_ENDED: ${{ needs.e2e.outputs.suite-ended }}
+        run: doppler run -- pnpm preview residency
+      - name: Release — redeploy the preview, ending the sessions the run left open
+        if: always()
+        working-directory: apps/os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PREVIEW_NAME: ${{ github.head_ref }}
+          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
+          PREVIEW_APPS: ${{ inputs.apps || 'all' }}
+        run: doppler run -- pnpm preview release
 
   cleanup:
     name: delete (PR closed)
