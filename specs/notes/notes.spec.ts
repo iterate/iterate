@@ -1,4 +1,5 @@
 import { expect } from "@playwright/test";
+import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
 import { test } from "../test-support/test.ts";
 
 test("sign in, create a project, save a note and read it after reload", async ({
@@ -21,7 +22,7 @@ test("sign in, create a project, save a note and read it after reload", async ({
   const password = page.getByRole("textbox", { name: "Password", exact: true });
   if (!(await password.isVisible()))
     await page.getByRole("button", { name: /^(Continue|Use password instead)$/ }).click();
-  await password.fill(process.env.LOGIN_PASSWORD || "dev");
+  await password.fill(readOsPlaywrightAuthConfig().loginPassword);
   // noWaitAfter: the post navigates; the next locator waits for it (the spinner-waiter counts a
   // navigation in flight as loading), not the click's tight action timeout
   await page.getByRole("button", { name: "Sign in", exact: true }).click({ noWaitAfter: true });
@@ -31,21 +32,24 @@ test("sign in, create a project, save a note and read it after reload", async ({
   await page.getByRole("textbox", { name: "Project slug", exact: true }).fill(slug);
   await page.getByRole("button", { name: "Review permissions", exact: true }).click();
   await page.getByRole("button", { name: "Authorize", exact: true }).click({ noWaitAfter: true });
-  await page.waitForURL(
-    (url) => url.origin === new URL(baseURL!).origin && url.pathname === `/projects/${slug}`,
-  );
+  // back on the Notes app, on the new project's page
   const note = page.getByRole("textbox", { name: "/repos/config/notes/log.md" });
   await note.fill(`Notes deployment proof ${stamp}`);
+  const landed = new URL(page.url());
+  expect({ origin: landed.origin, pathname: landed.pathname }).toEqual({
+    origin: new URL(baseURL!).origin,
+    pathname: `/projects/${slug}`,
+  });
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await page
     .getByRole("status")
     .filter({ hasText: /^Committed / })
     .waitFor();
   await page.reload();
-  await expect(note).toHaveValue(`Notes deployment proof ${stamp}`);
   await page
     .getByRole("status")
     .filter({ hasText: /^At commit / })
     .waitFor();
+  expect(await note.inputValue()).toBe(`Notes deployment proof ${stamp}`);
   expect(errors).toEqual([]);
 });

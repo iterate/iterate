@@ -6,7 +6,10 @@ import {
   uiErrorReporter,
   videoMode,
 } from "middlewright";
-import { createProjectFixture as createForgedProjectFixture } from "./forged-session.ts";
+import {
+  createProjectFixture as createForgedProjectFixture,
+  createSessionFixture,
+} from "./forged-session.ts";
 import { screenshot } from "./screenshot.ts";
 
 const addPagePlugins = (page: Page, testInfo: _TestInfo) => {
@@ -36,6 +39,8 @@ export const test = base.extend<{
       slugPrefix: string,
       options?: { projectCount?: number },
     ) => Promise<Awaited<ReturnType<typeof createForgedProjectFixture>>>;
+    /** A browser signed in as a fresh person with no project, without driving the sign-in page. */
+    createSession: (slugPrefix: string) => ReturnType<typeof createSessionFixture>;
   };
   page: Awaited<ReturnType<typeof addPagePlugins>>;
 }>({
@@ -45,6 +50,10 @@ export const test = base.extend<{
       createFixture: (slugPrefix, options) =>
         base.step("create project fixture", () =>
           createForgedProjectFixture(slugPrefix, { baseURL, page, ...options }),
+        ),
+      createSession: (slugPrefix) =>
+        base.step("create signed-in session", () =>
+          createSessionFixture(slugPrefix, { baseURL, page }),
         ),
     });
   },
