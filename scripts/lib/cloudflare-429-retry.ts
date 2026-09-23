@@ -15,9 +15,8 @@
  * otherwise wait 5s → 15s → 30s → 60s — ~110s worst case per call, a real
  * chance of outliving a short burst without threatening a CI job's 30-minute
  * ceiling. ONLY status 429 retries; every other status (and any thrown fetch
- * error) surfaces to the caller immediately. This mirrors the shape of
- * withGithubRetry in scripts/preview/preview.ts, but works at the Response
- * level so it can read Retry-After.
+ * error) surfaces to the caller immediately. It works at the Response level
+ * so it can read Retry-After.
  *
  * This is infrastructure-API resilience, not a test retry layer — the
  * e2e-policy "one retry layer" rule (docs/testing.md) governs retrying

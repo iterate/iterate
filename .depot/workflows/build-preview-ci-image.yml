@@ -18,7 +18,7 @@ on:
     # Weekly (Mondays 04:17 UTC) repairs drift even when dependency inputs have
     # not changed. Relevant mainline changes rebuild immediately so consumers
     # rarely spend startup time reconciling a stale snapshot. The reconcile
-    # step remains the correctness authority. See docs/depot-ci.md.
+    # step remains the correctness authority.
     - cron: "17 4 * * 1"
   workflow_dispatch:
     inputs:

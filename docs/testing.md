@@ -12,7 +12,7 @@ Run commands from the repository root unless stated otherwise.
 | `pnpm spec`                              | Chromium issuer and mini-app browser flows, plus mobile-width authentication   |
 | `pnpm --dir apps/kit firmware:test:host` | Firmware host tests                                                            |
 
-The platform's [Vitest config](../apps/os-next/vitest.config.ts) defines unit, Workers, e2e, and benchmark projects. Its [Playwright config](../apps/os-next/playwright.config.ts) starts a local Worker or uses `DEMO_BASE_URL`. Set `WORKER_BASE_URL` for deployed integration tests and supply that deployment's credentials as described in the [platform README](../apps/os-next/README.md).
+The platform's [Vitest config](../apps/os-next/vitest.config.ts) defines unit, Workers, e2e, and benchmark projects. Its [Playwright config](../apps/os-next/playwright.config.ts) starts a local Worker or uses `DEMO_BASE_URL`. Set `WORKER_BASE_URL` for deployed integration tests and supply that deployment's credentials as described in the [platform README](../apps/os-next/README.md). For test style (`test.for` tables with literal expectations, polling instead of sleeps), see [Vitest patterns](vitest-patterns.md).
 
 Tests own their project state. Retry only at the test boundary, keep recovery bounded, and report first-attempt failures through test telemetry. Fix product regressions; do not widen timeouts or silently skip tests to make them green. A fake must state which runtime behavior it cannot prove.
 

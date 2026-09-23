@@ -2,7 +2,7 @@
 # Cloudflare accounts (dev/preview and prd). Runs the probe from
 # scripts/ci/do-duration-probe.ts via scripts/ci/do-duration-alert.ts,
 # which trips on either signature of the DO billable-duration leak class
-# (apps/os/tasks/do-duration-leak/):
+# (https://github.com/iterate/iterate/tree/6a9a48e2a/apps/os/tasks/do-duration-leak):
 #
 #   1. one invocation pinned for hours of wall-clock (leaked RPC session)
 #   2. account-wide active time above a per-account hourly ceiling (the
