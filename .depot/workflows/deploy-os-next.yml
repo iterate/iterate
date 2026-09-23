@@ -49,6 +49,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       public_url: ${{ steps.metadata.outputs.public_url }}
+      deployed_at: ${{ steps.deployed.outputs.at }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -72,6 +73,33 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run -- pnpm run-script deploy --env prd
+      - name: Record when the deploy finished
+        id: deployed
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+  # READ-ONLY, five minutes after the deploy (scripts/ci/prd-post-deploy-check.ts): the prd fault
+  # alarm's own query over the window since the deploy, on the new version only, and one GET of each
+  # production project host (envs.ts osEnvs.prd.temporaryCustomHostnames). A fault, or a host that
+  # answers 421 or 5xx, pages #error-pulse and fails this workflow. It creates nothing.
+  verify:
+    needs:
+      - deploy
+    if: needs.deploy.result == 'success'
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ inputs.ref || github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Check the new version and the project hosts
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project project-worker --config prd -- pnpm tsx scripts/ci/prd-post-deploy-check.ts check --deployed-at "${{ needs.deploy.outputs.deployed_at }}"
   notify:
     needs:
       - deploy
