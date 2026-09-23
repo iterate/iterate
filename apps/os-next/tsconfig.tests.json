@@ -13,6 +13,7 @@
     "../agents/__workers-tests__",
     "specs",
     "__workers-tests__",
+    "platform-tests",
     "scripts/inspect-context.ts",
     "scripts/project-seed*.ts",
     "scripts/memory-budget-scenarios.ts",

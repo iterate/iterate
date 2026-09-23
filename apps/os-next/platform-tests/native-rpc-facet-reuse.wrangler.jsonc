@@ -1,0 +1,18 @@
+{
+  // Copy for one dedicated reproducer; provide its unique name and account externally.
+  "main": "./native-rpc-facet-reuse.fixture.mjs",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "allow_irrevocable_stub_storage",
+    "global_fetch_strictly_public",
+  ],
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [{ "name": "CALLER", "class_name": "Caller" }],
+  },
+  "exports": {
+    "Caller": { "type": "durable-object", "storage": "sqlite" },
+    "Repo": { "type": "durable-object", "storage": "sqlite" },
+  },
+}

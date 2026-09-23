@@ -78,3 +78,32 @@ test("a first-party facet name refuses a spec — no source ever names a class o
   expect(refusals.facet).toMatch(/first-party/);
   expect(refusals.processor).toMatch(/first-party/);
 });
+
+test("first-party project and repo facets survive sequential and concurrent top-level calls without a platform-recovery restart", async () => {
+  const ctx = "prj_first_party_facet_reuse";
+  const s = stub(ctx);
+  type Snapshot = { offset: number; state: unknown };
+  const snapshot = (name: "project" | "repo") =>
+    s.invoke(`itx.facets.get('${name}').snapshot()`) as Promise<Snapshot>;
+
+  // Distinct calls on the context's public RPC stub: this is not a chained
+  // invocation inside one context request.
+  const sequentialProject = await snapshot("project");
+  const sequentialRepo = await snapshot("repo");
+  // The duplicate calls are the same named first-party facet raced through
+  // independent top-level RPCs; project/repo together cover both exports.
+  const concurrent = await Promise.all([
+    snapshot("project"),
+    snapshot("project"),
+    snapshot("repo"),
+    snapshot("repo"),
+  ]);
+  for (const value of [sequentialProject, sequentialRepo, ...concurrent])
+    expect(value.offset).toBeTypeOf("number");
+
+  const restarts = await runInDurableObject(s, (_instance, state) => ({
+    project: Number(state.storage.kv.get("facet:project:restarts") ?? 0),
+    repo: Number(state.storage.kv.get("facet:repo:restarts") ?? 0),
+  }));
+  expect(restarts).toEqual({ project: 0, repo: 0 });
+});
