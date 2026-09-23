@@ -173,12 +173,15 @@ export function renderPullRequestSection(input: {
   deploymentId: string;
   dashboardUrl: string;
   apps: { name: string; url: string }[];
+  /** Which commit the run deployed and tested (scripts/ci/preview-tested-commit.ts). */
+  testedCommit?: string;
 }): string {
   return [
     `### os-next preview: \`${input.previewName}\``,
     "",
     `**${input.url}** · deployment \`${input.deploymentId.slice(0, 8)}\` · [Cloudflare dashboard](${input.dashboardUrl}) · deleted when this PR closes`,
     "",
+    ...(input.testedCommit ? [`Built and tested from ${input.testedCommit}.`, ""] : []),
     ...(input.apps.length > 0
       ? [
           "| App on top, signed in against this preview | |",

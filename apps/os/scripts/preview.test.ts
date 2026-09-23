@@ -73,6 +73,22 @@ describe("the PR body's managed section", () => {
     );
     expect(section).toContain("https://github.com/iterate/iterate/blob/main/apps/os/README.md");
     expect(section).not.toContain("depot ci dispatch");
+    expect(section).not.toContain("Built and tested from");
+  });
+
+  test("names the commit the run tested when the workflow resolved one", () => {
+    const withCommit = renderPullRequestSection({
+      previewName: "pr123-feature-foo",
+      url: "https://pr123-feature-foo-os-next-preview.iterate-dev-preview.workers.dev",
+      deploymentId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
+      dashboardUrl: "https://dash.cloudflare.com/x",
+      apps: [],
+      testedCommit:
+        "the merge commit `ccccccccc`: this PR's head `bbbbbbbbb` merged into main at `aaaaaaaaa`",
+    });
+    expect(withCommit).toContain(
+      "Built and tested from the merge commit `ccccccccc`: this PR's head `bbbbbbbbb` merged into main at `aaaaaaaaa`.",
+    );
   });
 
   test("appends to a body without one, keeping the author's text", () => {
