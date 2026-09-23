@@ -62,7 +62,9 @@ test("the Notes app works through a project config worker, and its session there
   const note = `Written on the independent app: ${project.slug}`;
   // the same app on the project's `notes` label: notes--<project>.<hostname>
   const proxiedUrl = projectUrlOf(ingressRouting, origin, { project: project.slug, app: "notes" })!;
-  const proxied = { origin: proxiedUrl.origin, name: notes.name, host: proxiedUrl.host };
+  // A project host's `/.auth/*` is the OS edge's (apps/os/src/browser-client.ts), whose client
+  // document names no app off the platform origin: the consent page names the client by its host.
+  const proxied = { origin: proxiedUrl.origin, name: proxiedUrl.host, host: proxiedUrl.host };
   // The repository's actual config-worker source, preserving its auth.require gate, pointed at the
   // Notes app under test (the source names production's).
   const source = transformSync(
