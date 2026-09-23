@@ -1,0 +1,27 @@
+{
+  "name": "@iterate-com/dummy-petshop",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0-beta.1",
+    "@orpc/openapi": "1.13.14",
+    "@orpc/server": "1.13.14",
+    "@orpc/zod": "1.13.14",
+    "capnweb": "npm:@iterate-com/capnweb@^0.12.2",
+    "dedent": "^1.7.0",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:cloudflare",
+    "@orpc/client": "1.13.14",
+    "typescript": "^5.9.3",
+    "vitest": "4.0.15",
+    "wrangler": "catalog:cloudflare"
+  }
+}

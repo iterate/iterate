@@ -4,9 +4,12 @@
 // `/__backdoor` console to force expiry. The worker under test fetches it directly (the local
 // worker over the real network, the deployed worker from the edge); nothing here proxies for it.
 
-/** The deployed fixture — `PETSHOP_BASE_URL` picks another (a preview slot's). */
+/** The deployed fixture (apps/dummy-petshop) — `PETSHOP_BASE_URL` picks another. */
 export const petshopBaseUrl = (): string =>
-  (process.env.PETSHOP_BASE_URL?.trim() || "https://dummy-petshop.iterate.com").replace(/\/$/, "");
+  (process.env.PETSHOP_BASE_URL?.trim() || "https://dummy-petshop.iterate.workers.dev").replace(
+    /\/$/,
+    "",
+  );
 
 const backdoorHeaders = (): Record<string, string> => {
   const secret = process.env.PETSHOP_BACKDOOR_SECRET?.trim();
