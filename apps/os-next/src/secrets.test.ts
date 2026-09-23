@@ -14,6 +14,7 @@ import {
 } from "./secret-oauth.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "./secret-at-rest.ts";
 import {
+  assertSecretPath,
   constantTimeEquals,
   hmacSha256Hex,
   normalizeSecretRecord,
@@ -207,6 +208,32 @@ test("secretPathsReferenced: the distinct secret PATHS a request's URL and heade
     ),
   ).toEqual(["/secrets/q", "/secrets/tok"]);
   expect(secretPathsReferenced(new Request("https://api.example.com/"))).toEqual([]);
+  // `.` and `..` name no secret — `/secrets/..` would resolve onto the owner's root — so the
+  // placeholder never names one; `...` is an ordinary name.
+  expect(
+    secretPathsReferenced(
+      new Request('https://api.example.com/?k=getSecret("/secrets/..")', {
+        headers: { a: 'getSecret("/secrets/.")', b: 'getSecret("/secrets/...")' },
+      }),
+    ),
+  ).toEqual(["/secrets/..."]);
+});
+
+test.each([
+  { path: "/secrets/api-key", accepted: true },
+  { path: "/secrets/a.b_c-1", accepted: true },
+  { path: "/secrets/...", accepted: true },
+  { path: "/secrets/.hidden", accepted: true },
+  { path: "/secrets/..", accepted: false },
+  { path: "/secrets/.", accepted: false },
+  { path: "/secrets/", accepted: false },
+  { path: "/secrets/a/b", accepted: false },
+  { path: "/secrets/has space", accepted: false },
+  { path: "secrets/api-key", accepted: false },
+  { path: "/kv/api-key", accepted: false },
+])("assertSecretPath($path): accepted $accepted", ({ path, accepted }) => {
+  if (accepted) expect(assertSecretPath(path)).toBe(path);
+  else expect(() => assertSecretPath(path)).toThrow(/a secret's path is \/secrets\/<name>/);
 });
 
 // ── the pin ── never empty: a secret goes to its origins and nowhere else.

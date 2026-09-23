@@ -28,6 +28,7 @@ import {
 } from "../stream/core-processor.ts";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
 import type { Stream } from "../stream/stream.ts";
+import { assertFacetPlacement } from "./first-party-facet-placement.ts";
 import {
   assertFacetSourceWithinCeiling,
   facetLoaderOwner,
@@ -65,6 +66,10 @@ type FacetHostDeps = {
   deployId: string;
   /** The DO's name: a facet's props and the owner half of its loader identity. */
   iterateContextName: string;
+  /** The context's project and canonical path — whether a facet may be hosted here is read off
+   *  them (first-party-facet-placement.ts). */
+  projectId: string;
+  path: string;
   /** The origin this context is reached on, folded into the loader id (worker-loader.ts). */
   platformOrigin: () => string | null;
   /** The `env.ITX` stub every worker this context loads receives (the DO's `#itxEntrypoint`). */
@@ -344,6 +349,13 @@ export class FacetHost {
       throw new Error(
         `facet "${name}" is first-party — hosted from this worker's own ${firstPartyClassName}, never a loaded source; call itx.facets.get("${name}") without a spec`,
       );
+    // WHERE it may be hosted (first-party-facet-placement.ts): a first-party class runs with the
+    // worker's real env on this context, so only where the platform hosts it; loaded code only
+    // inside a project. Every facet is created here, so this is where that holds.
+    assertFacetPlacement(name, {
+      projectId: this.#deps.projectId,
+      path: this.#deps.path,
+    });
     const facetStartupMemo = firstPartyClassName
       ? undefined
       : this.#facetStartupMemoFor(name, spec);
