@@ -32,11 +32,14 @@ export function captureIssueInPosthog(issue: Issue): void {
       failureSite: issue.failureSite,
       $environment: config.urls.os ? new URL(config.urls.os).host : "unconfigured",
       deployId: config.deployId,
+      $process_person_profile: false,
     })
+    // the send has settled; a bounded shutdown (the SDK's default waits 30 s) holds nothing past it
+    .then(() => client.shutdown(1_000))
     .catch((error: unknown) =>
-      // warn, not error: a failed report must not page the prd fault alarm on its own
+      // warn, not error, and after the shutdown too: a failed report — capture or flush — must
+      // never reject `waitUntil` into an uncaught error that pages the prd fault alarm
       console.warn({ event: "posthog.capture-failed", message: String(error) }),
-    )
-    .finally(() => client.shutdown());
+    );
   waitUntil(sent);
 }
