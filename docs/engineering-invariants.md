@@ -11,7 +11,10 @@ resource leaks.
   telemetry, and fix the rest.
 - Never swallow, endlessly retry, or hide failures behind fallbacks or
   compatibility shims. Recovery must be bounded, observable, and preserve a
-  durable explanation of what happened.
+  durable explanation of what happened. A workaround that heals a platform
+  fault logs a warn whose `event` is `<area>.platform-failure-<action>`: the
+  [prd fault alarm](../scripts/ci/prd-fault-alarm.ts) pages on bursts of those,
+  on any os-next-prd 5xx, and on error bursts.
 - A healthy request is not enough if it leaves corrupt, stalled, or divergent
   state behind. Verify the resulting state and the relevant production-shaped
   telemetry.
