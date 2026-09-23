@@ -1,3 +1,5 @@
 **/pnpm-lock.yaml linguist-generated=true
 .github/workflows/* linguist-generated=true
 **/routeTree.gen.ts linguist-generated=true
+explainers/playwright-parallelisation.html linguist-generated=true
+explainers/playwright-parallelisation/runs/*.json linguist-generated=true

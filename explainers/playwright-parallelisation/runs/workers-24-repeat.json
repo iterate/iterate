@@ -1,0 +1,3600 @@
+{
+  "root": {
+    "id": "n0",
+    "label": "24 workers \u00b7 repeat",
+    "start": 0,
+    "end": 528.831,
+    "kind": "job",
+    "note": "One 16-core / 64-GB runner, 24 maximum Playwright workers. Other app tests share this machine.",
+    "basis": "Depot workflow timestamps",
+    "children": [
+      {
+        "id": "n1",
+        "label": "Preview / deploy + e2e",
+        "start": 3.838,
+        "end": 525.9,
+        "kind": "job",
+        "note": "One checkout/install; deployment, tests, reporting and cleanup reuse this machine.",
+        "basis": "Depot job timestamps",
+        "children": [
+          {
+            "id": "n2",
+            "label": "Runner startup / unlogged setup",
+            "start": 3.838,
+            "end": 6.175,
+            "kind": "other",
+            "note": "Runner assignment and startup before checkout.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "n3",
+            "label": "Checkout + epoch check",
+            "start": 6.175,
+            "end": 6.986,
+            "kind": "other",
+            "note": "Checkout exact PR head and validate deployment compatibility.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "n4",
+            "label": "pnpm install",
+            "start": 6.986,
+            "end": 15.372,
+            "kind": "install",
+            "note": "Frozen, prefer-offline reconciliation against the baked workspace. Mutable image tag; exact digest unrecorded.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "n5",
+            "label": "Resolve PR, lease + deploy plan",
+            "start": 15.372,
+            "end": 20.663,
+            "kind": "other",
+            "note": "Resolve the PR head, lease and deployment plan.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "n6",
+            "label": "Clean old preview data",
+            "start": 20.663,
+            "end": 119.863,
+            "kind": "cleanup",
+            "note": "Pre-deploy resource cleanup, including the artifact repository deadline.",
+            "basis": "End log minus reported cleanup duration",
+            "children": []
+          },
+          {
+            "id": "n7",
+            "label": "Deploy selected apps concurrently",
+            "start": 120.434,
+            "end": 168.312,
+            "kind": "deploy",
+            "note": "Includes fresh builds/deployments and proven reuse.",
+            "basis": "Deployment telemetry",
+            "children": [
+              {
+                "id": "n8",
+                "label": "os",
+                "start": 120.434,
+                "end": 168.312,
+                "kind": "deploy",
+                "note": "Deployment outcome: passed.",
+                "basis": "Deployment telemetry",
+                "children": [
+                  {
+                    "id": "n9",
+                    "label": "Configure",
+                    "start": 120.434,
+                    "end": 120.436,
+                    "kind": "deploy",
+                    "note": "Sequential orchestrator subphase.",
+                    "basis": "Telemetry durations positioned in code order",
+                    "children": []
+                  },
+                  {
+                    "id": "n10",
+                    "label": "Build + deploy command",
+                    "start": 120.436,
+                    "end": 167.242,
+                    "kind": "deploy",
+                    "note": "Sequential orchestrator subphase.",
+                    "basis": "Telemetry durations positioned in code order",
+                    "children": []
+                  },
+                  {
+                    "id": "n11",
+                    "label": "Verify deployed version",
+                    "start": 167.242,
+                    "end": 168.312,
+                    "kind": "deploy",
+                    "note": "Sequential orchestrator subphase.",
+                    "basis": "Telemetry durations positioned in code order",
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "n12",
+                "label": "docs",
+                "start": 120.435,
+                "end": 138.152,
+                "kind": "deploy",
+                "note": "Deployment outcome: passed.",
+                "basis": "Deployment telemetry",
+                "children": [
+                  {
+                    "id": "n13",
+                    "label": "Configure",
+                    "start": 120.435,
+                    "end": 120.438,
+                    "kind": "deploy",
+                    "note": "Sequential orchestrator subphase.",
+                    "basis": "Telemetry durations positioned in code order",
+                    "children": []
+                  },
+                  {
+                    "id": "n14",
+                    "label": "Build + deploy command",
+                    "start": 120.438,
+                    "end": 137.858,
+                    "kind": "deploy",
+                    "note": "Sequential orchestrator subphase.",
+                    "basis": "Telemetry durations positioned in code order",
+                    "children": []
+                  },
+                  {
+                    "id": "n15",
+                    "label": "Verify deployed version",
+                    "start": 137.858,
+                    "end": 138.152,
+                    "kind": "deploy",
+                    "note": "Sequential orchestrator subphase.",
+                    "basis": "Telemetry durations positioned in code order",
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "n16",
+                "label": "auth",
+                "start": 120.435,
+                "end": 146.057,
+                "kind": "deploy",
+                "note": "Deployment outcome: passed.",
+                "basis": "Deployment telemetry",
+                "children": [
+                  {
+                    "id": "n17",
+                    "label": "Configure",
+                    "start": 120.435,
+                    "end": 120.44,
+                    "kind": "deploy",
+                    "note": "Sequential orchestrator subphase.",
+                    "basis": "Telemetry durations positioned in code order",
+                    "children": []
+                  },
+                  {
+                    "id": "n18",
+                    "label": "Build + deploy command",
+                    "start": 120.44,
+                    "end": 145.667,
+                    "kind": "deploy",
+                    "note": "Sequential orchestrator subphase.",
+                    "basis": "Telemetry durations positioned in code order",
+                    "children": []
+                  },
+                  {
+                    "id": "n19",
+                    "label": "Verify deployed version",
+                    "start": 145.667,
+                    "end": 146.056,
+                    "kind": "deploy",
+                    "note": "Sequential orchestrator subphase.",
+                    "basis": "Telemetry durations positioned in code order",
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "n20",
+                "label": "streams-example-app",
+                "start": 120.435,
+                "end": 141.263,
+                "kind": "deploy",
+                "note": "Deployment outcome: passed.",
+                "basis": "Deployment telemetry",
+                "children": [
+                  {
+                    "id": "n21",
+                    "label": "Configure",
+                    "start": 120.435,
+                    "end": 120.441,
+                    "kind": "deploy",
+                    "note": "Sequential orchestrator subphase.",
+                    "basis": "Telemetry durations positioned in code order",
+                    "children": []
+                  },
+                  {
+                    "id": "n22",
+                    "label": "Build + deploy command",
+                    "start": 120.441,
+                    "end": 140.722,
+                    "kind": "deploy",
+                    "note": "Sequential orchestrator subphase.",
+                    "basis": "Telemetry durations positioned in code order",
+                    "children": []
+                  },
+                  {
+                    "id": "n23",
+                    "label": "Verify deployed version",
+                    "start": 140.722,
+                    "end": 141.263,
+                    "kind": "deploy",
+                    "note": "Sequential orchestrator subphase.",
+                    "basis": "Telemetry durations positioned in code order",
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "n24",
+                "label": "dummy-petshop",
+                "start": 120.436,
+                "end": 120.641,
+                "kind": "deploy",
+                "note": "Deployment outcome: passed.",
+                "basis": "Deployment telemetry",
+                "children": [
+                  {
+                    "id": "n25",
+                    "label": "Configure",
+                    "start": 120.436,
+                    "end": 120.442,
+                    "kind": "deploy",
+                    "note": "Sequential orchestrator subphase.",
+                    "basis": "Telemetry durations positioned in code order",
+                    "children": []
+                  },
+                  {
+                    "id": "n26",
+                    "label": "Prove deployment reuse",
+                    "start": 120.442,
+                    "end": 120.608,
+                    "kind": "deploy",
+                    "note": "Sequential orchestrator subphase.",
+                    "basis": "Telemetry durations positioned in code order",
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "n27",
+            "label": "Publish deployment + seed test login",
+            "start": 168.312,
+            "end": 173.39,
+            "kind": "other",
+            "note": "Publish deployment identity and seed test logins.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "n28",
+            "label": "Run app suites + OS readiness",
+            "start": 173.39,
+            "end": 409.087,
+            "kind": "test",
+            "note": "Other apps run during readiness; root Playwright and OS Vitest start after shared readiness.",
+            "basis": "Timestamped log boundaries",
+            "children": [
+              {
+                "id": "n29",
+                "label": "Shared OS readiness",
+                "start": 173.573,
+                "end": 282.93,
+                "kind": "readiness",
+                "note": "Smoke, rollout timer, TUI and browser check overlap.",
+                "basis": "Timestamped log boundaries",
+                "children": [
+                  {
+                    "id": "n30",
+                    "label": "Rollout settle timer",
+                    "start": 173.573,
+                    "end": 257.574,
+                    "kind": "readiness",
+                    "note": "Readiness subtask.",
+                    "basis": "Timestamped log boundaries",
+                    "children": []
+                  },
+                  {
+                    "id": "n31",
+                    "label": "Agent smoke",
+                    "start": 173.573,
+                    "end": 282.93,
+                    "kind": "readiness",
+                    "note": "Readiness subtask.",
+                    "basis": "Timestamped log boundaries",
+                    "children": []
+                  },
+                  {
+                    "id": "n32",
+                    "label": "TUI quarantine check",
+                    "start": 173.573,
+                    "end": 173.982,
+                    "kind": "readiness",
+                    "note": "Readiness subtask.",
+                    "basis": "Timestamped log boundaries",
+                    "children": []
+                  },
+                  {
+                    "id": "n33",
+                    "label": "Chromium install/check",
+                    "start": 173.573,
+                    "end": 282.93,
+                    "kind": "browser",
+                    "note": "Runs during readiness; exact command duration was not logged.",
+                    "basis": "Known from code; duration unrecorded",
+                    "children": [],
+                    "unknown": true
+                  }
+                ]
+              },
+              {
+                "id": "n37",
+                "label": "auth \u00b7 vitest",
+                "start": 174.179,
+                "end": 191.533,
+                "kind": "test",
+                "note": "0 test retries. Reporter interval; buffered stdout is not used as execution time.",
+                "basis": "Test telemetry",
+                "children": []
+              },
+              {
+                "id": "n34",
+                "label": "dummy-petshop \u00b7 vitest",
+                "start": 174.234,
+                "end": 180.084,
+                "kind": "test",
+                "note": "0 test retries. Reporter interval; buffered stdout is not used as execution time.",
+                "basis": "Test telemetry",
+                "children": []
+              },
+              {
+                "id": "n36",
+                "label": "docs \u00b7 vitest",
+                "start": 175.872,
+                "end": 176.242,
+                "kind": "test",
+                "note": "0 test retries. Reporter interval; buffered stdout is not used as execution time.",
+                "basis": "Test telemetry",
+                "children": []
+              },
+              {
+                "id": "n39",
+                "label": "streams-example-app \u00b7 vitest",
+                "start": 232.45,
+                "end": 258.748,
+                "kind": "test",
+                "note": "0 test retries. Reporter interval; buffered stdout is not used as execution time.",
+                "basis": "Test telemetry",
+                "children": []
+              },
+              {
+                "id": "n38",
+                "label": "streams-example-app \u00b7 playwright",
+                "start": 233.274,
+                "end": 273.987,
+                "kind": "test",
+                "note": "0 test retries. Reporter interval; buffered stdout is not used as execution time.",
+                "basis": "Test telemetry",
+                "children": []
+              },
+              {
+                "id": "n40",
+                "label": "Playwright command \u00b7 24 workers",
+                "start": 282.931,
+                "end": 407.46,
+                "kind": "test",
+                "note": "Includes CLI startup, global setup, Expo, worker pool and reports.",
+                "basis": "Timestamped log boundaries",
+                "children": [
+                  {
+                    "id": "n41",
+                    "label": "Global setup + mobile web server",
+                    "start": 282.931,
+                    "end": 288.107,
+                    "kind": "other",
+                    "note": "Start Playwright, Expo and global auth setup before the worker pool.",
+                    "basis": "Timestamped log boundaries",
+                    "children": []
+                  },
+                  {
+                    "id": "n42",
+                    "label": "Worker pool + reporting",
+                    "start": 288.107,
+                    "end": 407.46,
+                    "kind": "test",
+                    "note": "Each bar is one actual attempt. Worker IDs in the inspector show process reuse and retries.",
+                    "basis": "Timestamped log boundaries",
+                    "children": [
+                      {
+                        "id": "n67",
+                        "label": "web \u203a agent-fake-model-chat.spec.ts \u203a a config file mention is materialized before the model sees the turn",
+                        "start": 289.213,
+                        "end": 312.706,
+                        "kind": "test",
+                        "note": "specs/agent-fake-model-chat.spec.ts \u00b7 passed \u00b7 worker 5 / slot 5 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n68",
+                            "label": "Before Hooks",
+                            "start": 289.225,
+                            "end": 289.518,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n69",
+                            "label": "create project fixture",
+                            "start": 289.518,
+                            "end": 299.012,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n70",
+                            "label": "connect admin itx",
+                            "start": 299.013,
+                            "end": 300.056,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n71",
+                            "label": "connect admin itx",
+                            "start": 303.303,
+                            "end": 304.38,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n80",
+                        "label": "web \u203a agent-fake-model-chat.spec.ts \u203a recreating an agent at the same path resets its composer",
+                        "start": 289.432,
+                        "end": 320.721,
+                        "kind": "test",
+                        "note": "specs/agent-fake-model-chat.spec.ts \u00b7 passed \u00b7 worker 8 / slot 8 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n81",
+                            "label": "Before Hooks",
+                            "start": 289.447,
+                            "end": 289.679,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n82",
+                            "label": "create project fixture",
+                            "start": 289.679,
+                            "end": 298.691,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n83",
+                            "label": "connect admin itx",
+                            "start": 298.691,
+                            "end": 300.027,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n84",
+                            "label": "connect admin itx",
+                            "start": 302.084,
+                            "end": 303.26,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n63",
+                        "label": "web \u203a agent-chat.spec.ts \u203a agent replies to a browser chat message in the feed",
+                        "start": 289.552,
+                        "end": 313.356,
+                        "kind": "test",
+                        "note": "specs/agent-chat.spec.ts \u00b7 passed \u00b7 worker 4 / slot 4 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n64",
+                            "label": "Before Hooks",
+                            "start": 289.562,
+                            "end": 289.808,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n65",
+                            "label": "create project fixture",
+                            "start": 289.809,
+                            "end": 299.458,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n66",
+                            "label": "connect admin itx",
+                            "start": 299.458,
+                            "end": 301.506,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n43",
+                        "label": "preview-resilience \u203a stream-resume-after-suspend.spec.ts \u203a control: appended event is delivered to a live stream feed",
+                        "start": 289.567,
+                        "end": 308.823,
+                        "kind": "test",
+                        "note": "specs/stream-resume-after-suspend.spec.ts \u00b7 passed \u00b7 worker 0 / slot 0 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n44",
+                            "label": "Before Hooks",
+                            "start": 289.58,
+                            "end": 289.747,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n45",
+                            "label": "create project fixture",
+                            "start": 289.747,
+                            "end": 300.238,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n46",
+                            "label": "connect admin itx",
+                            "start": 300.238,
+                            "end": 301.221,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n47",
+                            "label": "connect admin itx",
+                            "start": 303.884,
+                            "end": 305.546,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n97",
+                        "label": "web \u203a collect-secret.spec.ts \u203a a person provides a secret from a phone-sized sheet",
+                        "start": 289.591,
+                        "end": 303.717,
+                        "kind": "test",
+                        "note": "specs/collect-secret.spec.ts \u00b7 passed \u00b7 worker 12 / slot 12 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n98",
+                            "label": "Before Hooks",
+                            "start": 289.599,
+                            "end": 289.804,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n99",
+                            "label": "create project fixture",
+                            "start": 289.805,
+                            "end": 298.263,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n48",
+                        "label": "preview-resilience \u203a stream-resume-after-suspend.spec.ts \u203a feed resumes after the /api WebSocket dies (clean close)",
+                        "start": 289.598,
+                        "end": 314.262,
+                        "kind": "test",
+                        "note": "specs/stream-resume-after-suspend.spec.ts \u00b7 passed \u00b7 worker 1 / slot 1 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n49",
+                            "label": "Before Hooks",
+                            "start": 289.618,
+                            "end": 289.995,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n50",
+                            "label": "create project fixture",
+                            "start": 289.995,
+                            "end": 299.381,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n51",
+                            "label": "connect admin itx",
+                            "start": 299.384,
+                            "end": 300.352,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n52",
+                            "label": "connect admin itx",
+                            "start": 303.453,
+                            "end": 304.464,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n76",
+                        "label": "web \u203a agent-fake-model-chat.spec.ts \u203a switching agents clears the previous stream's submission acknowledgement",
+                        "start": 289.606,
+                        "end": 322.579,
+                        "kind": "test",
+                        "note": "specs/agent-fake-model-chat.spec.ts \u00b7 passed \u00b7 worker 7 / slot 7 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n77",
+                            "label": "Before Hooks",
+                            "start": 289.619,
+                            "end": 289.942,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n78",
+                            "label": "create project fixture",
+                            "start": 289.943,
+                            "end": 299.357,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n79",
+                            "label": "connect admin itx",
+                            "start": 301.758,
+                            "end": 303.13,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n58",
+                        "label": "preview-resilience \u203a stream-resume-after-suspend.spec.ts \u203a feed resumes after the /api WebSocket goes half-open (no close frame)",
+                        "start": 289.615,
+                        "end": 331.683,
+                        "kind": "test",
+                        "note": "specs/stream-resume-after-suspend.spec.ts \u00b7 passed \u00b7 worker 3 / slot 3 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n59",
+                            "label": "Before Hooks",
+                            "start": 289.634,
+                            "end": 289.877,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n60",
+                            "label": "create project fixture",
+                            "start": 289.878,
+                            "end": 299.142,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n61",
+                            "label": "connect admin itx",
+                            "start": 299.144,
+                            "end": 300.649,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n62",
+                            "label": "connect admin itx",
+                            "start": 303.703,
+                            "end": 304.634,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n93",
+                        "label": "web \u203a clients-os-app.spec.ts \u203a two dashboard tabs are two clients; an itx caller navigates each independently",
+                        "start": 289.631,
+                        "end": 311.817,
+                        "kind": "test",
+                        "note": "specs/clients-os-app.spec.ts \u00b7 passed \u00b7 worker 11 / slot 11 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n94",
+                            "label": "Before Hooks",
+                            "start": 289.652,
+                            "end": 289.877,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n95",
+                            "label": "create project fixture",
+                            "start": 289.878,
+                            "end": 298.178,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n96",
+                            "label": "connect admin itx",
+                            "start": 298.178,
+                            "end": 299.107,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n100",
+                        "label": "web \u203a create-project.spec.ts \u203a the config template opens a proactive onboarding conversation for a new project",
+                        "start": 289.687,
+                        "end": 340.506,
+                        "kind": "test",
+                        "note": "specs/create-project.spec.ts \u00b7 passed \u00b7 worker 13 / slot 13 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n101",
+                            "label": "Before Hooks",
+                            "start": 289.696,
+                            "end": 289.817,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n102",
+                            "label": "connect admin itx",
+                            "start": 316.145,
+                            "end": 317.971,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n85",
+                        "label": "web \u203a agent-script-reuse.spec.ts \u203a a repeat request reuses the previous turn's journaled script instead of re-deriving it",
+                        "start": 289.69,
+                        "end": 316.258,
+                        "kind": "test",
+                        "note": "specs/agent-script-reuse.spec.ts \u00b7 passed \u00b7 worker 9 / slot 9 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n86",
+                            "label": "Before Hooks",
+                            "start": 289.71,
+                            "end": 289.983,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n87",
+                            "label": "create project fixture",
+                            "start": 289.984,
+                            "end": 298.614,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n88",
+                            "label": "connect admin itx",
+                            "start": 298.615,
+                            "end": 299.729,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n103",
+                        "label": "web \u203a dashboard.spec.ts \u203a can enter the dashboard with a forged session",
+                        "start": 289.743,
+                        "end": 300.043,
+                        "kind": "test",
+                        "note": "specs/dashboard.spec.ts \u00b7 passed \u00b7 worker 14 / slot 14 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n104",
+                            "label": "Before Hooks",
+                            "start": 289.759,
+                            "end": 290.04,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n105",
+                            "label": "create project fixture",
+                            "start": 290.045,
+                            "end": 298.29,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n89",
+                        "label": "web \u203a agent-script-reuse.spec.ts \u203a run() return values are typed from the reused row's data, through the real gate",
+                        "start": 289.766,
+                        "end": 321.215,
+                        "kind": "test",
+                        "note": "specs/agent-script-reuse.spec.ts \u00b7 passed \u00b7 worker 10 / slot 10 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n90",
+                            "label": "Before Hooks",
+                            "start": 289.779,
+                            "end": 290.066,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n91",
+                            "label": "create project fixture",
+                            "start": 290.066,
+                            "end": 300.567,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n92",
+                            "label": "connect admin itx",
+                            "start": 300.568,
+                            "end": 301.531,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n72",
+                        "label": "web \u203a agent-fake-model-chat.spec.ts \u203a multi-turn chat with a sarcastic agent served by the spec's own fake-model interceptor",
+                        "start": 289.777,
+                        "end": 315.015,
+                        "kind": "test",
+                        "note": "specs/agent-fake-model-chat.spec.ts \u00b7 passed \u00b7 worker 6 / slot 6 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n73",
+                            "label": "Before Hooks",
+                            "start": 289.787,
+                            "end": 290.011,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n74",
+                            "label": "create project fixture",
+                            "start": 290.012,
+                            "end": 299.441,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n75",
+                            "label": "connect admin itx",
+                            "start": 299.441,
+                            "end": 299.974,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n115",
+                        "label": "web \u203a forged-session-repl.spec.ts \u203a project REPL accepts a forged session",
+                        "start": 289.781,
+                        "end": 308.91,
+                        "kind": "test",
+                        "note": "specs/forged-session-repl.spec.ts \u00b7 passed \u00b7 worker 19 / slot 19 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n116",
+                            "label": "Before Hooks",
+                            "start": 289.792,
+                            "end": 290.038,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n117",
+                            "label": "create project fixture",
+                            "start": 290.039,
+                            "end": 299.149,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n118",
+                        "label": "web \u203a integrations-hydration.spec.ts \u203a hydrates the client-only integrations route without rebuilding the shell",
+                        "start": 289.783,
+                        "end": 303.224,
+                        "kind": "test",
+                        "note": "specs/integrations-hydration.spec.ts \u00b7 passed \u00b7 worker 20 / slot 20 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n119",
+                            "label": "Before Hooks",
+                            "start": 289.796,
+                            "end": 290.04,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n120",
+                            "label": "create project fixture",
+                            "start": 290.041,
+                            "end": 301.304,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n53",
+                        "label": "preview-resilience \u203a stream-resume-after-suspend.spec.ts \u203a feed resumes after page freeze + socket death (mobile suspend shape)",
+                        "start": 289.804,
+                        "end": 312.539,
+                        "kind": "test",
+                        "note": "specs/stream-resume-after-suspend.spec.ts \u00b7 passed \u00b7 worker 2 / slot 2 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n54",
+                            "label": "Before Hooks",
+                            "start": 289.817,
+                            "end": 290.029,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n55",
+                            "label": "create project fixture",
+                            "start": 290.03,
+                            "end": 299.132,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n56",
+                            "label": "connect admin itx",
+                            "start": 299.136,
+                            "end": 300.264,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n57",
+                            "label": "connect admin itx",
+                            "start": 303.314,
+                            "end": 304.806,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n108",
+                        "label": "web \u203a dashboard.spec.ts \u203a opening OS returns to the most recently active project",
+                        "start": 289.805,
+                        "end": 304.643,
+                        "kind": "test",
+                        "note": "specs/dashboard.spec.ts \u00b7 passed \u00b7 worker 16 / slot 16 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n109",
+                            "label": "Before Hooks",
+                            "start": 289.875,
+                            "end": 290.036,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n110",
+                            "label": "create project fixture",
+                            "start": 290.036,
+                            "end": 300.877,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n124",
+                        "label": "web \u203a reactivity-hydration.spec.ts \u203a hydrates the client-only reactivity route without rebuilding the shell",
+                        "start": 289.865,
+                        "end": 301.579,
+                        "kind": "test",
+                        "note": "specs/reactivity-hydration.spec.ts \u00b7 passed \u00b7 worker 22 / slot 22 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n125",
+                            "label": "Before Hooks",
+                            "start": 289.877,
+                            "end": 290.042,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n126",
+                            "label": "create project fixture",
+                            "start": 290.042,
+                            "end": 299.58,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n121",
+                        "label": "web \u203a project-route-ssr.spec.ts \u203a project home hydrates the dashboard and REPL still server-renders",
+                        "start": 289.866,
+                        "end": 304.236,
+                        "kind": "test",
+                        "note": "specs/project-route-ssr.spec.ts \u00b7 passed \u00b7 worker 21 / slot 21 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n122",
+                            "label": "Before Hooks",
+                            "start": 289.88,
+                            "end": 290.063,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n123",
+                            "label": "create project fixture",
+                            "start": 290.063,
+                            "end": 298.587,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n127",
+                        "label": "web \u203a reactivity.spec.ts \u203a reactivity page repaints from a stream subscription after a page action",
+                        "start": 289.961,
+                        "end": 301.316,
+                        "kind": "test",
+                        "note": "specs/reactivity.spec.ts \u00b7 passed \u00b7 worker 23 / slot 23 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n128",
+                            "label": "Before Hooks",
+                            "start": 289.97,
+                            "end": 290.073,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n129",
+                            "label": "create project fixture",
+                            "start": 290.074,
+                            "end": 298.262,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n106",
+                        "label": "web \u203a dashboard.spec.ts \u203a loads project navigation only when it opens",
+                        "start": 289.973,
+                        "end": 302.767,
+                        "kind": "test",
+                        "note": "specs/dashboard.spec.ts \u00b7 passed \u00b7 worker 15 / slot 15 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n107",
+                            "label": "create project fixture",
+                            "start": 290.071,
+                            "end": 300.011,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n114",
+                        "label": "web \u203a flake-sentinel.spec.ts \u203a flake sentinel (specs)",
+                        "start": 290.093,
+                        "end": 290.095,
+                        "kind": "test",
+                        "note": "packages/shared/src/test-support/flake-test.ts \u00b7 body passed; quarantine wrapper throws as expected \u00b7 worker 18 / slot 18 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n130",
+                        "label": "web \u203a reactivity.spec.ts \u203a reactivity page appends a batch and renders every delivered marker",
+                        "start": 290.117,
+                        "end": 304.663,
+                        "kind": "test",
+                        "note": "specs/reactivity.spec.ts \u00b7 passed \u00b7 worker 18 / slot 18 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n131",
+                            "label": "create project fixture",
+                            "start": 290.213,
+                            "end": 300.418,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n111",
+                        "label": "web \u203a dashboard.spec.ts \u203a project settings is available under /settings",
+                        "start": 290.135,
+                        "end": 303.543,
+                        "kind": "test",
+                        "note": "specs/dashboard.spec.ts \u00b7 passed \u00b7 worker 17 / slot 17 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n112",
+                            "label": "Before Hooks",
+                            "start": 290.142,
+                            "end": 290.25,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n113",
+                            "label": "create project fixture",
+                            "start": 290.251,
+                            "end": 301.08,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n132",
+                        "label": "web \u203a reactivity.spec.ts \u203a reactivity page replays already appended events after reload",
+                        "start": 300.244,
+                        "end": 313.47,
+                        "kind": "test",
+                        "note": "specs/reactivity.spec.ts \u00b7 passed \u00b7 worker 14 / slot 14 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n133",
+                            "label": "create project fixture",
+                            "start": 300.266,
+                            "end": 308.952,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n134",
+                        "label": "web \u203a reactivity.spec.ts \u203a reactivity page delivers an appended event to another open tab",
+                        "start": 301.367,
+                        "end": 315.638,
+                        "kind": "test",
+                        "note": "specs/reactivity.spec.ts \u00b7 passed \u00b7 worker 23 / slot 23 \u00b7 attempt 0. After Hooks has a timestamp outside the reported attempt interval; omitted from nesting (end offset +0.006s).",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n135",
+                            "label": "create project fixture",
+                            "start": 301.395,
+                            "end": 310.296,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n136",
+                        "label": "web \u203a reactivity.spec.ts \u203a reactivity page processor panel goes live and repaints from a server push",
+                        "start": 301.684,
+                        "end": 316.417,
+                        "kind": "test",
+                        "note": "specs/reactivity.spec.ts \u00b7 passed \u00b7 worker 22 / slot 22 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n137",
+                            "label": "create project fixture",
+                            "start": 301.717,
+                            "end": 311.658,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n138",
+                            "label": "connect admin itx",
+                            "start": 314.804,
+                            "end": 315.832,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n139",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"stream-receive-events-from\" through the project REPL",
+                        "start": 302.842,
+                        "end": 319.043,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 15 / slot 15 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n140",
+                            "label": "create project fixture",
+                            "start": 302.866,
+                            "end": 311.628,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n141",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"scheduler-basics\" through the project REPL",
+                        "start": 303.4,
+                        "end": 318.627,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 20 / slot 20 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n142",
+                            "label": "create project fixture",
+                            "start": 303.43,
+                            "end": 311.709,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n143",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"scheduler-agent-checkin\" through the project REPL",
+                        "start": 303.656,
+                        "end": 329.973,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 17 / slot 17 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n144",
+                            "label": "create project fixture",
+                            "start": 303.682,
+                            "end": 321.577,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n145",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"describe-project\" through the project REPL",
+                        "start": 303.825,
+                        "end": 320.295,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 12 / slot 12 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n146",
+                            "label": "create project fixture",
+                            "start": 303.903,
+                            "end": 313.268,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n147",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"discover-tree\" through the project REPL",
+                        "start": 304.381,
+                        "end": 318.599,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 21 / slot 21 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n148",
+                            "label": "create project fixture",
+                            "start": 304.406,
+                            "end": 311.735,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n149",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"files-roundtrip\" through the project REPL",
+                        "start": 304.735,
+                        "end": 325.611,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 18 / slot 18 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n150",
+                            "label": "create project fixture",
+                            "start": 304.773,
+                            "end": 313.284,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n151",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"append-and-read-stream\" through the project REPL",
+                        "start": 304.803,
+                        "end": 323.364,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 16 / slot 16 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n152",
+                            "label": "create project fixture",
+                            "start": 304.832,
+                            "end": 314.475,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n155",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"ephemeral-events\" through the project REPL",
+                        "start": 309.115,
+                        "end": 325.686,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 19 / slot 19 \u00b7 attempt 0. After Hooks has a timestamp outside the reported attempt interval; omitted from nesting (end offset +0.008s).",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n156",
+                            "label": "create project fixture",
+                            "start": 309.146,
+                            "end": 316.148,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n153",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"egress-rules-configured\" through the project REPL",
+                        "start": 309.809,
+                        "end": 326.046,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 24 / slot 0 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n154",
+                            "label": "create project fixture",
+                            "start": 309.901,
+                            "end": 317.897,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n157",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"run-script\" through the project REPL",
+                        "start": 311.915,
+                        "end": 330.24,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 11 / slot 11 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n158",
+                            "label": "create project fixture",
+                            "start": 311.966,
+                            "end": 321.041,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n162",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"dynamic-worker-stateless\" through the project REPL",
+                        "start": 312.83,
+                        "end": 335.104,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 5 / slot 5 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n163",
+                            "label": "create project fixture",
+                            "start": 312.879,
+                            "end": 320.946,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n164",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"dynamic-worker-stateful\" through the project REPL",
+                        "start": 313.479,
+                        "end": 333.787,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 4 / slot 4 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n165",
+                            "label": "create project fixture",
+                            "start": 313.518,
+                            "end": 322.828,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n166",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"sandbox-exec\" through the project REPL",
+                        "start": 313.492,
+                        "end": 333.402,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 14 / slot 14 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n167",
+                            "label": "create project fixture",
+                            "start": 313.524,
+                            "end": 320.564,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n159",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"provide-itx-expression\" through the project REPL",
+                        "start": 313.831,
+                        "end": 331.206,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 25 / slot 2 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n160",
+                            "label": "Before Hooks",
+                            "start": 313.84,
+                            "end": 313.946,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n161",
+                            "label": "create project fixture",
+                            "start": 313.947,
+                            "end": 321.831,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n171",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"workspace-files-transfer\" through the project REPL",
+                        "start": 315.214,
+                        "end": 334.12,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 6 / slot 6 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n172",
+                            "label": "create project fixture",
+                            "start": 315.258,
+                            "end": 323.314,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n168",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"workspace-edit-and-push\" through the project REPL",
+                        "start": 315.479,
+                        "end": 333.191,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 26 / slot 1 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n169",
+                            "label": "Before Hooks",
+                            "start": 315.488,
+                            "end": 315.63,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n170",
+                            "label": "create project fixture",
+                            "start": 315.63,
+                            "end": 322.554,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n173",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"use-project-skill\" through the project REPL",
+                        "start": 315.66,
+                        "end": 337.575,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 23 / slot 23 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n174",
+                            "label": "create project fixture",
+                            "start": 315.693,
+                            "end": 324.416,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n175",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"repo-commit-files\" through the project REPL",
+                        "start": 316.438,
+                        "end": 331.026,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 22 / slot 22 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n176",
+                            "label": "create project fixture",
+                            "start": 316.472,
+                            "end": 324.842,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n177",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"repo-read-file\" through the project REPL",
+                        "start": 316.501,
+                        "end": 330.533,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 9 / slot 9 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n178",
+                            "label": "create project fixture",
+                            "start": 316.537,
+                            "end": 325.114,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n179",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"repo-edit-file\" through the project REPL",
+                        "start": 318.606,
+                        "end": 348.585,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 21 / slot 21 \u00b7 attempt 0. After Hooks has a timestamp outside the reported attempt interval; omitted from nesting (end offset +0.009s).",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n180",
+                            "label": "create project fixture",
+                            "start": 318.645,
+                            "end": 327.21,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n181",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"secrets-lifecycle\" through the project REPL",
+                        "start": 318.633,
+                        "end": 333.266,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 20 / slot 20 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n182",
+                            "label": "create project fixture",
+                            "start": 318.665,
+                            "end": 325.921,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n183",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"journal-is-the-record\" through the project REPL",
+                        "start": 319.05,
+                        "end": 337.157,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 15 / slot 15 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n184",
+                            "label": "create project fixture",
+                            "start": 319.08,
+                            "end": 329.065,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n185",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"docs-search-and-get\" through the project REPL",
+                        "start": 320.301,
+                        "end": 335.342,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 12 / slot 12 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n186",
+                            "label": "create project fixture",
+                            "start": 320.325,
+                            "end": 328.869,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n187",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"typed-capability-mount\" through the project REPL",
+                        "start": 320.825,
+                        "end": 333.88,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 8 / slot 8 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n188",
+                            "label": "create project fixture",
+                            "start": 320.859,
+                            "end": 328.037,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n189",
+                        "label": "web \u203a repl-examples.spec.ts \u203a itx REPL catalogue examples \u203a runs \"agent-send-message\" through the project REPL",
+                        "start": 321.446,
+                        "end": 342.918,
+                        "kind": "test",
+                        "note": "specs/repl-examples.spec.ts \u00b7 passed \u00b7 worker 10 / slot 10 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n190",
+                            "label": "create project fixture",
+                            "start": 321.476,
+                            "end": 334.718,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n191",
+                        "label": "web \u203a repl-lazy.spec.ts \u203a the REPL creates no session stream until the first Run",
+                        "start": 322.703,
+                        "end": 343.379,
+                        "kind": "test",
+                        "note": "specs/repl-lazy.spec.ts \u00b7 passed \u00b7 worker 7 / slot 7 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n192",
+                            "label": "create project fixture",
+                            "start": 322.739,
+                            "end": 331.759,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n193",
+                        "label": "web \u203a repo-ide-html-preview.spec.ts \u203a toggle an html file between Code and its sandboxed Preview",
+                        "start": 323.38,
+                        "end": 349.153,
+                        "kind": "test",
+                        "note": "specs/repo-ide-html-preview.spec.ts \u00b7 passed \u00b7 worker 16 / slot 16 \u00b7 attempt 0. After Hooks has a timestamp outside the reported attempt interval; omitted from nesting (end offset +0.006s).",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n194",
+                            "label": "create project fixture",
+                            "start": 323.426,
+                            "end": 332.904,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n195",
+                            "label": "connect admin itx",
+                            "start": 332.904,
+                            "end": 334.144,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n196",
+                        "label": "web \u203a repo-ide-json-schema.spec.ts \u203a flags a package.json schema violation with a red squiggle",
+                        "start": 325.627,
+                        "end": 348.18,
+                        "kind": "test",
+                        "note": "specs/repo-ide-json-schema.spec.ts \u00b7 passed \u00b7 worker 18 / slot 18 \u00b7 attempt 0. After Hooks has a timestamp outside the reported attempt interval; omitted from nesting (end offset +0.008s).",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n197",
+                            "label": "create project fixture",
+                            "start": 325.695,
+                            "end": 333.57,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n198",
+                            "label": "connect admin itx",
+                            "start": 333.571,
+                            "end": 335.422,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n199",
+                        "label": "web \u203a repo-ide-markdown-preview.spec.ts \u203a toggle a markdown file between Code and its rendered Preview",
+                        "start": 325.702,
+                        "end": 347.646,
+                        "kind": "test",
+                        "note": "specs/repo-ide-markdown-preview.spec.ts \u00b7 passed \u00b7 worker 19 / slot 19 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n200",
+                            "label": "create project fixture",
+                            "start": 325.755,
+                            "end": 334.576,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n201",
+                            "label": "connect admin itx",
+                            "start": 334.577,
+                            "end": 335.728,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n202",
+                        "label": "web \u203a repo-ide-svg-index-preview.spec.ts \u203a toggle an svg file between Code and its sandboxed Preview",
+                        "start": 326.118,
+                        "end": 358.604,
+                        "kind": "test",
+                        "note": "specs/repo-ide-svg-index-preview.spec.ts \u00b7 passed \u00b7 worker 24 / slot 0 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n203",
+                            "label": "create project fixture",
+                            "start": 326.168,
+                            "end": 345.773,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n204",
+                        "label": "web \u203a repo-ide-svg-index-preview.spec.ts \u203a preview a staged snapshot from the readonly Index view",
+                        "start": 329.988,
+                        "end": 351.702,
+                        "kind": "test",
+                        "note": "specs/repo-ide-svg-index-preview.spec.ts \u00b7 passed \u00b7 worker 17 / slot 17 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n205",
+                            "label": "create project fixture",
+                            "start": 330.021,
+                            "end": 336.869,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n206",
+                        "label": "web \u203a repo-ide.spec.ts \u203a edit, stage, inspect the Index, and commit through the repo IDE",
+                        "start": 330.255,
+                        "end": 355.479,
+                        "kind": "test",
+                        "note": "specs/repo-ide.spec.ts \u00b7 passed \u00b7 worker 11 / slot 11 \u00b7 attempt 0. After Hooks has a timestamp outside the reported attempt interval; omitted from nesting (end offset +0.006s).",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n207",
+                            "label": "create project fixture",
+                            "start": 330.284,
+                            "end": 336.688,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n208",
+                        "label": "web \u203a repo-ide.spec.ts \u203a discarding a new file confirms before permanently removing it",
+                        "start": 330.547,
+                        "end": 351.809,
+                        "kind": "test",
+                        "note": "specs/repo-ide.spec.ts \u00b7 passed \u00b7 worker 9 / slot 9 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n209",
+                            "label": "create project fixture",
+                            "start": 330.58,
+                            "end": 338.263,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n210",
+                        "label": "web \u203a repo-markdown-preview.spec.ts \u203a markdown files get a sanitized Code | Preview toggle in the repo IDE",
+                        "start": 331.036,
+                        "end": 354.721,
+                        "kind": "test",
+                        "note": "specs/repo-markdown-preview.spec.ts \u00b7 passed \u00b7 worker 22 / slot 22 \u00b7 attempt 0. After Hooks has a timestamp outside the reported attempt interval; omitted from nesting (end offset +0.006s).",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n211",
+                            "label": "create project fixture",
+                            "start": 331.057,
+                            "end": 339.019,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n212",
+                            "label": "connect admin itx",
+                            "start": 339.019,
+                            "end": 340.149,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n213",
+                        "label": "web \u203a seeded-apps.spec.ts \u203a the seeded guestbook app works after creating a project",
+                        "start": 331.299,
+                        "end": 348.673,
+                        "kind": "test",
+                        "note": "specs/seeded-apps.spec.ts \u00b7 passed \u00b7 worker 25 / slot 2 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n214",
+                            "label": "create project fixture",
+                            "start": 331.322,
+                            "end": 337.615,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n215",
+                        "label": "web \u203a seeded-apps.spec.ts \u203a the seeded todo app authenticates a real project member",
+                        "start": 332.598,
+                        "end": 364.936,
+                        "kind": "test",
+                        "note": "specs/seeded-apps.spec.ts \u00b7 passed \u00b7 worker 27 / slot 3 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n216",
+                        "label": "web \u203a seeded-apps.spec.ts \u203a undo keeps a peer's shopping-list edit in the seeded Docs app",
+                        "start": 333.293,
+                        "end": 358.502,
+                        "kind": "test",
+                        "note": "specs/seeded-apps.spec.ts \u00b7 passed \u00b7 worker 20 / slot 20 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n217",
+                            "label": "connect admin itx",
+                            "start": 340.824,
+                            "end": 340.938,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n218",
+                        "label": "web \u203a seeded-apps.spec.ts \u203a review a workspace document in the seeded Docs app",
+                        "start": 333.309,
+                        "end": 365.001,
+                        "kind": "test",
+                        "note": "packages/shared/src/test-support/flake-test.ts \u00b7 body passed; quarantine wrapper throws as expected \u00b7 worker 26 / slot 1 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n219",
+                            "label": "connect admin itx",
+                            "start": 340.407,
+                            "end": 341.579,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n220",
+                        "label": "web \u203a signup.spec.ts \u203a can sign up with an email one-time passcode",
+                        "start": 333.415,
+                        "end": 350.421,
+                        "kind": "test",
+                        "note": "specs/signup.spec.ts \u00b7 passed \u00b7 worker 14 / slot 14 \u00b7 attempt 0. After Hooks has a timestamp outside the reported attempt interval; omitted from nesting (end offset +0.004s).",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n221",
+                        "label": "web \u203a stream-cache-before-live.spec.ts \u203a empty agent feeds distinguish waiting from filtered zero matches",
+                        "start": 333.8,
+                        "end": 355.589,
+                        "kind": "test",
+                        "note": "specs/stream-cache-before-live.spec.ts \u00b7 passed \u00b7 worker 4 / slot 4 \u00b7 attempt 0. After Hooks has a timestamp outside the reported attempt interval; omitted from nesting (end offset +0.006s).",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n222",
+                            "label": "create project fixture",
+                            "start": 333.83,
+                            "end": 344.256,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n223",
+                            "label": "connect admin itx",
+                            "start": 344.256,
+                            "end": 345.489,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n224",
+                        "label": "web \u203a stream-cache-before-live.spec.ts \u203a a cold stream stays pending until its server history catches up",
+                        "start": 333.898,
+                        "end": 354.718,
+                        "kind": "test",
+                        "note": "specs/stream-cache-before-live.spec.ts \u00b7 passed \u00b7 worker 8 / slot 8 \u00b7 attempt 0. After Hooks has a timestamp outside the reported attempt interval; omitted from nesting (end offset +0.006s).",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n225",
+                            "label": "create project fixture",
+                            "start": 333.927,
+                            "end": 341.629,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n226",
+                            "label": "connect admin itx",
+                            "start": 341.629,
+                            "end": 342.73,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n227",
+                        "label": "web \u203a stream-cache-before-live.spec.ts \u203a a cached stream opens before its live connection",
+                        "start": 334.133,
+                        "end": 359.434,
+                        "kind": "test",
+                        "note": "specs/stream-cache-before-live.spec.ts \u00b7 passed \u00b7 worker 6 / slot 6 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n228",
+                            "label": "create project fixture",
+                            "start": 334.174,
+                            "end": 347.094,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n229",
+                            "label": "connect admin itx",
+                            "start": 347.094,
+                            "end": 348.884,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n230",
+                        "label": "web \u203a test-support/screenshot.spec.ts \u203a saves a successful locator screenshot under its readable locator slug",
+                        "start": 335.116,
+                        "end": 335.279,
+                        "kind": "test",
+                        "note": "specs/test-support/screenshot.spec.ts \u00b7 passed \u00b7 worker 5 / slot 5 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n231",
+                        "label": "web \u203a test-support/screenshot.spec.ts \u203a does not overwrite a screenshot from another page in the same test",
+                        "start": 335.285,
+                        "end": 335.487,
+                        "kind": "test",
+                        "note": "specs/test-support/screenshot.spec.ts \u00b7 passed \u00b7 worker 5 / slot 5 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n235",
+                        "label": "mobile \u203a mobile/chat-attachment-sheet.spec.ts \u203a + opens the sheet; carousel attaches chips that need a confirm to remove",
+                        "start": 336.152,
+                        "end": 368.629,
+                        "kind": "test",
+                        "note": "specs/mobile/chat-attachment-sheet.spec.ts \u00b7 passed \u00b7 worker 29 / slot 12 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n236",
+                            "label": "create mobile fixture",
+                            "start": 336.249,
+                            "end": 364.969,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n232",
+                        "label": "mobile \u203a mobile/approvals.spec.ts \u203a approve and reject script bursts from inside the chat thread",
+                        "start": 336.176,
+                        "end": 392.926,
+                        "kind": "test",
+                        "note": "specs/mobile/approvals.spec.ts \u00b7 passed \u00b7 worker 28 / slot 5 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n233",
+                            "label": "create mobile fixture",
+                            "start": 336.448,
+                            "end": 367.475,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n234",
+                            "label": "connect admin itx",
+                            "start": 372.85,
+                            "end": 374.02,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n237",
+                        "label": "mobile \u203a mobile/chat-photos.spec.ts \u203a photos share a mosaic row; tall solo on a blurred backdrop",
+                        "start": 338.106,
+                        "end": 375.902,
+                        "kind": "test",
+                        "note": "packages/shared/src/test-support/flake-test.ts \u00b7 body passed; quarantine wrapper throws as expected \u00b7 worker 30 / slot 15 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n238",
+                            "label": "create mobile fixture",
+                            "start": 338.2,
+                            "end": 368.013,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n239",
+                        "label": "mobile \u203a mobile/chat-titles.spec.ts \u203a a chat wears its agent-set title in the thread header and chat list",
+                        "start": 338.527,
+                        "end": 373.124,
+                        "kind": "test",
+                        "note": "specs/mobile/chat-titles.spec.ts \u00b7 passed \u00b7 worker 31 / slot 23 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n240",
+                            "label": "create mobile fixture",
+                            "start": 338.622,
+                            "end": 371.135,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n241",
+                        "label": "mobile \u203a mobile/collect-secret.spec.ts \u203a provides a secret from the thread, with no browser in the way",
+                        "start": 341.537,
+                        "end": 374.04,
+                        "kind": "test",
+                        "note": "specs/mobile/collect-secret.spec.ts \u00b7 passed \u00b7 worker 32 / slot 13 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n242",
+                            "label": "Before Hooks",
+                            "start": 341.547,
+                            "end": 341.671,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n243",
+                            "label": "create mobile fixture",
+                            "start": 341.672,
+                            "end": 364.76,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n244",
+                            "label": "connect admin itx",
+                            "start": 366.944,
+                            "end": 368.029,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n245",
+                        "label": "mobile \u203a mobile/expected-backend-mismatch.spec.ts \u203a a mismatched phone sees the differences and a one-tap sign-in fix",
+                        "start": 343.94,
+                        "end": 346.591,
+                        "kind": "test",
+                        "note": "specs/mobile/expected-backend-mismatch.spec.ts \u00b7 passed \u00b7 worker 33 / slot 10 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n246",
+                            "label": "Before Hooks",
+                            "start": 343.953,
+                            "end": 344.123,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n247",
+                        "label": "mobile \u203a mobile/expected-backend-mismatch.spec.ts \u203a a phone already matching the expectation is told so",
+                        "start": 344.355,
+                        "end": 346.583,
+                        "kind": "test",
+                        "note": "specs/mobile/expected-backend-mismatch.spec.ts \u00b7 passed \u00b7 worker 34 / slot 7 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n248",
+                            "label": "Before Hooks",
+                            "start": 344.363,
+                            "end": 344.506,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n249",
+                        "label": "mobile \u203a mobile/expected-backend-signin.spec.ts \u203a scanning the channel you're already on shows the bundle's expected backend",
+                        "start": 346.69,
+                        "end": 349.502,
+                        "kind": "test",
+                        "note": "specs/mobile/expected-backend-signin.spec.ts \u00b7 passed \u00b7 worker 34 / slot 7 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n250",
+                        "label": "mobile \u203a mobile/expected-backend-signin.spec.ts \u203a one tap signs the test identity in: consent is the only stop before the project",
+                        "start": 346.699,
+                        "end": 366.088,
+                        "kind": "test",
+                        "note": "specs/mobile/expected-backend-signin.spec.ts \u00b7 passed \u00b7 worker 33 / slot 10 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n251",
+                        "label": "mobile \u203a mobile/integrations.spec.ts \u203a opens the project integration catalogue from the mobile drawer",
+                        "start": 349.004,
+                        "end": 372.511,
+                        "kind": "test",
+                        "note": "specs/mobile/integrations.spec.ts \u00b7 passed \u00b7 worker 35 / slot 19 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n252",
+                            "label": "Before Hooks",
+                            "start": 349.021,
+                            "end": 349.309,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n253",
+                            "label": "create mobile fixture",
+                            "start": 349.31,
+                            "end": 371.917,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n254",
+                        "label": "mobile \u203a mobile/live-status.spec.ts \u203a the live card wears the agent-set status and a phase glyph per round",
+                        "start": 349.404,
+                        "end": 385.727,
+                        "kind": "test",
+                        "note": "specs/mobile/live-status.spec.ts \u00b7 passed \u00b7 worker 36 / slot 18 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n255",
+                            "label": "Before Hooks",
+                            "start": 349.415,
+                            "end": 349.678,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n256",
+                            "label": "create mobile fixture",
+                            "start": 349.679,
+                            "end": 369.629,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n263",
+                        "label": "mobile \u203a mobile/notes.spec.ts \u203a captures a note from the global composer and manages it on /notes",
+                        "start": 349.526,
+                        "end": 383.187,
+                        "kind": "test",
+                        "note": "specs/mobile/notes.spec.ts \u00b7 passed \u00b7 worker 34 / slot 7 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n264",
+                            "label": "create mobile fixture",
+                            "start": 349.587,
+                            "end": 372.224,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n257",
+                        "label": "mobile \u203a mobile/media.spec.ts \u203a renders, searches, and views seeded media",
+                        "start": 349.804,
+                        "end": 380.21,
+                        "kind": "test",
+                        "note": "specs/mobile/media.spec.ts \u00b7 passed \u00b7 worker 37 / slot 21 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n258",
+                            "label": "Before Hooks",
+                            "start": 349.816,
+                            "end": 350.142,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n259",
+                            "label": "create mobile fixture",
+                            "start": 350.144,
+                            "end": 373.476,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n260",
+                        "label": "mobile \u203a mobile/note-composer-camera-roll.spec.ts \u203a attaches a recent photo to a note through the shared attachment sheet",
+                        "start": 350.304,
+                        "end": 384.101,
+                        "kind": "test",
+                        "note": "specs/mobile/note-composer-camera-roll.spec.ts \u00b7 passed \u00b7 worker 39 / slot 16 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n261",
+                            "label": "Before Hooks",
+                            "start": 350.317,
+                            "end": 350.526,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n262",
+                            "label": "create mobile fixture",
+                            "start": 350.545,
+                            "end": 372.223,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n265",
+                        "label": "mobile \u203a mobile/notifications.spec.ts \u203a the approval push is suppressed in the watched thread and sent when you're elsewhere",
+                        "start": 350.317,
+                        "end": 407.08,
+                        "kind": "test",
+                        "note": "specs/mobile/notifications.spec.ts \u00b7 passed \u00b7 worker 38 / slot 2 \u00b7 attempt 0.",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n266",
+                            "label": "create mobile fixture",
+                            "start": 350.602,
+                            "end": 373.349,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          },
+                          {
+                            "id": "n267",
+                            "label": "connect admin itx",
+                            "start": 384.877,
+                            "end": 386.308,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      },
+                      {
+                        "id": "n268",
+                        "label": "mobile \u203a mobile/signed-out.spec.ts \u203a the mobile app can be reviewed without an iOS build",
+                        "start": 351.539,
+                        "end": 354.462,
+                        "kind": "test",
+                        "note": "specs/mobile/signed-out.spec.ts \u00b7 passed \u00b7 worker 40 / slot 14 \u00b7 attempt 0. After Hooks has a timestamp outside the reported attempt interval; omitted from nesting (end offset +0.090s).",
+                        "basis": "Playwright per-attempt telemetry",
+                        "children": [
+                          {
+                            "id": "n269",
+                            "label": "Before Hooks",
+                            "start": 351.55,
+                            "end": 351.732,
+                            "kind": "other",
+                            "note": "Recorded fixture/setup phase inside this attempt. Only fixed phase names are published; dynamic URLs and raw errors stay in the CI artifact.",
+                            "basis": "Playwright step telemetry",
+                            "children": []
+                          }
+                        ],
+                        "test": true,
+                        "failed": false
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "id": "n35",
+                "label": "os \u00b7 vitest",
+                "start": 283.346,
+                "end": 409.04,
+                "kind": "test",
+                "note": "0 test retries. Reporter interval; buffered stdout is not used as execution time.",
+                "basis": "Test telemetry",
+                "children": []
+              }
+            ]
+          },
+          {
+            "id": "n270",
+            "label": "Publish test results",
+            "start": 409.087,
+            "end": 410.42,
+            "kind": "artifact",
+            "note": "Record test outcomes without a new runner or cross-job report merge.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          },
+          {
+            "id": "n271",
+            "label": "Post-test cleanup",
+            "start": 410.42,
+            "end": 522.396,
+            "kind": "cleanup",
+            "note": "Cleanup remains on the same runner after tests, with the existing head/lease guards.",
+            "basis": "Timestamped log boundaries",
+            "children": [
+              {
+                "id": "n272",
+                "label": "Erase slot resources",
+                "start": 412.88,
+                "end": 522.38,
+                "kind": "cleanup",
+                "note": "OS reset, D1/KV, artifact repositories and supporting-service cleanup.",
+                "basis": "End log minus reported cleanup duration",
+                "children": []
+              }
+            ]
+          },
+          {
+            "id": "n273",
+            "label": "Telemetry + artifact uploads",
+            "start": 522.396,
+            "end": 525.9,
+            "kind": "artifact",
+            "note": "Upload complete test telemetry and reports.",
+            "basis": "Timestamped log boundaries",
+            "children": []
+          }
+        ],
+        "attempt": "3prp9726b7"
+      }
+    ]
+  },
+  "total": 528.831,
+  "run": "gmkp9k5gdh",
+  "workflow": "1741hjx4bt",
+  "head": "0bf376b7277f2ff2e02f5767e7783f619290d894",
+  "label": "24 workers \u00b7 repeat",
+  "normal": true,
+  "workers": 24,
+  "slot": "preview-6",
+  "startedAt": "2026-09-16T00:27:54.145Z",
+  "metrics": {
+    "result": "success",
+    "playwright": 122.95459600000001,
+    "vitest": 125.694,
+    "browserRetries": 0,
+    "appRetries": 0,
+    "browserGreen": 88,
+    "browserSkipped": 4,
+    "browserBodyFailures": 0,
+    "browserSentinelFailures": 0,
+    "readiness": 109.357,
+    "erase": [99.2, 109.5],
+    "cpuMean": 0.3956180805132675,
+    "cpuPeak": 0.8190859876620924,
+    "memoryPeak": 0.30776761991740775,
+    "resourceSummary": "During Playwright: sampled mean CPU 39.6% (6.3 cores), peak 81.9% (13.1 cores); peak memory 19.7 GB. 25 samples.",
+    "peakActiveAttempts": 24,
+    "firstStartSpread": 62.325999999999965,
+    "attemptDurationMedian": 20.49199999999999,
+    "attemptDurationP95": 37.79599999999999,
+    "attemptDurationMax": 56.76299999999998,
+    "activeAttemptSeconds": 1872.899,
+    "mobileFixtureMedian": 23.088
+  },
+  "installs": [
+    {
+      "job": "Preview / deploy + e2e",
+      "start": 6.986,
+      "end": 15.372,
+      "order": 0
+    }
+  ],
+  "installWall": 8.386,
+  "installSum": 8.386,
+  "windows": {
+    "prepare": [0, 282.93],
+    "tests": [173.39, 409.087],
+    "finish": [410.42, 528.831]
+  },
+  "browserWindow": [284.24, 407.194],
+  "samples": [
+    {
+      "time": 4.855,
+      "memory": 0.01310459348646109
+    },
+    {
+      "time": 5.855,
+      "cpu": 0.02520478890989288,
+      "memory": 0.014373865425347016
+    },
+    {
+      "time": 9.855,
+      "cpu": 0.054231974921630094,
+      "memory": 0.030774666481289917
+    },
+    {
+      "time": 14.855,
+      "cpu": 0.05634511382216074,
+      "memory": 0.014860388286546051
+    },
+    {
+      "time": 19.855,
+      "cpu": 0.02715215215215215,
+      "memory": 0.022274000564512293
+    },
+    {
+      "time": 24.855,
+      "cpu": 0.0033758439609902473,
+      "memory": 0.02263764755202773
+    },
+    {
+      "time": 29.855,
+      "cpu": 0.0006250781347668458,
+      "memory": 0.02264827695286541
+    },
+    {
+      "time": 34.855,
+      "cpu": 0.0017508754377188595,
+      "memory": 0.021416420504928126
+    },
+    {
+      "time": 39.855,
+      "cpu": 0.00037504688086010754,
+      "memory": 0.02140955694895865
+    },
+    {
+      "time": 44.855,
+      "cpu": 0.00037504688086010754,
+      "memory": 0.021385929309382316
+    },
+    {
+      "time": 49.855,
+      "cpu": 0.00025003125390673836,
+      "memory": 0.021466044621981758
+    },
+    {
+      "time": 54.855,
+      "cpu": 0.000375,
+      "memory": 0.021506557824031665
+    },
+    {
+      "time": 59.855,
+      "cpu": 0.0008751093886735842,
+      "memory": 0.021501880887663086
+    },
+    {
+      "time": 64.855,
+      "cpu": 0.0005,
+      "memory": 0.02150947331683286
+    },
+    {
+      "time": 69.855,
+      "cpu": 0.0003749531308586427,
+      "memory": 0.021513299901134424
+    },
+    {
+      "time": 74.855,
+      "cpu": 0.00025003125390673836,
+      "memory": 0.021516701309402482
+    },
+    {
+      "time": 79.855,
+      "cpu": 0.00012501562695336918,
+      "memory": 0.021516701309402482
+    },
+    {
+      "time": 84.855,
+      "cpu": 0.00037504688086010754,
+      "memory": 0.021516701309402482
+    },
+    {
+      "time": 89.855,
+      "cpu": 0.0004999375078115235,
+      "memory": 0.021516701309402482
+    },
+    {
+      "time": 94.855,
+      "cpu": 0.0006249218847644045,
+      "memory": 0.021516701309402482
+    },
+    {
+      "time": 99.855,
+      "cpu": 0.00037509377344336085,
+      "memory": 0.021567722433423354
+    },
+    {
+      "time": 104.855,
+      "cpu": 0.0003749531308586427,
+      "memory": 0.021567722433423354
+    },
+    {
+      "time": 109.855,
+      "cpu": 0.00012503125781445363,
+      "memory": 0.021567722433423354
+    },
+    {
+      "time": 114.855,
+      "cpu": 0.0006250781347668458,
+      "memory": 0.02142024708922969
+    },
+    {
+      "time": 119.855,
+      "cpu": 0.02599350162459385,
+      "memory": 0.019068841405634397
+    },
+    {
+      "time": 124.855,
+      "cpu": 0.12317301686445971,
+      "memory": 0.053499839556786784
+    },
+    {
+      "time": 129.855,
+      "cpu": 0.12294154619736015,
+      "memory": 0.08842562113207492
+    },
+    {
+      "time": 134.855,
+      "cpu": 0.2939265183704074,
+      "memory": 0.098652319526592
+    },
+    {
+      "time": 139.855,
+      "cpu": 0.07731573705179283,
+      "memory": 0.03384249378134496
+    },
+    {
+      "time": 144.855,
+      "cpu": 0.006742414783368711,
+      "memory": 0.024614837586703263
+    },
+    {
+      "time": 149.855,
+      "cpu": 0.019877484685585697,
+      "memory": 0.03040767882493978
+    },
+    {
+      "time": 154.855,
+      "cpu": 0,
+      "memory": 0.030411505409241348
+    },
+    {
+      "time": 159.855,
+      "cpu": 0.0012493753123438282,
+      "memory": 0.022129683670853252
+    },
+    {
+      "time": 164.855,
+      "cpu": 0.0005,
+      "memory": 0.022195707434913597
+    },
+    {
+      "time": 169.855,
+      "cpu": 0.0006250781347668458,
+      "memory": 0.016932210358393634
+    },
+    {
+      "time": 174.855,
+      "cpu": 0.05818318318318318,
+      "memory": 0.028274813622567226
+    },
+    {
+      "time": 179.855,
+      "cpu": 0.027618095476130967,
+      "memory": 0.022862261976586286
+    },
+    {
+      "time": 184.855,
+      "cpu": 0.002875359419927491,
+      "memory": 0.022577029597536262
+    },
+    {
+      "time": 189.855,
+      "cpu": 0.0008746719980007497,
+      "memory": 0.02271509032955941
+    },
+    {
+      "time": 194.855,
+      "cpu": 0.00037518759379689845,
+      "memory": 0.019308397730799065
+    },
+    {
+      "time": 199.855,
+      "cpu": 0.00012498437695288088,
+      "memory": 0.019308397730799065
+    },
+    {
+      "time": 204.855,
+      "cpu": 0,
+      "memory": 0.019308397730799065
+    },
+    {
+      "time": 209.855,
+      "cpu": 0.000125,
+      "memory": 0.019308397730799065
+    },
+    {
+      "time": 214.855,
+      "cpu": 0,
+      "memory": 0.019308397730799065
+    },
+    {
+      "time": 219.855,
+      "cpu": 0.00024996875390576176,
+      "memory": 0.01924243470617208
+    },
+    {
+      "time": 224.855,
+      "cpu": 0.00012503125781445363,
+      "memory": 0.019249662698741704
+    },
+    {
+      "time": 229.855,
+      "cpu": 0.000125,
+      "memory": 0.019249662698741704
+    },
+    {
+      "time": 234.855,
+      "cpu": 0.04195280309651642,
+      "memory": 0.03009796845424641
+    },
+    {
+      "time": 239.855,
+      "cpu": 0.07265702891326022,
+      "memory": 0.049774690108929494
+    },
+    {
+      "time": 244.855,
+      "cpu": 0.07321652065081352,
+      "memory": 0.053886992705011835
+    },
+    {
+      "time": 249.855,
+      "cpu": 0.07857142857142857,
+      "memory": 0.05284531142291902
+    },
+    {
+      "time": 254.855,
+      "cpu": 0.08537044001504325,
+      "memory": 0.0553432813592076
+    },
+    {
+      "time": 259.855,
+      "cpu": 0.04757148208265701,
+      "memory": 0.050671629321329764
+    },
+    {
+      "time": 264.855,
+      "cpu": 0.03673163418290855,
+      "memory": 0.038467315716103644
+    },
+    {
+      "time": 269.855,
+      "cpu": 0.011635180783185288,
+      "memory": 0.032575651419793364
+    },
+    {
+      "time": 274.855,
+      "cpu": 0.011008256192144109,
+      "memory": 0.019270010408916696
+    },
+    {
+      "time": 279.855,
+      "cpu": 0.0006250781347668458,
+      "memory": 0.019037074681988068
+    },
+    {
+      "time": 284.855,
+      "cpu": 0.32722250125565044,
+      "memory": 0.10256430347145906
+    },
+    {
+      "time": 289.855,
+      "cpu": 0.35032017075773747,
+      "memory": 0.2309531918238163
+    },
+    {
+      "time": 294.855,
+      "cpu": 0.04148962759310172,
+      "memory": 0.22264093962931575
+    },
+    {
+      "time": 299.855,
+      "cpu": 0.19679318551922836,
+      "memory": 0.2413806947850155
+    },
+    {
+      "time": 304.855,
+      "cpu": 0.520207927225471,
+      "memory": 0.2699448710681011
+    },
+    {
+      "time": 309.855,
+      "cpu": 0.6080618582836862,
+      "memory": 0.26059518935184284
+    },
+    {
+      "time": 314.855,
+      "cpu": 0.6658243840808591,
+      "memory": 0.2607241999082956
+    },
+    {
+      "time": 319.855,
+      "cpu": 0.5267021007339914,
+      "memory": 0.25484413684375673
+    },
+    {
+      "time": 324.855,
+      "cpu": 0.6134496271015042,
+      "memory": 0.260456339007186
+    },
+    {
+      "time": 329.855,
+      "cpu": 0.6923954372623574,
+      "memory": 0.2727405857067115
+    },
+    {
+      "time": 334.855,
+      "cpu": 0.5247273649505453,
+      "memory": 0.24164539723559048
+    },
+    {
+      "time": 339.855,
+      "cpu": 0.6995680894308943,
+      "memory": 0.28412552435593574
+    },
+    {
+      "time": 344.855,
+      "cpu": 0.7853869653767821,
+      "memory": 0.30776761991740775
+    },
+    {
+      "time": 349.855,
+      "cpu": 0.8125863584976761,
+      "memory": 0.2880305840054
+    },
+    {
+      "time": 354.855,
+      "cpu": 0.8190859876620924,
+      "memory": 0.26993551719536396
+    },
+    {
+      "time": 359.855,
+      "cpu": 0.5398528127728577,
+      "memory": 0.24739590308877632
+    },
+    {
+      "time": 364.855,
+      "cpu": 0.4235190097259063,
+      "memory": 0.23940046777867208
+    },
+    {
+      "time": 369.855,
+      "cpu": 0.23835443037974682,
+      "memory": 0.22126592033695322
+    },
+    {
+      "time": 374.855,
+      "cpu": 0.19754478266315922,
+      "memory": 0.1868008473636869
+    },
+    {
+      "time": 379.855,
+      "cpu": 0.1004011030333417,
+      "memory": 0.16395741461144164
+    },
+    {
+      "time": 384.855,
+      "cpu": 0.07435223432219301,
+      "memory": 0.14105397129903852
+    },
+    {
+      "time": 389.855,
+      "cpu": 0.07078651685393259,
+      "memory": 0.13000443580081814
+    },
+    {
+      "time": 394.855,
+      "cpu": 0.048826173826173824,
+      "memory": 0.11866808869828045
+    },
+    {
+      "time": 399.855,
+      "cpu": 0.010618363522798251,
+      "memory": 0.11757884843986817
+    },
+    {
+      "time": 404.855,
+      "cpu": 0.002375,
+      "memory": 0.11756979826429781
+    },
+    {
+      "time": 409.855,
+      "cpu": 0.020676691729323307,
+      "memory": 0.016394787852040443
+    },
+    {
+      "time": 414.855,
+      "cpu": 0.030106183635227983,
+      "memory": 0.02399189395818175
+    },
+    {
+      "time": 419.855,
+      "cpu": 0.011240164855751217,
+      "memory": 0.02399159026101496
+    },
+    {
+      "time": 424.855,
+      "cpu": 0.000749718855429214,
+      "memory": 0.024026879871796063
+    },
+    {
+      "time": 429.855,
+      "cpu": 0.0017506564961860698,
+      "memory": 0.022832499654240775
+    },
+    {
+      "time": 434.855,
+      "cpu": 0.00025003125390673836,
+      "memory": 0.022863598244120164
+    },
+    {
+      "time": 439.855,
+      "cpu": 0.00025003125390673836,
+      "memory": 0.022902289263169326
+    },
+    {
+      "time": 444.855,
+      "cpu": 0.00024996875390576176,
+      "memory": 0.02293624260641655
+    },
+    {
+      "time": 449.855,
+      "cpu": 0.00025006251562890725,
+      "memory": 0.02297068186513064
+    },
+    {
+      "time": 454.855,
+      "cpu": 0.001,
+      "memory": 0.022997224997508163
+    },
+    {
+      "time": 459.855,
+      "cpu": 0.00025006251562890725,
+      "memory": 0.02300105158180973
+    },
+    {
+      "time": 464.855,
+      "cpu": 0.00012503125781445363,
+      "memory": 0.02300105158180973
+    },
+    {
+      "time": 469.855,
+      "cpu": 0.00012501562695336918,
+      "memory": 0.02300105158180973
+    },
+    {
+      "time": 474.855,
+      "cpu": 0.0004998750312421895,
+      "memory": 0.02300105158180973
+    },
+    {
+      "time": 479.855,
+      "cpu": 0,
+      "memory": 0.02300105158180973
+    },
+    {
+      "time": 484.855,
+      "cpu": 0.00037490627343164207,
+      "memory": 0.02300105158180973
+    },
+    {
+      "time": 489.855,
+      "cpu": 0.000125,
+      "memory": 0.02300445299007779
+    },
+    {
+      "time": 494.855,
+      "cpu": 0.000375,
+      "memory": 0.023008218834945995
+    },
+    {
+      "time": 499.855,
+      "cpu": 0.00025003125390673836,
+      "memory": 0.023042658093660084
+    },
+    {
+      "time": 504.855,
+      "cpu": 0.00025003125390673836,
+      "memory": 0.023042658093660084
+    },
+    {
+      "time": 509.855,
+      "cpu": 0.0003749531308586427,
+      "memory": 0.023042658093660084
+    },
+    {
+      "time": 514.855,
+      "cpu": 0.001125,
+      "memory": 0.018677618715374347
+    },
+    {
+      "time": 519.855,
+      "cpu": 0.024606545091181615,
+      "memory": 0.027048423723632177
+    },
+    {
+      "time": 524.855,
+      "cpu": 0.050505050505050504,
+      "memory": 0.015848983303883818
+    }
+  ],
+  "catalogueCount": 92,
+  "catalogueHash": "1cd6aa275ec282cda82f881106a453210ce64bd9c4af164e5fac87bff38da0cd",
+  "imageTag": "0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree",
+  "bakedSourceHead": "611c376",
+  "context": "24 workers \u00b7 repeat \u00b7 run gmkp9k5gdh \u00b7 commit 0bf376b72 \u00b7 preview-6. Same application code; fresh runner.",
+  "findings": "Unchanged 24-worker repeat: preview success, 8m48.8s overall. Playwright 123.0s and OS Vitest 125.7s; Vitest still finishes last. All 88 non-skipped browser bodies passed, zero browser/app retries, no sentinel failure. Peak memory 19.7 GB. Together the 24-worker trials took 120.5\u2013123.0s versus 147.8\u2013149.3s at 16. The three 32-worker runs took 105.9\u2013114.1s but each needed one retry; their browser advantage did not move the Vitest finish. Install 8.4s and OS deployment 47.9s helped this whole-preview result; do not attribute the full difference to workers. During Playwright: sampled mean CPU 39.6% (6.3 cores), peak 81.9% (13.1 cores); peak memory 19.7 GB. 25 samples."
+}
