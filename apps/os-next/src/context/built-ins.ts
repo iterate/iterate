@@ -59,6 +59,7 @@ import {
 } from "../secrets.ts";
 import type { SecretCatalog, SecretState } from "../secret/contract.ts";
 import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.ts";
+import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   RPC_STUB_PAGER_WEBSOCKET_HEADER,
@@ -913,7 +914,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       enable: async (name, spec) => {
         // Refused HERE, before anything is appended. A FIRST-PARTY name (first-party-facets.ts) hosts
         // this worker's own class: `consumes` at most, never a source; any other name's spec names
-        // the source's host class, and its literal source is under the ceiling.
+        // the source's host class, and its literal source is under the ceiling. Either is hosted
+        // only where first-party-facet-placement.ts places it — the facet host refuses it anyway;
+        // refused here too, so a row that could never deliver is never appended.
         const firstPartyClassName = firstPartyFacetClassOf(name);
         const loaded = spec as (FacetSpec & { consumes?: string[] }) | undefined;
         if (firstPartyClassName) {
@@ -929,6 +932,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             );
           assertFacetSourceWithinCeiling(loaded, `processors.enable("${name}")`);
         }
+        assertFacetPlacement(name, { projectId, path });
         // IDEMPOTENT AT THE DOOR (the rule `provide` follows): a row already hosting this facet under
         // the same spec appends nothing — every entity's `create()` enables its row on every call.
         const existing = deps.subscriptions.get(name)?.hostedFacet;
@@ -986,6 +990,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               `workers.get(spec).${print(methodSteps)}: a WorkerEntrypoint exposes flat methods`,
             );
           const [method, ...args] = call;
+          // Loaded code runs only inside a project (first-party-facet-placement.ts rule 6) —
+          // refused before a source expression runs or anything loads.
+          assertLoadedCodePlacement("workers.get", { projectId, path });
           const { load } = await prepareConfinedWorker({
             env,
             deployId: deps.deployId,

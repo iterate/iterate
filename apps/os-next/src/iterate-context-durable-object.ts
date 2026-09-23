@@ -686,6 +686,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     env: () => this.env,
     deployId: this.#appConfig.deployId,
     iterateContextName: this.#durableObjectAddress.name,
+    projectId: this.#durableObjectAddress.projectId,
+    path: this.#durableObjectAddress.path,
     platformOrigin: () => this.#platformOrigin,
     itxEntrypoint: () => this.#itxEntrypoint,
     invoke: (call) => this.#invokeInProcess(call, [], { principal: null }),

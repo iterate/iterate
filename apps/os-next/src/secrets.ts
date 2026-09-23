@@ -31,15 +31,21 @@ export type SecretRecord = {
   refresh: SecretRefresh | null;
 };
 
-/** A secret IS its path, and the path is what the placeholder spells: `/secrets/<name>`, the name
- *  `[a-zA-Z0-9._-]+` — under the resource owner's root (a user's own secret lives at
- *  `/users/<id>/secrets/<name>`; the placeholder still spells `/secrets/<name>`). */
-const SECRET_PATH = /^\/secrets\/[a-zA-Z0-9._-]+$/;
+/** A secret's name: `[a-zA-Z0-9._-]+`, but never `.` or `..` — the two segments
+ *  `resolveContextPath` resolves away, so `/secrets/..` would name its owner's ROOT (and
+ *  `/secrets/.` the `/secrets` context), never a secret's own context. The stored path and the
+ *  placeholder share this grammar. */
+const SECRET_NAME = String.raw`(?!\.\.?(?![a-zA-Z0-9._-]))[a-zA-Z0-9._-]+`;
+
+/** A secret IS its path, and the path is what the placeholder spells: `/secrets/<name>` — under the
+ *  resource owner's root (a user's own secret lives at `/users/<id>/secrets/<name>`; the
+ *  placeholder still spells `/secrets/<name>`). */
+export const SECRET_PATH = new RegExp(`^/secrets/${SECRET_NAME}$`);
 
 export function assertSecretPath(path: string): string {
   if (!SECRET_PATH.test(path))
     throw new Error(
-      `secrets: a secret's path is /secrets/<name>, the name [a-zA-Z0-9._-]+ (what getSecret("/secrets/<name>") can spell), got ${JSON.stringify(path)}`,
+      `secrets: a secret's path is /secrets/<name>, the name [a-zA-Z0-9._-]+ and never "." or ".." (what getSecret("/secrets/<name>") can spell), got ${JSON.stringify(path)}`,
     );
   return path;
 }
@@ -126,7 +132,7 @@ export function normalizeSecretRecord(
 const QUOTE = '(?:"|%22)';
 const SPACE = "(?:\\s|%20)*";
 const SECRET_PLACEHOLDER = new RegExp(
-  `getSecret\\(${SPACE}${QUOTE}(/secrets/[a-zA-Z0-9._-]+)${QUOTE}${SPACE}` +
+  `getSecret\\(${SPACE}${QUOTE}(/secrets/${SECRET_NAME})${QUOTE}${SPACE}` +
     `(?:,${SPACE}(?:\\{|%7B)${SPACE}field${SPACE}:${SPACE}${QUOTE}([^"%\\s]+)${QUOTE}${SPACE}(?:\\}|%7D))?${SPACE}\\)`,
   "g",
 );
