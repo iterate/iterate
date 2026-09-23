@@ -4,7 +4,7 @@ import { type FaultReading, renderFaultPage } from "./prd-fault-alarm.ts";
 const quiet: FaultReading = {
   serverErrors: [],
   heals: [],
-  errors: [["Can't read from request stream", 1]],
+  errors: [],
 };
 const page = (reading: Partial<FaultReading>) =>
   renderFaultPage({ ...quiet, ...reading }, new Date("2026-09-23T07:30:00Z"));
@@ -43,17 +43,7 @@ test.each([
   ["one 5xx", { serverErrors: [["https://lispwoso.com/", 1]] }, true],
   ["9 heals", { heals: [["repo", 9]] }, false],
   ["10 heals", { heals: [["repo", 10]] }, true],
-  ["9 errors", { errors: [["boom", 9]] }, false],
-  [
-    "10 errors",
-    {
-      errors: [
-        ["boom", 5],
-        ["bang", 5],
-      ],
-    },
-    true,
-  ],
+  ["one error", { errors: [["boom", 1]] }, true],
 ] satisfies [string, Partial<FaultReading>, boolean][])(
   "%s pages: %s",
   (_label, reading, pages) => {
