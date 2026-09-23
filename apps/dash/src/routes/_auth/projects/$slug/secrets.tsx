@@ -379,10 +379,14 @@ function SecretForm({
       let notification = "";
       if (requestingAgent) {
         try {
-          const agent = await api.projects.get(projectId).agents.get(requestingAgent);
-          await agent.message(
-            `The user submitted the secret at ${path}. Its value was not included.`,
-          );
+          await api.projects
+            .get(projectId)
+            .invoke([
+              "itx",
+              "agents",
+              ["get", requestingAgent],
+              ["message", `The user submitted the secret at ${path}. Its value was not included.`],
+            ]);
         } catch {
           notification = " The secret was saved, but the requesting agent could not be notified.";
         }

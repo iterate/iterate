@@ -132,9 +132,6 @@ export type CollectSecretInput = {
  * Iterate instance; it is not itself permission to write a secret. */
 export type CollectSecretLink = { path: string; url: string };
 
-/** An existing agent's public message surface. */
-export type AgentHandle = InvokeHandle & { message(message: string): Promise<StreamEvent> };
-
 /** A context (a project, a user, an organization): every `itx` root, reached through `invoke`. */
 
 export interface IterateContextApi {
@@ -279,17 +276,6 @@ export interface IterateContextApi {
       }): Promise<{ url: string; expiresAt: string }>;
     };
     list(prefix?: string): Promise<{ path: string; contentType: string; size: number }[]>;
-  };
-  agents: {
-    get(path: string): AgentHandle;
-    list(): Promise<{ path: string; createdAt: string }[]>;
-    create(path: string): Promise<{ path: string }>;
-    delete(path: string): Promise<{ path: string }>;
-  };
-  /** The MCP connections born under the project, by grant: each connection's context path
-   *  (`/mcp/inbound/grants/<grantId>`, its transcript) and when it was born (the grant's first run). */
-  mcpConnections: {
-    list(): Promise<{ grantId: string; path: string; createdAt: string }[]>;
   };
 }
 
