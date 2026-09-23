@@ -8,6 +8,7 @@
 // is refused, so a creation is reachable at once.
 import type { Caller } from "iterate/next/principal";
 import type { OrganizationRole } from "../organization/contract.ts";
+import { isRetryableTransportError } from "../retryable-error.ts";
 import type { ControlPlaneDurableObject } from "./durable-object.ts";
 import type {
   AccessibleRecord,
@@ -51,9 +52,9 @@ export class ControlPlane {
    *  which the wire copies. Typed loosely here; the method name and args are pinned by the callers'
    *  own generics.
    *
-   *  A BROKEN STUB is replaced: workerd stamps `retryable: true` on a call cut at the transport — a
-   *  deploy resetting this Durable Object for its new code — and the stub that threw fails every
-   *  later call the same way (Cloudflare: create a new stub after an exception). A holder that
+   *  A BROKEN STUB is replaced (retryable-error.ts): a deploy resetting this Durable Object for its
+   *  new code cuts the call at the transport, and the stub that threw fails every later call the
+   *  same way. A holder that
    *  outlives one call (rpc.ts: one per socket, for its whole life) would otherwise stay broken
    *  until it closed; the call that failed still throws, and the next one reaches the new object. */
   async #call<T>(method: string, ...args: unknown[]): Promise<T> {
@@ -61,8 +62,7 @@ export class ControlPlane {
     try {
       return (await stub[method]!(...args)) as T;
     } catch (error) {
-      if ((error as { retryable?: unknown } | null)?.retryable === true)
-        this.#stub = this.#namespace.getByName("global");
+      if (isRetryableTransportError(error)) this.#stub = this.#namespace.getByName("global");
       throw error;
     }
   }
