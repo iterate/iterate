@@ -142,8 +142,9 @@ export async function signedInSession(email: string): Promise<any> {
  *  precondition here: workerd keeps a DO with a materialized facet or a borrowed stub
  *  non-hibernatable (workerd#6800), and evicting such a DO times out after 30s on "still has active
  *  references". You must release BEFORE you can evict. Run directly: in production the pins'
- *  30 s timer releases them, and a facet is released by nothing but the actor's own end (on the
- *  edge it does not keep the actor resident); a test that wants the alarm PASS itself fakes Date
+ *  30 s timer releases them, and a facet does not keep the actor resident on the edge (it runs on
+ *  after it; the next incarnation's birth resets it when loaded and unclaimed — FacetHost
+ *  `resetUnclaimedLoadedFacets`); a test that wants the alarm PASS itself fakes Date
  *  and calls `runDurableObjectAlarm`. */
 export async function releasePins(ctx: string): Promise<void> {
   await runInDurableObject(stub(ctx), (instance) => {
@@ -151,12 +152,29 @@ export async function releasePins(ctx: string): Promise<void> {
   });
 }
 
-/** THE ALARM A CONTEXT OWES, from its physical alarm: null when there is none or it is only the
- *  residency watchdog's (src/context/residency-watchdog.ts), which every inbound call arms a whole
- *  window out. A row here runs for seconds and every obligation it can create is owed within
- *  minutes, so an alarm more than half a window out is the watchdog's. */
-export const owedAlarm = (alarm: number | null): number | null =>
-  alarm !== null && alarm - Date.now() < RESIDENCY_WATCHDOG_WINDOW_MS / 2 ? alarm : null;
+/** THE ALARM A CONTEXT OWES, from its physical alarm: null when there is none or it is only one of
+ *  the running incarnation's in-memory deadlines (`inMemory`, the DO's `inMemoryAlarmDeadlines()`:
+ *  the residency watchdog's, src/context/residency-watchdog.ts, and the unclaimed-facet sweep's,
+ *  armed once a loaded facet is materialized) — neither is an obligation. A watchdog deadline an
+ *  evicted incarnation left is no obligation either: every inbound call arms it a whole window out,
+ *  a row here runs for seconds and every obligation it can create is owed within minutes, so an
+ *  alarm more than half a window out is the watchdog's. */
+export const owedAlarm = (alarm: number | null, inMemory: (number | null)[] = []): number | null =>
+  alarm !== null &&
+  !inMemory.includes(alarm) &&
+  alarm - Date.now() < RESIDENCY_WATCHDOG_WINDOW_MS / 2
+    ? alarm
+    : null;
+
+/** `owedAlarm` of a context, read inside its DO: the physical alarm beside the running incarnation's
+ *  in-memory deadlines. */
+export const owedAlarmOf = (s: ReturnType<typeof stub>): Promise<number | null> =>
+  runInDurableObject(s, async (instance, state) =>
+    owedAlarm(
+      await state.storage.getAlarm(),
+      (instance as IterateContextDurableObject).inMemoryAlarmDeadlines(),
+    ),
+  );
 
 /** Poll `fn` until it returns a defined, non-false value (bounded). Physical facts arrive a beat
  *  after the RPC that triggered them: a pager leaves the census when its CLOSE lands at the DO, a

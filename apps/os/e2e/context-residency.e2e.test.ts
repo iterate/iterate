@@ -15,9 +15,10 @@
 // more wakes, exactly as the control row that holds nothing does. The handle must still answer at
 // the end: a path outlives every incarnation.
 //
-// Wakes see the CONTEXT only. A facet it hosts can outlive it: the context is evicted on time,
-// every read wakes a fresh incarnation, and the facet keeps running under each one, billed (the
-// rows at the bottom, which read the facet's own birth instead).
+// Wakes see the CONTEXT only. A facet it hosts can outlive it: the context is evicted on time and
+// the facet runs on, billed, until the next incarnation's birth resets it — a loaded facet holding
+// no claim (FacetHost `resetUnclaimedLoadedFacets`). The careless rows and the rows at the bottom
+// read the facet's own start as well.
 import { expect, test } from "vitest";
 import {
   adminCredentials,
@@ -166,8 +167,10 @@ test("listing repos does not keep the project root resident", async () => {
 // `env.ITX` handed it, in a facet of the context (an actor that outlives the call), and disposes
 // nothing. Measured on a preview of main (2026-09-23): the data row, the live row and the client
 // row saw ONE wake across the three idles — resident throughout; the LiveState row already evicted.
-// What these rows prove is the CONTEXT's eviction: the careless facet itself keeps running on
-// what it keeps, billed, until V8 collects it — userspace's to release (the facets' rows below).
+// The careless facet itself kept running on what it kept, billed per minute under the context's
+// object with no request, until V8 happened to collect it (19 min and counting, measured) — so
+// each row also reads the facet's own start: the next incarnation's birth resets it (it is loaded
+// and holds no claim), and a fresh instance answers.
 
 /** A loaded worker whose answer is DATA — `{ a: 1 }`, handed through the context to the facet. */
 const DATA_WORKER_SOURCE = {
@@ -189,8 +192,10 @@ export default class LiveMaker extends WorkerEntrypoint { make() { made += 1; re
 const CARELESS_HOLDER_SOURCE = {
   "cap.js": `import { FacetDurableObject } from "./processor.js";
 export class CarelessHolderDurableObject extends FacetDurableObject {
-  static publicMethods = [...super.publicMethods, "keepData", "keepSiblingSnapshot", "keepLiveAndPing"];
+  static publicMethods = [...super.publicMethods, "keepData", "keepSiblingSnapshot", "keepLiveAndPing", "started"];
   kept = [];
+  startedAt = Date.now();
+  started() { return this.startedAt; }
   async keepData(source) {
     const itx = this.env.ITX.get();
     const answer = await itx.workers.get({ source }).data();
@@ -223,47 +228,76 @@ const carelessHolder = (itx: any, method: string, ...args: unknown[]) =>
     [method, ...args],
   ]);
 
-test("a facet keeping a loaded worker's data answer its context handed through does not keep the context resident", async () => {
+test("a facet keeping a loaded worker's data answer its context handed through keeps neither the context nor itself running", async () => {
   const itx = openItx(freshCtx("residency_careless_data"));
   expect(await carelessHolder(itx, "keepData", DATA_WORKER_SOURCE)).toBe('{"a":1}');
+  const started = await carelessHolder(itx, "started");
   expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(IDLES);
+  expect(await carelessHolder(itx, "started")).toBeGreaterThan(started);
 }, 90_000);
 
-test("a facet keeping a loaded worker's live RpcTarget does not keep the context resident", async () => {
+test("a facet keeping a loaded worker's live RpcTarget keeps neither the context nor itself running", async () => {
   const itx = openItx(freshCtx("residency_careless_live"));
   // A live answer leaves the context as the expression that made it: every verb re-runs `make()`
   // (the risk the rule accepts — identity per verb), so the ping answers from a fresh `Made`.
   expect(await carelessHolder(itx, "keepLiveAndPing", LIVE_WORKER_SOURCE)).toMatch(/^pong-\d+$/);
+  const started = await carelessHolder(itx, "started");
   expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(IDLES);
+  expect(await carelessHolder(itx, "started")).toBeGreaterThan(started);
 }, 90_000);
 
 // The prd shape (a project site's page load, 2026-09-23): loaded code asks its ROOT for a sibling's
 // facet snapshot, `env.ITX.get().cd('/domain-sales').facets.get(x).snapshot()`. The root's `cd`
 // invokes the sibling, whose answer is data from that hop; forwarded as it arrived, it kept the
 // root resident (sessions 142–2424 s) — and the sibling with it.
-test("a facet keeping a sibling's data answer, handed through the root's cd, keeps neither context resident", async () => {
+test("a facet keeping a sibling's data answer, handed through the root's cd, keeps neither context nor itself running", async () => {
   const itx = openItx(freshCtx("residency_careless_sibling"));
   expect(await carelessHolder(itx, "keepSiblingSnapshot", "/residency-sibling")).toBe("object");
+  const started = await carelessHolder(itx, "started");
   const [root, sibling] = await Promise.all([
     wakesAcrossIdles(itx),
     wakesAcrossIdles(await itx.cd("/residency-sibling")),
   ]);
   expect(Math.min(root, sibling), JSON.stringify({ root, sibling })).toBeGreaterThanOrEqual(IDLES);
+  expect(await carelessHolder(itx, "started")).toBeGreaterThan(started);
 }, 90_000);
 
 // LiveState's documented sink (sdk/index.ts): `{ append: (e) => env.ITX.get().append(e) }` — a fresh
-// scope per `set`, and neither it nor the append's answer is ever released.
-test("the LiveState sink that never releases env.ITX does not keep the context resident", async () => {
+// scope per `set`, and neither it nor the append's answer is ever released. The chatroom's live
+// state is built with it, so its revision (`rev`, the start time × 4096) names the instance.
+test("the LiveState sink that never releases env.ITX keeps neither the context nor its facet running", async () => {
   const itx = openItx(freshCtx("residency_live_state_sink"));
-  expect(
-    await itx.invoke([
+  const chatroom = (method: string, ...args: unknown[]) =>
+    itx.invoke([
       "itx",
       "facets",
       ["get", "chatroom", { source: SOURCES.chatroom, className: "ChatroomDurableObject" }],
-      ["post", "careless", "hi"],
-    ]),
-  ).toEqual({ ok: true });
+      [method, ...args],
+    ]);
+  expect(await chatroom("post", "careless", "hi")).toEqual({ ok: true });
+  const started = Math.floor((await chatroom("state")).rev / 4096);
   expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(IDLES);
+  const again = await chatroom("state");
+  expect(Math.floor(again.rev / 4096)).toBeGreaterThan(started);
+  expect(again.state).toEqual({ messages: [] }); // in memory, as it always was: gone with the instance
+}, 90_000);
+
+// The Keeper (support/sources.ts) stashes its `env.ITX` in its own storage and calls through the
+// restored one without releasing what it answers.
+test("a facet calling through a stashed env.ITX does not outlive its context", async () => {
+  const itx = openItx(freshCtx("residency_keeper"));
+  const keeper = (method: string) =>
+    itx.invoke([
+      "itx",
+      "facets",
+      ["get", "keeper", { source: SOURCES.keeper, className: "KeeperDurableObject" }],
+      [method],
+    ]);
+  expect(await keeper("stash")).toEqual({ stashed: true });
+  expect((await keeper("useStashed")).projectId).toEqual(expect.any(String));
+  const started = await keeper("started");
+  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(IDLES);
+  expect(await keeper("started")).toBeGreaterThan(started);
 }, 90_000);
 
 // A CLIENT is careless the same way: a held `cfArtifacts.get(path)` was the scoped repo RpcTarget,
@@ -372,6 +406,103 @@ test("an SDK facet that reached its context through withItx does not outlive the
   expect(await wakesAcrossIdles(openItx(ctx))).toBeGreaterThanOrEqual(IDLES);
   expect(await facetStartedAt(reacher(openItx(ctx)))).toBeGreaterThan(started);
 }, 90_000);
+
+// ── NOTHING NEEDS TO CALL AGAIN ──
+// The next incarnation's birth resets what the last one left running — but after a context's LAST
+// call nothing wakes it. A context that materialized a loaded facet arms the unclaimed-facet sweep
+// on its alarm (FacetHost `UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS`): a minute after its last call it
+// is woken fresh, and that birth resets the facet. The facet here keeps its `env.ITX` answer AND
+// beats a timer into its own storage, so its last beat says when it stopped, with no call from here.
+const HEARTBEAT_SOURCE = {
+  "cap.js": `import { FacetDurableObject } from "./processor.js";
+export class HeartbeatDurableObject extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "beat", "lastBeat"];
+  kept = [];
+  async beat() {
+    this.kept.push(await this.env.ITX.get().whoami());
+    const tick = () => { this.ctx.storage.kv.put("lastBeat", Date.now()); setTimeout(tick, 5_000); };
+    tick();
+    return Date.now();
+  }
+  lastBeat() { return this.ctx.storage.kv.get("lastBeat") ?? null; }
+}`,
+};
+
+test("a careless loaded facet the last call left running stops a quiet minute later, with no call from outside", async () => {
+  const ctx = freshCtx("residency_sweep");
+  const heartbeat = (method: string) =>
+    openItx(ctx).invoke([
+      "itx",
+      "facets",
+      ["get", "heartbeat", { source: HEARTBEAT_SOURCE, className: "HeartbeatDurableObject" }],
+      [method],
+    ]);
+  const lastCallAt = await heartbeat("beat");
+  disposeSessions();
+  await sleep(110_000); // no request: the context evicts in ~10 s; the sweep's alarm is its only wake
+  const lastBeat = await heartbeat("lastBeat");
+  // It beat on after its context evicted, and stopped at the sweep — long before this call.
+  expect(lastBeat - lastCallAt).toBeGreaterThan(30_000);
+  expect(lastBeat - lastCallAt).toBeLessThan(90_000);
+}, 180_000);
+
+// ── CLAIMED WORK OUTLIVES ITS CONTEXT ON PURPOSE ──
+// Work that must outlive the call that started it runs through `runInBackground`: the processor's
+// claim on the context's alarm keeps the facet running across the context's incarnations — the
+// claim's alarm wakes one mid-attempt, whose birth spares the claimed facet (FacetHost
+// `resetUnclaimedLoadedFacets`) — and the attempt finishes on the instance that started it.
+const SLEEPER_SOURCE = {
+  "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+const contract = defineProcessorContract({
+  slug: "sleeper",
+  version: "1.0.0",
+  description: "Sleeps in the background, then says which instance slept.",
+  stateSchema: z.object({}),
+  consumes: ["sleep"],
+  emits: ["slept"],
+});
+class SleeperProcessor extends StreamProcessor {
+  contract = contract;
+  startedAt = Date.now();
+  reduce() {}
+  processEvent({ event, append, runInBackground }) {
+    if (event?.type !== "sleep") return;
+    runInBackground(async () => {
+      await new Promise((resolve) => setTimeout(resolve, event.payload.ms));
+      await append({ type: "slept", payload: { startedAt: this.startedAt }, idempotencyKey: "slept:" + event.offset });
+    });
+  }
+}
+export class SleeperDurableObject extends StreamProcessorDurableObject {
+  processor = new SleeperProcessor();
+}`,
+};
+
+test("a facet's claimed background work finishes on the instance that started it across its context's incarnations", async () => {
+  const ctx = freshCtx("residency_claimed");
+  const itx = openItx(ctx);
+  await itx.processors.enable("sleeper", {
+    source: SLEEPER_SOURCE,
+    className: "SleeperDurableObject",
+  });
+  const started = await facetStartedAt(itx.facets.get("sleeper"));
+  await itx.append({ type: "sleep", payload: { ms: 45_000 } });
+  disposeSessions();
+  await sleep(60_000); // no request meanwhile: a poll would keep the context resident
+  const slept = await until(
+    "the background sleep's append",
+    async () => (await readAll(openItx(ctx))).find((e: any) => e.type === "slept"),
+    30_000,
+  );
+  const woken = (await readAll(openItx(ctx))).filter(
+    (e: any) => e.type === "events.iterate.com/stream/woken" && e.offset < slept.offset,
+  );
+  // The claim's alarm woke the context mid-sleep (20 s, then the revive's 40 s), each birth sparing
+  // the claimed facet; the append came from the instance the sleep started on.
+  expect(woken.length).toBeGreaterThanOrEqual(2);
+  expect(Math.abs(slept.payload.startedAt - started)).toBeLessThan(5_000);
+  expect(woken.every((e: any) => !e.payload.facetsReset?.includes("sleeper"))).toBe(true);
+}, 150_000);
 
 // ── A REFUSAL DOES NOT HOLD THE CONTEXT ──
 // A Workers-RPC call that THREW keeps its session to the callee open until the caller disposes its

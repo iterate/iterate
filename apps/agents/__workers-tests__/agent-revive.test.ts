@@ -16,7 +16,7 @@ import agentRuntime from "../../../configs-next/with-agents/agents.js?raw";
 import {
   adminCredentials,
   openSession,
-  owedAlarm,
+  owedAlarmOf,
   releasePins,
   stub,
   until,
@@ -71,9 +71,7 @@ test("KILLED MID-CALL, THE REQUEST CONTINUES: the context dies with the model ca
   expect(
     await runInDurableObject(s, (_i, state) => state.storage.kv.get("facet-claim:agent")),
   ).toBeGreaterThan(Date.now());
-  expect(
-    owedAlarm(await runInDurableObject(s, (_i, state) => state.storage.getAlarm())),
-  ).not.toBeNull();
+  expect(await owedAlarmOf(s)).not.toBeNull();
 
   // (2) THE DEATH: the release aborts the facet with its call in flight (what a crash or an eviction
   // does on the edge) and returns its borrowed model; the first answer then arrives at a facet that
@@ -116,9 +114,5 @@ test("KILLED MID-CALL, THE REQUEST CONTINUES: the context dies with the model ca
       undefined,
   );
   // the claim goes first and the alarm derived from it a moment later: wait for it the same way
-  await until(
-    "no alarm owed",
-    async () =>
-      owedAlarm(await runInDurableObject(s, (_i, state) => state.storage.getAlarm())) === null,
-  );
+  await until("no alarm owed", async () => (await owedAlarmOf(s)) === null);
 });

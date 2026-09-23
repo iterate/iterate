@@ -16,8 +16,9 @@
 //   3. the due CLAIMS of hosted processors (agent-revive.test.ts): each spent, the facet revived.
 // PINS ARE NOT THE ALARM'S: a borrowed stub or an open library socket keeps an actor resident on the
 // edge (measured), and a TIMER 30 s after the pin's last use returns the stubs and closes the sockets
-// — memory releasing memory, no durable alarm. A facet is NOT a pin: on the edge it dies with the
-// actor. Here in workerd a materialized facet or a borrowed stub does keep the DO non-hibernatable
+// — memory releasing memory, no durable alarm. A facet is NOT a pin: on the edge it does not hold
+// the actor (it runs on after it; the next incarnation's birth resets it unless it is claimed —
+// FacetHost `resetUnclaimedLoadedFacets`). Here in workerd a materialized facet or a borrowed stub does keep the DO non-hibernatable
 // (workerd#6800 — evictDurableObject on such a DO times out after 30s, "still has active
 // references"), so a test must release BEFORE it can evict (support.ts's `releasePins` runs the release
 // directly, facets included).
@@ -42,7 +43,7 @@ import {
   adminCredentials,
   Echo,
   openSession,
-  owedAlarm,
+  owedAlarmOf,
   releasePins,
   stub,
   until,
@@ -114,11 +115,6 @@ const stateOf = (ctx: string): Promise<Record<string, any>> =>
   runInDurableObject(stub(ctx), async (inst) =>
     (inst as unknown as { rpcStubTransportState(): Record<string, any> }).rpcStubTransportState(),
   );
-/** The alarm the context OWES (support.ts `owedAlarm` — the residency watchdog's deadline is no
- *  obligation), or null: only a test inside workerd can read the alarm, and it is the ONE proof that
- *  a release pin below is exercising the alarm instead of firing into an empty schedule. */
-const owedAlarmAt = async (ctx: string): Promise<number | null> =>
-  owedAlarm(await runInDurableObject(stub(ctx), (_inst, state) => state.storage.getAlarm()));
 /** Poll the census until `stubs` reaches `n` (bounded). A transport leaves the census when its
  *  pager socket's CLOSE lands at the DO — a physical fact that arrives a beat after the edge
  *  disposes its relay, never inside the RPC that triggered it. */
@@ -346,7 +342,7 @@ test("AN OBSERVED PASS: an exact waitForEvent observer receives one ephemeral tr
   await until("no alarm", async () => (await owedAlarmAt(ctx)) === null);
 });
 test(
-  "NO PIN ARMS AN ALARM: a facet arms nothing, a borrowed stub arms nothing — the stub is returned by a TIMER 30 s after its last use, and a call after that borrows it again",
+  "NO PIN ARMS AN ALARM: a facet owes nothing (a loaded one arms only the in-memory unclaimed-facet sweep), a borrowed stub arms nothing — the stub is returned by a TIMER 30 s after its last use, and a call after that borrows it again",
   { timeout: 60_000 },
   async () => {
     const ctx = "prj_q_pin_clock";
@@ -356,7 +352,7 @@ test(
     await new Promise((r) => setTimeout(r, 300));
     await snapCounter(ctx); // and a direct facet call
     await until("config acked", async () => (await owedAlarmAt(ctx)) === null);
-    expect(await owedAlarmAt(ctx)).toBeNull(); // a facet does not keep the actor resident on the edge: no deadline, no alarm
+    expect(await owedAlarmAt(ctx)).toBeNull(); // a facet does not keep the actor resident on the edge: nothing owed
     // A borrowed stub DOES pin the actor — and still arms nothing: a pin is memory, released by a
     // timer that is memory too (the stub keeps the actor resident until it fires).
     const clientItx = await (
@@ -389,14 +385,14 @@ test(
     expect(await owedAlarmAt(ctx)).toBeNull();
   },
 );
-test("A '*' FACET WAKE ARMS NOTHING: a facet-hosting context holds no alarm after a request, and an alarm-woken incarnation whose wake record materializes the facet leaves none either — one woken, then quiet", async () => {
+test("A '*' FACET WAKE OWES NOTHING: a facet-hosting context owes no alarm after a request (the unclaimed-facet sweep is in memory), and an alarm-woken incarnation whose wake record materializes the facet leaves none either — one woken, then quiet", async () => {
   const ctx = "prj_q_star_facet_wake";
   const s = stub(ctx);
   await enableCounter(ctx); // a "*" facet: every incarnation's wake record is pushed to it
   await s.append({ type: "a/1" });
   await new Promise((r) => setTimeout(r, 300));
   await until("config acked", async () => (await owedAlarmAt(ctx)) === null);
-  expect(await owedAlarmAt(ctx)).toBeNull(); // the live facet armed nothing: it is not a pin
+  expect(await owedAlarmAt(ctx)).toBeNull(); // the live facet is owed nothing: it is not a pin
   const wokens = async () =>
     ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events.filter(
       (event) => event.type === "events.iterate.com/stream/woken",
@@ -646,3 +642,9 @@ test("ALARM PUMPS THE CURSOR LANE: a failed at-least-once delivery is retried fr
   // Caught up, nothing pinned: the pass left no alarm behind.
   expect(await owedAlarmAt(ctx)).toBeNull();
 });
+
+/** The alarm the context OWES (support.ts `owedAlarm` — the residency watchdog's deadline and the
+ *  unclaimed-facet sweep's are no obligation), or null: only a test inside workerd can read the
+ *  alarm, and it is the ONE proof that a release pin above is exercising the alarm instead of firing
+ *  into an empty schedule. */
+const owedAlarmAt = async (ctx: string): Promise<number | null> => owedAlarmOf(stub(ctx));

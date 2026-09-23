@@ -35,7 +35,9 @@ export default class Probe extends WorkerEntrypoint {
   keeper: {
     "cap.js": `import { FacetDurableObject } from "./processor.js";
 export class KeeperDurableObject extends FacetDurableObject {
-  static publicMethods = [...super.publicMethods, "stash", "useStashed"];
+  static publicMethods = [...super.publicMethods, "stash", "useStashed", "started"];
+  startedAt = Date.now();
+  started() { return this.startedAt; }
   async stash() {
     await this.ctx.storage.put("itx-cap", this.env.ITX);
     return { stashed: true };

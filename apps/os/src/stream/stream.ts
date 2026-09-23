@@ -105,6 +105,9 @@ interface StreamDeps {
   /** The post-commit fan-out, once per offset-advancing commit with the newly committed events in
    *  offset order, ephemerals included (the waitForEvent waiters settle before it). */
   onCommit: (freshEvents: StreamEvent[], afterOffset: number, throughOffset: number) => void;
+  /** What the host adds to each incarnation's wake record (`appendWakeRecord`) — the DO: the loaded
+   *  facets its birth reset (FacetHost `resetUnclaimedLoadedFacets`), when there were any. */
+  wakeRecordDetail?: () => Record<string, unknown>;
 }
 
 /** THE STREAM — the commit point: SQLite rows + ONE durable mark, idempotency at the door, one
@@ -117,6 +120,7 @@ export class Stream {
   readonly #path: string;
   readonly #projectId: string;
   readonly #onCommit: StreamDeps["onCommit"];
+  readonly #wakeRecordDetail: StreamDeps["wakeRecordDetail"];
   /** The highest offset assigned THIS INCARNATION, ephemerals included; an ephemeral-only batch
    *  advances this alone. */
   #highestAssignedOffset: number;
@@ -142,6 +146,7 @@ export class Stream {
     this.#path = deps.path;
     this.#projectId = deps.projectId;
     this.#onCommit = deps.onCommit;
+    this.#wakeRecordDetail = deps.wakeRecordDetail;
     // THE DURABLE HEAD is the core checkpoint's offset — written every durable commit anyway (the
     // reduce inside the transaction below), so there is no separate mark to write. Read WHATEVER
     // version wrote it: a core-version bump still recovers the head and re-reduces the log up to it.
@@ -247,7 +252,7 @@ export class Stream {
     this.append(
       {
         type: "events.iterate.com/stream/woken",
-        payload: { incarnation: this.storage.incarnation, reason },
+        payload: { incarnation: this.storage.incarnation, reason, ...this.#wakeRecordDetail?.() },
       },
       ...interrupted,
     );
