@@ -1,14 +1,8 @@
 {
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
-    "lib": ["ES2022", "ESNext.Disposable"],
-    "types": ["node"],
-    "strict": true,
-    "noEmit": true,
-    "skipLibCheck": true,
-    "allowImportingTsExtensions": true
+    "lib": ["ES2024", "ESNext.Disposable"],
+    "types": ["node"]
   },
   "include": [
     "vite.config.ts",

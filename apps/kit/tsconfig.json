@@ -1,19 +1,4 @@
 {
-  "compilerOptions": {
-    "target": "ES2024",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "strict": true,
-    "noEmit": true,
-    "skipLibCheck": true,
-    "verbatimModuleSyntax": true,
-    "isolatedModules": true,
-    "noUncheckedSideEffectImports": true,
-    "allowImportingTsExtensions": true,
-    "resolveJsonModule": true,
-    "jsx": "react-jsx",
-    "lib": ["ES2024", "ESNext.Disposable", "DOM", "DOM.Iterable"],
-    "types": ["node", "vite/client", "vitest", "@cloudflare/workers-types"]
-  },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts"]
+  "extends": "../../tsconfig.base.json",
+  "include": ["src", "scripts"]
 }

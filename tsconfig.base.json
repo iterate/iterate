@@ -1,0 +1,19 @@
+{
+  // The compiler options every TanStack Start app on Workers shares (apps/os, dash, agents, notes,
+  // voice, kit): each app's tsconfig.json extends this and adds only what is its own — its
+  // `include`, and apps/os its Worker-only `lib`.
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2024", "ESNext.Disposable", "DOM", "DOM.Iterable"],
+    "types": ["@cloudflare/workers-types", "node", "vite/client"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "jsx": "react-jsx"
+  }
+}
