@@ -1,16 +1,15 @@
 /**
- * The scripts of a TanStack Start app on Workers — dash, agents, notes and voice. Each carried
- * byte-identical copies of generate-wrangler-config, deploy, ensure-resources, erase-data and
- * generate-route-tree that differed only in the app's name; this is the one copy. An app
- * describes itself in apps/<app>/scripts/app.ts (a StartApp below) and its package scripts run
- * `startAppCli`, whose commands keep the old scripts' names:
+ * The scripts of a TanStack Start app on Workers — dash, agents, notes, voice and kit. Each carried
+ * byte-identical copies of deploy, ensure-resources, erase-data and generate-route-tree that
+ * differed only in the app's name; this is the one copy. An app describes itself in
+ * apps/<app>/scripts/app.ts (a StartApp below), its vite.config.ts hands the Cloudflare Vite plugin
+ * `startAppWorkerConfig`, and its package scripts run `startAppCli`, whose commands keep the old
+ * scripts' names:
  *
- *   generate-wrangler-config   expand the app's envs.ts map into its gitignored wrangler.jsonc.
- *                              vite.config.ts calls writeWranglerConfig before the cloudflare plugin
- *                              reads the file, so dev/build never see a stale one.
- *   deploy                     vite build → wrangler deploy with secrets → /healthz smoke (deploy-app.ts)
- *   ensure-resources           the proxied DNS record for a custom-domain baseUrl (dash); a workers.dev
- *                              baseUrl has no zone in the account, so it only warns
+ *   deploy                     vite build → wrangler deploy with secrets → /healthz smoke (deploy-app.ts),
+ *                              or the app's own (kit)
+ *   ensure-resources           the proxied DNS record for a custom-domain baseUrl (dash, kit); a
+ *                              workers.dev baseUrl has no zone in the account, so it only warns
  *   erase-data                 nothing to erase — these apps own no server data; the line says where it lives
  *   generate-route-tree        regenerate src/routeTree.gen.ts outside `vite dev`/`vite build`; `--check`
  *                              fails (and restores the file) when the checked-in tree is stale
@@ -22,11 +21,11 @@ import { fileURLToPath } from "node:url";
 import { Generator, getConfig } from "@tanstack/router-generator";
 import { createCli, t } from "trpc-cli";
 import { z } from "zod";
-import { agentsEnvs, dashEnvs, notesEnvs, osEnvs, voiceEnvs } from "../../envs.ts";
+import { agentsEnvs, dashEnvs, kitEnvs, notesEnvs, osEnvs, voiceEnvs } from "../../envs.ts";
 import { deployApp } from "./deploy-app.ts";
 import { ensureProxiedDnsRecord } from "./deploy-helpers.ts";
 import { resolveEnvContext, type DeployableEnv } from "./env-context.ts";
-import { OBSERVABILITY, writeGeneratedWranglerConfig } from "./wrangler-config.ts";
+import { OBSERVABILITY } from "./wrangler-config.ts";
 
 /** One deployed environment of a start app: what every deploy needs, plus the worker and its origin. */
 export interface StartAppEnv extends DeployableEnv {
@@ -47,6 +46,9 @@ export interface StartApp {
   envs: Record<string, StartAppEnv>;
   /** erase-data's whole output: the app owns no server data, and this says where the data lives instead. */
   nothingToErase: string;
+  /** The app's own deploy, when it ships more than its build (kit: the firmware binaries); without
+   *  one, `deploy` below. */
+  deploy?: (options: { env?: string }) => Promise<void>;
 }
 
 /** The registrable domain of a URL or hostname — its last two labels (`os.iterate.com` ⇒ `iterate.com`;
@@ -86,69 +88,59 @@ export function ownZones(): string[] {
     if (env.projectWildcard) zones.add(env.projectWildcard.hostname);
     for (const hostname of Object.keys(env.temporaryCustomHostnames || {})) zones.add(hostname);
   }
-  for (const envs of [dashEnvs, agentsEnvs, notesEnvs, voiceEnvs])
+  for (const envs of [dashEnvs, agentsEnvs, notesEnvs, voiceEnvs, kitEnvs])
     for (const env of Object.values(envs) as { baseUrl: string }[])
       zones.add(ownOriginZone(env.baseUrl));
   return [...zones].sort();
 }
 
-/** Write the app's gitignored wrangler.jsonc from its envs.ts map and return the path. */
-export function writeWranglerConfig(app: StartApp) {
-  const bindings = {
+/** The app's Worker config for one envs.ts environment — or, with none, local dev — which its
+ *  vite.config.ts hands the Cloudflare Vite plugin (`cloudflare({ config })`); there is no wrangler
+ *  file. `vite build` snapshots it into dist/server/wrangler.json, what deploy and a per-PR preview
+ *  ship. The environment is CLOUDFLARE_ENV, as deployApp and buildStartApp set it. */
+export function startAppWorkerConfig(app: StartApp, envName: string | undefined) {
+  const env = envName ? app.envs[envName] : undefined;
+  if (envName && !env)
+    throw new Error(
+      `apps/${app.name}: unknown env ${JSON.stringify(envName)}; known envs: ${Object.keys(app.envs).join(", ")}`,
+    );
+  return {
+    name: env?.workerName ?? app.name,
+    main: "src/server.ts",
+    compatibility_date: "2026-09-01",
     compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
     durable_objects: { bindings: [{ name: "BROWSER_SESSION", class_name: "BrowserSession" }] },
-    exports: { BrowserSession: { type: "durable-object", storage: "sqlite" } },
+    exports: { BrowserSession: { type: "durable-object" as const, storage: "sqlite" as const } },
     vars: {
       // the default issuer: prd's platform origin (envs.ts always has a prd entry); a per-PR preview's
-      // config swaps in the same PR's os-next preview (startAppPreviewConfig)
+      // config swaps in the same PR's os-next preview (startAppPreviewConfig), and local dev takes a
+      // local one from a gitignored .dev.vars
       ITERATE_ORIGIN: osEnvs.prd!.baseUrl,
       // our own zones: project hosts and custom apexes are userspace and could serve a look-alike
       // issuer, so the browser-auth gate refuses to CONNECT to an issuer under them (the default
       // issuer is exempt) — derived from envs.ts, never spelled twice
       ITERATE_DENY_ZONES: ownZones().join(","),
+      // unset ⇒ no var, no PostHog
+      ...(env?.posthogProjectKey && { POSTHOG_PROJECT_KEY: env.posthogProjectKey }),
     },
     observability: OBSERVABILITY,
-    assets: { binding: "ASSETS", not_found_handling: "none", run_worker_first: true },
-  };
-  return writeGeneratedWranglerConfig({
-    configUrl: new URL("wrangler.jsonc", app.root),
-    appLabel: `apps/${app.name}`,
-    config: {
-      $schema: "node_modules/wrangler/config-schema.json",
-      name: app.name,
-      main: "src/worker.ts",
-      compatibility_date: "2026-09-01",
-      ...bindings,
-      env: Object.fromEntries(
-        Object.entries(app.envs).map(([name, env]) => [
-          name,
+    assets: { binding: "ASSETS", not_found_handling: "none" as const, run_worker_first: true },
+    ...(env && {
+      account_id: env.cloudflareAccountId,
+      workers_dev: true,
+    }),
+    // A workers.dev baseUrl is served by workers_dev itself — no custom route. A custom domain (a
+    // real zone) gets a route bound to that zone.
+    ...(env &&
+      !new URL(env.baseUrl).hostname.endsWith(".workers.dev") && {
+        routes: [
           {
-            name: env.workerName,
-            account_id: env.cloudflareAccountId,
-            workers_dev: true,
-            ...bindings,
-            vars: {
-              ...bindings.vars,
-              // unset ⇒ undefined, which the JSON config drops: no var, no PostHog
-              POSTHOG_PROJECT_KEY: env.posthogProjectKey,
-            },
-            // A workers.dev baseUrl is served by workers_dev itself — no custom route. A custom
-            // domain (a real zone) gets a route bound to that zone.
-            ...(new URL(env.baseUrl).hostname.endsWith(".workers.dev")
-              ? {}
-              : {
-                  routes: [
-                    {
-                      pattern: `${new URL(env.baseUrl).hostname}/*`,
-                      zone_name: new URL(env.baseUrl).hostname.split(".").slice(-2).join("."),
-                    },
-                  ],
-                }),
+            pattern: `${new URL(env.baseUrl).hostname}/*`,
+            zone_name: registrableDomainOf(env.baseUrl),
           },
-        ]),
-      ),
-    },
-  });
+        ],
+      }),
+  };
 }
 
 async function deploy(app: StartApp, options: { env?: string }) {
@@ -261,8 +253,9 @@ async function generateRouteTree(app: StartApp, options: { check?: boolean }) {
   }
 }
 
-/** `vite build` for one env: the cloudflare plugin snapshots that env's flattened wrangler config
- *  into dist/server/wrangler.json, which is what a preview deploy of the app starts from. */
+/** `vite build` for one env: the cloudflare plugin snapshots that env's Worker config
+ *  (startAppWorkerConfig) into dist/server/wrangler.json, which is what a preview deploy of the app
+ *  starts from. */
 export function buildStartApp(app: StartApp, env: string): Promise<void> {
   const root = fileURLToPath(app.root);
   rmSync(path.join(root, "dist"), { recursive: true, force: true });
@@ -280,7 +273,7 @@ export function buildStartApp(app: StartApp, env: string): Promise<void> {
 }
 
 /** The config `wrangler preview` reads for one per-PR preview of a start app, as a pure function
- *  of the built config (dist/server/wrangler.json, the `preview` env flattened) — the shape of
+ *  of the built config (dist/server/wrangler.json, the `preview` env's) — the shape of
  *  cloudflare-os's `buildPreviewConfigs`. An app on top of the platform is an OAuth client and
  *  nothing else: no secrets, no data of its own, one Durable Object class for the browser session,
  *  and its vars with the issuer swapped for the same PR's os-next preview. The top level is
@@ -292,15 +285,7 @@ export function startAppPreviewConfig(
   built: Record<string, any>,
   input: { issuer: string },
 ): Record<string, unknown> {
-  const {
-    exports,
-    configPath,
-    userConfigPath,
-    topLevelName,
-    definedEnvironments,
-    targetEnvironment,
-    ...config
-  } = built;
+  const { exports, topLevelName, ...config } = built;
   return {
     ...config,
     preview_urls: true,
@@ -336,8 +321,7 @@ export function startAppCli(app: StartApp) {
     router: t.router({
       deploy: t.procedure
         .input(z.object({ env: env.optional() }))
-        .handler(({ input }) => deploy(app, input)),
-      generateWranglerConfig: t.procedure.handler(() => console.log(writeWranglerConfig(app))),
+        .handler(({ input }) => (app.deploy ? app.deploy(input) : deploy(app, input))),
       ensureResources: t.procedure
         .input(z.object({ env: env.optional() }))
         .handler(({ input }) => ensureResources(app, input)),

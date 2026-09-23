@@ -28,10 +28,9 @@ export const PREVIEW_AND_DEV_ACCOUNT_ID = cloudflareAccounts["dev/preview"].clou
  */
 export const UNPROVISIONED = "UNPROVISIONED";
 
-/**
- * apps/kit — the browser device installer. Production only: it intentionally
- * has no preview fleet and owns no stateful Cloudflare resources.
- */
+/** apps/kit — the browser device installer (README there): a TanStack Start app like notes, an
+ *  ordinary OAuth client of the platform, on the k.iterate.com custom domain. It owns no stateful
+ *  Cloudflare resources. */
 export interface KitEnv {
   cloudflareAccountId: string;
   /** Doppler config (project `kit`) supplying deploy credentials. */
@@ -41,6 +40,16 @@ export interface KitEnv {
 }
 
 export const kitEnvs = {
+  // THE PARENT of kit's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
+  // branch of this worker, bound to the same PR's os-next preview as its issuer. Nothing reads its
+  // data. A preview serves the installer without firmware binaries: building them takes ESP-IDF,
+  // which only the production deploy (and the Build Kit Firmware workflow) installs.
+  preview: {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: "preview",
+    workerName: "kit-preview",
+    baseUrl: "https://kit-preview.iterate-dev-preview.workers.dev",
+  },
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
@@ -258,5 +267,24 @@ export const spaEnvs = {
     dopplerConfig: "prd",
     workerName: "iterate-spa",
     baseUrl: "https://iterate-spa.iterate.workers.dev",
+  },
+};
+
+/** apps/dummy-petshop — the fake third party os-next's tests connect to over the real network (a
+ *  plain Worker, no Start). Production only: its workers.dev origin, no routes, no DNS. */
+export interface DummyPetshopEnv {
+  cloudflareAccountId: string;
+  /** Doppler config (project `dummy-petshop`) supplying deploy credentials. */
+  dopplerConfig: string;
+  workerName: string;
+  baseUrl: string;
+}
+
+export const dummyPetshopEnvs: Record<string, DummyPetshopEnv> = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "dummy-petshop",
+    baseUrl: "https://dummy-petshop.iterate.workers.dev",
   },
 };

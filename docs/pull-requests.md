@@ -91,7 +91,7 @@ gh api -X PATCH repos/iterate/iterate/pulls/<n> --input payload.json
 
 ## Previews
 
-Every open PR (draft or ready) whose change touches the platform or its clients gets a preview deployment: the Preview OS workflow deploys one Cloudflare Worker Preview of `apps/os` per PR, plus the Dash, Agents, Notes and Voice clients on top, runs the integration suite and the browser specs against it, and writes the links and operations into the PR body. Commands for resetting, re-running e2e or deleting it: [apps/os/README.md](../apps/os/README.md).
+Every open PR (draft or ready) whose change touches the platform or its clients gets a preview deployment: the Preview OS workflow deploys one Cloudflare Worker Preview of `apps/os` per PR, plus the Dash, Agents, Notes, Voice and Kit clients on top, runs the integration suite and the browser specs against it, and writes the links and operations into the PR body. Commands for resetting, re-running e2e or deleting it: [apps/os/README.md](../apps/os/README.md).
 
 For operational changes, inspect the preview's resulting state and telemetry in addition to test results. Production rollout remains gated on the [engineering invariant](engineering-invariants.md).
 

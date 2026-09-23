@@ -12,6 +12,7 @@
     "./components/context-view/*": "./src/components/context-view/*.tsx",
     "./components/context-view/context-view-search": "./src/components/context-view/context-view-search.ts",
     "./components/events/agent-ui-reducer": "./src/components/events/agent-ui-reducer.ts",
+    "./components/events/types": "./src/components/events/types.ts",
     "./components/*": "./src/components/*.tsx",
     "./lib/*": "./src/lib/*.ts",
     "./hooks/*": "./src/hooks/*.ts",

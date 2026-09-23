@@ -208,13 +208,13 @@ describe("the preview's wrangler config (a pure transform of Vite's built config
 describe("which apps on top a preview run deploys", () => {
   test("all clients are selected by default, even when only os-next changes", () => {
     expect(DEFAULT_APPS_MODE).toBe("all");
-    expect(APPS.map((app) => app.name)).toEqual(["dash", "agents", "notes", "voice"]);
+    expect(APPS.map((app) => app.name)).toEqual(["dash", "agents", "notes", "voice", "kit"]);
   });
 
   test.each<[string, string[], string[]]>([
     ["nothing", ["apps/os/src/worker.ts", "docs/x.md"], []],
     ["one app", ["apps/dash/src/routes/index.tsx"], ["dash"]],
-    ["two apps", ["apps/notes/src/worker.ts", "apps/voice/README.md"], ["notes", "voice"]],
+    ["two apps", ["apps/notes/src/server.ts", "apps/voice/README.md"], ["notes", "voice"]],
     ["the SDK: every app", ["packages/iterate/src/next/app.ts"], APPS.map((app) => app.name)],
     ["the shared UI: every app", ["packages/ui/src/button.tsx"], APPS.map((app) => app.name)],
     ["envs.ts: every app", ["envs.ts"], APPS.map((app) => app.name)],

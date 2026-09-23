@@ -303,7 +303,7 @@ account: a Cloudflare Worker Preview of the parent `os-next-preview`, named
 `pr<n>-<branch slug>`, at
 `https://pr<n>-<branch slug>-os-next-preview.iterate-dev-preview.workers.dev`,
 with Durable Objects, KV, R2, D1 and an Artifacts namespace of its own. The
-four hosted clients (Dash, Agents, Notes, Voice) deploy as previews of their
+five hosted clients (Dash, Agents, Notes, Voice, Kit) deploy as previews of their
 own parents, wired to it. Previews use workers.dev and have no project hosts:
 projects are paths on the one origin. The recipe is cloudflare-os's
 (`apps/os/scripts/preview.ts`; commands in `apps/os/README.md`).

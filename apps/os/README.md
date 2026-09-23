@@ -58,8 +58,8 @@ The proxied `*.iterate.com` DNS record and Worker route serve the `iterate` proj
 named Worker routes such as `os.iterate.com`, `mcp.iterate.com`, `dash.iterate.com`, and
 `k.iterate.com` take precedence. The zone has an active `*.iterate.com` edge certificate.
 
-The Preview OS workflow deploys a platform preview and all four hosted clients (Dash,
-Agents, Notes, Voice); its separate `e2e` job then runs integration and browser checks against
+The Preview OS workflow deploys a platform preview and all five hosted clients (Dash,
+Agents, Notes, Voice, Kit); its separate `e2e` job then runs integration and browser checks against
 them, only once that deploy succeeded. To run it from a checkout:
 
 A platform preview is named `pr<n>-<branch slug>` under the `os-next-preview` parent Worker. It

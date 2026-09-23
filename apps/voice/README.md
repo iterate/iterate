@@ -9,8 +9,8 @@ end and the relay's live state on screen.
 
 ## Shape
 
-- `src/worker.ts` — the Notes app's worker verbatim: `appAuth` (the OAuth client in a `BrowserSession`
-  durable object), static assets, the server entry.
+- `src/server.ts` — the Notes app's server entry verbatim: `appAuth` (the OAuth client in a
+  `BrowserSession` durable object), static assets, then TanStack Start.
 - `src/routes/_auth/projects.$slug.tsx` — the one page. `useLiveState` from `iterate/next/react` subscribes to the
   relay's `voice-agent` live view (phase, answering, transcript, last end) on the call's context.
 - `src/call.ts` — one call: `itx.voice.setupVoiceAgent({streamPath, activation})` on a fresh

@@ -1,7 +1,16 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Env } from "./env.ts";
 
-const issuerRequests = new AsyncLocalStorage<{ env: Env; ctx: ExecutionContext; nonce: string }>();
+/** One issuer request as Start sees it: the Worker's bindings and context, the CSP nonce of its
+ *  response, and whether a server function's input decoded (src/start.ts). */
+interface IssuerRequest {
+  env: Env;
+  ctx: ExecutionContext;
+  nonce: string;
+  serverFunctionInputDecoded: boolean;
+}
+
+const issuerRequests = new AsyncLocalStorage<IssuerRequest>();
 
 export function withIssuerRequest<T>(
   env: Env,
@@ -9,7 +18,7 @@ export function withIssuerRequest<T>(
   nonce: string,
   render: () => T,
 ): T {
-  return issuerRequests.run({ env, ctx, nonce }, render);
+  return issuerRequests.run({ env, ctx, nonce, serverFunctionInputDecoded: false }, render);
 }
 
 export function issuerRequestContext() {

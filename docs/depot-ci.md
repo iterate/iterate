@@ -413,8 +413,8 @@ job logs, apply the same fix locally (usually `pnpm format`), and push.
 
 The Preview OS workflow (`.depot/workflows/preview-os-next.yml`, cribbed from
 cloudflare-os) selects PRs by its `pull_request.paths` list: `apps/os`,
-`configs-next`, the four hosted clients (`apps/dash`, `apps/agents`,
-`apps/notes`, `apps/voice`), `packages/iterate`, `packages/shared`,
+`configs-next`, the five hosted clients (`apps/dash`, `apps/agents`,
+`apps/notes`, `apps/voice`, `apps/kit` but not its firmware), `packages/iterate`, `packages/shared`,
 `packages/ui`, the root manifests and lockfile, `envs.ts`, `scripts/lib`,
 `scripts/depot-ci`, and its own and the production OS/Notes deploy workflows
 (a production-workflow change must exercise the isolated deployment). A PR that
