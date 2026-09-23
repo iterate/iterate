@@ -42,7 +42,9 @@ export function DefaultErrorComponent({ error, reset, secondaryAction }: ErrorFa
     <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-4 text-center">
       <div className="space-y-1">
         <h1 className="text-xl font-semibold">Something went wrong</h1>
-        <p className="max-w-md text-sm text-muted-foreground">{message}</p>
+        <p data-type="error" className="max-w-md text-sm text-muted-foreground">
+          {message}
+        </p>
       </div>
       <div className="flex items-center gap-3">
         <Button size="sm" onClick={reset}>

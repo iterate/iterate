@@ -323,7 +323,10 @@ function ResponseView({
         </div>
       ) : null}
       {outcome.status === "failed" ? (
-        <pre className="overflow-x-auto rounded-xl bg-destructive/5 px-4 py-2.5 font-mono text-xs leading-relaxed text-destructive">
+        <pre
+          data-type="error"
+          className="overflow-x-auto rounded-xl bg-destructive/5 px-4 py-2.5 font-mono text-xs leading-relaxed text-destructive"
+        >
           {outcome.errorMessage}
         </pre>
       ) : outcome.status === "cancelled" && !streaming ? (

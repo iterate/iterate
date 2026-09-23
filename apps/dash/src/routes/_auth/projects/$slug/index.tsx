@@ -202,7 +202,9 @@ function ProjectCreationFailed({ context, offset }: { context: ProjectContext; o
         <CircleXIcon aria-hidden="true" className="size-5" />
         <h2 className="text-lg font-semibold">Project creation failed</h2>
       </div>
-      <p className="mt-3 text-sm text-muted-foreground">{error || "Reading what went wrong…"}</p>
+      <p data-type="error" className="mt-3 text-sm text-muted-foreground">
+        {error || "Reading what went wrong…"}
+      </p>
       <p className="mt-2 text-sm text-muted-foreground">
         Try again — creating the project once more from the projects page is a new attempt; the
         project's log keeps the whole trail.

@@ -157,12 +157,12 @@ function OrganizationSettingsFor({
         </Link>
       </div>
       {error ? (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" data-type="error" className="text-sm text-destructive">
           {error}
         </p>
       ) : null}
       {org.error ? (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" data-type="error" className="text-sm text-destructive">
           The organization's record could not be read: {org.error}
         </p>
       ) : null}

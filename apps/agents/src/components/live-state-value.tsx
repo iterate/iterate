@@ -9,7 +9,11 @@ import { Spinner } from "@iterate-com/ui/components/spinner";
 
 export function LiveStateValue({ state }: { state: LiveStateResult }) {
   if (state.status === "error")
-    return <p className="text-xs text-destructive">Live state unavailable: {state.error}</p>;
+    return (
+      <p data-type="error" className="text-xs text-destructive">
+        Live state unavailable: {state.error}
+      </p>
+    );
   if (state.value === undefined)
     return (
       <p className="flex items-center gap-2 text-xs text-muted-foreground">

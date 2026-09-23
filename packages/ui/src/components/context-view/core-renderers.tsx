@@ -59,7 +59,7 @@ export const coreEventInspectors: EventInspectors = {
         {JSON.stringify(s.result ?? null, null, 2)}
       </pre>
     ) : (
-      <p className="text-sm text-destructive">
+      <p data-type="error" className="text-sm text-destructive">
         {str(s.failureKind)}: {str(s.error)}
       </p>
     );

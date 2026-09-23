@@ -52,7 +52,9 @@ export const agentEventInspectors: EventInspectors = {
     if (result.status === "failed")
       return (
         <div className="flex flex-col gap-2">
-          <p className="text-sm text-destructive">{str(result.errorMessage)}</p>
+          <p data-type="error" className="text-sm text-destructive">
+            {str(result.errorMessage)}
+          </p>
           {result.partialText ? prose(str(result.partialText)) : null}
         </div>
       );

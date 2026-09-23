@@ -374,7 +374,7 @@ function KitPage() {
                 </Button>
               )}
               {preparationError?.key === preparationKey && (
-                <p role="alert" className="text-xs text-destructive">
+                <p role="alert" data-type="error" className="text-xs text-destructive">
                   {preparationError.message}
                 </p>
               )}
