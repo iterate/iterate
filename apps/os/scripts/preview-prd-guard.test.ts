@@ -1,9 +1,12 @@
 import { expect, test } from "vitest";
 import { osEnvs, PRD_ACCOUNT_ID, PREVIEW_AND_DEV_ACCOUNT_ID } from "../../../envs.ts";
+import { previewWranglerConfig } from "./preview-config.ts";
 import {
   assertPreviewParentIsNotPrdLive,
   prdLiveResources,
   prdLiveViolations,
+  PREVIEW_BINDING_KEYS,
+  PREVIEW_CONFIG_KEYS,
   type GuardedPreviewConfig,
 } from "./preview-prd-guard.ts";
 
@@ -93,12 +96,57 @@ test.each<{ rule: string; change: (config: GuardedPreviewConfig) => void; violat
     change: (config) => void (config.previews.vars!.APP_CONFIG_URLS__OS = "https://os.iterate.com"),
     violation: /APP_CONFIG_URLS__OS is https:\/\/os\.iterate\.com/,
   },
+  // 7: fail closed — a binding kind no rule covers is refused, whatever it names
+  ...[
+    { key: "services", value: [{ binding: "PRD", service: "os-next-prd" }] },
+    { key: "queues", value: { producers: [{ binding: "Q", queue: "prd-queue" }] } },
+    { key: "hyperdrive", value: [{ binding: "DB", id: "prd-hyperdrive" }] },
+    { key: "dispatch_namespaces", value: [{ binding: "D", namespace: "prd" }] },
+    { key: "analytics_engine_datasets", value: [{ binding: "A", dataset: "prd" }] },
+  ].map(({ key, value }) => ({
+    rule: `7: an unknown binding kind in the preview block, ${key}`,
+    change: (config: GuardedPreviewConfig) => void Object.assign(config.previews, { [key]: value }),
+    violation: new RegExp(`the preview declares ${key}, which this guard does not know`),
+  })),
+  {
+    rule: "7: an unknown key at the top level",
+    change: (config) =>
+      void Object.assign(config, { services: [{ binding: "PRD", service: "os-next-prd" }] }),
+    violation: /the worker declares services, which this guard does not know/,
+  },
+  {
+    rule: "7: a tail consumer at the top level",
+    change: (config) =>
+      void Object.assign(config, { tail_consumers: [{ service: "os-next-prd" }] }),
+    violation: /the worker declares tail_consumers, which this guard does not know/,
+  },
+  {
+    rule: "8: a Durable Object binding naming another worker's script",
+    change: (config) =>
+      void config.previews.durable_objects!.bindings!.push({
+        name: "PRD_CONTEXT",
+        class_name: "IterateContextDurableObject",
+        script_name: "os-next-prd",
+      }),
+    violation: /the Durable Object binding PRD_CONTEXT names script os-next-prd/,
+  },
 ])("rule $rule", ({ change, violation }) => {
   const config = throwawayConfig();
   change(config);
   const violations = prdLiveViolations({ config, previewName: "main-abc1234", live });
   if (!violation) return expect(violations).toEqual([]);
   expect(violations.join("\n")).toMatch(violation);
+});
+
+test("rule 7's lists are exactly the keys preview-config.ts writes, so a new binding kind meets the guard first", () => {
+  const config = previewWranglerConfig({
+    template: { exports: {}, artifacts: [], kv_namespaces: [], r2_buckets: [] },
+    previewName: "main-abc1234",
+  });
+  expect(Object.keys(config).sort()).toEqual([...PREVIEW_CONFIG_KEYS].sort());
+  expect(Object.keys(config.previews).sort()).toEqual(
+    PREVIEW_BINDING_KEYS.filter((key) => key !== "d1_databases").sort(),
+  );
 });
 
 test("the dev/preview account's PR previews pass unchanged", () => {
@@ -130,6 +178,12 @@ function throwawayConfig(): GuardedPreviewConfig {
     name: "os-prd-account-e2e",
     account_id: PRD_ACCOUNT_ID,
     previews: {
+      durable_objects: {
+        bindings: [
+          { name: "ITERATE_CONTEXT", class_name: "IterateContextDurableObject" },
+          { name: "CONTROL_PLANE", class_name: "ControlPlaneDurableObject" },
+        ],
+      },
       d1_databases: [
         { database_name: "os-prd-account-e2e-main-abc1234-db", database_id: "fresh-d1-id" },
       ],

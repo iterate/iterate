@@ -10,6 +10,11 @@
 //      a production id or name.
 //   5. KV and R2 are binding-only: wrangler provisions them for the preview, never an existing one.
 //   6. Every URL the preview is told about is on workers.dev, never a production hostname.
+//   7. FAIL CLOSED: the config holds only keys this guard knows (PREVIEW_CONFIG_KEYS at the top,
+//      PREVIEW_BINDING_KEYS in `previews`). A binding kind added later (services, queues, hyperdrive,
+//      dispatch_namespaces, analytics_engine_datasets, …) is refused until a rule here covers it.
+//   8. A Durable Object binding names no `script_name`: a preview binds only its own classes, and a
+//      script name could be os-next-prd's.
 // A delete by name follows from the same names: `<worker>-<preview>-…` (rule 1 keeps the prefix off
 // production's), which `assertPreviewParentIsNotPrdLive` checks before any command runs.
 import {
@@ -68,6 +73,41 @@ export function prdLiveResources(): PrdLiveResources {
   };
 }
 
+/** Rule 7: every top-level key a preview's config may hold (scripts/preview-config.ts
+ *  `previewWranglerConfig`), routes excluded (rule 3). */
+export const PREVIEW_CONFIG_KEYS = [
+  "name",
+  "account_id",
+  "main",
+  "compatibility_date",
+  "compatibility_flags",
+  "workers_dev",
+  "preview_urls",
+  "no_bundle",
+  "rules",
+  "assets",
+  "migrations",
+  "previews",
+];
+
+/** Rule 7: every key the `previews` block may hold, each one a rule above covers or one that names
+ *  no resource. */
+export const PREVIEW_BINDING_KEYS = [
+  "observability",
+  "limits",
+  "durable_objects",
+  "worker_loaders",
+  "ai",
+  "browser",
+  "send_email",
+  "version_metadata",
+  "kv_namespaces",
+  "r2_buckets",
+  "artifacts",
+  "vars",
+  "d1_databases",
+];
+
 /** The parts of a preview's wrangler config the guard reads (scripts/preview-config.ts builds it). */
 export type GuardedPreviewConfig = {
   name: string;
@@ -77,6 +117,7 @@ export type GuardedPreviewConfig = {
   previews: {
     routes?: unknown;
     route?: unknown;
+    durable_objects?: { bindings?: Record<string, unknown>[] };
     d1_databases?: { database_name?: string; database_id?: string }[];
     kv_namespaces?: Record<string, unknown>[];
     r2_buckets?: Record<string, unknown>[];
@@ -139,6 +180,20 @@ export function prdLiveViolations(input: {
     if (!hostname.endsWith(".workers.dev") || live.hostnames.includes(hostname))
       violations.push(`${key} is ${value}, not a workers.dev URL of the run's own`);
   }
+  // 7 (routes are rule 3's)
+  for (const [where, block, known] of [
+    ["the worker", config, PREVIEW_CONFIG_KEYS],
+    ["the preview", config.previews, PREVIEW_BINDING_KEYS],
+  ] as const)
+    for (const key of Object.keys(block))
+      if (!known.includes(key) && key !== "routes" && key !== "route")
+        violations.push(`${where} declares ${key}, which this guard does not know`);
+  // 8
+  for (const binding of config.previews.durable_objects?.bindings || [])
+    if (binding.script_name !== undefined)
+      violations.push(
+        `the Durable Object binding ${String(binding.name)} names script ${String(binding.script_name)}: a preview binds only its own classes`,
+      );
   return violations;
 }
 
