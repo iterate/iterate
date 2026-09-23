@@ -8,63 +8,11 @@ import { expect, type BrowserContext, type Page } from "@playwright/test";
 import { newHttpBatchRpcSession } from "capnweb";
 import { authorizationCodeRequest } from "iterate/next/oauth";
 import type { IterateApi } from "iterate/next/api";
+import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
 import { test } from "../test-support/test.ts";
 
 const claudeClient = "https://claude.ai/oauth/claude-code-client-metadata";
 const stamp = () => `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}`;
-const isLocal = (origin: string) => new URL(origin).hostname === "localhost";
-const adminSecret = (origin: string) => {
-  const secret = process.env.ADMIN_API_SECRET || (isLocal(origin) && "dev-admin-api-secret");
-  if (!secret) throw new Error("ADMIN_API_SECRET is required for the deployed operator fixture");
-  return secret;
-};
-/** The deployment's sign-in password: the local worker's (scripts/dev.ts), else the run's. */
-const loginPassword = (origin: string) => {
-  const password = process.env.LOGIN_PASSWORD || (isLocal(origin) && "dev");
-  if (!password) throw new Error("LOGIN_PASSWORD is required to sign in to a deployed worker");
-  return password;
-};
-
-/** Sign in on the page the way a person does: the email, the password, Sign in — the password
- *  field is shown immediately only when email-code sign-in is unavailable. */
-async function signIn(page: Page, origin: string, email: string, _next = "/") {
-  await page.getByRole("textbox", { name: "Email", exact: true }).fill(email);
-  const password = page.getByLabel("Password", { exact: true });
-  if (!(await password.isVisible()))
-    await page.getByRole("button", { name: "Use password instead", exact: true }).click();
-  await password.fill(loginPassword(origin));
-  // noWaitAfter: the post navigates; the next locator waits for it (the spinner-waiter counts a
-  // navigation in flight as loading), not the click's tight action timeout
-  await page.getByRole("button", { name: "Sign in", exact: true }).click({ noWaitAfter: true });
-}
-
-async function cookieHeaders(context: BrowserContext, origin: string) {
-  return {
-    Origin: origin,
-    Cookie: (await context.cookies(origin)).map(({ name, value }) => `${name}=${value}`).join("; "),
-  };
-}
-
-async function mcp(origin: string, token: string, name: string, args = {}) {
-  const response = await fetch(origin, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      Accept: "application/json, text/event-stream",
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: { name, arguments: args },
-    }),
-  });
-  const body = await response.text();
-  expect(response.status, body).toBe(200);
-  const message = body.split("\n").find((line) => line.startsWith("data: "));
-  return JSON.parse(message ? message.slice(6) : body);
-}
 
 test("first Claude consent creates the organization and project on the consent page before granting MCP access", async ({
   page,
@@ -72,13 +20,24 @@ test("first Claude consent creates the organization and project on the consent p
   baseURL,
 }) => {
   const origin = new URL(baseURL!).origin;
-  const resource = process.env.MCP_BASE_URL || `${origin}/mcp`;
+  const { adminApiSecret, ingressRouting, mcpBaseUrl: resource } = readOsPlaywrightAuthConfig();
   const email = `consent-${stamp()}@example.com`;
   // the organization the onboarding step makes with the first project
   const firstOrg = "First consent studio";
   const project = `consent-${stamp()}`;
   const otherProject = `unselected-${stamp()}`;
   const thirdProject = `third-${stamp()}`;
+  const choice = `${project} in ${firstOrg}`;
+  const otherChoice = `${otherProject} in Second studio`;
+  const thirdChoice = `${thirdProject} in ${firstOrg}`;
+  const projectAccess = "Read and make changes in the projects you grant it";
+  const accountAccess = "See and end your sessions, and mint personal access tokens";
+  const future = "All my projects, now and future";
+  /** A checkbox on the consent page, by its label, optionally in a given state. */
+  const checkbox = (name: string, state: { checked?: boolean; disabled?: boolean } = {}) =>
+    page.getByRole("checkbox", { name, exact: true, ...state });
+  /** The element with keyboard focus, when it is `locator`. */
+  const focused = (locator: ReturnType<Page["locator"]>) => locator.and(page.locator(":focus"));
   let receiveCallback!: (url: URL) => void;
   const callback = new Promise<URL>((resolve) => {
     receiveCallback = resolve;
@@ -114,14 +73,14 @@ test("first Claude consent creates the organization and project on the consent p
   const takenSlug = `taken-${stamp()}`;
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
   using operator = newHttpBatchRpcSession<IterateApi>(
-    new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminSecret(origin)}` } }),
+    new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminApiSecret}` } }),
   );
   using _taken = await operator
-    .authenticate({ type: "admin-secret", secret: adminSecret(origin) })
+    .authenticate({ type: "admin-secret", secret: adminApiSecret })
     .projects.create({ project: takenSlug });
   try {
     await page.goto(flow.url.href);
-    await signIn(page, origin, email, flow.url.pathname + flow.url.search);
+    await signIn(page, email);
     await Promise.race([
       page.getByRole("heading", { name: "Create a project", exact: true }).waitFor(),
       callback.then((url) => {
@@ -147,20 +106,16 @@ test("first Claude consent creates the organization and project on the consent p
     expect(await projectField.inputValue()).toBe("first-consent-studio");
     await projectField.fill(`Consent Studio ${project}`);
     expect(await projectField.inputValue()).toBe(`consent-studio-${project}`);
-    // where the project will live, in the deployment's own routing (public/authorize.js): a subdomain
-    // under the hostname, or a path on this origin — a local worker routes by subdomain under
-    // localhost; a deployed target says so with PROJECT_INGRESS_ROUTING, as the e2e lane does
-    const routing = isLocal(origin)
-      ? { type: "subdomains", hostname: "localhost" }
-      : (JSON.parse(process.env.PROJECT_INGRESS_ROUTING || "null") as {
-          type: string;
-          hostname?: string;
-        } | null);
-    if (routing?.type === "subdomains")
+    // where the project will live, in the deployment's own routing: a subdomain under the
+    // hostname, or a path on this origin — a local worker routes by subdomain under localhost; a
+    // deployed target says so with PROJECT_INGRESS_ROUTING, as the e2e lane does (specs/setup.ts)
+    if (ingressRouting?.type === "subdomains")
       await page
-        .getByText(`Your project will be hosted at consent-studio-${project}.${routing.hostname}`)
+        .getByText(
+          `Your project will be hosted at consent-studio-${project}.${ingressRouting.hostname}`,
+        )
         .waitFor();
-    else if (routing?.type === "paths")
+    else if (ingressRouting?.type === "paths")
       await page
         .getByText(`Your project will be hosted at ${origin}/projects/consent-studio-${project}/`)
         .waitFor();
@@ -173,10 +128,10 @@ test("first Claude consent creates the organization and project on the consent p
       .getByRole("alert")
       .filter({ hasText: /already taken/ })
       .waitFor();
-    await expect(page.getByRole("alert")).toBeFocused();
+    await focused(page.getByRole("alert")).waitFor();
     const madeOrg = page.getByRole("combobox", { name: "Organization", exact: true });
     expect(await madeOrg.locator("option:checked").textContent()).toBe(firstOrg);
-    expect(await orgField.isVisible()).toBe(false);
+    expect(await orgField.count()).toBe(0);
     await projectField.fill(project);
     await page.getByRole("button", { name: "Review permissions", exact: true }).click();
     await page
@@ -185,75 +140,53 @@ test("first Claude consent creates the organization and project on the consent p
     // the client's heading stands on every step; the permissions step's own heading is what the
     // project, once created, opens ("Creating project…" shows meanwhile)
     await page.getByRole("heading", { name: "Review permissions", exact: true }).waitFor();
-    const approve = page.getByRole("button", { name: "Authorize", exact: true });
     // Task-based consent: `iterate` is fixed, the account permission is optional — untick it; the
     // choice survives every round trip below and the grant carries `iterate` alone.
-    const projectAccess = page.getByRole("checkbox", {
-      name: "Read and make changes in the projects you grant it",
-      exact: true,
-    });
-    expect(await projectAccess.isChecked()).toBe(true);
-    expect(await projectAccess.isDisabled()).toBe(true);
-    const accountAccess = page.getByRole("checkbox", {
-      name: "See and end your sessions, and mint personal access tokens",
-      exact: true,
-    });
-    expect(await accountAccess.isChecked()).toBe(true);
-    await accountAccess.uncheck();
+    await checkbox(projectAccess, { checked: true, disabled: true }).waitFor();
+    await checkbox(accountAccess, { checked: true }).uncheck();
     await page.getByRole("button", { name: "Edit selected projects", exact: true }).click();
     const review = page.getByRole("button", { name: "Review permissions", exact: true });
-    await expect(page.getByText("null", { exact: true })).toHaveCount(0);
-    const choice = page.getByRole("checkbox", { name: `${project} in ${firstOrg}`, exact: true });
-    await choice.waitFor();
-    expect(await choice.isChecked()).toBe(true);
+    await checkbox(choice, { checked: true }).waitFor();
+    expect(await page.getByText("null", { exact: true }).count()).toBe(0);
     // The either/or: one checkbox for every project now and later, else the projects ticked —
     // grants start with all current and future projects.
-    const future = page.getByRole("checkbox", {
-      name: "All my projects, now and future",
-      exact: true,
-    });
-    expect(await future.isChecked()).toBe(true);
-    expect(await choice.isDisabled()).toBe(true);
-    await future.uncheck();
-    await choice.uncheck();
-    expect(await review.isDisabled()).toBe(true);
+    await checkbox(future, { checked: true }).waitFor();
+    await checkbox(choice, { disabled: true }).waitFor();
+    await checkbox(future).uncheck();
+    await checkbox(choice).uncheck();
+    await page
+      .getByRole("button", { name: "Review permissions", exact: true, disabled: true })
+      .waitFor();
     // A second project in a NEW organization, named inside "New project" — the one place the
     // consent flow creates one. Refreshing the directory must preserve the choices made so far.
     // Review never creates the unfinished draft. Editing again keeps it available.
-    await choice.check();
+    await checkbox(choice).check();
     await page.getByRole("button", { name: "New project", exact: true }).click();
-    await expect(projectField).toBeFocused();
+    await focused(projectField).waitFor();
     await page.getByRole("button", { name: "New project", exact: true }).click();
-    await expect(page.getByRole("button", { name: "New project", exact: true })).toBeFocused();
+    await focused(page.getByRole("button", { name: "New project", exact: true })).waitFor();
     await page.getByRole("button", { name: "New project", exact: true }).click();
     await page.getByRole("textbox", { name: "Project slug", exact: true }).fill(otherProject);
     await review.click();
-    await expect(
-      page.getByRole("heading", { name: "Review permissions", exact: true }),
-    ).toBeFocused();
-    await expect(page.getByRole("region", { name: "Selected projects" })).not.toContainText(
-      otherProject,
-    );
+    await focused(page.getByRole("heading", { name: "Review permissions", exact: true })).waitFor();
+    expect(
+      await page.getByRole("region", { name: "Selected projects" }).textContent(),
+    ).not.toContain(otherProject);
     await page.getByRole("button", { name: "Edit selected projects", exact: true }).click();
     expect(
       await page.getByRole("textbox", { name: "Project slug", exact: true }).inputValue(),
     ).toBe(otherProject);
-    await choice.uncheck();
+    await checkbox(choice).uncheck();
     // the new organization's name field opens for "New organization…" alone
     const organization = page.getByRole("textbox", { name: "Organization name", exact: true });
-    expect(await organization.isVisible()).toBe(false);
+    expect(await organization.count()).toBe(0);
     await page
       .getByRole("combobox", { name: "Organization", exact: true })
       .selectOption({ label: "New organization…" });
     await organization.fill("Second studio");
     await page.getByRole("button", { name: "Create project", exact: true }).click();
-    const otherChoice = page.getByRole("checkbox", {
-      name: `${otherProject} in Second studio`,
-      exact: true,
-    });
-    await otherChoice.waitFor();
-    expect(await otherChoice.isChecked()).toBe(true);
-    expect(await choice.isChecked()).toBe(false);
+    await checkbox(otherChoice, { checked: true }).waitFor();
+    await checkbox(choice, { checked: false }).waitFor();
     await page
       .getByRole("group", { name: "Projects it may reach" })
       .filter({ hasText: firstOrg })
@@ -262,12 +195,11 @@ test("first Claude consent creates the organization and project on the consent p
       .getByRole("group", { name: "Projects it may reach" })
       .filter({ hasText: "Second studio" })
       .waitFor();
-    await choice.check();
-    await otherChoice.uncheck();
-    await future.check();
-    expect(await choice.isChecked()).toBe(true);
-    expect(await otherChoice.isChecked()).toBe(true);
-    expect(await otherChoice.isDisabled()).toBe(true);
+    await checkbox(choice).check();
+    await checkbox(otherChoice).uncheck();
+    await checkbox(future).check();
+    await checkbox(choice, { checked: true }).waitFor();
+    await checkbox(otherChoice, { checked: true, disabled: true }).waitFor();
     // A create while "all" is chosen re-renders the parked list; the new project goes into the
     // FIRST organization; each project keeps its own choice when all is switched off.
     await page.getByRole("button", { name: "New project", exact: true }).click();
@@ -276,33 +208,27 @@ test("first Claude consent creates the organization and project on the consent p
       .getByRole("combobox", { name: "Organization", exact: true })
       .selectOption({ label: firstOrg });
     await page.getByRole("button", { name: "Create project", exact: true }).click();
-    const thirdChoice = page.getByRole("checkbox", {
-      name: `${thirdProject} in ${firstOrg}`,
-      exact: true,
-    });
-    await thirdChoice.waitFor();
-    expect(await thirdChoice.isChecked()).toBe(true);
-    expect(await thirdChoice.isDisabled()).toBe(true);
-    await future.uncheck();
-    expect(await choice.isChecked()).toBe(true);
-    expect(await thirdChoice.isChecked()).toBe(true);
-    expect(await otherChoice.isChecked()).toBe(false);
-    await thirdChoice.uncheck();
+    await checkbox(thirdChoice, { checked: true, disabled: true }).waitFor();
+    await checkbox(future).uncheck();
+    await checkbox(choice, { checked: true }).waitFor();
+    await checkbox(thirdChoice, { checked: true }).waitFor();
+    await checkbox(otherChoice, { checked: false }).waitFor();
+    await checkbox(thirdChoice).uncheck();
     expect(new URL(page.url()).search).toBe(flow.url.search);
     await review.click();
-    expect(await accountAccess.isChecked()).toBe(false);
+    await checkbox(accountAccess, { checked: false }).waitFor();
     await page
       .getByRole("region", { name: "Selected projects" })
       .filter({ hasText: project })
       .waitFor();
-    await expect(page.getByRole("region", { name: "Selected projects" })).not.toContainText(
-      otherProject,
-    );
+    expect(
+      await page.getByRole("region", { name: "Selected projects" }).textContent(),
+    ).not.toContain(otherProject);
     // The consent page is server-rendered: its reads and actions are server functions and one
     // form post, so it opens no /api socket.
     expect(sockets.filter((url) => new URL(url).pathname === "/api")).toHaveLength(0);
     await page.screenshot({ path: test.info().outputPath("first-consent.png"), fullPage: true });
-    await approve.click({ noWaitAfter: true });
+    await page.getByRole("button", { name: "Authorize", exact: true }).click({ noWaitAfter: true });
     await page
       .getByRole("heading", { name: "Claude authorization completed", exact: true })
       .waitFor();
@@ -347,13 +273,13 @@ test("first Claude consent creates the organization and project on the consent p
       project: idOf(project),
       script: "async (itx) => itx.whoami()",
     });
-    expect(reached.result.isError).toBe(false);
+    expect(reached.result).toMatchObject({ isError: false });
     expect(reached.result.content[0].text).toContain(idOf(project));
     const denied = await mcp(resource, tokens.access_token, "run", {
       project: idOf(otherProject),
       script: "async (itx) => itx.whoami()",
     });
-    expect(denied.result.isError).toBe(true);
+    expect(denied.result).toMatchObject({ isError: true });
     expect(errors).toEqual([]);
   } finally {
     listener.closeAllConnections();
@@ -362,3 +288,43 @@ test("first Claude consent creates the organization and project on the consent p
     );
   }
 });
+/** Sign in on the page the way a person does: the email, the password, Sign in — the password
+ *  field is shown immediately only when email-code sign-in is unavailable. */
+async function signIn(page: Page, email: string) {
+  await page.getByRole("textbox", { name: "Email", exact: true }).fill(email);
+  const password = page.getByLabel("Password", { exact: true });
+  if (!(await password.isVisible()))
+    await page.getByRole("button", { name: "Use password instead", exact: true }).click();
+  await password.fill(readOsPlaywrightAuthConfig().loginPassword);
+  // noWaitAfter: the post navigates; the next locator waits for it (the spinner-waiter counts a
+  // navigation in flight as loading), not the click's tight action timeout
+  await page.getByRole("button", { name: "Sign in", exact: true }).click({ noWaitAfter: true });
+}
+
+async function cookieHeaders(context: BrowserContext, origin: string) {
+  return {
+    Origin: origin,
+    Cookie: (await context.cookies(origin)).map(({ name, value }) => `${name}=${value}`).join("; "),
+  };
+}
+
+async function mcp(origin: string, token: string, name: string, args = {}) {
+  const response = await fetch(origin, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name, arguments: args },
+    }),
+  });
+  const body = await response.text();
+  expect(response, body).toMatchObject({ status: 200 });
+  const message = body.split("\n").find((line) => line.startsWith("data: "));
+  return JSON.parse(message ? message.slice(6) : body);
+}

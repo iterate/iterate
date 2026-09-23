@@ -35,7 +35,6 @@ test.fixme("the Notes app works on its own origin and through a project config w
   await signIn(page, email);
   await page.getByRole("textbox", { name: "New project" }).fill(project);
   await page.getByRole("button", { name: "Create project", exact: true }).click();
-  await page.getByRole("link", { name: "open", exact: true }).waitFor();
   const projectOrigin = new URL(
     (await page.getByRole("link", { name: "open", exact: true }).getAttribute("href"))!,
   ).origin;
@@ -69,7 +68,9 @@ test.fixme("the Notes app works on its own origin and through a project config w
     ]),
   ]);
   await page.goto(notesOrigin);
-  await page.getByRole("link", { name: "Log in with iterate", exact: true }).click();
+  await page
+    .getByRole("link", { name: "Log in with iterate", exact: true })
+    .click({ noWaitAfter: true });
   await page
     .getByRole("heading", {
       name: `${new URL(notesOrigin).host} wants to access your account`,
@@ -121,12 +122,10 @@ test.fixme("the Notes app works on its own origin and through a project config w
   // The independently granted Notes session remains usable after proxy revocation.
   await page.goto(`${notesOrigin}/notes`);
   await page.getByRole("textbox", { name: noteFile, exact: true }).waitFor();
-  const cookies = await context.cookies();
-  expect(
-    cookies
-      .filter((cookie) => cookie.name.startsWith("__Host-itx-session"))
-      .every((cookie) => cookie.httpOnly && cookie.secure),
-  ).toBe(true);
+  const sessionCookies = (await context.cookies()).filter((cookie) =>
+    cookie.name.startsWith("__Host-itx-session"),
+  );
+  expect(sessionCookies.filter((cookie) => !cookie.httpOnly || !cookie.secure)).toEqual([]);
 });
 
 /** Sign in on the page the way a person does: the email, the password, Sign in — the password

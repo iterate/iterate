@@ -248,9 +248,29 @@
     {
       "files": ["specs/**/*.ts"],
       "rules": {
+        "iterate/spec-restricted-syntax": "error",
+        "iterate/helpers-after-tests": "error",
+        "iterate/no-lifecycle-hooks": "error",
+        "iterate/no-vi-mock": "error",
+        "iterate/prefer-object-property-match": "error",
+        "iterate/prefer-test-over-it": "error",
         "middlewright/prefer-locator-waits": "error",
         "middlewright/prefer-positive-waits": "error",
-        "middlewright/require-timeout-comment": "error"
+        "middlewright/require-timeout-comment": "error",
+        "no-restricted-imports": [
+          "error",
+          {
+            "name": "@playwright/test",
+            "importNames": ["test"],
+            "message": "Use import { test } from './test-support/test.ts' instead. It wraps Playwright's test with middlewright plugins (spinner waiter, hydration waiter, UI error reporter)."
+          }
+        ]
+      }
+    },
+    {
+      "files": ["specs/test-support/**"],
+      "rules": {
+        "no-restricted-imports": "off"
       }
     }
   ]

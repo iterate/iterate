@@ -1511,6 +1511,91 @@ const plugin: StrictPlugin = {
         };
       },
     },
+    "spec-restricted-syntax": {
+      meta: {
+        type: "problem",
+        docs: {
+          description:
+            "The Playwright spec house style (specs/AGENTS.md): locators over expect, no toBe(true/false), no waitForURL, no baseURL in goto",
+        },
+      },
+      create: (context) => {
+        return {
+          CallExpression: (node) => {
+            if (node.callee.type === "Identifier" && node.callee.name === "expect") {
+              let expr: any = node;
+              while ((expr = expr.parent)) {
+                if (expr.type === "AwaitExpression") break;
+              }
+              if (!expr) return;
+              // expect(locator).toBeVisible() / .toContainText() are
+              // middlewright/prefer-locator-waits' territory (same verdict,
+              // plus an autofix) — skip them so one mistake reports once.
+              const matcher = node.parent;
+              if (
+                matcher?.type === "MemberExpression" &&
+                matcher.property.type === "Identifier" &&
+                (matcher.property.name === "toBeVisible" ||
+                  matcher.property.name === "toContainText")
+              ) {
+                return;
+              }
+              context.report({
+                node,
+                message: `Use locators, not expect. Locators are configured to wait for loading UI to complete, so allow for faster failures and more reliable assertions. For example: page.getByText("...").waitFor() instead of expect(page.getByText("...")).toBeVisible(). If you can't use a locator and must use polling, expect.poll is acceptable.`,
+              });
+              return;
+            }
+
+            if (
+              node.callee.type === "MemberExpression" &&
+              node.callee.property.type === "Identifier" &&
+              node.callee.property.name === "toBe"
+            ) {
+              const firstArg = node.arguments[0];
+              if (
+                firstArg &&
+                firstArg.type === "Literal" &&
+                (firstArg.value === true || firstArg.value === false)
+              ) {
+                context.report({
+                  node,
+                  message: `Don't use toBe(true) or toBe(false), this is an indicator of an assertion that will fail unhelpfully. Examples: use \`await expect.poll(() => realtimeMessages).toMatchObject(expect.arrayContaining([expect.stringContaining("CONNECTED")]));\` instead of \`await expect.poll(() => realtimeMessages.some((msg) => msg.includes("CONNECTED"))).toBe(true);\`.`,
+                });
+                return;
+              }
+            }
+
+            const calleeName = getCalleeName(node.callee);
+            if (calleeName === "waitForURL") {
+              context.report({
+                node,
+                message: `Don't use waitForURL, use a locator with .waitFor() instead, this accounts for loading UI. If necessary, you can add "data-*" attributes to the product code so you have a concrete, reliable locator.`,
+              });
+              return;
+            }
+
+            if (calleeName !== "goto") {
+              return;
+            }
+            const firstArg = node.arguments[0];
+            if (firstArg?.type !== "TemplateLiteral") {
+              return;
+            }
+            const usesBaseUrl = firstArg.expressions.some(
+              (expression) => expression.type === "Identifier" && expression.name === "baseURL",
+            );
+            if (!usesBaseUrl) {
+              return;
+            }
+            context.report({
+              node,
+              message: `Don't use baseURL in goto, it's added as a prefix automatically. e.g. instead of \`await page.goto(\`\${baseURL}/foo/bar}\`)\`, use \`await page.goto("/foo/bar")\``,
+            });
+          },
+        };
+      },
+    },
   },
 };
 

@@ -53,6 +53,24 @@ export async function createProjectFixture(
   };
 }
 
+/** A browser signed in as a fresh person with no project yet — the consent page's onboarding
+ *  step, without driving the sign-in page. */
+export async function createSessionFixture(
+  slugPrefix: string,
+  input: {
+    baseURL: string | undefined;
+    page: Page;
+  },
+) {
+  const baseUrl = input.baseURL;
+  if (!baseUrl) throw new Error("Playwright baseURL fixture is required.");
+  return mintIterateSession({
+    baseUrl,
+    email: `forged-${uniqueFixtureSlug(slugPrefix)}@example.com`,
+    page: input.page,
+  });
+}
+
 /**
  * The fixture's browser session. OS has no token to forge — a browser session is an OAuth grant
  * the issuer makes on sign-in — so this posts the deployment's test password the way the sign-in
