@@ -54,8 +54,6 @@ function makeUiWorkspace(): WorkspaceConfig {
     // exports, no src/index.ts) — same posture as packages/shared.
     entry: ["src/**/*.test.{ts,tsx}"],
     project: ["src/**/*.{ts,tsx}"],
-    // KNOWN DEAD since #2837 — remove from package.json in a follow-up, then drop this line.
-    ignoreDependencies: ["@types/mdast"],
   };
 }
 
@@ -65,9 +63,8 @@ function makeIterateWorkspace(): WorkspaceConfig {
     entry: ["src/**/*.test.{ts,tsx}"],
     project: ["src/**/*.{ts,tsx}", "bin/**/*.js", "tsdown*.ts"],
     // `cloudflare:workers` (typed by src/cloudflare-workers.d.ts) parses as
-    // the "cloudflare" package — same posture as the app workspaces. The rest are KNOWN DEAD since
-    // #2837 (nothing in the package imports them) — remove from package.json in a follow-up.
-    ignoreDependencies: ["cloudflare", "@types/react-dom", "esbuild", "react-dom"],
+    // the "cloudflare" package — same posture as the app workspaces.
+    ignoreDependencies: ["cloudflare"],
   };
 }
 
@@ -78,9 +75,6 @@ function makeSharedWorkspace(): WorkspaceConfig {
     // use the declared export map as the public entry surface.
     entry: ["src/**/*.test.ts"],
     project: ["src/**/*.ts"],
-    // KNOWN DEAD since #2837 deleted the evlog runtime (only ./evlog/types.ts remains, which does
-    // not import it) — remove from package.json in a follow-up, then drop this line.
-    ignoreDependencies: ["evlog"],
   };
 }
 
@@ -109,7 +103,7 @@ const config: KnipConfig = {
   // into apps that have never been configured for it.
   ignoreWorkspaces: [
     "apps/*",
-    "!apps/os-next",
+    "!apps/os",
     "!apps/kit",
     "packages/*",
     "!packages/shared",
@@ -118,14 +112,10 @@ const config: KnipConfig = {
   ],
   ignoreIssues: {
     // Loaded code: the platform injects ./processor.js into the isolate it loads this example into.
-    "apps/os-next/examples/mini-app.ts": ["unresolved"],
-    // KNOWN DEAD, found when knip came back after #2837 — delete in a follow-up, then drop these
-    // lines: `projectSlug` and `SessionRpcTarget` are exported but used only in their own files.
-    "apps/os-next/src/directory.ts": ["exports"],
-    "apps/os-next/src/session.ts": ["exports"],
+    "apps/os/examples/mini-app.ts": ["unresolved"],
   },
   workspaces: {
-    "apps/os-next": makeOsNextWorkspace(),
+    "apps/os": makeOsNextWorkspace(),
     "apps/kit": makeKitWorkspace(),
     "packages/shared": makeSharedWorkspace(),
     "packages/ui": makeUiWorkspace(),

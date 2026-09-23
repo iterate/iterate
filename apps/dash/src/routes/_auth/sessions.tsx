@@ -3,7 +3,7 @@
 // the projects it may reach → `api.grants.mint` → the token, shown ONCE (it is a finite provider
 // access token, never stored readable). The list is one page of `grants.list(cursor)` — the route's
 // loader, `?cursor=` in the URL; a mint or an end invalidates the router, which reloads it. Ported
-// from apps/os-next's console page: every string, role and test id is the same.
+// from apps/os's console page: every string, role and test id is the same.
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useRef, useState, type FormEvent } from "react";
 import { z } from "zod";

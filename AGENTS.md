@@ -1,6 +1,6 @@
 # Iterate
 
-Cloudflare Workers monorepo. The platform is `apps/os-next`; production issuer: `https://os.iterate2.com`.
+Cloudflare Workers monorepo. The platform is `apps/os`; production issuer: `https://os.iterate.com`.
 
 - Read scoped `AGENTS.md` files and matching `rules/**/*.md`, honoring exclusions.
 - Expected outcomes must be modeled; recovery must be bounded and observable. Operational changes require preview, state, and telemetry evidence. [Engineering invariant](docs/engineering-invariants.md).
@@ -10,7 +10,7 @@ Cloudflare Workers monorepo. The platform is `apps/os-next`; production issuer: 
 
 ```sh
 pnpm install
-pnpm dev                 # local os-next platform
+pnpm dev                 # local OS platform
 pnpm typecheck
 pnpm test
 pnpm spec                # platform browser specs
@@ -18,7 +18,7 @@ pnpm spec                # platform browser specs
 
 Read when relevant:
 
-- [Repository map](README.md) · [Platform](apps/os-next/README.md) · [Kit firmware](apps/kit/firmware/AGENTS.md)
+- [Repository map](README.md) · [Platform](apps/os/README.md) · [Kit firmware](apps/kit/firmware/AGENTS.md)
 - [Testing](docs/testing.md) · [Vitest patterns](docs/vitest-patterns.md)
 - TypeScript style: [coding style](docs/coding-style.md) · [conventions](docs/typescript-conventions.md) · [code rules](docs/jonasland-rules.md) · [identifiers](docs/identifiers.md)
 - [Brand and tone of voice](docs/brand-and-tone-of-voice.md) for user-facing copy

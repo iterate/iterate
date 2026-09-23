@@ -154,7 +154,7 @@ test.each(["specs", "preview-e2e"])(
       ...browser,
       artifactId: "vitest",
       producer: "vitest-retry-telemetry-reporter",
-      context: { ...browser.context, framework: "vitest", workspace: "os-next" },
+      context: { ...browser.context, framework: "vitest", workspace: "os" },
     });
     const finalizer = TestTelemetryArtifact.parse({
       ...browser,

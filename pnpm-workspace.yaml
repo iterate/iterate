@@ -1,5 +1,5 @@
 packages:
-  - apps/os-next
+  - apps/os
   - apps/dash
   - apps/agents
   - apps/notes
@@ -74,8 +74,8 @@ overrides:
   baseline-browser-mapping: ^2.9.14
   iterate>capnweb: npm:@iterate-com/capnweb@0.12.2
   '@iterate-com/agents>capnweb': npm:@iterate-com/capnweb@0.12.2
-  os-next>capnweb: npm:@iterate-com/capnweb@0.12.2
-  os-next>wrangler: 4.131.1
+  os>capnweb: npm:@iterate-com/capnweb@0.12.2
+  os>wrangler: 4.131.1
   srvx: 0.11.12
   wrangler: 4.107.0
   ws: 8.19.0

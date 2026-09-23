@@ -1,13 +1,13 @@
 import { expect } from "vitest";
 import { buildVoiceInstall } from "../../kit/scripts/build-voice-install.ts";
 import { ensureVoiceAgent } from "../../kit/src/voice/install.ts";
-import { runId } from "../../os-next/e2e/support/client.ts";
-import { oauthSession } from "../../os-next/e2e/support/principal.ts";
+import { runId } from "../../os/e2e/support/client.ts";
+import { oauthSession } from "../../os/e2e/support/principal.ts";
 import {
   deployedOnly,
   freshDnsSafeProjectSlug,
   registerProject,
-} from "../../os-next/e2e/support/project-host.ts";
+} from "../../os/e2e/support/project-host.ts";
 
 deployedOnly(
   "Kit installs voice through project OAuth, preserves project data and reuses the install for another device",

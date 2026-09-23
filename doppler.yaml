@@ -4,7 +4,7 @@ setup:
   - project: _shared
     path: packages/shared/
   - project: project-worker
-    path: apps/os-next/
+    path: apps/os/
   - project: kit
     path: apps/kit/
   - project: dash

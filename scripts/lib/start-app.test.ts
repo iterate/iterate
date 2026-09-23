@@ -15,8 +15,8 @@ describe("a start app's preview config (a pure transform of the built wrangler.j
     assets: { binding: "ASSETS", directory: "../client", run_worker_first: true },
     workers_dev: true,
     vars: {
-      ITERATE_ORIGIN: "https://os.iterate2.com",
-      ITERATE_DENY_ZONES: "iterate2.com,iterate.com",
+      ITERATE_ORIGIN: "https://os.iterate.com",
+      ITERATE_DENY_ZONES: "iterate.app,iterate.com",
     },
     durable_objects: { bindings: [{ name: "BROWSER_SESSION", class_name: "BrowserSession" }] },
     exports: { BrowserSession: { type: "durable-object", storage: "sqlite" } },
@@ -34,7 +34,7 @@ describe("a start app's preview config (a pure transform of the built wrangler.j
       preview_urls: true,
       migrations: [{ tag: "v1", new_sqlite_classes: ["BrowserSession"] }],
       assets: built.assets,
-      vars: { ITERATE_ORIGIN: "https://os.iterate2.com" },
+      vars: { ITERATE_ORIGIN: "https://os.iterate.com" },
     });
     for (const key of [
       "exports",
@@ -53,7 +53,7 @@ describe("a start app's preview config (a pure transform of the built wrangler.j
       durable_objects: built.durable_objects,
       vars: {
         ITERATE_ORIGIN: "https://pr123-foo-os-next-preview.iterate-dev-preview.workers.dev",
-        ITERATE_DENY_ZONES: "iterate2.com,iterate.com",
+        ITERATE_DENY_ZONES: "iterate.app,iterate.com",
       },
     });
   });
@@ -73,5 +73,5 @@ test("on workers.dev our own zones are our apps' hosts, not the accounts they sh
     "voice.iterate.workers.dev",
   ]);
   // elsewhere, still the whole zone: our origins' and our project wildcard's
-  expect(zones).toEqual(expect.arrayContaining(["iterate2.com", "iterate2.app"]));
+  expect(zones).toEqual(expect.arrayContaining(["iterate.com", "iterate.app"]));
 });

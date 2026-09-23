@@ -16,7 +16,7 @@ on:
       - apps/dash/**
       - envs.ts
       - scripts/lib/**
-      - apps/os-next/**
+      - apps/os/**
       - packages/iterate/**
       # the dash renders packages/ui (the context view, the app shell); a change there is a dash change
       - packages/ui/**
@@ -53,7 +53,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - id: metadata
         name: Resolve Dash deploy URL
-        run: echo "public_url=https://dash.iterate2.com" >> "$GITHUB_OUTPUT"
+        run: echo "public_url=https://dash.iterate.com" >> "$GITHUB_OUTPUT"
       - name: Deploy apps/dash
         working-directory: apps/dash
         env:

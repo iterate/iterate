@@ -717,7 +717,7 @@ const launcherProcedures = {
           osBaseUrl: z
             .string()
             .optional()
-            .describe("Base URL for OS API (e.g. https://os.iterate2.com)"),
+            .describe("Base URL for OS API (e.g. https://os.iterate.com)"),
           defaultProject: z.string().optional().describe("Default project id or slug"),
           setDefault: z.boolean().optional().describe("Set as the default config"),
           setWorkspace: z.boolean().optional().describe("Map current directory to this config"),

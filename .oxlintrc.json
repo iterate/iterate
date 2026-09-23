@@ -38,7 +38,7 @@
     ".tmp-ci-build*",
     "**/*ignoreme*",
     "apps/browser-extension/capnweb.js",
-    "apps/os-next/public/capnweb.js",
+    "apps/os/public/capnweb.js",
     "configs-next/with-agents/agents.js"
   ],
   "jsPlugins": [
@@ -233,7 +233,7 @@
       "plugins": ["react"]
     },
     {
-      "files": ["apps/os-next/specs/**/*.ts"],
+      "files": ["apps/os/specs/**/*.ts"],
       "rules": {
         "middlewright/prefer-locator-waits": "error",
         "middlewright/prefer-positive-waits": "error",

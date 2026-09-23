@@ -68,7 +68,7 @@ export function projectAddressOf(
 }
 
 /** A CUSTOM HOSTNAME — one of a deployment's own that IS a project's apex (os-next
- *  `urls.temporaryCustomHostnames`, `{ "iterate2.com": "iterate" }`): the apex shape, `app: null`, so the
+ *  `urls.temporaryCustomHostnames`, `{ "iterate.com": "iterate" }`): the apex shape, `app: null`, so the
  *  project's config worker `fetch` answers exactly as it does on `<project>.<hostname>`. Null for a
  *  hostname the map does not name — the map's spelling, case and a trailing dot forgiven, no wildcard
  *  under it. Pure. */

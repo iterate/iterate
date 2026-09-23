@@ -1,7 +1,7 @@
 // e2e/agents-streamed.e2e.test.ts — the streamed answer, in a file of its own: it waits out whole chunk
 // windows (one of the suite's longest rows) and runs beside the other agent stories.
 import { expect, test } from "vitest";
-import { collector, freshCtx, readAll, until } from "../../os-next/e2e/support/client.ts";
+import { collector, freshCtx, readAll, until } from "../../os/e2e/support/client.ts";
 import { openAgentItx } from "./support.ts";
 import { ScriptedAi, onWorkersAi } from "./fixtures.ts";
 

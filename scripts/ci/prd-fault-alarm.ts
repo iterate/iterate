@@ -5,7 +5,7 @@
 // garple.com — and our recovery kept most requests green, so only the logs knew.
 //
 // A workaround that heals a platform fault logs `console.warn({ event:
-// "<area>.platform-failure-<action>", name, … })` (apps/os-next context/facet-host.ts); naming it so
+// "<area>.platform-failure-<action>", name, … })` (apps/os context/facet-host.ts); naming it so
 // is all it takes to be alarmed.
 //
 //   doppler run --project project-worker --config prd -- pnpm tsx scripts/ci/prd-fault-alarm.ts run
@@ -116,7 +116,7 @@ async function readWindow(windowEnd: Date): Promise<FaultReading> {
     rows(
       [
         { key: "$metadata.level", operation: "eq", value: "error", type: "string" },
-        // A reset someone asked for (`itx.abort()`, apps/os-next context/built-ins.ts): the runtime
+        // A reset someone asked for (`itx.abort()`, apps/os context/built-ins.ts): the runtime
         // logs `ctx.abort` as an uncatchable error — two lines per reset, one more per socket it
         // closed (measured on a preview, 2026-09-23) — and the context's own log already records it
         // as `context/aborted`, attributed. An expected outcome, not a fault.

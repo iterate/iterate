@@ -14,7 +14,7 @@ on:
       - scripts/lib/**
       - apps/kit/**
       - packages/ui/**
-      - apps/os-next/**
+      - apps/os/**
       - apps/agents/**
       - packages/iterate/**
       - package.json

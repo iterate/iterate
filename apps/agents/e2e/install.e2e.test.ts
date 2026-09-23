@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { freshCtx, openItx, readAll, until } from "../../os-next/e2e/support/client.ts";
+import { freshCtx, openItx, readAll, until } from "../../os/e2e/support/client.ts";
 import { buildAgentRuntime } from "../scripts/build-runtime.ts";
 import { installAgents } from "../runtime/install.ts";
 import { ScriptedAi, assistantWords, onWorkersAi } from "./fixtures.ts";

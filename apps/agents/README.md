@@ -1,6 +1,6 @@
 # Agents
 
-Agents is an optional app. `apps/os-next` supplies contexts, streams, workers, facets, model access
+Agents is an optional app. `apps/os` supplies contexts, streams, workers, facets, model access
 and storage; this app owns the agent catalog, lifecycle, model loop, sandbox setup and voice runtime.
 `itx.agents` is a durable rewrite to the installed collection facet, not a platform built-in.
 
@@ -28,13 +28,13 @@ history are retained. Reinstalling is safe. Existing projects are not silently m
 `pnpm test` runs app unit tests. From the repository root, integration tests run with:
 
 ```sh
-pnpm --dir apps/os-next exec vitest run --configLoader runner --project e2e ../agents/e2e
-pnpm --dir apps/os-next exec vitest run --configLoader runner --project workers ../agents/__workers-tests__
+pnpm --dir apps/os exec vitest run --configLoader runner --project e2e ../agents/e2e
+pnpm --dir apps/os exec vitest run --configLoader runner --project workers ../agents/__workers-tests__
 ```
 
 See [voice/README.md](voice/README.md) for voice setup. Run voice tools from this package:
 `pnpm voice:call`, `pnpm voice:board`. Kit’s Prepare device flow installs voice.
 
-Dev: `pnpm dev` (defaults to https://os.iterate2.com; a gitignored `.dev.vars` with
+Dev: `pnpm dev` (defaults to https://os.iterate.com; a gitignored `.dev.vars` with
 `ITERATE_ORIGIN=http://localhost:8788` selects a local platform). Deploy through the existing
 `doppler run --project agents --config prd -- pnpm run deploy --env prd` command.

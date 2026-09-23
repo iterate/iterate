@@ -56,7 +56,6 @@
   "devDependencies": {
     "@types/react": "^19.2.17",
     "typescript": "^5.9.3",
-    "@types/mdast": "^4.0.4",
     "vitest": "^4.1.10",
     "react-dom": "^19.2.7",
     "jsdom": "27.4.0",

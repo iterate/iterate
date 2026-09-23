@@ -1,6 +1,6 @@
 /**
  * Shared primitives for the per-app deploy/ensure-resources/erase-data
- * scripts under apps/ and apps/os-next.
+ * scripts under apps/ and apps/os.
  *
  * Each script stays an imperative top-to-bottom program; these are the
  * handful of moves they all make (spawn-and-fail-fast, smoke probes, the

@@ -2,14 +2,8 @@
 // transport. Whole-JSON fixtures cannot cover incremental delivery or Response metadata.
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import {
-  collector,
-  freshCtx,
-  readAll,
-  rejection,
-  until,
-} from "../../os-next/e2e/support/client.ts";
-import { startLoggedWorker } from "../../os-next/e2e/support/log-harness.ts";
+import { collector, freshCtx, readAll, rejection, until } from "../../os/e2e/support/client.ts";
+import { startLoggedWorker } from "../../os/e2e/support/log-harness.ts";
 import { buildAgentRuntime } from "../scripts/build-runtime.ts";
 import { AI_TRANSPORT_SOURCE } from "../runtime/ai-transport-source.ts";
 import { installAgents } from "../runtime/install.ts";
