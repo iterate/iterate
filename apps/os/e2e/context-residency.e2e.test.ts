@@ -25,6 +25,7 @@ import {
   freshCtx,
   openItx,
   readAll,
+  rejection,
   runId,
   session,
   sleep,
@@ -368,4 +369,42 @@ test("an SDK facet that reached its context through withItx does not outlive the
   disposeSessions();
   expect(await wakesAcrossIdles(openItx(ctx))).toBeGreaterThanOrEqual(IDLES);
   expect(await facetStartedAt(reacher(openItx(ctx)))).toBeGreaterThan(started);
+}, 90_000);
+
+// ── A REFUSAL DOES NOT HOLD THE CONTEXT ──
+// A Workers-RPC call that THREW keeps its session to the callee open until the caller disposes its
+// promise: workerd drops a call's pipeline when an answer arrives, never when an exception does. The
+// callee here is a facet, and the context hosting it stays resident, billed, until V8 collects the
+// promise. Measured 2026-09-23 after a full e2e run: every delete flow's contexts, and the roots
+// whose collection refused, were still on their first incarnation 20 minutes later. The context
+// releases a rejected answer (expression.ts `awaitAnswerReleasedIfRejected`). Each row reads the
+// context's wakes and, since a facet can outlive its context, the facet's own start.
+
+test("a deleted workspace's refusal keeps neither its context nor its facet resident", async () => {
+  const ctx = freshCtx("residency_refused_verb");
+  const path = "/workspaces/gone";
+  const itx = openItx(ctx);
+  expect(await itx.workspaces.create(path)).toEqual({ path });
+  expect(await itx.workspaces.delete(path)).toEqual({ path });
+  // the facet itself refuses: facet-host.ts `#call`
+  expect((await rejection(itx.workspaces.get(path).mounts())).message).toMatch(/deleted/);
+  const started = await facetStartedAt(itx.cd(path).facets.get("workspace"));
+  disposeSessions();
+  expect(await wakesAcrossIdles(openItx(ctx).cd(path))).toBeGreaterThanOrEqual(IDLES);
+  expect(await facetStartedAt(openItx(ctx).cd(path).facets.get("workspace"))).toBeGreaterThan(
+    started,
+  );
+}, 90_000);
+
+test("a collection's refusal keeps neither the project root nor its project facet resident", async () => {
+  const ctx = freshCtx("residency_refused_collection");
+  const itx = openItx(ctx);
+  // the collection stub the project facet answers `workspaces()` with refuses: the resolver's walk
+  expect((await rejection(itx.workspaces.delete("/workspaces/never"))).message).toMatch(
+    /not created — nothing to delete/,
+  );
+  const started = await facetStartedAt(itx.facets.get("project"));
+  disposeSessions();
+  expect(await wakesAcrossIdles(openItx(ctx))).toBeGreaterThanOrEqual(IDLES);
+  expect(await facetStartedAt(openItx(ctx).facets.get("project"))).toBeGreaterThan(started);
 }, 90_000);

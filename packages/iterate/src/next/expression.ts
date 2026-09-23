@@ -311,6 +311,22 @@ export function releaseRpcSessions(rpcSessions: readonly unknown[]): void {
     }
 }
 
+/** A walk's ANSWER (`walkSteps`' value), awaited — and RELEASED if it rejects. A Workers-RPC call
+ *  that threw keeps its session open, and the actor at its far end with it, until its promise is
+ *  disposed: workerd drops a call's pipeline when an answer arrives, never when an exception does,
+ *  and an idle isolate may not collect the promise for many minutes (measured 2026-09-23: a context
+ *  whose facet threw once was held resident, billed, 20 minutes on). Its caller receives the
+ *  rejection, never the promise, so the walk's owner releases it here. An answer that arrives is
+ *  the caller's, as ever. */
+export async function awaitAnswerReleasedIfRejected(answer: unknown): Promise<unknown> {
+  try {
+    return await answer;
+  } catch (error) {
+    if (holdsRpcSession(answer)) releaseRpcSessions([answer]);
+    throw error;
+  }
+}
+
 /** Resolve one step's property. `__proto__` / `constructor` / `prototype` never resolve — `constructor`
  *  would hand out the class itself (trusted clients or not, that is not a step anyone means). */
 function stepGet(value: object, key: string): unknown {
@@ -335,7 +351,7 @@ function stepGet(value: object, key: string): unknown {
  * (the collection stub a facet call answered, walked on for `.list()`): each keeps its session, and the
  * actor at its far end, open until disposed, so the walk's owner releases them once the answer is in
  * (`releaseRpcSessions`; the resolver's `invoke`, facet-host.ts `#call`). Never the start, never the
- * answer.
+ * answer — which its owner awaits with `awaitAnswerReleasedIfRejected`.
  */
 export async function walkSteps(
   start: { value: unknown; receiver: unknown },

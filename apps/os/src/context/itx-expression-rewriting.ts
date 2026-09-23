@@ -41,6 +41,7 @@ import {
   callOn,
   InvokeHandle,
   walkSteps,
+  awaitAnswerReleasedIfRejected,
   releaseRpcSessions,
   normalizedItxExpression,
   containsItxExpressionHole,
@@ -757,7 +758,8 @@ export class ItxExpressionResolver {
     // `repos()` with, walked on for `.list()`; a loaded worker's `make()` walked on for `.ping()` — is
     // this actor's to release once the answer is in: kept, it held the facet or the worker, and so
     // this actor, open until the next deploy (a project's root after every `repos.create`,
-    // 2026-09-23). The answer itself is the caller's.
+    // 2026-09-23). The answer itself is the caller's — unless it REJECTS (that collection refusing a
+    // `delete`): then nobody else holds it, and it is released here.
     const rpcSessionsSteppedPast: unknown[] = [];
     try {
       const { value, receiver } = await walkSteps(
@@ -765,7 +767,9 @@ export class ItxExpressionResolver {
         rewritten.slice(2),
         rpcSessionsSteppedPast,
       );
-      return extraArgs.length > 0 ? await callOn(value, receiver, extraArgs) : await value;
+      return extraArgs.length > 0
+        ? await callOn(value, receiver, extraArgs)
+        : await awaitAnswerReleasedIfRejected(value);
     } finally {
       releaseRpcSessions(rpcSessionsSteppedPast);
     }

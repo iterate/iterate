@@ -319,6 +319,45 @@ describe("pipelined RPC promise threading", () => {
     expect(order).toEqual(["answer settled", "collection released"]);
   });
 
+  test("the resolver releases a walk's answer that REJECTS — its caller gets the rejection, never the promise — and never one that arrives", async () => {
+    // A Workers-RPC call that threw keeps its callee's session open until its promise is disposed:
+    // the project facet's collection refusing `delete` held the project's root resident (2026-09-23).
+    const released: string[] = [];
+    class FakeCallPromise {
+      constructor(
+        readonly chain: string,
+        readonly outcome: { error: Error } | { value: unknown },
+      ) {}
+      then(resolve: (value: unknown) => void, reject: (error: unknown) => void): void {
+        if ("error" in this.outcome) reject(this.outcome.error);
+        else resolve(this.outcome.value);
+      }
+      [Symbol.dispose](): void {
+        released.push(this.chain);
+      }
+    }
+    registerPipelinedRpcBrand(FakeCallPromise);
+    registerRpcSessionBrand(FakeCallPromise);
+    const collection = {
+      delete: (path: string) =>
+        new FakeCallPromise(`delete(${path})`, { error: new Error(`${path}: not created`) }),
+      list: () => new FakeCallPromise("list()", { value: ["/w"] }),
+    };
+    const resolver = new ItxExpressionResolver({
+      builtIns: { facets: { get: () => ({ workspaces: async () => collection }) } },
+      rewriteRules: () => [],
+      implicitRoots: new Set(BUILT_IN_ROOTS),
+      path: "/",
+      caller: () => ({ principal: null }),
+    });
+    await expect(
+      resolver.invoke("itx.facets.get('project').workspaces().delete('/never')"),
+    ).rejects.toThrow("/never: not created");
+    expect(released).toEqual(["delete(/never)"]);
+    expect(await resolver.invoke("itx.facets.get('project').workspaces().list()")).toEqual(["/w"]);
+    expect(released).toEqual(["delete(/never)"]); // the answer that arrived is the caller's
+  });
+
   test("releaseRpcSessions releases each once, the last first; one that throws is reported, the rest still released", () => {
     const released: string[] = [];
     const session = (name: string, fail = false) => ({

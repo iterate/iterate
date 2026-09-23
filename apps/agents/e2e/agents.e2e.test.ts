@@ -10,7 +10,15 @@
 // deployed lane runs ONE real turn through Workers AI.
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { freshCtx, processorNames, readAll, sleep, until } from "../../os/e2e/support/client.ts";
+import {
+  disposeSessions,
+  freshCtx,
+  openItx,
+  processorNames,
+  readAll,
+  sleep,
+  until,
+} from "../../os/e2e/support/client.ts";
 import { openAgentItx } from "./support.ts";
 import {
   RED_PNG_BASE64,
@@ -723,3 +731,31 @@ test("itx.agents.delete(path) lands the request and the death certificate on the
     /agent \/agents\/gone: deleted — not re-creatable/,
   );
 });
+
+// A REFUSAL DOES NOT HOLD THE CONTEXT (apps/os e2e/context-residency.e2e.test.ts says why): the deleted
+// agent's facet refusing `message`, the collection on `/` refusing `create` — each held its context
+// on its first incarnation, billed, long after the call (2026-09-23: 20 minutes after the suite). An
+// idle context is evicted in ~10 s, so one woken after each of three 12 s idles shows three wakes.
+test("a deleted agent's refusals keep neither the root nor the agent's context resident", async () => {
+  const ctx = freshCtx("agent-delete-residency");
+  const itx = await openAgentItx(ctx);
+  expect(await itx.agents.create("/agents/gone")).toEqual({ path: "/agents/gone" });
+  expect(await itx.agents.delete("/agents/gone")).toEqual({ path: "/agents/gone" });
+  await expect(itx.agents.get("/agents/gone").message("anyone there?")).rejects.toThrow(/deleted/);
+  await expect(itx.agents.create("/agents/gone")).rejects.toThrow(/not re-creatable/);
+  disposeSessions();
+  const wakesAcrossIdles = async (context: any): Promise<number> => {
+    for (let i = 0; i < 3; i++) {
+      await sleep(12_000);
+      await context.whoami();
+    }
+    return (await readAll(context)).filter(
+      (event: { type: string }) => event.type === "events.iterate.com/stream/woken",
+    ).length;
+  };
+  const wakes = await Promise.all([
+    wakesAcrossIdles(openItx(ctx)),
+    wakesAcrossIdles(openItx(ctx).cd("/agents/gone")),
+  ]);
+  expect(Math.min(...wakes), JSON.stringify(wakes)).toBeGreaterThanOrEqual(3);
+}, 120_000);

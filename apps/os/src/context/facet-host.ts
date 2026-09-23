@@ -18,6 +18,7 @@ import {
   type ItxExpression,
   type ItxExpressionInput,
   walkSteps,
+  awaitAnswerReleasedIfRejected,
   releaseRpcSessions,
   FacetHandle,
 } from "iterate/next/expression";
@@ -603,13 +604,14 @@ export class FacetHost {
   ): Promise<unknown> {
     // Every step the walk went PAST (`repos()` in `repos().create(path)`, when one call walks several
     // steps on the facet — a subscription target's, a handle's own `invoke`) holds a session onto the
-    // facet, and so this actor, until disposed: released once the call settles, below.
+    // facet, and so this actor, until disposed: released once the call settles, below. So does the
+    // call itself when the facet THROWS (a deleted workspace's refusal): released as it rejects.
     const rpcSessionsSteppedPast: unknown[] = [];
     const call = walkSteps(
       { value: facet, receiver: undefined },
       itxExpressionSteps,
       rpcSessionsSteppedPast,
-    ).then((walked) => walked.value);
+    ).then((walked) => awaitAnswerReleasedIfRejected(walked.value));
     let result: unknown;
     try {
       // The label PRINTS the whole pushed batch (JSON5 + key-sort) — built lazily, so a facet
