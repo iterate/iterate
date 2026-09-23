@@ -76,6 +76,9 @@ export interface OsEnv {
    *  hostname (its registrable domain's zone must exist in the account), ensure-resources the proxied
    *  DNS record. Belongs in the project's own runtime config, not here. */
   temporaryCustomHostnames?: Record<string, string>;
+  /** One first-level wildcard on an owned zone, served as the named project's config-worker apex.
+   *  More specific Worker routes on that zone continue to take precedence. */
+  projectWildcard?: { hostname: string; project: string };
   /** Registrable domains in this account which host entries in `temporaryCustomHostnames`.
    * They receive their own Worker route and proxied DNS record, rather than becoming a
    * Cloudflare-for-SaaS hostname on a project-host zone. */
@@ -132,6 +135,7 @@ export const osEnvs: Record<string, OsEnv> = {
       "lispwoso.com": "lispwoso",
       "templestein.com": "templestein",
     },
+    projectWildcard: { hostname: "iterate.com", project: "iterate" },
     ownedProjectCustomApexes: ["iterate.com"],
     cloudflareForSaasProjectHostnameBases: ["iterate.app"],
     artifactsNamespace: "project-worker-prd-repos",

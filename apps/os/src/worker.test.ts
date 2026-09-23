@@ -128,6 +128,7 @@ describe("parseAppConfig", () => {
         APP_CONFIG_URLS__DASH: "https://dash.iterate.com",
         APP_CONFIG_URLS__INGRESS_ROUTING: '{"type":"subdomains","hostname":"Iterate.app"}',
         APP_CONFIG_URLS__TEMPORARY_CUSTOM_HOSTNAMES: '{"iterate.com":"iterate"}',
+        APP_CONFIG_URLS__PROJECT_WILDCARD: '{"hostname":"Iterate.com","project":"iterate"}',
         APP_CONFIG_LOGIN__EMAIL_CODE__FROM: "iterate <login@iterate.com>",
         APP_CONFIG_LOGIN__GOOGLE__CLIENT_ID: "google-id",
         APP_CONFIG_LOGIN__GOOGLE__CLIENT_SECRET: "google-secret",
@@ -143,6 +144,7 @@ describe("parseAppConfig", () => {
           dash: "https://dash.iterate.com",
           ingressRouting: { type: "subdomains", hostname: "iterate.app" },
           temporaryCustomHostnames: { "iterate.com": "iterate" },
+          projectWildcard: { hostname: "iterate.com", project: "iterate" },
         },
         login: {
           password: "password",
@@ -387,6 +389,15 @@ describe("public protocol origins", () => {
     ).toMatchObject({ issuer: "https://iterate.someorg.workers.dev" });
   });
 
+  test("the issuer stays on the control plane when its zone also has a project wildcard", async () => {
+    const response = await request("https://os.iterate.com/version", {
+      ...origins,
+      APP_CONFIG_URLS__PROJECT_WILDCARD: '{"hostname":"iterate.com","project":"iterate"}',
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("unversioned https://os.iterate.com\n");
+  });
+
   test("under path routing the platform's own paths are never a project (projects live under /projects/): the doors answer as themselves", async () => {
     const paths = {
       ...MINIMAL,
@@ -465,4 +476,16 @@ const customRows: { hostname: string; becomes: ReturnType<typeof customProjectHo
 for (const { hostname, becomes } of customRows)
   test(`custom hostname ${hostname} ⇒ ${JSON.stringify(becomes)}`, () => {
     expect(customProjectHostOf(hostname, customHostnames)).toEqual(becomes);
+  });
+
+const wildcard = { hostname: "iterate.com", project: "iterate" };
+for (const [hostname, project] of [
+  ["www.iterate.com", "iterate"],
+  ["Blog.Iterate.com.", "iterate"],
+  ["iterate.com", "iterate"],
+  ["deep.www.iterate.com", null],
+  ["www.iterate.app", null],
+] as const)
+  test(`project wildcard ${hostname} ⇒ ${project}`, () => {
+    expect(customProjectHostOf(hostname, customHostnames, wildcard)?.project ?? null).toBe(project);
   });

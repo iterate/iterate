@@ -171,7 +171,15 @@ export default {
     // A project under the ingress routing (iterate/next/project-ingress: subdomains — a host under
     // the wildcard; paths — `/<project>[/<app>]` on the platform origin), or one of the deployment's
     // custom hostnames (a project's apex).
-    const customHost = customProjectHostOf(url.hostname, appConfig.urls.temporaryCustomHostnames);
+    // The issuer has a more specific route on the same Worker; keep it on the control plane.
+    const customHost =
+      url.origin === platformOrigin
+        ? null
+        : customProjectHostOf(
+            url.hostname,
+            appConfig.urls.temporaryCustomHostnames,
+            appConfig.urls.projectWildcard,
+          );
     const projectHost =
       projectAddressOf(routing, url, platformOrigin) ??
       (customHost && { ...customHost, basePath: "" });

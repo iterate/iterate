@@ -16,6 +16,8 @@ function urlVars(env: OsEnv): Record<string, string> {
     vars.APP_CONFIG_URLS__INGRESS_ROUTING = JSON.stringify(env.ingressRouting);
   if (env.temporaryCustomHostnames)
     vars.APP_CONFIG_URLS__TEMPORARY_CUSTOM_HOSTNAMES = JSON.stringify(env.temporaryCustomHostnames);
+  if (env.projectWildcard)
+    vars.APP_CONFIG_URLS__PROJECT_WILDCARD = JSON.stringify(env.projectWildcard);
   return vars;
 }
 
@@ -28,6 +30,7 @@ export function ownZonesOf(env: OsEnv): Set<string> {
     registrableDomainOf(new URL(env.mcpBaseUrl).hostname),
     ...(env.ingressRouting?.type === "subdomains" ? [env.ingressRouting.hostname] : []),
     ...(env.ownedProjectCustomApexes || []),
+    ...(env.projectWildcard ? [env.projectWildcard.hostname] : []),
     ...(env.cloudflareForSaasProjectHostnameBases || []),
   ]);
 }
@@ -99,6 +102,14 @@ export function wranglerConfig() {
                   {
                     pattern: `*.${env.ingressRouting.hostname}/*`,
                     zone_name: env.ingressRouting.hostname,
+                  },
+                ]
+              : []),
+            ...(env.projectWildcard
+              ? [
+                  {
+                    pattern: `*.${env.projectWildcard.hostname}/*`,
+                    zone_name: env.projectWildcard.hostname,
                   },
                 ]
               : []),
