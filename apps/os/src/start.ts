@@ -16,9 +16,13 @@ const issuerServerFunctionRequests = createMiddleware().server(
     if (!pathname.startsWith("/_serverFn/")) return next();
     if (!issuerServerFunctions.some((serverFunction) => serverFunction.url === pathname))
       return new Response("Not found", { status: 404 });
-    const payload = new URL(request.url).searchParams.get("payload") || "";
-    if (payload.length > 1_000_000 || Number(request.headers.get("content-length")) > 1_000_000)
-      return new Response("Payload too large", { status: 413 });
+    // a GET's payload is its query; a POST's is its body, measured as read (Content-Length may be
+    // missing or understated)
+    const payload =
+      request.method === "POST"
+        ? await request.clone().text()
+        : new URL(request.url).searchParams.get("payload") || "";
+    if (payload.length > 1_000_000) return new Response("Payload too large", { status: 413 });
     const result = await next();
     if (!issuerRequestContext().serverFunctionInputDecoded && result.response.status >= 500)
       return new Response("Invalid server-function payload", { status: 400 });
