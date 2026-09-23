@@ -192,7 +192,7 @@ export default class LiveMaker extends WorkerEntrypoint { make() { made += 1; re
 const CARELESS_HOLDER_SOURCE = {
   "cap.js": `import { FacetDurableObject } from "./processor.js";
 export class CarelessHolderDurableObject extends FacetDurableObject {
-  static publicMethods = [...super.publicMethods, "keepData", "keepSiblingSnapshot", "keepLiveAndPing"];
+  static publicMethods = [...super.publicMethods, "keepData", "keepSiblingSnapshot", "keepLiveAndPing", "started"];
   kept = [];
   startedAt = Date.now();
   started() { return this.startedAt; }
@@ -406,6 +406,45 @@ test("an SDK facet that reached its context through withItx does not outlive the
   expect(await wakesAcrossIdles(openItx(ctx))).toBeGreaterThanOrEqual(IDLES);
   expect(await facetStartedAt(reacher(openItx(ctx)))).toBeGreaterThan(started);
 }, 90_000);
+
+// ── NOTHING NEEDS TO CALL AGAIN ──
+// The next incarnation's birth resets what the last one left running — but after a context's LAST
+// call nothing wakes it. A context that materialized a loaded facet arms the unclaimed-facet sweep
+// on its alarm (FacetHost `UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS`): a minute after its last call it
+// is woken fresh, and that birth resets the facet. The facet here keeps its `env.ITX` answer AND
+// beats a timer into its own storage, so its last beat says when it stopped, with no call from here.
+const HEARTBEAT_SOURCE = {
+  "cap.js": `import { FacetDurableObject } from "./processor.js";
+export class HeartbeatDurableObject extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "beat", "lastBeat"];
+  kept = [];
+  async beat() {
+    this.kept.push(await this.env.ITX.get().whoami());
+    const tick = () => { this.ctx.storage.kv.put("lastBeat", Date.now()); setTimeout(tick, 5_000); };
+    tick();
+    return Date.now();
+  }
+  lastBeat() { return this.ctx.storage.kv.get("lastBeat") ?? null; }
+}`,
+};
+
+test("a careless loaded facet the last call left running stops a quiet minute later, with no call from outside", async () => {
+  const ctx = freshCtx("residency_sweep");
+  const heartbeat = (method: string) =>
+    openItx(ctx).invoke([
+      "itx",
+      "facets",
+      ["get", "heartbeat", { source: HEARTBEAT_SOURCE, className: "HeartbeatDurableObject" }],
+      [method],
+    ]);
+  const lastCallAt = await heartbeat("beat");
+  disposeSessions();
+  await sleep(110_000); // no request: the context evicts in ~10 s; the sweep's alarm is its only wake
+  const lastBeat = await heartbeat("lastBeat");
+  // It beat on after its context evicted, and stopped at the sweep — long before this call.
+  expect(lastBeat - lastCallAt).toBeGreaterThan(30_000);
+  expect(lastBeat - lastCallAt).toBeLessThan(90_000);
+}, 180_000);
 
 // ── CLAIMED WORK OUTLIVES ITS CONTEXT ON PURPOSE ──
 // Work that must outlive the call that started it runs through `runInBackground`: the processor's

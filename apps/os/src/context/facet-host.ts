@@ -68,6 +68,15 @@ const isFacetStartPlatformFailure = (error: unknown): error is Error =>
 /** How long one facet call may take before the facet is aborted (a call that never answers would
  *  hold the pins' release, and with it this actor, forever). */
 const FACET_CALL_WATCHDOG_MS = 60_000;
+/** How long a context that materialized a loaded facet must be quiet — no inbound call, no facet
+ *  call, run or pin in flight — before its unclaimed loaded facets are reset
+ *  (`resetUnclaimedLoadedFacets`). The deadline is the DO's in-memory `#unclaimedFacetSweepArmedFor`
+ *  on its one alarm: a context that evicted on time (~10 s) is woken fresh by it, and that birth does
+ *  the reset; a context still resident does it in place. Past the ~10 s eviction and the pins' 30 s
+ *  release, so a used context costs ONE extra alarm wake per quiet period — and a facet the last
+ *  call left running is billed about a minute, not until the residency watchdog's 15 (measured
+ *  2026-09-23: a careless loaded facet billed 60 s of every minute until that wake). */
+export const UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS = 60_000;
 
 /** Each first-party facet's `publicMethods`, read off its class (the class is minted from
  *  `ctx.exports` by name, first-party-facets.ts). A first-party name without its list fails to
@@ -110,6 +119,8 @@ type FacetHostDeps = {
   stream: Stream;
   /** A claim changed: the DO reconciles its alarm against `deadlines()`. */
   reconcileAlarm: () => void;
+  /** A LOADED facet was materialized: the DO arms its sweep (`UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS`). */
+  loadedFacetMaterialized: () => void;
 };
 
 /** What `#materialize` hands `#call`: the container, the retirement of the loaded identity it was
@@ -261,20 +272,22 @@ export class FacetHost {
       this.#abortedOnRequest.set(name, { generation, reason });
   }
 
-  /** THE BIRTH RESET — the DO constructor runs it before this incarnation serves anything. A facet
-   *  does NOT die with the incarnation that started it: one that keeps any Workers-RPC value from
-   *  its `env.ITX` (a stub, an answer, plain data included) keeps running after its context is
-   *  evicted, billed per instance under the context's object, and the next incarnation's
-   *  `facets.get` lands on that same instance — its startup callback runs again all the same, so
-   *  nothing tells the host the instance is old (measured on a deployed preview, 2026-09-23). So
-   *  every LOADED facet is reset here unless it holds a CLAIM: work that must outlive the call that
-   *  started it runs through the processor's `runInBackground`, whose claim on this context's alarm
-   *  (`processors.claim`) keeps the facet running — an LLM attempt, its backoff, a live voice dial.
-   *  The abort cannot tell a running facet from a stopped one and costs neither anything (no wake,
-   *  0 ms); a running one ends, with its billing, and its next call starts it from its startup
-   *  memo. FIRST-PARTY facets keep no memo and are never reset: the `secret` facet pumps a proxied
-   *  socket with no claim, and the platform's own classes release every round trip (`withItx`).
-   *  Returns the names reset, whether or not each was still running. */
+  /** THE RESET OF UNCLAIMED LOADED FACETS — run by the DO at an incarnation's birth (its constructor,
+   *  before it serves anything) and when a context that materialized one has been quiet for
+   *  `UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS` (the sweep on its alarm). A facet does NOT die with the
+   *  incarnation that started it: one that keeps any Workers-RPC value from its `env.ITX` (a stub,
+   *  an answer, plain data included) keeps running after its context is evicted, billed per
+   *  instance under the context's object, and the next incarnation's `facets.get` lands on that same
+   *  instance — its startup callback runs again all the same, so nothing tells the host the instance
+   *  is old (measured on a deployed preview, 2026-09-23). So every LOADED facet is reset here unless
+   *  it holds a CLAIM: work that must outlive the call that started it runs through the processor's
+   *  `runInBackground`, whose claim on this context's alarm (`processors.claim`) keeps the facet
+   *  running — an LLM attempt, its backoff, a live voice dial. The abort cannot tell a running facet
+   *  from a stopped one and costs neither anything (no wake, 0 ms); a running one ends, with its
+   *  billing, and its next call starts it from its startup memo. FIRST-PARTY facets keep no memo and
+   *  are never reset: the `secret` facet pumps a proxied socket with no claim, and the platform's own
+   *  classes release every round trip (`withItx`). Returns the names reset, whether or not each was
+   *  still running. */
   resetUnclaimedLoadedFacets(): string[] {
     const reset: string[] = [];
     // The prefix holds a loaded facet's startup memo (`facet:<name>`, what names it here), its loaded
@@ -283,7 +296,8 @@ export class FacetHost {
       const name = key.slice("facet:".length);
       if (name.endsWith(":loader-id") || name.endsWith(":restarts")) continue;
       if (firstPartyFacetClassOf(name) || this.#facetClaims.has(name)) continue;
-      this.#abortFacetIfRunning(name, "reset at its context's birth: loaded, unclaimed");
+      this.#abortFacetIfRunning(name, "reset: loaded, unclaimed, and its context quiet or reborn");
+      this.#liveFacetNames.delete(name); // cold from here: its next call starts it from its memo
       reset.push(name);
     }
     return reset;
@@ -697,6 +711,7 @@ export class FacetHost {
       }
     });
     this.#liveFacetNames.add(name); // live from here
+    if (!firstPartyClassName) this.#deps.loadedFacetMaterialized();
     return {
       facet,
       retireLoadedIdentity,

@@ -82,7 +82,7 @@ import { signedFileUrl } from "./context/file-urls.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import type { ControlPlaneDurableObject } from "./control-plane/durable-object.ts";
 import { buildBuiltIns, type SubscriptionListEntry } from "./context/built-ins.ts";
-import { FacetHost } from "./context/facet-host.ts";
+import { FacetHost, UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS } from "./context/facet-host.ts";
 import type { ArtifactsNamespace } from "./context/repos.ts";
 import {
   RESIDENCY_WATCHDOG_WINDOW_MS,
@@ -131,6 +131,8 @@ export type AlarmTrace = {
     claims: { name: string; at: number }[];
     /** The residency watchdog's deadline — in memory, so null in a fresh incarnation. */
     residencyWatchdog: number | null;
+    /** The unclaimed-facet sweep's deadline — in memory, like the watchdog's. */
+    unclaimedFacetSweep: number | null;
   };
   durableHead: number;
   /** On `alarm-fired`: how many schedules this pass will append. */
@@ -707,11 +709,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #alarmCoordinator = new AlarmCoordinator({
     setAlarm: (at) => this.ctx.storage.setAlarm(at),
     deleteAlarm: () => this.ctx.storage.deleteAlarm(),
-    deadlines: () => [...this.#durableAlarmDeadlines(), this.#residencyWatchdogArmedFor],
+    deadlines: () => [
+      ...this.#durableAlarmDeadlines(),
+      this.#residencyWatchdogArmedFor,
+      this.#unclaimedFacetSweepArmedFor,
+    ],
   });
 
   /** The three sources a fresh incarnation derives again — schedules, cursor-row claims, facet
-   *  claims; the fourth, the residency watchdog, is this incarnation's alone. */
+   *  claims; the residency watchdog and the unclaimed-facet sweep are this incarnation's alone. */
   #durableAlarmDeadlines(): (number | null)[] {
     return [
       this.#stream.nextScheduledAppendAt(),
@@ -735,6 +741,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     resolveItxExpression: (expression) => this.#itxExpressionResolver.resolve(expression),
     stream: this.#stream,
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
+    loadedFacetMaterialized: () => this.#armUnclaimedFacetSweep(),
   });
 
   #traceAlarm(
@@ -755,6 +762,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         deliveryOmitted: Math.max(0, delivery.length - 32),
         claims: this.#facetHost.deadlines(),
         residencyWatchdog: this.#residencyWatchdogArmedFor,
+        unclaimedFacetSweep: this.#unclaimedFacetSweepArmedFor,
       },
       durableHead: this.#stream.highestDurableOffset(),
       facetWorkInFlight: facets.facetWorkInFlight,
@@ -838,20 +846,25 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  completes; a pass that dies is retried by the runtime): the due schedules, the stream-kept
    *  cursors' owed deliveries, the due claims of hosted processors (each spent, then the facet's
    *  `revive()` — a facet still busy claims again from there). Then the next deadline is derived
-   *  from what is left. The residency watchdog is decided first in every pass; a wake with nothing
-   *  durable due is the watchdog's alone and does nothing else. */
+   *  from what is left. The residency watchdog and the unclaimed-facet sweep are decided first in
+   *  every pass; a wake with nothing durable due is theirs alone and does nothing else. */
   async alarm(): Promise<void> {
     const { armedAt: fired } = this.#alarmCoordinator.snapshot();
-    // THE WATCHDOG'S OWN WAKE: no wake record, no trace, no delivery — in a fresh incarnation (its
-    // armer was evicted, the normal end) nothing at all but re-deriving the alarm.
+    // THE WATCHDOG'S OR THE SWEEP'S OWN WAKE: no wake record, no trace, no delivery — in a fresh
+    // incarnation (its armer was evicted, the normal end) nothing at all but re-deriving the alarm;
+    // its birth already reset the unclaimed loaded facets.
     const wokeAt = Date.now();
     if (!this.#durableAlarmDeadlines().some((at) => at !== null && at <= wokeAt)) {
-      await this.#alarmCoordinator.pass(async () => this.#checkResidencyWatchdog(wokeAt));
+      await this.#alarmCoordinator.pass(async () => {
+        this.#checkResidencyWatchdog(wokeAt);
+        this.#checkUnclaimedFacetSweep(wokeAt);
+      });
       return;
     }
     try {
       await this.#alarmCoordinator.pass(async () => {
         this.#checkResidencyWatchdog(wokeAt);
+        this.#checkUnclaimedFacetSweep(wokeAt);
         // An incarnation the alarm woke records its wake HERE, inside the hold — the one door that
         // knows the reason. Its delivery (every "*" row's) runs and acks within this pass, so an
         // alarm wake that finds nothing else owed ends with no alarm and no alarm write at all.
@@ -1031,6 +1044,60 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         incarnation: payload.incarnation,
       });
     }
+  }
+
+  // ── THE UNCLAIMED-FACET SWEEP (FacetHost `resetUnclaimedLoadedFacets`): a loaded facet the last call left running, ended ──
+
+  /** The sweep's deadline, epoch ms — in memory on purpose, like the watchdog's: a fresh incarnation
+   *  has none, so the alarm an evicted one left wakes it only for its birth, which did the reset. */
+  #unclaimedFacetSweepArmedFor: number | null = null;
+
+  /** A loaded facet was materialized: the sweep is owed once this context has been quiet for
+   *  `UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS`. Armed when none is: one alarm write per quiet period. */
+  #armUnclaimedFacetSweep(): void {
+    if (this.#unclaimedFacetSweepArmedFor !== null) return;
+    this.#unclaimedFacetSweepArmedFor = Date.now() + UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS;
+    this.#alarmCoordinator.reconcile();
+  }
+
+  /** The sweep's decision, applied in every alarm pass beside the watchdog's and by the same rule
+   *  (`decideResidencyWatchdog`, its own window): nothing, a later deadline while a call or facet work
+   *  is in flight or the quiet period is young, or THE SWEEP — this still-resident incarnation's
+   *  unclaimed loaded facets reset in place. An incarnation that evicted on time never gets here: the
+   *  alarm wakes a fresh one, whose birth reset them. */
+  #checkUnclaimedFacetSweep(now: number): void {
+    const decision = decideResidencyWatchdog({
+      armedFor: this.#unclaimedFacetSweepArmedFor,
+      now,
+      lastCallEndedAt: this.#lastInboundCallEndedAt,
+      workInFlight:
+        this.#inboundCallsInFlight +
+        this.#facetHost.snapshot().facetWorkInFlight +
+        this.#scriptRunsInFlight.size +
+        this.#pinCallsInFlight,
+      windowMs: UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS,
+    });
+    if (decision.action === "none") return;
+    if (decision.action === "rearm") {
+      this.#unclaimedFacetSweepArmedFor = decision.at;
+      return;
+    }
+    this.#unclaimedFacetSweepArmedFor = null;
+    const facets = this.#facetHost.resetUnclaimedLoadedFacets();
+    if (facets.length > 0)
+      console.log({
+        event: "context.facets-reset-when-quiet",
+        namespace: "iterate-context",
+        name: this.#durableObjectAddress.name,
+        facets,
+      });
+  }
+
+  /** DO-only, for the tests that run inside workerd (`__workers-tests__/support.ts` `owedAlarm`): the
+   *  deadlines on the one alarm that are this incarnation's alone and owe nothing — the residency
+   *  watchdog's and the unclaimed-facet sweep's. */
+  inMemoryAlarmDeadlines(): (number | null)[] {
+    return [this.#residencyWatchdogArmedFor, this.#unclaimedFacetSweepArmedFor];
   }
 
   /** DO-only, for the tests that run inside workerd (`__workers-tests__`): the release, plus every

@@ -241,14 +241,15 @@ describe("rules 3–8: the verdict", () => {
   });
 
   test.each([
-    // the six careless-facet fixtures, root context only
-    { name: "prj_live_bb1d9e20_28_0.iterate/", byDesign: true },
-    { name: "prj_rest_bb1d9e20_13_8.iterate/", byDesign: true },
-    { name: "prj_residency_careless_data_bb1d9e20_23_8.iterate/", byDesign: true },
-    { name: "prj_residency_careless_live_bb1d9e20_23_9.iterate/", byDesign: true },
-    { name: "prj_residency_careless_sibling_bb1d9e20_23_10.iterate/", byDesign: true },
-    { name: "prj_residency_live_state_sink_bb1d9e20_23_11.iterate/", byDesign: true },
-    // anything else of theirs, and every other fixture, is still a leak
+    // the six careless-facet fixtures the list once allowed: no longer resident by design since a
+    // loaded facet holding no claim is reset (FacetHost `resetUnclaimedLoadedFacets`)
+    { name: "prj_live_bb1d9e20_28_0.iterate/", byDesign: false },
+    { name: "prj_rest_bb1d9e20_13_8.iterate/", byDesign: false },
+    { name: "prj_residency_careless_data_bb1d9e20_23_8.iterate/", byDesign: false },
+    { name: "prj_residency_careless_live_bb1d9e20_23_9.iterate/", byDesign: false },
+    { name: "prj_residency_careless_sibling_bb1d9e20_23_10.iterate/", byDesign: false },
+    { name: "prj_residency_live_state_sink_bb1d9e20_23_11.iterate/", byDesign: false },
+    // and every other fixture is a leak
     { name: "prj_live_bb1d9e20_28_0.iterate/repos/config", byDesign: false },
     { name: "prj_residency_root_bb1d9e20_23_6.iterate/", byDesign: false },
     { name: "prj_ws_bb1d9e20_12_2.iterate/", byDesign: false },

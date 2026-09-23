@@ -38,21 +38,10 @@ export const DURABLE_OBJECT_ANALYTICS_ROW_LIMIT = 10_000;
  *  with no client connected, and which run's data showed it. An entry is a decision, not a silencer:
  *  a pattern broad enough to hide a class of leak is a bug in this list. */
 export const RESIDENT_BY_DESIGN: { namePattern: RegExp; reason: string }[] = [
-  // Deliberate test subjects for one known platform gap, each the root context of its fixture's
-  // project (e2e/support/client.ts `freshCtx`: `prj_<prefix>_<run>_<worker>_<n>`), resident on
-  // PR #2849's run of 2026-09-23 (window 15:05–15:10Z). Any other path of these projects still fails.
-  ...[
-    "live", // e2e/live-state-chains-client-side.e2e.test.ts: the chatroom facet
-    "residency_careless_data", // e2e/context-residency.e2e.test.ts
-    "residency_careless_live",
-    "residency_careless_sibling",
-    "residency_live_state_sink",
-    "rest", // e2e/workers-and-facets.e2e.test.ts: a facet stashes a live itx handle
-  ].map((prefix) => ({
-    namePattern: new RegExp(`^prj_${prefix}_[0-9a-f]{8}_\\d+_\\d+\\.iterate/$`),
-    reason:
-      "a userspace facet keeps an env.ITX value and outlives its context — the platform gap the facet birth rule closes (facet-outlives-context investigation); remove this entry when that ships",
-  })),
+  // Empty. The six careless-facet fixtures once here (`live`, `rest`, `residency_careless_data`,
+  // `_live`, `_sibling`, `residency_live_state_sink`) were a userspace facet keeping an env.ITX
+  // value and outliving its context; a loaded facet holding no claim is now reset when its context
+  // is reborn or has been quiet a minute (FacetHost `resetUnclaimedLoadedFacets`).
 ];
 
 /** One row of the account's Durable Object namespace listing (`GET /workers/durable_objects/namespaces`). */
