@@ -1,7 +1,8 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { SUITE_WORKFLOWS } from "./flake-dashboard/update.ts";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 const bakedImage = "0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree";
@@ -70,13 +71,13 @@ const workspaceDirectories = (
 ).packages;
 
 describe("Depot deployment safety", () => {
-  it("finds the production deploy workflows", () => {
+  test("finds the production deploy workflows", () => {
     expect(deploymentWorkflows.map(({ app }) => app)).toEqual(
       expect.arrayContaining(["os-next", "dash", "agents", "notes", "voice", "kit", "spa"]),
     );
   });
 
-  it.each(deploymentWorkflows)(
+  test.each(deploymentWorkflows)(
     "$file serializes the destination without cancelling an active deploy",
     ({ file, app }) => {
       const workflow = loadWorkflow(file);
@@ -96,7 +97,7 @@ describe("Depot deployment safety", () => {
     },
   );
 
-  it.each(deploymentWorkflows)(
+  test.each(deploymentWorkflows)(
     "$file redeploys when its app or a workspace package it depends on changes",
     ({ file, app }) => {
       const workspaceByName = new Map(
@@ -121,7 +122,7 @@ describe("Depot deployment safety", () => {
     },
   );
 
-  it("runs OS-Next and Notes stateful proofs only against an isolated preview", () => {
+  test("runs OS-Next and Notes stateful proofs only against an isolated preview", () => {
     const preview = loadWorkflow(".depot/workflows/preview-os-next.yml");
     const previewScript = readFileSync(resolve(repoRoot, "apps/os/scripts/preview.ts"), "utf8");
 
@@ -146,7 +147,7 @@ describe("Depot deployment safety", () => {
     expect(previewScript).toContain("NOTES_BASE_URL: notesPreview.url");
   });
 
-  it("installs the pinned ESP-IDF release before preparing Kit firmware", () => {
+  test("installs the pinned ESP-IDF release before preparing Kit firmware", () => {
     const workflow = loadWorkflow(".depot/workflows/deploy-kit.yml");
     const deploy = workflow.jobs.deploy;
     const install = deploy.steps?.find((step) => step.name === "Install ESP-IDF 5.4.2");
@@ -172,7 +173,7 @@ describe("Depot deployment safety", () => {
 });
 
 describe("Depot credential boundaries", () => {
-  it("uses DOPPLER_TOKEN as the only stored Depot secret", () => {
+  test("uses DOPPLER_TOKEN as the only stored Depot secret", () => {
     const secretReferences = depotWorkflowFiles.flatMap((file) => {
       const contents = readFileSync(resolve(repoRoot, file), "utf8");
       return [...contents.matchAll(/secrets\.([A-Z0-9_]+)/g)].map((match) => match[1]);
@@ -181,7 +182,7 @@ describe("Depot credential boundaries", () => {
     expect([...new Set(secretReferences)]).toEqual(["DOPPLER_TOKEN"]);
   });
 
-  it("uses only GitHub's job-scoped token for GitHub API calls", () => {
+  test("uses only GitHub's job-scoped token for GitHub API calls", () => {
     const tokenAssignments = depotWorkflowFiles.flatMap((file) => {
       const contents = readFileSync(resolve(repoRoot, file), "utf8");
       return [...contents.matchAll(/^\s+GITHUB_TOKEN:\s*(.+)$/gm)].map((match) => match[1]);
@@ -191,7 +192,7 @@ describe("Depot credential boundaries", () => {
     expect([...new Set(tokenAssignments)]).toEqual(["${{ github.token }}"]);
   });
 
-  it.each([
+  test.each([
     {
       file: ".depot/workflows/ci-telemetry.yml",
       permissions: {
@@ -225,11 +226,15 @@ describe("Depot credential boundaries", () => {
       file: ".depot/workflows/release.yml",
       permissions: { contents: "write" },
     },
+    {
+      file: ".depot/workflows/flake-dashboard.yml",
+      permissions: { contents: "read", issues: "write" },
+    },
   ])("$file grants only its required GitHub permissions", ({ file, permissions }) => {
     expect(loadWorkflow(file).permissions).toEqual(permissions);
   });
 
-  it("loads the Depot telemetry token from preview without changing the PostHog config", () => {
+  test("loads the Depot telemetry token from preview without changing the PostHog config", () => {
     const workflow = loadWorkflow(".depot/workflows/ci-telemetry.yml");
     const collector = workflow.jobs.sync.steps?.find((step) =>
       step.run?.includes("scripts/ci/sync-ci-telemetry.ts"),
@@ -241,10 +246,44 @@ describe("Depot credential boundaries", () => {
     expect(collector?.run).toContain("doppler run --project _shared --config prd");
     expect(collector?.run).toContain("--preserve-env=DEPOT_CI_TELEMETRY_TOKEN,GITHUB_TOKEN");
   });
+
+  test("the flake dashboard lists every workflow that uploads flake records", () => {
+    const uploaders = depotWorkflowFiles.flatMap((file) => {
+      const workflow = parseYaml(readFileSync(resolve(repoRoot, file), "utf8")) as Workflow & {
+        name: string;
+      };
+      return Object.values(workflow.jobs).some((job) =>
+        (job.steps || []).some((step) =>
+          String(step.with?.name || "").startsWith("flake-records-"),
+        ),
+      )
+        ? [workflow.name]
+        : [];
+    });
+
+    expect(uploaders.sort()).toEqual([...SUITE_WORKFLOWS].sort());
+  });
+
+  test("writes the flake dashboard with the Depot telemetry token and keeps its state only for real runs", () => {
+    const steps = loadWorkflow(".depot/workflows/flake-dashboard.yml").jobs.update?.steps ?? [];
+    const writer = steps.find((step) => step.run?.includes("scripts/ci/flake-dashboard/update.ts"));
+    const keep = steps.find((step) => step.with?.name === "flake-dashboard-state");
+
+    expect(writer?.run).toContain(
+      "doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview",
+    );
+    expect(writer?.run).toContain("--state-out test-results/flake-dashboard/state.json");
+    expect(keep).toMatchObject({
+      if: "inputs.dry-run != 'true'",
+      uses: "actions/upload-artifact@v4",
+      with: expect.objectContaining({ path: "test-results/flake-dashboard/state.json" }),
+    });
+    expect(steps.indexOf(writer!)).toBeLessThan(steps.indexOf(keep!));
+  });
 });
 
 describe("Depot validation capacity", () => {
-  it("refreshes the baked workspace when dependency inputs land on main", () => {
+  test("refreshes the baked workspace when dependency inputs land on main", () => {
     const workflow = loadWorkflow(".depot/workflows/build-preview-ci-image.yml");
 
     expect(workflow.on?.push?.branches).toEqual(["main"]);
@@ -262,7 +301,7 @@ describe("Depot validation capacity", () => {
     );
   });
 
-  it.each(["deploy", "e2e"])(
+  test.each(["deploy", "e2e"])(
     "starts the OS-Next preview %s job from the baked workspace",
     (jobId) => {
       const job = loadWorkflow(".depot/workflows/preview-os-next.yml").jobs[jobId];
@@ -280,14 +319,14 @@ describe("Depot validation capacity", () => {
     },
   );
 
-  it("runs every workspace test script", () => {
+  test("runs every workspace test script", () => {
     const workflow = readFileSync(resolve(repoRoot, ".depot/workflows/test.yml"), "utf8");
 
     expect(readPackageJson(".").scripts?.test).toBe("pnpm -r --parallel test");
     expect(workflow).toContain("run: doppler run -- pnpm test");
   });
 
-  it("the preview's e2e suite and browser specs write the canonical telemetry artifact", () => {
+  test("the preview's e2e suite and browser specs write the canonical telemetry artifact", () => {
     expect(readPackageJson("apps/os").scripts?.e2e).toMatch(/retry-telemetry-reporter\.ts/);
     // The preview runs vitest directly (it must not rebuild the deployed dist/), so it names the
     // reporter itself.
@@ -299,7 +338,7 @@ describe("Depot validation capacity", () => {
     );
   });
 
-  it("every unit-test workspace writes the canonical telemetry artifact", () => {
+  test("every unit-test workspace writes the canonical telemetry artifact", () => {
     const expectedWorkspaces = workspaceDirectories.flatMap((directory) => {
       const packageJson = readPackageJson(directory);
       const testCommand = [packageJson.scripts?.test, packageJson.scripts?.["test:unit"]]
@@ -321,7 +360,7 @@ describe("Depot validation capacity", () => {
     );
   });
 
-  it.each([
+  test.each([
     {
       file: ".depot/workflows/test.yml",
       group: "test-${{ github.head_ref || github.ref_name || github.run_id }}",
@@ -352,7 +391,7 @@ describe("Depot validation capacity", () => {
     expect(job["timeout-minutes"]).toBe(timeoutMinutes);
   });
 
-  it.each([
+  test.each([
     { file: ".depot/workflows/test.yml", jobId: "test", group: "unit", suites: ["unit"] },
     {
       file: ".depot/workflows/preview-os-next.yml",
@@ -403,7 +442,7 @@ describe("Depot validation capacity", () => {
     },
   );
 
-  it("labels unit artifacts with the exact checked-out pull-request head", () => {
+  test("labels unit artifacts with the exact checked-out pull-request head", () => {
     const runTests = loadWorkflow(".depot/workflows/test.yml").jobs.test.steps?.find(
       (step) => step.name === "Run Tests",
     );
@@ -415,7 +454,7 @@ describe("Depot validation capacity", () => {
     });
   });
 
-  it.each([
+  test.each([
     [".depot/workflows/test.yml", "test"],
     [".depot/workflows/preview-os-next.yml", "e2e"],
   ])("%s finalizes test telemetry under the canonical PostHog project", (file, jobId) => {

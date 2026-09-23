@@ -8,7 +8,13 @@
 > six Playwright shards, the agent smoke and TUI lanes, `node:test`) went with
 > #2837. The Preview OS workflow's `e2e` job now runs one Vitest e2e runner and
 > one Playwright runner and finalizes them with
-> `upload-test-telemetry.ts --flake-suites preview`.
+> `upload-test-telemetry.ts --flake-suites preview`. The flake dashboard
+> (issue #2580) is written by `.depot/workflows/flake-dashboard.yml` every
+> 15 minutes (`scripts/ci/flake-dashboard/`, the legacy starter app's fold),
+> following the rules in [Current unknown flakes](#current-unknown-flakes).
+> A suite's run counts as main when its summary names `main` as its branch; a
+> workflow that uploads `flake-records-*` must be listed in the writer's
+> `SUITE_WORKFLOWS` (a workflow test enforces it).
 
 PostHog is the historical query layer for test performance, failures, flakes,
 CI queueing, Depot utilization, and automated-review outcomes. Retained CI

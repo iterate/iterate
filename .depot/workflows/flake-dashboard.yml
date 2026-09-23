@@ -1,0 +1,57 @@
+# THE FLAKE DASHBOARD'S WRITER (scripts/ci/flake-dashboard/update.ts): folds the flake-records-*
+# artifacts that the Test and Preview OS jobs finished since its last run and rewrites issue #2580.
+# The fold's state is this job's own artifact, read back by the next run. A dispatch with
+# dry-run=true renders without writing the issue or the state.
+name: Flake dashboard
+permissions:
+  contents: read
+  issues: write
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: true = render only; neither the issue nor the state is written
+        required: false
+        type: string
+        default: "false"
+concurrency:
+  group: flake-dashboard
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 15
+    env:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      GITHUB_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      # The Depot organization token CI telemetry already uses (Doppler _shared/preview) lists and
+      # downloads the artifacts; the job's own GitHub token writes the issue.
+      - name: Fold new flake records into the dashboard issue
+        run: |-
+          set -euo pipefail
+          export DEPOT_TOKEN
+          DEPOT_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
+          pnpm tsx scripts/ci/flake-dashboard/update.ts \
+            --state-out test-results/flake-dashboard/state.json \
+            --body-out test-results/flake-dashboard/body.md \
+            ${{ inputs.dry-run == 'true' && '--dry-run' || '' }}
+      - name: Keep the fold state for the next run
+        if: inputs.dry-run != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-dashboard-state
+          path: test-results/flake-dashboard/state.json
+          if-no-files-found: error
+          overwrite: true
