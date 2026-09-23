@@ -12,6 +12,7 @@ import { isRetryableTransportError } from "../retryable-error.ts";
 import type { ControlPlaneDurableObject } from "./durable-object.ts";
 import type {
   AccessibleRecord,
+  Caller as ControlPlaneCaller,
   MemberRecord,
   OrganizationRecord,
   ProjectRecord,
@@ -35,7 +36,10 @@ const projectMemo = new Map<string, ProjectRecord>();
 const accessMemo = new Map<string, { at: number; value: Promise<AccessibleRecord> }>();
 
 /** Who asked, as the control plane records it: the caller's principal and its connection. */
-const callerOf = (caller: Caller) => ({ principal: caller.principal, grant: caller.grant });
+const callerOf = (caller: Caller): ControlPlaneCaller => ({
+  principal: caller.principal,
+  grant: caller.grant,
+});
 
 /** The control plane as the edge holds it — ONE per request (worker.ts, rpc.ts), over the
  *  `CONTROL_PLANE` binding. */
