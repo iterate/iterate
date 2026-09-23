@@ -755,12 +755,14 @@ const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, st
  *  and `pnpm spec` know. Each runner derives the deployed target itself
  *  (e2e/support/deployed-target.ts, from the `APP_CONFIG` in this process's environment and the
  *  parent's envs.ts entry): the vitest suite in its global-setup, the specs in specs/setup.ts. Every
- *  spec project runs, the notes project against this preview's Notes app (NOTES_BASE_URL; the Notes
- *  specs fail in CI without it). vitest streams; Playwright's report prints after it. */
+ *  spec project runs, the notes and voice projects against this preview's Notes and Voice apps
+ *  (NOTES_BASE_URL, VOICE_BASE_URL; their specs fail in CI without them). vitest streams;
+ *  Playwright's report prints after it. */
 async function runE2e(previewName: string): Promise<void> {
   const url = previewUrl(previewName);
   const env = { WORKER_BASE_URL: url, DEMO_BASE_URL: url };
   const notes = APPS.find((app) => app.name === "notes")!;
+  const voice = APPS.find((app) => app.name === "voice")!;
   const spec = (async () => {
     if (process.env.CI)
       await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], {
@@ -772,6 +774,7 @@ async function runE2e(previewName: string): Promise<void> {
         ...process.env,
         ...env,
         NOTES_BASE_URL: appPreviewUrl(notes, previewName),
+        VOICE_BASE_URL: appPreviewUrl(voice, previewName),
         ...PREVIEW_SUITE_TELEMETRY.specs,
       },
     });

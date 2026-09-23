@@ -3,11 +3,10 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
 import viteReact from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { writeVoiceInstall } from "../agents/scripts/build-voice-install.ts";
 import { writeWranglerConfig } from "./scripts/generate-wrangler-config.ts";
 
-import { writeVoiceInstall } from "./scripts/build-voice-install.ts";
-
-await writeVoiceInstall();
+await writeVoiceInstall(new URL("./public/voice-install.json", import.meta.url));
 
 // wrangler.jsonc is generated and gitignored. Refresh it before the Cloudflare
 // plugin reads it so local dev and deploy builds always agree with envs.ts.

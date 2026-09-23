@@ -22,7 +22,8 @@ has none. It verifies voice health before minting a ten-year token scoped to the
 chosen project, under the same OAuth client that was authorized. Existing voice
 services, secrets and project websites are preserved. Immutable voice files live
 under `kit/voice/` in project KV; the `itx.voice` mount is published only after all
-uploads succeed.
+uploads succeed. The installer is `apps/agents/voice/install.ts`, shared with voice.iterate.com,
+which installs voice without a device.
 
 Client metadata lives at `k.iterate.com/devices/<model>/clients/<uuid>.json`. The
 flashed token appears as `Kit <board> <date>` with kind **Device** in your sessions

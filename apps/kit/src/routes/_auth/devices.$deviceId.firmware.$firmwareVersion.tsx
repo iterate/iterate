@@ -18,7 +18,7 @@ import {
   SelectValue,
 } from "@iterate-com/ui/components/select";
 import { LogOutIcon, UsbIcon } from "lucide-react";
-import { ensureVoiceAgent, VoiceInstall } from "../../voice/install.ts";
+import { ensureVoiceAgent, fetchVoiceInstall } from "../../../../agents/voice/install.ts";
 import { dashEnvs } from "../../../../../envs.ts";
 import { FirmwareInstallButton } from "../../components/firmware-install-button.tsx";
 import {
@@ -336,18 +336,7 @@ function KitPage() {
                     setPreparationError(undefined);
                     try {
                       using itx = await api.projects.get(projectId);
-                      const voice = await ensureVoiceAgent(
-                        itx,
-                        async () => {
-                          const response = await fetch("/voice-install.json", {
-                            signal: AbortSignal.timeout(30_000),
-                          });
-                          if (!response.ok)
-                            throw new Error("Could not download voice setup. Please try again.");
-                          return VoiceInstall.parse(await response.json());
-                        },
-                        openaiKey,
-                      );
+                      const voice = await ensureVoiceAgent(itx, fetchVoiceInstall, openaiKey);
                       if (voice === "needs-openai-key") {
                         setNeedsOpenaiKey(projectId);
                         return;

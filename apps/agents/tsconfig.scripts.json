@@ -4,5 +4,10 @@
     "types": ["node", "@cloudflare/workers-types"],
     "lib": ["ES2023", "ESNext.Disposable"]
   },
-  "include": ["scripts/build-runtime.ts", "scripts/client.ts", "scripts/voice-*.ts"]
+  "include": [
+    "scripts/build-runtime.ts",
+    "scripts/client.ts",
+    "scripts/voice-*.ts",
+    "scripts/build-voice-install.ts"
+  ]
 }

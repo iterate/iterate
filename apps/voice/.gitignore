@@ -2,3 +2,4 @@ node_modules/
 dist/
 .wrangler/
 wrangler.jsonc
+public/voice-install.json

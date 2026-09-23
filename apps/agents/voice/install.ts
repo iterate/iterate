@@ -1,7 +1,8 @@
 import type { IterateContextApi } from "iterate/next/api";
 import { z } from "zod";
-import { installAgents } from "../../../agents/runtime/install.ts";
+import { installAgents } from "../runtime/install.ts";
 
+// `kit/voice/…`: the prefix Kit first installed under, kept so installed projects keep their keys.
 const VoiceFileKey = z.string().regex(/^kit\/voice\/[a-f0-9]{64}\/[a-z-]+\.(js|css)$/);
 export const VoiceInstall = z.object({
   agentsRuntime: z.string().min(1),
@@ -11,7 +12,15 @@ export const VoiceInstall = z.object({
 });
 const VoiceHealth = z.object({ ok: z.literal(true) });
 
-/** No device grant is minted until this succeeds. Partial uploads are safe to retry:
+/** The voice install an app serves beside itself at `/voice-install.json` (written at build time by
+ *  apps/agents/scripts/build-voice-install.ts): Kit and voice.iterate.com each serve their own copy. */
+export async function fetchVoiceInstall(): Promise<z.infer<typeof VoiceInstall>> {
+  const response = await fetch("/voice-install.json", { signal: AbortSignal.timeout(30_000) });
+  if (!response.ok) throw new Error("Could not download voice setup. Please try again.");
+  return VoiceInstall.parse(await response.json());
+}
+
+/** Kit mints its device grant only after this succeeds. Partial uploads are safe to retry:
  * content-addressed files are written first, then one durable rule publishes the service. */
 export async function ensureVoiceAgent(
   project: Parameters<typeof installAgents>[0] & {

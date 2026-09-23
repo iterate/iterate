@@ -1,5 +1,5 @@
-import { createFileRoute, useRouterState } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import { createFileRoute, useRouter, useRouterState } from "@tanstack/react-router";
+import { useActionState, useRef, useState } from "react";
 import { CircleIcon } from "lucide-react";
 import { z } from "zod";
 import { useLiveState } from "iterate/next/react";
@@ -12,7 +12,10 @@ import {
   BreadcrumbSeparator,
 } from "@iterate-com/ui/components/breadcrumb";
 import { Button } from "@iterate-com/ui/components/button";
+import { Field, FieldDescription, FieldLabel } from "@iterate-com/ui/components/field";
+import { Input } from "@iterate-com/ui/components/input";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { ensureVoiceAgent, fetchVoiceInstall } from "../../../../agents/voice/install.ts";
 import { openAudio, type AudioSession } from "../../audio.ts";
 import { startCall, type Call, type CallFact } from "../../call.ts";
 
@@ -32,14 +35,25 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
     // the URL names the project by slug (its id works too); one this sign-in lacks → sign in again
     const project = projects.find((item) => item.slug === params.slug || item.id === params.slug);
     if (!project) return context.signInFor(params.slug);
-    return { projects, project };
+    // Installed is what ensureVoiceAgent checks: the project has an `itx.voice` rule. One that
+    // exists but fails is Call's error to report, never a reason to install over it.
+    using itx = await context.api.projects.get(project.id);
+    const [rule, secrets] = await Promise.all([
+      itx.rewriteRules.get("itx.voice"),
+      itx.secrets.list(),
+    ]);
+    const voice = {
+      installed: Boolean(rule),
+      hasOpenaiKey: secrets.some((secret) => secret.path === "/secrets/openai"),
+    };
+    return { projects, project, voice };
   },
   component: CallPage,
 });
 
 function CallPage() {
   const { info } = Route.useRouteContext();
-  const { projects, project } = Route.useLoaderData();
+  const { projects, project, voice } = Route.useLoaderData();
   const href = useRouterState({ select: (state) => state.location.href });
   return (
     <AppShell
@@ -62,8 +76,71 @@ function CallPage() {
       locationKey={href}
     >
       {/* the loader sends a sign-in the project is missing from off to sign in again */}
-      <Phone key={project.id} project={project.id} />
+      {voice.installed ? (
+        <Phone key={project.id} project={project.id} />
+      ) : (
+        <InstallVoice key={project.id} project={project.id} needsOpenaiKey={!voice.hasOpenaiKey} />
+      )}
     </AppShell>
+  );
+}
+
+/** A project with no voice agent: the installer Kit's Prepare runs (apps/agents/voice/install.ts),
+ *  here in the browser, as the signed-in person, against whichever platform this app is connected
+ *  to. The key goes from this form to the project's `/secrets/openai`, pinned to OpenAI. */
+function InstallVoice({ project, needsOpenaiKey }: { project: string; needsOpenaiKey: boolean }) {
+  const { api } = Route.useRouteContext();
+  const router = useRouter();
+  const [error, install, installing] = useActionState(
+    async (_previous: string | undefined, form: FormData) => {
+      try {
+        using itx = await api.projects.get(project);
+        const openaiKey = String(form.get("openai-key") || "");
+        await ensureVoiceAgent(itx, fetchVoiceInstall, openaiKey);
+        // "needs-openai-key" too: the key was deleted since the page loaded, and the reload asks
+        await router.invalidate();
+        return undefined;
+      } catch (e: unknown) {
+        return e instanceof Error ? e.message : String(e);
+      }
+    },
+    undefined,
+  );
+  return (
+    <form action={install} className="mx-auto flex w-full max-w-xl flex-col gap-6 p-4 md:p-8">
+      <div className="flex flex-col gap-2">
+        <p className="text-2xl font-semibold">Install voice</p>
+        <p className="text-sm text-muted-foreground">
+          This project has no voice agent yet. Installing one adds it to the project, then you can
+          call it from here.
+        </p>
+      </div>
+      {needsOpenaiKey ? (
+        <Field>
+          <FieldLabel htmlFor="openai-key">OpenAI API key</FieldLabel>
+          <Input
+            id="openai-key"
+            name="openai-key"
+            type="password"
+            autoComplete="new-password"
+            required
+          />
+          <FieldDescription>
+            Saved as a secret in your project, and only ever sent to api.openai.com.
+          </FieldDescription>
+        </Field>
+      ) : null}
+      <div>
+        <Button type="submit" size="lg" className="rounded-full px-8" disabled={installing}>
+          {installing ? "Installing…" : "Install voice"}
+        </Button>
+      </div>
+      {error ? (
+        <p role="alert" className="text-sm break-words text-destructive">
+          {error}
+        </p>
+      ) : null}
+    </form>
   );
 }
 

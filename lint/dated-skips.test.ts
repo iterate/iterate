@@ -49,6 +49,11 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     match: "The Notes specs need the Notes app deployed against the platform under test",
     note: "env-gated, local runs only: the notes project's baseURL is NOTES_BASE_URL; in CI (the preview's e2e job sets it) a missing Notes app fails",
   },
+  {
+    file: "specs/voice/voice.spec.ts",
+    match: "The Voice specs need the Voice app deployed against the platform under test",
+    note: "env-gated, local runs only: the voice project's baseURL is VOICE_BASE_URL; in CI (the preview's e2e job sets it) a missing Voice app fails",
+  },
   // -- Structural (fixture): the skip is the subject of the test, not a parked bug.
   {
     file: "scripts/ci/tracing/vitest.test.ts",

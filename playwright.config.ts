@@ -17,6 +17,8 @@ const localOsPort = Number(process.env.DEMO_PORT || 8788);
 const osBaseUrl = configuredOsBaseUrl || `http://localhost:${localOsPort}`;
 /** The Notes app deployed against that OS; unset skips the notes project's specs. */
 const notesBaseUrl = process.env.NOTES_BASE_URL?.replace(/\/+$/, "");
+/** The Voice app deployed against that OS; unset skips the voice project's specs. */
+const voiceBaseUrl = process.env.VOICE_BASE_URL?.replace(/\/+$/, "");
 const desktopWebUse = {
   ...devices["Desktop Chrome"],
   viewport: { width: 1280, height: 900 },
@@ -84,6 +86,11 @@ export default defineConfig({
       name: "notes",
       testDir: "specs/notes",
       use: recordedAtViewport({ ...desktopWebUse, baseURL: notesBaseUrl }),
+    },
+    {
+      name: "voice",
+      testDir: "specs/voice",
+      use: recordedAtViewport({ ...desktopWebUse, baseURL: voiceBaseUrl }),
     },
     // the suite's own specs, beside the app folders: the flake sentinel and the harness's
     // local-only specs (setContent, no deployment)
