@@ -22,7 +22,7 @@ export async function run(options: { at?: string; dryRun?: boolean } = {}) {
   const reading = await readWindow(windowEnd);
   const page = renderFaultPage(reading, windowEnd);
   console.log(JSON.stringify({ windowEnd, reading }));
-  if (!page || options.dryRun) return page ?? "os-next-prd is quiet";
+  if (!page || options.dryRun) return page || "os-next-prd is quiet";
   const slack = getSlackClient();
   const channel = slackChannelIds["#error-pulse"];
   // A fault that lasts pages hourly, not every run.
