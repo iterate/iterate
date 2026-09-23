@@ -29,6 +29,7 @@ on:
       - .depot/workflows/deploy-agents.yml
       - .depot/workflows/deploy-notes.yml
       - .depot/workflows/deploy-voice.yml
+      - .depot/workflows/deploy-kit.yml
       - .depot/workflows/preview-os-next.yml
       - .depot/workflows/main-os-e2e.yml
       - apps/os/**
@@ -37,6 +38,9 @@ on:
       - apps/agents/**
       - apps/notes/**
       - apps/voice/**
+      - apps/kit/**
+      # a preview builds kit's installer, never its firmware (envs.ts kitEnvs.preview)
+      - "!apps/kit/firmware/**"
       - specs/**
       - playwright.config.ts
       - packages/iterate/**
