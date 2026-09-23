@@ -11,7 +11,7 @@
 // cancelled runs'), sweep (the stale previews and the resources that outlived theirs —
 // the rules are scripts/preview-sweep.ts). `--dry-run` prints the plan.
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -25,6 +25,7 @@ import {
 } from "../../../scripts/lib/deploy-helpers.ts";
 import {
   CloudflareApiError,
+  loadDopplerSecrets,
   resolveEnvContext,
   type EnvContext,
 } from "../../../scripts/lib/env-context.ts";
@@ -40,6 +41,8 @@ import {
   PREVIEW_CONFIG_NAME,
   PREVIEW_PARENT,
   isDurableObjectClassNotExportedError,
+  PLATFORM_SPEC_PROJECTS,
+  PREVIEW_PARENT_ENV,
   previewPullRequestNumber,
   previewResourceName,
   previewResourceSuffixes,
@@ -48,8 +51,14 @@ import {
   RESIDENCY_SECTION_MARKERS,
   resolvePreviewName,
   splicePullRequestBody,
+  THROWAWAY_PARENT_CONFIG_NAME,
   writePreviewWranglerConfig,
+  writeThrowawayParentWranglerConfig,
 } from "./preview-config.ts";
+import {
+  assertPreviewConfigTouchesNoPrdLiveResource,
+  assertPreviewParentIsNotPrdLive,
+} from "./preview-prd-guard.ts";
 import {
   DURABLE_OBJECT_RESIDENCY_QUERY,
   DurableObjectNamespace,
@@ -102,11 +111,23 @@ const USAGE = `Usage: preview.ts <${Command.options.join("|")}> [--pr <n>] [--na
  *  429s retried, a truncated listing refused). */
 type Cf = EnvContext<OsEnv>["cf"];
 
-/** The parent's Doppler config (project-worker/preview), downloaded — the Cloudflare credentials for
- *  its account and the two secrets every preview inherits — the way ensure-resources and erase-data
- *  resolve theirs. Refuses a Doppler account that is not the parent's. */
-const parentContext = () =>
-  resolveEnvContext({ envs: osEnvs, dopplerProject: "project-worker", env: "preview" });
+/** The parent's Doppler config (project-worker/preview, or prd for `PREVIEW_PARENT_ENV=prd-account-e2e`),
+ *  downloaded — the Cloudflare credentials for its account — the way ensure-resources and erase-data
+ *  resolve theirs. Refuses a Doppler account that is not the parent's, and a production parent
+ *  (scripts/preview-prd-guard.ts). */
+const parentContext = async () => {
+  assertPreviewParentIsNotPrdLive(PREVIEW_PARENT);
+  const ctx = await resolveEnvContext({
+    envs: osEnvs,
+    dopplerProject: "project-worker",
+    env: PREVIEW_PARENT_ENV,
+  });
+  // wrangler, a child process, authenticates from the environment: the parent account's
+  // credentials (the same values `doppler run` already set, for the dev/preview parent).
+  process.env.CLOUDFLARE_API_TOKEN = ctx.secrets.CLOUDFLARE_API_TOKEN;
+  process.env.CLOUDFLARE_ACCOUNT_ID = ctx.env.cloudflareAccountId;
+  return ctx;
+};
 
 // ── process helpers (cloudflare-os) ────────────────────────────────────────────────────────────
 
@@ -471,6 +492,11 @@ async function deployAppPreview(
 }
 
 /** The apps this run previews: --apps all, none, or (auto) the ones whose paths this PR changes. */
+/** An app on top is previewed only beside a parent on its own account: the prd account's throwaway
+ *  parent has none (their parents are the dev account's). Deploy, delete and the specs all ask. */
+const isBesideParent = (app: StartApp) =>
+  app.envs.preview!.cloudflareAccountId === PREVIEW_PARENT.cloudflareAccountId;
+
 async function appsToPreview(mode: AppsMode, prNumber: string | undefined): Promise<StartApp[]> {
   if (mode === "all") return APPS;
   if (mode === "none") return [];
@@ -551,7 +577,14 @@ async function deleteWorkerPreview(
  *  `login.password`, `secrets.adminBearer` — and `APP_CONFIG_SECRETS__KEY` beside it. Values go
  *  through a 0600 tmp file, never argv or the config. */
 async function uploadPreviewSecrets(wrangler: string, ctx: EnvContext<OsEnv>): Promise<void> {
-  const secrets = collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]);
+  // A preview always runs as the `preview` config's test identities, whichever account its parent
+  // is on: the prd account's throwaway parent gets its Cloudflare credentials from `prd`, never
+  // production's admin secret or sign-in password.
+  const appSecrets =
+    ctx.env.dopplerConfig === osEnvs.preview!.dopplerConfig
+      ? ctx
+      : { env: osEnvs.preview!, secrets: loadDopplerSecrets("project-worker", "preview") };
+  const secrets = collectSecrets(appSecrets, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]);
   const dir = mkdtempSync(path.join(tmpdir(), "os-next-preview-secrets-"));
   const file = path.join(dir, "secrets.json");
   try {
@@ -596,13 +629,27 @@ async function deployOsPreview(
 }> {
   await ensureArtifactsNamespace(ctx.cf, previewResourceName(previewName, "repos"));
   const dash = apps.find((app) => app.name === "dash");
-  writePreviewWranglerConfig({
+  const configPath = writePreviewWranglerConfig({
     previewName,
     dashOrigin: dash && `https://${previewName}-${new URL(dash.envs.preview!.baseUrl).hostname}`,
   });
+  assertPreviewConfigTouchesNoPrdLiveResource(
+    JSON.parse(readFileSync(configPath, "utf8")),
+    previewName,
+  );
   const wrangler = preparePreviewWrangler();
   try {
     await wrangler.ready;
+    // The prd account's throwaway parent: one fixed name, deployed from this same guarded config on
+    // every run (workers are never deleted), so it always exports every Durable Object class the
+    // build binds — a parent that lacks one fails its previews with 10061. The repo's wrangler, as
+    // the dev parent's deploy: the preview build predates `exports`.
+    if (PREVIEW_PARENT_ENV !== "preview") {
+      writeThrowawayParentWranglerConfig(configPath);
+      await runAsync("pnpm", ["exec", "wrangler", "deploy", "-c", THROWAWAY_PARENT_CONFIG_NAME], {
+        cwd: ROOT,
+      });
+    }
     await uploadPreviewSecrets(wrangler.command, ctx);
     const result = await run(wrangler.command, [
       "preview",
@@ -724,7 +771,7 @@ async function deleteAll(cf: Cf, previewName: string): Promise<void> {
   try {
     await wrangler.ready;
     await deletePreview(cf, previewName, wrangler.command);
-    for (const app of APPS)
+    for (const app of APPS.filter(isBesideParent))
       await deleteWorkerPreview(app.envs.preview!, previewName, wrangler.command);
   } finally {
     wrangler.cleanup();
@@ -760,18 +807,23 @@ const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, st
  *  parent's envs.ts entry): the vitest suite in its global-setup, the specs in specs/setup.ts. Every
  *  spec project runs, the notes and voice projects against this preview's Notes and Voice apps, the
  *  Notes session specs signing out in its Dash (NOTES_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL;
- *  their specs fail in CI without them). vitest streams; Playwright's report prints after it. */
+ *  their specs fail in CI without them). Beside a parent whose account has no apps on top (the prd
+ *  account's throwaway run) only the platform's own projects run, chosen by name
+ *  (PLATFORM_SPEC_PROJECTS). vitest streams; Playwright's report prints after it. */
 async function runE2e(previewName: string): Promise<void> {
   const url = previewUrl(previewName);
   const env = { WORKER_BASE_URL: url, DEMO_BASE_URL: url };
   const appUrl = (name: string) =>
     appPreviewUrl(APPS.find((app) => app.name === name)!, previewName);
+  const specProjects = APPS.every(isBesideParent)
+    ? []
+    : PLATFORM_SPEC_PROJECTS.flatMap((project) => ["--project", project]);
   const spec = (async () => {
     if (process.env.CI)
       await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], {
         cwd: path.resolve(ROOT, "../.."),
       });
-    return run("pnpm", ["spec"], {
+    return run("pnpm", ["spec", ...specProjects], {
       cwd: path.resolve(ROOT, "../.."),
       env: {
         ...process.env,
@@ -1062,7 +1114,10 @@ async function sweep(cf: Cf, dryRun: boolean): Promise<void> {
   const previews = await listAll<ListedPreview>(
     cf,
     `/workers/workers/${PREVIEW_PARENT.workerName}/previews`,
-  );
+  ).catch((error) => {
+    if (!isMissingWorkerError(describe(error))) throw error;
+    return [] as ListedPreview[]; // the prd account's parent before its first run holds none
+  });
   console.log(
     `${previews.length} preview(s) on ${PREVIEW_PARENT.workerName}; ${resources.length} KV namespaces, R2 buckets, D1s and Artifacts namespaces to judge`,
   );

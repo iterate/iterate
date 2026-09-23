@@ -5,7 +5,8 @@ import { parse as parseYaml } from "yaml";
 
 /** The parts of .depot/workflows/main-os-e2e.yml these tests read. */
 type MainWorkflow = {
-  on: { push?: { branches?: string[]; paths?: string[] } };
+  on: { push?: { branches?: string[]; paths?: string[] }; schedule?: { cron: string }[] };
+  env?: Record<string, string>;
   concurrency: { group: string; "cancel-in-progress": boolean };
   jobs: Record<
     string,
@@ -19,6 +20,7 @@ type MainWorkflow = {
 };
 
 const main = readWorkflow("main-os-e2e.yml") as MainWorkflow;
+const prdAccount = readWorkflow("main-os-e2e-prd-account.yml") as MainWorkflow;
 const preview = readWorkflow("preview-os-next.yml") as {
   on: { pull_request: { paths: string[] } };
 };
@@ -81,6 +83,25 @@ test("pages on main's change of state, never for a superseded run", () => {
     "delete",
   ]);
   expect(runs("alert")).toContain("pnpm tsx scripts/ci/main-e2e-alert.ts alert");
+});
+
+test("the prd account's run is the same run on the one throwaway parent, the platform alone", () => {
+  expect(prdAccount.on.push?.branches).toEqual(["main"]);
+  expect(prdAccount.env?.PREVIEW_PARENT_ENV).toBe("prd-account-e2e");
+  const step = (jobId: string, command: string) =>
+    prdAccount.jobs[jobId]?.steps?.find((candidate) => candidate.run === command);
+  expect(step("deploy", "doppler run -- pnpm preview deploy")?.env?.PREVIEW_APPS).toBe("none");
+  expect(step("e2e", "doppler run -- pnpm preview e2e")).toBeDefined();
+  expect(step("residency", "doppler run -- pnpm preview residency")).toBeDefined();
+  expect(prdAccount.jobs.delete?.if).toBe("always() && github.event_name != 'schedule'");
+  expect(prdAccount.jobs.residency?.if).toBe(main.jobs.residency?.if);
+  expect(prdAccount.jobs.alert?.steps?.at(-1)?.run).toBe(
+    'pnpm tsx scripts/ci/main-e2e-alert.ts alert --label "main e2e on the prd account"',
+  );
+  // the nightly backstop sweeps the prd account parent's leftovers
+  expect(prdAccount.on.schedule).toHaveLength(1);
+  expect(prdAccount.jobs.sweep?.if).toBe("github.event_name == 'schedule'");
+  expect(step("sweep", "doppler run -- pnpm preview sweep")).toBeDefined();
 });
 
 function readWorkflow(file: string): unknown {
