@@ -209,7 +209,7 @@ export type SessionAuthority = {
   scopes?: string[];
 };
 
-export class SessionRpcTarget extends RpcTarget {
+class SessionRpcTarget extends RpcTarget {
   readonly #sessionTeardown: SessionTeardown;
   readonly #projects: ProjectCollectionRpcTarget;
   readonly #organizations: OrganizationCollectionRpcTarget;
