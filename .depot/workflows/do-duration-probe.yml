@@ -12,10 +12,13 @@
 # Every run rewrites the headline of the day's thread in Slack #error-pulse
 # (one message per UTC day: latest hour, today's total, hours over the
 # ceiling, per account). A breach in the last two hours or a probe that could
-# not run is a reply in that thread, and the run goes red.
+# not run is a reply in that thread, and the run goes red. An account at its
+# page tier (dev/preview $10/hour, prd $12/hour) also gets a new top-level
+# message that @-mentions Jonas and names the top namespaces, at most every
+# 3 hours while it lasts.
 #
-# Test the Slack hookup end to end (a tiny threshold forces an alert, marked
-# 🧪 TEST RUN in the message):
+# Test the Slack hookup end to end (a tiny threshold forces an alert and a
+# page without the mention, marked 🧪 TEST RUN in the message):
 #
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
 #     --workflow do-duration-probe.yml \

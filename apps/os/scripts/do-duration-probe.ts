@@ -28,6 +28,8 @@
 //   --json                    human report moves to stderr; stdout carries one
 //                             ProbeSummary JSON line (for the CI alert wrapper)
 
+import { z } from "zod";
+
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (value === undefined || value === "") throw new Error(`Missing required env var ${name}`);
@@ -76,6 +78,7 @@ async function cfGraphql<T>(input: {
 }
 
 export type ActiveTimeRow = { hour: string; doHours: number };
+export type NamespaceActiveTimeRow = { namespace: string; doHours: number };
 export type PinnedInvocationRow = {
   date: string;
   script: string;
@@ -90,6 +93,8 @@ export type ProbeSummary = {
     /** Every hour of the lookback that had any DO activity, oldest first. */
     hours: ActiveTimeRow[];
     breachedHours: ActiveTimeRow[];
+    /** The trailing 60 minutes' five biggest namespaces: who is spending. */
+    topNamespaces: NamespaceActiveTimeRow[];
   };
   pinnedInvocations: { thresholdHours: number; rows: PinnedInvocationRow[] };
 };
@@ -152,6 +157,67 @@ async function checkAccountActiveTime(input: {
   return { hours, breachedHours: hours.filter((row) => row.doHours > input.maxAccountDoHours) };
 }
 
+/**
+ * The trailing 60 minutes' five biggest DO namespaces by active time, named
+ * as the account's namespace listing names them: `<script>_<class>`, with the
+ * preview slug in between for a Worker Preview
+ * (`os-next-preview_pr2828-control-plane-cleanup_IterateContextDurableObject`).
+ * DO-hours in the trailing hour are DO-hours per hour, so the alert can put
+ * a $/h on each.
+ */
+async function topNamespacesInTrailingHour(input: {
+  accountTag: string;
+  apiToken: string;
+}): Promise<NamespaceActiveTimeRow[]> {
+  const query = `
+    query DoTopNamespacesProbe($accountTag: string!, $since: Time!) {
+      viewer {
+        accounts(filter: { accountTag: $accountTag }) {
+          durableObjectsPeriodicGroups(
+            limit: 5
+            filter: { datetimeMinute_geq: $since }
+            orderBy: [sum_activeTime_DESC]
+          ) {
+            dimensions { namespaceId }
+            sum { activeTime }
+          }
+        }
+      }
+    }`;
+  const since = new Date(Date.now() - 3600_000).toISOString();
+  const data = await cfGraphql<{
+    viewer: {
+      accounts: Array<{
+        durableObjectsPeriodicGroups: Array<{
+          dimensions: { namespaceId: string };
+          sum: { activeTime: number };
+        }>;
+      }>;
+    };
+  }>({ apiToken: input.apiToken, query, variables: { accountTag: input.accountTag, since } });
+  const rows = data.viewer.accounts[0]?.durableObjectsPeriodicGroups ?? [];
+  if (rows.length === 0) return [];
+  // One page of the listing: dev/preview holds ~400 namespaces. A namespace
+  // past it keeps its bare id rather than paging through the whole account.
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${input.accountTag}/workers/durable_objects/namespaces?per_page=1000`,
+    { headers: { Authorization: `Bearer ${input.apiToken}` } },
+  );
+  // Only `id` and `name` are read. A listing that fails or drifts in shape
+  // leaves every namespace under its bare id: less readable, never a wrong
+  // number and never a lost reading.
+  const listing = z
+    .object({ result: z.array(z.object({ id: z.string(), name: z.string() })) })
+    .safeParse(await response.json().catch(() => null));
+  const names = new Map(
+    (listing.success ? listing.data.result : []).map((namespace) => [namespace.id, namespace.name]),
+  );
+  return rows.map((row) => ({
+    namespace: names.get(row.dimensions.namespaceId) || row.dimensions.namespaceId,
+    doHours: Math.round(row.sum.activeTime / 3600e6),
+  }));
+}
+
 async function proveCredentials(input: { accountTag: string; apiToken: string }): Promise<void> {
   const response = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${input.accountTag}/workers/durable_objects/namespaces?per_page=1`,
@@ -210,6 +276,9 @@ async function main(): Promise<void> {
       );
     }
   }
+  const topNamespaces = await topNamespacesInTrailingHour({ accountTag, apiToken });
+  report("Top DO namespaces, trailing hour (DO-hours):");
+  for (const row of topNamespaces) report(`  - ${row.namespace}  ${row.doHours}`);
 
   // Cloudflare keeps adaptive analytics for the trailing window; query by day so
   // the schema accepts the filter, then keep only scripts over the ceiling.
@@ -287,7 +356,7 @@ async function main(): Promise<void> {
 
   if (json) {
     const summary: ProbeSummary = {
-      activeTime: { ceilingDoHours: maxAccountDoHours, hours, breachedHours },
+      activeTime: { ceilingDoHours: maxAccountDoHours, hours, breachedHours, topNamespaces },
       pinnedInvocations: { thresholdHours, rows: flagged },
     };
     console.log(JSON.stringify(summary));

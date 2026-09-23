@@ -6,9 +6,14 @@
 // thread's first reply is the per-account table (latest hour, today so far,
 // hours over the ceiling, pinned invocations), also rewritten every hour;
 // anything that needs a human — an hour over the ceiling, a probe that could
-// not run — is a further reply. The channel itself sees one message a day.
+// not run — is a further reply. An account at its page tier ($/hour) also gets
+// a NEW top-level message that @-mentions Jonas and names the top spenders,
+// repeated every PAGE_REPEAT_HOURS while it lasts: edits and thread replies
+// notify nobody.
 // Exists because the 2026-09-01 preview stream-DO wake loop burned ~$300/hour
-// for 28 hours before a human noticed it on the bill.
+// for 28 hours before a human noticed it on the bill — and the 2026-09-21
+// os-next preview pin runaway reached $87/hour with this alarm red for a day,
+// its replies unread in the thread.
 //
 //   pnpm tsx scripts/ci/do-duration-alert.ts run
 //   pnpm tsx scripts/ci/do-duration-alert.ts run --threshold-do-hours 1   # force an alert (Slack hookup test)
@@ -29,6 +34,8 @@ const USD_PER_DO_HOUR = 0.005625;
 const RECENT_HOURS = 2;
 /** Long enough that every hour of the current UTC day is in the summary. */
 const LOOKBACK_HOURS = 26;
+/** A breach that lasts pages every third hourly run. */
+const PAGE_REPEAT_HOURS = 3;
 
 const ACCOUNTS = [
   {
@@ -38,6 +45,11 @@ const ACCOUNTS = [
     // every run (#2585); one slot relit by a finished run is 2,000–4,000. The
     // incident ran 20,000–57,000. ≈ $2.80/hour.
     maxAccountDoHours: 500,
+    // ≈ 1,780 DO-hours/hour, 3.6× the ceiling: above every breach between the
+    // 09-01 and 09-21 incidents (the worst, 09-04, ran ~1,160 ≈ $6.50/h); the
+    // 09-21 os-next preview pin runaway ran $16/h in its second hour, $87/h
+    // at its peak.
+    pageUsdPerHour: 10,
   },
   {
     dopplerConfig: "prd",
@@ -47,12 +59,17 @@ const ACCOUNTS = [
     // (not this repo's; routed to its owner) — ≈ $3/hour, visible in the
     // headline every hour without a reply. ≈ $3.40/hour ceiling.
     maxAccountDoHours: 600,
+    // ≈ 2,130 DO-hours/hour, 3.6× the ceiling like dev/preview; prd's worst
+    // breach on record ran ~880 ≈ $4.95/h (09-04..08).
+    pageUsdPerHour: 12,
   },
 ];
 
 export type AccountReading = {
   label: string;
   ceilingDoHours: number;
+  /** Current usage at or above this pages: a new top-level message. */
+  pageUsdPerHour: number;
   summary: ProbeSummary | null;
   /** Why the probe printed no summary (bad creds, GraphQL outage). */
   failure: string | null;
@@ -74,6 +91,10 @@ export async function run(options: {
     readings.push({
       label: account.label,
       ceilingDoHours,
+      // A forced-threshold test run pages at 10× its tiny ceiling, so the
+      // Slack hookup test exercises the page too.
+      pageUsdPerHour:
+        override === undefined ? account.pageUsdPerHour : override * 10 * USD_PER_DO_HOUR,
       ...probe(account.dopplerConfig, ceilingDoHours),
     });
   }
@@ -81,9 +102,22 @@ export async function run(options: {
   const thread = renderDailyThread({ now, readings, runUrl, testRun: override !== undefined });
   console.log(`\n${thread.headline}\n\n${thread.details}\n`);
   for (const reply of thread.replies) console.log(`\n${reply}\n`);
+  for (const page of thread.pages) console.log(`\n${page.text}\n`);
 
   const slack = getSlackClient();
   const channel = slackChannelIds["#error-pulse"];
+  // Pages first: a Slack error in the thread upkeep below must not swallow one.
+  let pagesPosted = 0;
+  for (const page of thread.pages) {
+    const posted = await postPageUnlessRecent({
+      slack,
+      channel,
+      now,
+      page,
+      testRun: override !== undefined,
+    });
+    if (posted) pagesPosted++;
+  }
   const headlineTs = await findOrCreateHeadline({
     slack,
     channel,
@@ -97,7 +131,7 @@ export async function run(options: {
   }
   await slack.chat.update({ channel, ts: headlineTs, text: thread.headline });
 
-  if (thread.replies.length === 0) {
+  if (thread.replies.length === 0 && thread.pages.length === 0) {
     console.log("✅ both accounts under their ceilings; headline updated");
     return { breached: false };
   }
@@ -105,7 +139,8 @@ export async function run(options: {
   // exits 0 on a normal return even with process.exitCode set — verified on
   // the 2026-09-02 dispatch test, where a breach concluded "success".
   throw new Error(
-    `DO duration alarm: ${thread.replies.length} alert(s) posted to the daily thread`,
+    `DO duration alarm: ${thread.replies.length} alert(s) posted to the daily thread, ` +
+      `${thread.pages.length} account(s) at the page tier (${pagesPosted} paged now)`,
   );
 }
 
@@ -146,9 +181,9 @@ function probe(dopplerConfig: string, ceilingDoHours: number) {
 
 /**
  * The day's Slack thread as text: the one-sentence headline, the per-account
- * details table that lives in the thread's first reply, and the alert replies
- * this run has to add (only what a human should look at now). Pure, so the
- * wording is testable.
+ * details table that lives in the thread's first reply, the alert replies
+ * this run has to add (only what a human should look at now), and a page per
+ * account at its page tier. Pure, so the wording is testable.
  */
 export function renderDailyThread(input: {
   now: Date;
@@ -157,8 +192,7 @@ export function renderDailyThread(input: {
   testRun: boolean;
 }) {
   const date = input.now.toISOString().slice(0, 10);
-  // The probe runs at :41 and analytics lag ~15–20 minutes, so the current
-  // hour is always partial: "current usage" is the last complete hour.
+  const currentHour = input.now.toISOString().slice(0, 13);
   const lastCompleteHour = new Date(input.now.getTime() - 3600_000).toISOString().slice(0, 13);
   const recentSince = new Date(input.now.getTime() - RECENT_HOURS * 3600_000).toISOString();
   const testPrefix = input.testRun ? "🧪 TEST RUN — " : "";
@@ -169,6 +203,7 @@ export function renderDailyThread(input: {
   const perAccount: string[] = [];
   const tableRows: string[][] = [];
   const replies: string[] = [];
+  const pages: Array<{ label: string; text: string }> = [];
   for (const reading of input.readings) {
     if (reading.summary === null) {
       perAccount.push(`${reading.label}: probe failed`);
@@ -179,10 +214,21 @@ export function renderDailyThread(input: {
       continue;
     }
     const { activeTime, pinnedInvocations } = reading.summary;
-    // Rows exist only for hours with activity: no row for the last complete
-    // hour means nothing ran in it (dev/preview overnight, slots erased).
-    const current = activeTime.hours.find((row) => row.hour.startsWith(lastCompleteHour));
-    const accountUsdPerDay = (current ? current.doHours : 0) * 24 * USD_PER_DO_HOUR;
+    // Current usage: the last complete hour, or this partial hour projected
+    // to a full one if that is higher, so a runaway that started this hour
+    // pages now rather than at the next run. Analytics lag only makes the
+    // projection low. It divides by at least 30 minutes: a dispatch early in
+    // the hour must not turn a few minutes' burst into a page. Rows exist
+    // only for hours with activity: no row means nothing ran in that hour.
+    const lastComplete = activeTime.hours.find((row) => row.hour.startsWith(lastCompleteHour));
+    const thisHour = activeTime.hours.find((row) => row.hour.startsWith(currentHour));
+    const doHoursPerHour = Math.max(
+      lastComplete ? lastComplete.doHours : 0,
+      thisHour ? (thisHour.doHours * 60) / Math.max(input.now.getUTCMinutes(), 30) : 0,
+    );
+    const accountUsdPerHour = doHoursPerHour * USD_PER_DO_HOUR;
+    const accountUsdPerDay = doHoursPerHour * 24 * USD_PER_DO_HOUR;
+    const ceilingMultiple = `${(doHoursPerHour / reading.ceilingDoHours).toFixed(1)}×`;
     usdPerDay += accountUsdPerDay;
     perAccount.push(`${money(accountUsdPerDay)} ${reading.label}`);
 
@@ -204,7 +250,7 @@ export function renderDailyThread(input: {
     if (worst) {
       replies.push(
         [
-          `${testPrefix}🚨 Durable Objects hours over ${reading.ceilingDoHours}. account: ${reading.label}.`,
+          `${testPrefix}🚨 Durable Objects hours over ${reading.ceilingDoHours}. account: ${reading.label}. Now ${ceilingMultiple} the ceiling (~${money(accountUsdPerHour)}/h).`,
           `Latest: ${hourOf(worst)}`,
           pinned ? `Also pinned: ${pinned.script}  wallTimeP99=${pinned.wallTimeP99Hours}h` : null,
           links(input.runUrl),
@@ -212,6 +258,21 @@ export function renderDailyThread(input: {
           .filter(Boolean)
           .join("\n"),
       );
+    }
+    if (accountUsdPerHour >= reading.pageUsdPerHour) {
+      pages.push({
+        label: reading.label,
+        text: [
+          // "DO cost page for <label>:" is how postPageUnlessRecent finds it.
+          // The mention is Jonas (slackUsers in ./slack.ts); a test run
+          // mentions nobody.
+          `${testPrefix}🚨 DO cost page for ${reading.label}: ~${money(accountUsdPerHour)}/h (≈ ${money(accountUsdPerDay)}/day), ${ceilingMultiple} the ceiling.${input.testRun ? "" : " <@U067G4QRFK2>"}`,
+          "Top spenders, trailing hour:",
+          ...activeTime.topNamespaces.map((row) => `• ${row.namespace}  ~${usd(row.doHours)}/h`),
+          `Pages again in ${PAGE_REPEAT_HOURS}h while it lasts; hourly readings are in today's "We're spending" thread.`,
+          links(input.runUrl),
+        ].join("\n"),
+      });
     }
   }
 
@@ -222,7 +283,7 @@ export function renderDailyThread(input: {
     "```",
     links(input.runUrl),
   ].join("\n");
-  return { date, headline, details, replies };
+  return { date, headline, details, replies, pages };
 }
 
 /** The details table's header row; also how the reply is recognised in the thread. */
@@ -311,9 +372,12 @@ async function findOrCreateHeadline(input: {
 /**
  * The thread's first reply is the per-account table: posted on the day's
  * first run, rewritten in place on every run after. Recognised among the
- * bot's replies by the table's header row.
+ * bot's replies by every cell of the table's header row — never the joined
+ * row: the table pads cells into columns, so the joined header never appears
+ * verbatim, and until 2026-09-23 every run posted a fresh table (24 replies a
+ * day, burying the alerts).
  */
-async function upsertDetailsReply(input: {
+export async function upsertDetailsReply(input: {
   slack: WebClient;
   channel: string;
   headlineTs: string;
@@ -328,7 +392,7 @@ async function upsertDetailsReply(input: {
     (message) =>
       message.bot_id &&
       message.ts !== input.headlineTs &&
-      message.text?.includes(DETAILS_HEADER.join("  ").slice(0, 20)),
+      DETAILS_HEADER.every((cell) => message.text?.includes(cell)),
   );
   if (existing?.ts) {
     await input.slack.chat.update({ channel: input.channel, ts: existing.ts, text: input.details });
@@ -339,6 +403,42 @@ async function upsertDetailsReply(input: {
     thread_ts: input.headlineTs,
     text: input.details,
   });
+}
+
+/**
+ * A page is a NEW top-level message — an edit or a thread reply notifies
+ * nobody — posted unless the same account was paged by one of the last two
+ * runs: a breach that lasts pages every PAGE_REPEAT_HOURS, not every hour.
+ * Found by text like the headline (the words, since Slack rewrites emoji in
+ * history); a test run's page never suppresses a real one. Returns whether
+ * it posted.
+ */
+export async function postPageUnlessRecent(input: {
+  slack: WebClient;
+  channel: string;
+  now: Date;
+  page: { label: string; text: string };
+  testRun: boolean;
+}) {
+  const history = await input.slack.conversations.history({
+    channel: input.channel,
+    // Half an hour short of PAGE_REPEAT_HOURS, so the page three runs ago
+    // no longer counts even when this run starts a few minutes early.
+    oldest: String(input.now.getTime() / 1000 - (PAGE_REPEAT_HOURS - 0.5) * 3600),
+    limit: 200,
+  });
+  const recentPage = (history.messages || []).find(
+    (message) =>
+      message.bot_id &&
+      message.text?.includes(`DO cost page for ${input.page.label}:`) &&
+      message.text.includes("TEST RUN") === input.testRun,
+  );
+  if (recentPage) {
+    console.log(`${input.page.label} was paged at ts ${recentPage.ts}; not paging again yet`);
+    return false;
+  }
+  await input.slack.chat.postMessage({ channel: input.channel, text: input.page.text });
+  return true;
 }
 
 if (isMainModule(import.meta.url)) {
