@@ -18,6 +18,7 @@ import {
   type StreamEventInput,
 } from "../stream/processor.ts";
 import { auth } from "./auth.ts";
+import { recordPipelinedSteps } from "./record-pipelined-steps.ts";
 export { auth };
 export {
   StreamProcessor,
@@ -194,19 +195,26 @@ export abstract class StreamProcessorDurableObject<
     }));
   }
 
-  /** ONE pipelined round trip on the itx scope, then release it: await the answer — plain data, the
-   *  wire already copied it — then dispose the call AND the get. Hygiene, not what keeps the context
-   *  evictable: the context's own `invoke` ends every inbound session with the call, whatever a
-   *  caller keeps (expression.ts `itxAnswerDetachedFromSession`), so an intermediate left undisposed
-   *  here holds only the stateless loopback call. Protected: a host with methods of its own (the
-   *  workspace, src/workspace/durable-object.ts) reaches its context the same way. */
+  /** ONE round trip on the itx scope, then RELEASE EVERYTHING IT REACHED: the get, and every call the
+   *  callback made through it — not only the last. A Workers-RPC value this facet leaves undisposed —
+   *  the `itx.cd(path)` of `itx.cd(path).append(…)`, the `cfArtifacts.get(p)` of `.remote()`, an
+   *  answer awaited inside the callback (`const { state } = await context.invoke(…)`), data included —
+   *  keeps THIS FACET running after its context is evicted, until V8 collects the value, which an
+   *  idle isolate may not do for many minutes: each new incarnation of the context reattaches to the
+   *  facet, and the object stays billed (measured 2026-09-23: a new website project's `/` and
+   *  `/repos/config` billed 60 s of every minute for 30 min with no request). The context's own
+   *  `invoke` cannot end this from its side: the facet holds the value (context-residency.e2e.test.ts,
+   *  "… does not outlive …"). Protected: a host with methods of its own (the workspace,
+   *  src/workspace/durable-object.ts) reaches its context the same way. */
   protected async withItx<T>(call: (itx: Scope) => T): Promise<Awaited<T>> {
+    const steps: unknown[] = [];
     const itx = this.#itxEntrypoint().get();
-    const result = call(itx);
     try {
-      return await result;
+      return await call(recordPipelinedSteps(itx, steps));
     } finally {
-      (result as unknown as Disposable)[Symbol.dispose]?.();
+      // A step is whatever a call answered — a Workers-RPC promise (disposable), or a void call's undefined.
+      for (const step of steps.reverse())
+        (step as Partial<Disposable> | undefined)?.[Symbol.dispose]?.();
       (itx as unknown as Disposable)[Symbol.dispose]?.();
     }
   }

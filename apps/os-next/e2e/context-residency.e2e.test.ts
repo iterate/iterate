@@ -14,17 +14,29 @@
 // incarnation appends one `stream/woken` on wake, so an actor evicted between reads shows three or
 // more wakes, exactly as the control row that holds nothing does. The handle must still answer at
 // the end: a path outlives every incarnation.
+//
+// Wakes see the CONTEXT only. A facet it hosts can outlive it: the context is evicted on time,
+// every read wakes a fresh incarnation, and the facet keeps running under each one, billed (the
+// rows at the bottom, which read the facet's own birth instead).
 import { expect, test } from "vitest";
 import {
+  adminCredentials,
   disposeSessions,
   freshCtx,
   openItx,
   readAll,
   runId,
+  session,
   sleep,
+  until,
   workerSlot,
 } from "./support/client.ts";
-import { deployedOnly } from "./support/project-host.ts";
+import {
+  deployedOnly,
+  fetchProjectUrl,
+  freshDnsSafeProjectSlug,
+  projectUrl,
+} from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
 
 const IDLES = 3;
@@ -99,7 +111,8 @@ test("a run whose script returned a live value does not keep its context residen
 // `itx.cd(path)…waitForEvent`. A step such a round trip left holding the context's session kept
 // facet → ItxEntrypoint → context resident UNTIL THE NEXT DEPLOY (every project an os-next preview's
 // e2e run created stayed billed for hours, 2026-09-21/22); the context now ends that session with
-// the call, whatever `withItx` releases (the careless-caller rows below).
+// the call. What `withItx` leaves undisposed keeps the FACET running instead, so it releases every
+// call (the rows at the bottom).
 let repoCounter = 0;
 /** A repo born through the collection and read through its facet, then the client's session closed:
  *  what stays behind is the platform's own doing, not a handle this test holds. */
@@ -152,6 +165,8 @@ test("listing repos does not keep the project root resident", async () => {
 // `env.ITX` handed it, in a facet of the context (an actor that outlives the call), and disposes
 // nothing. Measured on a preview of main (2026-09-23): the data row, the live row and the client
 // row saw ONE wake across the three idles — resident throughout; the LiveState row already evicted.
+// What these rows prove is the CONTEXT's eviction: the careless facet itself keeps running on
+// what it keeps, billed, until V8 collects it — userspace's to release (the facets' rows below).
 
 /** A loaded worker whose answer is DATA — `{ a: 1 }`, handed through the context to the facet. */
 const DATA_WORKER_SOURCE = {
@@ -267,3 +282,90 @@ deployedOnly(
   },
   120_000,
 );
+
+// ── A FACET DOES NOT OUTLIVE ITS CONTEXT ──
+// A facet holding ANY Workers-RPC value from its `env.ITX` round trips — a pipelined step, an answer
+// it awaited — keeps running after its context is evicted, until V8 collects the value: each new
+// incarnation reattaches to it, and the object stays billed. Wakes cannot see it (the context
+// evicts on time), so these rows read the facet's own birth: its live state is built when it starts
+// (`liveSnapshot().rev` is that moment × 4096, stream/processor.ts `LiveState`). Measured 2026-09-23
+// on previews of main: after one page load a website project's `/` and `/repos/config` were billed
+// every minute with no request until the next deploy; both rows below failed there, the facets'
+// births unchanged across three evictions, and pass once `withItx` releases every call.
+
+/** When the facet started — the construction time its live state's revision counts from. */
+const facetStartedAt = async (facet: any): Promise<number> =>
+  Math.floor((await facet.liveSnapshot()).rev / 4096);
+
+test("a website project's facets do not outlive their contexts after a page load", async () => {
+  const slug = freshDnsSafeProjectSlug("residency-site");
+  const root = await session().authenticate(adminCredentials()).projects.create({ project: slug });
+  const { projectId } = await root.whoami();
+  await until(
+    "project/created",
+    async () =>
+      (await readAll(root)).find((e: any) => e.type === "events.iterate.com/project/created"),
+    60_000,
+  );
+  disposeSessions();
+  // The prd shape: a visitor's page load — the root loads the config worker, whose source the repo
+  // facet on /repos/config answers — and the two facets it woke.
+  const page = await fetchProjectUrl(projectUrl({ project: slug, path: "/" }));
+  expect(page.text.trim()).toBe(`Homepage of project ${slug}`);
+  const itx = openItx(projectId);
+  const started = {
+    project: await facetStartedAt(itx.facets.get("project")),
+    repo: await facetStartedAt(itx.repos.get("/repos/config")),
+  };
+  disposeSessions();
+  const wakes = await Promise.all([
+    wakesAcrossIdles(openItx(projectId)),
+    wakesAcrossIdles(openItx(projectId).cd("/repos/config")),
+  ]);
+  expect(Math.min(...wakes), JSON.stringify(wakes)).toBeGreaterThanOrEqual(IDLES);
+  const again = openItx(projectId);
+  expect(await facetStartedAt(again.facets.get("project"))).toBeGreaterThan(started.project);
+  expect(await facetStartedAt(again.repos.get("/repos/config"))).toBeGreaterThan(started.repo);
+}, 120_000);
+
+/** An SDK facet that reaches its context the way the platform's own facets do: a pipelined chain
+ *  (the repo facet's `cfArtifacts.get(path).remote()`), and answers awaited inside the round trip
+ *  (the collection's `const context = itx.cd(path)`). */
+const REACHER_SOURCE = {
+  "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+const contract = defineProcessorContract({
+  slug: "reacher",
+  version: "1.0.0",
+  description: "Reaches its context through withItx, the platform's shapes.",
+  stateSchema: z.object({}),
+  consumes: [],
+  emits: [],
+});
+class ReacherProcessor extends StreamProcessor {
+  contract = contract;
+  reduce() {}
+}
+export class ReacherDurableObject extends StreamProcessorDurableObject {
+  processor = new ReacherProcessor();
+  async reach(path) {
+    await this.withItx((itx) => itx.cd(path).whoami());
+    await this.withItx(async (itx) => {
+      const child = itx.cd(path);
+      await child.whoami();
+      return child.whoami();
+    });
+  }
+}`,
+};
+
+test("an SDK facet that reached its context through withItx does not outlive the context", async () => {
+  const ctx = freshCtx("residency_sdk_facet");
+  const reacher = (itx: any) =>
+    itx.facets.get("reacher", { source: REACHER_SOURCE, className: "ReacherDurableObject" });
+  const itx = openItx(ctx);
+  await reacher(itx).reach("/child");
+  const started = await facetStartedAt(reacher(itx));
+  disposeSessions();
+  expect(await wakesAcrossIdles(openItx(ctx))).toBeGreaterThanOrEqual(IDLES);
+  expect(await facetStartedAt(reacher(openItx(ctx)))).toBeGreaterThan(started);
+}, 90_000);
