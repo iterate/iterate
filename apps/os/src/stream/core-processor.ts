@@ -407,8 +407,8 @@ export function reduceCoreEvent(
       const matchString = print(matchPrefix);
       const existing = state.itxExpressionRewriteRules[matchString];
       // What has an implicit row HERE (rule 3) decides what a null and a platform-equivalent target
-      // mean (rule 8). The event carries the path; the state has it only after the birth record.
-      const implicitRoots = implicitRootsAt(state.projectId || "", event.path || state.path || "/");
+      // mean (rule 8). The event carries the path.
+      const implicitRoots = implicitRootsAt(state.projectId || "", event.path);
       // Every change to the rules table re-derives the subscriptions' hosting markers through it.
       const withRule = (rule: ItxExpressionRewriteRule | undefined): CoreState => {
         const rules = draftOf(state.itxExpressionRewriteRules, draftTables);
