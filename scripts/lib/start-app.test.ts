@@ -58,7 +58,6 @@ test("on workers.dev our own zones are our apps' hosts, not the accounts they sh
     "notes-preview.iterate-dev-preview.workers.dev",
     "notes.iterate.workers.dev",
     "os-next-preview.iterate-dev-preview.workers.dev",
-    "os-prd-account-e2e.iterate.workers.dev",
     "voice-preview.iterate-dev-preview.workers.dev",
   ]);
   // elsewhere, still the whole zone: our origins' and our project wildcard's

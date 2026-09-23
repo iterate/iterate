@@ -8,29 +8,29 @@ import {
 
 test.each<{ results: Record<string, string>; verdict: string | undefined }>([
   {
-    results: { deploy: "success", e2e: "success", residency: "success", delete: "success" },
+    results: { deploy: "success", e2e: "success", delete: "success" },
     verdict: "green",
   },
   {
-    results: { deploy: "success", e2e: "failure", residency: "success", delete: "success" },
+    results: { deploy: "success", e2e: "failure", delete: "success" },
     verdict: "red",
   },
   {
-    results: { deploy: "failure", e2e: "skipped", residency: "skipped", delete: "success" },
+    results: { deploy: "failure", e2e: "skipped", delete: "success" },
     verdict: "red",
   },
   // a failed cleanup left garbage behind: red too
   {
-    results: { deploy: "success", e2e: "success", residency: "success", delete: "failure" },
+    results: { deploy: "success", e2e: "success", delete: "failure" },
     verdict: "red",
   },
   // a newer push superseded the run: no verdict either way
   {
-    results: { deploy: "success", e2e: "cancelled", residency: "skipped", delete: "success" },
+    results: { deploy: "success", e2e: "cancelled", delete: "success" },
     verdict: undefined,
   },
   {
-    results: { deploy: "success", e2e: "success", residency: "skipped", delete: "success" },
+    results: { deploy: "success", e2e: "skipped", delete: "success" },
     verdict: undefined,
   },
   { results: {}, verdict: undefined },
@@ -49,7 +49,6 @@ test.each([
   "main was $previous, this run is $verdict → pages $pages",
   ({ previous, verdict, pages }) => {
     const page = mainE2ePage({
-      label: "main e2e",
       previous,
       verdict,
       commitSha: "0123456789abcdef",
@@ -68,19 +67,18 @@ test.each([
 test("a red page names the commit, the failed jobs and the failing rows, and mentions Jonas", () => {
   expect(
     mainE2ePage({
-      label: "main e2e",
       previous: "green",
       verdict: "red",
       commitSha: "0123456789abcdef",
       commitSubject: "Some change (#1)",
-      failedJobs: ["e2e", "residency"],
+      failedJobs: ["e2e", "delete"],
       failingRows: Array.from({ length: 10 }, (_, index) => `f.e2e.test.ts: row ${index}`),
       runUrl: "https://depot.dev/run",
     }),
   ).toBe(
     [
       "🔴 main e2e red at `012345678` (Some change (#1)) <@U067G4QRFK2>",
-      "• failed: e2e, residency",
+      "• failed: e2e, delete",
       "• failing rows: f.e2e.test.ts: row 0; f.e2e.test.ts: row 1; f.e2e.test.ts: row 2; f.e2e.test.ts: row 3; f.e2e.test.ts: row 4; f.e2e.test.ts: row 5; f.e2e.test.ts: row 6; f.e2e.test.ts: row 7; … and 2 more",
       "<https://depot.dev/run|the run>",
     ].join("\n"),
@@ -97,14 +95,6 @@ test.each([
     ],
     state: "green",
   },
-  // another label's pages (the prd account's run) are not this label's state
-  {
-    messages: [
-      { bot_id: "B", text: "🔴 main e2e on the prd account red at `z`" },
-      { bot_id: "B", text: "🟢 main e2e green again at `y`" },
-    ],
-    state: "green",
-  },
   // other bots' pages and people's replies are not this alert's state
   {
     messages: [
@@ -115,7 +105,7 @@ test.each([
     state: "red",
   },
 ])("the channel's newest main e2e page is the state: $state", ({ messages, state }) => {
-  expect(previousMainE2eState(messages, "main e2e")).toBe(state);
+  expect(previousMainE2eState(messages)).toBe(state);
 });
 
 test("failing rows are the unexpected (Playwright) or failed (vitest) tests, once each", () => {

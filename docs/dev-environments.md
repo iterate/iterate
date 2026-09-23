@@ -355,12 +355,17 @@ head.
 
 ### Main runs
 
-There is no main preview. A push to `main` deploys production directly: Deploy
+A push to `main` deploys production directly and waits for nothing else: Deploy
 OS runs the deploy script, whose smoke probes (`/version`, OAuth discovery, and
-the MCP and `/api` bearer challenges) are production's only check, and they
-mutate nothing. The full mutating proof is each PR's preview. The legacy
-fleet's main preview runs (a `main-preview` lease, `preview-main.yml`) went with
-it in #2837.
+the MCP and `/api` bearer challenges) mutate nothing, then, once `/version`
+names the new version, GETs each production project host and pages
+#error-pulse on a 421, a 5xx or no answer that four tries 10 s apart do not
+clear (`scripts/ci/prd-post-deploy-check.ts`). In parallel, **Main OS e2e**
+(`main-os-e2e.yml`) deploys a throwaway preview of the pushed commit, runs the
+e2e suite and the browser specs against it, deletes it, and pages #error-pulse
+only when main goes red or green again. The full mutating proof is each PR's
+preview. The legacy fleet's main preview runs (a `main-preview` lease,
+`preview-main.yml`) went with it in #2837.
 
 What still exercises deployed code on a schedule: the nightly **OS crash hunt**
 drives isolate-ceiling rows against prd (`os-next-crash-hunt.yml`), the hourly

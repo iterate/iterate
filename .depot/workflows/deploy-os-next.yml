@@ -47,9 +47,6 @@ jobs:
       size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 30
-    outputs:
-      public_url: ${{ steps.metadata.outputs.public_url }}
-      deployed_at: ${{ steps.deployed.outputs.at }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -65,60 +62,34 @@ jobs:
         run: doppler setup --config prd --project project-worker
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - id: metadata
-        name: Resolve OS deploy URL
-        run: echo "public_url=https://os.iterate.com" >> "$GITHUB_OUTPUT"
+      # `/version` answers `<version id> <origin>` (apps/os/src/worker.ts): the id prd serves before
+      # this deploy, so the host check waits for the new one. Empty when prd does not answer.
+      - name: Read the version prd serves
+        id: previous
+        run: echo "version=$(curl -fsS --max-time 10 https://os.iterate.com/version | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - name: Deploy apps/os
+        id: deploy
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run -- pnpm run-script deploy --env prd
-      - name: Record when the deploy finished
-        id: deployed
-        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-  # READ-ONLY, five minutes after the deploy (scripts/ci/prd-post-deploy-check.ts): the prd fault
-  # alarm's own query over the window since the deploy, on the new version only, and one GET of each
-  # production project host (envs.ts osEnvs.prd.temporaryCustomHostnames). A fault, or a host that
-  # answers 421 or 5xx, pages #error-pulse and fails this workflow. It creates nothing.
-  verify:
-    needs:
-      - deploy
-    if: needs.deploy.result == 'success'
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 20
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          clean: false
-          ref: ${{ inputs.ref || github.sha }}
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
-      - name: Check the new version and the project hosts
+      # READ-ONLY, right after the deploy (scripts/ci/prd-post-deploy-check.ts): once `/version` names
+      # the new version (≤ 60 s), one GET of each production project host (envs.ts
+      # osEnvs.prd.temporaryCustomHostnames), four tries 10 s apart while it looks down. A host still
+      # answering 421 or 5xx, or not at all, or a `/version` that never moves, pages #error-pulse and
+      # fails this workflow. Faults on the new version are the prd fault alarm's (prd-fault-alarm.yml,
+      # every 15 minutes).
+      - name: Check the project hosts
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run --project project-worker --config prd -- pnpm tsx scripts/ci/prd-post-deploy-check.ts check --deployed-at "${{ needs.deploy.outputs.deployed_at }}"
-  notify:
-    needs:
-      - deploy
-    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && (needs.deploy.result == 'success' || needs.deploy.result == 'failure')
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 10
-    env:
-      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          clean: false
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
+        run: pnpm tsx scripts/ci/prd-post-deploy-check.ts check --previous-version "${{ steps.previous.outputs.version }}"
+      # The deploy's own result to #ci; a deploy that failed, was cancelled or hit the job's timeout
+      # posts failure. `always()`, because `!cancelled()` is false once the job is cancelled, and a
+      # timeout ends the job by cancelling it.
       - name: Notify Slack
+        if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           APP_DISPLAY_NAME: OS
-          PUBLIC_URL: ${{ needs.deploy.outputs.public_url }}
-        run: pnpm tsx scripts/ci/notify.ts deploy-${{ needs.deploy.result }}
+          PUBLIC_URL: https://os.iterate.com
+        run: pnpm tsx scripts/ci/notify.ts deploy-${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}

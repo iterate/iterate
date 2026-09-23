@@ -3,15 +3,13 @@
 // half; the pure half — naming, the PR body's section, the preview's wrangler config — is
 // scripts/preview-config.ts (preview.test.ts). Commands: config (build and write preview config),
 // deploy (build, the Artifacts namespace, the secrets, `wrangler preview`, the PR body),
-// e2e (vitest and Playwright against the live preview), residency (after e2e: fail on any Durable
-// Object still resident with no client connected; scripts/preview-residency.ts), release (after
-// residency: redeploy — never a reset — ending the sessions the run left open), reset (delete, then
-// deploy), delete (the preview, its Artifacts namespace, KV namespaces and R2 bucket, plus any
-// leftover D1, the apps on top), delete-superseded (every `main-<sha>` preview but this one: main's
-// cancelled runs'), sweep (the stale previews and the resources that outlived theirs —
-// the rules are scripts/preview-sweep.ts). `--dry-run` prints the plan.
+// e2e (vitest and Playwright against the live preview), reset (delete, then deploy), delete (the
+// preview, its Artifacts namespace, KV namespaces and R2 bucket, plus any leftover D1, the apps on
+// top), delete-superseded (every `main-<sha>` preview but this one: main's cancelled runs'), sweep
+// (the stale previews and the resources that outlived theirs — the rules are
+// scripts/preview-sweep.ts). `--dry-run` prints the plan.
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -25,7 +23,6 @@ import {
 } from "../../../scripts/lib/deploy-helpers.ts";
 import {
   CloudflareApiError,
-  loadDopplerSecrets,
   resolveEnvContext,
   type EnvContext,
 } from "../../../scripts/lib/env-context.ts";
@@ -41,35 +38,15 @@ import {
   PREVIEW_CONFIG_NAME,
   PREVIEW_PARENT,
   isDurableObjectClassNotExportedError,
-  PLATFORM_SPEC_PROJECTS,
-  PREVIEW_PARENT_ENV,
   previewPullRequestNumber,
   previewResourceName,
   previewResourceSuffixes,
   previewUrl,
   renderPullRequestSection,
-  RESIDENCY_SECTION_MARKERS,
   resolvePreviewName,
   splicePullRequestBody,
-  THROWAWAY_PARENT_CONFIG_NAME,
   writePreviewWranglerConfig,
-  writeThrowawayParentWranglerConfig,
 } from "./preview-config.ts";
-import {
-  assertPreviewConfigTouchesNoPrdLiveResource,
-  assertPreviewParentIsNotPrdLive,
-} from "./preview-prd-guard.ts";
-import {
-  DURABLE_OBJECT_RESIDENCY_QUERY,
-  DurableObjectNamespace,
-  DurableObjectResidencyAnswer,
-  durableObjectAnalyticsCoverWindow,
-  durableObjectResidencyVariables,
-  durableObjectResidencyVerdict,
-  durableObjectResidencyWindow,
-  previewDurableObjectNamespaces,
-  renderDurableObjectResidency,
-} from "./preview-residency.ts";
 import {
   planPreviewSweep,
   previewNameOfSweptResource,
@@ -93,8 +70,6 @@ const Command = z.enum([
   "config",
   "deploy",
   "e2e",
-  "residency",
-  "release",
   "reset",
   "delete",
   "delete-superseded",
@@ -111,23 +86,11 @@ const USAGE = `Usage: preview.ts <${Command.options.join("|")}> [--pr <n>] [--na
  *  429s retried, a truncated listing refused). */
 type Cf = EnvContext<OsEnv>["cf"];
 
-/** The parent's Doppler config (project-worker/preview, or prd for `PREVIEW_PARENT_ENV=prd-account-e2e`),
- *  downloaded — the Cloudflare credentials for its account — the way ensure-resources and erase-data
- *  resolve theirs. Refuses a Doppler account that is not the parent's, and a production parent
- *  (scripts/preview-prd-guard.ts). */
-const parentContext = async () => {
-  assertPreviewParentIsNotPrdLive(PREVIEW_PARENT);
-  const ctx = await resolveEnvContext({
-    envs: osEnvs,
-    dopplerProject: "project-worker",
-    env: PREVIEW_PARENT_ENV,
-  });
-  // wrangler, a child process, authenticates from the environment: the parent account's
-  // credentials (the same values `doppler run` already set, for the dev/preview parent).
-  process.env.CLOUDFLARE_API_TOKEN = ctx.secrets.CLOUDFLARE_API_TOKEN;
-  process.env.CLOUDFLARE_ACCOUNT_ID = ctx.env.cloudflareAccountId;
-  return ctx;
-};
+/** The parent's Doppler config (project-worker/preview), downloaded — the Cloudflare credentials for
+ *  its account and the two secrets every preview inherits — the way ensure-resources and erase-data
+ *  resolve theirs. Refuses a Doppler account that is not the parent's. */
+const parentContext = () =>
+  resolveEnvContext({ envs: osEnvs, dopplerProject: "project-worker", env: "preview" });
 
 // ── process helpers (cloudflare-os) ────────────────────────────────────────────────────────────
 
@@ -223,7 +186,7 @@ function requireEnv(name: string): string {
 }
 
 /** A GitHub 5xx is asked again twice, 5 s apart: every call here is a read or a whole-body write,
- *  so a repeat is harmless, and one 500 had failed a residency job whose gate had passed (#2911). */
+ *  so a repeat is harmless, and one 500 had failed a run whose checks had passed (#2911). */
 async function github<T = unknown>(route: string, init: { method?: string; body?: unknown } = {}) {
   const method = init.method || "GET";
   let response: Response;
@@ -256,15 +219,11 @@ const repository = () => requireEnv("GITHUB_REPOSITORY");
 /** Read, splice, write, read back: the PR body has no conditional update, so a person editing the
  *  description in the same seconds could lose one write or the other. Reading it back and
  *  re-splicing onto whatever is there now converges on both edits within a few rounds. */
-async function writePullRequestSection(
-  prNumber: string,
-  section: string,
-  markers?: typeof RESIDENCY_SECTION_MARKERS,
-): Promise<void> {
+async function writePullRequestSection(prNumber: string, section: string): Promise<void> {
   const route = `/repos/${repository()}/pulls/${prNumber}`;
   for (let attempt = 1; attempt <= 3; attempt++) {
     const before = (await github<{ body: string | null }>(route)).body || "";
-    const body = splicePullRequestBody(before, section, markers);
+    const body = splicePullRequestBody(before, section);
     if (body === before)
       return console.log(`PR #${prNumber}'s body already carries this preview section`);
     await github(route, { method: "PATCH", body: { body } });
@@ -491,25 +450,8 @@ async function deployAppPreview(
   return { name: app.name, url };
 }
 
-/** An app on top is previewed only beside a parent on its own account: the prd account's throwaway
- *  parent has none (their parents are the dev account's). Deploy, delete and the specs all ask. */
-const isBesideParent = (app: StartApp) =>
-  app.envs.preview!.cloudflareAccountId === PREVIEW_PARENT.cloudflareAccountId;
-
-/** The apps this run previews: --apps all, none, or (auto) the ones whose paths this PR changes —
- *  of those, only the ones beside the parent, whatever PREVIEW_APPS says: the prd account's
- *  credentials never deploy an app's preview, nor create an app's missing parent there. */
+/** The apps this run previews: --apps all, none, or (auto) the ones whose paths this PR changes. */
 async function appsToPreview(mode: AppsMode, prNumber: string | undefined): Promise<StartApp[]> {
-  const apps = await appsOfMode(mode, prNumber);
-  const elsewhere = apps.filter((app) => !isBesideParent(app));
-  if (elsewhere.length > 0)
-    console.log(
-      `not previewing ${elsewhere.map((app) => app.name).join(", ")}: their parents are not on ${PREVIEW_PARENT.workerName}'s account`,
-    );
-  return apps.filter(isBesideParent);
-}
-
-async function appsOfMode(mode: AppsMode, prNumber: string | undefined): Promise<StartApp[]> {
   if (mode === "all") return APPS;
   if (mode === "none") return [];
   try {
@@ -589,14 +531,7 @@ async function deleteWorkerPreview(
  *  `login.password`, `secrets.adminBearer` — and `APP_CONFIG_SECRETS__KEY` beside it. Values go
  *  through a 0600 tmp file, never argv or the config. */
 async function uploadPreviewSecrets(wrangler: string, ctx: EnvContext<OsEnv>): Promise<void> {
-  // A preview always runs as the `preview` config's test identities, whichever account its parent
-  // is on: the prd account's throwaway parent gets its Cloudflare credentials from `prd`, never
-  // production's admin secret or sign-in password.
-  const appSecrets =
-    ctx.env.dopplerConfig === osEnvs.preview!.dopplerConfig
-      ? ctx
-      : { env: osEnvs.preview!, secrets: loadDopplerSecrets("project-worker", "preview") };
-  const secrets = collectSecrets(appSecrets, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]);
+  const secrets = collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]);
   const dir = mkdtempSync(path.join(tmpdir(), "os-next-preview-secrets-"));
   const file = path.join(dir, "secrets.json");
   try {
@@ -626,8 +561,8 @@ function assertFreshInstall() {
 
 /** The OS's own preview, from an OS build already made — its Artifacts namespace, its config
  *  (naming the PR's Dash preview when `apps` holds dash), the Previews secrets, `wrangler preview`,
- *  and the smoke that the new deployment serves. What `deploy` and `release` share. The wrangler it
- *  prepared comes back for the apps on top; the caller cleans it up (here, when this fails). */
+ *  and the smoke that the new deployment serves. The wrangler it prepared comes back for the apps
+ *  on top; the caller cleans it up (here, when this fails). */
 async function deployOsPreview(
   ctx: EnvContext<OsEnv>,
   previewName: string,
@@ -641,27 +576,13 @@ async function deployOsPreview(
 }> {
   await ensureArtifactsNamespace(ctx.cf, previewResourceName(previewName, "repos"));
   const dash = apps.find((app) => app.name === "dash");
-  const configPath = writePreviewWranglerConfig({
+  writePreviewWranglerConfig({
     previewName,
     dashOrigin: dash && `https://${previewName}-${new URL(dash.envs.preview!.baseUrl).hostname}`,
   });
-  assertPreviewConfigTouchesNoPrdLiveResource(
-    JSON.parse(readFileSync(configPath, "utf8")),
-    previewName,
-  );
   const wrangler = preparePreviewWrangler();
   try {
     await wrangler.ready;
-    // The prd account's throwaway parent: one fixed name, deployed from this same guarded config on
-    // every run (workers are never deleted), so it always exports every Durable Object class the
-    // build binds — a parent that lacks one fails its previews with 10061. The repo's wrangler, as
-    // the dev parent's deploy: the preview build predates `exports`.
-    if (PREVIEW_PARENT_ENV !== "preview") {
-      writeThrowawayParentWranglerConfig(configPath);
-      await runAsync("pnpm", ["exec", "wrangler", "deploy", "-c", THROWAWAY_PARENT_CONFIG_NAME], {
-        cwd: ROOT,
-      });
-    }
     await uploadPreviewSecrets(wrangler.command, ctx);
     const result = await run(wrangler.command, [
       "preview",
@@ -783,7 +704,7 @@ async function deleteAll(cf: Cf, previewName: string): Promise<void> {
   try {
     await wrangler.ready;
     await deletePreview(cf, previewName, wrangler.command);
-    for (const app of APPS.filter(isBesideParent))
+    for (const app of APPS)
       await deleteWorkerPreview(app.envs.preview!, previewName, wrangler.command);
   } finally {
     wrangler.cleanup();
@@ -813,29 +734,24 @@ const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, st
   : { specs: {}, "preview-e2e": {} };
 
 /** THE PROOF: the vitest e2e suite and the root Playwright specs (specs/AGENTS.md), both in
- *  deployed-target mode against the preview, side by side — the same two suites deploy-os-next.yml
- *  and `pnpm spec` know. Each runner derives the deployed target itself
+ *  deployed-target mode against the preview, side by side — the same two suites `pnpm e2e` and
+ *  `pnpm spec` run. Each runner derives the deployed target itself
  *  (e2e/support/deployed-target.ts, from the `APP_CONFIG` in this process's environment and the
  *  parent's envs.ts entry): the vitest suite in its global-setup, the specs in specs/setup.ts. Every
  *  spec project runs, the notes and voice projects against this preview's Notes and Voice apps, the
  *  Notes session specs signing out in its Dash (NOTES_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL;
- *  their specs fail in CI without them). Beside a parent whose account has no apps on top (the prd
- *  account's throwaway run) only the platform's own projects run, chosen by name
- *  (PLATFORM_SPEC_PROJECTS). vitest streams; Playwright's report prints after it. */
+ *  their specs fail in CI without them). vitest streams; Playwright's report prints after it. */
 async function runE2e(previewName: string): Promise<void> {
   const url = previewUrl(previewName);
   const env = { WORKER_BASE_URL: url, DEMO_BASE_URL: url };
   const appUrl = (name: string) =>
     appPreviewUrl(APPS.find((app) => app.name === name)!, previewName);
-  const specProjects = APPS.every(isBesideParent)
-    ? []
-    : PLATFORM_SPEC_PROJECTS.flatMap((project) => ["--project", project]);
   const spec = (async () => {
     if (process.env.CI)
       await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], {
         cwd: path.resolve(ROOT, "../.."),
       });
-    return run("pnpm", ["spec", ...specProjects], {
+    return run("pnpm", ["spec"], {
       cwd: path.resolve(ROOT, "../.."),
       env: {
         ...process.env,
@@ -881,125 +797,6 @@ async function runE2e(previewName: string): Promise<void> {
     Boolean,
   );
   if (failed.length > 0) throw new Error(`${failed.join(" and ")} failed against ${url}`);
-}
-
-// ── after the suite: the residency gate, then the release ──────────────────────────────────────
-
-/** A suite boundary the workflow recorded (`PREVIEW_SUITE_STARTED`, `PREVIEW_SUITE_ENDED`, UTC ISO). */
-function suiteTime(name: string, fallback?: Date): Date {
-  const value = process.env[name];
-  if (!value && fallback) {
-    console.warn(`${name} is unset (the e2e step never finished); using ${fallback.toISOString()}`);
-    return fallback;
-  }
-  const time = new Date(requireEnv(name));
-  if (Number.isNaN(time.getTime())) throw new Error(`${name}=${value} is not a time`);
-  return time;
-}
-
-/** THE RESIDENCY GATE (the rules: scripts/preview-residency.ts). Waits until the analytics cover the
- *  window five minutes after the suite ended, reads which of the preview's Durable Objects were still
- *  resident, prints the verdict, writes it into the PR body, and fails on any leak. It only reads: a
- *  redeploy before it would end the very sessions it looks for, so `release` is the step after it. */
-async function residencyGate(
-  ctx: EnvContext<OsEnv>,
-  previewName: string,
-  prNumber: string | undefined,
-): Promise<void> {
-  // A suite killed before its end was recorded ended no later than now: every client it had is gone.
-  const suite = {
-    started: suiteTime("PREVIEW_SUITE_STARTED"),
-    ended: suiteTime("PREVIEW_SUITE_ENDED", new Date()),
-  };
-  const window = durableObjectResidencyWindow(suite.ended);
-  const namespaces = previewDurableObjectNamespaces(
-    z
-      .array(DurableObjectNamespace)
-      .parse(await listAll<unknown>(ctx.cf, "/workers/durable_objects/namespaces")),
-    { parentWorkerName: PREVIEW_PARENT.workerName, previewName },
-  );
-  if (namespaces.length === 0)
-    throw new Error(`no Durable Object namespace on the account belongs to preview ${previewName}`);
-  const sleepUntil = (time: number) =>
-    new Promise((resolve) => setTimeout(resolve, Math.max(0, time - Date.now())));
-  // A refused answer (a 5xx, a rate limit) is read again twice, 15 s apart, before it fails the gate.
-  const read = async () => {
-    for (let attempt = 1; ; attempt++) {
-      const variables = durableObjectResidencyVariables({
-        accountTag: PREVIEW_PARENT.cloudflareAccountId,
-        namespaceIds: namespaces.map((namespace) => namespace.id),
-        window,
-        suite,
-        readAt: new Date(),
-      });
-      const response = await fetch("https://api.cloudflare.com/client/v4/graphql", {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${ctx.secrets.CLOUDFLARE_API_TOKEN}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ query: DURABLE_OBJECT_RESIDENCY_QUERY, variables }),
-      });
-      const text = await response.text();
-      let body: unknown;
-      try {
-        body = JSON.parse(text);
-      } catch {
-        body = undefined; // an HTML error page (a 502 from the edge) is a refusal like any other
-      }
-      const answer = DurableObjectResidencyAnswer.safeParse(body);
-      if (answer.success) return answer.data.data.viewer.accounts[0];
-      const refusal = `Cloudflare GraphQL answered ${response.status}: ${text.slice(0, 1000)}`;
-      if (attempt === 3) throw new Error(refusal);
-      console.warn(`${refusal}; reading again in 15 s`);
-      await sleepUntil(Date.now() + 15_000);
-    }
-  };
-  // The window's last minute is complete about two minutes after the window ends, and a new
-  // preview's own data, its first minutes especially, can trail the account's by a quarter of an
-  // hour (measured 2026-09-23; durableObjectAnalyticsCoverWindow). An idle account reports no newer minute at all, so the wait
-  // also ends fifteen minutes after the window does.
-  const firstRead = window.end.getTime() + 2 * 60_000;
-  const deadline = window.end.getTime() + 15 * 60_000;
-  console.log(
-    `suite ${suite.started.toISOString()} → ${suite.ended.toISOString()}; reading the window ${window.start.toISOString()} → ${window.end.toISOString()} over ${namespaces.length} namespaces of ${previewName}, from ${new Date(firstRead).toISOString()}`,
-  );
-  await sleepUntil(firstRead);
-  let account = await read();
-  while (!durableObjectAnalyticsCoverWindow(account, window, suite) && Date.now() < deadline) {
-    await sleepUntil(Date.now() + 30_000);
-    account = await read();
-  }
-  console.log(
-    `the account's newest analytics minute: ${account.newestMinute[0]?.dimensions.datetimeMinute ?? "none since the window started"}; the preview's: ${account.previewOldestMinute[0]?.dimensions.datetimeMinute ?? "none since the suite started"} → ${account.previewNewestMinute[0]?.dimensions.datetimeMinute ?? "none"}`,
-  );
-  const verdict = durableObjectResidencyVerdict({ account, namespaces, window });
-  console.log(`\n${renderDurableObjectResidency(verdict)}\n`);
-  if (prNumber && process.env.GITHUB_TOKEN)
-    await writePullRequestSection(
-      prNumber,
-      renderDurableObjectResidency(verdict, { maxRows: 40 }),
-      RESIDENCY_SECTION_MARKERS,
-    );
-  if (verdict.failures.length > 0)
-    throw new Error(`the residency gate failed: ${verdict.failures.join("; ")}`);
-}
-
-/** THE RELEASE: redeploy the preview from this checkout (the commit the run deployed, the same
- *  config), which ends the sessions the run left open instead of billing them until the next push.
- *  Measured on PR #2849's first run: 10 of 16 resident objects were gone within a minute; the 6 that
- *  are re-woken after a reset survived it, and the next run's gate names them again. The PR body
- *  keeps the deploy's section; only the deployment id behind the URL changes. */
-async function releasePreview(
-  ctx: EnvContext<OsEnv>,
-  previewName: string,
-  apps: StartApp[],
-): Promise<void> {
-  assertFreshInstall();
-  await buildOsNext("preview");
-  const { wrangler, deploymentId } = await deployOsPreview(ctx, previewName, apps);
-  wrangler.cleanup();
-  console.log(`released ${previewName}: redeployed as deployment ${deploymentId}`);
 }
 
 // ── sweep (cloudflare-os: GitHub has no `environment.auto_stop_in`) ────────────────────────────
@@ -1126,10 +923,7 @@ async function sweep(cf: Cf, dryRun: boolean): Promise<void> {
   const previews = await listAll<ListedPreview>(
     cf,
     `/workers/workers/${PREVIEW_PARENT.workerName}/previews`,
-  ).catch((error) => {
-    if (!isMissingWorkerError(describe(error))) throw error;
-    return [] as ListedPreview[]; // the prd account's parent before its first run holds none
-  });
+  );
   console.log(
     `${previews.length} preview(s) on ${PREVIEW_PARENT.workerName}; ${resources.length} KV namespaces, R2 buckets, D1s and Artifacts namespaces to judge`,
   );
@@ -1311,9 +1105,6 @@ async function main(argv: string[]): Promise<void> {
   }
   if (parsed.command === "e2e") return runE2e(previewName);
   const ctx = await parentContext();
-  if (parsed.command === "residency") return residencyGate(ctx, previewName, pr);
-  if (parsed.command === "release")
-    return releasePreview(ctx, previewName, await appsToPreview(appsMode, pr));
   if (parsed.command === "delete") return deleteAll(ctx.cf, previewName);
   if (parsed.command === "reset") await deleteAll(ctx.cf, previewName);
   return deployPreview(ctx, previewName, pr, await appsToPreview(appsMode, pr));

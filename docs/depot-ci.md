@@ -15,6 +15,16 @@ failure-rate analysis lives in PostHog; see
 scheduled backfill, Doppler-managed Depot organization token and its scope
 caveat, and CLI/MCP queries.
 
+## Time budget
+
+- A merge to main just deploys: each app's deploy workflow finishes in about two minutes.
+- A throwaway preview plus e2e (Main OS e2e) may run in parallel, but nothing waits on it.
+- No job sleeps or waits minutes for analytics or logs to settle. Put slow-arriving signals
+  (Durable Object cost, prd faults) in a scheduled alarm (`do-duration-probe.yml`,
+  `prd-fault-alarm.yml`), not in a gate on the merge path.
+- Build expensive artifacts once and consume them, instead of rebuilding them on every deploy.
+- Run a suite on one account, not repeated on others.
+
 ## Quick Links
 
 - [Depot CI dashboard](https://depot.dev/orgs/0p91s0lz49/workflows)
@@ -255,6 +265,12 @@ depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
   --input ref=<branch>
 ```
 
+The job runs the deployed ref's own scripts. A ref whose
+`scripts/ci/prd-post-deploy-check.ts check` has no `--previous-version` option
+(any commit from before 2026-09-24, so most rollbacks) deploys prd and then
+fails its `Check the project hosts` step. Check the hosts from `main` by hand:
+`pnpm tsx scripts/ci/prd-post-deploy-check.ts check --dry-run`.
+
 ## Editing Workflows
 
 1. Edit `.depot/workflows/<name>.yml`.
@@ -291,8 +307,10 @@ freshness:
   validation result obsolete, including on `main`.
 - Every mainline job has `timeout-minutes`. This is a watchdog, not a retry:
   jobs fail at the outer edge and an operator decides whether a rerun is safe.
-  Deploy OS gets 30 minutes: its bounded worst case is the build, the rollout
-  and the deploy script's readiness probes. Deploy Kit also gets 30, the other
+  Deploy OS gets 30 minutes: its bounded worst case is the build, the rollout,
+  the deploy script's readiness probes, the host check (≤ 60 s for `/version`
+  to name the new version, then four tries of each production project host)
+  and its Slack notice, all in the one job. Deploy Kit also gets 30, the other
   client deploys 15–20, and notification jobs 10.
 - Runner size follows observed peak CPU and memory, with headroom. Lint stays
   on `8x32` (parallel oxlint/typecheck/format check/knip). Unit tests use `4x16` — measured
@@ -326,8 +344,8 @@ browser. A snapshot is independent of sandbox size: choose `2x8`, `4x16`,
 `4x16`; the e2e job runs Vitest and Playwright concurrently against the one
 preview. The image rebuilds when
 dependency manifests or its bake inputs land on `main`, with a weekly scheduled
-rebuild as drift repair. The Preview OS, Deploy OS (and its notify job), Lint
-and Typecheck, OS crash hunt and OS e2e soak jobs run
+rebuild as drift repair. The Preview OS, Deploy OS, Main OS e2e, Lint and
+Typecheck, OS crash hunt and OS e2e soak jobs run
 `node scripts/depot-ci/dependencies.mjs install`: an exact
 baked fingerprint reuses the installed tree without starting pnpm. A mismatch
 or missing receipt runs `pnpm install --frozen-lockfile --prefer-offline`.

@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, test } from "vitest";
 import { DEFAULT_APPS_MODE } from "./preview.ts";
 import {
@@ -7,17 +5,14 @@ import {
   changedApps,
   isDurableObjectClassNotExportedError,
   MAX_PREVIEW_NAME_LENGTH,
-  PLATFORM_SPEC_PROJECTS,
   previewNameOfResource,
   previewPullRequestNumber,
   previewResourceName,
   previewWranglerConfig,
   renderPullRequestSection,
-  RESIDENCY_SECTION_MARKERS,
   resolvePreviewName,
   slugifyPreviewName,
   splicePullRequestBody,
-  throwawayParentWranglerConfig,
 } from "./preview-config.ts";
 
 describe("the preview name (cloudflare-os: pr<n>-<branch slug>)", () => {
@@ -115,22 +110,6 @@ describe("the PR body's managed section", () => {
     expect(splicePullRequestBody("", "s")).toBe(
       "<!-- os-next-preview:begin -->\ns\n<!-- os-next-preview:end -->\n",
     );
-  });
-
-  test("the residency gate fills in its pending block inside the section, and a redeploy resets it", () => {
-    const deployed = splicePullRequestBody("Intro.\n", section);
-    expect(deployed).toContain("#### Residency gate: pending");
-    const gated = splicePullRequestBody(
-      deployed,
-      "#### Residency gate: passed",
-      RESIDENCY_SECTION_MARKERS,
-    );
-    expect(gated).not.toContain("pending");
-    expect(gated).toContain(
-      "<!-- os-next-preview-residency:begin -->\n#### Residency gate: passed\n<!-- os-next-preview-residency:end -->",
-    );
-    expect(gated.endsWith("\n<!-- os-next-preview:end -->\n")).toBe(true);
-    expect(splicePullRequestBody(gated, section)).toBe(deployed);
   });
 });
 
@@ -276,43 +255,3 @@ test.each([
     expect(isDurableObjectClassNotExportedError(output)).toBe(recreate);
   },
 );
-
-test("every root Playwright project is the platform's own or an app's, so a run without the apps on top names the right ones", () => {
-  const config = readFileSync(
-    resolve(import.meta.dirname, "../../../playwright.config.ts"),
-    "utf8",
-  );
-  const projects = [...config.matchAll(/^\s+name: "([^"]+)",$/gm)].map((match) => match[1]);
-  expect(projects).toEqual(expect.arrayContaining(PLATFORM_SPEC_PROJECTS));
-  expect(projects.filter((project) => !PLATFORM_SPEC_PROJECTS.includes(project!)).sort()).toEqual(
-    APPS.map((app) => app.name)
-      .filter((name) => projects.includes(name))
-      .sort(),
-  );
-  expect(projects.length).toBeGreaterThan(PLATFORM_SPEC_PROJECTS.length);
-});
-
-test("the prd account's throwaway parent is the preview config's top level, its classes as exports", () => {
-  const exports = {
-    IterateContextDurableObject: { type: "durable-object", storage: "sqlite" },
-    ControlPlaneDurableObject: { type: "durable-object", storage: "sqlite" },
-  };
-  const parent = throwawayParentWranglerConfig({
-    previewConfig: {
-      name: "os-prd-account-e2e",
-      account_id: "prd",
-      main: "index.js",
-      workers_dev: true,
-      migrations: [{ tag: "v1", new_sqlite_classes: ["IterateContextDurableObject"] }],
-      previews: { kv_namespaces: [{ binding: "ITX_KV" }] },
-    },
-    template: { exports },
-  });
-  expect(parent).toEqual({
-    name: "os-prd-account-e2e",
-    account_id: "prd",
-    main: "index.js",
-    workers_dev: true,
-    exports,
-  });
-});
