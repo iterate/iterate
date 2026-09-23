@@ -483,9 +483,9 @@ function SecretForm({
             other host is refused, and the value is never sent there.
           </FieldDescription>
         </Field>
-        {updating?.refresh && (
+        {existing?.refresh && (
           <p role="note" className="text-sm text-muted-foreground">
-            This secret refreshes itself ({updating.refresh}). A value set from here has no refresh
+            This secret refreshes itself ({existing.refresh}). A value set from here has no refresh
             strategy — to keep one, set it from code with <code>refresh</code>.
           </p>
         )}
