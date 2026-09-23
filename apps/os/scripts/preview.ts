@@ -7,7 +7,8 @@
 // Object still resident with no client connected; scripts/preview-residency.ts), release (after
 // residency: redeploy — never a reset — ending the sessions the run left open), reset (delete, then
 // deploy), delete (the preview, its Artifacts namespace, KV namespaces and R2 bucket, plus any
-// leftover D1, the apps on top), sweep (the stale previews and the resources that outlived theirs —
+// leftover D1, the apps on top), delete-superseded (every `main-<sha>` preview but this one: main's
+// cancelled runs'), sweep (the stale previews and the resources that outlived theirs —
 // the rules are scripts/preview-sweep.ts). `--dry-run` prints the plan.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -63,6 +64,7 @@ import {
 import {
   planPreviewSweep,
   previewNameOfSweptResource,
+  supersededMainPreviews,
   type PullRequestState,
   type SweptResource,
 } from "./preview-sweep.ts";
@@ -86,6 +88,7 @@ const Command = z.enum([
   "release",
   "reset",
   "delete",
+  "delete-superseded",
   "sweep",
 ]);
 type Command = z.infer<typeof Command>;
@@ -1021,6 +1024,31 @@ async function listSweptResources(cf: Cf): Promise<SweptResource[]> {
 
 type ListedPreview = { name: string; created_on?: string; deployed_on?: string };
 
+/** Main's superseded throwaway previews (preview-sweep.ts `supersededMainPreviews`), each deleted
+ *  with everything it owns and the apps on top: the delete a cancelled run never ran. */
+async function deleteSupersededMainPreviews(
+  cf: Cf,
+  current: string,
+  dryRun: boolean,
+): Promise<void> {
+  const listed = await listAll<ListedPreview>(
+    cf,
+    `/workers/workers/${PREVIEW_PARENT.workerName}/previews`,
+  ).catch((error) => {
+    if (!isMissingWorkerError(describe(error))) throw error;
+    return [] as ListedPreview[]; // a parent not yet deployed holds no previews
+  });
+  const superseded = supersededMainPreviews(
+    listed.map((preview) => preview.name),
+    current,
+  );
+  console.log(
+    `superseded main previews on ${PREVIEW_PARENT.workerName}: ${superseded.join(", ") || "none"}`,
+  );
+  if (dryRun) return;
+  for (const name of superseded) await deleteAll(cf, name);
+}
+
 const RESOURCE_KIND_LABELS: Record<SweptResource["kind"], string> = {
   kv: "KV namespace",
   r2: "R2 bucket",
@@ -1209,6 +1237,8 @@ async function main(argv: string[]): Promise<void> {
   const branch = await resolveBranch(pr, parsed.name);
   const previewName = resolvePreviewName({ name: branch, prNumber: pr });
   console.log(`preview ${previewName} → ${previewUrl(previewName)}`);
+  if (parsed.command === "delete-superseded")
+    return deleteSupersededMainPreviews((await parentContext()).cf, previewName, parsed.dryRun);
   if (parsed.command === "config" || parsed.dryRun) {
     await buildOsNext("preview");
     console.log(`wrote ${writePreviewWranglerConfig({ previewName })}`);

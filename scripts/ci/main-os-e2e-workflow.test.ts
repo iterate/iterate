@@ -62,6 +62,11 @@ test("always deletes the preview and everything it created, cancelled or failed"
   expect(runs("delete")).toContain(
     'PREVIEW_NAME="main-${GITHUB_SHA::7}" doppler run -- pnpm preview delete',
   );
+  // a cancelled run's delete is cancelled with it: the next run deletes its preview first
+  expect(runs("deploy").indexOf("doppler run -- pnpm preview delete-superseded")).toBeLessThan(
+    runs("deploy").indexOf("doppler run -- pnpm preview deploy"),
+  );
+  expect(runs("deploy")).toContain("doppler run -- pnpm preview delete-superseded");
   // nothing redeploys or keeps the preview after the suite
   expect(Object.keys(main.jobs).flatMap(runs)).not.toContain("doppler run -- pnpm preview release");
 });

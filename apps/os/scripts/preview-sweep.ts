@@ -146,3 +146,11 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepPlan {
   }
   return { previews, orphans };
 }
+
+/** Main's throwaway previews (.depot/workflows/main-os-e2e.yml names each `main-<short sha>`) that
+ *  are not `current`: a superseded run's. Depot's cancel-in-progress cancels a superseded run's
+ *  queued jobs, its `always()` delete included (observed 2026-09-23 on main-44db0e6), so each run
+ *  deletes these before it deploys; the nightly sweep's rule 3 is the backstop. Pure. */
+export function supersededMainPreviews(previewNames: string[], current: string): string[] {
+  return previewNames.filter((name) => /^main-[0-9a-f]{7}$/.test(name) && name !== current);
+}
