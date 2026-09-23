@@ -10,6 +10,7 @@
     "./config": "./src/config.ts",
     "./dev/is-main-module": "./src/dev/is-main-module.ts",
     "./evlog/types": "./src/evlog/types.ts",
+    "./test-support/e2e-policy": "./src/test-support/e2e-policy/index.ts",
     "./test-support/failing-test": "./src/test-support/failing-test.ts",
     "./test-support/flake-test": "./src/test-support/flake-test.ts",
     "./test-support/flake-suite-summary": "./src/test-support/flake-suite-summary.ts",

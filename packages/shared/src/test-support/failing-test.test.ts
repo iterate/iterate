@@ -282,8 +282,8 @@ function scopedFlakeRecordDir() {
           .map((line) => JSON.parse(line)),
       ),
     [Symbol.dispose]() {
-      if (previous === undefined) delete process.env.FLAKE_RECORD_DIR;
-      else process.env.FLAKE_RECORD_DIR = previous;
+      if (previous) process.env.FLAKE_RECORD_DIR = previous;
+      else delete process.env.FLAKE_RECORD_DIR;
     },
   };
 }

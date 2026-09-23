@@ -229,10 +229,10 @@ test("a relative FLAKE_RECORD_DIR is rebased against GITHUB_WORKSPACE", async ()
     const files = readdirSync(join(workspaceRoot, "test-results/flake-records"));
     expect(files).toHaveLength(1);
   } finally {
-    if (previous.dir === undefined) delete process.env.FLAKE_RECORD_DIR;
-    else process.env.FLAKE_RECORD_DIR = previous.dir;
-    if (previous.root === undefined) delete process.env.GITHUB_WORKSPACE;
-    else process.env.GITHUB_WORKSPACE = previous.root;
+    if (previous.dir) process.env.FLAKE_RECORD_DIR = previous.dir;
+    else delete process.env.FLAKE_RECORD_DIR;
+    if (previous.root) process.env.GITHUB_WORKSPACE = previous.root;
+    else delete process.env.GITHUB_WORKSPACE;
   }
 });
 
@@ -245,7 +245,7 @@ test("without FLAKE_RECORD_DIR nothing is written anywhere", async () => {
     });
     await expect(body()).rejects.toThrow(/flaked/);
   } finally {
-    if (previous !== undefined) process.env.FLAKE_RECORD_DIR = previous;
+    if (previous) process.env.FLAKE_RECORD_DIR = previous;
   }
 });
 
@@ -279,8 +279,8 @@ function flakeRecordDir() {
           .map((line) => JSON.parse(line)),
       ),
     [Symbol.dispose]() {
-      if (previous === undefined) delete process.env.FLAKE_RECORD_DIR;
-      else process.env.FLAKE_RECORD_DIR = previous;
+      if (previous) process.env.FLAKE_RECORD_DIR = previous;
+      else delete process.env.FLAKE_RECORD_DIR;
     },
   };
 }

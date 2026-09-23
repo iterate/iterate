@@ -1,4 +1,5 @@
 import { appendFlakeRecord, type FlakeRecord } from "./flake-record.ts";
+import { E2E_CI_RETRY_DELAY_MS } from "./e2e-policy/budgets.ts";
 /**
  * Pinned-bug tests: the body asserts the DESIRED behavior, and while the bug
  * exists it must fail with an error matching the given pattern.
@@ -39,27 +40,29 @@ import { appendFlakeRecord, type FlakeRecord } from "./flake-record.ts";
  * through the body — chiefly a runner-level test timeout on a hung body —
  * counts as the expected one. The wrapper therefore races the body against
  * its own 30s deadline and reports a timeout as NOT-the-pinned-failure (red),
- * so a hang cannot vanish into a vacuous pass. Registration sets the runner's
- * per-test timeout to that deadline + 1s (vitest's `timeout` option,
- * playwright's `test.setTimeout`) — the runner must never fire first, or the
- * blind spot returns. A pin whose body legitimately needs longer raises it
- * via `options.timeoutMs`.
+ * so a hang cannot vanish into a vacuous pass. The default sits below every
+ * test lane's runner timeout (apps/os unit: 45s; e2e: 120s) — it must, or the
+ * runner fires first and the blind spot returns. A pin whose body
+ * legitimately needs longer raises it via `options.timeoutMs`, still kept
+ * BELOW the runner's own test timeout for the same reason.
  *
  * Write the body so the pinned bug produces a DISTINCTIVE error (throw a
  * purpose-built message rather than relying on a generic assertion diff), and
  * so that conditions which prove nothing — e.g. a coincidental restart that
  * masks the bug for one observation — retry or fail with a NON-matching
- * error instead of succeeding.
+ * error instead of succeeding. See
+ * apps/os/e2e/vitest/userspace-facet-source-version.e2e.test.ts for the
+ * worked example (its predecessor bare `test.fails` false-alarmed 7+ times).
  *
  * A failure that proves nothing is retried HERE, not by the runner: vitest's
  * `retry` re-runs a body that THREW (for a pin, the pinned failure — the good
  * outcome) and stops once the body passed, inverting for `.fails` only
  * afterwards — so the outcome that proves nothing is the one it never retries
  * (which is also why registration pins `retry: 0`). A pin opts in with
- * `options.retries` (an e2e pin passes the CI retry count every plain e2e
- * test gets, zero at a desk): a non-matching failure re-runs the body that
- * many times, after `retryDelayMs` (default 5s, longer than the transient
- * blips a zero-delay retry re-runs into), with what is left of `timeoutMs` — never sleeping
+ * `options.retries` (an e2e pin passes E2E_RETRIES_THIS_RUN: the CI retry
+ * count every plain e2e test gets, zero at a desk): a non-matching failure
+ * re-runs the body that many times, after `retryDelayMs` (default: the e2e
+ * suites' CI retry pause), with what is left of `timeoutMs` — never sleeping
  * past the deadline, so the runner's timeout cannot fire during the pause and
  * count as the pin holding. Each attempt writes its own record. A pass and a
  * hang are never retried.
@@ -71,7 +74,7 @@ export function createFailing<TestFn extends (...args: any[]) => any>(
 ): TestFn {
   const timeoutMs = options?.timeoutMs || 30_000;
   const retries = options?.retries ?? 0;
-  const retryDelayMs = options?.retryDelayMs ?? 5_000;
+  const retryDelayMs = options?.retryDelayMs ?? E2E_CI_RETRY_DELAY_MS;
   const failer: unknown = "fails" in test ? test.fails : "fail" in test ? test.fail : undefined;
   if (typeof failer !== "function") {
     throw new Error(
