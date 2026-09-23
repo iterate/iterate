@@ -195,7 +195,7 @@ The deployment's two secrets give you three ways in:
 
 **A new user has no organization.** A human creates one in the Dash's New
 project sheet, or on the consent page when a client such as Claude Code first
-asks for access (`apps/os/specs/auth.spec.ts`). An agent that
+asks for access (`specs/os/auth.spec.ts`). An agent that
 needs a project a particular user can reach creates it as that user through the
 operator session: `session().authenticate(adminCredentials({ email })).projects.create({ project })`,
 as `apps/os/e2e/support/project-host.ts` does.
@@ -217,20 +217,20 @@ channels. The local values in `scripts/dev.ts` are public dev values.
 ### Playwright specs against local dev or previews
 
 The root Playwright config runs every app's browser specs from the root
-`specs/` directory, and `pnpm spec` runs them from the repo root. (This lands
-with the root specs PR; today `pnpm spec` delegates to
-`apps/os/playwright.config.ts` and `apps/os/specs/`, and Notes has its own
-`apps/notes/playwright.config.ts`.) The OS config has two projects:
-`chromium` (Desktop Chrome, every spec) and `phone` (Pixel 7, with touch, for
-the sign-in and consent specs). Select one with `pnpm spec --project=phone`.
+`specs/` directory, and `pnpm spec` runs them from the repo root. It has one
+project per app host: `os` (Desktop Chrome, `specs/os/`), `os-phone` (Pixel 7,
+with touch, for the sign-in and consent specs), `notes` (`specs/notes/`,
+skipped unless `NOTES_BASE_URL` is set) and `suite` (the flake sentinel and
+the harness's own specs). Select one with `pnpm spec --project=os-phone`.
 Playwright owns the server lifecycle: for a localhost target it runs
 `pnpm dev -- --port <DEMO_PORT, default 8788>`, reuses an already running
 server outside CI, and waits on `/version`.
 
 Specs sign in through the real `/login` password step and stamp their own
-identities, so files and tests run side by side (`fullyParallel`; six workers
-and one retry in CI). The target is the only thing that changes between local
-and deployed runs:
+identities, so in CI files and tests run side by side (`fullyParallel`, six
+workers, one retry); locally they run on one worker so a single dev server
+isn't hammered. The target is the only thing that changes between local and
+deployed runs:
 
 ```bash
 # local dev: starts or reuses the local OS dev server
@@ -241,7 +241,7 @@ DEMO_BASE_URL=https://pr<n>-<branch slug>-os-next-preview.iterate-dev-preview.wo
   doppler run --project project-worker --config preview -- pnpm spec
 
 # a single spec, headed, while working on it
-pnpm spec specs/auth.spec.ts --headed
+pnpm spec specs/os/auth.spec.ts --headed
 ```
 
 Against a deployment, the specs validate one env contract. The config reads

@@ -106,18 +106,18 @@ unset env var that silently skips tests is the failure mode this table
 exists to prevent (a `@preview` title filter once quietly reduced the
 streams example app's CI coverage to 3 of ~37 tests while the rest rotted).
 
-| Lane             | Command (repo root unless noted)                                 | Lives in                                                                                             | In CI                                                                                               | Proves                                                                                                                                                                                                                |
-| ---------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Unit             | `pnpm test`                                                      | `apps/os/src/**/*.test.ts` (colocated), `apps/os/scripts/*.test.ts`, every workspace's own suite     | Depot **Test** workflow, every PR — full suite                                                      | In-process logic; no deployment needed.                                                                                                                                                                               |
-| Workers          | `pnpm test` (`--project workers` in `apps/os`)                   | `apps/os/__workers-tests__/`, `apps/agents/__workers-tests__/`                                       | Depot **Test** workflow, every PR — full suite                                                      | Inside workerd next to the worker (Vite's built `dist/server/index.js` through `SELF.fetch`, never a source import): hibernation, eviction, alarms and pins that need `cloudflare:test` controls.                     |
-| OS e2e           | `pnpm e2e`                                                       | `apps/os/e2e/*.e2e.test.ts`, `apps/agents/e2e/`                                                      | Preview OS **e2e** job, every preview deploy — full suite, against the PR's preview                 | One real worker (local workerd by default, the deployed worker with `WORKER_BASE_URL`), every file a capnweb client at `/api` exactly like a production client; files in parallel and tests within a file concurrent. |
-| Playwright specs | `pnpm spec`                                                      | `specs/` (root `playwright.config.ts`, with the root specs harness; `apps/os/specs/` until it lands) | Preview OS **e2e** job — full suite, side by side with OS e2e                                       | Browser-level product flows: issuer sign-in and consent (plus a phone-width project), the issuer's server functions, the project mini-app, and the Dash, Agents, Notes and Voice flows as they move into `specs/`.    |
-| Notes smoke      | `pnpm --dir apps/notes spec` (`NOTES_BASE_URL`, `DEMO_BASE_URL`) | `apps/notes/specs/`                                                                                  | Preview OS **deploy** job, after the Notes preview deploys; fails fast without both URLs            | Sign in through the issuer, create a project, save a note and read it after reload, against the preview pair.                                                                                                         |
-| Kit host         | `pnpm --dir apps/kit firmware:test:host` (part of Kit's `test`)  | `apps/kit/firmware/tests/`                                                                           | Depot **Test** workflow, every PR (through `pnpm test`)                                             | Firmware logic compiled for the host and run under CTest.                                                                                                                                                             |
-| Dummy petshop    | `pnpm test` (its unit suite)                                     | `apps/dummy-petshop/src/`                                                                            | Depot **Test** workflow; the fixture itself deploys from `main` (Deploy dummy-petshop)              | The OAuth/API fixture the OS secret and connection e2e rows dial (`PETSHOP_BASE_URL`, default `https://dummy-petshop.iterate.workers.dev`).                                                                           |
-| Soak             | `pnpm --dir apps/os e2e:soak --runs N` (`WORKER_BASE_URL`)       | `apps/os/scripts/e2e-soak.ts`                                                                        | **Manual** — dispatch `os-next-e2e-soak.yml`; a measurement, not a gate                             | The e2e suite N times against one deployed worker, tallying every row that did not pass every time.                                                                                                                   |
-| Crash hunt       | `RUN_ISOLATE_CRASH_HUNT=1 pnpm e2e isolate-ceilings`             | `apps/os/e2e/isolate-ceilings-deployed.e2e.test.ts`                                                  | Nightly against prd (`os-next-crash-hunt.yml`); opt-in rows, so the preview run stays deterministic | Drives one context's Durable Object up to and past its isolate ceiling on purpose.                                                                                                                                    |
-| Bench            | `pnpm --dir apps/os bench` (`BENCH_OUT=<file.json>`)             | `apps/os/bench/`                                                                                     | **Manual**                                                                                          | Latency scenarios over the same client and worker, files one at a time.                                                                                                                                               |
+| Lane             | Command (repo root unless noted)                                | Lives in                                                                                             | In CI                                                                                                             | Proves                                                                                                                                                                                                                |
+| ---------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit             | `pnpm test`                                                     | `apps/os/src/**/*.test.ts` (colocated), `apps/os/scripts/*.test.ts`, every workspace's own suite     | Depot **Test** workflow, every PR — full suite                                                                    | In-process logic; no deployment needed.                                                                                                                                                                               |
+| Workers          | `pnpm test` (`--project workers` in `apps/os`)                  | `apps/os/__workers-tests__/`, `apps/agents/__workers-tests__/`                                       | Depot **Test** workflow, every PR — full suite                                                                    | Inside workerd next to the worker (Vite's built `dist/server/index.js` through `SELF.fetch`, never a source import): hibernation, eviction, alarms and pins that need `cloudflare:test` controls.                     |
+| OS e2e           | `pnpm e2e`                                                      | `apps/os/e2e/*.e2e.test.ts`, `apps/agents/e2e/`                                                      | Preview OS **e2e** job, every preview deploy — full suite, against the PR's preview                               | One real worker (local workerd by default, the deployed worker with `WORKER_BASE_URL`), every file a capnweb client at `/api` exactly like a production client; files in parallel and tests within a file concurrent. |
+| Playwright specs | `pnpm spec`                                                     | `specs/` (root `playwright.config.ts`, one project per app host: `os`, `os-phone`, `notes`, `suite`) | Preview OS **e2e** job — the `os`, `os-phone` and `suite` projects, side by side with OS e2e                      | Browser-level product flows: issuer sign-in and consent (plus a phone-width project), the issuer's server functions, the project mini-app, and the Dash, Agents, Notes and Voice flows as they move into `specs/`.    |
+| Notes specs      | `pnpm spec --project notes` (`NOTES_BASE_URL`, `DEMO_BASE_URL`) | `specs/notes/`                                                                                       | Preview OS **deploy** job, after the Notes preview deploys; the project is skipped when `NOTES_BASE_URL` is unset | Sign in through the issuer, create a project, save a note and read it after reload, against the preview pair.                                                                                                         |
+| Kit host         | `pnpm --dir apps/kit firmware:test:host` (part of Kit's `test`) | `apps/kit/firmware/tests/`                                                                           | Depot **Test** workflow, every PR (through `pnpm test`)                                                           | Firmware logic compiled for the host and run under CTest.                                                                                                                                                             |
+| Dummy petshop    | `pnpm test` (its unit suite)                                    | `apps/dummy-petshop/src/`                                                                            | Depot **Test** workflow; the fixture itself deploys from `main` (Deploy dummy-petshop)                            | The OAuth/API fixture the OS secret and connection e2e rows dial (`PETSHOP_BASE_URL`, default `https://dummy-petshop.iterate.workers.dev`).                                                                           |
+| Soak             | `pnpm --dir apps/os e2e:soak --runs N` (`WORKER_BASE_URL`)      | `apps/os/scripts/e2e-soak.ts`                                                                        | **Manual** — dispatch `os-next-e2e-soak.yml`; a measurement, not a gate                                           | The e2e suite N times against one deployed worker, tallying every row that did not pass every time.                                                                                                                   |
+| Crash hunt       | `RUN_ISOLATE_CRASH_HUNT=1 pnpm e2e isolate-ceilings`            | `apps/os/e2e/isolate-ceilings-deployed.e2e.test.ts`                                                  | Nightly against prd (`os-next-crash-hunt.yml`); opt-in rows, so the preview run stays deterministic               | Drives one context's Durable Object up to and past its isolate ceiling on purpose.                                                                                                                                    |
+| Bench            | `pnpm --dir apps/os bench` (`BENCH_OUT=<file.json>`)            | `apps/os/bench/`                                                                                     | **Manual**                                                                                                        | Latency scenarios over the same client and worker, files one at a time.                                                                                                                                               |
 
 The normal Depot **Test** workflow runs `pnpm test` from the repo root. That
 recursively runs every workspace's `test` script, including the `iterate` CLI,
@@ -194,8 +194,10 @@ new deployment and every client answers `/healthz`, and the `e2e` job only
 starts after a successful deploy. This shared readiness time belongs to
 CI setup, not individual test durations. Both suites run concurrently once
 ready; browser installation overlaps the Vitest run. Playwright's worker count
-and the case against sharding were measured, not guessed: see the
-[Playwright parallelisation study](../explainers/playwright-parallelisation/README.md).
+and the case against sharding were measured, not guessed: #2659's study, run
+on the legacy 88-test suite, settled on 24 workers and found that six-way
+sharding lengthened the full preview run. Neither carried over to today's
+smaller suite, which runs 6 workers in CI; measure again before changing it.
 
 Each runner derives the deployed target itself, once, from the deployment's
 own `APP_CONFIG` (parsed exactly as the worker parses it) and its `envs.ts`
@@ -308,33 +310,33 @@ Doppler config and its `envs.ts` entry — tests never invent parallel names
 for it. The Playwright config additionally honors the Playwright-conventional
 `CI` and `VIDEO_MODE`.
 
-| Variable                                            | Set by                                                      | Controls                                                                                                                                    | Default                                     |
-| --------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| `WORKER_BASE_URL`                                   | You, the preview script, the soak and crash hunt            | THE deployed worker for `pnpm e2e`, the soak and bench                                                                                      | Boot the real worker in local workerd       |
-| `DEMO_BASE_URL`                                     | You, the preview script                                     | THE deployment for `pnpm spec` (and the issuer for the Notes smoke)                                                                         | Local `pnpm dev` on `DEMO_PORT`             |
-| `DEMO_PORT`                                         | You                                                         | Port for the local server Playwright starts                                                                                                 | `8788`                                      |
-| `APP_CONFIG`, `APP_CONFIG_SECRETS__KEY`             | Doppler (`project-worker`, `preview` / `prd`)               | The deployed target's credentials and login (`deployed-target.ts`)                                                                          | None — deployed runs throw without them     |
-| `ADMIN_API_SECRET`, `LOGIN_PASSWORD`                | You (explicit override)                                     | The admin bearer and sign-in password, instead of reading them out of `APP_CONFIG`                                                          | From `APP_CONFIG`                           |
-| `PROJECT_INGRESS_ROUTING`, `MCP_BASE_URL`           | You (explicit override)                                     | Project routing and the MCP origin, instead of the `envs.ts` entry                                                                          | From `envs.ts`                              |
-| `E2E_RUN_ID`                                        | Preview CI (`<run id>-<attempt>`), or you                   | The run's id, folded into every identifier a test mints                                                                                     | Minted once per run                         |
-| `OPENAI_API_KEY`                                    | You / Doppler                                               | Deployed stories that speak to the real default model                                                                                       | Unset → those stories skip                  |
-| `PETSHOP_BASE_URL`, `PETSHOP_BACKDOOR_SECRET`       | You                                                         | Which dummy petshop the secret and connection rows dial, and its backdoor credential                                                        | `https://dummy-petshop.iterate.workers.dev` |
-| `NOTES_BASE_URL`                                    | The preview script, or you                                  | The Notes deployment the Notes smoke signs in to                                                                                            | None — the smoke throws without it          |
-| `RUN_ISOLATE_CRASH_HUNT`                            | The crash-hunt workflow                                     | `"1"` opts in to the load-dependent isolate-ceiling rows                                                                                    | Unset → those rows skip                     |
-| `BENCH_OUT`                                         | You                                                         | Writes the bench's raw samples as JSON                                                                                                      | Unset → no file                             |
-| `FLAKE_RECORD_DIR`                                  | CI (Test workflow: `test-results/flake-records`)            | Where flake wrappers and retried plain tests append one JSON line per outcome                                                               | Unset → nothing recorded                    |
-| `TEST_TELEMETRY_ARTIFACT_FILE`                      | You                                                         | Optional named immediate canonical JSON copy                                                                                                | Unset → no immediate copy                   |
-| `TEST_TELEMETRY_ARTIFACT_DIR`                       | CI (Test workflow: `test-results/ci-telemetry/raw`), or you | Durable canonical JSON directory consumed by the always-running finalizer                                                                   | Unset → reporter does not write             |
-| `TEST_TELEMETRY_KIND`                               | CI                                                          | Shared `unit`, `integration`, or `e2e` dimension                                                                                            | Runner-appropriate default                  |
-| `TEST_TELEMETRY_LANE`                               | CI                                                          | Shared lane dimension (`unit`, `vitest`, `playwright`, …)                                                                                   | Runner-appropriate default                  |
-| `TEST_TELEMETRY_APP`, `TEST_TELEMETRY_PREVIEW_SLOT` | No setter today (the legacy preview orchestrator)           | Deployed application and preview dimensions; the preview e2e telemetry upload is the flake-tooling follow-up's                              | Unset outside app e2e                       |
-| `TEST_TELEMETRY_HEAD_SHA`                           | CI                                                          | Exact tested commit identity, including manually dispatched runs                                                                            | Ambient `GITHUB_SHA`, then local HEAD       |
-| `TEST_TELEMETRY_BRANCH`                             | CI                                                          | Exact tested source branch, including manually dispatched runs                                                                              | Ambient GitHub head/ref name                |
-| `TEST_TELEMETRY_PULL_REQUEST_NUMBER`                | CI                                                          | Exact selected PR identity for manually dispatched runs                                                                                     | Ambient pull-request ref, then unset        |
-| `TEST_TELEMETRY_EXPECTED_WORKSPACES`                | CI finalizer                                                | Comma-separated unit workspaces that must each have emitted one runner artifact                                                             | Unset → require at least one artifact       |
-| `CI`                                                | Depot CI                                                    | One retry (Vitest e2e and Playwright), trace on first retry, 16 Vitest e2e workers and 6 Playwright workers, never reuse an existing server | Unset locally                               |
-| `VIDEO_MODE`                                        | You                                                         | `"1"` records spec demo videos — see [Video mode](#video-mode-recorded-spec-demos-for-prs)                                                  | No video                                    |
-| `PLAYWRIGHT_SCREENSHOT`                             | You                                                         | Semicolon-separated regexes over `locator.toString()`; each matching successful action saves a full-page PNG (root specs harness)           | Unset → no screenshots                      |
+| Variable                                            | Set by                                                      | Controls                                                                                                                                          | Default                                     |
+| --------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| `WORKER_BASE_URL`                                   | You, the preview script, the soak and crash hunt            | THE deployed worker for `pnpm e2e`, the soak and bench                                                                                            | Boot the real worker in local workerd       |
+| `DEMO_BASE_URL`                                     | You, the preview script                                     | THE deployment for `pnpm spec` (and the issuer for the `notes` project)                                                                           | Local `pnpm dev` on `DEMO_PORT`             |
+| `DEMO_PORT`                                         | You                                                         | Port for the local server Playwright starts                                                                                                       | `8788`                                      |
+| `APP_CONFIG`, `APP_CONFIG_SECRETS__KEY`             | Doppler (`project-worker`, `preview` / `prd`)               | The deployed target's credentials and login (`deployed-target.ts`)                                                                                | None — deployed runs throw without them     |
+| `ADMIN_API_SECRET`, `LOGIN_PASSWORD`                | You (explicit override)                                     | The admin bearer and sign-in password, instead of reading them out of `APP_CONFIG`                                                                | From `APP_CONFIG`                           |
+| `PROJECT_INGRESS_ROUTING`, `MCP_BASE_URL`           | You (explicit override)                                     | Project routing and the MCP origin, instead of the `envs.ts` entry                                                                                | From `envs.ts`                              |
+| `E2E_RUN_ID`                                        | Preview CI (`<run id>-<attempt>`), or you                   | The run's id, folded into every identifier a test mints                                                                                           | Minted once per run                         |
+| `OPENAI_API_KEY`                                    | You / Doppler                                               | Deployed stories that speak to the real default model                                                                                             | Unset → those stories skip                  |
+| `PETSHOP_BASE_URL`, `PETSHOP_BACKDOOR_SECRET`       | You                                                         | Which dummy petshop the secret and connection rows dial, and its backdoor credential                                                              | `https://dummy-petshop.iterate.workers.dev` |
+| `NOTES_BASE_URL`                                    | The preview script, or you                                  | The Notes deployment the `notes` project signs in to                                                                                              | Unset → the `notes` project is skipped      |
+| `RUN_ISOLATE_CRASH_HUNT`                            | The crash-hunt workflow                                     | `"1"` opts in to the load-dependent isolate-ceiling rows                                                                                          | Unset → those rows skip                     |
+| `BENCH_OUT`                                         | You                                                         | Writes the bench's raw samples as JSON                                                                                                            | Unset → no file                             |
+| `FLAKE_RECORD_DIR`                                  | CI (Test workflow: `test-results/flake-records`)            | Where flake wrappers and retried plain tests append one JSON line per outcome                                                                     | Unset → nothing recorded                    |
+| `TEST_TELEMETRY_ARTIFACT_FILE`                      | You                                                         | Optional named immediate canonical JSON copy                                                                                                      | Unset → no immediate copy                   |
+| `TEST_TELEMETRY_ARTIFACT_DIR`                       | CI (Test workflow: `test-results/ci-telemetry/raw`), or you | Durable canonical JSON directory consumed by the always-running finalizer                                                                         | Unset → reporter does not write             |
+| `TEST_TELEMETRY_KIND`                               | CI                                                          | Shared `unit`, `integration`, or `e2e` dimension                                                                                                  | Runner-appropriate default                  |
+| `TEST_TELEMETRY_LANE`                               | CI                                                          | Shared lane dimension (`unit`, `vitest`, `playwright`, …)                                                                                         | Runner-appropriate default                  |
+| `TEST_TELEMETRY_APP`, `TEST_TELEMETRY_PREVIEW_SLOT` | No setter today (the legacy preview orchestrator)           | Deployed application and preview dimensions; the preview e2e telemetry upload is the flake-tooling follow-up's                                    | Unset outside app e2e                       |
+| `TEST_TELEMETRY_HEAD_SHA`                           | CI                                                          | Exact tested commit identity, including manually dispatched runs                                                                                  | Ambient `GITHUB_SHA`, then local HEAD       |
+| `TEST_TELEMETRY_BRANCH`                             | CI                                                          | Exact tested source branch, including manually dispatched runs                                                                                    | Ambient GitHub head/ref name                |
+| `TEST_TELEMETRY_PULL_REQUEST_NUMBER`                | CI                                                          | Exact selected PR identity for manually dispatched runs                                                                                           | Ambient pull-request ref, then unset        |
+| `TEST_TELEMETRY_EXPECTED_WORKSPACES`                | CI finalizer                                                | Comma-separated unit workspaces that must each have emitted one runner artifact                                                                   | Unset → require at least one artifact       |
+| `CI`                                                | Depot CI                                                    | One retry (Vitest e2e and Playwright), trace on first retry, 16 Vitest e2e workers and 6 Playwright workers, never reuse an existing server       | Unset locally                               |
+| `VIDEO_MODE`                                        | You                                                         | `"1"` records spec demo videos — see [Video mode](#video-mode-recorded-spec-demos-for-prs)                                                        | No video                                    |
+| `PLAYWRIGHT_SCREENSHOT`                             | You                                                         | Semicolon-separated regexes over `locator.toString()`; each matching successful action saves a full-page PNG (`specs/test-support/screenshot.ts`) | Unset → no screenshots                      |
 
 ## Artifacts
 
@@ -347,14 +349,16 @@ for it. The Playwright config additionally honors the Playwright-conventional
   [CI and test telemetry](ci-test-telemetry.md) for replay and query examples.
 - **The Vitest e2e suite** streams to the job log; the soak writes one JSON
   report per run under `apps/os/output/soak/` plus `summary.json`.
-- **Playwright** writes `test-results/` next to its config: traces (on the
-  first retry), videos in video mode, and `PLAYWRIGHT_SCREENSHOT` captures
-  per test. With the root specs harness that is the repo-level
-  `test-results/`.
+- **Playwright** writes the repo-level `test-results/`:
+  `playwright-output/` per test (traces and screenshots retained on failure,
+  videos in video mode or on local failures, `PLAYWRIGHT_SCREENSHOT`
+  captures), the HTML report in `playwright-html/`, and
+  `playwright-results.json`.
 - **Preview CI** writes the deployed preview's summary to
   `apps/os/output/preview.json` and the URLs into the PR body. Its `e2e` job
-  uploads no artifact today; collecting its Playwright and telemetry output
-  is the flake-tooling follow-up's.
+  uploads `preview-test-telemetry` (the canonical telemetry of both runners)
+  and the `flake-records-specs` and `flake-records-preview-e2e` artifacts,
+  even when a suite fails.
 
 ## Where test helpers live
 
@@ -362,12 +366,12 @@ Four layers. A helper lives at the **lowest layer all its consumers share**,
 and imports point **down** only. When both lanes need a helper, it moves down
 a layer — never sideways into a copy.
 
-| Layer                     | Home                                                                                                                                 | Charter                                                                                                                                                                                                                                                                                                                                                                              |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| L0 policy & infra         | `packages/shared/src/test-support/`                                                                                                  | Runner-agnostic: the retry policy and timeout ladder (`e2e-policy/budgets.ts`) and the retry telemetry reporter (`e2e-policy/`, both exported from `@iterate-com/shared/test-support/e2e-policy`), the CI telemetry contract (`ci-telemetry.ts`), flake records and suite summaries (`flake-record.ts`, `flake-suite-summary.ts`), and the `createFlake` / `createFailing` wrappers. |
-| L1 environment & identity | `apps/os/scripts/` and `apps/os/e2e/support/deployed-target.ts`                                                                      | The deployment under test and who you are against it: dev server, build, deploy and preview lifecycle; the deployed target's credentials, routing and MCP origin out of `APP_CONFIG` and `envs.ts`. Consumed by both lanes' configs (and Notes').                                                                                                                                    |
-| L2 surface clients        | `apps/os/e2e/support/` (itx surface) · `specs/test-support/` (browser surface; `apps/os/specs/test.ts` until the root harness lands) | Lane-specific clients and fixtures: admin itx sessions, fresh projects, principals and fakes on the itx side; signed-in browser sessions and page plugins on the Playwright side.                                                                                                                                                                                                    |
-| L3 domain harnesses       | `apps/os/src/stream/test-support.ts`, `apps/os/__workers-tests__/support.ts`, colocated with the domain                              | Unit- and Workers-lane fakes implementing real interfaces (`memoryStream`, node-SQLite Durable Object storage); never imported by L2 or above.                                                                                                                                                                                                                                       |
+| Layer                     | Home                                                                                                    | Charter                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| L0 policy & infra         | `packages/shared/src/test-support/`                                                                     | Runner-agnostic: the retry policy and timeout ladder (`e2e-policy/budgets.ts`) and the retry telemetry reporter (`e2e-policy/`, both exported from `@iterate-com/shared/test-support/e2e-policy`), the CI telemetry contract (`ci-telemetry.ts`), flake records and suite summaries (`flake-record.ts`, `flake-suite-summary.ts`), and the `createFlake` / `createFailing` wrappers. |
+| L1 environment & identity | `apps/os/scripts/` and `apps/os/e2e/support/deployed-target.ts`                                         | The deployment under test and who you are against it: dev server, build, deploy and preview lifecycle; the deployed target's credentials, routing and MCP origin out of `APP_CONFIG` and `envs.ts`. Consumed by both lanes' configs (and Notes').                                                                                                                                    |
+| L2 surface clients        | `apps/os/e2e/support/` (itx surface) · `specs/test-support/` (browser surface)                          | Lane-specific clients and fixtures: admin itx sessions, fresh projects, principals and fakes on the itx side; signed-in browser sessions and page plugins on the Playwright side.                                                                                                                                                                                                    |
+| L3 domain harnesses       | `apps/os/src/stream/test-support.ts`, `apps/os/__workers-tests__/support.ts`, colocated with the domain | Unit- and Workers-lane fakes implementing real interfaces (`memoryStream`, node-SQLite Durable Object storage); never imported by L2 or above.                                                                                                                                                                                                                                       |
 
 Anti-goal: one mega test-support package. That would drag itx clients and
 credential machinery into a package that production workers import; the
@@ -404,8 +408,7 @@ outputs a reviewer should read.
 Any Playwright spec re-runs as a watchable demo — pointer highlights on every
 action, dead air compressed, the blank startup lead-in trimmed. Design and
 plugin by Misha: [middlewright](https://github.com/iterate/middlewright)'s
-`videoMode`, wired in `specs/test-support/test.ts` (`apps/os/specs/test.ts`
-until the root harness lands); the auto start-trim
+`videoMode`, wired in `specs/test-support/test.ts`; the auto start-trim
 shipped in iterate/middlewright#3 / PR #1788.
 
 ```bash
@@ -420,21 +423,34 @@ doppler run --project project-worker --config preview -- \
 
 `VIDEO_MODE=1` flips two things:
 
-- **Config** (`playwright.config.ts`): `video: "on"` at a fixed 1280×1000
-  desktop viewport (the phone project records at its device size), plus
-  relaxed budgets wherever the tight action budget is in force, so highlight
-  pauses don't trip the deliberately-tight normal budgets.
-- **Plugin** (`videoMode` in the specs harness): records each
-  action's bounding box during the run, then post-renders with ffmpeg (must
-  be installed): pointer highlights, dead-air spans >300ms sped up, a final
-  hold (default 1s; `finalHold` is in milliseconds), and the blank
+- **Config** (`playwright.config.ts`): `video: "on"`, recorded at each
+  project's own viewport (1280×900 desktop; the phone project at its device
+  size). The budgets do not relax: the action budget is one number, video
+  mode included, and `e2e-policy/budgets.ts` says why (video mode's runtime
+  cost is one screenshot per click; the pointer animation and holds are
+  post-production).
+- **Plugin** (`videoMode` in `specs/test-support/test.ts`): records each
+  action's bounding box during the run, then post-renders with ffmpeg:
+  pointer highlights, dead-air spans >300ms sped up, `test.step` captions, a
+  final hold (default 1s; `finalHold` is in milliseconds), and the blank
   `about:blank`-to-first-paint lead-in trimmed
   automatically (`trimStart: "auto"`, pixel-based; an explicit
   `page.videoMode.setStartTime()` in a spec still wins).
 
-Output lands under `test-results/<test-title-dir>/` next to the config:
-`video-rendered.webm` (the demo), `video-raw.webm`, a `video-mode.html`
-frame-stepper and `video-mode-report.html`.
+The post-render needs an `ffmpeg` on `PATH` with the `ass` (libass) filter,
+which draws the captions. Homebrew's `ffmpeg` lacks it; install `ffmpeg-full`,
+which is keg-only, and put it first on `PATH`:
+
+```bash
+brew install ffmpeg-full
+export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"
+```
+
+Output lands under `test-results/playwright-output/<test-title-dir>/`:
+`video-rendered.webm` (the demo), `video-raw.webm` (middlewright's copy of
+Playwright's own `video.webm`, which sits beside it), a `video-mode.html`
+frame-stepper and `video-mode-report.html`, all also attached to the HTML
+report.
 
 **Getting the video into a PR description is manual** — the "automatic" part
 is only the recording/trimming. GitHub renders an inline video player only
@@ -442,13 +458,18 @@ for `user-attachments` URLs, and only its web editors mint those (`<video>`
 tags pointing at any other host are sanitised — which is why older PRs fell
 back to release-asset GIFs, e.g. PR #1764):
 
-1. Convert for the widest GitHub support:
-   `ffmpeg -i video-rendered.webm demo.mp4`.
-2. Drag (or paste) `demo.mp4` into the PR-description editor on github.com.
-   GitHub uploads it and inserts a `https://github.com/user-attachments/assets/…`
-   URL — leave it on its own line and it renders as an inline player. There
-   is no API or `gh` route for this upload. PR #1788's before/after clip is
-   the working example.
+1. Upload `video-rendered.webm` through a github.com editor: drag or paste it
+   into the PR-description editor, or attach it in any comment editor and
+   clear the comment WITHOUT submitting — the asset is already permanent.
+   Agents can point a browser-automation `file_upload` at the editor's file
+   input. GitHub accepts `.webm`, `.mp4` and `.mov`;
+   `ffmpeg -i video-rendered.webm demo.mp4` gives the widest playback support.
+2. GitHub inserts a `https://github.com/user-attachments/assets/…` URL — put
+   it on its own line in the body, with blank lines above and below, and it
+   renders as an inline player. There is no API or `gh` route for this
+   upload. PR #1788's before/after clip is the working example; [Pull
+   requests](pull-requests.md#video) has the command that checks the player
+   rendered.
 
 ## Retries and timeouts
 
@@ -499,19 +520,19 @@ only on genuine infra wedges).
 
 ### The ladder
 
-| What it bounds             | Knob                             | Policy (`budgets.ts`)                             | In force today                                                                 | On expiry                 |
-| -------------------------- | -------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------ | ------------------------- |
-| One UI action              | `actionTimeout` + spinner-waiter | `SPEC_ACTION_TIMEOUT_MS` 1s (→ ~30s with spinner) | none set in `apps/os/playwright.config.ts`; the root specs harness restores it | fail the attempt          |
-| One assertion              | `expect.timeout`                 | `SPEC_EXPECT_TIMEOUT_MS` 15s                      | 30s (`playwright.config.ts`)                                                   | fail the attempt          |
-| One Playwright spec        | `timeout`                        | `SPEC_TEST_TIMEOUT_MS` 240s                       | 90s (`playwright.config.ts`)                                                   | retry once (CI)           |
-| One Vitest e2e test/hook   | `testTimeout` / `hookTimeout`    | `E2E_TEST_TIMEOUT_MS` 120s                        | 60s / 120s (`apps/os/vitest.config.ts`, `e2e`)                                 | retry once (CI)           |
-| A heavy test               | per-test `{ timeout }`           | capped at `E2E_HEAVY_TEST_TIMEOUT_MS` 240s        | per test, with a `// comment`                                                  | retry once (CI)           |
-| A retry's pause            | vitest `retry.delay`             | `E2E_CI_RETRY_DELAY_MS` 5s                        | `createFailing`'s retries; the e2e project retries without a pause             | n/a                       |
-| One Workers-lane test/hook | `testTimeout` / `hookTimeout`    | —                                                 | 120s / 120s (the first test pays workerd boot)                                 | fail                      |
-| One bench file             | `testTimeout` / `hookTimeout`    | —                                                 | 300s                                                                           | fail                      |
-| Each preview sub-lane      | `timeout N <lane command>`       | `OS_PREVIEW_LANE_TIMEOUT_SECS` 480s               | none: the kill-tree wrapper went with `scripts/preview/`                       | **fail — never retry**    |
-| One whole preview run      | run watchdog                     | `PREVIEW_RUN_WATCHDOG_SECS` 600s                  | none                                                                           | **cancel — never retry**  |
-| The Depot CI job           | `timeout-minutes`                | —                                                 | Test 20, preview deploy 40, preview e2e 30 minutes                             | outer edge: re-run button |
+| What it bounds             | Knob                             | Policy (`budgets.ts`)                             | In force today                                                     | On expiry                 |
+| -------------------------- | -------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------ | ------------------------- |
+| One UI action              | `actionTimeout` + spinner-waiter | `SPEC_ACTION_TIMEOUT_MS` 1s (→ ~30s with spinner) | the policy value (root `playwright.config.ts` imports it)          | fail the attempt          |
+| One assertion              | `expect.timeout`                 | `SPEC_EXPECT_TIMEOUT_MS` 15s                      | the policy value                                                   | fail the attempt          |
+| One Playwright spec        | `timeout`                        | `SPEC_TEST_TIMEOUT_MS` 240s                       | the policy value                                                   | retry once (CI)           |
+| One Vitest e2e test/hook   | `testTimeout` / `hookTimeout`    | `E2E_TEST_TIMEOUT_MS` 120s                        | 60s / 120s (`apps/os/vitest.config.ts`, `e2e`)                     | retry once (CI)           |
+| A heavy test               | per-test `{ timeout }`           | capped at `E2E_HEAVY_TEST_TIMEOUT_MS` 240s        | per test, with a `// comment`                                      | retry once (CI)           |
+| A retry's pause            | vitest `retry.delay`             | `E2E_CI_RETRY_DELAY_MS` 5s                        | `createFailing`'s retries; the e2e project retries without a pause | n/a                       |
+| One Workers-lane test/hook | `testTimeout` / `hookTimeout`    | —                                                 | 120s / 120s (the first test pays workerd boot)                     | fail                      |
+| One bench file             | `testTimeout` / `hookTimeout`    | —                                                 | 300s                                                               | fail                      |
+| Each preview sub-lane      | `timeout N <lane command>`       | `OS_PREVIEW_LANE_TIMEOUT_SECS` 480s               | none: the kill-tree wrapper went with `scripts/preview/`           | **fail — never retry**    |
+| One whole preview run      | run watchdog                     | `PREVIEW_RUN_WATCHDOG_SECS` 600s                  | none                                                               | **cancel — never retry**  |
+| The Depot CI job           | `timeout-minutes`                | —                                                 | Test 20, preview deploy 40, preview e2e 30 minutes                 | outer edge: re-run button |
 
 `budgets.ts` also still carries `OS_AGENT_SMOKE_TIMEOUT_SECS`,
 `OS_TUI_LANE_TIMEOUT_SECS`, `TUI_TEST_TIMEOUT_MS` and
@@ -659,9 +680,9 @@ flaky moves to `createFlake`; if it stops passing entirely, switch it to
 ~10%-flaky sentinel that proves the pipeline works — if its flake rate reads
 0%, distrust the dashboard, not the sentinel.
 
-Every suite carries its own sentinel (the unit sentinel above; the specs and
-e2e sentinels, `flake sentinel (specs)` and `flake sentinel (e2e)`, return
-with the root specs harness and the preview flake upload) — distinct names, so each
+Every suite carries its own sentinel (the unit sentinel above,
+`flake sentinel (specs)` in `specs/flake-sentinel.spec.ts`, and
+`flake sentinel (e2e)` in `apps/os/e2e/flake-sentinel.e2e.test.ts`) — distinct names, so each
 gets its own dashboard row and a suite whose row reads 0% has broken
 recording/ingestion plumbing, not a healthy month.
 

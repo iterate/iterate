@@ -62,15 +62,20 @@ A real inline **player** only renders from a
 pointing at any other host — link at best, never a player. (GIFs render from
 any URL.)
 
-Mint the URL through any PR page's comment editor: upload via the attach flow
-(a browser-automation `file_upload` tool pointed at the editor's file input
-works), wait for the inserted `user-attachments` URL, then clear the comment
-WITHOUT submitting — the asset is already permanent. Put the bare URL in the
-body on its own line with blank lines above and below.
+Mint the URL through a github.com editor: drag or paste the file into the PR
+description editor, or upload via the attach flow of any PR page's comment
+editor (a browser-automation `file_upload` tool pointed at the editor's file
+input works), wait for the inserted `user-attachments` URL, then clear the
+comment WITHOUT submitting — the asset is already permanent. Put the bare URL
+in the body on its own line with blank lines above and below.
 
 Spec recordings: `VIDEO_MODE=1 pnpm spec -g <name>`. Ship
-`video-rendered.webm` (dead air sped up, pointer annotations) — `video.webm`
-is the raw capture. Note that video mode depends on "middlewright" which is somewhat experimental and also maintained by us. If there are issues with it they typically need to be fixed upstream. we can use pkg-pr-new releases and publish to npm will be done manually later.
+`video-rendered.webm` (dead air sped up, pointer annotations) —
+`video-raw.webm` is the raw capture (a copy of Playwright's own `video.webm`).
+Rendering needs an `ffmpeg` with the `ass` filter on `PATH`: Homebrew's
+`ffmpeg` lacks it, so install `ffmpeg-full` (keg-only) and put
+`$(brew --prefix ffmpeg-full)/bin` first. Output paths and the upload steps:
+[Video mode](testing.md#video-mode-recorded-spec-demos-for-prs). Note that video mode depends on "middlewright" which is somewhat experimental and also maintained by us. If there are issues with it they typically need to be fixed upstream. we can use pkg-pr-new releases and publish to npm will be done manually later.
 
 Verify the player rendered:
 
@@ -115,7 +120,7 @@ These rules apply whenever an agent is asked to open, babysit, address review, o
 - Autofix / preview flakiness: investigate; re-run or fix when you can. Do not use a red check as “close enough.”
 - If an unrelated flaky or pathologically slow test is quarantined under the
   [testing protocol](./testing.md#flaky-test-quarantine-protocol), the PR body
-  must prominently name the skipped test/lane and link its task. A hidden skip
+  must prominently name the skipped test/lane and link its tracking issue. A hidden skip
   is not green CI.
 - When the human asks to merge: wait for green CI **and** zero unresolved review threads, then merge (squash unless told otherwise).
 - Do not commit, push, open, or merge a PR unless the human asked for that action (or a standing instruction for this session clearly includes it).
