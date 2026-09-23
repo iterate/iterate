@@ -1,6 +1,6 @@
 import type { FormEvent, Ref } from "react";
 import { Button } from "@iterate-com/ui/components/button";
-import { ConsentFooter, StepHeading } from "./consent-step.tsx";
+import { ConsentPanel, StepHeading, type ConsentFrame } from "./consent-step.tsx";
 import { ProjectChoices, type ProjectRow, type ProjectSelection } from "./project-choices.tsx";
 import { ProjectFields } from "./project-fields.tsx";
 
@@ -8,32 +8,43 @@ import { ProjectFields } from "./project-fields.tsx";
  *  spot when none fits. */
 export function ProjectsStep({
   headingRef,
+  frame,
   projects,
   projectBound,
   selection,
   fields,
   canReview,
-  error,
-  denyLocation,
   onSelectionChange,
   onCreateProject,
   onReview,
 }: {
   headingRef: Ref<HTMLHeadingElement>;
+  frame: ConsentFrame;
   projects: ProjectRow[];
   projectBound: boolean;
   selection: ProjectSelection;
   fields: Parameters<typeof ProjectFields>[0];
   canReview: boolean;
-  error: string | null;
-  denyLocation: string;
   onSelectionChange: (selection: ProjectSelection) => void;
   onCreateProject: (event: FormEvent<HTMLFormElement>) => void;
   onReview: () => void;
 }) {
   const { draft, disabled, onDraftChange } = fields;
   return (
-    <section className="flex flex-col gap-4">
+    <ConsentPanel
+      {...frame}
+      action={
+        <Button
+          type="button"
+          size="lg"
+          className="h-11"
+          disabled={disabled || !canReview}
+          onClick={onReview}
+        >
+          Review permissions
+        </Button>
+      }
+    >
       <StepHeading ref={headingRef}>Select projects</StepHeading>
       <ProjectChoices
         projects={projects}
@@ -48,20 +59,15 @@ export function ProjectsStep({
         <form
           aria-label="New project"
           onSubmit={onCreateProject}
-          className="flex flex-col gap-4 rounded-lg border p-4"
+          className="flex flex-col gap-4 rounded-xl border bg-muted/40 p-4"
         >
           <h3 className="text-sm font-medium">New project</h3>
           <ProjectFields {...fields} focusSlug />
-          <Button type="submit" variant="secondary" disabled={disabled}>
+          <Button type="submit" variant="outline" size="lg" className="h-11" disabled={disabled}>
             Create project
           </Button>
         </form>
       ) : null}
-      <ConsentFooter error={error} denyLocation={denyLocation}>
-        <Button type="button" size="lg" disabled={disabled || !canReview} onClick={onReview}>
-          Review permissions
-        </Button>
-      </ConsentFooter>
-    </section>
+    </ConsentPanel>
   );
 }

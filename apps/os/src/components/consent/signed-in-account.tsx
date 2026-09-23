@@ -1,8 +1,8 @@
 import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
 import { Button } from "@iterate-com/ui/components/button";
 
-/** Who is approving — their picture (or initial) and address — and Switch account, which signs out
- *  and comes back to this request through sign-in. */
+/** Who is approving — their picture (or initial) and address, wrapped rather than cut when long —
+ *  and Switch account, which signs out and comes back to this request through sign-in. */
 export function SignedInAccount({
   email,
   picture,
@@ -15,21 +15,30 @@ export function SignedInAccount({
   return (
     <section
       aria-label="Signed-in account"
-      className="flex items-center gap-3 rounded-lg bg-muted/60 px-3 py-2"
+      className="flex items-start gap-3.5 rounded-xl border p-4"
     >
-      <Avatar>
-        {picture ? <AvatarImage src={picture} referrerPolicy="no-referrer" /> : null}
-        <AvatarFallback>{email.slice(0, 1).toUpperCase()}</AvatarFallback>
+      <Avatar className="size-11 rounded-lg after:rounded-lg">
+        {picture ? (
+          <AvatarImage src={picture} referrerPolicy="no-referrer" className="rounded-lg" />
+        ) : null}
+        <AvatarFallback className="rounded-lg text-base">
+          {email.slice(0, 1).toUpperCase()}
+        </AvatarFallback>
       </Avatar>
-      <div className="flex min-w-0 flex-1 flex-col text-sm leading-tight">
+      <div className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-sm">
         <span className="text-xs text-muted-foreground">Signed in as</span>
-        <strong className="truncate font-medium">{email}</strong>
+        <strong className="font-medium wrap-anywhere">{email}</strong>
+        <form method="post" action={switchAccount}>
+          <Button
+            type="submit"
+            variant="link"
+            size="xs"
+            className="px-0 text-muted-foreground underline hover:text-foreground"
+          >
+            Switch account
+          </Button>
+        </form>
       </div>
-      <form method="post" action={switchAccount}>
-        <Button type="submit" variant="ghost" size="sm">
-          Switch account
-        </Button>
-      </form>
     </section>
   );
 }

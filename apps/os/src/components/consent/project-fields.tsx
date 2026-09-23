@@ -4,6 +4,7 @@ import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import type { IngressRouting } from "iterate/next/project-ingress";
 import type { OrganizationRecord } from "../../control-plane/catalog.ts";
+import { focusOnMount } from "../focus-on-mount.ts";
 import { typedSlug } from "./project-slug.ts";
 
 /** A project about to be created on the consent page: its slug as typed (or, on the first
@@ -15,11 +16,6 @@ export interface ProjectDraft {
   followsName: boolean;
   orgId: string;
   organizationName: string;
-}
-
-/** Module-level so its identity is stable: React calls it once, as the field appears. */
-function focusOnMount(node: HTMLInputElement | null) {
-  node?.focus();
 }
 
 /** The organization (a select of the person's, or a new one's name) and the project's slug, with
@@ -60,7 +56,7 @@ export function ProjectFields({
           <FieldLabel htmlFor={organizationId}>Organization</FieldLabel>
           <NativeSelect
             id={organizationId}
-            className="w-full"
+            className="w-full *:data-[slot=native-select]:h-11 *:data-[slot=native-select]:pl-3 *:data-[slot=native-select]:text-base"
             value={draft.orgId}
             disabled={disabled}
             onChange={(event) => onDraftChange({ ...draft, orgId: event.target.value })}
@@ -84,6 +80,7 @@ export function ProjectFields({
             autoComplete="organization"
             required
             disabled={disabled}
+            className="h-11 px-3 text-base md:text-base"
             onChange={(event) => onDraftChange({ ...draft, organizationName: event.target.value })}
           />
         </Field>
@@ -100,6 +97,7 @@ export function ProjectFields({
           required
           ref={focusSlug ? focusOnMount : undefined}
           disabled={disabled}
+          className="h-11 px-3 text-base md:text-base"
           onChange={(event) =>
             onDraftChange({ ...draft, slug: typedSlug(event.target.value), followsName: false })
           }

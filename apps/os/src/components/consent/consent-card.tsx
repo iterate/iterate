@@ -2,15 +2,14 @@ import { useRef, useState, useTransition, type FormEvent } from "react";
 import { flushSync } from "react-dom";
 import { useHydrated, useRouter } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { Button } from "@iterate-com/ui/components/button";
 import type { ConsentView } from "../../consent.ts";
 import { createProjectForConsent } from "../../issuer.functions.ts";
 import { IssuerPage } from "../issuer-page.tsx";
 import { ClientHeading } from "./client-heading.tsx";
-import { ConsentFooter, StepHeading } from "./consent-step.tsx";
+import { OnboardingStep } from "./onboarding-step.tsx";
 import { PermissionsStep } from "./permissions-step.tsx";
 import type { ProjectSelection } from "./project-choices.tsx";
-import { ProjectFields, type ProjectDraft } from "./project-fields.tsx";
+import type { ProjectDraft } from "./project-fields.tsx";
 import { proposedSlug } from "./project-slug.ts";
 import { ProjectsStep } from "./projects-step.tsx";
 import { SignedInAccount } from "./signed-in-account.tsx";
@@ -122,34 +121,39 @@ export function ConsentCard({
     onDraftChange: setDraft,
   };
 
+  const frame = {
+    account: (
+      <SignedInAccount email={view.email} picture={view.picture} switchAccount={switchAccount} />
+    ),
+    error,
+    // Creating a project takes the platform a few seconds; say so while the controls wait.
+    status: pending ? "Creating project…" : null,
+    denyLocation: view.denyLocation,
+  };
+
   return (
-    <IssuerPage className="max-w-md">
+    <IssuerPage wide className="gap-8 md:gap-10">
       <ClientHeading
         clientName={view.clientName}
         clientLogoUri={view.clientLogoUri}
         clientDomain={view.clientDomain}
       />
-      <SignedInAccount email={view.email} picture={view.picture} switchAccount={switchAccount} />
       {onboarding ? (
-        <form onSubmit={submitDraft} className="flex flex-col gap-4">
-          <StepHeading ref={headingRef}>Create a project</StepHeading>
-          <ProjectFields {...fields} />
-          <ConsentFooter error={error} denyLocation={view.denyLocation}>
-            <Button type="submit" size="lg" disabled={disabled}>
-              Review permissions
-            </Button>
-          </ConsentFooter>
-        </form>
+        <OnboardingStep
+          headingRef={headingRef}
+          frame={frame}
+          fields={fields}
+          onCreateProject={submitDraft}
+        />
       ) : step === "projects" ? (
         <ProjectsStep
           headingRef={headingRef}
+          frame={frame}
           projects={projects}
           projectBound={view.projectBound}
           selection={selection}
           fields={fields}
           canReview={selection.all || selected.length > 0}
-          error={error}
-          denyLocation={view.denyLocation}
           onSelectionChange={setSelection}
           onCreateProject={submitDraft}
           onReview={() => showStep("permissions")}
@@ -157,23 +161,16 @@ export function ConsentCard({
       ) : (
         <PermissionsStep
           headingRef={headingRef}
+          frame={frame}
           all={selection.all}
           selected={selected}
           scopes={view.scopes}
           declined={declined}
-          error={error}
-          denyLocation={view.denyLocation}
           disabled={disabled}
           onDeclinedChange={setDeclined}
           onEditProjects={() => showStep("projects")}
         />
       )}
-      {/* Creating a project takes the platform a few seconds; say so while the controls wait. */}
-      {pending ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          Creating project…
-        </p>
-      ) : null}
     </IssuerPage>
   );
 }

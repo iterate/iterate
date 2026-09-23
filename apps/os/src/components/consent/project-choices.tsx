@@ -43,10 +43,11 @@ export function ProjectChoices({
     onSelectionChange({ ...selection, excluded });
   }
   return (
-    <fieldset aria-label="Projects it may reach" className="flex flex-col gap-1">
+    <fieldset aria-label="Projects it may reach" className="-mx-2 flex flex-col gap-1">
       {projectBound ? null : (
         <Label className="gap-3 rounded-lg px-2 py-2 leading-normal hover:bg-muted">
           <Checkbox
+            className="border-foreground/30 data-disabled:opacity-50"
             aria-label="All my projects, now and future"
             checked={selection.all}
             disabled={disabled}
@@ -61,6 +62,7 @@ export function ProjectChoices({
           className="gap-3 rounded-lg px-2 py-2 leading-normal font-normal hover:bg-muted"
         >
           <Checkbox
+            className="border-foreground/30 data-disabled:opacity-50"
             aria-label={`${project.slug} in ${project.orgName}`}
             checked={selection.all || !selection.excluded.has(project.id)}
             disabled={disabled || selection.all}
