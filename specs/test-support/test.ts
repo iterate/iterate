@@ -1,4 +1,4 @@
-import { test as base, type Page, type TestInfo as _TestInfo } from "@playwright/test";
+import { test as base, expect, type Page, type TestInfo as _TestInfo } from "@playwright/test";
 import {
   addPlugins,
   hydrationWaiter,
@@ -23,7 +23,8 @@ const addPagePlugins = (page: Page, testInfo: _TestInfo) => {
       screenshot(),
       process.env.VIDEO_MODE === "1" &&
         videoMode({
-          skipStackFrames: ["test-support/test.ts"],
+          // the harness's own actions, and the fixture's sign-in to an app, are not the demo
+          skipStackFrames: ["test-support/test.ts", "test-support/forged-session.ts"],
           deadAirThreshold: 300,
           finalHold: 1,
           highlight: { mode: "pointer", duration: 1000 },
@@ -35,9 +36,12 @@ const addPagePlugins = (page: Page, testInfo: _TestInfo) => {
 
 export const test = base.extend<{
   helpers: {
+    /** A fresh person with fresh projects, signed in without driving the UI. With `app` (a client
+     *  app's URL, usually the project's `baseURL`), also signed in to that app and on its page for
+     *  the project; uncaught page errors then fail the spec. */
     createFixture: (
       slugPrefix: string,
-      options?: { projectCount?: number },
+      options?: { projectCount?: number; app?: string },
     ) => Promise<Awaited<ReturnType<typeof createForgedProjectFixture>>>;
     /** A browser signed in as a fresh person with no project, without driving the sign-in page. */
     createSession: (slugPrefix: string) => ReturnType<typeof createSessionFixture>;
@@ -45,14 +49,19 @@ export const test = base.extend<{
   page: Awaited<ReturnType<typeof addPagePlugins>>;
 }>({
   helpers: async ({ page }, use) => {
+    // A client app's uncaught errors fail its spec (docs/browser-testing.md: fail on page and
+    // hydration errors), counted from before the fixture's sign-in to the end of the test.
+    const appPageErrors: string[] = [];
     await use({
       createFixture: (slugPrefix, options) =>
-        base.step("create project fixture", () =>
-          createForgedProjectFixture(slugPrefix, { page, ...options }),
-        ),
+        base.step("create project fixture", () => {
+          if (options?.app) page.on("pageerror", (error) => appPageErrors.push(error.message));
+          return createForgedProjectFixture(slugPrefix, { page, ...options });
+        }),
       createSession: (slugPrefix) =>
         base.step("create signed-in session", () => createSessionFixture(slugPrefix, { page })),
     });
+    expect(appPageErrors, "uncaught errors on the app's pages").toEqual([]);
   },
   page: async ({ page: basePage }, use, testInfo) => {
     // A spec that opens a second tab does so via `context.newPage()`, which

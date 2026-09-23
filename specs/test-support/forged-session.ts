@@ -1,5 +1,6 @@
-import { test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
+import type { VideoModePageExtension } from "middlewright";
 // eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup; specs drive the product through the browser.
 import { newHttpBatchRpcSession } from "capnweb";
 import type { IterateApi } from "iterate/next/api";
@@ -11,7 +12,8 @@ export type MintedIterateSession = {
 
 /**
  * A browser signed in as a fresh person who owns fresh projects, without driving the sign-in page
- * or the consent flow — for specs whose subject is something else. Dispose with
+ * or the consent flow — for specs whose subject is something else. With `app`, that person is
+ * also signed in to the client app and on its page for the project (`signInToApp`). Dispose with
  * `await using fixture = await helpers.createFixture(...)`.
  */
 export async function createProjectFixture(
@@ -19,6 +21,8 @@ export async function createProjectFixture(
   input: {
     page: Page;
     projectCount?: number;
+    /** A client app (any URL on its origin) to sign in to and open on the project's page. */
+    app?: string;
   },
 ) {
   // the OS platform, whichever app host the spec's project targets
@@ -39,6 +43,7 @@ export async function createProjectFixture(
       }),
     ),
   );
+  if (input.app) await signInToApp({ page: input.page, app: input.app, project: projects[0]! });
 
   return {
     project: projects[0]!,
@@ -50,6 +55,36 @@ export async function createProjectFixture(
       return Promise.resolve();
     },
   };
+}
+
+/**
+ * The fixture's person signed in to a client app and on its page for `project`: the app's own
+ * sign-in door (`/.auth/login`), which the issuer answers with consent because the person is signed
+ * in there already, then Authorize. A demo video (VIDEO_MODE=1) starts on the app's page, not on
+ * consent. Signing in to an app is itself the subject of specs/notes/sessions.spec.ts, and consent
+ * of specs/os/auth.spec.ts.
+ */
+async function signInToApp(input: { page: Page; app: string; project: { slug: string } }) {
+  const { page, project } = input;
+  const origin = new URL(input.app).origin;
+  const next = `/projects/${project.slug}`;
+  await test.step("sign in to the app", async () => {
+    await page.goto(`${origin}/.auth/login?${new URLSearchParams({ next })}`);
+    await page.getByRole("button", { name: "Review permissions", exact: true }).click();
+    // noWaitAfter: Authorize posts and the issuer hands the browser back to the app; the wait
+    // below covers that navigation (the spinner-waiter counts one in flight as loading)
+    await page.getByRole("button", { name: "Authorize", exact: true }).click({ noWaitAfter: true });
+    // every client app's shell (packages/ui app-shell.tsx) names the active project in its switcher
+    await page
+      .getByRole("button", { name: "Switch project" })
+      .filter({ hasText: project.slug })
+      .waitFor();
+  });
+  const landed = new URL(page.url());
+  expect({ origin: landed.origin, pathname: landed.pathname }).toEqual({ origin, pathname: next });
+  // the harness leaves this file's clicks unhighlighted (test.ts `skipStackFrames`): the renderer
+  // would pull the start back to a highlighted consent click
+  (page as Page & Partial<VideoModePageExtension>).videoMode?.setStartTime();
 }
 
 /** A browser signed in as a fresh person with no project yet — the consent page's onboarding
