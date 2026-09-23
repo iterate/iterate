@@ -182,6 +182,9 @@ test("first Claude consent creates the organization and project on the consent p
     await page
       .getByRole("heading", { name: "Claude Code wants to access your account", exact: true })
       .waitFor();
+    // the client's heading stands on every step; the permissions step's own heading is what the
+    // project, once created, opens ("Creating project…" shows meanwhile)
+    await page.getByRole("heading", { name: "Review permissions", exact: true }).waitFor();
     const approve = page.getByRole("button", { name: "Authorize", exact: true });
     // Task-based consent: `iterate` is fixed, the account permission is optional — untick it; the
     // choice survives every round trip below and the grant carries `iterate` alone.
