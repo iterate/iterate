@@ -3,7 +3,8 @@
 # The script is apps/os/scripts/preview.ts. One job per operation, named for when it runs:
 #   deploy              every push: deploys a preview named `pr<n>-<branch slug>` of the parent
 #                       worker os-next-preview and writes the URL and the operations into the PR body
-#   e2e                 after deploy succeeds: the e2e suite and the Playwright specs against it
+#   e2e                 after deploy succeeds: the e2e suite and the Playwright specs against it,
+#                       then their test telemetry and flake records as artifacts
 #   delete (PR closed)  deletes the preview and everything it owned
 #   sweep (nightly)     deletes previews whose PR closed without a delete, or that went stale
 # On a push, "delete" and "sweep" skip by design; "e2e" skips only when deploy did not succeed.
@@ -145,12 +146,22 @@ jobs:
       size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 30
+    # TEST TELEMETRY (docs/testing.md#flakes-and-pinned-failures): both runners write their canonical
+    # artifact here, each suite's flake lines go to its own directory (apps/os/scripts/preview.ts),
+    # and the always-running steps after the suite normalize, summarize and upload them.
+    env:
+      TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
+      TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
+      TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ env.PR_NUMBER }}
     steps:
       - name: Checkout the PR head
         uses: actions/checkout@v4
         with:
           clean: false
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
+      # A dispatch checks out refs/pull/<n>/head, so the tested commit is what was checked out.
+      - name: Record the tested commit for test telemetry
+        run: echo "TEST_TELEMETRY_HEAD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)
@@ -167,6 +178,43 @@ jobs:
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: doppler run -- pnpm preview e2e
+      # Fails when either runner left no complete artifact, and writes the specs and preview-e2e
+      # suite summaries next to their flake lines. It runs under _shared/prd like the Test
+      # workflow's finalizer; PostHog delivery itself is off (scripts/ci/posthog-events.ts). A
+      # cancelled run keeps its partial evidence without reporting it as failures.
+      - name: Normalize test telemetry and write the suite summaries
+        if: always()
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          TEST_TELEMETRY_EXPECTED_WORKSPACES: "iterate-root,os"
+        run: doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites preview ${{ cancelled() && '--cancelled' || '' }}
+      # One artifact per suite, pulled by the flake dashboard's writer. A job retry re-uploads under
+      # the same name, hence overwrite.
+      - name: Upload specs flake records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-records-specs
+          path: test-results/flake-records/specs
+          if-no-files-found: ignore
+          overwrite: true
+      - name: Upload preview e2e flake records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-records-preview-e2e
+          path: test-results/flake-records/preview-e2e
+          if-no-files-found: ignore
+          overwrite: true
+      - name: Upload test telemetry artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-test-telemetry
+          path: test-results/ci-telemetry
+          include-hidden-files: true
+          if-no-files-found: error
+          overwrite: true
 
   cleanup:
     name: delete (PR closed)

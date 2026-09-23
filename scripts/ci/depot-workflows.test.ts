@@ -287,6 +287,18 @@ describe("Depot validation capacity", () => {
     expect(workflow).toContain("run: doppler run -- pnpm test");
   });
 
+  it("the preview's e2e suite and browser specs write the canonical telemetry artifact", () => {
+    expect(readPackageJson("apps/os").scripts?.e2e).toMatch(/retry-telemetry-reporter\.ts/);
+    // The preview runs vitest directly (it must not rebuild the deployed dist/), so it names the
+    // reporter itself.
+    expect(readFileSync(resolve(repoRoot, "apps/os/scripts/preview.ts"), "utf8")).toContain(
+      "--reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
+    );
+    expect(readFileSync(resolve(repoRoot, "apps/os/playwright.config.ts"), "utf8")).toContain(
+      "scripts/ci/playwright-telemetry-reporter.ts",
+    );
+  });
+
   it("every unit-test workspace writes the canonical telemetry artifact", () => {
     const expectedWorkspaces = workspaceDirectories.flatMap((directory) => {
       const packageJson = readPackageJson(directory);
@@ -340,34 +352,56 @@ describe("Depot validation capacity", () => {
     expect(job["timeout-minutes"]).toBe(timeoutMinutes);
   });
 
-  it("always finalizes and retains unit test telemetry", () => {
-    const steps = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps ?? [];
-    const finalizer = steps.find((step) =>
-      step.run?.includes("scripts/ci/upload-test-telemetry.ts"),
-    );
-    // Flake records have their own upload. Select the complete telemetry directory this
-    // retention guard is about.
-    const upload = steps.find(
-      (step) =>
-        step.uses === "actions/upload-artifact@v4" &&
-        step.with?.path === "test-results/ci-telemetry",
-    );
+  it.each([
+    { file: ".depot/workflows/test.yml", jobId: "test", group: "unit", suites: ["unit"] },
+    {
+      file: ".depot/workflows/preview-os-next.yml",
+      jobId: "e2e",
+      group: "preview",
+      suites: ["specs", "preview-e2e"],
+    },
+  ])(
+    "$file always finalizes and retains $group test telemetry",
+    ({ file, jobId, group, suites }) => {
+      const steps = loadWorkflow(file).jobs[jobId]?.steps ?? [];
+      const finalizer = steps.find((step) =>
+        step.run?.includes("scripts/ci/upload-test-telemetry.ts"),
+      );
+      // Flake records have their own upload. Select the complete telemetry directory this
+      // retention guard is about.
+      const upload = steps.find(
+        (step) =>
+          step.uses === "actions/upload-artifact@v4" &&
+          step.with?.path === "test-results/ci-telemetry",
+      );
 
-    expect(finalizer, "test.yml must normalize and send telemetry").toMatchObject({
-      if: "always()",
-    });
-    expect(finalizer?.run, "test.yml must not send cancelled runs as test failures").toContain(
-      "cancelled() && '--cancelled'",
-    );
-    expect(upload, "test.yml must retain raw and normalized telemetry").toMatchObject({
-      if: "always()",
-      with: expect.objectContaining({
-        path: expect.stringContaining("test-results"),
-        "if-no-files-found": "error",
-      }),
-    });
-    expect(steps.indexOf(finalizer!)).toBeLessThan(steps.indexOf(upload!));
-  });
+      expect(finalizer, `${file} must normalize telemetry`).toMatchObject({ if: "always()" });
+      expect(finalizer?.run, `${file} must not send cancelled runs as test failures`).toContain(
+        "cancelled() && '--cancelled'",
+      );
+      expect(finalizer?.run, `${file} must write its suites' summaries`).toContain(
+        `--flake-suites ${group}`,
+      );
+      expect(upload, `${file} must retain raw and normalized telemetry`).toMatchObject({
+        if: "always()",
+        with: expect.objectContaining({
+          path: expect.stringContaining("test-results"),
+          "if-no-files-found": "error",
+        }),
+      });
+      expect(steps.indexOf(finalizer!)).toBeLessThan(steps.indexOf(upload!));
+      // Every suite's records (and the summary the finalizer wrote beside them) leave the job after
+      // the finalizer, whatever the suite's outcome.
+      for (const suite of suites) {
+        const records = steps.find((step) => step.with?.name === `flake-records-${suite}`);
+        expect(records, `${file} must upload flake-records-${suite}`).toMatchObject({
+          if: "always()",
+          uses: "actions/upload-artifact@v4",
+        });
+        expect(steps.indexOf(finalizer!)).toBeLessThan(steps.indexOf(records!));
+      }
+    },
+  );
 
   it("labels unit artifacts with the exact checked-out pull-request head", () => {
     const runTests = loadWorkflow(".depot/workflows/test.yml").jobs.test.steps?.find(
@@ -381,8 +415,11 @@ describe("Depot validation capacity", () => {
     });
   });
 
-  it("sends finalized unit test telemetry to the canonical PostHog project", () => {
-    const finalizer = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps?.find((step) =>
+  it.each([
+    [".depot/workflows/test.yml", "test"],
+    [".depot/workflows/preview-os-next.yml", "e2e"],
+  ])("%s finalizes test telemetry under the canonical PostHog project", (file, jobId) => {
+    const finalizer = loadWorkflow(file).jobs[jobId]?.steps?.find((step) =>
       step.run?.includes("scripts/ci/upload-test-telemetry.ts"),
     );
 
