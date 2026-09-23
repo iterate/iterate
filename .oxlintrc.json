@@ -215,7 +215,7 @@
       "plugins": ["react"]
     },
     {
-      "files": ["**/*.test.ts"],
+      "files": ["**/test/**", "**/*.test.ts"],
       "rules": {
         "no-console": "off"
       }
