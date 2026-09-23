@@ -7,12 +7,11 @@
 // threading") and, for the capnweb one-shot batch where it is CORRECTNESS, by
 // the e2e lane's remote-capnweb call-then-call test.
 
-// Side-effect import FIRST: worker.ts's module scope is where the native RpcPromise brand is
-// REGISTERED with expression.ts. The regression test below fails if that registration disappears.
-import "../src/worker.ts";
 import * as cloudflareWorkers from "cloudflare:workers";
 import { expect, test } from "vitest";
 import { walkSteps } from "iterate/next/expression";
+// support.ts loads iterate-context.ts, which registers the brands in the same source module as
+// walkSteps. The deployed behavior is covered separately by the remote-capnweb E2E test.
 import { stub } from "./support.ts";
 
 test("cloudflare:workers exports RpcPromise and native RPC calls are instanceof it", async () => {

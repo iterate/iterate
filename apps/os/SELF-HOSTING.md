@@ -8,7 +8,7 @@ account with `wrangler deploy` and two secrets. No domain is needed; a **Workers
 ```bash
 git clone https://github.com/iterate/iterate && cd iterate
 pnpm install
-pnpm --filter os build                 # writes apps/os/wrangler.self-host.jsonc
+OS_NEXT_ENV=self-host pnpm --filter os build  # writes apps/os/dist/server/wrangler.json
 npx wrangler login                          # opens the browser; pick the account to deploy into
 
 # The two secrets: APP_CONFIG holds the sign-in password (choose one), the key encrypts your
@@ -17,7 +17,7 @@ cat > .secrets <<EOF
 APP_CONFIG={"login":{"password":"choose-a-password"}}
 APP_CONFIG_SECRETS__KEY=$(openssl rand -hex 32)
 EOF
-npx wrangler deploy --config apps/os/wrangler.self-host.jsonc --secrets-file .secrets
+npx wrangler deploy --config apps/os/dist/server/wrangler.json --secrets-file .secrets
 rm .secrets
 ```
 
@@ -54,7 +54,7 @@ and hands you the dash.
 
 The whole configuration is one JSON object, the `APP_CONFIG` secret (`apps/os/src/app-config.ts`
 documents every key). Any key can also be set alone as a var, the path joined by `__`; the generated
-config sets `APP_CONFIG_URLS__INGRESS_ROUTING` and `APP_CONFIG_URLS__DASH` that way. To add Google or Cloudflare
+Vite build sets `APP_CONFIG_URLS__INGRESS_ROUTING` and `APP_CONFIG_URLS__DASH` that way. To add Google or Cloudflare
 sign-in or mailed codes later, put `login.google`, `login.cloudflare` or `login.emailCode` in the
 object and deploy again. Cloudflare takes `{ clientId, clientSecret }` from your own OAuth client;
 register `<your-origin>/.auth/identity/cloudflare/callback` and configure the client for
@@ -62,7 +62,7 @@ register `<your-origin>/.auth/identity/cloudflare/callback` and configure the cl
 
 ```bash
 printf 'APP_CONFIG=%s\n' '{"login":{"password":"…","google":{"clientId":"…","clientSecret":"…"}}}' > .secrets
-npx wrangler deploy --config apps/os/wrangler.self-host.jsonc --secrets-file .secrets && rm .secrets
+npx wrangler deploy --config apps/os/dist/server/wrangler.json --secrets-file .secrets && rm .secrets
 ```
 
 ## Updating
@@ -70,8 +70,8 @@ npx wrangler deploy --config apps/os/wrangler.self-host.jsonc --secrets-file .se
 ```bash
 git pull
 pnpm install
-pnpm --filter os build
-npx wrangler deploy --config apps/os/wrangler.self-host.jsonc
+OS_NEXT_ENV=self-host pnpm --filter os build
+npx wrangler deploy --config apps/os/dist/server/wrangler.json
 ```
 
 A deploy without `--secrets-file` keeps the secrets already on the Worker. The directory schema is
@@ -81,6 +81,7 @@ applied by the Worker itself at boot, so there is no migration step.
 
 Add your zone to the same Cloudflare account, then set `urls.os` to `https://os.<your-domain>` and
 `urls.ingressRouting` to `{"type":"subdomains","hostname":"<your-domain>"}` in `APP_CONFIG`, and add
-a route for `os.<your-domain>/*` and a wildcard route `*.<your-domain>/*` (with a proxied wildcard
+a route for `os.<your-domain>/*` and a wildcard route `*.<your-domain>/*` in
+`selfHostWranglerConfig` in `apps/os/scripts/generate-wrangler-config.ts` (with a proxied wildcard
 DNS record) to the config. Projects then answer at `<app>--<project>.<your-domain>` and
 `<project>.<your-domain>`.

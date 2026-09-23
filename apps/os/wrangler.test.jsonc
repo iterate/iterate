@@ -1,7 +1,7 @@
 {
   // wrangler.test.jsonc — config for the `workers` project of vitest.config.ts (the lane that runs
-  // INSIDE workerd via @cloudflare/vitest-plugin; `pnpm test`). wrangler.jsonc stays the deploy
-  // truth. The divergences, each deliberate and test-only:
+  // INSIDE workerd via @cloudflare/vitest-plugin; `pnpm test`). Vite's built entry is the code
+  // under test. The divergences, each deliberate and test-only:
   //
   //  1. the two generated modules the worker imports are written by scripts/build.ts
   //     (vitest.global-setup.ts) — the same way for every lane.
@@ -27,7 +27,7 @@
   // NO `ai` or `browser` binding here, on purpose: Workers AI and Browser Run are REMOTE-ONLY in
   // local dev, and vitest-pool-workers starts a remote proxy session for them at boot (an account to
   // pick, a network to reach). The workers lane never calls `itx.ai` / `itx.browser`; the e2e lane
-  // boots from wrangler.jsonc (support/worker-config.ts) and carries the bindings, and its tests
+  // boots from the Vite-built Wrangler config (support/worker-config.ts) and carries the bindings, and its tests
   // shadow them locally / call them only against the deployed worker
   // (e2e/ai-root-shadow-and-fable.e2e.test.ts, e2e/browser-root.e2e.test.ts). `env.AI` and
   // `env.BROWSER` are undefined in this lane.

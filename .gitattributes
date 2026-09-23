@@ -1,4 +1,3 @@
 **/pnpm-lock.yaml linguist-generated=true
 .github/workflows/* linguist-generated=true
 **/routeTree.gen.ts linguist-generated=true
-apps/os/public/capnweb.js linguist-vendored=true

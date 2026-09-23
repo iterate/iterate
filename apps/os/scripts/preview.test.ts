@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { DEFAULT_APPS_MODE } from "./preview.ts";
 import {
   APPS,
   changedApps,
@@ -95,12 +96,13 @@ describe("the PR body's managed section", () => {
   });
 });
 
-describe("the preview's wrangler config (a pure transform of wrangler.base.jsonc, cloudflare-os style)", () => {
+describe("the preview's wrangler config (a pure transform of Vite's built config)", () => {
   const template = {
-    main: "src/worker.ts",
+    main: "index.js",
+    no_bundle: true,
     compatibility_date: "2026-09-01",
     compatibility_flags: ["nodejs_compat"],
-    assets: { directory: "./public", binding: "ASSETS", run_worker_first: true },
+    assets: { directory: "../client", binding: "ASSETS", run_worker_first: true },
     limits: { cpu_ms: 1 },
     worker_loaders: [{ binding: "LOADER" }],
     ai: { binding: "AI" },
@@ -132,6 +134,9 @@ describe("the preview's wrangler config (a pure transform of wrangler.base.jsonc
 
   test("the top level provisions live classes, excluding deleted exports, as a legacy migrations entry", () => {
     expect(config.name).toBe("os-next-preview");
+    expect(config.main).toBe("index.js");
+    expect(config.no_bundle).toBe(true);
+    expect(config.assets).toEqual(template.assets);
     expect(config.migrations).toEqual([
       { tag: "v1", new_sqlite_classes: ["IterateContextDurableObject", "BrowserSession"] },
     ]);
@@ -180,7 +185,12 @@ describe("the preview's wrangler config (a pure transform of wrangler.base.jsonc
   });
 });
 
-describe("which apps on top a change touches (cloudflare-os previews all; ours only the changed)", () => {
+describe("which apps on top a preview run deploys", () => {
+  test("all clients are selected by default, even when only os-next changes", () => {
+    expect(DEFAULT_APPS_MODE).toBe("all");
+    expect(APPS.map((app) => app.name)).toEqual(["dash", "agents", "notes", "voice"]);
+  });
+
   test.each<[string, string[], string[]]>([
     ["nothing", ["apps/os/src/worker.ts", "docs/x.md"], []],
     ["one app", ["apps/dash/src/routes/index.tsx"], ["dash"]],

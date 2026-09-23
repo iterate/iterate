@@ -14,15 +14,10 @@ export default async function deploy(options: { env?: string } = {}) {
     workerName: (env) => env.workerName,
     servingUrl: (env) => env.baseUrl,
     resources: (env) => env.resources,
-    // THE TWO SECRETS a deployment holds (src/app-config.ts): the `APP_CONFIG` object — its `login`
-    // and `secrets` halves; the `urls` half is the generated config's vars — and the at-rest key
-    // alone, so it can rotate with `previousKey` beside it. Both from Doppler.
+    // The private login settings and at-rest key come from Doppler. Public URLs come from envs.ts.
     requiredSecrets: ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"],
-    // wrangler bundles src/worker.ts itself: the deploy is `wrangler deploy --config wrangler.jsonc
-    // --env <name>` on the generated config's env block; `prepare` writes that config and the
-    // generated modules (scripts/build.ts) first. The directory schema is the worker's own business:
-    // applied at boot, idempotent (src/control-plane.sql).
-    build: "checked-in-config",
+    build: "vite",
+    buildEnv: (ctx) => ({ CLOUDFLARE_ENV: "", OS_NEXT_ENV: ctx.name }),
     async prepare() {
       await build();
     },

@@ -3,8 +3,8 @@
 //   • unit    — in-process node, the fast lane (src/**/*.test.ts)
 //   • workers — INSIDE workerd next to the worker via @cloudflare/vitest-plugin, for the hibernation
 //               cases that genuinely need cloudflare:test controls (__workers-tests__/**). The worker
-//               under test is src/worker.ts, bundled by the plugin — SELF.fetch, never
-//               `import worker from "../src/worker.ts"`.
+//               under test is Vite's built dist/server/index.js — SELF.fetch, never
+//               a source import of the Start entry.
 //   • e2e     — ONE real worker booted once by e2e/support/global-setup.ts (local workerd by default;
 //               the DEPLOYED worker with `WORKER_BASE_URL=https://os.iterate.com`,
 //               the proof that counts), every file a capnweb client at /api exactly like a production
@@ -15,8 +15,8 @@
 //   • bench   — vitest's benchmark runner (tinybench) over the same client + worker (`pnpm bench`),
 //               files one at a time so scenarios never share the wire; `BENCH_OUT=<file.json>` writes
 //               the raw samples
-// Every project runs after THE BUILD (vitest.global-setup.ts → scripts/build.ts): the generated modules
-// the worker imports. Browser E2E is Playwright (playwright.config.ts + specs/**).
+// Package test scripts run the Vite build before Vitest starts. Global setup refreshes generated
+// modules for unit tests and fixtures. Browser E2E is Playwright (playwright.config.ts + specs/**).
 
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { defineConfig, type Plugin } from "vitest/config";
@@ -91,7 +91,7 @@ export default defineConfig({
         plugins: [
           sqlAsText,
           cloudflareTest({
-            main: "./src/worker.ts",
+            main: "./dist/server/index.js",
             wrangler: { configPath: "./wrangler.test.jsonc" },
           }),
         ],

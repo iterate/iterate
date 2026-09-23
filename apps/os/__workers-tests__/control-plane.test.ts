@@ -294,18 +294,14 @@ test("password sign-in: the email and the password make an ordinary user session
   await expect(
     startLoginCode({ ...bindings, EMAIL: undefined }, "someone@directory.test"),
   ).rejects.toThrow();
-  // the page learns which sign-ins this deployment offers — this lane's config has all three
-  const state = await (
-    await SELF.fetch(`${origin}/login.json?next=/sessions`)
-  ).json<{
-    password: boolean;
-    emailSignIn: boolean;
-    google: string | null;
-    cloudflare: string | null;
-  }>();
-  expect(state).toMatchObject({ password: true, emailSignIn: true });
-  expect(state.google).toMatch(/^\/\.auth\/identity/);
-  expect(state.cloudflare).toBe("/.auth/identity/cloudflare?next=%2Fsessions");
+  // The page renders the offered sign-ins in its initial HTML.
+  const page = await SELF.fetch(`${origin}/login?next=/sessions`);
+  expect(page.status).toBe(200);
+  const html = await page.text();
+  expect(html).toContain("Use password instead");
+  expect(html).toContain("Send me a code");
+  expect(html).toContain("Continue with Google");
+  expect(html).toContain("Continue with Cloudflare");
   // a wrong password goes back to the page with the reason, and makes no session
   const wrong = await postLogin({
     email: "Test-Login@directory.test",
@@ -318,10 +314,9 @@ test("password sign-in: the email and the password make an ordinary user session
   expect(bounced.searchParams.get("next")).toBe("/sessions");
   expect(bounced.searchParams.get("error")).toBeTruthy();
   expect(bounced.searchParams.get("method")).toBe("password");
-  const retryState = await SELF.fetch(`${origin}/login.json${bounced.search}`).then((r) =>
-    r.json(),
-  );
-  expect(retryState).toMatchObject({ passwordSelected: true, email: "Test-Login@directory.test" });
+  const retryPage = await SELF.fetch(`${origin}/login${bounced.search}`).then((r) => r.text());
+  expect(retryPage).toContain("Test-Login@directory.test");
+  expect(retryPage).toContain("That password");
   expect(wrong.headers.get("set-cookie") ?? "").not.toMatch(/__Host-itx-session=/);
   // the right one is the session — the email lowercased, the user created on first sign-in
   const login = await postLogin({

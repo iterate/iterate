@@ -32,7 +32,7 @@ const loginPassword = (origin: string) => {
  *  field is shown immediately only when email-code sign-in is unavailable. */
 async function signIn(page: Page, origin: string, email: string, _next = "/") {
   await page.getByRole("textbox", { name: "Email", exact: true }).fill(email);
-  const password = page.getByRole("textbox", { name: "Password", exact: true });
+  const password = page.getByLabel("Password", { exact: true });
   if (!(await password.isVisible()))
     await page.getByRole("button", { name: "Use password instead", exact: true }).click();
   await password.fill(loginPassword(origin));
@@ -296,9 +296,9 @@ test("first Claude consent creates the organization and project on the consent p
     await expect(page.getByRole("region", { name: "Selected projects" })).not.toContainText(
       otherProject,
     );
-    // The consent page is a capnweb client of /api like any app: ONE socket for the whole flow,
-    // the session cookie riding its handshake — no JSON sibling, no form post.
-    expect(sockets.filter((url) => new URL(url).pathname === "/api")).toHaveLength(1);
+    // The consent page is server-rendered: its reads and actions are server functions and one
+    // form post, so it opens no /api socket.
+    expect(sockets.filter((url) => new URL(url).pathname === "/api")).toHaveLength(0);
     await page.screenshot({ path: test.info().outputPath("first-consent.png"), fullPage: true });
     await approve.click();
     await page

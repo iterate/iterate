@@ -1,227 +1,159 @@
-// issuer-pages.ts — the issuer's pages: /login and the /oauth2/auth consent, files in public/ with a
-// script each (served through the assets binding, no build), the sign-in page's /login.json and its
-// form POSTs — the password, an email then its mailed code (password-and-code-sign-in.ts), or the
-// identity provider link (identity.ts) — and `/`, which says this origin is headless and points at the dash.
-// The consent page is a capnweb client of /api like any app; this only gates it. Everything else a
-// person does with Iterate is an app's, an ordinary OAuth client of this issuer.
+// The issuer's browser pages are TanStack Start routes (src/routes): the landing page, sign-in and
+// consent, with their form posts and server functions. This handler admits exactly those requests
+// into Start — same-origin POSTs, server-function payloads restricted to plain data, a CSP nonce per
+// response — and serves the public files beside them. The platform's API and OAuth endpoints are
+// owned by the Worker and never reach it.
 
-import { errorCode, isSameOriginBrowserRequest, sameOriginPath } from "iterate/next/lib";
-import { startIssuerSession } from "./issuer-session.ts";
-import {
-  clearLoginCookie,
-  finishLoginCode,
-  loginCodePending,
-  signInWithPassword,
-  startLoginCode,
-} from "./password-and-code-sign-in.ts";
-import { appConfigOf, platformAddressesOf } from "./app-config.ts";
-import { browserAuthorization } from "./browser-client.ts";
-import type { User } from "./directory.ts";
+import { isSameOriginBrowserRequest } from "iterate/next/lib";
+import { z } from "zod";
 import type { Env, Handler } from "./env.ts";
+import { withIssuerRequest } from "./issuer-request-context.server.ts";
 
-/** The paths the issuer's pages own on the platform origin, every one open to a browser that is not
- *  signed in: the two pages, the sign-in page's JSON, their files (the consent page's capnweb bundle
- *  among them) — and `/`, the landing page (`landingPage`) telling a browser this origin is
- *  deliberately headless and where the dash is. */
-const issuerPagePaths = [
-  "/",
-  "/login",
-  "/login.json",
-  "/login.js",
-  "/oauth2/auth",
-  "/authorize.js",
-  "/capnweb.js",
-  "/issuer.css",
+/** The Start routes, with the methods each answers (POST is the page's own form). */
+const issuerPageMethods = new Map([
+  ["/", ["GET", "HEAD"]],
+  ["/login", ["GET", "HEAD", "POST"]],
+  ["/oauth2/auth", ["GET", "HEAD", "POST"]],
+]);
+
+const publicFiles = new Set([
   "/iterate-logo.svg",
   "/google-logo.svg",
   "/cloudflare-logo.svg",
+  // the stylesheet apps' own sign-in pages link from their issuer (iterate/next/app-server)
+  "/issuer.css",
   // the prompt an agent follows to deploy and connect a platform of the person's own
   "/setup-prompt.md",
-];
+]);
 
-/** /login.json — what the sign-in page (public/login.js) shows: who is signed in (continue, or switch
- *  account); or that a code is on its way and to whom (the code step); or the sign-ins this
- *  deployment offers — the password, email (a code), Google or Cloudflare — and where to continue to; and what
- *  went wrong with the last post (`?error=`, the message `loginFormPost` bounced back with). Signing
- *  in is the form's POSTs to `loginFormPost` or a provider link (identity.ts); "switch account" ends
- *  the browser's session and returns here. Without a `next` the page is its own destination (the
- *  issuer has no home page): signed in, it says so. */
-async function loginState(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  const config = appConfigOf(env);
+/** Seroval's JSON form of plain data — what Start's client sends as server-function input: numbers,
+ *  strings, constants (null, undefined, booleans), arrays and plain objects. Start decodes whatever
+ *  Seroval can express (promises, frozen objects, plugin values) before any input validator runs,
+ *  so nothing else is admitted. */
+const PlainDataNode: z.ZodType = z.lazy(() =>
+  z.union([
+    z.strictObject({ t: z.literal(0), s: z.number() }),
+    z.strictObject({ t: z.literal(1), s: z.string() }),
+    z.strictObject({ t: z.literal(2), s: z.number().int().min(0).max(7) }),
+    z.strictObject({
+      t: z.literal(9),
+      i: z.number().int(),
+      a: z.array(PlainDataNode),
+      o: z.literal(0),
+    }),
+    z.strictObject({
+      t: z.literal(10),
+      i: z.number().int(),
+      p: z
+        .strictObject({
+          k: z.array(z.string().refine((key) => key !== "__proto__")),
+          v: z.array(PlainDataNode),
+        })
+        .refine(({ k, v }) => k.length === v.length && new Set(k).size === k.length),
+      o: z.literal(0),
+    }),
+  ]),
+);
+/** `{ data }` — the one key an issuer server function reads (no client-sent context). */
+const ServerFunctionPayload = z.strictObject({
+  t: z.strictObject({
+    t: z.literal(10),
+    i: z.literal(0),
+    p: z.strictObject({
+      k: z.union([z.tuple([]), z.tuple([z.literal("data")])]),
+      v: z.array(PlainDataNode).max(1),
+    }),
+    o: z.literal(0),
+  }),
+  f: z.number().int(),
+  m: z.tuple([]),
+});
+
+/** Why a server-function request may not reach Start, or null when it may. */
+async function serverFunctionRefusal(request: Request): Promise<Response | null> {
   const url = new URL(request.url);
-  const next = sameOriginPath(
-    url.searchParams.get("next") || "/login",
-    platformAddressesOf(env, request).platformOrigin,
-  );
-  const session = await browserAuthorization(env, request, ctx);
-  return Response.json(
-    {
-      next,
-      signedInAs: session ? session.principal.email || session.principal.actor : null,
-      switchAccount: `/.auth/logout?next=${encodeURIComponent(`/login?next=${encodeURIComponent(next)}`)}`,
-      codeSentTo: session ? null : await loginCodePending(env, request),
-      error: url.searchParams.get("error"),
-      // the email the refused post carried, so the page keeps what was typed
-      email: url.searchParams.get("email") || "",
-      // The code form needs both its configuration and the mailbox binding.
-      password: Boolean(config.login.password.exposeSecret()),
-      passwordSelected: url.searchParams.get("method") === "password",
-      emailSignIn: Boolean(env.EMAIL && config.login.emailCode),
-      google: config.login.google ? `/.auth/identity?next=${encodeURIComponent(next)}` : null,
-      cloudflare: config.login.cloudflare
-        ? `/.auth/identity/cloudflare?next=${encodeURIComponent(next)}`
-        : null,
-      // where a signed-in person with nowhere else to go is sent (the landing page's pointer)
-      dash: config.urls.dash || null,
-    },
-    { headers: { "cache-control": "no-store" } },
-  );
-}
-
-/** The sign-in page's POSTs — plain forms, no script in the loop. An `email` with a `password`
- *  signs in at once; an `email` alone starts the code sign-in; a `code` finishes it; `restart`
- *  drops a pending code for another email. What goes wrong comes back to the page as `?error=`
- *  (303), so the person reads it where they typed. */
-async function loginFormPost(request: Request, env: Env): Promise<Response | null> {
-  if (request.method !== "POST" || new URL(request.url).pathname !== "/login") return null;
-  const form = await request.formData();
-  const next = String(form.get("next") || "/login");
-  const email = String(form.get("email") ?? "").trim();
-  /** Back to the page with what went wrong — and the email as typed, so it is still there. */
-  const back = (error?: string, ...cookies: string[]) => {
-    const query = new URLSearchParams({ next });
-    if (error) query.set("error", error);
-    if (error && email) query.set("email", email);
-    if (error && form.has("password")) query.set("method", "password");
-    const headers = new Headers({ location: `/login?${query}` });
-    for (const cookie of cookies) headers.append("set-cookie", cookie);
-    return new Response(null, { status: 303, headers });
-  };
-  /** The person is signed in: the issuer session's cookie, any pending code dropped, onward. */
-  const signedIn = async (user: User) => {
-    const { setCookie, location } = await startIssuerSession(env, request, user, next);
-    const headers = new Headers({ location });
-    headers.append("set-cookie", setCookie);
-    headers.append("set-cookie", clearLoginCookie);
-    return new Response(null, { status: 302, headers });
-  };
+  // Start reports unknown server-function IDs as 500s; only the issuer's own are served here.
+  const { issuerServerFunctions } = await import("./issuer.functions.ts");
+  if (!issuerServerFunctions.some((serverFunction) => serverFunction.url === url.pathname))
+    return new Response("Not found", { status: 404 });
+  let payload: string | null;
+  if (request.method === "GET") payload = url.searchParams.get("payload");
+  else if (request.method === "POST") {
+    if (!request.headers.get("content-type")?.startsWith("application/json"))
+      return new Response("Server functions take JSON", { status: 415 });
+    if (Number(request.headers.get("content-length")) > 1_000_000)
+      return new Response("Payload too large", { status: 413 });
+    payload = await request.clone().text();
+  } else return new Response("Method not allowed", { status: 405 });
+  if (!payload) return null;
+  if (payload.length > 1_000_000) return new Response("Payload too large", { status: 413 });
   try {
-    if (form.has("restart")) return back(undefined, clearLoginCookie);
-    if (form.has("code")) {
-      const finished = await finishLoginCode(env, request, String(form.get("code") ?? ""));
-      if ("error" in finished)
-        return finished.restart ? back(finished.error, clearLoginCookie) : back(finished.error);
-      return signedIn(finished.user);
-    }
-    const client = request.headers.get("cf-connecting-ip");
-    if (form.has("password")) {
-      const attempt = await signInWithPassword(env, email, String(form.get("password")), client);
-      if ("error" in attempt) return back(attempt.error);
-      return signedIn(attempt.user);
-    }
-    const started = await startLoginCode(env, email, client);
-    return back(undefined, started.setCookie);
-  } catch (error) {
-    const code = errorCode(error);
-    if (code === "INVALID_INPUT")
-      return back(error instanceof Error ? error.message : "Try again.");
-    if (code !== "UNAUTHENTICATED") throw error;
-    return new Response(error instanceof Error ? error.message : String(error), { status: 401 });
+    if (ServerFunctionPayload.safeParse(JSON.parse(payload)).success) return null;
+  } catch {
+    // not JSON, or nested past what the parser handles: malformed either way
   }
+  return new Response("Invalid server-function payload", { status: 400 });
 }
 
-/** GET /oauth2/auth is the consent page (public/oauth2/auth.html) for a signed-in browser — no session ⇒
- *  sign in first, and come back to this very URL. The page itself is a capnweb client of `/api`
- *  like any app, the cookie riding the handshake: `consent.describe` for what to show, `createOrg`
- *  and `projects.create` for a project made on the spot, `consent.approve` for the client's
- *  redirect — this worker only gates the page. */
-async function authorizePage(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  if (await browserAuthorization(env, request, ctx)) return env.ASSETS.fetch(request);
-  const login = `/login?next=${encodeURIComponent(`/oauth2/auth${new URL(request.url).search}`)}`;
-  return new Response(null, {
-    status: 303,
-    headers: { Location: login, "Cache-Control": "no-store" },
-  });
+/** Start answers a page request that does not accept HTML with a 500; it is a 406. */
+function acceptsHtml(request: Request) {
+  const accept = request.headers.get("accept") || "*/*";
+  return accept
+    .split(",")
+    .some((part) => part.trim().startsWith("*/*") || part.trim().startsWith("text/html"));
 }
 
-/** `/` — the one landing page: this origin is headless (the API, the OAuth issuer, the MCP server;
- *  sign-in and consent are its only pages) and the dash is where a person's projects, organizations
- *  and sessions are. Rendered from the configuration, so the hostnames are the deployment's own —
- *  a preview's, a self-hoster's — never a file's. */
-function landingPage(request: Request, env: Env): Response {
-  const config = appConfigOf(env);
-  const issuer = platformAddressesOf(env, request).platformOrigin;
-  const escape = (text: string) =>
-    text.replace(
-      /[&<>"]/g,
-      (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[character]!,
-    );
-  const dash = config.urls.dash
-    ? `<p>
-        Your projects, organizations and sessions are in the dash:
-        <a class="button primary" href="${escape(`${config.urls.dash}/.auth/connect?${new URLSearchParams({ issuer })}`)}">${escape(new URL(config.urls.dash).host)}</a>
-      </p>`
-    : "";
-  return new Response(
-    `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>iterate platform</title>
-    <link rel="stylesheet" href="/issuer.css" />
-    <link rel="icon" href="/iterate-logo.svg" type="image/svg+xml" />
-  </head>
-  <body>
-    <main class="issuer-card">
-      <img class="issuer-mark" src="/iterate-logo.svg" alt="" width="56" height="56" />
-      <h1>iterate platform</h1>
-      <p>
-        <strong>${escape(new URL(issuer).host)}</strong> is deliberately headless: the
-        API (<code>/api</code>), the OAuth issuer and the MCP server. Its only pages are
-        <a href="/login">sign-in</a> and consent.
-      </p>
-      ${dash}
-      <p class="muted">
-        Setting this up with an agent? Point it at <a href="/setup-prompt.md">/setup-prompt.md</a>.
-      </p>
-    </main>
-  </body>
-</html>
-`,
-    {
-      headers: {
-        "content-type": "text/html; charset=utf-8",
-        "cache-control": "no-store",
-        // what public/_headers gives the pages beside it
-        "content-security-policy":
-          "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'",
-        "x-frame-options": "DENY",
-      },
-    },
+/** Start's answer, with the headers every issuer response carries: never cached, never framed,
+ *  scripts only from this origin or with this response's nonce. Base UI hides its native inputs
+ *  with style attributes, so those (and only those) may be inline. */
+async function startResponse(request: Request, env: Env, ctx: ExecutionContext) {
+  const nonce = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
+  // API and OAuth traffic bypasses the React server runtime entirely.
+  const { default: entry } = await import("@tanstack/react-start/server-entry");
+  const rendered = await withIssuerRequest(env, ctx, nonce, () => entry.fetch(request));
+  const response = new Response(rendered.body, rendered);
+  response.headers.set("cache-control", "no-store");
+  response.headers.set(
+    "content-security-policy",
+    `default-src 'none'; script-src 'self' 'nonce-${nonce}'${import.meta.env.DEV ? " 'unsafe-eval'" : ""}; style-src 'self'; style-src-attr 'unsafe-inline'; connect-src 'self'; img-src 'self' data: https:; base-uri 'none'; frame-ancestors 'none'`,
   );
+  response.headers.set("x-frame-options", "DENY");
+  return response;
 }
 
-/** The issuer's pages: the sign-in POST, the two pages and their JSON, their files — with same-origin
- *  POST checks. Anything else on the platform origin is not a page — the dash lives on its own origin. */
+/** The issuer's pages, their server functions and public files. */
 export const issuerHandler: Handler = {
   async fetch(request, env, ctx) {
     if (request.method === "POST" && !isSameOriginBrowserRequest(request))
       return new Response("403: a cross-site request cannot act on this session\n", {
         status: 403,
       });
-    const signedIn = await loginFormPost(request, env);
-    if (signedIn) return signedIn;
     const { pathname } = new URL(request.url);
-    if (!["GET", "HEAD", "POST"].includes(request.method))
-      return new Response("Method not allowed", { status: 405 });
-    if (pathname === "/oauth2/auth" && request.method !== "POST")
-      return authorizePage(request, env, ctx);
-    if (request.method === "POST") return new Response("Not found", { status: 404 });
-    if (pathname === "/") return landingPage(request, env);
-    if (pathname === "/login.json") return loginState(request, env, ctx);
-    // the pages and their files, as they are in public/
-    if (issuerPagePaths.includes(pathname)) return env.ASSETS.fetch(request);
+    if (pathname.startsWith("/_serverFn/"))
+      return (await serverFunctionRefusal(request)) ?? startResponse(request, env, ctx);
+    const pageMethods = issuerPageMethods.get(pathname);
+    if (pageMethods) {
+      if (!pageMethods.includes(request.method))
+        return new Response("Method not allowed", {
+          status: 405,
+          headers: { allow: pageMethods.join(", ") },
+        });
+      if (request.method !== "POST" && !acceptsHtml(request))
+        return new Response("Not acceptable: this page is HTML", { status: 406 });
+      return startResponse(request, env, ctx);
+    }
+    if (request.method !== "GET" && request.method !== "HEAD")
+      return new Response("Not found", { status: 404 });
+    // Vite emits hashed Start assets under /assets; the Worker still owns the platform origin.
+    if (
+      publicFiles.has(pathname) ||
+      pathname.startsWith("/assets/") ||
+      (import.meta.env.DEV &&
+        (pathname.startsWith("/@") ||
+          pathname.startsWith("/node_modules/") ||
+          pathname.startsWith("/src/")))
+    )
+      return env.ASSETS.fetch(request);
     return new Response("Not found", { status: 404 });
   },
 };

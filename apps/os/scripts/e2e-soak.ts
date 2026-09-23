@@ -8,7 +8,7 @@
 // e2e/support/global-setup.ts reads them out of it; an explicit ADMIN_API_SECRET and LOGIN_PASSWORD
 // still win.
 //
-// Each run is `pnpm e2e` with vitest's JSON reporter written to output/soak/run-<n>.json; the tally is
+// Each run invokes Vitest directly with its JSON reporter written to output/soak/run-<n>.json; the tally is
 // output/soak/summary.json plus the table below. Runs are sequential — the point is to see the suite
 // as CI sees it, not to load the worker a hundredfold.
 import { spawnSync } from "node:child_process";
@@ -61,7 +61,20 @@ for (let n = 1; n <= runs; n++) {
     // --retry=0: the e2e project retries once in CI, which is right for a gate and wrong for a soak —
     // a row that failed its first attempt and passed its second is exactly what the soak exists to
     // count (soak qx2jhwrrlk, 2026-09-22: the tally said 1/100 for a row that had failed 3 first attempts).
-    ["e2e", "--reporter=json", `--outputFile=${file}`, "--retry=0", ...(filter ? [filter] : [])],
+    [
+      "exec",
+      "vitest",
+      "run",
+      "--configLoader",
+      "runner",
+      "--project",
+      "e2e",
+      "--sequence.concurrent",
+      "--reporter=json",
+      `--outputFile=${file}`,
+      "--retry=0",
+      ...(filter ? [filter] : []),
+    ],
     { cwd: ROOT, env: process.env, stdio: ["ignore", "ignore", "inherit"] },
   );
   wall.push(Date.now() - started);

@@ -21,6 +21,7 @@ on:
       - scripts/lib/**
       - scripts/depot-ci/**
       - packages/shared/**
+      - packages/ui/**
       # A root dependency resolution can change the Worker bundle even when no
       # application source path moved.
       - package.json

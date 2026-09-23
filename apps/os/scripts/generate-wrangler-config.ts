@@ -2,10 +2,7 @@ import { readFileSync } from "node:fs";
 import JSON5 from "json5";
 import { osEnvs, PREVIEW_AND_DEV_ACCOUNT_ID, type OsEnv } from "../../../envs.ts";
 import { registrableDomainOf } from "../../../scripts/lib/start-app.ts";
-import {
-  OBSERVABILITY,
-  writeGeneratedWranglerConfig,
-} from "../../../scripts/lib/wrangler-config.ts";
+import { OBSERVABILITY } from "../../../scripts/lib/wrangler-config.ts";
 
 /** The `urls` half of `APP_CONFIG` (src/app-config.ts) a deployment gets from envs.ts, as the
  *  override vars the parser merges on top of the Doppler blob: `APP_CONFIG_URLS__<KEY>`. An object
@@ -42,7 +39,7 @@ function template() {
 /** Runtime bindings stay with the app; deployed names and IDs come from envs.ts. The top-level
  *  block is local dev (projects under `<project>.localhost`, the secrets as plain dev vars —
  *  scripts/dev.ts) on the dev/preview account, one `env` block per deployment. */
-export function writeWranglerConfig() {
+export function wranglerConfig() {
   const base = template();
   // THE BINDINGS every env block repeats (wrangler does not inherit them): the base minus its
   // inheritable keys and minus what an env block sets for itself (the resource ids, routes, vars).
@@ -138,11 +135,33 @@ export function writeWranglerConfig() {
       ]),
     ),
   };
-  return writeGeneratedWranglerConfig({
-    configUrl: new URL("../wrangler.jsonc", import.meta.url),
-    appLabel: "apps/os",
-    config,
-  });
+  return config;
+}
+
+/** The Vite plugin builds one flattened environment at a time. The source remains the same
+ *  base bindings and envs.ts map used by the Wrangler test harness. */
+export function viteWranglerConfig(name?: string, localDev = false) {
+  if (name === "self-host") return selfHostWranglerConfig();
+  const { env, ...local } = wranglerConfig();
+  if (!name)
+    return {
+      ...local,
+      name: localDev ? local.name : "os-next-local-build",
+      vars: {
+        ...local.vars,
+        APP_CONFIG_URLS__OS: `http://localhost:${process.env.OS_NEXT_DEV_PORT || "8788"}`,
+        ...(localDev && {
+          APP_CONFIG: JSON.stringify({
+            login: { password: "dev", emailCode: { from: "iterate <login@localhost>" } },
+            secrets: { adminBearer: "dev-admin-api-secret" },
+          }),
+          APP_CONFIG_SECRETS__KEY: "dev-secrets-key",
+        }),
+      },
+    };
+  const deployment = env[name];
+  if (!deployment) throw new Error(`Unknown os-next environment: ${name}`);
+  return { ...local, ...deployment };
 }
 
 /** THE SELF-HOST CONFIG (SELF-HOSTING.md): the same worker, the same bindings, for a deployment into
@@ -150,7 +169,7 @@ export function writeWranglerConfig() {
  *  D1, KV and R2 by name on the first deploy), projects as paths on the one workers.dev origin, the
  *  dash ours. `urls.os` stays unset: the worker takes each request's own origin. Every secret is in
  *  the `APP_CONFIG` blob (login.password) and `APP_CONFIG_SECRETS__KEY`, put at deploy time. */
-export function writeSelfHostWranglerConfig() {
+export function selfHostWranglerConfig() {
   const base = template();
   const { routes: _routes, d1_databases, kv_namespaces, r2_buckets, ...rest } = base;
   const config = {
@@ -172,15 +191,5 @@ export function writeSelfHostWranglerConfig() {
       ...(osEnvs.prd!.dashBaseUrl && { APP_CONFIG_URLS__DASH: osEnvs.prd!.dashBaseUrl }),
     },
   };
-  return writeGeneratedWranglerConfig({
-    configUrl: new URL("../wrangler.self-host.jsonc", import.meta.url),
-    appLabel: "apps/os (self-host)",
-    extraDocs: "apps/os/SELF-HOSTING.md",
-    config,
-  });
-}
-
-if (process.argv[1]?.endsWith("generate-wrangler-config.ts")) {
-  console.log(writeWranglerConfig());
-  console.log(writeSelfHostWranglerConfig());
+  return config;
 }

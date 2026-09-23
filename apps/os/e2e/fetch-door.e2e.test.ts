@@ -187,6 +187,13 @@ test("the old RPC routes are GONE — /expression, /call, /ws and /cap are no ca
   expect(outcome).not.toBe("101");
 });
 
+test("unknown issuer server functions answer 404 instead of Start's internal 500", async () => {
+  for (const id of ["bogus", "0".repeat(64)]) {
+    const response = await fetch(workerUrl(`/_serverFn/${id}`), { redirect: "manual" });
+    expect(response.status, id).toBe(404);
+  }
+});
+
 // ── egress: a missing project secret is a 502 at the door ──
 
 /** Send a Request through a fresh context's egress terminal, with test query/headers. (The URL

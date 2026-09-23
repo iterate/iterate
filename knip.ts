@@ -29,8 +29,9 @@ function makeOsNextWorkspace(): WorkspaceConfig {
       "bench/**/*.ts",
       "specs/**/*.ts",
     ],
-    // `cloudflare:workers` parses as the "cloudflare" package.
-    ignoreDependencies: ["cloudflare"],
+    // `cloudflare:workers` parses as the "cloudflare" package. Tailwind is imported by
+    // src/styles.css, which knip does not read.
+    ignoreDependencies: ["cloudflare", "tailwindcss"],
   };
 }
 
