@@ -32,3 +32,4 @@ pnpm --filter @iterate-com/voice deploy -- --env prd
 ```
 
 Deployment configuration lives in `envs.ts` (`voiceEnvs`), secrets in the Doppler project `voice`.
+Production serves `https://voice.iterate.com` through an exact Worker route on the iterate.com zone.

@@ -230,9 +230,8 @@ export const voiceEnvs = {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
     workerName: "voice",
-    // Its own workers.dev subdomain — NOT a custom domain (iterate.com is the iterate project's
-    // apex, osEnvs.prd.temporaryCustomHostnames). A workers.dev baseUrl adds no custom route (below).
-    baseUrl: "https://voice.iterate.workers.dev",
+    // This exact Worker route takes precedence over the iterate project's *.iterate.com route.
+    baseUrl: "https://voice.iterate.com",
   },
 };
 
