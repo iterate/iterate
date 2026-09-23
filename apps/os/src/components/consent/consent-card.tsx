@@ -3,6 +3,7 @@ import { flushSync } from "react-dom";
 import { useHydrated, useRouter } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import type { ConsentView } from "../../consent.ts";
+import { projectSlug } from "../../control-plane/catalog.ts";
 import { createProjectForConsent } from "../../issuer.functions.ts";
 import { switchAccountHref } from "../../login-search.ts";
 import { IssuerPage } from "../issuer-page.tsx";
@@ -11,7 +12,6 @@ import { OnboardingStep } from "./onboarding-step.tsx";
 import { PermissionsStep } from "./permissions-step.tsx";
 import type { ProjectSelection } from "./project-choices.tsx";
 import type { ProjectDraft } from "./project-fields.tsx";
-import { proposedSlug } from "./project-slug.ts";
 import { ProjectsStep } from "./projects-step.tsx";
 import { SignedInAccount } from "./signed-in-account.tsx";
 
@@ -61,7 +61,7 @@ export function ConsentCard({
     : projects.filter((project) => !selection.excluded.has(project.id));
   const onboarding = !view.projectBound && !view.projects.length;
   const organizationName = draft.orgId ? (orgNames.get(draft.orgId) ?? "") : draft.organizationName;
-  const slug = onboarding && draft.followsName ? proposedSlug(organizationName) : draft.slug;
+  const slug = onboarding && draft.followsName ? projectSlug(organizationName) : draft.slug;
   const switchAccount = switchAccountHref(`/oauth2/auth${authorization}`);
 
   /** Change step and move focus to its heading, so the change is announced. */
