@@ -657,6 +657,8 @@ async function deployPreview(
       slug,
       dashboardUrl: `https://dash.cloudflare.com/${PREVIEW_PARENT.cloudflareAccountId}/workers/services/view/${PREVIEW_PARENT.workerName}/production/previews/${slug}`,
       apps: appPreviews,
+      // the workflow's scripts/ci/preview-tested-commit.ts: the PR merged into main, or the head alone
+      testedCommit: process.env.PREVIEW_TESTED_COMMIT,
     };
     mkdirSync(OUTPUT_DIR, { recursive: true });
     writeFileSync(path.join(OUTPUT_DIR, "preview.json"), `${JSON.stringify(summary, null, 2)}\n`);

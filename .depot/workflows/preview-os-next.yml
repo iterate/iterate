@@ -1,8 +1,11 @@
 # ONE PREVIEW PER PULL REQUEST of apps/os, on Cloudflare Worker Previews — the shape of
 # cloudflare/cloudflare-os's .github/workflows/preview.yml, cut down to one worker and run on Depot.
 # The script is apps/os/scripts/preview.ts. One job per operation, named for when it runs:
-#   deploy              every push: deploys a preview named `pr<n>-<branch slug>` of the parent
-#                       worker os-next-preview and writes the URL and the operations into the PR body
+#   deploy              every push: deploys the PR merged into main (GitHub's test merge commit;
+#                       the head alone when the PR conflicts, scripts/ci/preview-tested-commit.ts)
+#                       as a preview named `pr<n>-<branch slug>` of the parent worker
+#                       os-next-preview, and writes the URL, the tested commit and the operations
+#                       into the PR body
 #   e2e                 after deploy succeeds: the e2e suite and the Playwright specs against it,
 #                       then their test telemetry and flake records as artifacts
 #   residency           after every suite: fails if any Durable Object is still resident five minutes
@@ -120,12 +123,25 @@ jobs:
       size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 40
+    # THE COMMIT THIS RUN TESTS, for the jobs after this one: the PR merged into main
+    # (scripts/ci/preview-tested-commit.ts), so e2e and residency test and redeploy the very
+    # commit deployed here even after main moves on.
+    outputs:
+      tested-sha: ${{ steps.tested.outputs.sha }}
+      head-sha: ${{ steps.tested.outputs.head-sha }}
     steps:
       - name: Checkout the PR head
         uses: actions/checkout@v4
         with:
           clean: false
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
+      # The preview proves what main will be after the merge: GitHub's test merge commit, or the
+      # head alone when there is none (a conflict), which the PR body then says.
+      - name: Check out the PR merged into main
+        id: tested
+        env:
+          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
+        run: node scripts/ci/preview-tested-commit.ts
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)
@@ -144,6 +160,7 @@ jobs:
           PREVIEW_NAME: ${{ github.head_ref }}
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
           PREVIEW_APPS: ${{ inputs.apps || 'all' }}
+          PREVIEW_TESTED_COMMIT: ${{ steps.tested.outputs.description }}
         run: doppler run -- pnpm preview "$ACTION"
 
   # THE FULL MUTATING PROOF (docs/testing.md): this isolated preview owns the project-creating
@@ -174,15 +191,28 @@ jobs:
     outputs:
       suite-started: ${{ steps.suite-started.outputs.at }}
       suite-ended: ${{ steps.suite-ended.outputs.at }}
+      tested-sha: ${{ steps.tested-sha.outputs.sha }}
     steps:
-      - name: Checkout the PR head
+      # The commit deploy deployed; alone on a dispatch with action=e2e, the head, then the PR
+      # merged into main as deploy would resolve it.
+      - name: Checkout the tested commit
         uses: actions/checkout@v4
         with:
           clean: false
-          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
-      # A dispatch checks out refs/pull/<n>/head, so the tested commit is what was checked out.
-      - name: Record the tested commit for test telemetry
-        run: echo "TEST_TELEMETRY_HEAD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          ref: ${{ needs.deploy.outputs.tested-sha || github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
+      # Telemetry is labelled with the PR head, whatever merge commit was tested.
+      - name: Record the PR head for test telemetry
+        env:
+          HEAD_SHA: ${{ needs.deploy.outputs.head-sha }}
+        run: echo "TEST_TELEMETRY_HEAD_SHA=${HEAD_SHA:-$(git rev-parse HEAD)}" >> "$GITHUB_ENV"
+      - name: Check out the PR merged into main
+        if: needs.deploy.outputs.tested-sha == ''
+        env:
+          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
+        run: node scripts/ci/preview-tested-commit.ts
+      - name: Record the tested commit for residency
+        id: tested-sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)
@@ -265,11 +295,12 @@ jobs:
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 30
     steps:
-      - name: Checkout the PR head
+      # The release redeploys the commit the suite tested.
+      - name: Checkout the tested commit
         uses: actions/checkout@v4
         with:
           clean: false
-          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
+          ref: ${{ needs.e2e.outputs.tested-sha }}
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
       - name: Setup Doppler (baked CLI)
