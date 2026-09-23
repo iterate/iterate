@@ -197,19 +197,30 @@ function requireEnv(name: string): string {
   return value;
 }
 
+/** A GitHub 5xx is asked again twice, 5 s apart: every call here is a read or a whole-body write,
+ *  so a repeat is harmless, and one 500 had failed a residency job whose gate had passed (#2911). */
 async function github<T = unknown>(route: string, init: { method?: string; body?: unknown } = {}) {
-  const response = await fetch(`https://api.github.com${route}`, {
-    method: init.method || "GET",
-    headers: {
-      accept: "application/vnd.github+json",
-      authorization: `Bearer ${requireEnv("GITHUB_TOKEN")}`,
-      "user-agent": "os-next-preview",
-      ...(init.body !== undefined && { "content-type": "application/json" }),
-    },
-    body: init.body === undefined ? undefined : JSON.stringify(init.body),
-  });
+  const method = init.method || "GET";
+  let response: Response;
+  for (let attempt = 1; ; attempt++) {
+    response = await fetch(`https://api.github.com${route}`, {
+      method,
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${requireEnv("GITHUB_TOKEN")}`,
+        "user-agent": "os-next-preview",
+        ...(init.body !== undefined && { "content-type": "application/json" }),
+      },
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    });
+    if (response.status < 500 || attempt === 3) break;
+    console.log(
+      `GitHub ${method} ${route} answered ${response.status}; asking again (${attempt}/3)`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
   if (!response.ok) {
-    throw new Error(`GitHub ${init.method || "GET"} ${route} failed with ${response.status}`);
+    throw new Error(`GitHub ${method} ${route} failed with ${response.status}`);
   }
   // GitHub's REST shapes are stable and documented; each caller declares the two or three fields it reads.
   return (await response.json()) as T;
