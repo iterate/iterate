@@ -52,7 +52,6 @@ export function reduceProcessor<State>(
       offset: index + 1,
       createdAt: new Date((index + 1) * 1000).toISOString(),
       path: "/",
-      source: input.source,
     } as StreamEvent;
     state = processor.reduce({ event, state }) ?? state;
   });

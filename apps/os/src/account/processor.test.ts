@@ -9,7 +9,7 @@ import { AccountProcessor } from "./processor.ts";
 import { type AccountState } from "./contract.ts";
 
 /** Every fact the account folds is the platform's: stamped `source.platform` as its writers stamp it
- *  (session.ts `publishGlobalFact`). */
+ *  (session.ts `publishAccountFact`, grants.ts, oauth.ts). */
 const platform = { platform: true } as const;
 const authenticated = (operationId: string, credential: "from-server-cookie" | "admin-secret") => ({
   type: "events.iterate.com/account/authenticated",
@@ -133,21 +133,33 @@ describe("AccountProcessor — the account state folded from facts", () => {
         {
           type: "events.iterate.com/organization/member-added",
           payload: { orgId: "org_1", userId: "user_me", role: "member" },
+          source: platform,
         },
         {
           type: "events.iterate.com/organization/member-added",
           payload: { orgId: "org_1", userId: "user_me", role: "owner" },
+          source: platform,
         },
         {
           type: "events.iterate.com/organization/member-added",
           payload: { orgId: "org_2", userId: "user_me", role: "member" },
+          source: platform,
         },
         {
           type: "events.iterate.com/organization/member-removed",
           payload: { orgId: "org_2", userId: "user_me" },
+          source: platform,
         },
-        { type: "events.iterate.com/account/grant-used", payload: { grantId: "grant_a", at: 5 } },
-        { type: "events.iterate.com/account/grant-used", payload: { grantId: "grant_a", at: 3 } },
+        {
+          type: "events.iterate.com/account/grant-used",
+          payload: { grantId: "grant_a", at: 5 },
+          source: platform,
+        },
+        {
+          type: "events.iterate.com/account/grant-used",
+          payload: { grantId: "grant_a", at: 3 },
+          source: platform,
+        },
       ],
       state: {
         authentications: [],
@@ -214,13 +226,35 @@ describe("AccountProcessor — the account state folded from facts", () => {
           type: "events.iterate.com/secret/set",
           payload: { path: "/secrets/forged", urls: ["https://evil.example.test"] },
         },
+        {
+          type: "events.iterate.com/organization/member-added",
+          payload: { orgId: "org_forged", userId: "user_me", role: "owner" },
+        },
         authenticated("op-1", "from-server-cookie"),
+        // the platform's mint of a real grant, then an end the person appended: the grant stays open
+        {
+          type: "events.iterate.com/account/grant-minted",
+          payload: { grantId: "grant_a", name: "laptop", projects: [], expiresAt: 9 },
+          source: platform,
+        },
+        { type: "events.iterate.com/account/grant-ended", payload: { grantId: "grant_a" } },
+        { type: "events.iterate.com/account/grant-used", payload: { grantId: "grant_a", at: 7 } },
       ],
       state: {
         authentications: [{ credential: "from-server-cookie", at: 1, operationId: "op-1" }],
-        personalAccessTokens: {},
+        personalAccessTokens: {
+          grant_a: {
+            name: "laptop",
+            projects: [],
+            expiresAt: 9,
+            mintedAt: expect.any(String),
+            endedAt: null,
+          },
+        },
         endedGrants: {},
+        grantUses: {},
         consents: [],
+        memberships: {},
         secrets: {},
       },
     },

@@ -31,7 +31,8 @@ export type Caller = {
   platformOrigin?: string | null;
   /** Set ONLY by the platform's own code, on the one `itx.builtins.append` of a fact it vouches for
    *  on the principal's behalf — an account's or an organization's (apps/os session.ts
-   *  `publishGlobalFact`, the secrets built-ins' catalog cross-post) — never by a client, who never
+   *  `publishAccountFact` and `publishOrganizationFact`, grants.ts's awaited grant end, oauth.ts's
+   *  grant use, the secrets built-ins' catalog cross-post) — never by a client, who never
    *  supplies a Caller. `stampCaller` stamps it as `source.platform`, which the processors folding
    *  those facts require; the fixed point is what no rewrite rule redirects, so nothing else runs
    *  under it. */

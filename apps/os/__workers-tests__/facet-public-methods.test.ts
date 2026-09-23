@@ -130,7 +130,9 @@ async function byExpression(call: () => Promise<unknown>): Promise<string> {
 
 test("a signed-in person calls each facet by itx expression: what its class lists reaches the facet, and everything else is refused FORBIDDEN", async () => {
   const session = await signedInSession("facet-public-methods@example.com");
-  const organization = (await session.createOrg("public methods org")) as { id: string };
+  const organization = (await session.organizations.create({ name: "public methods org" })) as {
+    id: string;
+  };
   const project = await session.projects.create({
     project: "facet-public-methods",
     orgId: organization.id,

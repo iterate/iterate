@@ -195,7 +195,7 @@ describe("security requirements — the global namespace is not navigable", () =
         ["get", "account"],
         ["snapshot"],
       ]) as Promise<AccountSnapshot>;
-    // The platform's own fact folds: this session's authentication (session.ts `publishGlobalFact`).
+    // The platform's own fact folds: this session's authentication (session.ts `publishAccountFact`).
     await until("the platform's authentication fact is folded", async () =>
       (await account()).state.authentications.length > 0 ? true : undefined,
     );
@@ -237,10 +237,15 @@ describe("security requirements — the global namespace is not navigable", () =
 
   test("a member cannot forge their organization's facts: it folds only what the platform wrote", async () => {
     const s = await userSession("forge-org@sec.test");
-    const org = (await s.createOrg("the real name")) as { id: string };
+    const org = await s.organizations.create({ name: "the real name" });
     const organization = s.organizations.get(org.id);
     type OrganizationSnapshot = {
-      state: { name: string | null; deletedAt: string | null; projects: Record<string, unknown> };
+      state: {
+        name: string | null;
+        deletedAt: string | null;
+        members: Record<string, unknown>;
+        projects: Record<string, unknown>;
+      };
     };
     const snapshot = () =>
       organization.invoke([
@@ -249,7 +254,7 @@ describe("security requirements — the global namespace is not navigable", () =
         ["get", "organization"],
         ["snapshot"],
       ]) as Promise<OrganizationSnapshot>;
-    // The platform's own fact folds: the organization's creation (session.ts `publishGlobalFact`).
+    // The platform's own fact folds: the organization's creation (session.ts `publishOrganizationFact`).
     await until("the platform's creation fact is folded", async () =>
       (await snapshot()).state.name === "the real name" ? true : undefined,
     );
@@ -260,17 +265,19 @@ describe("security requirements — the global namespace is not navigable", () =
         { type: "events.iterate.com/organization/renamed", payload: { name: "forged" } },
         { type: "events.iterate.com/organization/deleted", payload: {} },
         {
+          type: "events.iterate.com/organization/member-added",
+          payload: { orgId: org.id, userId: "user_forged", role: "owner" },
+        },
+        {
           type: "events.iterate.com/organization/project-created",
           payload: { projectId: "prj_forged", slug: "forged" },
           source: { platform: true },
         },
       ],
     ]);
-    expect((await snapshot()).state).toMatchObject({
-      name: "the real name",
-      deletedAt: null,
-      projects: {},
-    });
+    const { state } = await snapshot();
+    expect(state).toMatchObject({ name: "the real name", deletedAt: null, projects: {} });
+    expect(state.members).not.toHaveProperty("user_forged");
   });
 
   test("a user cannot reach the global ROOT context — not by cd, not through the project catalog", async () => {

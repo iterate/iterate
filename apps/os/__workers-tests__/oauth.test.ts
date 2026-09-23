@@ -86,17 +86,24 @@ async function actingAs(email?: string) {
 async function endGrantOnAccount(userId: string, grantId: string): Promise<void> {
   const account = stub(`global.iterate/users/${userId}`);
   await account.invoke(["itx", "processors", ["enable", "account"]]);
-  await account.invoke([
-    "itx",
+  // As grants.ts lands it: through the fixed point, stamped `source.platform` — the only end the
+  // account folds.
+  await account.invoke(
     [
-      "append",
-      {
-        type: "events.iterate.com/account/grant-ended",
-        idempotencyKey: `account/grant-ended/${grantId}`,
-        payload: { grantId } satisfies GrantEnded,
-      },
+      "itx",
+      "builtins",
+      [
+        "append",
+        {
+          type: "events.iterate.com/account/grant-ended",
+          idempotencyKey: `account/grant-ended/${grantId}`,
+          payload: { grantId } satisfies GrantEnded,
+        },
+      ],
     ],
-  ]);
+    [],
+    { principal: null, platform: true },
+  );
 }
 
 /** A person's membership of `orgId` removed by the operator — the org given a second owner first

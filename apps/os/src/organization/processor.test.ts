@@ -8,7 +8,7 @@ import { OrganizationProcessor } from "./processor.ts";
 import { type OrganizationState } from "./contract.ts";
 
 /** Every fact the organization folds is the platform's: stamped `source.platform` as its writer
- *  stamps it (session.ts `publishGlobalFact`). */
+ *  stamps it (session.ts `publishOrganizationFact`). */
 const platform = { platform: true } as const;
 const created = (name: string) => ({
   type: "events.iterate.com/organization/created",
@@ -63,26 +63,32 @@ describe("OrganizationProcessor — the organization's record folded from facts"
         {
           type: "events.iterate.com/organization/member-added",
           payload: { orgId: "org_1", userId: "user_a", role: "owner" },
+          source: platform,
         },
         {
           type: "events.iterate.com/organization/member-added",
           payload: { orgId: "org_1", userId: "user_a", role: "owner" },
+          source: platform,
         },
         {
           type: "events.iterate.com/organization/member-added",
           payload: { orgId: "org_1", userId: "user_b", role: "member" },
+          source: platform,
         },
         {
           type: "events.iterate.com/organization/member-added",
           payload: { orgId: "org_1", userId: "user_b", role: "owner" },
+          source: platform,
         },
         {
           type: "events.iterate.com/organization/member-removed",
           payload: { orgId: "org_1", userId: "user_a" },
+          source: platform,
         },
         {
           type: "events.iterate.com/organization/member-removed",
           payload: { orgId: "org_1", userId: "user_zzz" },
+          source: platform,
         },
       ],
       state: {
@@ -133,11 +139,15 @@ describe("OrganizationProcessor — the organization's record folded from facts"
         { type: "events.iterate.com/organization/renamed", payload: { name: "Forged" } },
         { type: "events.iterate.com/organization/deleted", payload: {} },
         {
+          type: "events.iterate.com/organization/member-added",
+          payload: { orgId: "org_1", userId: "user_forged", role: "owner" },
+        },
+        {
           type: "events.iterate.com/organization/project-created",
           payload: { projectId: "prj_f", slug: "forged" },
         },
       ],
-      state: { name: "Booper", deletedAt: null, projects: {}, secrets: {} },
+      state: { name: "Booper", deletedAt: null, members: {}, projects: {}, secrets: {} },
     },
   ];
   for (const { name, events, state } of rows)
