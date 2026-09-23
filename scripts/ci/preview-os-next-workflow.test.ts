@@ -1,10 +1,11 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
 
 /** The parts of .depot/workflows/preview-os-next.yml these tests read. */
 type PreviewWorkflow = {
+  env?: Record<string, string>;
   jobs: Record<
     string,
     {
@@ -12,7 +13,7 @@ type PreviewWorkflow = {
       name?: string;
       needs?: string | string[];
       "runs-on"?: { size?: string };
-      steps?: Array<{ run?: string; if?: string }>;
+      steps?: Array<{ id?: string; run?: string; if?: string; uses?: string }>;
     }
   >;
 };
@@ -22,7 +23,7 @@ const preview = parseYaml(
 ) as PreviewWorkflow;
 
 describe("the OS-Next preview workflow", () => {
-  it("deploys in one job and runs the suite in the next", () => {
+  test("deploys in one job and runs the suite in the next", () => {
     expect(preview.jobs.deploy.steps?.map((step) => step.run)).not.toContain(
       "doppler run -- pnpm preview e2e",
     );
@@ -32,7 +33,7 @@ describe("the OS-Next preview workflow", () => {
     );
   });
 
-  it("reads the preview's residency after every suite, then always releases it, in that order", () => {
+  test("reads the preview's residency after every suite, then always releases it, in that order", () => {
     const steps = preview.jobs.residency.steps || [];
     expect([preview.jobs.residency.needs].flat()).toEqual(["e2e"]);
     expect(preview.jobs.residency["runs-on"]?.size).toBe("2x8");
@@ -46,7 +47,7 @@ describe("the OS-Next preview workflow", () => {
 
   // After every deploy that succeeded, never after one that did not, and alone (deploy skipped) on
   // a dispatch with action=e2e.
-  it.each([
+  test.each([
     ["pull_request", "", "success", true],
     ["pull_request", "", "failure", false],
     ["pull_request", "", "cancelled", false],
@@ -80,4 +81,28 @@ describe("the OS-Next preview workflow", () => {
     // oxlint-disable-next-line no-new-func -- evaluating the workflow's own condition IS the test
     expect(new Function(`return (${javascript});`)()).toBe(runs);
   });
+});
+
+// docs/ci-traces.md: every run step's markers, the e2e step as the Test phase, and one trace job
+// after deploy and e2e settle.
+test("the CI trace collects deploy and e2e after both settle and posts its status", () => {
+  expect(preview.env).toMatchObject({
+    BASH_ENV: "${{ github.workspace }}/scripts/ci/tracing/shell.sh",
+    CI_TRACE_ENABLED: "1",
+  });
+  expect(
+    preview.jobs.e2e.steps?.find((step) => step.run === "doppler run -- pnpm preview e2e"),
+  ).toMatchObject({ id: "e2e" });
+  expect(preview.jobs.trace).toMatchObject({
+    needs: ["deploy", "e2e"],
+    if: expect.stringContaining("always()"),
+  });
+  const runs = (preview.jobs.trace.steps || []).map((step) => step.run || step.uses || "");
+  const order = [
+    runs.findIndex((run) => run.includes("scripts/ci/tracing/cli.ts current")),
+    runs.indexOf("actions/upload-artifact@v4"),
+    runs.findIndex((run) => run.includes("scripts/ci/tracing/cli.ts publish")),
+  ];
+  expect(order.every((index) => index >= 0)).toBe(true);
+  expect(order).toEqual([...order].sort((a, b) => a - b));
 });

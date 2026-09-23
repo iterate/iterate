@@ -49,6 +49,12 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     match: "This acceptance case needs the independently deployed Notes worker",
     note: "env-gated: needs NOTES_BASE_URL pointing at the independently deployed Notes worker (the os-next ↔ Notes acceptance case)",
   },
+  // -- Structural (fixture): the skip is the subject of the test, not a parked bug.
+  {
+    file: "scripts/ci/tracing/vitest.test.ts",
+    match: 'test.skip("never ran"',
+    note: "fixture: the child Vitest run's static skip proves a test that never ran gets no CI trace span",
+  },
 ];
 
 test("parked skip/fixme/todo markers carry an unexpired `revisit by` date", () => {

@@ -36,7 +36,13 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   // The telemetry reporter writes the canonical test artifact and the retried-pass flake records
   // the preview's CI finalizer uploads (docs/testing.md#flakes-and-pinned-failures).
-  reporter: [["list"], ["../../scripts/ci/playwright-telemetry-reporter.ts"]],
+  // The trace reporter prints each attempt's `@@ci-trace` lifecycle records when CI_TRACE_ENABLED=1
+  // (docs/ci-traces.md).
+  reporter: [
+    ["list"],
+    ["../../scripts/ci/playwright-telemetry-reporter.ts"],
+    ["../../scripts/ci/tracing/tracing.ts"],
+  ],
   use: {
     baseURL,
     trace: "on-first-retry",
