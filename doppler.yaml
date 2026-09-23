@@ -15,3 +15,5 @@ setup:
     path: apps/notes/
   - project: voice
     path: apps/voice/
+  - project: dummy-petshop
+    path: apps/dummy-petshop/

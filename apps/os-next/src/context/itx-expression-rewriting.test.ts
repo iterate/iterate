@@ -370,6 +370,17 @@ describe("resolveItxExpression — the call that runs", () => {
     );
   });
 
+  test("`abort` is a CONTEXT root: under a parent link a child's `itx.abort()` resets the child itself, never the context the link names; a row or a bare null takes it away", () => {
+    const link = ["itx ⇒ itx.builtins.cd('/agents/a')"];
+    const runsAt = (rules: string[], call: string) =>
+      print(resolveItxExpression(() => table(rules), parse(call), CHILD).at(-1)!);
+    expect(runsAt(link, "itx.abort('r')")).toBe("itx.builtins.abort('r')");
+    expect(runsAt(link, "itx.facets.abort('f')")).toBe("itx.builtins.facets.abort('f')");
+    expect(() => runsAt([...link, "itx.abort ⇒ null"], "itx.abort()")).toThrow(/is masked/);
+    expect(() => runsAt(["itx ⇒ null"], "itx.abort()")).toThrow(/is masked/);
+    expect(() => runsAt(["itx ⇒ null"], "itx.facets.abort('f')")).toThrow(/is masked/);
+  });
+
   test("a builtins-rooted call NEVER reads the table (the fixed point is checked before the rules)", () => {
     const neverRead = () => {
       throw new Error("the table was read");

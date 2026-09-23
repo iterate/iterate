@@ -39,6 +39,7 @@ type ErrorCode =
   | "RPC_STUB_OFFLINE" // the rpc stub a row names is neither borrowed nor pager-backed right now — or its lend ended mid-call (recalled, returned, broken; the relay re-codes)
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
   | "NO_FACET" // no facet of that name has been loaded into this context
+  | "FACET_ABORTED" // the facet instance this call ran on was reset by `itx.facets.abort` (apps/os-next context/facet-host.ts) — its next call starts it fresh
   | "FACET_NO_UPGRADE" // a WebSocket upgrade aimed at a facet: a facet answers RPC and plain HTTP, never a socket — sockets terminate at the edge (apps/os-next context/facet-host.ts)
   | "WAIT_TIMEOUT" // waitForEvent expired with no matching event committed
   | "TIMEOUT"; // lib.ts withTimeout: the call did not answer within its deadline

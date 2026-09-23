@@ -107,6 +107,9 @@ export class FacetHost {
   readonly #facetStartupMemoByName = new Map<string, FacetSpec>();
   /** A late failure may only retire the container it called, never its replacement. */
   readonly #facetGenerationByName = new Map<string, number>();
+  /** The generation `itx.facets.abort` ended, per facet, and why: a call in flight on it rejects
+   *  FACET_ABORTED (`#call`) — an outcome asked for, not a failure to report or a row to halt. */
+  readonly #abortedOnRequest = new Map<string, { generation: number; reason?: string }>();
   /** Each facet's latest recovery (`#recover`), settled either way: the next one starts after it,
    *  so no restart aborts another recovery's retry mid-call. */
   readonly #facetRecoveryByName = new Map<string, Promise<void>>();
@@ -177,6 +180,13 @@ export class FacetHost {
         await this.invoke(name, undefined, [["revive"]]);
         this.#facetRevived(name);
       } catch (error) {
+        // A revive `itx.facets.abort` cut off (FACET_ABORTED) failed at nothing: the reset was asked
+        // for, and the fresh instance is owed the same revive — due now, the next pass's, with no
+        // backoff and no issue.
+        if (errorCode(error) === "FACET_ABORTED") {
+          this.#claimFacetAlarm(name, Date.now());
+          continue;
+        }
         reportIssue("iterate-context.revive", error, { name });
         // A revive that threw (a load failure, a timeout) spent nothing: the claim is put back,
         // later each time, so the attempt is still owed and a facet that cannot load costs a
@@ -189,6 +199,29 @@ export class FacetHost {
         );
       }
     }
+  }
+
+  /** `itx.facets.abort(name, reason)` (built-ins.ts, which records the fact right after): the facet
+   *  RESET from here, the host — `ctx.facets.abort` needs nothing from the facet, so a class that is
+   *  no SDK host and one that would never answer a call reset alike. Its instance goes, and every
+   *  call in flight on it rejects FACET_ABORTED (`#call`); its storage and startup memo stay, so the
+   *  next call starts it fresh. A facet not running this incarnation has nothing to reset — the
+   *  call still answers, and the fact still lands. The core reduce is no facet; a name never hosted
+   *  here is NO_FACET. */
+  abort(name: string, reason: string | undefined): void {
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- name arrives as a client-authored itx expression argument; the static string type is the API contract, not a runtime guarantee
+    if (typeof name !== "string")
+      throw new Error("itx.facets.abort(name, reason?): name the facet");
+    if (name === CoreContract.slug)
+      throw new Error(`"${name}" is the core reduce — never a facet, nothing to abort`);
+    // A first-party name is always hostable; any other must have been hosted here (its memo, or the
+    // row that hosts it) — else NO_FACET, before anything is recorded.
+    if (!firstPartyFacetClassOf(name)) this.#facetStartupMemoFor(name, undefined);
+    const generation = this.#facetGeneration(name);
+    this.#abortFacetIfRunning(name, `facet "${name}" aborted${reason ? `: ${reason}` : ""}`);
+    this.#liveFacetNames.delete(name);
+    if (this.#facetGeneration(name) !== generation)
+      this.#abortedOnRequest.set(name, { generation, reason });
   }
 
   /** For the test-only release (the DO's `releasePins`): every live facet aborted, so a
@@ -562,7 +595,7 @@ export class FacetHost {
    *  WebSocket upgrade from the DO's egress to the `secret` facet, whose 101 rides the fetch
    *  channel back) — then the answer copied out. A facet that never answers (FACET_CALL_WATCHDOG_MS)
    *  or whose startup threw is aborted: its pending call rejects, the counter drains, the next call
-   *  re-materializes it. */
+   *  re-materializes it. A call on an instance `abort` reset rejects FACET_ABORTED. */
   async #call(
     { facet, startupFailed, generation }: MaterializedFacet,
     name: string,
@@ -601,6 +634,12 @@ export class FacetHost {
           this.#liveFacetNames.delete(name);
         }
       }
+      const aborted = this.#abortedOnRequest.get(name);
+      if (aborted?.generation === generation)
+        throw codedError(
+          "FACET_ABORTED",
+          `facet "${name}" was aborted${aborted.reason ? `: ${aborted.reason}` : ""} — its next call starts it fresh`,
+        );
       throw error;
     } finally {
       releaseRpcSessions(rpcSessionsSteppedPast);

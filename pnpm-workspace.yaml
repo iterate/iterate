@@ -6,6 +6,7 @@ packages:
   - apps/voice
   - apps/kit
   - apps/spa
+  - apps/dummy-petshop
   - packages/iterate
   - packages/shared
   - packages/ui

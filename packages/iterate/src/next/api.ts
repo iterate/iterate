@@ -156,6 +156,18 @@ export interface IterateContextApi {
     | { projectId: string; path: string; projectSlug?: string; projectUrl?: string }
     | Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
+  /** RESET this context (Cloudflare's `ctx.abort`): its Durable Object drops everything it holds in
+   *  memory and the next call starts a fresh incarnation from durable storage. Resolves with the
+   *  `events.iterate.com/context/aborted { reason?, callerPath?, app? }` event it recorded — durable
+   *  and attributed to the caller before anything resets — and the reset follows the answer.
+   *  SURVIVES: the log and everything derived from it (rewrite rules, subscriptions, schedules),
+   *  every facet's storage, kv. GOES: in-memory state, every facet instance and its in-flight work,
+   *  every socket on the context (a provider's re-dials), and every other call in flight there — it
+   *  rejects with the reset's message (`itx.abort() reset the context <path>: <reason>`). A handle
+   *  you kept names its target by expression, so its next call reaches the new incarnation.
+   *  Another context of the project: `itx.cd(path).abort()`. A rewrite rule masks it like any name
+   *  (`provide("itx.abort", null)`). */
+  abort(reason?: string): Promise<StreamEvent>;
   readEvents(
     afterOffset?: number,
     limit?: number,
@@ -197,7 +209,16 @@ export interface IterateContextApi {
     get(match: string): Promise<RewriteRuleListEntry | null>;
     resolve(call: ItxExpressionInput): string[];
   };
-  facets: { get(name: string, spec?: FacetSpec): FacetHandle };
+  facets: {
+    get(name: string, spec?: FacetSpec): FacetHandle;
+    /** RESET one facet of this context, from the context that hosts it — any facet, whether or not
+     *  it extends the SDK's host, including one that would never answer a call. Its instance and
+     *  in-memory state go, and every call in flight on it rejects `FACET_ABORTED`; its storage
+     *  stays, and its next call starts it fresh. The context itself is not reset. Resolves with the
+     *  `events.iterate.com/context/facet-aborted { name, reason?, callerPath?, app? }` event;
+     *  `NO_FACET` for a name never hosted here. */
+    abort(name: string, reason?: string): Promise<StreamEvent>;
+  };
   subscriptions: {
     list(): SubscriptionListEntry[];
     get(name: string): SubscriptionListEntry | null;

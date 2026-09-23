@@ -257,6 +257,20 @@ export interface BuiltInScope extends LibraryRoots {
    *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge
    *  RpcTarget exactly: `itx.append({...})` is one spelling on every hop. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
+  /** RESET THIS CONTEXT — Cloudflare's `ctx.abort`, asked for: the Durable Object's in-memory state
+   *  is discarded and the next call builds a fresh incarnation from durable storage (a new
+   *  `stream/woken`). The FACT comes first — `context/aborted { reason?, callerPath?, app? }`,
+   *  attributed like any append (`source.principal`) and durable before anything resets — then the
+   *  answer (that event), then the reset, one zero-delay turn after the answer left
+   *  (iterate-context-durable-object.ts `#abortAfterTheAnswer`). SURVIVES: the log and everything
+   *  reduced from it (rewrite rules, subscriptions, schedules), the facets' own storage, kv, an
+   *  armed alarm. GOES: in-memory state, every facet instance and its in-flight work, every socket
+   *  (a lender's pager re-dials), every borrowed stub, and every call still in flight here — it
+   *  rejects with the reset's message. A handle a holder kept is the expression that names it
+   *  (expression.ts `itxAnswerDetachedFromSession`), so its next call reaches the fresh
+   *  incarnation. A context root, so it resets the context it is spelled at; another context of
+   *  the project is `itx.cd(path).abort()`. */
+  abort(reason?: string): Promise<StreamEvent>;
   /** Durable batches appended after a deadline or on a fixed interval (missed ticks coalesce). Setting a key
    *  replaces it; cancelling cannot retract an occurrence already committed. Pause holds work
    *  until resume; set is refused while paused, while cancel remains available. Failure remains
@@ -318,7 +332,16 @@ export interface BuiltInScope extends LibraryRoots {
    *  `ctx.facets.get(name, startupCallback)`; `source`/`cacheKey` as for `workers.get` (a new key
    *  restarts the facet, its storage surviving). A facet leaves with the subscription that hosted it
    *  (`subscription-configured { name, target: null }`) — there is no delete verb. */
-  facets: { get(name: string, spec?: FacetSpec): FacetHandle };
+  facets: {
+    get(name: string, spec?: FacetSpec): FacetHandle;
+    /** RESET ONE FACET — `ctx.facets.abort(name)` from the HOST (facet-host.ts `abort`), so it works
+     *  on any facet, a class of this worker or a loaded one, an SDK host or not, and on one that
+     *  would never answer a call: its instance goes and every call in flight on it rejects
+     *  FACET_ABORTED; its storage stays; the next call starts it fresh from its startup memo. This
+     *  context's incarnation is untouched. The fact is `context/facet-aborted { name, reason?,
+     *  callerPath?, app? }`. NO_FACET for a name never hosted here. */
+    abort(name: string, reason?: string): Promise<StreamEvent>;
+  };
   /** The subscriptions layer, read: the table (a slice of core) joined with the stream-kept
    *  cursors. Read-only — `subscribe` lives on the edge as sugar over the `subscription-configured`
    *  event, never a verb here. */
@@ -397,6 +420,18 @@ function r2ObjectRecord(object: R2Object, prefix: string): R2ObjectRecord {
   };
 }
 
+/** A reset's reason (`abort`, `facets.abort`): absent, or one line a person reads — it lands in the
+ *  fact and in the message every call the reset cuts off rejects with. */
+function abortReasonOf(reason: unknown, verb: string): string | undefined {
+  const parsed = z.string().max(1000).optional().safeParse(reason);
+  if (!parsed.success)
+    throw codedError(
+      "INVALID_INPUT",
+      `${verb}(reason?): a reason is a string of at most 1000 chars`,
+    );
+  return parsed.data;
+}
+
 /** What the CONTEXT (the DO) injects: identity, the bindings, and the seams only it can serve. */
 interface BuildBuiltInsDeps {
   projectInfo?: () => Promise<{ projectSlug?: string; projectUrl?: string }>;
@@ -455,8 +490,15 @@ interface BuildBuiltInsDeps {
   rewriteRules: BuiltInScope["rewriteRules"];
   /** The own context's — a wait never crosses a hop. */
   waitForEvent: BuiltInScope["waitForEvent"];
-  /** The facet door, verbatim (accepted trade: a busy stateful facet pins its stream). */
-  facets: BuiltInScope["facets"];
+  /** The facet door, verbatim (accepted trade: a busy stateful facet pins its stream), and the
+   *  host's synchronous reset of one facet (facet-host.ts `abort`). */
+  facets: {
+    get: BuiltInScope["facets"]["get"];
+    abort(name: string, reason: string | undefined): void;
+  };
+  /** THE CONTEXT'S RESET, once the call that asked for it has its answer (the DO's
+   *  `#abortAfterTheAnswer`): resolves when every write so far is durable; the reset follows. */
+  abortAfterTheAnswer: (message: string) => Promise<void>;
   /** The DO's claim table for hosted processors (`processors.claim`). */
   claimFacetAlarm: (name: string, at: number | null) => void;
   /** The `ItxEntrypoint` stub a loaded worker gets as `env.ITX` and `globalOutbound` — the loopback
@@ -823,6 +865,24 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     browser: cfBrowser(env.BROWSER),
     cfArtifacts: projectScopedArtifacts({ namespace: env.ARTIFACTS, projectId: owner.id }),
     append,
+    abort: async (reasonInput) => {
+      const reason = abortReasonOf(reasonInput, "itx.abort");
+      // WHO ASKED, beyond what the append stamps (`source.principal`): the context the call started
+      // at when it hopped here, and whether loaded code asked — loaded code carries no principal.
+      const { path: callerPath, app } = deps.caller();
+      // THE FACT FIRST, through `append` (attributed, pause-exempt — stream.ts), then durable, then
+      // the answer; the reset is the DO's, after it.
+      const [aborted] = await append({
+        type: "events.iterate.com/context/aborted",
+        payload: { reason, callerPath, app },
+      });
+      // The runtime logs this message as an error line (uncatchable); the prd fault alarm
+      // (scripts/ci/prd-fault-alarm.ts) excludes its prefix as the expected outcome it is.
+      await deps.abortAfterTheAnswer(
+        `itx.abort() reset the context ${path}${reason ? `: ${reason}` : ""}`,
+      );
+      return aborted;
+    },
     schedules: {
       ...deps.schedules,
       get: (key) => deps.schedules.get(ScheduleKey.parse(key)),
@@ -908,7 +968,22 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     },
     fetch: (request: Request) => deps.egress(request),
     rpcStubs: deps.rpcStubs,
-    facets: deps.facets,
+    facets: {
+      get: deps.facets.get,
+      // The reset and its fact in ONE synchronous turn — the host's abort, then the append — so no
+      // event lands between them, and the fact's own delivery to a processor facet meets the fresh
+      // instance, never the one going away.
+      abort: async (name, reasonInput) => {
+        const reason = abortReasonOf(reasonInput, "itx.facets.abort");
+        const { path: callerPath, app } = deps.caller(); // who asked, as for `abort` above
+        deps.facets.abort(name, reason);
+        const [aborted] = await append({
+          type: "events.iterate.com/context/facet-aborted",
+          payload: { name, reason, callerPath, app },
+        });
+        return aborted;
+      },
+    },
     subscriptions: deps.subscriptions,
     processors: {
       enable: async (name, spec) => {
