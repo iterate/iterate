@@ -27,9 +27,6 @@ export default createServerEntry({
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/healthz") return new Response("ok");
-    },
-  ) {
-    if (new URL(request.url).pathname === "/healthz") return new Response("ok");
     // posthog-js's `api_host` (packages/ui posthog.tsx): PostHog EU through our own origin
     if (url.pathname.startsWith("/e/")) return proxyPosthogRequest({ request, proxyPrefix: "/e" });
     const auth = await appAuth(request, {
