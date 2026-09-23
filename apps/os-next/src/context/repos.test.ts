@@ -127,3 +127,25 @@ test("the '.' delimiter is collision-free for hyphenated project IDs; list filte
   const ab = scoped(namespace, "prj_a-b");
   expect((await ab.list()).repos.map((r) => r.path)).toEqual(["/secret"]);
 });
+
+test("every binding handle is released: create, get and createToken leave none live", async () => {
+  // A handle is a live Workers-RPC stub; one kept (the scoped repo held it, the create probe dropped
+  // it) held the root's session to Artifacts, and the root, open until the next deploy (2026-09-23).
+  const { namespace } = recordingNamespace();
+  let opened = 0;
+  let released = 0;
+  const counting: ArtifactsNamespace = {
+    ...namespace,
+    get: async (name) => {
+      const handle = await namespace.get(name); // a missing repo throws here: no handle to release
+      opened++;
+      return Object.assign(handle, { [Symbol.dispose]: () => released++ });
+    },
+  };
+  const a = scoped(counting, "prj_a");
+  await a.create("/repos/config"); // the probe: not found, then create
+  await a.create("/repos/config"); // the probe: found
+  const repo = await a.get("/repos/config");
+  expect((await repo.createToken("write", 60)).plaintext).toBe("write-prj_a.repos--config-60");
+  expect({ opened, released }).toEqual({ opened: 3, released: 3 }); // probe (found), get, createToken
+});
