@@ -849,22 +849,26 @@ async function residencyGate(
       await sleepUntil(Date.now() + 15_000);
     }
   };
-  // The window's last minute is complete about two minutes after the window ends (measured
-  // 2026-09-23; durableObjectAnalyticsCoverWindow). An idle account reports no newer minute at all,
-  // so the wait also ends five minutes after the window does.
+  // The window's last minute is complete about two minutes after the window ends, and a new
+  // preview's own data can trail the account's by a quarter of an hour (measured 2026-09-23;
+  // durableObjectAnalyticsCoverWindow). An idle account reports no newer minute at all, so the wait
+  // also ends fifteen minutes after the window does.
   const firstRead = window.end.getTime() + 2 * 60_000;
-  const deadline = window.end.getTime() + 5 * 60_000;
+  const deadline = window.end.getTime() + 15 * 60_000;
   console.log(
     `suite ${suite.started.toISOString()} → ${suite.ended.toISOString()}; reading the window ${window.start.toISOString()} → ${window.end.toISOString()} over ${namespaces.length} namespaces of ${previewName}, from ${new Date(firstRead).toISOString()}`,
   );
   await sleepUntil(firstRead);
   let account = await read();
-  while (!durableObjectAnalyticsCoverWindow(account, window) && Date.now() < deadline) {
+  while (
+    !durableObjectAnalyticsCoverWindow(account, window, suite.ended) &&
+    Date.now() < deadline
+  ) {
     await sleepUntil(Date.now() + 30_000);
     account = await read();
   }
   console.log(
-    `the account's newest analytics minute: ${account.newestMinute[0]?.dimensions.datetimeMinute ?? "none since the window started"}`,
+    `the account's newest analytics minute: ${account.newestMinute[0]?.dimensions.datetimeMinute ?? "none since the window started"}; the preview's: ${account.previewNewestMinute[0]?.dimensions.datetimeMinute ?? "none since the suite started"}`,
   );
   const verdict = durableObjectResidencyVerdict({ account, namespaces, window });
   console.log(`\n${renderDurableObjectResidency(verdict)}\n`);

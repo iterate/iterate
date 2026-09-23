@@ -108,23 +108,51 @@ describe("rule 2: five whole minutes, five minutes after the suite ended", () =>
   });
 });
 
-describe("the window (10:05–10:10) is complete once the account reports the minute after next", () => {
-  test.each([
-    { newestMinute: "2026-09-23T10:11:00Z", covers: true },
-    { newestMinute: "2026-09-23T10:13:00Z", covers: true },
-    // the window's last minute (10:09) is still filling in while 10:10 is the newest
-    { newestMinute: "2026-09-23T10:10:00Z", covers: false },
-    { newestMinute: "2026-09-23T10:09:00Z", covers: false },
-    { newestMinute: undefined, covers: false },
-  ])("newest minute $newestMinute → $covers", ({ newestMinute, covers }) => {
+test.each([
+  {
+    newestMinute: "2026-09-23T10:11:00Z",
+    previewNewestMinute: "2026-09-23T09:59:00Z",
+    covers: true,
+  },
+  {
+    newestMinute: "2026-09-23T10:13:00Z",
+    previewNewestMinute: "2026-09-23T09:58:00Z",
+    covers: true,
+  },
+  // the window's last minute (10:09) is still filling in while 10:10 is the newest
+  {
+    newestMinute: "2026-09-23T10:10:00Z",
+    previewNewestMinute: "2026-09-23T09:59:00Z",
+    covers: false,
+  },
+  {
+    newestMinute: "2026-09-23T10:09:00Z",
+    previewNewestMinute: "2026-09-23T09:59:00Z",
+    covers: false,
+  },
+  { newestMinute: undefined, previewNewestMinute: "2026-09-23T09:59:00Z", covers: false },
+  // the account is current but this new preview's own data trails it (main-6b39ca9, 2026-09-23)
+  {
+    newestMinute: "2026-09-23T10:11:00Z",
+    previewNewestMinute: "2026-09-23T09:52:00Z",
+    covers: false,
+  },
+  { newestMinute: "2026-09-23T10:11:00Z", previewNewestMinute: undefined, covers: false },
+])(
+  "the window (10:05–10:10, suite ended 09:59:40) is in once the account reports the minute after next and the preview its suite's end: account $newestMinute, preview $previewNewestMinute → $covers",
+  ({ newestMinute, previewNewestMinute, covers }) => {
+    const minute = (at: string | undefined) => (at ? [{ dimensions: { datetimeMinute: at } }] : []);
     const account = {
-      newestMinute: newestMinute ? [{ dimensions: { datetimeMinute: newestMinute } }] : [],
+      newestMinute: minute(newestMinute),
+      previewNewestMinute: minute(previewNewestMinute),
       windowMinutes: [],
       runObjects: [],
     };
-    expect(durableObjectAnalyticsCoverWindow(account, window)).toBe(covers);
-  });
-});
+    expect(
+      durableObjectAnalyticsCoverWindow(account, window, new Date("2026-09-23T09:59:40Z")),
+    ).toBe(covers);
+  },
+);
 
 describe("rules 3–8: the verdict", () => {
   const residentByDesign = [
@@ -195,6 +223,7 @@ describe("rules 3–8: the verdict", () => {
     const verdict = durableObjectResidencyVerdict({
       account: {
         newestMinute: [],
+        previewNewestMinute: [],
         windowMinutes: windowMinutes(...minutes),
         runObjects: runObjects(runObjectCount),
       },
@@ -230,6 +259,7 @@ describe("rules 3–8: the verdict", () => {
     const verdict = durableObjectResidencyVerdict({
       account: {
         newestMinute: [],
+        previewNewestMinute: [],
         windowMinutes: windowMinutes(`${name} ns-context 60 60 60 60 60`),
         runObjects: runObjects(500),
       },
@@ -241,7 +271,12 @@ describe("rules 3–8: the verdict", () => {
 
   test("rule 7: an answer at the row limit fails, whatever it holds", () => {
     const verdict = durableObjectResidencyVerdict({
-      account: { newestMinute: [], windowMinutes: [], runObjects: runObjects(10_000) },
+      account: {
+        newestMinute: [],
+        previewNewestMinute: [],
+        windowMinutes: [],
+        runObjects: runObjects(10_000),
+      },
       namespaces,
       window,
     });
@@ -254,6 +289,7 @@ describe("rules 3–8: the verdict", () => {
     const verdict = durableObjectResidencyVerdict({
       account: {
         newestMinute: [],
+        previewNewestMinute: [],
         windowMinutes: windowMinutes(
           "prj_b.iterate/ ns-context 60 60 60 60 0",
           "prj_a.iterate/ ns-context 60 60 60 60 60",
@@ -275,6 +311,7 @@ describe("the rendered verdict (the job log and the PR body)", () => {
     durableObjectResidencyVerdict({
       account: {
         newestMinute: [],
+        previewNewestMinute: [],
         windowMinutes: windowMinutes(...minutes),
         runObjects: runObjects(507),
       },
@@ -322,6 +359,7 @@ describe("the GraphQL answer", () => {
           accounts: [
             {
               newestMinute: [{ dimensions: { datetimeMinute: "2026-09-23T10:09:00Z" } }],
+              previewNewestMinute: [{ dimensions: { datetimeMinute: "2026-09-23T09:59:00Z" } }],
               windowMinutes: windowMinutes("prj_a.iterate/ ns-context 60"),
               runObjects: runObjects(1),
             },
