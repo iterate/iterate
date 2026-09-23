@@ -628,7 +628,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // The facets (context/facet-host.ts): the handle every `itx.facets.get` call walks, the
     // platform's own call past the facets' lists (the `itx.secrets` verbs), and the claim a hosted
     // processor makes on this context's alarm.
-    claimFacetAlarm: (name, at) => this.#facetHost.claim(name, at),
+    claimFacetAlarm: (name, at) => {
+      this.#lastOutsideActivityEndedAt = Date.now(); // a claim restarts the sweep's quiet clock
+      this.#facetHost.claim(name, at);
+    },
     facets: {
       get: (name, spec) => this.#facetHost.handle(name, spec),
       abort: (name, reason) => this.#facetHost.abort(name, reason),
@@ -950,6 +953,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       throw error;
     }
     this.#traceAlarm("alarm-pass", fired);
+    this.#lastOutsideActivityEndedAt = Date.now(); // a pass that did durable work restarts the sweep's quiet clock
   }
 
   /** THE RELEASE (the pins' timer, `#pinCallEnded`): every borrowed stub returned, every library
@@ -972,6 +976,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  last one ended: the quiet window runs from there. */
   #inboundCallsInFlight = 0;
   #lastInboundCallEndedAt: number | null = null;
+  /** THE UNCLAIMED-FACET SWEEP'S QUIET CLOCK: when the last inbound call from OUTSIDE the project's
+   *  loaded code ended (an edge session, HTTP, MCP, a sibling's hop, a socket event), a claim was
+   *  made, or an alarm pass did durable work. A call from loaded code — `caller.app`, a loaded
+   *  worker's fetch — counts as work while in flight, but does not restart it: a facet that calls its
+   *  own context more often than the context would evict would otherwise never be quiet, and never
+   *  reset. */
+  #lastOutsideActivityEndedAt: number | null = null;
 
   /** An inbound call begins, and arms the watchdog when none is armed: one alarm write per quiet
    *  window, not per call. Before the call's wake record, so a fresh incarnation's first commit
@@ -982,9 +993,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#residencyWatchdogArmedFor = Date.now() + RESIDENCY_WATCHDOG_WINDOW_MS;
     this.#alarmCoordinator.reconcile();
   }
-  #inboundCallEnded(): void {
+  #inboundCallEnded(fromLoadedCode = false): void {
     this.#inboundCallsInFlight -= 1;
     this.#lastInboundCallEndedAt = Date.now();
+    if (!fromLoadedCode) this.#lastOutsideActivityEndedAt = this.#lastInboundCallEndedAt;
   }
   /** An inbound call that runs in ONE synchronous turn (`append`, `read`, a lend, a socket event):
    *  begun and ended at once — the clock does not move inside a turn. */
@@ -1061,20 +1073,20 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** The sweep's decision, applied in every alarm pass beside the watchdog's and by the same rule
-   *  (`decideResidencyWatchdog`, its own window): nothing, a later deadline while a call or facet work
-   *  is in flight or the quiet period is young, or THE SWEEP — this still-resident incarnation's
-   *  unclaimed loaded facets reset in place. An incarnation that evicted on time never gets here: the
-   *  alarm wakes a fresh one, whose birth reset them. */
+   *  (`decideResidencyWatchdog`, its own window, its own clock `#lastOutsideActivityEndedAt`): nothing,
+   *  a later deadline while a call or facet work is in flight or the quiet period is young, or THE
+   *  SWEEP — this still-resident incarnation's unclaimed loaded facets reset in place. An incarnation
+   *  that evicted on time never gets here: the alarm wakes a fresh one, whose birth reset them. */
   #checkUnclaimedFacetSweep(now: number): void {
     const decision = decideResidencyWatchdog({
       armedFor: this.#unclaimedFacetSweepArmedFor,
       now,
-      lastCallEndedAt: this.#lastInboundCallEndedAt,
       workInFlight:
         this.#inboundCallsInFlight +
         this.#facetHost.snapshot().facetWorkInFlight +
         this.#scriptRunsInFlight.size +
         this.#pinCallsInFlight,
+      lastCallEndedAt: this.#lastOutsideActivityEndedAt,
       windowMs: UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS,
     });
     if (decision.action === "none") return;
@@ -1134,7 +1146,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#inboundCallStarted();
     this.#stream.appendWakeRecord("request");
     const result = await this.#invokeInProcess(call, args, caller).finally(() =>
-      this.#inboundCallEnded(),
+      this.#inboundCallEnded(caller.app === true),
     );
     // THE CALLER'S SESSION ENDS WITH THE CALL, WHATEVER IT KEEPS (expression.ts
     // `itxAnswerDetachedFromSession`): every Workers-RPC caller of this actor — the edge (capnweb
@@ -1184,7 +1196,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  a stream longer than the watchdog's window is recorded as held. */
   async fetch(request: Request): Promise<Response> {
     this.#inboundCallStarted();
-    return this.#serveFetch(request).finally(() => this.#inboundCallEnded());
+    return this.#serveFetch(request).finally(() =>
+      this.#inboundCallEnded(request.headers.get(ITX_APP_HEADER) !== null),
+    );
   }
 
   async #serveFetch(request: Request): Promise<Response> {

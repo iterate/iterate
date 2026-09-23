@@ -78,3 +78,20 @@ test("a context still resident a quiet period after it materialized a loaded fac
   expect(events.filter((event) => event.type === "events.iterate.com/stream/woken").length).toBe(1);
   await s.invoke(["itx", "processors", ["claim", "busy", null]]);
 });
+
+test("a call from loaded code counts while in flight but never restarts the sweep's quiet clock: the unclaimed facet is reset a quiet period after the last OUTSIDE call", async () => {
+  const ctx = "prj_facet_sweep_outside_clock";
+  const s = stub(ctx);
+  const t0 = Date.now();
+  vi.useFakeTimers({ now: t0, toFake: ["Date"] });
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  const before = (await s.invoke(["itx", "facets", ["get", "chatty", spec], ["hello"]])) as string;
+  // Loaded code calling its own context half a period later — what a chatty facet does.
+  vi.setSystemTime(t0 + UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS / 2);
+  await s.invoke("itx.whoami()", [], { principal: null, app: true });
+  vi.setSystemTime(t0 + UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS);
+  expect(await runDurableObjectAlarm(s)).toBe(true);
+  expect(await s.invoke(["itx", "facets", ["get", "chatty"], ["hello"]])).not.toBe(before);
+});
