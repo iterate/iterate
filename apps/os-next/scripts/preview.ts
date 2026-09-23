@@ -251,7 +251,8 @@ type ArtifactsNamespaceRow = { namespace: string; repo_count?: number; created_a
 const CloudflareErrors = z.array(z.object({ code: z.number() }));
 
 /** A Cloudflare refusal with this status and error code. Each one used here was measured:
- *  Artifacts 404/10200 (no such namespace, or repo) and 409/10202 (namespace still holds repos); KV
+ *  Artifacts 404/10200 (no such namespace, or repo), 409/10202 (namespace still holds repos) and
+ *  409/10305 (namespace deletion already in progress); KV
  *  404/10013 (no such namespace); R2 404/10006 (no such bucket); Worker Previews 404/10025 (no such
  *  preview). */
 const isCloudflareError = (error: unknown, status: number, code: number) =>
@@ -317,11 +318,14 @@ async function deleteArtifactsNamespace(cf: Cf, artifactsNamespaceName: string):
       deletedRepos += Math.min(10, repos.length - i);
     }
     if (repos.length > 0) continue;
-    // gone under this run (the sweep and the close job can race) is deleted
+    // gone under this run (the sweep and the close job can race) is deleted, and so is one whose
+    // deletion Cloudflare already has in progress (409/10305; one sat there with `repo_count: 1` and
+    // an empty repos list for minutes, 2026-09-23)
     const deleted = await cf(route, { method: "DELETE" }).then(
       () => true,
       (error) => {
-        if (isCloudflareError(error, 404, 10200)) return true;
+        if (isCloudflareError(error, 404, 10200) || isCloudflareError(error, 409, 10305))
+          return true;
         if (!isCloudflareError(error, 409, 10202)) throw error;
         return false;
       },
