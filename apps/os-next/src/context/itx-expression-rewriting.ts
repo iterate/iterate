@@ -82,7 +82,10 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
   fetch: "the internet through the project's egress: `itx.fetch(new Request(url))`",
   rpcStubs: "live values clients lent here: `rpcStubs.list()` · `rpcStubs.get(key)`",
   rewriteRules: "this table, described: `await rewriteRules.list()`",
-  facets: "a durable facet hosted here: `facets.get(name)`",
+  facets:
+    "a durable facet hosted here: `facets.get(name)` · `facets.abort(name, reason?)` resets that one facet",
+  abort:
+    "reset this context: its log and storage stay, its in-memory state, facets and sockets go — `itx.abort(reason?)`; another: `itx.cd(path).abort()`",
   subscriptions: "the rows delivered each commit: `subscriptions.list()`",
   processors: "hosted processors: `processors.enable(name, spec)` · `list()` · `disable(name)`",
   workers: "load code as a stateless worker: `workers.get({ source }).run()`",
@@ -107,14 +110,16 @@ export const BUILT_IN_ROOTS = Object.keys(BUILT_IN_ROOT_DESCRIPTIONS) as readonl
 const BUILT_IN_ROOT_SET: ReadonlySet<string> = new Set<string>(BUILT_IN_ROOTS);
 
 /** THE CONTEXT ROOTS: the built-ins that are a context's OWN — its log, its tables, its facets, the
- *  hosts whose loaded code speaks for it, and where it lives (`whoami`, `url`: information, not a
- *  capability). Implicit in every context (rule 3): nothing else could `append` mean at `/agents/x`,
- *  and a hop for it would land in another log. Everything else in `BUILT_IN_ROOTS` is a PROJECT
- *  resource or an external capability (`fetch`, `ai`, `browser`), implicit at the owner root only. */
+ *  hosts whose loaded code speaks for it, its own reset, and where it lives (`whoami`, `url`:
+ *  information, not a capability). Implicit in every context (rule 3): nothing else could `append`
+ *  or `abort` mean at `/agents/x`, and a hop for it would land in another context. Everything else in
+ *  `BUILT_IN_ROOTS` is a PROJECT resource or an external capability (`fetch`, `ai`, `browser`),
+ *  implicit at the owner root only. */
 export const CONTEXT_ROOTS = [
   "whoami",
   "url",
   "append",
+  "abort",
   "readEvents",
   "waitForEvent",
   "cd",

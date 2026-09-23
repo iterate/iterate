@@ -610,7 +610,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // The facets (context/facet-host.ts): the handle every `itx.facets.get` call walks, and the
     // claim a hosted processor makes on this context's alarm.
     claimFacetAlarm: (name, at) => this.#facetHost.claim(name, at),
-    facets: { get: (name, spec) => this.#facetHost.handle(name, spec) },
+    facets: {
+      get: (name, spec) => this.#facetHost.handle(name, spec),
+      abort: (name, reason) => this.#facetHost.abort(name, reason),
+    },
+    abortAfterTheAnswer: (message) => this.#abortAfterTheAnswer(message),
     schedules: {
       list: () => Object.values(this.#stream.coreReducedState.schedules),
       get: (key) => this.#stream.coreReducedState.schedules[key] ?? null,
@@ -651,6 +655,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     path: this.#durableObjectAddress.path,
     caller: () => this.#caller,
   });
+
+  /** THE RESET `itx.abort` asked for (built-ins.ts — its fact already appended): every write so far
+   *  made durable, then `ctx.abort(message)` one zero-delay turn later, so the call that asked gets
+   *  its answer. `ctx.abort` inside the call would reject that very call with `message` — the
+   *  runtime aborts every request in flight, and no code can catch it — while a timer fires only
+   *  after this turn's microtasks have resolved the answer and the runtime has sent it. Nor can the
+   *  timer keep an idle actor resident: the actor it fires in is the one it resets. Every OTHER call
+   *  in flight here rejects with `message`. */
+  async #abortAfterTheAnswer(message: string): Promise<void> {
+    // An abort breaks the output gate: a write not yet confirmed would go with it, the fact included.
+    await this.ctx.storage.sync();
+    setTimeout(() => this.ctx.abort(message), 0);
+  }
 
   // ── SUBSCRIPTION DELIVERY: the one loop (subscription-delivery.ts), wired to this DO ──
 

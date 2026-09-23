@@ -358,6 +358,8 @@ export class SubscriptionDelivery {
         this.#haltRow(name, row.configuredAtOffset, row.configuredAtOffset, 1, error);
         return;
       }
+      // A catch-up an `itx.facets.abort` cut off is owed by the fresh instance: run it there.
+      if (errorCode(error) === "FACET_ABORTED") return this.#catchUpFacetRow(name, row);
       throw error;
     }
   }
@@ -549,22 +551,27 @@ export class SubscriptionDelivery {
         // checkpointed and nothing else redelivers it, so the restarted facet CATCHES UP from the
         // log — queued behind whatever already waits on this row (a later push heals the same gap
         // on its own; the catch-up is then a no-op). ONE catch-up per timed-out push: a batch that
-        // is slow every time costs two aborts per commit and never loops.
-        if (errorCode(error) === "TIMEOUT") this.#catchUpAfterPushTimeout(name, row);
+        // is slow every time costs two aborts per commit and never loops. A push an
+        // `itx.facets.abort` cut off (FACET_ABORTED) is the same loss, asked for: caught up alike.
+        const code = errorCode(error);
+        if (code === "TIMEOUT" || code === "FACET_ABORTED")
+          this.#catchUpAfterPushTimeout(name, row);
         throw error;
       }
     } catch (error) {
       // NO_FACET is a disable that landed under an in-flight push — the row is gone too.
       // NO_ITX_EXPRESSION_MATCH is a row that DANGLES (its rule removed, or not configured yet): it
       // errors until the rule lands and revives with it, so a push into it is no issue per commit.
+      // FACET_ABORTED is a reset someone asked for, its batch caught up above.
       const code = errorCode(error);
-      if (code !== "NO_FACET" && code !== "NO_ITX_EXPRESSION_MATCH")
+      if (code !== "NO_FACET" && code !== "NO_ITX_EXPRESSION_MATCH" && code !== "FACET_ABORTED")
         reportIssue("subscription-delivery.deliver", error, { name });
     }
   }
 
-  /** The catch-up a timed-out push owes (above): chained, so it runs after this row's in-flight
-   *  delivery and before anything queued later; a catch-up that fails is reported, never retried. */
+  /** The catch-up a timed-out push owes (above), or one an `itx.facets.abort` cut off: chained, so
+   *  it runs after this row's in-flight delivery and before anything queued later; a catch-up that
+   *  fails is reported, never retried. */
   #catchUpAfterPushTimeout(name: string, row: Subscription): void {
     const record = this.#deliveryRecordFor(name);
     record.deliveryChain = record.deliveryChain.then(() =>

@@ -67,6 +67,9 @@ const PAUSE_EXEMPT_EVENT_TYPES = new Set([
   "events.iterate.com/stream/woken",
   "events.iterate.com/stream/paused",
   "events.iterate.com/stream/resumed",
+  // a reset's record (`itx.abort`, `itx.facets.abort`) — a paused context must still be resettable
+  "events.iterate.com/context/aborted",
+  "events.iterate.com/context/facet-aborted",
   "events.iterate.com/stream/append-schedule-cancelled",
   // the delivery loop's own record of a halted row — a paused stream's ladder must still end
   "events.iterate.com/stream/subscription-delivery-halted",
