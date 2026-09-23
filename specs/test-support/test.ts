@@ -44,17 +44,14 @@ export const test = base.extend<{
   };
   page: Awaited<ReturnType<typeof addPagePlugins>>;
 }>({
-  helpers: async ({ baseURL, page }, use) => {
-    if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
+  helpers: async ({ page }, use) => {
     await use({
       createFixture: (slugPrefix, options) =>
         base.step("create project fixture", () =>
-          createForgedProjectFixture(slugPrefix, { baseURL, page, ...options }),
+          createForgedProjectFixture(slugPrefix, { page, ...options }),
         ),
       createSession: (slugPrefix) =>
-        base.step("create signed-in session", () =>
-          createSessionFixture(slugPrefix, { baseURL, page }),
-        ),
+        base.step("create signed-in session", () => createSessionFixture(slugPrefix, { page })),
     });
   },
   page: async ({ page: basePage }, use, testInfo) => {
