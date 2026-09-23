@@ -22,14 +22,15 @@ function urlVars(env: OsNextEnv): Record<string, string> {
   return vars;
 }
 
-/** The zones a deployment owns: those of its own hostnames and its SaaS project-host zones. A custom
- *  hostname under one of these routes on that zone (and gets a DNS record); any other is a Cloudflare
+/** The zones a deployment owns: those of its own hostnames, project-owned custom apexes, and SaaS
+ *  project-host zones. A custom hostname under one of these routes on that zone (and gets a DNS record); any other is a Cloudflare
  *  for SaaS custom hostname (ensure-resources creates it on the first SaaS zone). */
 export function ownZonesOf(env: OsNextEnv): Set<string> {
   return new Set([
     registrableDomainOf(new URL(env.baseUrl).hostname),
     registrableDomainOf(new URL(env.mcpBaseUrl).hostname),
     ...(env.ingressRouting?.type === "subdomains" ? [env.ingressRouting.hostname] : []),
+    ...(env.ownedProjectCustomApexes || []),
     ...(env.cloudflareForSaasProjectHostnameBases || []),
   ]);
 }
