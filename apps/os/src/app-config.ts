@@ -83,6 +83,14 @@ export const AppConfig = z.object({
        *  `fetch` exactly as `<project>.<hostname>` does; the route and the DNS record are the
        *  deployment's (envs.ts). This belongs in the project's own runtime config, not the platform's. */
       temporaryCustomHostnames: z.record(dnsName, z.string().trim().min(1, REQUIRED)).default({}),
+      /** First-level subdomains of this owned zone serve one project's config worker. */
+      projectWildcard: z
+        .object({
+          hostname: dnsName,
+          project: z.string().trim().min(1, REQUIRED),
+          excludedHostnames: z.array(dnsName).optional(),
+        })
+        .optional(),
     })
     .prefault({}),
   /** How a person signs in. Each mechanism is on iff its block is present; `parseAppConfig` refuses a

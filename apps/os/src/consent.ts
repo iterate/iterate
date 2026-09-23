@@ -61,7 +61,7 @@ export type ConsentView =
 /** A platform-served project CIMD client can receive only that project's authority — on a host
  *  under the project hostname base or on a project's custom apex (the same two hostname checks
  *  worker.ts admits a project host with). */
-async function projectsForClient(
+export async function projectsForClient(
   env: Env,
   platformOrigin: string,
   clientId: string,
@@ -73,7 +73,13 @@ async function projectsForClient(
   const host =
     url?.pathname === "/.auth/client.json"
       ? (projectAddressOf(config.urls.ingressRouting, url, platformOrigin) ??
-        customProjectHostOf(url.hostname, config.urls.temporaryCustomHostnames))
+        (url.origin === platformOrigin || url.origin === config.urls.mcp
+          ? null
+          : customProjectHostOf(
+              url.hostname,
+              config.urls.temporaryCustomHostnames,
+              config.urls.projectWildcard,
+            )))
       : null;
   if (!host) return { projects, projectBound: false };
   const project = await directory(env.DB).getProject(host.project);

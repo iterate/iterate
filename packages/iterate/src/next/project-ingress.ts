@@ -70,13 +70,21 @@ export function projectAddressOf(
 /** A CUSTOM HOSTNAME — one of a deployment's own that IS a project's apex (os-next
  *  `urls.temporaryCustomHostnames`, `{ "iterate.com": "iterate" }`): the apex shape, `app: null`, so the
  *  project's config worker `fetch` answers exactly as it does on `<project>.<hostname>`. Null for a
- *  hostname the map does not name — the map's spelling, case and a trailing dot forgiven, no wildcard
- *  under it. Pure. */
+ *  hostname the map does not name, unless the optional first-level wildcard names a project.
+ *  The map's spelling, case and a trailing dot are forgiven. Pure. */
 export function customProjectHostOf(
   hostname: string,
   hostnames: Record<string, string>,
+  wildcard?: { hostname: string; project: string; excludedHostnames?: string[] },
 ): { app: null; project: string } | null {
-  const project = hostnames[hostname.toLowerCase().replace(/\.$/, "")];
+  const normalized = hostname.toLowerCase().replace(/\.$/, "");
+  const exact = hostnames[normalized];
+  if (exact) return { app: null, project: exact };
+  if (wildcard?.excludedHostnames?.includes(normalized)) return null;
+  const suffix = wildcard && `.${wildcard.hostname}`;
+  const wildcardMatch =
+    suffix && normalized.endsWith(suffix) ? normalized.slice(0, -suffix.length) : null;
+  const project = wildcardMatch && !wildcardMatch.includes(".") ? wildcard?.project : null;
   return project ? { app: null, project } : null;
 }
 

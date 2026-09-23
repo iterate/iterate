@@ -76,6 +76,9 @@ export interface OsEnv {
    *  hostname (its registrable domain's zone must exist in the account), ensure-resources the proxied
    *  DNS record. Belongs in the project's own runtime config, not here. */
   temporaryCustomHostnames?: Record<string, string>;
+  /** One first-level wildcard on an owned zone, served as the named project's config-worker apex.
+   *  More specific Worker routes on that zone continue to take precedence. */
+  projectWildcard?: { hostname: string; project: string; excludedHostnames?: string[] };
   /** Registrable domains in this account which host entries in `temporaryCustomHostnames`.
    * They receive their own Worker route and proxied DNS record, rather than becoming a
    * Cloudflare-for-SaaS hostname on a project-host zone. */
@@ -131,6 +134,20 @@ export const osEnvs: Record<string, OsEnv> = {
       "garple.com": "garple",
       "lispwoso.com": "lispwoso",
       "templestein.com": "templestein",
+    },
+    projectWildcard: {
+      hostname: "iterate.com",
+      project: "iterate",
+      // These first-party origins have their own routes and OAuth clients. A missing route must
+      // never make their client IDs look like clients of the cheese-game project at consent.
+      excludedHostnames: [
+        "os.iterate.com",
+        "mcp.iterate.com",
+        "dash.iterate.com",
+        "k.iterate.com",
+        "voice.iterate.com",
+        "install.iterate.com",
+      ],
     },
     ownedProjectCustomApexes: ["iterate.com"],
     cloudflareForSaasProjectHostnameBases: ["iterate.app"],
@@ -213,9 +230,8 @@ export const voiceEnvs = {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
     workerName: "voice",
-    // Its own workers.dev subdomain — NOT a custom domain (iterate.com is the iterate project's
-    // apex, osEnvs.prd.temporaryCustomHostnames). A workers.dev baseUrl adds no custom route (below).
-    baseUrl: "https://voice.iterate.workers.dev",
+    // This exact Worker route takes precedence over the iterate project's *.iterate.com route.
+    baseUrl: "https://voice.iterate.com",
   },
 };
 

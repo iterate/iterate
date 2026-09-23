@@ -70,7 +70,6 @@ test("on workers.dev our own zones are our apps' hosts, not the accounts they sh
     "notes.iterate.workers.dev",
     "os-next-preview.iterate-dev-preview.workers.dev",
     "voice-preview.iterate-dev-preview.workers.dev",
-    "voice.iterate.workers.dev",
   ]);
   // elsewhere, still the whole zone: our origins' and our project wildcard's
   expect(zones).toEqual(expect.arrayContaining(["iterate.com", "iterate.app"]));

@@ -6,6 +6,7 @@ import { appSession } from "iterate/next/app-server";
 import { platformAddressesOf } from "../src/app-config.ts";
 import { directory } from "../src/directory.ts";
 import { browserAuthorization } from "../src/browser-client.ts";
+import { projectsForClient } from "../src/consent.ts";
 import { oauthHelpers } from "../src/oauth.ts";
 import type { Env } from "../src/env.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
@@ -38,6 +39,54 @@ beforeEach(() => {
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
     SELF.fetch(new Request(input, init)),
   );
+});
+
+test("a first-level wildcard CIMD client is bound to its project at consent", async () => {
+  const user = await directory(bindings.DB).upsertUser("wildcard-consent@example.com");
+  const target = await directory(bindings.DB).createProject(
+    { userId: user.id },
+    "wildcard-consent",
+  );
+  await directory(bindings.DB).createProject({ userId: user.id }, "other-consent");
+  const configured = {
+    ...bindings,
+    APP_CONFIG_URLS__PROJECT_WILDCARD: JSON.stringify({
+      hostname: "iterate.com",
+      project: "wildcard-consent",
+      excludedHostnames: [
+        "os.iterate.com",
+        "mcp.iterate.com",
+        "dash.iterate.com",
+        "k.iterate.com",
+        "voice.iterate.com",
+        "install.iterate.com",
+      ],
+    }),
+  } as Env;
+  const bound = await projectsForClient(
+    configured,
+    ORIGIN,
+    "https://www.iterate.com/.auth/client.json",
+    user.id,
+  );
+  expect(bound.projectBound).toBe(true);
+  expect(bound.projects.map((project) => project.id)).toEqual([target.id]);
+  const issuer = await projectsForClient(
+    configured,
+    ORIGIN,
+    `${ORIGIN}/.auth/client.json`,
+    user.id,
+  );
+  expect(issuer.projectBound).toBe(false);
+  for (const hostname of ["os", "mcp", "dash", "k", "voice", "install"]) {
+    const firstParty = await projectsForClient(
+      configured,
+      ORIGIN,
+      `https://${hostname}.iterate.com/.auth/client.json`,
+      user.id,
+    );
+    expect(firstParty.projectBound).toBe(false);
+  }
 });
 afterEach(() => {
   vi.restoreAllMocks();

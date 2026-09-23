@@ -54,6 +54,9 @@ cutover: `https://os.iterate.com/.auth/identity/callback` for Google and
 `APP_CONFIG` email-code sender must use a verified Iterate sending domain. Project ingress and the
 Cloudflare for SaaS fallback use `iterate.app`; custom apexes hosted in other accounts point at
 `cname.iterate.app` and must show an active hostname and certificate on that zone.
+The proxied `*.iterate.com` DNS record and Worker route serve the `iterate` project's config worker;
+named Worker routes such as `os.iterate.com`, `mcp.iterate.com`, `dash.iterate.com`, and
+`k.iterate.com` take precedence. The zone has an active `*.iterate.com` edge certificate.
 
 The Preview OS workflow deploys a platform preview and all four hosted clients (Dash,
 Agents, Notes, Voice); its separate `e2e` job then runs integration and browser checks against

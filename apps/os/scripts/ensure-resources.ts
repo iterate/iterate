@@ -49,6 +49,7 @@ export default async function ensureResources(options: { env?: string } = {}) {
     ...(ctx.env.ingressRouting?.type === "subdomains"
       ? [`*.${ctx.env.ingressRouting.hostname}`]
       : []),
+    ...(ctx.env.projectWildcard ? [`*.${ctx.env.projectWildcard.hostname}`] : []),
     // this account's own custom apexes; the SaaS ones are custom hostnames, below
     ...Object.keys(ctx.env.temporaryCustomHostnames || {}).filter((hostname) =>
       ownZonesOf(ctx.env).has(registrableDomainOf(hostname)),
@@ -75,7 +76,13 @@ export default async function ensureResources(options: { env?: string } = {}) {
         id: string;
         hostname: string;
         status: string;
-        ssl?: { status?: string };
+        ssl?: {
+          status?: string;
+          method?: string;
+          type?: string;
+          wildcard?: boolean;
+          settings?: { min_tls_version?: string };
+        };
       }[]
     >(`/zones/${saasZone!.id}/custom_hostnames?hostname=${encodeURIComponent(hostname)}`);
     const current = existing.find(
@@ -85,9 +92,18 @@ export default async function ensureResources(options: { env?: string } = {}) {
     if (current?.status === "moved" || current?.ssl?.status === "deleted") {
       // A hostname can still exist here after traffic moved to another SaaS zone. Refreshing the
       // same SSL configuration requests DCV again; a mere existence check would leave it moved.
+      if (!current.ssl?.method || !current.ssl.type)
+        throw new Error(`${hostname}: existing custom hostname has no SSL method or type`);
       await ctx.cfV4(`/zones/${saasZone!.id}/custom_hostnames/${current.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ ssl }),
+        body: JSON.stringify({
+          ssl: {
+            method: current.ssl.method,
+            type: current.ssl.type,
+            wildcard: current.ssl.wildcard,
+            settings: current.ssl.settings || ssl.settings,
+          },
+        }),
       });
       console.log(`requested reactivation of custom hostname ${hostname} on ${saasZoneName}`);
       continue;

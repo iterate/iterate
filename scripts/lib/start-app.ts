@@ -80,6 +80,7 @@ export function ownZones(): string[] {
     zones.add(ownOriginZone(env.mcpBaseUrl));
     if (env.dashBaseUrl) zones.add(ownOriginZone(env.dashBaseUrl));
     if (env.ingressRouting?.type === "subdomains") zones.add(env.ingressRouting.hostname);
+    if (env.projectWildcard) zones.add(env.projectWildcard.hostname);
     for (const hostname of Object.keys(env.temporaryCustomHostnames || {})) zones.add(hostname);
   }
   for (const envs of [dashEnvs, agentsEnvs, notesEnvs, voiceEnvs])

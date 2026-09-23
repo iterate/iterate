@@ -52,7 +52,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - id: metadata
         name: Resolve Voice deploy URL
-        run: echo "public_url=https://voice.iterate.workers.dev" >> "$GITHUB_OUTPUT"
+        run: echo "public_url=https://voice.iterate.com" >> "$GITHUB_OUTPUT"
       - name: Deploy apps/voice
         working-directory: apps/voice
         env:
