@@ -101,6 +101,9 @@ export class FacetHost {
   readonly #facetStartupMemoByName = new Map<string, FacetSpec>();
   /** A late failure may only retire the container it called, never its replacement. */
   readonly #facetGenerationByName = new Map<string, number>();
+  /** Each facet's latest recovery (`#recover`), settled either way: the next one starts after it,
+   *  so no restart aborts another recovery's retry mid-call. */
+  readonly #facetRecoveryByName = new Map<string, Promise<void>>();
   /** The in-flight count the test-only `releasePins` respects: aborting a facet mid-REDUCE is exactly the stall a
    *  reduce would have to repair from the log — never cause it. */
   #facetWorkInFlight = 0;
@@ -349,45 +352,101 @@ export class FacetHost {
       try {
         return await this.#call(materialized, name, itxExpressionSteps);
       } catch (error) {
-        const retiredByPeer =
-          error instanceof Error &&
-          error.message === "platform failure at facet start — restarting" &&
-          this.#facetGeneration(name) !== materialized.generation;
-        if ((!isFacetStartPlatformFailure(error) && !retiredByPeer) || materialized.startupFailed())
-          throw error;
-        // The platform failure (the predicate's doc): restart the facet AND retire its loaded
-        // identity (the cached entry is what stays broken), then the call once more, cold. One
-        // extra attempt, never a loop — a second failure is the caller's. The retry re-delivers a
-        // pushed batch: durables are offset-guarded by the engine, ephemerals are not (a duplicate
-        // beats a lost batch; at-least-once is the facet contract). Counted on the facet's row and
-        // logged, never swallowed, so the platform condition stays queryable without a log grep.
-        if (this.#facetGeneration(name) === materialized.generation) {
-          this.#abortFacetIfRunning(
-            name,
-            "platform failure at facet start — restarting",
-            materialized.generation,
-          );
-          this.#liveFacetNames.delete(name);
-          materialized.retireLoadedIdentity?.();
-          const restarts = this.restarts(name) + 1;
-          this.#deps.ctx.storage.kv.put(`facet:${name}:restarts`, restarts);
-          console.warn({
-            event: "facet.platform-failure-retry",
-            namespace: "iterate-context",
-            name,
-            restarts,
-            message: error.message,
-          });
-        }
-        return await this.#call(
-          await this.#materialize(name, firstPartyClassName, facetStartupMemo),
-          name,
-          itxExpressionSteps,
+        if (!this.#isRecoverableFacetFailure(name, error, materialized)) throw error;
+        // The platform failure (the predicate's doc), or a restart for one: recovered below, one
+        // recovery of this facet at a time.
+        return await this.#afterEarlierRecoveries(name, () =>
+          this.#recover(name, firstPartyClassName, facetStartupMemo, itxExpressionSteps, {
+            failedOn: materialized,
+            error,
+          }),
         );
       }
     } finally {
       this.#facetWorkInFlight--;
     }
+  }
+
+  /** A failed call's recovery, bounded: at most ONE retry on a start a peer already put in place,
+   *  and at most ONE restart of the facet for this call — a later failure is the caller's. A call
+   *  that failed on the start still running restarts it, retiring the loaded identity it broke
+   *  under (the cached entry is what stays broken), and retries cold; one whose start is already
+   *  gone — a peer restarted it, the platform failure or the abort text alike — retries on the
+   *  replacement without touching it, so a single failure never turns into a restart per call in
+   *  flight. A replacement can be good for exactly ONE call (prd 2026-09-23: first-party starts
+   *  rejected every call after their first with "internal error; reference = …"), so the second
+   *  attempt may fail the same way; that one gets the call's restart. Recoveries run one at a time
+   *  (`#afterEarlierRecoveries`) so no restart aborts another's retry mid-call; a retry that calls
+   *  back into this same facet and fails waits behind itself until the watchdog ends it. A retry
+   *  re-delivers a pushed batch: durables are offset-guarded by the engine, ephemerals are not (a
+   *  duplicate beats a lost batch; at-least-once is the facet contract). Each restart is counted on
+   *  the facet's row and logged, never swallowed, so the platform condition stays queryable
+   *  without a log grep. */
+  async #recover(
+    name: string,
+    firstPartyClassName: string | undefined,
+    facetStartupMemo: FacetSpec | undefined,
+    itxExpressionSteps: ItxExpression,
+    failure: { failedOn: MaterializedFacet; error: unknown },
+  ): Promise<unknown> {
+    let { failedOn, error } = failure;
+    let retriedOnReplacement = false;
+    let restarted = false;
+    for (;;) {
+      // Removed or reconfigured while this waited: never abort the newer facet (#materialize's check).
+      if (facetStartupMemo && this.#facetStartupMemoByName.get(name) !== facetStartupMemo)
+        throw codedError(
+          "NO_FACET",
+          `facet "${name}" was deleted or reconfigured while it recovered`,
+        );
+      if (this.#facetGeneration(name) !== failedOn.generation) {
+        if (retriedOnReplacement) throw error;
+        retriedOnReplacement = true;
+      } else {
+        if (restarted || !isFacetStartPlatformFailure(error)) throw error;
+        restarted = true;
+        this.#abortFacetIfRunning(
+          name,
+          "platform failure at facet start — restarting",
+          failedOn.generation,
+        );
+        this.#liveFacetNames.delete(name);
+        failedOn.retireLoadedIdentity?.();
+        const restarts = this.restarts(name) + 1;
+        this.#deps.ctx.storage.kv.put(`facet:${name}:restarts`, restarts);
+        console.warn({
+          event: "facet.platform-failure-retry",
+          namespace: "iterate-context",
+          name,
+          restarts,
+          message: error.message,
+        });
+      }
+      const attempt = await this.#materialize(name, firstPartyClassName, facetStartupMemo);
+      try {
+        return await this.#call(attempt, name, itxExpressionSteps);
+      } catch (attemptError) {
+        if (!this.#isRecoverableFacetFailure(name, attemptError, attempt)) throw attemptError;
+        failedOn = attempt;
+        error = attemptError;
+      }
+    }
+  }
+
+  /** The platform failure at facet start (the predicate), or the abort a restart for one sends to
+   *  the calls in flight on the start it retires — never a start whose own startup threw. */
+  #isRecoverableFacetFailure(
+    name: string,
+    error: unknown,
+    attempt: MaterializedFacet,
+  ): error is Error {
+    if (attempt.startupFailed()) return false;
+    if (isFacetStartPlatformFailure(error)) return true;
+    return (
+      error instanceof Error &&
+      error.message === "platform failure at facet start — restarting" &&
+      this.#facetGeneration(name) !== attempt.generation
+    );
   }
 
   /** The container to call, live or cold: the loaded identity (resolved, not loaded) → the
@@ -601,6 +660,20 @@ export class FacetHost {
       throw codedError("NO_FACET", `no facet "${name}" — load a class into it first`);
     this.#facetStartupMemoByName.set(name, facetStartupMemo);
     return facetStartupMemo;
+  }
+
+  /** `recover` once this facet's earlier recoveries settled, its own outcome handed back. */
+  #afterEarlierRecoveries<T>(name: string, recover: () => Promise<T>): Promise<T> {
+    const recovery = (this.#facetRecoveryByName.get(name) ?? Promise.resolve()).then(recover);
+    const settled = recovery.then(
+      () => {},
+      () => {},
+    );
+    this.#facetRecoveryByName.set(name, settled);
+    void settled.then(() => {
+      if (this.#facetRecoveryByName.get(name) === settled) this.#facetRecoveryByName.delete(name);
+    });
+    return recovery;
   }
 
   /** Abort a facet that is running; one that is not (already released, never started) is nothing. */
