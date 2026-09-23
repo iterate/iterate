@@ -38,6 +38,7 @@ import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
   projectUrl,
+  registerProject,
 } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
 
@@ -445,6 +446,133 @@ test("a careless loaded facet the last call left running stops a quiet minute la
   expect(lastBeat - lastCallAt).toBeGreaterThan(30_000);
   expect(lastBeat - lastCallAt).toBeLessThan(90_000);
 }, 180_000);
+
+// ── ONLY OUTSIDE ACTIVITY KEEPS A CONTEXT IN USE ──
+// The sweep's quiet clock restarts on activity from outside the project's loaded code — a session,
+// HTTP, MCP, a claim, an alarm pass — never on loaded code's own calls, which count only while in
+// flight. A careless facet that calls its own context every few seconds keeps that context resident,
+// so no birth would ever reset it; it is reset in place a quiet minute after the last outside call.
+const CHATTY_SOURCE = {
+  "cap.js": `import { FacetDurableObject } from "./processor.js";
+export class ChattyDurableObject extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "chatter"];
+  kept = [];
+  chatter() {
+    const tick = async () => {
+      const itx = this.env.ITX.get();
+      this.kept.push(itx, await itx.append({ type: "chatter" }));
+      setTimeout(tick, 5_000);
+    };
+    void tick();
+    return "chattering";
+  }
+}`,
+};
+
+test("a careless loaded facet calling its own context every 5 s is reset a quiet minute after the last outside call", async () => {
+  const ctx = freshCtx("residency_chatty");
+  expect(
+    await openItx(ctx).invoke([
+      "itx",
+      "facets",
+      ["get", "chatty", { source: CHATTY_SOURCE, className: "ChattyDurableObject" }],
+      ["chatter"],
+    ]),
+  ).toBe("chattering");
+  disposeSessions();
+  await sleep(120_000); // no outside call: the facet's own appends are the context's only callers
+  const chatter = (await readAll(openItx(ctx)))
+    .filter((e: any) => e.type === "chatter")
+    .map((e: any) => Date.parse(e.createdAt));
+  // It chattered past the ~10 s eviction a birth would have needed, and stopped at the sweep.
+  expect(chatter.at(-1)! - chatter[0]!).toBeGreaterThan(40_000);
+  expect(chatter.at(-1)! - chatter[0]!).toBeLessThan(90_000);
+}, 180_000);
+
+// Outside traffic is what keeps a context in use: a loaded facet serving a project host's HTTP every
+// few seconds is the same instance throughout — never reset mid-traffic.
+const SITE_SOURCE = {
+  "cap.js": `import { FacetDurableObject } from "./processor.js";
+export class SiteDurableObject extends FacetDurableObject {
+  id = crypto.randomUUID();
+  fetch() { return new Response(this.id); }
+}`,
+};
+
+deployedOnly(
+  "a loaded facet serving outside HTTP requests every 5 s is never reset mid-traffic",
+  async () => {
+    const slug = freshDnsSafeProjectSlug("residency-site-facet");
+    const projectId = await registerProject(slug);
+    // The session stays open: what `provide` sets is un-done when its session ends.
+    await openItx(projectId).provide("itx.apps.site", [
+      "itx",
+      "facets",
+      ["get", "site", { source: SITE_SOURCE, className: "SiteDurableObject" }],
+    ]);
+    const instances = new Set<string>();
+    const t0 = Date.now();
+    while (Date.now() - t0 < 150_000) {
+      const page = await fetchProjectUrl(projectUrl({ project: slug, app: "site" }));
+      expect(page).toMatchObject({ status: 200 });
+      instances.add(page.text);
+      await sleep(5_000);
+    }
+    expect([...instances]).toHaveLength(1);
+  },
+  240_000,
+);
+
+// A CLAIM'S RELEASE is the last thing the facet's work did, so it arms the sweep again: the sweep
+// may already have run — and disarmed — while the claim held the facet (the voice call that hangs up
+// after a quiet minute is the real case). Here the facet keeps its env.ITX answer and beats a timer
+// into its own storage; its claim holds past the first sweep and is released at 70 s.
+const RELEASER_SOURCE = {
+  "cap.js": `import { FacetDurableObject } from "./processor.js";
+export class ReleaserDurableObject extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "start", "beats"];
+  kept = [];
+  async released(call) {
+    const itx = this.env.ITX.get();
+    const answer = call(itx);
+    try { return await answer; } finally { answer?.[Symbol.dispose]?.(); itx[Symbol.dispose]?.(); }
+  }
+  async start(holdMs) {
+    const name = this.ctx.props.name;
+    await this.released((itx) => itx.processors.claim(name, Date.now() + 600_000));
+    const itx = this.env.ITX.get();
+    this.kept.push(itx, await itx.whoami());
+    const beat = () => { this.ctx.storage.kv.put("lastBeat", Date.now()); setTimeout(beat, 5_000); };
+    beat();
+    setTimeout(async () => {
+      await this.released((itx) => itx.processors.claim(name, null));
+      this.ctx.storage.kv.put("releasedAt", Date.now());
+    }, holdMs);
+    return Date.now();
+  }
+  beats() {
+    return { lastBeat: this.ctx.storage.kv.get("lastBeat"), releasedAt: this.ctx.storage.kv.get("releasedAt") };
+  }
+}`,
+};
+
+test("a careless facet whose claim ends stops a quiet minute after the release, though the sweep ran while the claim held it", async () => {
+  const ctx = freshCtx("residency_released");
+  const releaser = (method: string, ...args: unknown[]) =>
+    openItx(ctx).invoke([
+      "itx",
+      "facets",
+      ["get", "releaser", { source: RELEASER_SOURCE, className: "ReleaserDurableObject" }],
+      [method, ...args],
+    ]);
+  await releaser("start", 70_000);
+  disposeSessions();
+  await sleep(180_000); // nothing from here: the sweep runs at ~60 s, the release lands at 70 s
+  const { lastBeat, releasedAt } = await releaser("beats");
+  // It beat on through its claim and stopped at the sweep the release armed, long before this call.
+  expect(lastBeat - releasedAt).toBeGreaterThan(30_000);
+  expect(lastBeat - releasedAt).toBeLessThan(90_000);
+}, 270_000);
 
 // ── CLAIMED WORK OUTLIVES ITS CONTEXT ON PURPOSE ──
 // Work that must outlive the call that started it runs through `runInBackground`: the processor's

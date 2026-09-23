@@ -68,14 +68,17 @@ const isFacetStartPlatformFailure = (error: unknown): error is Error =>
 /** How long one facet call may take before the facet is aborted (a call that never answers would
  *  hold the pins' release, and with it this actor, forever). */
 const FACET_CALL_WATCHDOG_MS = 60_000;
-/** How long a context that materialized a loaded facet must be quiet — no inbound call, no facet
- *  call, run or pin in flight — before its unclaimed loaded facets are reset
- *  (`resetUnclaimedLoadedFacets`). The deadline is the DO's in-memory `#unclaimedFacetSweepArmedFor`
- *  on its one alarm: a context that evicted on time (~10 s) is woken fresh by it, and that birth does
- *  the reset; a context still resident does it in place. Past the ~10 s eviction and the pins' 30 s
- *  release, so a used context costs ONE extra alarm wake per quiet period — and a facet the last
- *  call left running is billed about a minute, not until the residency watchdog's 15 (measured
- *  2026-09-23: a careless loaded facet billed 60 s of every minute until that wake). */
+/** How long a context that materialized a loaded facet must go without activity from OUTSIDE the
+ *  project's loaded code — an edge session, HTTP, MCP, a sibling's hop, a claim, an alarm pass that
+ *  did work — with no call, facet call, run or pin in flight, before its unclaimed loaded facets are
+ *  reset (`resetUnclaimedLoadedFacets`). A call from loaded code counts while in flight but never
+ *  restarts the wait, so a facet calling its own context more often than it would evict is still
+ *  reset. The deadline is the DO's in-memory `#unclaimedFacetSweepArmedFor` on its one alarm: a
+ *  context that evicted on time (~10 s) is woken fresh by it, and that birth does the reset; a
+ *  context still resident does it in place. Past the ~10 s eviction and the pins' 30 s release, so a
+ *  used context costs ONE extra alarm wake per quiet period — and a facet the last call left running
+ *  is billed about a minute, not until the residency watchdog's 15 (measured 2026-09-23: a careless
+ *  loaded facet billed 60 s of every minute until that wake). */
 export const UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS = 60_000;
 
 /** Each first-party facet's `publicMethods`, read off its class (the class is minted from
