@@ -276,9 +276,9 @@ describe("Depot validation capacity", () => {
 
       const reconcile = job.steps?.find((step) => step.name === "Reconcile dependencies (baked)");
       expect(reconcile?.run).toBe("node scripts/depot-ci/dependencies.mjs install");
-      expect(job.steps?.map((step) => step.name)).not.toEqual(
-        expect.arrayContaining(["Setup pnpm", "Setup Node", "Install Doppler CLI"]),
-      );
+      // Any one of these means the job installs its own toolchain instead of using the baked one.
+      const installSteps = ["Setup pnpm", "Setup Node", "Install Doppler CLI"];
+      expect(job.steps?.filter((step) => installSteps.includes(step.name || ""))).toEqual([]);
     },
   );
 
