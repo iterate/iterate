@@ -171,6 +171,12 @@ export class CarelessHolderDurableObject extends DurableObject {
     this.kept.push(itx, answer);
     return JSON.stringify(answer); // never the answer itself: returning it would hand its release on
   }
+  async keepSiblingSnapshot(path) {
+    const itx = this.env.ITX.get();
+    const answer = await itx.cd(path).facets.get("core").snapshot();
+    this.kept.push(itx, answer);
+    return typeof answer;
+  }
   async keepLiveAndPing(source) {
     const itx = this.env.ITX.get();
     const made = await itx.workers.get({ source }).make();
@@ -203,6 +209,20 @@ test("a facet keeping a loaded worker's live RpcTarget does not keep the context
   // (the risk the rule accepts — identity per verb), so the ping answers from a fresh `Made`.
   expect(await carelessHolder(itx, "keepLiveAndPing", LIVE_WORKER_SOURCE)).toMatch(/^pong-\d+$/);
   expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(IDLES);
+}, 90_000);
+
+// The prd shape (a project site's page load, 2026-09-23): loaded code asks its ROOT for a sibling's
+// facet snapshot, `env.ITX.get().cd('/domain-sales').facets.get(x).snapshot()`. The root's `cd`
+// invokes the sibling, whose answer is data from that hop; forwarded as it arrived, it kept the
+// root resident (sessions 142–2424 s) — and the sibling with it.
+test("a facet keeping a sibling's data answer, handed through the root's cd, keeps neither context resident", async () => {
+  const itx = openItx(freshCtx("residency_careless_sibling"));
+  expect(await carelessHolder(itx, "keepSiblingSnapshot", "/residency-sibling")).toBe("object");
+  const [root, sibling] = await Promise.all([
+    wakesAcrossIdles(itx),
+    wakesAcrossIdles(await itx.cd("/residency-sibling")),
+  ]);
+  expect(Math.min(root, sibling), JSON.stringify({ root, sibling })).toBeGreaterThanOrEqual(IDLES);
 }, 90_000);
 
 // LiveState's documented sink (sdk/index.ts): `{ append: (e) => env.ITX.get().append(e) }` — a fresh

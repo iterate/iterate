@@ -22,6 +22,7 @@ import {
 } from "iterate/next/expression";
 import type { ItxExpressionRewriteRule } from "./itx-expression-rewriting.ts";
 import { BUILT_IN_ROOTS, ItxExpressionResolver } from "./itx-expression-rewriting.ts";
+import { ScopedArtifactRepoRpcTarget, type ArtifactsNamespace } from "./repos.ts";
 
 // Plausible itx expressions in CANONICAL form — exactly what `print` emits (single-quoted strings,
 // unquoted identifier keys, no spaces). Each row is checked BOTH directions.
@@ -594,11 +595,19 @@ describe("an answer leaves a context holding nothing of its session", () => {
       ["itx", "rpcStubs", ["get", "k"]],
     ],
     [
-      "an RpcTarget built here (cfArtifacts.get's repo, a library connection)",
+      "an RpcTarget built here (a library connection)",
       new BuiltHereRpcTarget(),
-      ["itx", "cfArtifacts", ["get", "/e2e/r"]],
+      ["itx", ["connectToMcp", "https://mcp.example"]],
       [],
-      ["itx", "cfArtifacts", ["get", "/e2e/r"]],
+      ["itx", ["connectToMcp", "https://mcp.example"]],
+    ],
+    [
+      // prd 2026-09-23: a root session held one for 24 min, `remote`/`createToken` called on it live
+      "the scoped Artifacts repo `cfArtifacts.get(path)` answers",
+      new ScopedArtifactRepoRpcTarget({} as ArtifactsNamespace, "repos--x", "https://git/x.git"),
+      ["itx", "cfArtifacts", ["get", "/repos/x"]],
+      [],
+      ["itx", "cfArtifacts", ["get", "/repos/x"]],
     ],
     ["a function", () => "called", ["itx", "kv", "get"], [], ["itx", "kv", "get"]],
     [
