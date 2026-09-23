@@ -5,7 +5,11 @@ size: medium
 
 # voice.iterate.com installs voice itself
 
-**Status:** spec only. Nothing implemented yet.
+**Status:** implemented, waiting on the PR preview to run the new spec.
+
+- Done: installer moved to `apps/agents`, the voice page installs voice (key field + button), spec
+  wired into PR previews beside Notes'.
+- Left: the spec's first real run on the preview; then delete this file (iterate dropped `tasks/`).
 
 ## Why
 
@@ -43,20 +47,24 @@ Found while dogfooding self-hosting: voice was installed into a self-hosted proj
 
 ## Checklist
 
-- [ ] Move `install.ts` and `build-voice-install.ts` into `apps/agents`; update Kit, the agents e2e
+- [x] Move `install.ts` and `build-voice-install.ts` into `apps/agents`; update Kit, the agents e2e
       tests (`kit-voice-install.e2e.test.ts` → `voice-install.e2e.test.ts`,
-      `voice-agent.e2e.test.ts`) and READMEs.
-- [ ] apps/voice builds `public/voice-install.json` in `vite.config.ts` (gitignored), as Kit does.
-- [ ] Voice page: the loader reads whether `itx.voice` is configured and whether `/secrets/openai`
-      exists. Not installed → "Install voice" form. Installed → Call.
-- [ ] Install runs `ensureVoiceAgent` with the signed-in project, loading `/voice-install.json`,
-      then invalidates the route.
-- [ ] `call.ts`: the no-`itx.voice` error stops sending people to Kit.
-- [ ] Spec: `apps/voice/specs/voice.spec.ts` + `playwright.config.ts`, like
+      `voice-agent.e2e.test.ts`) and READMEs. _Own commit; also added `fetchVoiceInstall()`, which
+      Kit and voice share._
+- [x] apps/voice builds `public/voice-install.json` in `vite.config.ts` (gitignored), as Kit does.
+      _`writeVoiceInstall(destination)`; the build puts it in `dist/client`._
+- [x] Voice page: the loader reads whether `itx.voice` is configured and whether `/secrets/openai`
+      exists. Not installed → "Install voice" form. Installed → Call. _`InstallVoice` in
+      `projects.$slug.tsx`._
+- [x] Install runs `ensureVoiceAgent` with the signed-in project, loading `/voice-install.json`,
+      then invalidates the route. _A form action via `useActionState`; no effects._
+- [x] `call.ts`: the no-`itx.voice` error stops sending people to Kit. _Now "isn't answering",
+      since Call only shows once installed._
+- [x] Spec: `apps/voice/specs/voice.spec.ts` + `playwright.config.ts`, like
       `apps/notes/specs/notes.spec.ts`: sign in, create a project, install voice with a placeholder
       key, see Call. Run it from `apps/os/scripts/preview.ts` beside the notes spec when the voice
-      preview deploys.
-- [ ] READMEs: apps/voice (install lives here now), apps/kit (Prepare uses the shared installer).
+      preview deploys. _`scripts/ci/depot-workflows.test.ts` asserts the wiring, as for Notes._
+- [x] READMEs: apps/voice (install lives here now), apps/kit (Prepare uses the shared installer).
 
 ## Out of scope
 

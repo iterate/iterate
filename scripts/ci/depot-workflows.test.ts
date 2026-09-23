@@ -145,6 +145,8 @@ describe("Depot deployment safety", () => {
     );
     expect(previewScript).toContain('cwd: path.resolve(ROOT, "../notes")');
     expect(previewScript).toContain("NOTES_BASE_URL: notesPreview.url");
+    expect(previewScript).toContain('cwd: path.resolve(ROOT, "../voice")');
+    expect(previewScript).toContain("VOICE_BASE_URL: voicePreview.url");
   });
 
   test("installs the pinned ESP-IDF release before preparing Kit firmware", () => {

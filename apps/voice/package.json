@@ -12,7 +12,8 @@
     "erase-data": "tsx scripts/app.ts erase-data",
     "routes:generate": "tsx scripts/app.ts generate-route-tree",
     "routes:check": "tsx scripts/app.ts generate-route-tree --check",
-    "test": "vitest run --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts"
+    "test": "vitest run --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
+    "spec": "playwright test"
   },
   "dependencies": {
     "@iterate-com/shared": "workspace:*",

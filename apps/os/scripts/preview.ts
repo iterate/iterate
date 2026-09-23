@@ -641,15 +641,21 @@ async function deployPreview(
     const appPreviews = await Promise.all(
       apps.map((app) => deployAppPreview(app, previewName, url, wrangler.command)),
     );
+    // The apps with a Playwright smoke spec run it against their preview, signed in to this one.
     const notesPreview = appPreviews.find((app) => app.name === "notes");
-    if (notesPreview) {
-      if (process.env.CI)
-        await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], { cwd: ROOT });
+    const voicePreview = appPreviews.find((app) => app.name === "voice");
+    if ((notesPreview || voicePreview) && process.env.CI)
+      await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], { cwd: ROOT });
+    if (notesPreview)
       await runAsync("pnpm", ["spec"], {
         cwd: path.resolve(ROOT, "../notes"),
         env: { DEMO_BASE_URL: url, NOTES_BASE_URL: notesPreview.url },
       });
-    }
+    if (voicePreview)
+      await runAsync("pnpm", ["spec"], {
+        cwd: path.resolve(ROOT, "../voice"),
+        env: { DEMO_BASE_URL: url, VOICE_BASE_URL: voicePreview.url },
+      });
     const summary = {
       previewName,
       url,

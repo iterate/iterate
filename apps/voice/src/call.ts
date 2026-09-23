@@ -51,10 +51,11 @@ export async function startCall(input: {
   ).join("");
   const streamPath = `/agents/voice/web/${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "")}-${activation}`;
   const project = await api.projects.get(projectId);
-  // A project with no voice install has no `itx.voice`: say so before anything is appended.
+  // The page offers Call only once `itx.voice` is configured (it installs voice otherwise): a
+  // service that is there but failing says so before anything is appended.
   await project.invoke(["itx", "voice", ["health"]]).catch((error: unknown) => {
     throw new Error(
-      `This project has no voice agent yet (${error instanceof Error ? error.message : String(error)}). Open https://k.iterate.com and prepare this project to install voice.`,
+      `This project's voice agent isn't answering (${error instanceof Error ? error.message : String(error)}).`,
     );
   });
   const call = (project as unknown as { cd(path: string): CallItx }).cd(streamPath);

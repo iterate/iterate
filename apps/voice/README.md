@@ -20,8 +20,11 @@ end and the relay's live state on screen.
   50 ms PCM16 frames, the playback worklet drains a queue of answer chunks (cleared when the relay
   says so). Modeled on the recorder and stream player of OpenAI's realtime console.
 
-The project needs the voice agent installed (prepare the project at [Kit](https://k.iterate.com)); the page says
-so if it is not.
+A project without a voice agent gets **Install voice** in place of Call: an OpenAI key field if the
+project has no `/secrets/openai`, then `ensureVoiceAgent` (`apps/agents/voice/install.ts`, the
+installer Kit's Prepare runs too) against the install this app serves at `/voice-install.json`,
+written at build time by `apps/agents/scripts/build-voice-install.ts`. It works against any platform
+the app connects to, a self-hosted one included.
 
 ## Run
 
