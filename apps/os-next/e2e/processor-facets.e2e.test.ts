@@ -124,17 +124,16 @@ test("two userspace facet processors reduce side-by-side — user-tally and tall
   await itx.provide("itx.b", "itx.kv");
   await itx.provide("itx.a", null);
 
-  // Both reduce the same 8 durable events (created, woken, 3 configured, 3 rewrite-rule-configured):
-  // an enablement is a subscription-configured event, not a rewrite rule, so rule events = 3. The 3
-  // Each processor has its own configured event.
-  // Checkpoints sit at or past offset 8 (live-state deltas share the offset space).
+  // Both reduce the same 7 durable events (created, woken, 2 configured, 3 rewrite-rule-configured).
+  // An enablement is one subscription-configured event, not a rewrite rule.
+  // Checkpoints sit at or past offset 7 (live-state deltas share the offset space).
   const su = await itx.invoke("itx.facets.get('user-tally').snapshot()");
   expect(su.state?.counts?.[RULE_CONFIGURED]).toBe(3);
-  expect(su.offset).toBeGreaterThanOrEqual(8);
+  expect(su.offset).toBeGreaterThanOrEqual(7);
 
   const sb = await itx.invoke("itx.facets.get('tally').snapshot()");
   expect(sb.state?.counts?.[RULE_CONFIGURED]).toBe(3);
-  expect(sb.offset).toBeGreaterThanOrEqual(8);
+  expect(sb.offset).toBeGreaterThanOrEqual(7);
   expect(sb.state.counts).toEqual(su.state.counts); // the same reduce over the same log
 
   // the subscriptions table lists both processors (rows whose target is a facet's processEventBatch)
