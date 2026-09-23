@@ -29,7 +29,6 @@
     "test": "vitest run --environment node src --reporter=default --reporter=./src/test-support/e2e-policy/retry-telemetry-reporter.ts"
   },
   "dependencies": {
-    "evlog": "^1.8.0",
     "type-fest": "^5.5.0",
     "zod": "4.5.4",
     "pako": "^3.0.1"

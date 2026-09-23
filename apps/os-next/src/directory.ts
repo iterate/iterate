@@ -61,7 +61,7 @@ export interface Project {
 
 /** A project's slug from its name — the ONE slugging (`createProject` here): lowercase,
  *  non-alphanumeric → dash, runs collapsed, ends trimmed. Empty when nothing DNS-safe survives. */
-export const projectSlug = (name: string) =>
+const projectSlug = (name: string) =>
   name
     .trim()
     .toLowerCase()
