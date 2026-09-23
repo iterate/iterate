@@ -126,7 +126,7 @@ export async function rpcResponse(
       () => stop(new Error("Session authorization expired")),
       Math.max(0, until - Date.now()),
     );
-    renewal = setTimeout(async () => {
+    const renew = async () => {
       const started = Date.now();
       // THE PROJECTS THIS SOCKET HOLDS at this tick. One admitted while the reads are in flight
       // passed `reachesProject` itself and is the next tick's to re-check — measured against a list
@@ -148,10 +148,20 @@ export async function rpcResponse(
         until = Math.min(started + 60_000, grant.expiresAt);
         schedule(authorization, grant);
       } catch (error) {
+        // A RETRYABLE READ is asked again, not a lost session: every deploy resets the control
+        // plane's Durable Object, and workerd stamps `retryable: true` on the call it cut. The
+        // retry is bounded by the deadline above — the grant stays good only until `until`, so a
+        // read that keeps failing ends the session there, "Session authorization expired".
+        if ((error as { retryable?: unknown } | null)?.retryable === true && !stopped) {
+          console.warn("oauth.live_authorization_retry", { grantId: grant.grantId, error });
+          renewal = setTimeout(renew, 2_000);
+          return;
+        }
         console.error("oauth.live_authorization_failed", { grantId: grant.grantId, error });
         stop(new Error("Session authorization could not be renewed"));
       }
-    }, 30_000);
+    };
+    renewal = setTimeout(renew, 30_000);
   };
   // Bind the guard to a grant: at once for the upgrade's, at `authenticate` for an in-band one.
   bindSocket = (authorization) => {

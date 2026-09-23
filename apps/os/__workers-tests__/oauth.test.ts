@@ -8,7 +8,8 @@ import type { GrantEnded } from "../src/account/contract.ts";
 import { browserAuthorization } from "../src/browser-client.ts";
 import { projectsForClient } from "../src/consent.ts";
 import { ControlPlane } from "../src/control-plane/edge.ts";
-import { accountStateOf, oauthHelpers } from "../src/oauth.ts";
+import { accountStateOf, authorizationForToken, oauthHelpers } from "../src/oauth.ts";
+import { rpcResponse } from "../src/rpc.ts";
 import type { Env } from "../src/env.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { loginPassword, stub } from "./support.ts";
@@ -475,6 +476,51 @@ test("a socket holding no project re-checks its grant every thirty seconds and r
   // approved the consent): each tick reads its grant on the account and no membership at all.
   expect(membershipReads).not.toHaveBeenCalled();
   expect((await root.whoami()).actor).toBe(flow.user.id); // still live: it holds nothing to lose
+});
+
+test("a live session rides out a deploy's Durable Object reset during its re-check", async () => {
+  const flow = await grant([`${ORIGIN}/api`]);
+  // THE GUARD FROM SOURCE (src/rpc.ts), not through SELF: SELF serves the built worker, whose own
+  // copy of ControlPlane a spy on the source class never sees. Same admission as /api's.
+  const request = new Request(`${ORIGIN}/api`, {
+    headers: { Upgrade: "websocket", Origin: ORIGIN },
+  });
+  const executionContext = createExecutionContext();
+  const authorization = await authorizationForToken(
+    bindings,
+    executionContext,
+    flow.token!.access_token,
+    platformAddressesOf(bindings, request),
+  );
+  const response = await rpcResponse(request, bindings, executionContext, authorization);
+  expect(response).toMatchObject({ status: 101 });
+  response.webSocket!.accept();
+  const transport = newWebSocketRpcSession<IterateRpcTarget>(
+    response.webSocket! as unknown as WebSocket,
+  );
+  sessions.push(transport);
+  const root = transport.authenticate({ type: "from-server-cookie" });
+  using context = await root.projects.get(flow.oauthA.id);
+  await context.invoke("itx.kv.get('live-auth-probe')"); // holds the project: the tick reads membership
+  // What a deploy does to the tick's membership read (prd, 2026-09-23 after #2888): the control
+  // plane's Durable Object is reset for its new code and workerd stamps the cut call retryable.
+  const membershipReads = vi
+    .spyOn(ControlPlane.prototype, "reachableProjects")
+    .mockImplementationOnce(() =>
+      Promise.reject(
+        Object.assign(new Error("Durable Object reset because its code was updated."), {
+          retryable: true,
+          durableObjectReset: true,
+        }),
+      ),
+    );
+  // Real elapsed time: the 30 s tick meets the reset, and its retry 2 s later reads through.
+  await new Promise((resolve) => setTimeout(resolve, 34_000));
+  const reads = membershipReads.mock.calls.length; // mockRestore clears the record
+  membershipReads.mockRestore();
+  expect(reads).toBeGreaterThanOrEqual(2);
+  expect(await root.whoami()).toMatchObject({ actor: flow.user.id });
+  await context.invoke("itx.kv.get('live-auth-probe')"); // the project it holds still answers
 });
 
 test("console and project browsers use the same CIMD flow and independent grants", async () => {
