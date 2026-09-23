@@ -5,7 +5,7 @@
 // names no app and lands on the config worker's `fetch` (the bundled default: 404; a project's own
 // routes it); a label with no rule is a 404; and — deployed — an upgrade rides through the host to the
 // app. The app is one rule row: the log never names a hostname. WHO, on a host: an OAuth bearer stamps the verified
-// principal; credentials never reach the app. Browser cookie flows are in specs/auth.spec.ts. RED, deployed: the hop budget counts only
+// principal; credentials never reach the app. Browser cookie flows are in specs/os/auth.spec.ts. RED, deployed: the hop budget counts only
 // what an app forwards — an app fetching its own host with a FRESH Request is not stopped by it.
 
 import { expect, test } from "vitest";
