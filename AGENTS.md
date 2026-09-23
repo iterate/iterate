@@ -13,7 +13,7 @@ pnpm install
 pnpm dev                 # local OS platform
 pnpm typecheck
 pnpm test
-pnpm spec                # platform browser specs
+pnpm spec                # product browser specs (specs/AGENTS.md)
 ```
 
 Read when relevant:

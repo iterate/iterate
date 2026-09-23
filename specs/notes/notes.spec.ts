@@ -1,10 +1,14 @@
 import { expect } from "@playwright/test";
-import { test } from "../../os/specs/test.ts";
+import { test } from "../test-support/test.ts";
 
 test("sign in, create a project, save a note and read it after reload", async ({
   page,
   baseURL,
 }) => {
+  test.skip(
+    !process.env.NOTES_BASE_URL,
+    "The Notes specs need the Notes app deployed against the platform under test",
+  );
   const stamp = `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}`;
   const slug = `notes-proof-${stamp}`;
   const errors: string[] = [];

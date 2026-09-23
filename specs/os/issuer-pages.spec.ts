@@ -4,7 +4,7 @@
 // DEMO_BASE_URL, a deployment.
 import { expect, type Page } from "@playwright/test";
 import { authorizationCodeRequest } from "iterate/next/oauth";
-import { test } from "./test.ts";
+import { test } from "../test-support/test.ts";
 
 const claudeClient = "https://claude.ai/oauth/claude-code-client-metadata";
 const stamp = () => `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}`;

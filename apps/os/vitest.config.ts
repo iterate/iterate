@@ -16,7 +16,7 @@
 //               files one at a time so scenarios never share the wire; `BENCH_OUT=<file.json>` writes
 //               the raw samples
 // Package test scripts run the Vite build before Vitest starts. Global setup refreshes generated
-// modules for unit tests and fixtures. Browser E2E is Playwright (playwright.config.ts + specs/**).
+// modules for unit tests and fixtures. Browser E2E is the root Playwright suite (specs/AGENTS.md).
 
 import { fileURLToPath } from "node:url";
 import { cloudflareTest } from "@cloudflare/vitest-plugin";

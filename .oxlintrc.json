@@ -246,7 +246,7 @@
       "plugins": ["react"]
     },
     {
-      "files": ["apps/os/specs/**/*.ts"],
+      "files": ["specs/**/*.ts"],
       "rules": {
         "middlewright/prefer-locator-waits": "error",
         "middlewright/prefer-positive-waits": "error",

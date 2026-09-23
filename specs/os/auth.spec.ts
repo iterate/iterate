@@ -10,8 +10,8 @@ import { expect, type BrowserContext, type Page } from "@playwright/test";
 import { newHttpBatchRpcSession } from "capnweb";
 import { transformSync } from "esbuild";
 import { authorizationCodeRequest } from "iterate/next/oauth";
-import type { IterateRpcTarget } from "../src/session.ts";
-import { test } from "./test.ts";
+import type { IterateApi } from "iterate/next/api";
+import { test } from "../test-support/test.ts";
 
 const claudeClient = "https://claude.ai/oauth/claude-code-client-metadata";
 const stamp = () => `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}`;
@@ -114,7 +114,7 @@ test("first Claude consent creates the organization and project on the consent p
   // a slug the deployment's own organization holds — the onboarding step's refused first try below
   const takenSlug = `taken-${stamp()}`;
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
-  using operator = newHttpBatchRpcSession<IterateRpcTarget>(
+  using operator = newHttpBatchRpcSession<IterateApi>(
     new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminSecret(origin)}` } }),
   );
   using _taken = await operator
@@ -327,7 +327,7 @@ test("first Claude consent creates the organization and project on the consent p
     // which alone a project is addressed (the page showed their slugs).
     const headers = await cookieHeaders(context, origin);
     // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory assertion after the UI flow.
-    using api = newHttpBatchRpcSession<IterateRpcTarget>(new Request(`${origin}/api`, { headers }));
+    using api = newHttpBatchRpcSession<IterateApi>(new Request(`${origin}/api`, { headers }));
     const session = api.authenticate({ type: "from-server-cookie" });
     const [inventory, orgs, listed] = await Promise.all([
       session.grants.list(),
@@ -389,12 +389,12 @@ test("the Notes app works on its own origin and through a project config worker"
   // hands the config worker x-iterate-app: notes), not the apex — the apex has no app label.
   const appOrigin = projectOrigin.replace(`${project}.`, `notes--${project}.`);
   const source = transformSync(
-    readFileSync(resolve(import.meta.dirname, "../../../apps/notes/config-worker.ts"), "utf8"),
+    readFileSync(resolve(import.meta.dirname, "../../apps/notes/config-worker.ts"), "utf8"),
     { loader: "ts", format: "esm" },
   ).code;
   // Install the repository's actual config-worker source, preserving its auth.require gate.
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- One operator fixture installs the proxy; all app interactions are real browser RPC.
-  using operator = newHttpBatchRpcSession<IterateRpcTarget>(
+  using operator = newHttpBatchRpcSession<IterateApi>(
     new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminSecret(origin)}` } }),
   );
   const projectContext = operator

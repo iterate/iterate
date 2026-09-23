@@ -645,8 +645,9 @@ async function deployPreview(
     if (notesPreview) {
       if (process.env.CI)
         await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], { cwd: ROOT });
-      await runAsync("pnpm", ["spec"], {
-        cwd: path.resolve(ROOT, "../notes"),
+      // the root suite's notes project (specs/AGENTS.md), against this preview's Notes app
+      await runAsync("pnpm", ["spec", "--project", "notes"], {
+        cwd: path.resolve(ROOT, "../.."),
         env: { DEMO_BASE_URL: url, NOTES_BASE_URL: notesPreview.url },
       });
     }
@@ -722,19 +723,21 @@ const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, st
     }
   : { specs: {}, "preview-e2e": {} };
 
-/** THE PROOF: the vitest e2e suite and the Playwright specs, both in deployed-target mode against
- *  the preview, side by side — the same two suites deploy-os-next.yml and `pnpm spec` know. Each
- *  runner derives the deployed target itself (e2e/support/deployed-target.ts, from the `APP_CONFIG`
- *  in this process's environment and the parent's envs.ts entry): the vitest suite in its
- *  global-setup, the specs in playwright.config.ts. vitest streams; Playwright's report prints
- *  after it. */
+/** THE PROOF: the vitest e2e suite and the root Playwright specs (specs/AGENTS.md), both in
+ *  deployed-target mode against the preview, side by side — the same two suites deploy-os-next.yml
+ *  and `pnpm spec` know. Each runner derives the deployed target itself
+ *  (e2e/support/deployed-target.ts, from the `APP_CONFIG` in this process's environment and the
+ *  parent's envs.ts entry): the vitest suite in its global-setup, the specs in specs/setup.ts. The
+ *  notes project ran after the deploy, against the Notes preview. vitest streams; Playwright's
+ *  report prints after it. */
 async function runE2e(previewName: string): Promise<void> {
   const url = previewUrl(previewName);
   const env = { WORKER_BASE_URL: url, DEMO_BASE_URL: url };
   const spec = (async () => {
     if (process.env.CI)
       await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], { cwd: ROOT });
-    return run("pnpm", ["spec"], {
+    return run("pnpm", ["spec", "--project", "os", "--project", "os-phone", "--project", "suite"], {
+      cwd: path.resolve(ROOT, "../.."),
       env: { ...process.env, ...env, ...PREVIEW_SUITE_TELEMETRY.specs },
     });
   })();

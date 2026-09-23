@@ -5,11 +5,12 @@
 // specs; sign-in is the page's password post, so it works local and deployed.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 import { transformSync } from "esbuild";
 // eslint-disable-next-line iterate/no-capnweb-http-batch -- one bounded operator fixture installs the app; the app itself uses real browser RPC.
 import { newHttpBatchRpcSession } from "capnweb";
-import type { IterateRpcTarget } from "../src/session.ts";
+import type { IterateApi } from "iterate/next/api";
+import { test } from "../test-support/test.ts";
 
 const adminSecret = process.env.ADMIN_API_SECRET || "dev-admin-api-secret";
 /** The deployment's sign-in password: the local worker's (scripts/dev.ts), else the run's. */
@@ -35,7 +36,7 @@ test("a no-build mini-app served by a project persists a note through its own ca
   // Create the project as that user, over /api with the admin bearer on the POST (the platform has no
   // dashboard: creating a project is the OS app's or a script's — here the fixture's).
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
-  using owner = newHttpBatchRpcSession<IterateRpcTarget>(
+  using owner = newHttpBatchRpcSession<IterateApi>(
     new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminSecret}` } }),
   );
   // one pipelined round trip (an HTTP batch session ends with its first): create the project and
@@ -65,11 +66,11 @@ test("a no-build mini-app served by a project persists a note through its own ca
   // Install the mini-app as an app label — ONE rewrite rule. (An operator fixture here; a project
   // owner would run the same provide() through their own session.)
   const source = transformSync(
-    readFileSync(resolve(import.meta.dirname, "../examples/mini-app.ts"), "utf8"),
+    readFileSync(resolve(import.meta.dirname, "../../apps/os/examples/mini-app.ts"), "utf8"),
     { loader: "ts", format: "esm" },
   ).code;
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
-  using operator = newHttpBatchRpcSession<IterateRpcTarget>(
+  using operator = newHttpBatchRpcSession<IterateApi>(
     new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminSecret}` } }),
   );
   await operator

@@ -3,8 +3,8 @@ import type { KnipConfig } from "knip";
 type WorkspaceConfig = NonNullable<KnipConfig["workspaces"]>[string];
 
 function makeOsNextWorkspace(): WorkspaceConfig {
-  // The os-next platform worker. Knip's vitest and Playwright plugins read vitest.config.ts (its
-  // global setups) and playwright.config.ts; the rest are entries here.
+  // The os-next platform worker. Knip's vitest plugin reads vitest.config.ts (its global
+  // setups); the rest are entries here. The browser specs are the root suite (specs/AGENTS.md).
   return {
     entry: [
       "src/worker.ts!",
@@ -14,7 +14,6 @@ function makeOsNextWorkspace(): WorkspaceConfig {
       "e2e/**/*.e2e.test.ts",
       "__workers-tests__/**/*.ts",
       "bench/**/*.ts",
-      "specs/**/*.ts",
       "src/**/*.test.ts",
       // the node programs: build/dev/deploy/preview and the voice operator tools
       "scripts/*.ts",
@@ -27,7 +26,6 @@ function makeOsNextWorkspace(): WorkspaceConfig {
       "e2e/**/*.ts",
       "__workers-tests__/**/*.ts",
       "bench/**/*.ts",
-      "specs/**/*.ts",
     ],
     // `cloudflare:workers` parses as the "cloudflare" package. Tailwind is imported by
     // src/styles.css, which knip does not read.
