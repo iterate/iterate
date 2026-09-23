@@ -1,17 +1,14 @@
 // Browser acceptance for the current OAuth contract. Google identity proof is covered separately;
 // the sign-in page's password step (`login.password`, src/app-config.ts — the local worker's is
 // scripts/dev.ts's, a deployment's is handed to the run as LOGIN_PASSWORD) is how these sign in.
-import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { resolve } from "node:path";
 import { expect, type BrowserContext, type Page } from "@playwright/test";
 // eslint-disable-next-line iterate/no-capnweb-http-batch -- Bounded fixture setup; browser actions use the app's real WebSocket.
 import { newHttpBatchRpcSession } from "capnweb";
-import { transformSync } from "esbuild";
 import { authorizationCodeRequest } from "iterate/next/oauth";
-import type { IterateRpcTarget } from "../src/session.ts";
-import { test } from "./test.ts";
+import type { IterateApi } from "iterate/next/api";
+import { test } from "../test-support/test.ts";
 
 const claudeClient = "https://claude.ai/oauth/claude-code-client-metadata";
 const stamp = () => `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}`;
@@ -36,7 +33,9 @@ async function signIn(page: Page, origin: string, email: string, _next = "/") {
   if (!(await password.isVisible()))
     await page.getByRole("button", { name: "Use password instead", exact: true }).click();
   await password.fill(loginPassword(origin));
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  // noWaitAfter: the post navigates; the next locator waits for it (the spinner-waiter counts a
+  // navigation in flight as loading), not the click's tight action timeout
+  await page.getByRole("button", { name: "Sign in", exact: true }).click({ noWaitAfter: true });
 }
 
 async function cookieHeaders(context: BrowserContext, origin: string) {
@@ -114,7 +113,7 @@ test("first Claude consent creates the organization and project on the consent p
   // a slug the deployment's own organization holds — the onboarding step's refused first try below
   const takenSlug = `taken-${stamp()}`;
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- bounded fixture setup
-  using operator = newHttpBatchRpcSession<IterateRpcTarget>(
+  using operator = newHttpBatchRpcSession<IterateApi>(
     new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminSecret(origin)}` } }),
   );
   using _taken = await operator
@@ -183,6 +182,9 @@ test("first Claude consent creates the organization and project on the consent p
     await page
       .getByRole("heading", { name: "Claude Code wants to access your account", exact: true })
       .waitFor();
+    // the client's heading stands on every step; the permissions step's own heading is what the
+    // project, once created, opens ("Creating project…" shows meanwhile)
+    await page.getByRole("heading", { name: "Review permissions", exact: true }).waitFor();
     const approve = page.getByRole("button", { name: "Authorize", exact: true });
     // Task-based consent: `iterate` is fixed, the account permission is optional — untick it; the
     // choice survives every round trip below and the grant carries `iterate` alone.
@@ -300,7 +302,7 @@ test("first Claude consent creates the organization and project on the consent p
     // form post, so it opens no /api socket.
     expect(sockets.filter((url) => new URL(url).pathname === "/api")).toHaveLength(0);
     await page.screenshot({ path: test.info().outputPath("first-consent.png"), fullPage: true });
-    await approve.click();
+    await approve.click({ noWaitAfter: true });
     await page
       .getByRole("heading", { name: "Claude authorization completed", exact: true })
       .waitFor();
@@ -327,7 +329,7 @@ test("first Claude consent creates the organization and project on the consent p
     // which alone a project is addressed (the page showed their slugs).
     const headers = await cookieHeaders(context, origin);
     // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded inventory assertion after the UI flow.
-    using api = newHttpBatchRpcSession<IterateRpcTarget>(new Request(`${origin}/api`, { headers }));
+    using api = newHttpBatchRpcSession<IterateApi>(new Request(`${origin}/api`, { headers }));
     const session = api.authenticate({ type: "from-server-cookie" });
     const [inventory, orgs, listed] = await Promise.all([
       session.grants.list(),
@@ -359,118 +361,4 @@ test("first Claude consent creates the organization and project on the consent p
       listener.close((error) => (error ? reject(error) : resolve())),
     );
   }
-});
-
-test("the Notes app works on its own origin and through a project config worker", async ({
-  page,
-  context,
-  baseURL,
-}) => {
-  test.skip(
-    !process.env.NOTES_BASE_URL,
-    "This acceptance case needs the independently deployed Notes worker",
-  );
-  const origin = new URL(baseURL!).origin;
-  const notesOrigin = new URL(process.env.NOTES_BASE_URL!).origin;
-  const email = `notes-${stamp()}@example.com`;
-  const project = `notes-${stamp()}`;
-  const note = `Written on the independent app: ${stamp()}`;
-  // the note's textbox is named by the file it edits (apps/notes/src/routes/_auth/notes.tsx)
-  const noteFile = "/repos/config/notes/log.md";
-  await page.goto(`${origin}/login`);
-  await signIn(page, origin, email);
-  await page.getByRole("textbox", { name: "New project" }).fill(project);
-  await page.getByRole("button", { name: "Create project", exact: true }).click();
-  await page.getByRole("link", { name: "open", exact: true }).waitFor();
-  const projectOrigin = new URL(
-    (await page.getByRole("link", { name: "open", exact: true }).getAttribute("href"))!,
-  ).origin;
-  // The notes app on this project is served at the app-slug host notes--<project>.<base> (the edge
-  // hands the config worker x-iterate-app: notes), not the apex — the apex has no app label.
-  const appOrigin = projectOrigin.replace(`${project}.`, `notes--${project}.`);
-  const source = transformSync(
-    readFileSync(resolve(import.meta.dirname, "../../../apps/notes/config-worker.ts"), "utf8"),
-    { loader: "ts", format: "esm" },
-  ).code;
-  // Install the repository's actual config-worker source, preserving its auth.require gate.
-  // eslint-disable-next-line iterate/no-capnweb-http-batch -- One operator fixture installs the proxy; all app interactions are real browser RPC.
-  using operator = newHttpBatchRpcSession<IterateRpcTarget>(
-    new Request(`${origin}/api`, { headers: { authorization: `Bearer ${adminSecret(origin)}` } }),
-  );
-  const projectContext = operator
-    .authenticate({ type: "admin-secret", secret: adminSecret(origin) })
-    .projects.get(project);
-  // Both rules in ONE batch (an HTTP-batch session is one-shot): install the config worker, and point
-  // the `notes` app label at it — so notes--<project>.<base> reaches the config worker with the app
-  // slug in x-iterate-app, and it fetches through to the Notes worker.
-  await Promise.all([
-    projectContext.append({
-      type: "events.iterate.com/project/ingress-configured",
-      payload: { target: ["itx", "workers", ["get", { source: { "cap.js": source } }]] },
-    }),
-    projectContext.provide("itx.apps.notes", [
-      "itx",
-      "workers",
-      ["get", { source: { "cap.js": source } }],
-    ]),
-  ]);
-  await page.goto(notesOrigin);
-  await page.getByRole("link", { name: "Log in with iterate", exact: true }).click();
-  await page
-    .getByRole("heading", {
-      name: `${new URL(notesOrigin).host} wants to access your account`,
-      exact: true,
-    })
-    .waitFor();
-  await page.getByRole("button", { name: "Review permissions", exact: true }).click();
-  await page.getByRole("button", { name: "Authorize", exact: true }).click();
-  await page.getByRole("textbox", { name: noteFile, exact: true }).fill(note);
-  await page.getByRole("button", { name: "Save", exact: true }).click();
-  await page
-    .getByRole("status")
-    .filter({ hasText: /^Committed / })
-    .waitFor();
-  await page.reload();
-  expect(await page.getByRole("textbox", { name: noteFile, exact: true }).inputValue()).toBe(note);
-  await page.goto(`${appOrigin}/notes`);
-  await page
-    .getByRole("heading", {
-      name: `${new URL(appOrigin).host} wants to access your account`,
-      exact: true,
-    })
-    .waitFor();
-  await page.getByRole("button", { name: "Review permissions", exact: true }).click();
-  await page.getByRole("button", { name: "Authorize", exact: true }).click();
-  expect(await page.getByRole("textbox", { name: noteFile, exact: true }).inputValue()).toBe(note);
-  await page
-    .getByRole("textbox", { name: noteFile, exact: true })
-    .fill(`${note}; edited through the project proxy`);
-  await page.getByRole("button", { name: "Save", exact: true }).click();
-  await page
-    .getByRole("status")
-    .filter({ hasText: /^Committed / })
-    .waitFor();
-  await page.goto(`${notesOrigin}/notes`);
-  expect(await page.getByRole("textbox", { name: noteFile, exact: true }).inputValue()).toBe(
-    `${note}; edited through the project proxy`,
-  );
-  await page.goto(`${origin}/sessions`);
-  const appSession = page.getByRole("row").filter({ hasText: new URL(appOrigin).host });
-  await appSession.getByRole("button", { name: "Log out", exact: true }).click();
-  await page.goto(`${appOrigin}/notes`);
-  await page
-    .getByRole("heading", {
-      name: `${new URL(appOrigin).host} wants to access your account`,
-      exact: true,
-    })
-    .waitFor();
-  // The independently granted Notes session remains usable after proxy revocation.
-  await page.goto(`${notesOrigin}/notes`);
-  await page.getByRole("textbox", { name: noteFile, exact: true }).waitFor();
-  const cookies = await context.cookies();
-  expect(
-    cookies
-      .filter((cookie) => cookie.name.startsWith("__Host-itx-session"))
-      .every((cookie) => cookie.httpOnly && cookie.secure),
-  ).toBe(true);
 });

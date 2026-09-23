@@ -1,7 +1,7 @@
 // Start client navigation is exercised in Chromium. The phone project covers the issuer pages'
 // server-rendered flows; it does not wait for client hydration.
 import { expect } from "@playwright/test";
-import { test } from "./test.ts";
+import { test } from "../test-support/test.ts";
 
 test("client navigation loads sign-in through its server function and rejects malformed payloads", async ({
   page,

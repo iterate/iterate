@@ -641,21 +641,6 @@ async function deployPreview(
     const appPreviews = await Promise.all(
       apps.map((app) => deployAppPreview(app, previewName, url, wrangler.command)),
     );
-    // The apps with a Playwright smoke spec run it against their preview, signed in to this one.
-    const notesPreview = appPreviews.find((app) => app.name === "notes");
-    const voicePreview = appPreviews.find((app) => app.name === "voice");
-    if ((notesPreview || voicePreview) && process.env.CI)
-      await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], { cwd: ROOT });
-    if (notesPreview)
-      await runAsync("pnpm", ["spec"], {
-        cwd: path.resolve(ROOT, "../notes"),
-        env: { DEMO_BASE_URL: url, NOTES_BASE_URL: notesPreview.url },
-      });
-    if (voicePreview)
-      await runAsync("pnpm", ["spec"], {
-        cwd: path.resolve(ROOT, "../voice"),
-        env: { DEMO_BASE_URL: url, VOICE_BASE_URL: voicePreview.url },
-      });
     const summary = {
       previewName,
       url,
@@ -728,20 +713,33 @@ const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, st
     }
   : { specs: {}, "preview-e2e": {} };
 
-/** THE PROOF: the vitest e2e suite and the Playwright specs, both in deployed-target mode against
- *  the preview, side by side — the same two suites deploy-os-next.yml and `pnpm spec` know. Each
- *  runner derives the deployed target itself (e2e/support/deployed-target.ts, from the `APP_CONFIG`
- *  in this process's environment and the parent's envs.ts entry): the vitest suite in its
- *  global-setup, the specs in playwright.config.ts. vitest streams; Playwright's report prints
- *  after it. */
+/** THE PROOF: the vitest e2e suite and the root Playwright specs (specs/AGENTS.md), both in
+ *  deployed-target mode against the preview, side by side — the same two suites deploy-os-next.yml
+ *  and `pnpm spec` know. Each runner derives the deployed target itself
+ *  (e2e/support/deployed-target.ts, from the `APP_CONFIG` in this process's environment and the
+ *  parent's envs.ts entry): the vitest suite in its global-setup, the specs in specs/setup.ts. Every
+ *  spec project runs, the notes and voice projects against this preview's Notes and Voice apps
+ *  (NOTES_BASE_URL, VOICE_BASE_URL; their specs fail in CI without them). vitest streams;
+ *  Playwright's report prints after it. */
 async function runE2e(previewName: string): Promise<void> {
   const url = previewUrl(previewName);
   const env = { WORKER_BASE_URL: url, DEMO_BASE_URL: url };
+  const notes = APPS.find((app) => app.name === "notes")!;
+  const voice = APPS.find((app) => app.name === "voice")!;
   const spec = (async () => {
     if (process.env.CI)
-      await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], { cwd: ROOT });
+      await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], {
+        cwd: path.resolve(ROOT, "../.."),
+      });
     return run("pnpm", ["spec"], {
-      env: { ...process.env, ...env, ...PREVIEW_SUITE_TELEMETRY.specs },
+      cwd: path.resolve(ROOT, "../.."),
+      env: {
+        ...process.env,
+        ...env,
+        NOTES_BASE_URL: appPreviewUrl(notes, previewName),
+        VOICE_BASE_URL: appPreviewUrl(voice, previewName),
+        ...PREVIEW_SUITE_TELEMETRY.specs,
+      },
     });
   })();
   // The deployed target needs no local Vite build. Keep the preview's built dist/ intact while

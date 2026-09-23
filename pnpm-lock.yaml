@@ -60,9 +60,15 @@ importers:
       '@types/node':
         specifier: ^24.10.1
         version: 24.11.0
+      capnweb:
+        specifier: npm:@iterate-com/capnweb@^0.12.2
+        version: '@iterate-com/capnweb@0.12.2'
       dedent:
         specifier: ^1.7.0
         version: 1.7.2
+      esbuild:
+        specifier: ^0.27.4
+        version: 0.27.4
       eslint-plugin-codegen:
         specifier: 0.34.1
         version: 0.34.1(eslint@9.39.3(jiti@2.7.0))
@@ -120,6 +126,9 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      zod:
+        specifier: 4.5.4
+        version: 4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5)
 
   apps/agents:
     dependencies:
@@ -528,9 +537,6 @@ importers:
       esbuild:
         specifier: ^0.27.4
         version: 0.27.4
-      middlewright:
-        specifier: https://pkg.pr.new/middlewright@e3f2374
-        version: https://pkg.pr.new/middlewright@e3f2374(@playwright/test@1.60.0)
       trpc-cli:
         specifier: 0.15.1
         version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5))
