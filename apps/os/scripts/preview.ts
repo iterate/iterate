@@ -673,6 +673,28 @@ async function deleteAll(cf: Cf, previewName: string): Promise<void> {
   }
 }
 
+/** Each suite's test telemetry identity, pinned rather than read from pnpm's ambient package name:
+ *  the workspace is what the CI finalizer (`upload-test-telemetry.ts --flake-suites preview`, which
+ *  expects exactly these two workspaces) and scripts/ci/flake-suite-summary.ts match a suite by, and
+ *  each suite records its flake lines into its own `flake-records-<suite>` directory (relative to
+ *  GITHUB_WORKSPACE). Only when the workflow asks for telemetry (TEST_TELEMETRY_ARTIFACT_DIR): a run
+ *  from a laptop records nothing. */
+const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, string>> = process.env
+  .TEST_TELEMETRY_ARTIFACT_DIR
+  ? {
+      specs: {
+        TEST_TELEMETRY_WORKSPACE: "iterate-root",
+        FLAKE_RECORD_DIR: "test-results/flake-records/specs",
+      },
+      "preview-e2e": {
+        TEST_TELEMETRY_WORKSPACE: "os",
+        TEST_TELEMETRY_KIND: "e2e",
+        TEST_TELEMETRY_LANE: "vitest",
+        FLAKE_RECORD_DIR: "test-results/flake-records/preview-e2e",
+      },
+    }
+  : { specs: {}, "preview-e2e": {} };
+
 /** THE PROOF: the vitest e2e suite and the Playwright specs, both in deployed-target mode against
  *  the preview, side by side — the same two suites deploy-os-next.yml and `pnpm spec` know. Each
  *  runner derives the deployed target itself (e2e/support/deployed-target.ts, from the `APP_CONFIG`
@@ -685,10 +707,14 @@ async function runE2e(previewName: string): Promise<void> {
   const spec = (async () => {
     if (process.env.CI)
       await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], { cwd: ROOT });
-    return run("pnpm", ["spec"], { env: { ...process.env, ...env } });
+    return run("pnpm", ["spec"], {
+      env: { ...process.env, ...env, ...PREVIEW_SUITE_TELEMETRY.specs },
+    });
   })();
   // The deployed target needs no local Vite build. Keep the preview's built dist/ intact while
   // Playwright runs beside Vitest; the package's local `e2e` script intentionally rebuilds it.
+  // The reporters are the `e2e` script's: the retry telemetry reporter records first attempts
+  // that failed.
   const e2e = runAsync(
     "pnpm",
     [
@@ -700,8 +726,10 @@ async function runE2e(previewName: string): Promise<void> {
       "--project",
       "e2e",
       "--sequence.concurrent",
+      "--reporter=default",
+      "--reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     ],
-    { cwd: ROOT, env },
+    { cwd: ROOT, env: { ...env, ...PREVIEW_SUITE_TELEMETRY["preview-e2e"] } },
   ).then(
     () => true,
     (error: unknown) => {

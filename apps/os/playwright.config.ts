@@ -34,7 +34,9 @@ export default defineConfig({
   fullyParallel: true,
   workers: process.env.CI ? 6 : undefined,
   retries: process.env.CI ? 1 : 0,
-  reporter: "list",
+  // The telemetry reporter writes the canonical test artifact and the retried-pass flake records
+  // the preview's CI finalizer uploads (docs/testing.md#flakes-and-pinned-failures).
+  reporter: [["list"], ["../../scripts/ci/playwright-telemetry-reporter.ts"]],
   use: {
     baseURL,
     trace: "on-first-retry",
