@@ -5,7 +5,7 @@
 // LITERAL request appended by anyone runs the same way. A run the context's restart interrupted is
 // settled `interrupted` by the wake record — never re-run — which only the workers project can
 // prove (the context is aborted mid-run). The ten-minute DEADLINE is pinned with fake timers in
-// src/library.test.ts: this lane cannot fake the loaded isolate's clock.
+// src/library.test.ts: inside workerd a test cannot fake the loaded isolate's clock.
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { beforeAll, expect, test } from "vitest";
 import type { StreamEvent } from "iterate/next/stream/processor";
