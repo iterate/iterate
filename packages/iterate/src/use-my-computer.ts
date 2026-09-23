@@ -4,39 +4,69 @@ import { RpcTarget } from "capnweb";
 import { run } from "./run-command.ts";
 import type { connectOsNext } from "./next-node.ts";
 
+type ComputerEvent =
+  | { type: "status"; loggedIn: true; name: string }
+  | { type: "call"; id: number; method: string; summary: string }
+  | { type: "call-done"; id: number; ok: boolean };
+
 /** Methods run locally with the authority of the person sharing this Mac. */
 export class MyComputer extends RpcTarget {
+  #emit: (event: ComputerEvent) => void;
+  #nextCall = 0;
+
+  constructor(emit: (event: ComputerEvent) => void = () => {}) {
+    super();
+    this.#emit = emit;
+  }
+
+  async #call<T>(method: string, summary: string, operation: () => Promise<T>): Promise<T> {
+    const id = ++this.#nextCall;
+    this.#emit({ type: "call", id, method, summary: summary.slice(0, 160) });
+    let ok = false;
+    try {
+      const result = await operation();
+      ok = true;
+      return result;
+    } finally {
+      this.#emit({ type: "call-done", id, ok });
+    }
+  }
+
   /** Pop a native dialog on screen and return which button the human clicked. */
   async ask({ question, buttons = ["No", "Yes"] }: { question: string; buttons?: string[] }) {
-    // AppleScript's `display dialog` supports one to three buttons.
-    if (buttons.length < 1 || buttons.length > 3) {
-      throw new Error("ask() needs 1–3 buttons (AppleScript dialogs cap at three).");
-    }
-    const buttonList = buttons.map((b) => `"${escapeForAppleScript(b)}"`).join(", ");
-    const { stdout } = await osascript(
-      `display dialog "${escapeForAppleScript(question)}" ` +
-        // Default to the FIRST button (the caller's safe/decline option, "No" by
-        // default): this can run arbitrary local Swift, so an accidental Return
-        // must not confirm.
-        `buttons {${buttonList}} default button "${escapeForAppleScript(buttons[0]!)}" ` +
-        `with title "iterate · myComputer"`,
-    );
-    // osascript prints e.g. `button returned:Yes` — hand back just the choice.
-    return { answer: stdout.trim().replace(/^button returned:/, "") };
+    return this.#call("ask", question, async () => {
+      // AppleScript's `display dialog` supports one to three buttons.
+      if (buttons.length < 1 || buttons.length > 3) {
+        throw new Error("ask() needs 1–3 buttons (AppleScript dialogs cap at three).");
+      }
+      const buttonList = buttons.map((b) => `"${escapeForAppleScript(b)}"`).join(", ");
+      const { stdout } = await osascript(
+        `display dialog "${escapeForAppleScript(question)}" ` +
+          // Default to the FIRST button (the caller's safe/decline option, "No" by
+          // default): this can run arbitrary local Swift, so an accidental Return
+          // must not confirm.
+          `buttons {${buttonList}} default button "${escapeForAppleScript(buttons[0]!)}" ` +
+          `with title "iterate · myComputer"`,
+      );
+      // osascript prints e.g. `button returned:Yes` — hand back just the choice.
+      return { answer: stdout.trim().replace(/^button returned:/, "") };
+    });
   }
 
   /** Show a desktop notification. */
   async notify({ message, title = "iterate" }: { message: string; title?: string }) {
-    await osascript(
-      `display notification "${escapeForAppleScript(message)}" with title "${escapeForAppleScript(title)}"`,
-    );
-    return { ok: true as const };
+    return this.#call("notify", message, async () => {
+      await osascript(
+        `display notification "${escapeForAppleScript(message)}" with title "${escapeForAppleScript(title)}"`,
+      );
+      return { ok: true as const };
+    });
   }
 
   /** Run arbitrary Swift and return its output — full power, when an agent needs it. */
   async runSwift({ code }: { code: string }) {
     // `swift -` reads a whole program from stdin and runs it.
-    return await run("swift", ["-"], code);
+    return await this.#call("runSwift", "Swift script", () => run("swift", ["-"], code));
   }
 
   __describe() {
@@ -86,10 +116,15 @@ export async function shareMyComputer(input: {
   connection: Awaited<ReturnType<typeof connectOsNext>>;
   project: string;
   name?: string;
+  json?: boolean;
 }) {
   const name = input.name || (await askComputerName());
   using project = await input.connection.session.projects.get(input.project);
-  using _provision = await project.provide(`itx.${name}`, new MyComputer());
+  const emit = (event: ComputerEvent) => {
+    if (input.json) process.stdout.write(`${JSON.stringify(event)}\n`);
+  };
+  using _provision = await project.provide(`itx.${name}`, new MyComputer(emit));
+  emit({ type: "status", loggedIn: true, name });
   console.error(`itx.${name} is live for project ${input.project}. Press Ctrl-C to stop sharing.`);
   console.error(`Tell your agent to call itx.${name}.__describe() to learn how to use this Mac.`);
   let stop: () => void = () => {};
@@ -98,6 +133,11 @@ export async function shareMyComputer(input: {
   });
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
+  if (input.json) {
+    process.stdin.once("end", stop);
+    process.stdin.resume();
+    if (process.stdin.readableEnded) stop();
+  }
   try {
     const outcome = await Promise.race([stopped, input.connection.closed]);
     if (outcome !== "stopped") {
@@ -108,6 +148,10 @@ export async function shareMyComputer(input: {
   } finally {
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);
+    if (input.json) {
+      process.stdin.removeListener("end", stop);
+      process.stdin.pause();
+    }
   }
 }
 

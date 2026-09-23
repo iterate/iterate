@@ -278,7 +278,8 @@
     "bin",
     "dist",
     "README.md",
-    "THIRD_PARTY_NOTICES.md"
+    "THIRD_PARTY_NOTICES.md",
+    "menubar"
   ],
   "scripts": {
     "build": "node scripts/build.ts",

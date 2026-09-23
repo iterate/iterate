@@ -4,34 +4,18 @@
 // specs/repl-examples.spec.ts (the real REPL); everything else is here.
 //
 //   node            AsyncFunction over an itx Cap'n Web stub in this process
-//   cli             spawned `tsx scripts/cli.ts itx run --eval … --context …`
-//                   (a genuinely separate process; parses the CLI's one JSON doc)
 //   run-script      project.capabilityHost.runScript(`async (itx) => { const vars = …; <body> }`)
 //                   — the server-side script isolate agents use
 //   project-worker  the body baked into the project's repo worker.ts, invoked
 //                   via project.worker.runItxExample (env.ITX inside)
 
-import { execFile } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { RpcTarget } from "capnweb";
-import { ITX_INITIAL_CONNECTION_RETRY_PREFIX } from "../../scripts/itx.ts";
 import type { ItxExample, ItxExampleRuntime } from "../../src/itx/examples.ts";
 import { runExample } from "../test-support/run-example.ts";
-import { baseUrl, connectProject } from "./e2e-env.ts";
+import { connectProject } from "./e2e-env.ts";
 
-export const MATRIX_RUNTIMES = ["node", "cli", "run-script", "project-worker"] as const;
+export const MATRIX_RUNTIMES = ["node", "run-script", "project-worker"] as const;
 export type MatrixRuntime = (typeof MATRIX_RUNTIMES)[number] & ItxExampleRuntime;
-export type CliInitialConnectionRetry = {
-  attemptDurationMs: number;
-  delayMs: number;
-  error: string;
-  errorCode?: string;
-  failedAttempt: number;
-  nextAttempt: number;
-  startedAt: string;
-};
-
 const AsyncFunction = async function () {}.constructor as new (
   ...args: string[]
 ) => (itx: unknown, vars: Record<string, unknown>, rpcTarget: unknown) => Promise<unknown>;
@@ -44,135 +28,17 @@ export async function runExampleCode(
     projectId: string;
     timeoutMs: number;
     vars: Record<string, unknown>;
-    onInitialConnectionRetry?: (retry: CliInitialConnectionRetry) => Promise<void> | void;
   },
 ): Promise<unknown> {
-  // Execute user code exactly once. The CLI may make one observable fresh
-  // dial before its RPC session exists, but neither it nor these runtime
-  // adapters replay authentication or an operation. A wrapper here used to
-  // re-roll anything containing "internal error; reference =" — Cloudflare's
-  // redaction of EVERY server-side crash — which could mask real
-  // worker-startup product bugs behind a silent second retry layer.
+  // Execute user code once; runtime adapters never replay failed operations.
   switch (runtime) {
     case "node":
       return await runInNode(input);
-    case "cli":
-      return await runInCli(input);
     case "run-script":
       return await runInRunScript(input);
     case "project-worker":
       return await runInProjectWorker(input);
   }
-}
-
-const execFileAsync = promisify(execFile);
-const APP_ROOT = fileURLToPath(new URL("../..", import.meta.url));
-
-async function runInCli(input: {
-  code: string;
-  projectId: string;
-  timeoutMs: number;
-  vars: Record<string, unknown>;
-  onInitialConnectionRetry?: (retry: CliInitialConnectionRetry) => Promise<void> | void;
-}): Promise<unknown> {
-  const abortController = new AbortController();
-  const timeoutId = setTimeout(() => abortController.abort(), input.timeoutMs);
-  // tsx directly (not `pnpm cli`) so stdout is exactly the run command's one
-  // JSON document, with no package-runner banner in front of it.
-  try {
-    const { stderr, stdout } = await execFileAsync(
-      "pnpm",
-      [
-        "exec",
-        "tsx",
-        "./scripts/cli.ts",
-        "itx",
-        "run",
-        "--eval",
-        input.code,
-        "--context",
-        input.projectId,
-        "--vars",
-        JSON.stringify(input.vars),
-        "--base-url",
-        baseUrl(),
-      ],
-      {
-        cwd: APP_ROOT,
-        env: process.env,
-        killSignal: "SIGKILL",
-        maxBuffer: 10 * 1024 * 1024,
-        signal: abortController.signal,
-      },
-    );
-    await reportCliDiagnostics(stderr, input.onInitialConnectionRetry);
-    return JSON.parse(stdout);
-  } catch (error) {
-    if (abortController.signal.aborted) {
-      throw new ExampleRuntimeDeadlineError("cli", input.timeoutMs, { cause: error });
-    }
-    throw cliProcessFailure(error);
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-async function reportCliDiagnostics(
-  stderr: string,
-  onInitialConnectionRetry:
-    | ((retry: CliInitialConnectionRetry) => Promise<void> | void)
-    | undefined,
-) {
-  for (const line of stderr.split(/\r?\n/u).filter(Boolean)) {
-    if (!line.startsWith(ITX_INITIAL_CONNECTION_RETRY_PREFIX)) {
-      console.warn(`[cli stderr] ${line}`);
-      continue;
-    }
-    const retry = parseInitialConnectionRetry(
-      line.slice(ITX_INITIAL_CONNECTION_RETRY_PREFIX.length),
-    );
-    console.warn(`${ITX_INITIAL_CONNECTION_RETRY_PREFIX}${JSON.stringify(retry)}`);
-    await onInitialConnectionRetry?.(retry);
-  }
-}
-
-function parseInitialConnectionRetry(value: string): CliInitialConnectionRetry {
-  const parsed = JSON.parse(value) as Record<string, unknown>;
-  if (
-    typeof parsed.attemptDurationMs !== "number" ||
-    typeof parsed.delayMs !== "number" ||
-    typeof parsed.error !== "string" ||
-    typeof parsed.failedAttempt !== "number" ||
-    typeof parsed.nextAttempt !== "number" ||
-    typeof parsed.startedAt !== "string" ||
-    (parsed.errorCode !== undefined && typeof parsed.errorCode !== "string")
-  ) {
-    throw new Error(`Invalid CLI initial-connection retry diagnostic: ${value}`);
-  }
-  return parsed as CliInitialConnectionRetry;
-}
-
-function cliProcessFailure(error: unknown): unknown {
-  if (typeof error !== "object" || error === null) return error;
-  const processError = error as { stderr?: unknown; stdout?: unknown };
-  const stderr = compactProcessOutput(processError.stderr);
-  const stdout = compactProcessOutput(processError.stdout);
-  const output = stderr ?? stdout;
-  if (output === undefined) return error;
-  return new Error(
-    `cli process failed — ${stderr === undefined ? "stdout" : "stderr"}: ${output}`,
-    {
-      cause: error,
-    },
-  );
-}
-
-function compactProcessOutput(output: unknown): string | undefined {
-  if (typeof output !== "string") return undefined;
-  const compact = output.replace(/\s+/gu, " ").trim();
-  if (compact.length === 0) return undefined;
-  const limit = 2_000;
-  return compact.length > limit ? `…${compact.slice(-limit)}` : compact;
 }
 
 async function runInNode(input: {

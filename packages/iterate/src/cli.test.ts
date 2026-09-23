@@ -43,7 +43,14 @@ test(
   { timeout: 20_000 },
   async () => {
     using config = cliConfig("http://127.0.0.1:1");
-    for (const args of [[], ["--help"], ["itx", "run", "--help"], ["use-my-computer", "--help"]]) {
+    for (const args of [
+      [],
+      ["--help"],
+      ["itx", "run", "--help"],
+      ["use-my-computer", "--help"],
+      ["menubar", "--help"],
+      ["repl", "--help"],
+    ]) {
       const { stdout } = await runCli(config.directory, args);
       expect(stdout).toContain("iterate");
       expect(stdout).not.toMatch(/\b(chat|approve|daemon)\b/);
@@ -132,6 +139,29 @@ test(
     using config = cliConfig(`http://127.0.0.1:${address.port}`);
     try {
       expect((await runCli(config.directory, ["ping"])).stdout).toContain("user_test");
+      const interactive = promisify(execFile)(process.execPath, [bin, "repl"], {
+        env: {
+          ...process.env,
+          XDG_CONFIG_HOME: config.directory,
+          APP_CONFIG_ADMIN_API_SECRET: "",
+          ITERATE_BEARER_TOKEN: "",
+        },
+        timeout: 10_000,
+      });
+      interactive.child.stdin!.write("await itx.run('async () => 42')\n");
+      let replTranscript = "";
+      let sentExit = false;
+      interactive.child.stdout!.on("data", (chunk) => {
+        replTranscript += chunk.toString();
+        if (!sentExit && replTranscript.includes("42")) {
+          sentExit = true;
+          interactive.child.stdin!.end("typeof itx\ntypeof RpcTarget\n.clear\ntypeof itx\n.exit\n");
+        }
+      });
+      const replOutput = (await interactive).stdout;
+      expect(replOutput).toContain("42");
+      expect(replOutput).toContain("'function'");
+      expect(replOutput).not.toContain("undefined");
       calls.length = 0;
       const result = await runCli(config.directory, [
         "itx",
@@ -316,6 +346,72 @@ test("an authentication timeout closes the transport without an unhandled RPC re
   } finally {
     vi.useRealTimers();
     for (const socket of server.clients) socket.terminate();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("computer activity pairs a failed call with its completion", async () => {
+  const events: unknown[] = [];
+  const computer = new MyComputer((event) => events.push(event));
+  await expect(computer.ask({ question: "A question", buttons: [] })).rejects.toThrow("1–3");
+  expect(events).toEqual([
+    { type: "call", id: 1, method: "ask", summary: "A question" },
+    { type: "call-done", id: 1, ok: false },
+  ]);
+});
+
+test("menu-bar sharing releases its provision on stdin EOF", { timeout: 15_000 }, async () => {
+  let released = false;
+  class Provision extends RpcTarget {
+    [Symbol.dispose]() {
+      released = true;
+    }
+  }
+  class Project extends RpcTarget {
+    provide() {
+      return new Provision();
+    }
+  }
+  class Projects extends RpcTarget {
+    get() {
+      return new Project();
+    }
+  }
+  class Session extends RpcTarget {
+    get projects() {
+      return new Projects();
+    }
+  }
+  class Root extends RpcTarget {
+    authenticate() {
+      return new Session();
+    }
+  }
+  const server = new WebSocketServer({ port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  server.on("connection", (socket) => {
+    // ws implements the DOM WebSocket interface capnweb consumes.
+    newWebSocketRpcSession(socket as unknown as WebSocket, new Root());
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("No port");
+  const source = `
+    import { connectOsNext } from ${JSON.stringify(new URL("./next-node.ts", import.meta.url).href)};
+    import { shareMyComputer } from ${JSON.stringify(new URL("./use-my-computer.ts", import.meta.url).href)};
+    using connection = await connectOsNext({ baseUrl: "http://127.0.0.1:${address.port}", auth: { type: "bearer", token: "test" } });
+    await shareMyComputer({ connection, project: "demo", name: "testComputer", json: true });
+  `;
+  try {
+    const child = promisify(execFile)(process.execPath, ["--input-type=module", "--eval", source], {
+      timeout: 10_000,
+    });
+    child.child.stdin!.end();
+    expect((await child).stdout.trim()).toBe(
+      JSON.stringify({ type: "status", loggedIn: true, name: "testComputer" }),
+    );
+    await expect.poll(() => released).toBe(true);
+  } finally {
+    for (const client of server.clients) client.terminate();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });

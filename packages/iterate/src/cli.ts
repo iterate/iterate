@@ -3,12 +3,15 @@ import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname } from "node:path";
 import process from "node:process";
+import repl from "node:repl";
+import { RpcTarget } from "capnweb";
 import * as prompts from "@clack/prompts";
 import { os } from "@orpc/server";
 import { createCli, yamlTableConsoleLogger } from "trpc-cli";
 import { z } from "zod/v4";
 import { connectOsNext } from "./next-node.ts";
 import type { SessionCredentials } from "./next/api.ts";
+import { launchMenubarApp } from "./menubar-app.ts";
 import { shareMyComputer } from "./use-my-computer.ts";
 import {
   CONFIG_PATH,
@@ -539,6 +542,44 @@ const launcherProcedures = {
       return await owned.session.projects.list();
     }),
   },
+  repl: os
+    .input(
+      z.object({
+        project: z.string().optional().describe("Project id or slug"),
+        context: z.string().default("/").describe("Context path within the project"),
+      }),
+    )
+    .meta({ description: "Open a local Node REPL with itx and RpcTarget in scope" })
+    .handler(async ({ input }) => {
+      const { resolved, connection } = await connectConfigured();
+      using owned = connection;
+      const project = await selectProject(owned, input.project || resolved.config.defaultProject);
+      using root = await owned.session.projects.get(project);
+      using context = await root.cd(input.context);
+      console.error(
+        `Connected to ${resolved.config.osBaseUrl}, project ${project}, context ${input.context}. Use .exit to quit.`,
+      );
+      const server = repl.start({ prompt: "itx> " });
+      const initialize = () => {
+        server.context.itx = context;
+        server.context.RpcTarget = RpcTarget;
+      };
+      initialize();
+      server.on("reset", initialize);
+      try {
+        const outcome = await Promise.race([
+          new Promise<"exit">((resolve) => server.once("exit", () => resolve("exit"))),
+          owned.closed,
+        ]);
+        if (outcome !== "exit") {
+          throw new Error(
+            `REPL disconnected (${outcome.code}: ${outcome.reason || "connection closed"}). Start a new REPL to reconnect.`,
+          );
+        }
+      } finally {
+        server.close();
+      }
+    }),
   itx: {
     run: os
       .input(
@@ -579,10 +620,20 @@ const launcherProcedures = {
         return await context.run(`async (itx) => {\n${script}\n}`);
       }),
   },
+  menubar: os
+    .input(z.object({ project: z.string().optional().describe("Project id or slug") }))
+    .meta({ description: "Launch the macOS menu bar for sign-in and computer sharing" })
+    .handler(async ({ input }) => {
+      const resolved = resolveConfig(process.cwd(), { throw: true });
+      const project = input.project || resolved.config.defaultProject;
+      if (!project) throw new Error("menubar needs --project or a configured defaultProject.");
+      await launchMenubarApp({ configName: resolved.name, project, log: console.error });
+    }),
   useMyComputer: os
     .input(
       z.object({
         project: z.string().optional().describe("Project id or slug"),
+        json: z.boolean().optional().describe("Emit menu-bar events as NDJSON; stop on stdin EOF"),
         name: z
           .string()
           .regex(/^[a-zA-Z][a-zA-Z0-9]*$/)
@@ -597,7 +648,7 @@ const launcherProcedures = {
       const { resolved, connection } = await connectConfigured();
       using owned = connection;
       const project = await selectProject(owned, input.project || resolved.config.defaultProject);
-      await shareMyComputer({ connection: owned, project, name: input.name });
+      await shareMyComputer({ connection: owned, project, name: input.name, json: input.json });
     }),
   config: {
     get: os

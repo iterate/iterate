@@ -5,7 +5,7 @@ Main product dashboard and project runtime. Read [architecture and source map](R
 - The public capability surface is `/api`; its generated contract is `src/itx-api.generated.ts`. Use the existing itx client/hooks rather than adding another product API.
 - Auth owns organizations, project IDs and the project directory. Other durable state belongs in Durable Object SQLite.
 - Runtime identity uses `prj_…` IDs; slugs are human-readable URLs. Stream paths are project-local.
-- Run app commands here. `pnpm cli itx run --help` describes the script interface; wrap with `doppler run --config <config> --` to target an explicit environment. [Doppler-backed scripts](docs/doppler-backed-scripts.md).
+- Run app commands here. The former `pnpm cli itx` wrapper is retired; the published `iterate` CLI targets OS Next. Wrap operational commands with `doppler run --config <config> --` to target an explicit environment. [Doppler-backed scripts](docs/doppler-backed-scripts.md).
 
 ```bash
 pnpm test

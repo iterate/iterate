@@ -23,7 +23,7 @@
 // `runtimes` records where a snippet genuinely works unattended. Live
 // capabilities (provideCapability with a `capability` value) are session-bound
 // — the provider object lives in the calling process — so those entries stay
-// node/cli only (the browser REPL executes server-side and cannot host a live
+// node only (the browser REPL executes server-side and cannot host a live
 // provider). Everything else must stay runtime-agnostic: no pipelining
 // tricks, plain serializable return values.
 //
@@ -36,13 +36,7 @@
 // re-exports the generated data, so the catalogue's consumers never touch
 // the generated file directly.
 
-export const ITX_EXAMPLE_RUNTIMES = [
-  "browser",
-  "node",
-  "cli",
-  "run-script",
-  "project-worker",
-] as const;
+export const ITX_EXAMPLE_RUNTIMES = ["browser", "node", "run-script", "project-worker"] as const;
 
 export type ItxExampleRuntime = (typeof ITX_EXAMPLE_RUNTIMES)[number];
 

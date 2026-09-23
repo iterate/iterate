@@ -49,7 +49,6 @@ const matrixTest = baseTest;
 // racing those resources. Pool size matches Vitest's in-file concurrency.
 const matrixProjectPools: Record<MatrixRuntime, ReturnType<typeof createTestProjectPool>> = {
   node: createTestProjectPool({ size: E2E_FILE_TEST_CONCURRENCY, slugPrefix: "matrix-node" }),
-  cli: createTestProjectPool({ size: E2E_FILE_TEST_CONCURRENCY, slugPrefix: "matrix-cli" }),
   "run-script": createTestProjectPool({
     size: E2E_FILE_TEST_CONCURRENCY,
     slugPrefix: "matrix-script",
@@ -99,7 +98,7 @@ baseTest("every catalogue example is either matrix-tested or explicitly excluded
   // runtime. The Playwright REPL spec (specs/repl-examples.spec.ts) runs the
   // browser-runnable subset through the project REPL; live-capability entries
   // dropped that runtime when REPL runs moved server-side, and stay proven by
-  // the node/cli matrix here.
+  // the node matrix here.
   for (const id of Object.keys(EXAMPLE_CASES)) {
     const example = ITX_EXAMPLES.find((candidate) => candidate.id === id);
     expect(example, `example-cases.ts references missing example "${id}"`).toBeDefined();
@@ -171,17 +170,6 @@ for (const example of MATRIX_EXAMPLES) {
           const result = await runExampleCode(runtime, {
             code: example.code,
             id: example.id,
-            onInitialConnectionRetry: async (retry) => {
-              await annotate(
-                JSON.stringify({
-                  name: "cli: initial connection retry",
-                  category: "retry",
-                  durationMs: retry.attemptDurationMs + retry.delayMs,
-                  startedAt: retry.startedAt,
-                }),
-                "e2e-phase",
-              );
-            },
             projectId,
             timeoutMs: remainingMs,
             vars,

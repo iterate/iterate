@@ -8,8 +8,10 @@ npx iterate login                 # browser OAuth with project consent
 npx iterate projects list
 npx iterate orgs list
 npx iterate ping
+npx iterate repl --project my-project   # local Node REPL
 npx iterate itx run --project my-project --eval 'return await itx.whoami();'
 npx iterate use-my-computer --project my-project --name myComputer
+npx iterate menubar --project my-project   # macOS app
 npx iterate logout
 ```
 
@@ -72,10 +74,18 @@ Existing configs keep their server URL. For a config that targets the old OS,
 set its `--os-base-url` to an OS Next deployment and log in again. Changing the
 server clears that config's session. There is no separate `authBaseUrl` setting.
 
-The old chat TUI, egress approver, menu-bar app and remotely discovered
-`iterate os ...` commands have been removed. Use `iterate itx run` for scripts;
+The old chat TUI and remotely discovered `iterate os ...` commands are removed.
+The menu bar supports sign-in and computer sharing. Approval code is retained
+but dormant until OS Next supports it. Use `iterate itx run` for scripts;
 its `--project` selects the project and `--context` selects a path within it.
-Legacy SDK exports remain available for apps that still use the original OS.
+
+## Node REPL
+
+`iterate repl --project my-project --context /` opens a local Node REPL
+with the live context as `itx` and the transport's `RpcTarget` constructor in
+scope. Top-level `await`, Node APIs and `.load` are available. `.clear` restores
+the two bindings; `.exit` releases the context and connection. A lost connection
+ends the REPL visibly; it never silently repeats your commands.
 
 ## Node connections
 

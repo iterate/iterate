@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Used only when building with a real SIGN_IDENTITY (see build-menubar-app.sh).
+  Local UserNotifications need no special entitlement — this is the hardened-
+  runtime baseline, and the place to add keys (e.g. aps-environment for remote
+  push, or app-sandbox) if this ever ships through the App Store / notarization.
+-->
+<plist version="1.0">
+<dict>
+</dict>
+</plist>

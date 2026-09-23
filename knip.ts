@@ -159,6 +159,9 @@ function makeIterateCliWorkspace(): WorkspaceConfig {
       "src/index.ts",
       "src/worker.ts",
       "src/cli.ts",
+      // Legacy approvals are intentionally retained, but not mounted by the OS Next CLI.
+      "src/approve.ts",
+      "src/approve-json.ts",
       "bin/iterate.js",
       "scripts/*.ts",
       "tsdown.app-clients.config.ts",
