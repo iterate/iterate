@@ -5,8 +5,8 @@
 import { build } from "esbuild";
 import { expect } from "vitest";
 import { buildAgentRuntime } from "../scripts/build-runtime.ts";
-import { createVoiceInstall } from "../../kit/scripts/build-voice-install.ts";
-import { ensureVoiceAgent } from "../../kit/src/voice/install.ts";
+import { createVoiceInstall } from "../scripts/build-voice-install.ts";
+import { ensureVoiceAgent } from "../voice/install.ts";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../runtime/system-prompt.ts";
 import { openItx, readAll, runId, until } from "../../os/e2e/support/client.ts";
 import { oauthSession } from "../../os/e2e/support/principal.ts";

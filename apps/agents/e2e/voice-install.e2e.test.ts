@@ -1,6 +1,6 @@
 import { expect } from "vitest";
-import { buildVoiceInstall } from "../../kit/scripts/build-voice-install.ts";
-import { ensureVoiceAgent } from "../../kit/src/voice/install.ts";
+import { buildVoiceInstall } from "../scripts/build-voice-install.ts";
+import { ensureVoiceAgent } from "../voice/install.ts";
 import { runId } from "../../os/e2e/support/client.ts";
 import { oauthSession } from "../../os/e2e/support/principal.ts";
 import {
@@ -10,7 +10,7 @@ import {
 } from "../../os/e2e/support/project-host.ts";
 
 deployedOnly(
-  "Kit installs voice through project OAuth, preserves project data and reuses the install for another device",
+  "voice installs through project OAuth, preserves project data and reuses the install for another device",
   async () => {
     const user = { email: `kit-install-${runId()}@example.com` };
     const projectId = await registerProject(freshDnsSafeProjectSlug("kit-voice"), user);

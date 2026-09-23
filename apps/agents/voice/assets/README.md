@@ -8,7 +8,7 @@ Its SIL Open Font License is in `press-start-2p-OFL.txt`.
 - [Google Fonts family](https://fonts.google.com/specimen/Press+Start+2P)
 - [Upstream font and license](https://github.com/google/fonts/tree/main/ofl/pressstart2p)
 
-Kit’s `apps/kit/scripts/build-voice-install.ts` embeds this font in `pixel-font.css` and stores that CSS in
+`apps/agents/scripts/build-voice-install.ts` embeds this font in `pixel-font.css` and stores that CSS in
 a content-addressed `kit/voice/…/screen-font.css` project KV entry. A rendering script inserts
 the CSS into its HTML; Chromium needs no external font request. The model never
 needs to generate or read the font's base64 bytes. The CSS family name is
