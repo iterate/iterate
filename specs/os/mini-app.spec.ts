@@ -30,6 +30,9 @@ test("a no-build mini-app served by a project persists a note through its own ca
     headers: { Origin: origin },
     form: { email, password: loginPassword, next: "/" },
     maxRedirects: 0,
+    // A page.request call inherits the tight actionTimeout, but this is fixture setup over HTTP
+    // (the sign-in makes an OAuth grant). timeout: no loading UI exists for the spinner-waiter
+    timeout: 15_000,
   });
   expect(login.status(), await login.text().catch(() => "")).toBe(302);
 

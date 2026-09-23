@@ -24,7 +24,9 @@ async function passwordStep(page: Page, origin: string, email: string, password?
   if (!(await field.isVisible()))
     await page.getByRole("button", { name: "Use password instead", exact: true }).click();
   await field.fill(password || loginPassword(origin));
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  // noWaitAfter: the post navigates; the next locator waits for it (the spinner-waiter counts a
+  // navigation in flight as loading), not the click's tight action timeout
+  await page.getByRole("button", { name: "Sign in", exact: true }).click({ noWaitAfter: true });
 }
 
 /** Sign in the way auth.spec.ts does — the page's password step — and land on `next`. */
@@ -58,7 +60,9 @@ test("the sign-in page refuses a wrong password in place, keeps the email, and t
   const onward = page.getByRole("link", { name: "Go to the dash", exact: true });
   await expect(onward).toHaveCount(dashOrigin ? 1 : 0);
   if (dashOrigin) await expect(onward).toHaveAttribute("href", dashOrigin);
-  await page.getByRole("button", { name: "Switch account", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Switch account", exact: true })
+    .click({ noWaitAfter: true });
   await page.getByRole("textbox", { name: "Email", exact: true }).waitFor();
   expect(await page.getByText(`Signed in as ${email}.`).count()).toBe(0);
 });
@@ -103,7 +107,9 @@ test("a consent page whose session ends underneath it returns to sign-in", async
   // the session ends elsewhere: another tab of the same browser switches account
   const other = await context.newPage();
   await other.goto(`${origin}/login`);
-  await other.getByRole("button", { name: "Switch account", exact: true }).click();
+  await other
+    .getByRole("button", { name: "Switch account", exact: true })
+    .click({ noWaitAfter: true });
   // The server-rendered sign-in page now names nobody.
   await other.getByRole("heading", { name: "Sign in to iterate" }).waitFor();
   await other.close();
@@ -201,6 +207,9 @@ for (const loads of [true, false]) {
         grant_types: ["authorization_code"],
         response_types: ["code"],
       },
+      // A page.request call inherits the tight actionTimeout, but dynamic client registration is
+      // fixture setup over HTTP. timeout: no loading UI exists for the spinner-waiter
+      timeout: 15_000,
     });
     expect(registration.status()).toBe(201);
     const { client_id: clientId } = (await registration.json()) as { client_id: string };

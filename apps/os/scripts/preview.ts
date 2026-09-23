@@ -644,7 +644,9 @@ async function deployPreview(
     const notesPreview = appPreviews.find((app) => app.name === "notes");
     if (notesPreview) {
       if (process.env.CI)
-        await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], { cwd: ROOT });
+        await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], {
+          cwd: path.resolve(ROOT, "../.."),
+        });
       // the root suite's notes project (specs/AGENTS.md), against this preview's Notes app
       await runAsync("pnpm", ["spec", "--project", "notes"], {
         cwd: path.resolve(ROOT, "../.."),
@@ -735,7 +737,9 @@ async function runE2e(previewName: string): Promise<void> {
   const env = { WORKER_BASE_URL: url, DEMO_BASE_URL: url };
   const spec = (async () => {
     if (process.env.CI)
-      await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], { cwd: ROOT });
+      await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], {
+        cwd: path.resolve(ROOT, "../.."),
+      });
     return run("pnpm", ["spec", "--project", "os", "--project", "os-phone", "--project", "suite"], {
       cwd: path.resolve(ROOT, "../.."),
       env: { ...process.env, ...env, ...PREVIEW_SUITE_TELEMETRY.specs },

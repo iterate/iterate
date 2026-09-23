@@ -14,19 +14,21 @@ test("sign in, create a project, save a note and read it after reload", async ({
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/");
-  await page.getByRole("link", { name: "Log in with Iterate" }).click();
+  await page.getByRole("link", { name: "Log in with Iterate" }).click({ noWaitAfter: true });
   await page.getByRole("textbox", { name: "Email", exact: true }).fill(`${slug}@example.com`);
   const password = page.getByRole("textbox", { name: "Password", exact: true });
   if (!(await password.isVisible()))
     await page.getByRole("button", { name: /^(Continue|Use password instead)$/ }).click();
   await password.fill(process.env.LOGIN_PASSWORD || "dev");
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  // noWaitAfter: the post navigates; the next locator waits for it (the spinner-waiter counts a
+  // navigation in flight as loading), not the click's tight action timeout
+  await page.getByRole("button", { name: "Sign in", exact: true }).click({ noWaitAfter: true });
   await page
     .getByRole("textbox", { name: "Organization name", exact: true })
     .fill("Notes rollout proof");
   await page.getByRole("textbox", { name: "Project slug", exact: true }).fill(slug);
   await page.getByRole("button", { name: "Review permissions", exact: true }).click();
-  await page.getByRole("button", { name: "Authorize", exact: true }).click();
+  await page.getByRole("button", { name: "Authorize", exact: true }).click({ noWaitAfter: true });
   await page.waitForURL(
     (url) => url.origin === new URL(baseURL!).origin && url.pathname === `/projects/${slug}`,
   );

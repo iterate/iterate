@@ -13,7 +13,7 @@ export function IssuerPage({ children, className }: { children: ReactNode; class
 /** A refusal or failure shown where the person acted. */
 export function ErrorMessage({ children }: { children: ReactNode }) {
   return (
-    <p role="alert" className="text-sm text-destructive">
+    <p role="alert" data-type="error" className="text-sm text-destructive">
       {children}
     </p>
   );

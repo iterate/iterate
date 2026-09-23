@@ -36,7 +36,9 @@ async function signIn(page: Page, origin: string, email: string, _next = "/") {
   if (!(await password.isVisible()))
     await page.getByRole("button", { name: "Use password instead", exact: true }).click();
   await password.fill(loginPassword(origin));
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  // noWaitAfter: the post navigates; the next locator waits for it (the spinner-waiter counts a
+  // navigation in flight as loading), not the click's tight action timeout
+  await page.getByRole("button", { name: "Sign in", exact: true }).click({ noWaitAfter: true });
 }
 
 async function cookieHeaders(context: BrowserContext, origin: string) {
@@ -300,7 +302,7 @@ test("first Claude consent creates the organization and project on the consent p
     // form post, so it opens no /api socket.
     expect(sockets.filter((url) => new URL(url).pathname === "/api")).toHaveLength(0);
     await page.screenshot({ path: test.info().outputPath("first-consent.png"), fullPage: true });
-    await approve.click();
+    await approve.click({ noWaitAfter: true });
     await page
       .getByRole("heading", { name: "Claude authorization completed", exact: true })
       .waitFor();
@@ -423,7 +425,7 @@ test("the Notes app works on its own origin and through a project config worker"
     })
     .waitFor();
   await page.getByRole("button", { name: "Review permissions", exact: true }).click();
-  await page.getByRole("button", { name: "Authorize", exact: true }).click();
+  await page.getByRole("button", { name: "Authorize", exact: true }).click({ noWaitAfter: true });
   await page.getByRole("textbox", { name: noteFile, exact: true }).fill(note);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await page
@@ -440,7 +442,7 @@ test("the Notes app works on its own origin and through a project config worker"
     })
     .waitFor();
   await page.getByRole("button", { name: "Review permissions", exact: true }).click();
-  await page.getByRole("button", { name: "Authorize", exact: true }).click();
+  await page.getByRole("button", { name: "Authorize", exact: true }).click({ noWaitAfter: true });
   expect(await page.getByRole("textbox", { name: noteFile, exact: true }).inputValue()).toBe(note);
   await page
     .getByRole("textbox", { name: noteFile, exact: true })
