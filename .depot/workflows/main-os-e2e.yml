@@ -1,0 +1,252 @@
+# MAIN'S E2E RUN on the dev/preview account: every push to main (the paths a PR preview runs for)
+# deploys a THROWAWAY Worker Preview of apps/os named `main-<short sha>`, with fresh resources of its
+# own (D1, KV, R2, Artifacts namespace, Durable Object namespaces) and the four clients on top, runs
+# the e2e suite, the browser specs and the residency gate against it, then DELETES the preview and
+# everything it created. Nothing it makes outlives the run: a cancelled or failed run still deletes
+# (the `delete` job runs always), and the nightly sweep of preview-os-next.yml deletes a PR-less
+# preview a day after its last deploy as the backstop.
+#
+# A newer push cancels the run in progress: only the latest main is tested. The `alert` job pages
+# #error-pulse only when main changes state — once when it goes red, naming the failing rows, once
+# when it is green again (scripts/ci/main-e2e-alert.ts). Nothing is written to any PR.
+#
+# The script is apps/os/scripts/preview.ts (the same commands as a PR's preview, keyed by name).
+# The only Depot secret is DOPPLER_TOKEN; Doppler project-worker/preview supplies the Cloudflare
+# credentials, _shared/prd the Slack token and the telemetry finalizer's config.
+
+name: Main OS e2e
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .depot/workflows/deploy-os-next.yml
+      - .depot/workflows/deploy-dash.yml
+      - .depot/workflows/deploy-agents.yml
+      - .depot/workflows/deploy-notes.yml
+      - .depot/workflows/deploy-voice.yml
+      - .depot/workflows/preview-os-next.yml
+      - .depot/workflows/main-os-e2e.yml
+      - apps/os/**
+      - configs-next/**
+      - apps/dash/**
+      - apps/agents/**
+      - apps/notes/**
+      - apps/voice/**
+      - packages/iterate/**
+      - packages/shared/**
+      - packages/ui/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - envs.ts
+      - scripts/lib/**
+      - scripts/depot-ci/**
+  workflow_dispatch:
+
+concurrency:
+  group: main-os-e2e
+  cancel-in-progress: true
+
+env:
+  # The store the image was baked with (preview-os-next.yml says why).
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on:
+      size: 4x16
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 40
+    outputs:
+      preview-name: ${{ steps.name.outputs.preview-name }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.sha }}
+      # One preview per pushed commit, never reused: `main-<short sha>`.
+      - name: Name the throwaway preview
+        id: name
+        run: echo "preview-name=main-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config preview --project project-worker
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Deploy the throwaway preview
+        working-directory: apps/os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          PREVIEW_NAME: ${{ steps.name.outputs.preview-name }}
+          PREVIEW_APPS: all
+        run: doppler run -- pnpm preview deploy
+
+  e2e:
+    name: e2e
+    needs: deploy
+    runs-on:
+      size: 4x16
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 30
+    # TEST TELEMETRY, as a PR preview's e2e job writes it; main's suite summaries feed the flake
+    # dashboard (scripts/ci/flake-dashboard/update.ts SUITE_WORKFLOWS).
+    env:
+      TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
+      TEST_TELEMETRY_BRANCH: main
+      TEST_TELEMETRY_HEAD_SHA: ${{ github.sha }}
+    outputs:
+      suite-started: ${{ steps.suite-started.outputs.at }}
+      suite-ended: ${{ steps.suite-ended.outputs.at }}
+      failing-rows: ${{ steps.failing-rows.outputs.failing-rows }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config preview --project project-worker
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Record the suite's start
+        id: suite-started
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - name: Run the e2e suite and the browser specs against the preview
+        working-directory: apps/os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          PREVIEW_NAME: ${{ needs.deploy.outputs.preview-name }}
+          E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: doppler run -- pnpm preview e2e
+      - name: Record the suite's end
+        id: suite-ended
+        if: always() && steps.suite-started.outcome == 'success'
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      # The rows the alert names when main goes red.
+      - name: Collect the failing rows
+        id: failing-rows
+        if: always()
+        run: pnpm tsx scripts/ci/main-e2e-alert.ts failing-rows --dir test-results/ci-telemetry/raw
+      - name: Normalize test telemetry and write the suite summaries
+        if: always()
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          TEST_TELEMETRY_EXPECTED_WORKSPACES: "iterate-root,os"
+        run: doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites preview ${{ cancelled() && '--cancelled' || '' }}
+      - name: Upload specs flake records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-records-specs
+          path: test-results/flake-records/specs
+          if-no-files-found: ignore
+          overwrite: true
+      - name: Upload preview e2e flake records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-records-preview-e2e
+          path: test-results/flake-records/preview-e2e
+          if-no-files-found: ignore
+          overwrite: true
+      - name: Upload test telemetry artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-test-telemetry
+          path: test-results/ci-telemetry
+          include-hidden-files: true
+          if-no-files-found: error
+          overwrite: true
+
+  # The residency gate (apps/os/scripts/preview-residency.ts), read-only. No release after it: the
+  # preview is deleted next, which ends every session with it.
+  residency:
+    name: residency
+    needs: [deploy, e2e]
+    if: always() && needs.e2e.outputs.suite-started != ''
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 30
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config preview --project project-worker
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Fail on any Durable Object still resident five minutes after the suite
+        working-directory: apps/os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          PREVIEW_NAME: ${{ needs.deploy.outputs.preview-name }}
+          PREVIEW_SUITE_STARTED: ${{ needs.e2e.outputs.suite-started }}
+          PREVIEW_SUITE_ENDED: ${{ needs.e2e.outputs.suite-ended }}
+        run: doppler run -- pnpm preview residency
+
+  # ALWAYS, whatever happened before, cancelled included: the preview, its D1, Artifacts
+  # namespace, KV namespaces and R2 bucket, and the clients' previews of the same name.
+  delete:
+    name: delete
+    needs: [deploy, e2e, residency]
+    if: always()
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 15
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config preview --project project-worker
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      # The name is derived here too: a deploy cancelled before it named anything still created a D1.
+      - name: Delete the throwaway preview and everything it created
+        working-directory: apps/os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: PREVIEW_NAME="main-${GITHUB_SHA::7}" doppler run -- pnpm preview delete
+
+  # Main's state changes only: red once, green again once. Not for a superseded (cancelled) run.
+  alert:
+    name: alert
+    needs: [deploy, e2e, residency, delete]
+    if: ${{ !cancelled() && github.event_name == 'push' }}
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 10
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Page #error-pulse when main changes state
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          NEEDS: ${{ toJSON(needs) }}
+        run: pnpm tsx scripts/ci/main-e2e-alert.ts alert

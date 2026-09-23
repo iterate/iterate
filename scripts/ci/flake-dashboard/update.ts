@@ -41,7 +41,7 @@ const execFile = promisify(execFileCallback);
  * listed here. Main is whatever a suite summary names as its branch, so a workflow that runs the
  * suites on main pushes needs only to be listed.
  */
-export const SUITE_WORKFLOWS = ["Test", "Preview OS"];
+export const SUITE_WORKFLOWS = ["Test", "Preview OS", "Main OS e2e"];
 const STATE_ARTIFACT = "flake-dashboard-state";
 /** Depot lists at most 200 workflows per query; the schedule runs far more often than that fills. */
 const WORKFLOW_LIMIT = "200";
