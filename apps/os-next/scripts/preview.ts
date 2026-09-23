@@ -372,6 +372,9 @@ async function deleteR2Bucket(cf: Cf, bucketName: string): Promise<void> {
           // a key's slashes are its path: each segment encoded, the slashes kept
           cf(`${route}/objects/${key.split("/").map(encodeURIComponent).join("/")}`, {
             method: "DELETE",
+          }).catch((error) => {
+            // one already gone (a racing delete took it, or the whole bucket) is deleted
+            if (!(error instanceof CloudflareApiError && error.status === 404)) throw error;
           }),
         ),
       );
