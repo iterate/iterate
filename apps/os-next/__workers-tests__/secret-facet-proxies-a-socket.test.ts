@@ -15,7 +15,7 @@ import { newWebSocketRpcSession } from "capnweb";
 import { expect, test } from "vitest";
 import { stub, until } from "./support.ts";
 
-const SHOP = "https://dummy-petshop.iterate.com";
+const SHOP = "https://dummy-petshop.iterate.workers.dev";
 
 test("a WebSocket 101 through a secret: the caller's context forwards to /secrets/shop, whose facet dials the petshop's capnweb door with the bearer substituted and hands the 101 back; frames round-trip; the use is a fact with status 101; aborting the facet closes the socket 1006", async () => {
   const login = await fetch(`${SHOP}/api/legacy-login`, {

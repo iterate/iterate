@@ -1,8 +1,8 @@
 // library-connectors.e2e.test.ts — THE LIBRARY end to end: `itx.connectToMcp`, `itx.connectToOpenApi`,
 // `itx.connectToCapnweb`, through the client context's own egress. The pet-shop rows reach a REAL third
-// party (apps/dummy-petshop — https://dummy-petshop.iterate.com, or PETSHOP_BASE_URL): its MCP server at
-// /mcp, its OpenAPI document at /openapi.json (served REST-shaped under /api/v2), its capnweb door at
-// /capnweb (batch and WebSocket); every door takes the shop's ordinary bearer in the Authorization
+// party (apps/dummy-petshop — https://dummy-petshop.iterate.workers.dev, or PETSHOP_BASE_URL): its MCP
+// server at /mcp, its OpenAPI document at /openapi.json (served REST-shaped under /api/v2), its capnweb
+// door at /capnweb (batch and WebSocket); every door takes the shop's ordinary bearer in the Authorization
 // header, minted the cheapest way the shop offers (legacy login, any email + the fixture password) and
 // passed as the connector's `headers` option — exactly what a user writes. Egress is the DO's own fetch:
 // local workerd reaches the internet too, but its outbound fetch cannot upgrade to a WebSocket, so the
@@ -59,10 +59,9 @@ deployedSubdomainsOnly(
 // The pet-shop rows share one gate: the deployed shop must answer before any of them runs (a shop that
 // is down fails the block loudly instead of failing eight rows on eight timeouts).
 describe("against the deployed pet shop", () => {
-  const PETSHOP = (process.env.PETSHOP_BASE_URL || "https://dummy-petshop.iterate.com").replace(
-    /\/+$/,
-    "",
-  );
+  const PETSHOP = (
+    process.env.PETSHOP_BASE_URL || "https://dummy-petshop.iterate.workers.dev"
+  ).replace(/\/+$/, "");
   const PETSHOP_WS = PETSHOP.replace(/^http/, "ws");
 
   /** The shop's pets as its API objects spell them. */
