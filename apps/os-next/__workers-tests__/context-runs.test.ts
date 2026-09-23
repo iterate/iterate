@@ -4,11 +4,19 @@
 // at that commit, and a `run-settled` naming that offset, which the caller's wait resolves on. A
 // LITERAL request appended by anyone runs the same way. A run the context's restart interrupted is
 // settled `interrupted` by the wake record — never re-run — which only the workers project can
-// prove (the context is aborted mid-run).
-import { runInDurableObject } from "cloudflare:test";
+// prove (the context is aborted mid-run). The ten-minute DEADLINE is pinned with fake timers in
+// src/library.test.ts: inside workerd a test cannot fake the loaded isolate's clock.
+import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { beforeAll, expect, test } from "vitest";
 import type { StreamEvent } from "iterate/next/stream/processor";
-import { adminCredentials, applyDirectorySchema, openSession, stub, until } from "./support.ts";
+import {
+  adminCredentials,
+  applyDirectorySchema,
+  openSession,
+  releasePins,
+  stub,
+  until,
+} from "./support.ts";
 
 beforeAll(applyDirectorySchema);
 
@@ -127,6 +135,37 @@ test("KILLED MID-RUN, NEVER RE-RUN: the context dies with a script in flight; th
   expect(await itx.kv.get("starts")).toBe("1"); // not run again
   expect(await openScriptRuns(ROOT)).toEqual({});
 });
+
+// THE RESULT IS RELEASED (library.ts `runSettlementOf`): what a script returns crosses Workers RPC
+// from its loaded isolate, and a LIVE value in it — a function, an object carrying one, a handle —
+// arrives as a stub. Serialized and dropped undisposed, that stub held the context: workerd refused
+// to evict it ("still has active references") until the next deploy. The number is the control.
+test.for([
+  ["a number", "async () => 1", 1],
+  ["a function", "async () => () => 1", undefined],
+  ["an object carrying a function", "async () => ({ n: 1, f: () => 1 })", { n: 1 }],
+  ["a handle", "async (itx) => itx.cd('/elsewhere')", undefined],
+] as const)(
+  "a run returning %s leaves nothing holding the context: settled, then evicted at once",
+  async ([name, code, result]) => {
+    const ctx = `prj_run_result_${name.replaceAll(" ", "_")}`;
+    const [requested] = (await stub(ctx).append({
+      type: "events.iterate.com/context/run-requested",
+      payload: { code },
+    })) as [StreamEvent];
+    const settled = await until("the run is settled", async () =>
+      (await runEvents(ctx)).find(
+        (e) => (e.payload as { requestOffset?: number }).requestOffset === requested.offset,
+      ),
+    );
+    expect(settled.payload).toEqual({
+      requestOffset: requested.offset,
+      settlement: { status: "succeeded", result },
+    });
+    await releasePins(ctx);
+    await evictDurableObject(stub(ctx)); // times out after 30 s while anything still holds it
+  },
+);
 
 test("a script's hop to a sibling context carries the platform origin: `itx.cd(path).url()` composes it there, though the sibling was never reached from the edge", async () => {
   // a project the directory knows (its slug names its URL), reached from this stamped session

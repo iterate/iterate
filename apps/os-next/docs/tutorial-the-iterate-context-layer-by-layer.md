@@ -1806,6 +1806,9 @@ principal: loaded code speaks for the project, never for a person, so an append 
 `source.principal`. It is loaded code's handle (chapter 3): every call through this context's rows,
 `itx.builtins` refused, `cd` down only, no `provide` and no `subscribe`. A text that is not one
 function expression fails at load, in the loader's words, and does not poison the isolate id.
+A run has ten minutes (`RUN_DEADLINE_MS`): the loaded `run()` races the script against it and
+gives up on its own, so its call ends — the runner cannot cancel a Workers-RPC call, and a call in
+flight keeps the context resident — and the runner settles it `failed` / `deadline`.
 
 An agent's scripts run this way in `<agent>/sandbox`: the agent's creation saga (`src/agent/processor.ts`
 `#assertSandbox`) writes `itx.run ⇒ itx.builtins.cd('<agent>/sandbox').builtins.run` on the agent —

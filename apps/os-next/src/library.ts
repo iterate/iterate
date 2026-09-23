@@ -12,10 +12,10 @@ import {
   print,
   type ItxExpression,
 } from "iterate/next/expression";
-import { codedError, errorCode, resolveContextPath } from "iterate/next/lib";
+import { codedError, errorCode, resolveContextPath, withTimeout } from "iterate/next/lib";
 import type { Caller } from "iterate/next/principal";
 import type { EventInput, StreamEvent } from "iterate/next/stream/processor";
-import type { RunSettled } from "./stream/core-processor.ts";
+import type { RunSettled, RunSettlement } from "./stream/core-processor.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import { RepoContract } from "./repo/contract.ts";
 import type { RepoDurableObject } from "./repo/durable-object.ts";
@@ -52,9 +52,10 @@ export interface LibraryRoots {
    *  runner starts it at that commit in a confined isolate (`executeScript`: a WorkerEntrypoint
    *  whose `run` hands the script `env.ITX.get()`), and `run` resolves with the `run-settled`
    *  event's result — or rejects with its error. So every script that ever ran is a pair of events
-   *  on the context it ran against, and a run the context's restart interrupted is settled as such,
-   *  never re-run. JSON in, JSON out. A script bakes in its own values — an agent writes it whole
-   *  (an alternative to a tool call), so `run` takes no arguments. */
+   *  on the context it ran against, and a run the context's restart interrupted — or that was still
+   *  running at its ten-minute deadline (RUN_DEADLINE_MS) — is settled as such, never re-run. JSON
+   *  in, JSON out. A script bakes in its own values — an agent writes it whole (an alternative to a
+   *  tool call), so `run` takes no arguments. */
   run(script: string): Promise<unknown>;
   /** An MCP server over Streamable HTTP: `callTool(name, args)`, `listTools()`, and one method per
    *  tool whose name is a legal identifier. */
@@ -280,7 +281,17 @@ export function buildLibrary(
 // The call rides `itx.workers.get(...).run()` on the handle the library holds, so a rule on
 // `itx.workers` applies to it like any other call.
 
-/** The module `run` loads: `script` spliced in as `const script = (…)`. Exported for the unit pin. */
+/** THE RUN DEADLINE: ten minutes from the moment the runner starts a script. A run that has not
+ *  finished by then is settled `failed` / `deadline`, and nothing it started stays in flight: the
+ *  loaded `run()` gives up on its own (the module below — the runner cannot cancel a Workers-RPC call
+ *  it made, and a call in flight keeps this context resident and billed), the runner stops waiting
+ *  (`runSettlementOf`) and a caller's `itx.run` returns. Ten minutes is what an agent's turn already
+ *  allows: its model request expires after ten, and its feed closes a code step at ten
+ *  (apps/agents `adaptContextRuns`). */
+export const RUN_DEADLINE_MS = 10 * 60_000;
+
+/** The module `run` loads: `script` spliced in as `const script = (…)`, raced against the deadline.
+ *  Exported for the unit pin. */
 export function runScriptModule(script: string): { "cap.js": string } {
   return {
     "cap.js": [
@@ -289,9 +300,16 @@ export function runScriptModule(script: string): { "cap.js": string } {
       "export default class extends WorkerEntrypoint {",
       "  async run() {",
       "    const itx = this.env.ITX.get();",
+      "    let deadline;",
       "    try {",
-      "      return await script(itx);",
+      "      return await Promise.race([",
+      "        script(itx),",
+      "        new Promise((_, reject) => {",
+      `          deadline = setTimeout(() => reject(new Error("itx.run: the script did not finish within ${RUN_DEADLINE_MS / 60_000} minutes")), ${RUN_DEADLINE_MS});`,
+      "        }),",
+      "      ]);",
       "    } finally {",
+      "      clearTimeout(deadline);",
       "      itx[Symbol.dispose]?.();",
       "    }",
       "  }",
@@ -313,6 +331,53 @@ export async function executeScript(itx: LibraryItx, code: string): Promise<unkn
   return worker.run();
 }
 
+/** THE RUNNER'S SETTLEMENT of one execution (iterate-context-durable-object.ts `#executeRun`): the
+ *  value through THE JSON BOUNDARY — a round trip keeps what the log carries (undefined and functions
+ *  drop; a bigint or a cycle throws, a runtime failure like any other) — or how it failed: `deadline`
+ *  once RUN_DEADLINE_MS has passed, whichever side gave up first (this wait, the loaded `run()`, or a
+ *  redirect's own runner), else `runtime`. The value is RELEASED once serialized, whenever it lands:
+ *  a Workers-RPC result holds its callee open until disposed, and a returned live value (a function,
+ *  a handle) holds this context with it. The value only, never also its promise: they share one
+ *  disposer, and a second call throws. */
+export async function runSettlementOf(execution: Promise<unknown>): Promise<RunSettlement> {
+  const startedAt = Date.now();
+  try {
+    const json = await withTimeout(
+      execution.then((value) => {
+        try {
+          return JSON.stringify(value);
+        } finally {
+          // Any value may carry a disposer (an RPC result, a stub); a primitive or plain data has none.
+          // A disposer that throws (already released, or not ours to release) never turns the run's
+          // outcome into a failure: the release is housekeeping, the settlement is the fact.
+          try {
+            (value as Partial<Disposable> | null | undefined)?.[Symbol.dispose]?.();
+          } catch {
+            /* already released or not ours */
+          }
+        }
+      }),
+      RUN_DEADLINE_MS,
+      "itx.run",
+    );
+    // `json` is absent only for a value JSON has no text for (undefined, a function): the log then
+    // carries no result. (An empty STRING result serializes to `""`, two chars — truthy.)
+    return { status: "succeeded", result: json ? JSON.parse(json) : undefined };
+  } catch (error) {
+    if (Date.now() - startedAt >= RUN_DEADLINE_MS)
+      return {
+        status: "failed",
+        error: `itx.run: the script did not finish within ${RUN_DEADLINE_MS / 60_000} minutes; it may have partly run, and it is not run again`,
+        failureKind: "deadline",
+      };
+    return {
+      status: "failed",
+      error: String(error instanceof Error ? error.message : error).slice(0, 8_000),
+      failureKind: "runtime",
+    };
+  }
+}
+
 /** `script` is wire-fed (`itx.run` over capnweb; the array-form expression carries no argument
  *  validation), so it is typed `unknown` here and the runtime check IS the contract — `LibraryRoots.run`
  *  keeps the `string` signature callers see. */
@@ -327,9 +392,12 @@ export async function runScript(itx: LibraryItx, script: unknown): Promise<unkno
     payload: { code: script },
   });
   const requestOffset = requested!.offset; // the run's identity: its settlement names it
-  // The runner started at that commit. Wait for ITS settlement — as long as the script takes: the
-  // caller's own call holds the context, and each wait is capped (stream.ts), so re-arm on timeout
-  // from the last event seen; a settlement of another run in between is skipped, not lost.
+  // The runner started at that commit and settles by the deadline. Wait for ITS settlement: each
+  // wait is capped (stream.ts), so re-arm on timeout from the last event seen — a settlement of
+  // another run in between is skipped, not lost — until a minute past the deadline, time for the
+  // settlement's own append. None by then means the runner could not record one (it reports why):
+  // give up rather than hold the caller's call, and this context with it, open.
+  const waitUntil = Date.now() + RUN_DEADLINE_MS + 60_000;
   let afterOffset = requestOffset;
   for (;;) {
     let settled;
@@ -337,10 +405,15 @@ export async function runScript(itx: LibraryItx, script: unknown): Promise<unkno
       settled = await itx.builtins.waitForEvent({
         type: "events.iterate.com/context/run-settled",
         afterOffset,
-        timeoutMs: 120_000,
+        timeoutMs: Math.min(120_000, Math.max(0, waitUntil - Date.now())),
       });
     } catch (error) {
       if (errorCode(error) !== "WAIT_TIMEOUT") throw error;
+      if (Date.now() >= waitUntil)
+        throw codedError(
+          "WAIT_TIMEOUT",
+          `itx.run: no settlement of run ${requestOffset} within ${(RUN_DEADLINE_MS + 60_000) / 60_000} minutes`,
+        );
       continue;
     }
     afterOffset = settled.offset;

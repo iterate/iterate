@@ -240,7 +240,8 @@ export interface IterateContextApi {
   ): Promise<{ [Symbol.dispose](): void }>;
   /** A script — the text of `async (itx) => { … }` — run once against this context, on its log:
    *  `context/run-requested` under the caller, the context's runner, `run-settled` (JSON in, JSON
-   *  out); resolves with the result or rejects with the settlement's error. Never re-run. */
+   *  out); resolves with the result or rejects with the settlement's error. Never re-run. A script
+   *  still running ten minutes after it started is settled failed (`failureKind: "deadline"`). */
   run(script: string): Promise<unknown>;
   /** The project's repos, workspaces and agents as domain objects — one shape each: `get(path)` is
    *  the entity's facet on the context at `path` (its verbs, plus the typed `append` on that
