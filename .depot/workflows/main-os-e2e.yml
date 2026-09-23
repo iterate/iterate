@@ -203,11 +203,12 @@ jobs:
           overwrite: true
 
   # The residency gate (apps/os/scripts/preview-residency.ts), read-only. No release after it: the
-  # preview is deleted next, which ends every session with it.
+  # preview is deleted next, which ends every session with it. A superseded (cancelled) run skips
+  # it, so `delete` runs at once instead of after the analytics wait.
   residency:
     name: residency
     needs: [deploy, e2e]
-    if: always() && needs.e2e.outputs.suite-started != ''
+    if: ${{ !cancelled() && needs.e2e.outputs.suite-started != '' }}
     runs-on:
       size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree

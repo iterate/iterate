@@ -55,6 +55,10 @@ test("deploys, tests and reads residency on a throwaway preview named for the co
 test("always deletes the preview and everything it created, cancelled or failed", () => {
   expect(main.jobs.delete?.if).toBe("always()");
   expect([main.jobs.delete?.needs].flat()).toEqual(["deploy", "e2e", "residency"]);
+  // a superseded run skips the analytics wait, so the delete is not held behind it
+  expect(main.jobs.residency?.if).toBe(
+    "${{ !cancelled() && needs.e2e.outputs.suite-started != '' }}",
+  );
   expect(runs("delete")).toContain(
     'PREVIEW_NAME="main-${GITHUB_SHA::7}" doppler run -- pnpm preview delete',
   );
