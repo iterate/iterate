@@ -7,7 +7,7 @@
 //   invoke handle — `InvokeHandle` + the prototype hop: the DOTTED DOOR, every unknown chain one `invoke(expression)`
 import JSON5 from "json5";
 import { RpcTarget } from "capnweb";
-import { codedError, jsonEqual } from "./lib.ts";
+import { codedError, jsonEqual, reportIssue } from "./lib.ts";
 
 /** A STRING expression is for what a person types: short. Anything bigger — a worker's source, a large
  *  literal — rides the PARSED form (`["itx","workers",["get",{ source }]]`), which is plain data and never
@@ -289,6 +289,28 @@ export function registerPipelinedRpcBrand(brand: abstract new (...args: never[])
 }
 const pipelined = (v: unknown): boolean => PIPELINED_RPC_BRANDS.some((b) => v instanceof b);
 
+// Workers-RPC brands whose every value HOLDS A SESSION — and the actor at its far end — open until
+// disposed: a stub, a call's promise, a property. Registered at boot beside the pipelined brands
+// (os-next iterate-context.ts), for the same reason: the unit tests run this module in Node.
+const RPC_SESSION_BRANDS: (abstract new (...args: never[]) => unknown)[] = [];
+/** Register a brand whose values hold a Workers-RPC session until disposed. */
+export function registerRpcSessionBrand(brand: abstract new (...args: never[]) => unknown): void {
+  RPC_SESSION_BRANDS.push(brand);
+}
+const holdsRpcSession = (v: unknown): boolean => RPC_SESSION_BRANDS.some((b) => v instanceof b);
+
+/** Release each of `rpcSessions`, the last first. The answer they served is already in, so a release
+ *  that throws is reported, never made the call's failure. */
+export function releaseRpcSessions(rpcSessions: readonly unknown[]): void {
+  for (const rpcSession of [...rpcSessions].reverse())
+    try {
+      // A session-brand value or an RPC result object: each carries a disposer, or has nothing to release.
+      (rpcSession as Partial<Disposable>)[Symbol.dispose]?.();
+    } catch (error) {
+      reportIssue("itx-expression.release-rpc-session", error);
+    }
+}
+
 /** Resolve one step's property. `__proto__` / `constructor` / `prototype` never resolve — `constructor`
  *  would hand out the class itself (trusted clients or not, that is not a step anyone means). */
 function stepGet(value: object, key: string): unknown {
@@ -308,19 +330,22 @@ function stepGet(value: object, key: string): unknown {
  * stub may never be serialized (`requireAllowsTransfer()` throws unconditionally) → `DataCloneError:
  * Durable Object Facet stubs cannot be transferred between Workers`. Do not "simplify" this away.
  *
- * `pipelinedIntermediates`, when given, collects every pipelined value the walk stepped PAST (the
- * `repos()` of `facet.repos().create(path)`): each keeps its Workers-RPC session open until disposed,
- * so a caller that owns the round trip disposes them once the answer is in (facet-host.ts `#call`).
+ * `rpcSessionsSteppedPast`, when given, collects every value the walk stepped PAST that holds a
+ * Workers-RPC session — pipelined (the `repos()` promise of `facet.repos().create(path)`) or awaited
+ * (the collection stub a facet call answered, walked on for `.list()`): each keeps its session, and the
+ * actor at its far end, open until disposed, so the walk's owner releases them once the answer is in
+ * (`releaseRpcSessions`; the resolver's `invoke`, facet-host.ts `#call`). Never the start, never the
+ * answer.
  */
 export async function walkSteps(
   start: { value: unknown; receiver: unknown },
   steps: ItxExpression,
-  pipelinedIntermediates?: unknown[],
+  rpcSessionsSteppedPast?: unknown[],
 ): Promise<{ value: unknown; receiver: unknown }> {
   let { value, receiver } = start;
   for (const [stepIndex, step] of steps.entries()) {
     if (!pipelined(value)) value = await value;
-    else if (stepIndex > 0) pipelinedIntermediates?.push(value);
+    if (stepIndex > 0 && holdsRpcSession(value)) rpcSessionsSteppedPast?.push(value);
     if (value == null)
       throw new Error(
         `hit ${String(value)} at step ${stepIndex + 1} of ${print(steps)} (${JSON.stringify(step)})`,
@@ -559,14 +584,13 @@ export function walkStepsOnRpcStub(stub: unknown, steps: ItxExpression): unknown
 export class FacetHandle extends InvokeHandle {}
 
 /** A HANDLE ON THE WIRE IS THE EXPRESSION THAT NAMES IT. An `InvokeHandle` a context mints (`repos.get(path)`,
- *  `workspaces.get(path)`, `facets.get(name)`, `cd(path)`, `workers.get(spec)`) holds no state — it is a
- *  dispatch closure over a path — yet as a Workers-RPC result it would cross a hop as a LIVE stub whose
- *  session keeps the context's actor resident for as long as the holder keeps it (prd 2026-09-22: ~125
- *  such sessions parked around the clock). So the context's RPC door answers with THIS instead: the
- *  caller's own expression, which from the caller's root denotes the same handle; the caller mints its
- *  own handle over it (`materializeItxHandleReference`), and every later verb is one whole call the
- *  context resolves from scratch. Nothing outlives a call. A lent client stub (`RpcStubHandle`) is the
- *  one handle that IS live and crosses as itself. */
+ *  `workspaces.get(path)`, `facets.get(name)`, `cd(path)`, `workers.get(spec)`, `rpcStubs.get(key)`)
+ *  holds no state — it is a dispatch closure over a path or a key — yet as a Workers-RPC result it would
+ *  cross a hop as a LIVE stub whose session keeps the context's actor resident for as long as the holder
+ *  keeps it (prd 2026-09-22: ~125 such sessions parked around the clock). So the context answers with
+ *  THIS instead: the caller's own expression, which from the caller's root denotes the same handle; the
+ *  caller mints its own handle over it (`materializeItxHandleReference`), and every later verb is one
+ *  whole call the context resolves from scratch. Nothing outlives a call. */
 export const ITX_HANDLE_REFERENCE_KEY = "$itxHandleExpression";
 export type ItxHandleReference = { [ITX_HANDLE_REFERENCE_KEY]: ItxExpression };
 
@@ -575,27 +599,56 @@ export const isItxHandleReference = (value: unknown): value is ItxHandleReferenc
   typeof value === "object" &&
   Array.isArray((value as Record<string, unknown>)[ITX_HANDLE_REFERENCE_KEY]);
 
-/** What a context's RPC door hands back for `expression`'s result: a reference when the result is a
- *  path-shaped handle (an `InvokeHandle` that is not a lent stub) or a reference from a hop below —
- *  re-rooted, since `expression` is how THIS caller reached it — else nothing (the result crosses as it
- *  is). Runtime args that fold into a terminal NAME fold here exactly as the resolver folds them, so the
- *  reference is the call the resolver ran; args left over apply to the value and never name a handle. */
-export function itxHandleReferenceOf(
+/** An object a Workers-RPC call answered with: workerd gives every such object but a stub a
+ *  `Symbol.dispose` that releases what that call left open. */
+const isRpcResultWithDisposer = (value: unknown): value is Disposable =>
+  // A primitive or null reads as no disposer; an object's is whatever it carries.
+  typeof (value as Partial<Disposable> | null | undefined)?.[Symbol.dispose] === "function";
+
+/** A CONTEXT'S INBOUND SESSION ENDS WITH THE CALL, WHATEVER THE CALLER KEEPS — and a careless caller
+ *  (userspace code) keeps everything and disposes nothing. What a context's RPC `invoke` hands back for
+ *  `expression`'s result, `args` being the call's runtime args:
+ *   - A LIVE result — any `InvokeHandle` (a lent stub's `RpcStubHandle` too: it dispatches by its key,
+ *     so the key's expression reaches the same lent stub), any other RpcTarget, a function, a
+ *     Workers-RPC stub a hop below answered with, a reference a hop below answered with — becomes the
+ *     expression that names it, re-rooted at THIS caller, and a stub is released. Runtime args fold
+ *     into a terminal NAME as the resolver folds them; any left over are the anonymous call on the
+ *     value, as the resolver applies them.
+ *   - DATA a hop below answered with carries that hop's disposer, and workerd keeps a call's session —
+ *     and the actor — open for as long as the caller holds an answer that has one (measured 2026-09-23:
+ *     a facet holding a loaded worker's `{ a: 1 }` that its context handed through kept the context
+ *     resident until the next deploy). It is copied, and the original released.
+ *   - Everything else crosses as it is: data built here, a primitive, and what can neither be copied
+ *     nor named — a stream, a Response, data holding a stub — which stays the holder's to release. */
+export function itxAnswerDetachedFromSession(
   result: unknown,
   expression: ItxExpression,
   args: unknown[] = [],
-): ItxHandleReference | undefined {
+): unknown {
   const last = expression.at(-1);
-  const folded =
-    args.length > 0 && typeof last === "string" && expression.length > 1
-      ? [...expression.slice(0, -1), [last, ...args] as ItxExpressionStep]
-      : args.length > 0
-        ? undefined
-        : expression;
-  if (!folded) return undefined;
-  const isPathShapedHandle = result instanceof InvokeHandle && !(result instanceof RpcStubHandle);
-  if (!isPathShapedHandle && !isItxHandleReference(result)) return undefined;
-  return { [ITX_HANDLE_REFERENCE_KEY]: folded };
+  const reference: ItxHandleReference = {
+    [ITX_HANDLE_REFERENCE_KEY]:
+      args.length === 0
+        ? expression
+        : typeof last === "string" && expression.length > 1
+          ? [...expression.slice(0, -1), [last, ...args]]
+          : [...expression, ["", ...args]],
+  };
+  if (holdsRpcSession(result)) {
+    releaseRpcSessions([result]);
+    return reference;
+  }
+  if (result instanceof RpcTarget || typeof result === "function" || isItxHandleReference(result))
+    return reference;
+  if (!isRpcResultWithDisposer(result)) return result;
+  let copy: unknown;
+  try {
+    copy = structuredClone(result);
+  } catch {
+    return result; // a stream, a Response, data holding a stub: not data a copy can carry
+  }
+  releaseRpcSessions([result]);
+  return copy;
 }
 
 /** The holder's side: a reference becomes a handle of the HOLDER's own whose every dotted call is one

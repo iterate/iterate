@@ -2135,7 +2135,11 @@ re-materializes from its durable startup memo on the next call, its storage havi
 survived. A facet's answer arrives as a Workers-RPC result carrying a disposer that holds a reference
 on the facet until disposed or GC'd — GC is too late for the release — so the DO copies the data out
 and disposes the result at once; the SDK host releases its `env.ITX.get()` capability after every
-append and read for the same reason.
+append and read for the same reason. The context holds ITS callers to the same rule without asking
+them to be careful: its RPC `invoke` answers a live object with the expression that names it and
+data a hop below answered with as a copy (`itxAnswerDetachedFromSession` in
+`iterate/next/expression`), and the step walk releases every stub it walked past once the answer is
+in — so a caller's session onto the context ends with the call, whatever that caller keeps.
 
 ### Alarms only while something is owed
 

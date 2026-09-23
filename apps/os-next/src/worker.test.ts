@@ -13,6 +13,7 @@ vi.mock("cloudflare:workers", () => ({
   RpcTarget: class {},
   DurableObject: class {},
   WorkerEntrypoint: class {},
+  RpcStub: class {},
   RpcPromise: class {},
   RpcProperty: class {},
 }));

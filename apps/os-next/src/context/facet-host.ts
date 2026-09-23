@@ -18,6 +18,7 @@ import {
   type ItxExpression,
   type ItxExpressionInput,
   walkSteps,
+  releaseRpcSessions,
   FacetHandle,
 } from "iterate/next/expression";
 import {
@@ -496,13 +497,14 @@ export class FacetHost {
     name: string,
     itxExpressionSteps: ItxExpression,
   ): Promise<unknown> {
-    // Every pipelined step the walk went PAST (`repos()` in `repos().create(path)`) holds a session
-    // onto the facet — and so this actor — until disposed: released once the call settles, below.
-    const pipelinedIntermediates: unknown[] = [];
+    // Every step the walk went PAST (`repos()` in `repos().create(path)`, when one call walks several
+    // steps on the facet — a subscription target's, a handle's own `invoke`) holds a session onto the
+    // facet, and so this actor, until disposed: released once the call settles, below.
+    const rpcSessionsSteppedPast: unknown[] = [];
     const call = walkSteps(
       { value: facet, receiver: undefined },
       itxExpressionSteps,
-      pipelinedIntermediates,
+      rpcSessionsSteppedPast,
     ).then((walked) => walked.value);
     let result: unknown;
     try {
@@ -530,9 +532,7 @@ export class FacetHost {
       }
       throw error;
     } finally {
-      // A step is a Workers-RPC promise or property: disposable, or nothing to release.
-      for (const step of pipelinedIntermediates)
-        (step as Partial<Disposable> | undefined)?.[Symbol.dispose]?.();
+      releaseRpcSessions(rpcSessionsSteppedPast);
     }
     // A Workers-RPC RESULT object carries a disposer that references the FACET until disposed or
     // GC'd — and GC is too late for the release: an aborted facet stayed referenced through every
