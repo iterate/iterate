@@ -307,14 +307,20 @@ function stepGet(value: object, key: string): unknown {
  * calling it passes the stub as an argument, so workerd serializes it — and a Worker-Loader facet
  * stub may never be serialized (`requireAllowsTransfer()` throws unconditionally) → `DataCloneError:
  * Durable Object Facet stubs cannot be transferred between Workers`. Do not "simplify" this away.
+ *
+ * `pipelinedIntermediates`, when given, collects every pipelined value the walk stepped PAST (the
+ * `repos()` of `facet.repos().create(path)`): each keeps its Workers-RPC session open until disposed,
+ * so a caller that owns the round trip disposes them once the answer is in (facet-host.ts `#call`).
  */
 export async function walkSteps(
   start: { value: unknown; receiver: unknown },
   steps: ItxExpression,
+  pipelinedIntermediates?: unknown[],
 ): Promise<{ value: unknown; receiver: unknown }> {
   let { value, receiver } = start;
   for (const [stepIndex, step] of steps.entries()) {
     if (!pipelined(value)) value = await value;
+    else if (stepIndex > 0) pipelinedIntermediates?.push(value);
     if (value == null)
       throw new Error(
         `hit ${String(value)} at step ${stepIndex + 1} of ${print(steps)} (${JSON.stringify(step)})`,

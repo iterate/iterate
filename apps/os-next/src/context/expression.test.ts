@@ -254,6 +254,23 @@ describe("pipelined RPC promise threading", () => {
     expect(FakeRpcPromise.awaited).toEqual(["dial.svc(x).add(2,3)"]);
   });
 
+  test("pipelinedIntermediates collects every pipelined value stepped past — never the start, never the answer", async () => {
+    // facet-host.ts `#call` disposes these: each held its session (and the facet's actor) open until
+    // GC — `repos()` of `facet.repos().create(path)` kept a project's root resident (2026-09-23).
+    const itx = { dial: () => new FakeRpcPromise("dial") };
+    const pipelinedIntermediates: unknown[] = [];
+    const { value } = await walkSteps(
+      { value: itx, receiver: undefined },
+      parse("itx.dial().svc('x').add(2, 3)").slice(1),
+      pipelinedIntermediates,
+    );
+    expect(pipelinedIntermediates.map((step) => (step as FakeRpcPromise).chain)).toEqual([
+      "dial",
+      "dial.svc(x)",
+    ]);
+    expect((value as FakeRpcPromise).chain).toBe("dial.svc(x).add(2,3)");
+  });
+
   test("an UNREGISTERED thenable keeps the default: awaited at every step", async () => {
     const awaited: string[] = [];
     const plain = (chain: string) => ({
