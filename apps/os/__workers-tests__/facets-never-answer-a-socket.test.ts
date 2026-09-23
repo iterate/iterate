@@ -21,8 +21,9 @@ import { adminCredentials, openSession, stub } from "./support.ts";
 /** A stateful app hosted as a facet: `fetch()` serves plain HTTP AND would upgrade a WebSocket if
  *  asked — so the refusal below is the platform's, not the class's. `hits()` is its RPC method. */
 const SRC_APP_FACET = /* js */ `
-import { DurableObject } from "cloudflare:workers";
-export class AppFacetDurableObject extends DurableObject {
+import { FacetDurableObject } from "./processor.js";
+export class AppFacetDurableObject extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "hits"];
   #hits = 0;
   fetch(request) {
     this.#hits++;
@@ -89,7 +90,7 @@ test("the DO's invoke method refuses the same upgrade, coded, on a facet it has 
     (error: unknown) => errorCode(error),
   );
   expect(bare).toBe("NO_FACET");
-  // A plain fetch through `FacetHost#invoke` hosts it and answers — the ordinary method walk.
+  // A plain fetch through `FacetHost#callFacet` hosts it and answers — the ordinary method walk.
   const plain = (await stub(ctx).invoke([
     "itx",
     "facets",

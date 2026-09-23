@@ -173,7 +173,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** Native operator RPC only. Bypass every project rewrite so no project code can observe
    * the admin credential. The first-party secret facet independently verifies it. */
   async exportSecretForProjectSeed(adminSecret: string): Promise<unknown> {
-    return this.#facetHost.invoke("secret", undefined, [["exportForProjectSeed", adminSecret]]);
+    return this.#facetHost.callFacetAsPlatform("secret", [["exportForProjectSeed", adminSecret]]);
   }
 
   /** WHO THIS DO IS: the DO name parsed ONCE into `{ name, projectId, path }`. A context is only
@@ -606,13 +606,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         }),
       list: () => this.#rpcStubs.listRpcStubKeys(),
     },
-    // The facets (context/facet-host.ts): the handle every `itx.facets.get` call walks, and the
-    // claim a hosted processor makes on this context's alarm.
+    // The facets (context/facet-host.ts): the handle every `itx.facets.get` call walks, the
+    // platform's own call past the facets' lists (the `itx.secrets` verbs), and the claim a hosted
+    // processor makes on this context's alarm.
     claimFacetAlarm: (name, at) => this.#facetHost.claim(name, at),
     facets: {
       get: (name, spec) => this.#facetHost.handle(name, spec),
       abort: (name, reason) => this.#facetHost.abort(name, reason),
     },
+    callFacetAsPlatform: (name, itxExpressionSteps) =>
+      this.#facetHost.callFacetAsPlatform(name, itxExpressionSteps),
     abortAfterTheAnswer: (message) => this.#abortAfterTheAnswer(message),
     schedules: {
       list: () => Object.values(this.#stream.coreReducedState.schedules),
@@ -674,6 +677,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     stream: this.#stream,
     // The RESOLVER's door, not this class's `invoke`: the loop's evaluation is the kernel's own call.
     evaluateItxExpression: (itxExpression) => this.#itxExpressionResolver.invoke(itxExpression),
+    // A facet row's push and catch-up: the facet host's platform entries, past the facet's list.
+    pushEventBatchToFacet: (facetHandle, events, range) =>
+      this.#facetHost.pushEventBatchToFacet(facetHandle, events, range),
+    catchUpFacetFromLog: (facetHandle) => this.#facetHost.catchUpFacetFromLog(facetHandle),
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
   });
 
@@ -1253,7 +1260,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // This context IS the secret's: its facet dials. Hosted on demand, row or no row — a secret
     // never set refuses inside the facet ("no stored project secret"), the same 502 as before.
     if (secretPath === path)
-      return this.#facetHost.invoke("secret", undefined, [
+      return this.#facetHost.callFacetAsPlatform("secret", [
         ["fetch", outbound],
       ]) as Promise<Response>;
     // Another context's: its own `fetch` door lands in ITS `#egress`, the branch above.

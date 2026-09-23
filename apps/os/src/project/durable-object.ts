@@ -18,6 +18,9 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
   { ITX?: ItxEntrypointService },
   ItxEntrypointScope
 > {
+  /** The processor's reads, and the two collections `itx.repos` / `itx.workspaces` reach (library.ts). */
+  static override publicMethods = [...super.publicMethods, "repos", "workspaces"];
+
   processor = new ProjectProcessor((call) => this.withItx(call));
 
   // THE COLLECTIONS are METHODS, not fields: Workers RPC reaches only what the PROTOTYPE declares,

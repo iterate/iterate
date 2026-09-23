@@ -21,6 +21,12 @@
 // retried by the next incarnation within 20 s, a batch that keeps killing its caller halts after
 // fifteen attempts, as fifteen refusals would, and NOTHING IN MEMORY IS A REASON TO WAKE.
 //
+// A FACET IS PUSHED THROUGH THE PLATFORM'S OWN ENTRIES: a row's target evaluates to the facet's
+// FacetHandle, and the loop hands that handle to the facet host's push and catch-up
+// (context/facet-host.ts `pushEventBatchToFacet`, `catchUpFacetFromLog`) — never the handle's own walk,
+// which reaches only what the facet's class lists for callers (context/facet-public-methods.ts). A
+// facet row whose target names any other method is walked like any caller's call.
+//
 // Nothing here reads a "kind" off an event: the kind is the evaluated value's brand, minted by the
 // built-in that produced it. Every delivery carries `{ after, through }`; per subscription the loop
 // remembers the last `through` it handed over, so a batch the filter skipped still rides inside the
@@ -130,7 +136,7 @@ type SubscriptionDeliveryRecord = {
     configuredAtOffset: number;
     rewriteRulesRef: object;
     head: unknown;
-    call: (args: unknown[]) => Promise<void>;
+    call: (events: StreamEvent[], range: ScannedRange) => Promise<void>;
   };
 };
 
@@ -174,6 +180,15 @@ type SubscriptionDeliveryDeps = {
   stream: Stream;
   /** Evaluate an itx expression through the context's own dispatch — a handle, a function, a value. */
   evaluateItxExpression: (expression: ItxExpression) => Promise<unknown>;
+  /** A facet row's push: `processEventBatch(events, range)` on the facet a target evaluated to, through
+   *  the facet host's platform entry. */
+  pushEventBatchToFacet: (
+    facetHandle: FacetHandle,
+    events: StreamEvent[],
+    range: ScannedRange,
+  ) => Promise<unknown>;
+  /** A facet row's catch-up from the log, through the facet host's platform entry. */
+  catchUpFacetFromLog: (facetHandle: FacetHandle) => Promise<unknown>;
   /** A row's claim changed OFF the commit path (a commit's own tail reconciles): the DO
    *  reconciles its alarm against `deadlines()`. */
   reconcileAlarm: () => void;
@@ -186,6 +201,8 @@ export type DeliveryDeadline = { name: string; at: number; attempt: number };
 export class SubscriptionDelivery {
   readonly #stream: Stream;
   readonly #evaluateItxExpression: SubscriptionDeliveryDeps["evaluateItxExpression"];
+  readonly #pushEventBatchToFacet: SubscriptionDeliveryDeps["pushEventBatchToFacet"];
+  readonly #catchUpFacetFromLog: SubscriptionDeliveryDeps["catchUpFacetFromLog"];
   readonly #reconcileAlarm: SubscriptionDeliveryDeps["reconcileAlarm"];
   /** What the loop remembers per row, by name (SubscriptionDeliveryRecord). */
   readonly #deliveryRecordByName = new Map<string, SubscriptionDeliveryRecord>();
@@ -204,6 +221,8 @@ export class SubscriptionDelivery {
   constructor(deps: SubscriptionDeliveryDeps) {
     this.#stream = deps.stream;
     this.#evaluateItxExpression = deps.evaluateItxExpression;
+    this.#pushEventBatchToFacet = deps.pushEventBatchToFacet;
+    this.#catchUpFacetFromLog = deps.catchUpFacetFromLog;
     this.#reconcileAlarm = deps.reconcileAlarm;
     // The persisted cursors seed memory once, here — after this, memory is the one truth.
     for (const [name, cursor] of this.#stream.storage.listSubscriptionCursors())
@@ -349,7 +368,7 @@ export class SubscriptionDelivery {
       return;
     if (!(head instanceof FacetHandle)) return;
     try {
-      await head.invoke([["catchUpFromLog"]]);
+      await this.#catchUpFacetFromLog(head);
     } catch (error) {
       // A catch-up refused for good (a latched checkpoint, an event over its ceiling) HALTS the row
       // as a push's refusal would (below) — else the row stays live, re-pushed into the same wall on
@@ -513,7 +532,7 @@ export class SubscriptionDelivery {
           });
           return;
         }
-        void call([events, range])
+        void call(events, range)
           .catch((error) => {
             if (errorCode(error) !== "RPC_STUB_OFFLINE")
               console.warn({
@@ -529,13 +548,13 @@ export class SubscriptionDelivery {
         return;
       }
       // A FACET owns its checkpoint: push, AWAITED, so this facet's batches stay in order and no
-      // release aborts it mid-reduce (`releasePins` waits for the in-flight count). The DO's facet watchdog (FacetHost#invoke, 60 s) bounds a
+      // release aborts it mid-reduce (`releasePins` waits for the in-flight count). The DO's facet watchdog (FacetHost#call, 60 s) bounds a
       // hung facet; its own gap repair covers a dropped push.
       try {
         const chars = serializedChars(events);
         await this.#deliveryCharsInFlight.acquire(chars);
         try {
-          await call([events, range]);
+          await call(events, range);
         } finally {
           this.#deliveryCharsInFlight.release(chars);
         }
@@ -547,7 +566,7 @@ export class SubscriptionDelivery {
           this.#haltRow(name, row.configuredAtOffset, range.after, 1, error);
           return;
         }
-        // A push the watchdog TIMED OUT aborted the facet (FacetHost#invoke): the batch was never
+        // A push the watchdog TIMED OUT aborted the facet (FacetHost#call): the batch was never
         // checkpointed and nothing else redelivers it, so the restarted facet CATCHES UP from the
         // log — queued behind whatever already waits on this row (a later push heals the same gap
         // on its own; the catch-up is then a no-op). ONE catch-up per timed-out push: a batch that
@@ -613,7 +632,10 @@ export class SubscriptionDelivery {
   async #evaluateTargetHeadForRow(
     name: string,
     row: Subscription,
-  ): Promise<{ head: unknown; call: (args: unknown[]) => Promise<void> }> {
+  ): Promise<{
+    head: unknown;
+    call: (events: StreamEvent[], range: ScannedRange) => Promise<void>;
+  }> {
     const rewriteRulesRef = this.#stream.coreReducedState.itxExpressionRewriteRules;
     const cached = this.#deliveryRecordByName.get(name)?.evaluatedTargetHead;
     if (
@@ -635,10 +657,11 @@ export class SubscriptionDelivery {
   /** Evaluate a target's HEAD (everything but a trailing method name) and return the value plus the
    *  one call to make on it. A target ending in a call step names the callee itself (a bare lent
    *  callback: `itx.rpcStubs.get('k')`); a trailing property step names the method to call on it
-   *  (`…get('presence').processEventBatch`). */
-  async #evaluateItxExpressionTargetHead(
-    target: ItxExpression,
-  ): Promise<{ head: unknown; call: (args: unknown[]) => Promise<void> }> {
+   *  (`…get('presence').processEventBatch`) — on a facet, the facet host's push. */
+  async #evaluateItxExpressionTargetHead(target: ItxExpression): Promise<{
+    head: unknown;
+    call: (events: StreamEvent[], range: ScannedRange) => Promise<void>;
+  }> {
     const last = target.at(-1);
     // A trailing name is a METHOD only past the root and one more step: a two-step target
     // (`itx.<alias>`) IS the callee and is root-called whole — peeling its name would leave the bare
@@ -648,10 +671,14 @@ export class SubscriptionDelivery {
     // Every lane below AWAITS this only for the ack and IGNORES the return. A Workers-RPC/capnweb
     // call result pins the callee's export table until disposed, so release it here — a live client's
     // push runs on every commit, and leaving each result to GC would leak a slot per delivered batch.
-    const call = async (args: unknown[]): Promise<void> => {
+    const call = async (events: StreamEvent[], range: ScannedRange): Promise<void> => {
+      if (head instanceof FacetHandle && method === "processEventBatch") {
+        await this.#pushEventBatchToFacet(head, events, range);
+        return;
+      }
       const walked = method
-        ? (await walkSteps({ value: head, receiver: undefined }, [[method, ...args]])).value
-        : await callOn(head, undefined, args);
+        ? (await walkSteps({ value: head, receiver: undefined }, [[method, events, range]])).value
+        : await callOn(head, undefined, [events, range]);
       // A PIPELINED call answers with a branded promise the step walk hands back UNAWAITED
       // (expression.ts): settle it HERE, before the dispose — otherwise a sibling hop's refusal
       // (FORBIDDEN from the target context) or a hang was disposed unseen and the batch acked as
@@ -883,7 +910,7 @@ export class SubscriptionDelivery {
             const { call } = await this.#evaluateTargetHeadForRow(name, row);
             if (!this.cursor(name)) continue; // replaced while the target was evaluated
             await withTimeout(
-              call([events, range]),
+              call(events, range),
               CURSOR_DELIVERY_CALL_WATCHDOG_MS,
               `subscription "${name}"`,
             );

@@ -41,8 +41,9 @@ export default class extends WorkerEntrypoint {
  *  answers. */
 const COUNTER = {
   source: {
-    "cap.js": `import { DurableObject } from "cloudflare:workers";
-export class CounterDurableObject extends DurableObject {
+    "cap.js": `import { FacetDurableObject } from "./processor.js";
+export class CounterDurableObject extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "bump", "hang"];
   inMemory = 0;
   async bump() {
     this.inMemory += 1;

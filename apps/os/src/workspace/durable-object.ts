@@ -66,6 +66,22 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
   { ITX?: ItxEntrypointService },
   ItxEntrypointScope
 > {
+  /** The processor's reads, and the workspace's own verbs — what `itx.workspaces.get(path)` reaches
+   *  (library.ts). */
+  static override publicMethods = [
+    ...super.publicMethods,
+    "mounts",
+    "readFile",
+    "readBase",
+    "writeFile",
+    "deleteFile",
+    "revert",
+    "listAllFiles",
+    "gitStatus",
+    "gitCommit",
+    "gitLog",
+  ];
+
   processor = new WorkspaceProcessor((call) => this.withItx(call));
 
   #pathRead?: string;

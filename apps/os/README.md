@@ -101,6 +101,12 @@ The [engineering invariant](../../docs/engineering-invariants.md) defines the re
 repository; commits to `/repos/config` publish the pinned `worker.ts` revision. The optional
 `configs-next/with-agents` template adds userspace agents. See [project creation](docs/project-creation.md).
 
+A context hosts Durable Object classes as facets (`itx.facets.get(name, { source, className })`, or
+a processor's row). A caller reaches a facet by itx expression only through the methods its class
+lists in `static publicMethods`: extend `FacetDurableObject` or `StreamProcessorDurableObject` from
+`iterate/next/sdk` and add your own (`[...super.publicMethods, "send"]`); the platform's own calls
+go around the list (`src/context/facet-public-methods.ts`).
+
 The MCP endpoint is `/mcp` on each platform deployment (production also serves
 https://mcp.iterate.com). It exposes `run({ project?, script })`, where `script` is an
 `async (itx) => …` function. The deployed integration test

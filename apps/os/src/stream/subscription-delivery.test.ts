@@ -96,6 +96,11 @@ function incarnation(
         );
       return value;
     },
+    // The facet host's platform entries (context/facet-host.ts), stood in for by each fake
+    // FacetHandle's own walk: what a test's facet records is what the facet host would call.
+    pushEventBatchToFacet: async (facetHandle, events, range) =>
+      facetHandle.invoke([["processEventBatch", events, range]]),
+    catchUpFacetFromLog: async (facetHandle) => facetHandle.invoke([["catchUpFromLog"]]),
     reconcileAlarm: () => coordinator.reconcile(),
   });
   stream.appendBirthRecord(); // created + woken on a fresh store…

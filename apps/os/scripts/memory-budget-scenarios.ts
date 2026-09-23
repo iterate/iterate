@@ -22,6 +22,7 @@ import { deserialize, serialize } from "node:v8";
 import { FacetHandle } from "iterate/next/expression";
 import { errorCode } from "iterate/next/lib";
 import {
+  type ScannedRange,
   type StreamEvent,
   ProcessorEngine,
   StreamProcessor,
@@ -32,6 +33,17 @@ import { CoreContract, normalizeControlEvent } from "../src/stream/core-processo
 import { nodeSqliteDurableObjectStorage } from "../src/stream/test-support.ts";
 import { Stream, type DurableObjectStorageSlice } from "../src/stream/stream.ts";
 import { SubscriptionDelivery } from "../src/stream/subscription-delivery.ts";
+
+/** The facet host's platform entries (context/facet-host.ts), stood in for by each fake
+ *  FacetHandle's own walk. */
+const facetHostPlatformEntries = {
+  pushEventBatchToFacet: async (
+    facetHandle: FacetHandle,
+    events: StreamEvent[],
+    range: ScannedRange,
+  ) => facetHandle.invoke([["processEventBatch", events, range]]),
+  catchUpFacetFromLog: async (facetHandle: FacetHandle) => facetHandle.invoke([["catchUpFromLog"]]),
+};
 
 /** These workloads run no background work, so the engine never claims the alarm: a stub that must
  *  never be reached. */
@@ -437,6 +449,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       stream,
       evaluateItxExpression: async () =>
         new FacetHandle(() => new Promise((resolve) => callsInFlight.push(resolve))),
+      ...facetHostPlatformEntries,
       reconcileAlarm: () => {},
     });
     stream.append(
@@ -489,6 +502,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
           callsStarted++;
           return new Promise((resolve) => callsInFlight.push(resolve));
         }),
+      ...facetHostPlatformEntries,
       reconcileAlarm: () => {},
     });
     const typeOf = (i: number) => (args.disjointTypes ? `blob-${i % args.rowCount}` : "blob");
@@ -574,6 +588,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
           }, args.callMs ?? 250),
         );
       },
+      ...facetHostPlatformEntries,
       reconcileAlarm: () => {},
     });
     stream.append({ type: "blob", payload: { n: -1 } }); // ONE commit
@@ -607,6 +622,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
         callsStarted++;
         return new Promise((resolve) => callsInFlight.push(resolve));
       },
+      ...facetHostPlatformEntries,
       reconcileAlarm: () => {},
     });
     stream.append(

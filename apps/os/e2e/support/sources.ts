@@ -10,9 +10,9 @@ import type { WorkerSource } from "../../src/context/worker-loader.ts";
  *  literally at every load site (`itx.workers.get({ source: SOURCES.probe })`, `facets.get(name, { source: … })`). */
 export const SOURCES: Record<string, WorkerSource> = {
   chatroom: {
-    "cap.js": `import { DurableObject } from "cloudflare:workers";
-import { LiveState } from "./processor.js";
-export class ChatroomDurableObject extends DurableObject {
+    "cap.js": `import { FacetDurableObject, LiveState } from "./processor.js";
+export class ChatroomDurableObject extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "post", "state"];
   #chat = new LiveState({ append: (e) => this.env.ITX.get().append(e) }, "chat", { messages: [] });
   post(from, text) {
     this.#chat.set({ messages: [...this.#chat.get().messages, { from, text }] });
@@ -33,8 +33,9 @@ export default class Probe extends WorkerEntrypoint {
 }`,
   },
   keeper: {
-    "cap.js": `import { DurableObject } from "cloudflare:workers";
-export class KeeperDurableObject extends DurableObject {
+    "cap.js": `import { FacetDurableObject } from "./processor.js";
+export class KeeperDurableObject extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "stash", "useStashed"];
   async stash() {
     await this.ctx.storage.put("itx-cap", this.env.ITX);
     return { stashed: true };

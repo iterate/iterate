@@ -55,6 +55,20 @@ const Certificate = z.discriminatedUnion("type", [
 ]);
 
 export class AgentCollectionDurableObject extends StreamProcessorDurableObject<AgentCatalogState> {
+  /** The processor's reads, and `itx.agents`: the collection's verbs, `at(base)` (the collection an
+   *  agent's own `itx.agents` rule reaches, collection.ts) and `announce` (a certificate from an
+   *  agent context). */
+  static override publicMethods = [
+    ...super.publicMethods,
+    "list",
+    "get",
+    "create",
+    "delete",
+    "upgrade",
+    "at",
+    "announce",
+  ];
+
   processor = new AgentCatalogProcessor();
   at(base: string) {
     return new AgentCollectionRpcTarget(

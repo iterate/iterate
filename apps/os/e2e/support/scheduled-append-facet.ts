@@ -15,6 +15,7 @@ class Deadlines extends StreamProcessor {
   }
 }
 export class DeadlinesDurableObject extends StreamProcessorDurableObject {
+  static publicMethods = [...super.publicMethods, "hasAlarmHandler", "start", "finish"];
   processor = new Deadlines(this.ctx.props.name);
   hasAlarmHandler() { return typeof this.alarm === "function"; }
   async start(job, when) {
