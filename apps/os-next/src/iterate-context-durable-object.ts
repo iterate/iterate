@@ -84,6 +84,10 @@ import { directory, ensureDirectorySchema } from "./directory.ts";
 import { buildBuiltIns, type SubscriptionListEntry } from "./context/built-ins.ts";
 import { FacetHost } from "./context/facet-host.ts";
 import type { ArtifactsNamespace } from "./context/repos.ts";
+import {
+  RESIDENCY_WATCHDOG_WINDOW_MS,
+  decideResidencyWatchdog,
+} from "./context/residency-watchdog.ts";
 import { SubscriptionDelivery, type DeliveryDeadline } from "./stream/subscription-delivery.ts";
 
 function parseIterateContextDurableObjectName(name: string | undefined) {
@@ -125,6 +129,8 @@ export type AlarmTrace = {
     deliveryOmitted: number;
     /** The hosted processors holding a claim (`processors.claim`): a revive owed by `at`. */
     claims: { name: string; at: number }[];
+    /** The residency watchdog's deadline — in memory, so null in a fresh incarnation. */
+    residencyWatchdog: number | null;
   };
   durableHead: number;
   /** On `alarm-fired`: how many schedules this pass will append. */
@@ -352,6 +358,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** The append door — a thin wrapper over Stream.append. */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+    this.#inboundCallInOneTurn();
     this.#stream.appendWakeRecord("request");
     return this.#appendAndRunCommittedEffects(events);
   }
@@ -387,6 +394,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     limit = 500,
     options: { includeEphemeral?: boolean } = {},
   ): Promise<StreamPage> {
+    this.#inboundCallInOneTurn();
     this.#stream.appendWakeRecord("request");
     return this.#stream.read(afterOffset, limit, options); // sync on the Stream, a promise over Workers RPC
   }
@@ -515,10 +523,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** The own-context adapter used by built-ins: a loopback (`itx.cd(<own path>)`, the config
    *  delivery) keeps caller attribution and committed effects and records no wake (it runs inside
-   *  an incarnation a request or alarm already woke); the caller defaults to the one already in
-   *  AsyncLocalStorage, so a loopback's appends stay attributed. */
+   *  an incarnation a request or alarm already woke) — nor is it an inbound call to the residency
+   *  watchdog; the caller defaults to the one already in AsyncLocalStorage, so a loopback's
+   *  appends stay attributed. */
   readonly #localContext: ReachableContext = {
-    fetch: (request) => this.fetch(request),
+    fetch: (request) => this.#serveFetch(request),
     append: async (...events) => this.#appendAndRunCommittedEffects(events),
     read: async (afterOffset, limit, options) => this.#stream.read(afterOffset, limit, options),
     invoke: (call, args = [], caller = this.#caller) =>
@@ -652,17 +661,23 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
   });
 
-  // ── THE ONE ALARM (alarm-coordinator.ts): derived from three deadline sources, traced ──
+  // ── THE ONE ALARM (alarm-coordinator.ts): derived from four deadline sources, traced ──
 
   readonly #alarmCoordinator = new AlarmCoordinator({
     setAlarm: (at) => this.ctx.storage.setAlarm(at),
     deleteAlarm: () => this.ctx.storage.deleteAlarm(),
-    deadlines: () => [
+    deadlines: () => [...this.#durableAlarmDeadlines(), this.#residencyWatchdogArmedFor],
+  });
+
+  /** The three sources a fresh incarnation derives again — schedules, cursor-row claims, facet
+   *  claims; the fourth, the residency watchdog, is this incarnation's alone. */
+  #durableAlarmDeadlines(): (number | null)[] {
+    return [
       this.#stream.nextScheduledAppendAt(),
       this.#subscriptionDelivery.deadlines()[0]?.at ?? null,
       this.#facetHost.deadlines()[0]?.at ?? null,
-    ],
-  });
+    ];
+  }
 
   // ── THE FACETS (context/facet-host.ts): the hosted classes' lifecycle and their alarm claims, wired to this DO ──
 
@@ -696,6 +711,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         delivery: delivery.slice(0, 32),
         deliveryOmitted: Math.max(0, delivery.length - 32),
         claims: this.#facetHost.deadlines(),
+        residencyWatchdog: this.#residencyWatchdogArmedFor,
       },
       durableHead: this.#stream.highestDurableOffset(),
       facetWorkInFlight: facets.facetWorkInFlight,
@@ -750,9 +766,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  things that keep an actor resident on the edge, both measured) — starts the quiet period over
    *  when the call ENDS; a call in flight holds it off (a stub is never returned out from under a
    *  call); its end releases every pin (`#releasePins`). In memory on purpose: the pins are, and
-   *  the pin itself keeps the actor resident until the timer fires (a pending timer holds off
-   *  hibernation, not eviction — and nothing pinned means nothing to release). A live facet is not
-   *  a pin: on the edge it dies with the actor. */
+   *  the pin itself keeps the actor resident until the timer fires. A pending timer holds off
+   *  eviction AND hibernation, billed, for its whole length (measured 2026-09-23) — harmless only
+   *  because this one is armed while a pin already holds the actor, and for 30 s; nothing pinned
+   *  means nothing to release. A live facet is not a pin: on the edge it dies with the actor. */
   #pinReleaseTimer: ReturnType<typeof setTimeout> | undefined;
   #pinCallsInFlight = 0;
   #pinCallStarted(): void {
@@ -764,7 +781,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#pinCallsInFlight -= 1;
     if (this.#pinCallsInFlight > 0) return;
     // A call that ends with nothing pinned (an HTTP client's, a stub returned mid-call) starts no
-    // timer: a pending timer holds off hibernation, and there would be nothing to release.
+    // timer: a pending timer holds off eviction and hibernation, and there would be nothing to release.
     if (!this.#rpcStubs.hasBorrowedRpcStubs() && !this.#library.holdsOpenSocket()) return;
     this.#pinReleaseTimer = setTimeout(() => {
       this.#pinReleaseTimer = undefined;
@@ -776,11 +793,20 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  completes; a pass that dies is retried by the runtime): the due schedules, the stream-kept
    *  cursors' owed deliveries, the due claims of hosted processors (each spent, then the facet's
    *  `revive()` — a facet still busy claims again from there). Then the next deadline is derived
-   *  from what is left. */
+   *  from what is left. The residency watchdog is decided first in every pass; a wake with nothing
+   *  durable due is the watchdog's alone and does nothing else. */
   async alarm(): Promise<void> {
     const { armedAt: fired } = this.#alarmCoordinator.snapshot();
+    // THE WATCHDOG'S OWN WAKE: no wake record, no trace, no delivery — in a fresh incarnation (its
+    // armer was evicted, the normal end) nothing at all but re-deriving the alarm.
+    const wokeAt = Date.now();
+    if (!this.#durableAlarmDeadlines().some((at) => at !== null && at <= wokeAt)) {
+      await this.#alarmCoordinator.pass(async () => this.#checkResidencyWatchdog(wokeAt));
+      return;
+    }
     try {
       await this.#alarmCoordinator.pass(async () => {
+        this.#checkResidencyWatchdog(wokeAt);
         // An incarnation the alarm woke records its wake HERE, inside the hold — the one door that
         // knows the reason. Its delivery (every "*" row's) runs and acks within this pass, so an
         // alarm wake that finds nothing else owed ends with no alarm and no alarm write at all.
@@ -877,6 +903,91 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#library.releaseConnections();
   }
 
+  // ── THE RESIDENCY WATCHDOG (context/residency-watchdog.ts): an actor held resident with nothing to do, recorded ──
+
+  /** The watchdog's deadline, epoch ms — in memory on purpose: a fresh incarnation has none, so the
+   *  alarm an evicted one left wakes it for nothing. */
+  #residencyWatchdogArmedFor: number | null = null;
+  /** Once per incarnation: a recorded incarnation is never armed again. */
+  #residencyWatchdogRecorded = false;
+  /** Inbound calls — Workers RPC, fetch, socket events; never the alarm — in flight, and when the
+   *  last one ended: the quiet window runs from there. */
+  #inboundCallsInFlight = 0;
+  #lastInboundCallEndedAt: number | null = null;
+
+  /** An inbound call begins, and arms the watchdog when none is armed: one alarm write per quiet
+   *  window, not per call. Before the call's wake record, so a fresh incarnation's first commit
+   *  supersedes the alarm its predecessor's watchdog left in one write, not a delete and a set. */
+  #inboundCallStarted(): void {
+    this.#inboundCallsInFlight += 1;
+    if (this.#residencyWatchdogArmedFor !== null || this.#residencyWatchdogRecorded) return;
+    this.#residencyWatchdogArmedFor = Date.now() + RESIDENCY_WATCHDOG_WINDOW_MS;
+    this.#alarmCoordinator.reconcile();
+  }
+  #inboundCallEnded(): void {
+    this.#inboundCallsInFlight -= 1;
+    this.#lastInboundCallEndedAt = Date.now();
+  }
+  /** An inbound call that runs in ONE synchronous turn (`append`, `read`, a lend, a socket event):
+   *  begun and ended at once — the clock does not move inside a turn. */
+  #inboundCallInOneTurn(): void {
+    this.#inboundCallStarted();
+    this.#inboundCallEnded();
+  }
+
+  /** The watchdog's decision, applied at the start of every alarm pass: nothing, a later deadline,
+   *  or THE RECORD — one appended fact and one structured `console.warn` (the line Workers Logs
+   *  alerts on; `durableObjectId` finds the held session's still-open invocation there). Never an
+   *  abort, and never a failed pass. */
+  #checkResidencyWatchdog(now: number): void {
+    const facets = this.#facetHost.snapshot();
+    const decision = decideResidencyWatchdog({
+      armedFor: this.#residencyWatchdogArmedFor,
+      now,
+      lastCallEndedAt: this.#lastInboundCallEndedAt,
+      workInFlight:
+        this.#inboundCallsInFlight +
+        facets.facetWorkInFlight +
+        this.#scriptRunsInFlight.size +
+        this.#pinCallsInFlight,
+      windowMs: RESIDENCY_WATCHDOG_WINDOW_MS,
+    });
+    if (decision.action === "none") return;
+    if (decision.action === "rearm") {
+      this.#residencyWatchdogArmedFor = decision.at;
+      return;
+    }
+    this.#residencyWatchdogArmedFor = null;
+    this.#residencyWatchdogRecorded = true;
+    const transport = this.#rpcStubs.rpcStubTransportState();
+    const payload = {
+      incarnation: this.#stream.storage.incarnation,
+      idleSince: new Date(decision.idleSince).toISOString(),
+      idleForMs: now - decision.idleSince,
+      liveFacets: facets.liveFacetNames.slice(0, 32),
+      borrowedRpcStubs: transport.borrowedRpcStubs,
+      rpcStubPagers: transport.rpcStubPagers,
+      webSockets: this.ctx.getWebSockets().length,
+      libraryHoldsSocket: this.#library.holdsOpenSocket(),
+    };
+    console.warn({
+      event: "context.held-resident-while-idle",
+      namespace: "iterate-context",
+      name: this.#durableObjectAddress.name,
+      durableObjectId: this.ctx.id.toString(),
+      ...payload,
+    });
+    try {
+      this.#appendAndRunCommittedEffects([
+        { type: "events.iterate.com/context/held-resident-while-idle", payload },
+      ]);
+    } catch (error) {
+      reportIssue("iterate-context.residency-watchdog", error, {
+        incarnation: payload.incarnation,
+      });
+    }
+  }
+
   /** DO-only, for the tests that run inside workerd (`__workers-tests__`): the release, plus every
    *  live facet aborted — workerd's harness keeps a facet-pinned actor resident (workerd#6800), so
    *  a test that must evict a facet-hosting context runs this first (`releasePins` in
@@ -907,8 +1018,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     args: unknown[] = [],
     caller: Caller = { principal: null },
   ): Promise<unknown> {
+    this.#inboundCallStarted();
     this.#stream.appendWakeRecord("request");
-    const result = await this.#invokeInProcess(call, args, caller);
+    const result = await this.#invokeInProcess(call, args, caller).finally(() =>
+      this.#inboundCallEnded(),
+    );
     // THE CALLER'S SESSION ENDS WITH THE CALL, WHATEVER IT KEEPS (expression.ts
     // `itxAnswerDetachedFromSession`): every Workers-RPC caller of this actor — the edge (capnweb
     // /api, a loaded worker's or a facet's `env.ITX`), /mcp, a sibling's `cd` — arrives through this
@@ -953,7 +1067,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   // ── native fetch: the rpc-stub pager door, the fetch lane, egress ──
 
+  /** Ends when the Response is handed back — a body still streaming after that is not counted, so
+   *  a stream longer than the watchdog's window is recorded as held. */
   async fetch(request: Request): Promise<Response> {
+    this.#inboundCallStarted();
+    return this.#serveFetch(request).finally(() => this.#inboundCallEnded());
+  }
+
+  async #serveFetch(request: Request): Promise<Response> {
     this.#stream.appendWakeRecord("request");
     // The doors, in order — each answers or declines: the rpc-stub pager and the rpc-stub fetch
     // upgrade leg; THE FETCH LANE (`x-itx-expression` names an itx expression — JSON from a session's
@@ -1098,12 +1219,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
+    this.#inboundCallInOneTurn();
     this.#stream.appendWakeRecord("request");
     // Fetch-upgrade frames only (eyeball ⇄ upgrade leg); a pager socket's inbound payloads carry
     // nothing this DO acts on.
     this.#rpcStubFetch.handleWebSocketMessage(ws, message);
   }
   webSocketClose(ws: WebSocket, code: number, reason: string): void {
+    this.#inboundCallInOneTurn();
     this.#stream.appendWakeRecord("request");
     if (this.#rpcStubFetch.handleWebSocketClose(ws, code, reason)) return;
     this.#rpcStubs.rpcStubPagerClosed(ws);
@@ -1119,6 +1242,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  permissively and the directory types it. (The pager has no verb: it is the
    *  `x-itx-rpc-stub-pager` upgrade at `fetch`.) */
   lendRpcStub(input: { rpcStubKey: string; stub: unknown }): void {
+    this.#inboundCallInOneTurn();
     this.#stream.appendWakeRecord("request");
     this.#rpcStubs.lendRpcStub({
       rpcStubKey: input.rpcStubKey,

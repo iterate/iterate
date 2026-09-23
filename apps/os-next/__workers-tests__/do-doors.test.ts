@@ -14,9 +14,10 @@
 //
 //   • the alarm serves durable obligations only: a probe (`itx.facets.get('core').snapshot()`) on a
 //     never-touched ctx MATERIALIZES it (the constructor's `Stream.appendBirthRecord()` writes
-//     created + woken before the first request is served) yet arms NO alarm — a pin (a borrowed
-//     rpc stub, an open socket) is released by a timer, never the alarm; only storage.getAlarm()
-//     can see that (the deployed e2e tests pin the records but cannot read the alarm);
+//     created + woken before the first request is served) yet OWES no alarm (its one alarm is the
+//     residency watchdog's, support.ts `owedAlarm`) — a pin (a borrowed rpc stub, an open socket) is
+//     released by a timer, never the alarm; only storage.getAlarm() can see that (the deployed e2e
+//     tests pin the records but cannot read the alarm);
 //   • the doors themselves: the four deleted configuration verbs are gone; the rewrite-rule EVENT's
 //     match is canonicalized at the append BOUNDARY (a Workers-RPC caller bypasses the edge, appends a
 //     literal, and the DO normalizes it — no builder in between); and a table row is
@@ -35,7 +36,14 @@ import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "capnweb";
 import { beforeAll, expect, test } from "vitest";
 import { parse, print, type ItxExpression } from "iterate/next/expression";
-import { adminCredentials, applyDirectorySchema, openSession, stub, until } from "./support.ts";
+import {
+  adminCredentials,
+  applyDirectorySchema,
+  openSession,
+  owedAlarm,
+  stub,
+  until,
+} from "./support.ts";
 
 beforeAll(applyDirectorySchema);
 
@@ -94,7 +102,10 @@ test("a core-snapshot probe materializes only created and woken, without subscri
     expect(typeof snap.state.createdAt).toBe("string");
     expect(snap.offset).toBe(2); // created and woken
     // Nothing is subscribed, so there is no delivery to schedule.
-    await until("no alarm after the probe", async () => (await state.storage.getAlarm()) === null);
+    await until(
+      "no alarm after the probe",
+      async () => owedAlarm(await state.storage.getAlarm()) === null,
+    );
     expect((await instance.read(0)).events.map((e) => [e.type, e.offset])).toEqual([
       ["events.iterate.com/stream/created", 1],
       ["events.iterate.com/stream/woken", 2],
@@ -109,7 +120,10 @@ test("a core-snapshot probe materializes only created and woken, without subscri
     const [mark] = (await instance.append({ type: "mark" })) as unknown as { offset: number }[];
     expect(mark.offset).toBe(3);
     // With no subscriptions, the mark creates no delivery claim.
-    await until("no alarm after the ack", async () => (await state.storage.getAlarm()) === null);
+    await until(
+      "no alarm after the ack",
+      async () => owedAlarm(await state.storage.getAlarm()) === null,
+    );
   });
 });
 

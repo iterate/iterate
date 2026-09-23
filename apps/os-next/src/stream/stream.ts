@@ -72,6 +72,8 @@ const PAUSE_EXEMPT_EVENT_TYPES = new Set([
   "events.iterate.com/stream/subscription-delivery-halted",
   // the runner's own record of a run's end — a paused stream must still close a script it started
   "events.iterate.com/context/run-settled",
+  // the residency watchdog's record (context/residency-watchdog.ts) — a paused context is billed too
+  "events.iterate.com/context/held-resident-while-idle",
   // Alarm traces are kernel diagnostics, not user work; an operator must still be able to
   // inspect a paused context's current incarnation.
   STREAM_ALARM_TRACE_EVENT,
