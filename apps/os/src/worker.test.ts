@@ -1,8 +1,8 @@
 // worker.test.ts — the edge's pure halves as tables: the app config (what the one object becomes,
 // what is refused by name, the per-env memo, the derived keys), the platform's own doors (the public
-// protocol origins, `/version`, and under path routing the platform's own paths never a project),
-// and the custom-hostname map. The ingress convention itself (subdomains, paths) is the SDK's
-// project-ingress module and its own table.
+// protocol origins, `/version`, and under path routing the platform's own paths never a project).
+// The ingress convention itself (subdomains, paths, custom hostnames) is the SDK's project-ingress
+// module and its own table.
 
 import { describe, expect, test, vi } from "vitest";
 
@@ -22,7 +22,6 @@ vi.mock("cloudflare:workers", () => ({
 vi.mock("@tanstack/react-start/server-entry", () => ({
   default: { fetch: () => new Response("<html>Issuer page</html>", { status: 200 }) },
 }));
-import { customProjectHostOf } from "iterate/next/project-ingress";
 import worker from "./worker.ts";
 import {
   appConfigOf,
@@ -464,47 +463,3 @@ describe("appConfigOf — once per env object", () => {
     );
   });
 });
-
-// ── custom hostname ── a deployment's own hostname that IS a project's apex (`app: null`, the config
-// worker's fetch): the map's spelling, case and a trailing dot forgiven, anything else null.
-const customHostnames = { "iterate.com": "iterate" };
-const customRows: { hostname: string; becomes: ReturnType<typeof customProjectHostOf> }[] = [
-  { hostname: "iterate.com", becomes: { app: null, project: "iterate" } },
-  { hostname: "Iterate.COM.", becomes: { app: null, project: "iterate" } },
-  { hostname: "www.iterate.com", becomes: null }, // only the hostnames named — no wildcard under them
-  { hostname: "iterate.iterate.app", becomes: null }, // the ingress's own shapes are project-ingress.ts's
-  { hostname: "os.iterate.com", becomes: null },
-];
-for (const { hostname, becomes } of customRows)
-  test(`custom hostname ${hostname} ⇒ ${JSON.stringify(becomes)}`, () => {
-    expect(customProjectHostOf(hostname, customHostnames)).toEqual(becomes);
-  });
-
-const wildcard = {
-  hostname: "iterate.com",
-  project: "iterate",
-  excludedHostnames: [
-    "os.iterate.com",
-    "mcp.iterate.com",
-    "dash.iterate.com",
-    "k.iterate.com",
-    "voice.iterate.com",
-    "install.iterate.com",
-  ],
-};
-for (const [hostname, project] of [
-  ["www.iterate.com", "iterate"],
-  ["Blog.Iterate.com.", "iterate"],
-  ["iterate.com", "iterate"],
-  ["deep.www.iterate.com", null],
-  ["www.iterate.app", null],
-  ["os.iterate.com", null],
-  ["mcp.iterate.com", null],
-  ["dash.iterate.com", null],
-  ["k.iterate.com", null],
-  ["voice.iterate.com", null],
-  ["install.iterate.com", null],
-] as const)
-  test(`project wildcard ${hostname} ⇒ ${project}`, () => {
-    expect(customProjectHostOf(hostname, customHostnames, wildcard)?.project ?? null).toBe(project);
-  });
