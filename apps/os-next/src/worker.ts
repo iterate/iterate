@@ -30,8 +30,8 @@ import { authorizationForToken, recordGrantUse, cleanGrantActivity } from "./oau
 const PROJECT_HOST_HOPS_HEADER = "x-itx-expression-hops";
 const PROJECT_HOST_MAX_HOPS = 4;
 
-/** THE BASE PATH an app is served under (paths ingress: `/projects/<project>/<app>`), apps/os's header
- *  style beside `x-iterate-app`: the edge strips it from the URL the app sees and says it here, so
+/** THE BASE PATH an app is served under (paths ingress: `/projects/<project>/<app>`), alongside
+ *  `x-iterate-app`: the edge strips it from the URL the app sees and says it here, so
  *  the app's own links and its browser adapter can compose absolute paths. Set or deleted by the
  *  edge on every project request, so a visitor's spelling never reaches an app. Empty under
  *  subdomains (the app owns its origin). */

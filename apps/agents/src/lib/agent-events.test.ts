@@ -1,6 +1,6 @@
 // agent-events.test.ts — the os-next log through the shared reducer: `adaptContextRuns` turns the
 // CONTEXT's runs (`context/run-requested` / `run-settled`, the request's offset as identity) into the
-// script vocabulary apps/os's reducer folds (`capability-host/script-run-*`, an executionId the
+// script vocabulary the platform's reducer folds (`capability-host/script-run-*`, an executionId the
 // reducer links to the assistant's message — from the processor's `whileProcessing` stamp), so a
 // turn renders as one activity with its code step, and a bare reply's `reply:` script is filtered out
 // of the feed whether its activity settled on its own or at the idle boundary.
@@ -34,8 +34,8 @@ const byAgentWhile = (offset: number) => ({
  *  back as the developer item. */
 const turn = (kind: "run-requested" | "plain-response") => [
   at(1, "events.iterate.com/agent/created", { path: PATH }),
-  at(2, "events.iterate.com/agents/context-added", { role: "system", content: "Be terse." }),
-  at(3, "events.iterate.com/agents/context-added", {
+  at(2, "events.iterate.com/agent/context-added", { role: "system", content: "Be terse." }),
+  at(3, "events.iterate.com/agent/context-added", {
     role: "user",
     content: "store 42",
     actor: { type: "user" },
@@ -49,7 +49,7 @@ const turn = (kind: "run-requested" | "plain-response") => [
     requestOffset: 4,
     result: { status: "succeeded", text: "ok" },
   }),
-  at(6, "events.iterate.com/agents/context-added", {
+  at(6, "events.iterate.com/agent/context-added", {
     role: "assistant",
     llmRequestOffset: 4,
     content:
@@ -66,14 +66,14 @@ const turn = (kind: "run-requested" | "plain-response") => [
   // the visible message: the tag's prose sent directly, or the reply the `reply:` script sends
   at(
     9,
-    "events.iterate.com/agents/web-message-sent",
+    "events.iterate.com/agent/web-message-sent",
     kind === "run-requested" ? { message: "Storing.", llmRequestOffset: 4 } : { message: "Done." },
   ),
   at(10, "events.iterate.com/context/run-settled", {
     requestOffset: 8,
     settlement: { status: "succeeded", result: { stored: true } },
   }),
-  at(11, "events.iterate.com/agents/context-added", {
+  at(11, "events.iterate.com/agent/context-added", {
     role: "developer",
     content: "Your script returned: …",
     actor: { type: "script", requestOffset: 8 },
@@ -108,7 +108,7 @@ describe("adaptContextRuns — the context's runs in the reducer's vocabulary", 
     expect(unasked!.payload).toMatchObject({ executionId: "run:20" });
   });
 
-  test("a failed settlement gains the fields apps/os's strict schema wants — an interrupted run counts as having run", () => {
+  test("a failed settlement gains the fields the platform's strict schema wants — an interrupted run counts as having run", () => {
     const [, settled] = adaptContextRuns([
       at(
         8,

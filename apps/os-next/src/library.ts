@@ -90,13 +90,13 @@ export interface LibraryRoots {
     /** The entity's deletion saga on that path: the request, the death certificate (cross-posted to `/`, the catalog drops it), then the row disabled. */
     delete(path: string): Promise<{ path: string }>;
   };
-  /** THE FILES (apps/os's `itx.files`, lean): project file storage as a PATH namespace over `itx.r2`
+  /** THE FILES: project file storage as a PATH namespace over `itx.r2`
    *  — a file is its path (leading slash), its bytes and a content type; last write wins, no
    *  events. `get(path)` is a handle: `.put({ contentType, data })` (data: bytes, or a string that
    *  is base64 or a `data:` URL) → the record, `.bytes()`, `.head()` (null when absent), `.delete()`,
    *  and `.url({ method?, expiresInSeconds? })` — a signed URL on the project host that downloads
    *  (`GET`, the default) or uploads (`PUT`) the file, `itx.r2.presign` underneath. `list(prefix?)`
-   *  is what apps/os lacks and an agent needs: the records under a prefix. */
+   *  lists records under a prefix. */
   files: {
     get(path: string): InvokeHandle & FileHandle;
     list(prefix?: string): Promise<FileRecord[]>;
@@ -550,7 +550,7 @@ function entityHandle(
 const fileKey = (path: string): string => path.replace(/^\/+/, "");
 
 /** `put`'s data as bytes: bytes as they are; a string is base64, with or without a `data:` prefix
- *  (apps/os's FileData rule — a string is never raw text). A `data:` URL's own content type wins. */
+ *  (a string is never raw text). A `data:` URL's own content type wins. */
 function fileBytes(data: Uint8Array | ArrayBuffer | string): {
   bytes: Uint8Array;
   contentType?: string;

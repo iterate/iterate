@@ -1,4 +1,4 @@
-// apps/os's queued-messages panel: messages that landed while a turn was running, rendered as
+// the platform's queued-messages panel: messages that landed while a turn was running, rendered as
 // PART OF THE COMPOSER — input that has not reached the agent yet belongs with the input surface,
 // not in the feed's history. A rounded card tucked behind the pill; on phones only the newest
 // message stays pinned, with a "+N more" toggle.

@@ -122,7 +122,7 @@ function ProjectsPage() {
           </TableBody>
         </Table>
       </ListPage>
-      {/* apps/os's create-project sheet: the right edge, full width on a phone, dismiss refused
+      {/* apps/os-next's create-project sheet: the right edge, full width on a phone, dismiss refused
           while the create is in flight so Escape and the backdrop cannot race it */}
       <Sheet
         open={search.new === 1}

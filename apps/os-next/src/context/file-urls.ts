@@ -1,4 +1,4 @@
-// file-urls.ts — SIGNED FILE URLS, apps/os's way (its `iterate-files--<project>` host, lean): a URL on
+// file-urls.ts — SIGNED FILE URLS: a URL on
 // the project host `files--<project>.<base>` whose ONE query parameter is a signed claim over
 // `{ project, key, method, exp }` (principal.ts `signClaims`, the platform's session secret), served
 // at ingress straight from the bucket — a download (`GET`/`HEAD`, Range honoured) or an upload

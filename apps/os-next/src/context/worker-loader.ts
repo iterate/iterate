@@ -13,7 +13,7 @@
 // PRODUCES the modules, in which case the caller MUST name the `cacheKey` (a build id, a commit): the
 // producer runs inside `getCode`, i.e. only on a cold isolate, and the caller owns "same key ⇒ same
 // code". A producer without a key is refused: hashing the expression would be the stale-code trap.
-// (apps/os derives its key from a repo's content hash and caches the BUILD artifact in KV under it;
+// (the cache key derives from a repo's content hash;
 // that tier belongs to a build capability, not here.)
 //
 // A loaded worker's `env.ITX` is a Workers-RPC service binding to the `ItxEntrypoint`; `env.ITX.get()`
@@ -159,11 +159,11 @@ type PrepareConfinedWorkerOptions = {
  * and "choose the host" are visibly separate: `itx.workers.get` calls `load()` at once (a stateless
  * entrypoint per call; the loader caches by key); `FacetHost#invoke` calls
  * it only for a facet that STARTS — a call to a RUNNING facet never touches the loader
- * (Cloudflare's facet lifecycle; apps/os PR #2631 measured the alternative: one isolate lookup per
+ * (Cloudflare's facet lifecycle; one isolate lookup per
  * warm call).
  *
  * ⚠️  THE cacheKey IS A DOLLAR AMOUNT. Cloudflare bills EVERY DISTINCT value ever passed to
- * `LOADER.get` as a Dynamic Worker at $0.002/worker/day. apps/os PR #2504: a per-request random
+ * `LOADER.get` as a Dynamic Worker at $0.002/worker/day. A per-request random
  * nonce in the key produced ~3.9M identities ≈ $7.8k in ~3 weeks, plus a cold isolate build on
  * every dispatch (~5MB, 1-2s). Key components must be LOW-CARDINALITY: deploy version × owning
  * context × (content hash | the caller's build/commit id) — NEVER a nonce, timestamp, request id, or

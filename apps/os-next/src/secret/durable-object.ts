@@ -100,7 +100,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     return { context, path: rootPath === "/" ? path : path.slice(rootPath.length) };
   }
 
-  /** Replace the record whole — material always travels with its complete policy (apps/os's
+  /** Replace the record whole — material always travels with its complete policy
    *  `update` rule), so a value never inherits a pin or a strategy it was not set with. The caller
    *  (`itx.secrets.set`) has appended the fact already; this is the value. */
   async write(record: SecretRecord): Promise<void> {
@@ -181,7 +181,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     await this.#bump();
     await this.ctx.storage.delete(["stored", "pending", "completed"]);
   }
-  /** THE VERIFY LANE (apps/os's `verifyMaterialField`, for webhooks): is `signature` the HMAC-SHA256
+  /** THE VERIFY LANE (for webhooks): is `signature` the HMAC-SHA256
    *  of `payload` under this secret's material? The material is opened HERE and the answer is one
    *  bit — nothing comes out, and no request goes anywhere, so the pin is not consulted. The
    *  candidate arrives from an unauthenticated door (a webhook): a secret never set, or a material

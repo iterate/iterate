@@ -75,8 +75,7 @@ set its `--os-base-url` to an OS Next deployment and log in again. Changing the
 server clears that config's session. There is no separate `authBaseUrl` setting.
 
 The old chat TUI and remotely discovered `iterate os ...` commands are removed.
-The menu bar supports sign-in and computer sharing. Approval code is retained
-but dormant until OS Next supports it. Use `iterate itx run` for scripts;
+The menu bar supports sign-in and computer sharing. Use `iterate itx run` for scripts;
 its `--project` selects the project and `--context` selects a path within it.
 
 ## Node REPL
@@ -105,3 +104,7 @@ console.log(await project.run("async (itx) => await itx.whoami()"));
 
 The package launcher delegates to repository source during development and
 uses the published build when installed through `npx`.
+
+## SDK
+
+The OS Next SDK exposes context APIs, stream processors, reactive clients, React bindings, and OAuth app sessions under `iterate/next/*`. The package exports source in this workspace and compiled JavaScript with declarations when packed.

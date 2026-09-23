@@ -7,15 +7,14 @@ import { z } from "zod";
 import { applyPatch, type PatchOp } from "../lib.ts";
 
 // ── live state store ── THE CLIENT HALF of live state, for browsers and node test clients.
-// Adapted from apps/os's `createLiveStateStore` (packages/iterate/src/sdk/capnweb/live-state), kept
-// deliberately tiny, and pointed at the CLEAN-ROOM wire instead of apps/os's in-band snapshot:
+// A deliberately small store for the platform's live-state wire:
 //
 //   • SEED through the producer's door — `{rev, state}` read via an RPC method (a processor's
-//     `liveSnapshot()`, a mini-app's `state()`). apps/os reduces the first snapshot in-band on the
+//     `liveSnapshot()`, a mini-app's `state()`).
 //     subscription; here the stream keeps no per-subscriber state, so the seed is a separate read.
 //   • APPLY each `{key, from, to, patch}` delta the subscription delivers: a patch lands only when
 //     its `from` matches the held rev; a mismatch means a missed delta (or a reborn producer's fresh
-//     epoch) — resync by re-reading the door, exactly like apps/os's revision-gap resync.
+//     epoch) — resync by re-reading the door.
 //
 // The patch format is lib.ts (an RFC-6902 subset), so this store shares ONE applyPatch with
 // the producer — no second diff implementation. No capnweb import: a caller wires the transport and

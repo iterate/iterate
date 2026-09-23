@@ -69,7 +69,9 @@ describe("the PR body's managed section", () => {
     expect(section).toContain(
       "| dash | https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev |",
     );
-    expect(section).toContain("apps/os-next/README.md#previews--one-per-pull-request");
+    expect(section).toContain(
+      "https://github.com/iterate/iterate/blob/main/apps/os-next/README.md",
+    );
     expect(section).not.toContain("depot ci dispatch");
   });
 
@@ -188,6 +190,10 @@ describe("which apps on top a change touches (cloudflare-os previews all; ours o
     ["the SDK: every app", ["packages/iterate/src/next/app.ts"], APPS.map((app) => app.name)],
     ["the shared UI: every app", ["packages/ui/src/button.tsx"], APPS.map((app) => app.name)],
     ["envs.ts: every app", ["envs.ts"], APPS.map((app) => app.name)],
+    ["shared utilities: every app", ["packages/shared/src/config.ts"], APPS.map((app) => app.name)],
+    ...["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"].map(
+      (file): [string, string[], string[]] => [file, [file], APPS.map((app) => app.name)],
+    ),
     ["a look-alike path is not an app", ["apps/dashboard/x.ts", "packages/iterate-docs/x.md"], []],
   ])("%s", (_, paths, expected) => {
     expect(changedApps(paths).map((app) => app.name)).toEqual(expected);

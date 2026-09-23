@@ -1,30 +1,3 @@
-# Continuous preview publishing of first-party packages via https://pkg.pr.new.
-#
-# Every push to main and every PR publishes tarballs to pkg.pr.new's CDN
-# (no npm token involved), installable as:
-#
-#   https://pkg.pr.new/iterate/iterate/iterate@main            (latest main build)
-#   https://pkg.pr.new/iterate/iterate/iterate@<sha>           (specific commit)
-#   https://pkg.pr.new/iterate/iterate/iterate@<pr>            (latest build of a PR)
-#   https://pkg.pr.new/iterate/iterate/@iterate-com/docs@main  (Docs config connector)
-#   https://pkg.pr.new/iterate/iterate/@iterate-com/voice-agent@main  (the voice agent guest worker)
-#
-# The seeded project-repo-template depends on the iterate @main URL — that's how
-# customer repos get `iterate/sdk` types without a manual npm release.
-# Preview deploys pin every iterate/iterate pkg.pr.new spec in seeded repos to
-# @<pr-head-sha> (see iterateRepoPkgRef in apps/os/src/config.ts and
-# apps/os/src/pkg-pr-new.ts), so this workflow must run on EVERY pull request
-# — do not add a `paths:` filter, or previews of unrelated PRs would seed
-# repos with a dangling @<sha> ref.
-#
-# @iterate-com/docs is the config-side connector for the independently
-# deployed docs app (which serves both the docs and tasks views). The seeded
-# worker installs it for its proxy and agent-facing link capabilities.
-#
-# This lives in .github/workflows (real GitHub Actions, like
-# claude-assistant.yml) rather than .depot/workflows: pkg.pr.new's backend
-# verifies each publish against the GitHub Actions API via its GitHub App,
-# which must be installed on this repo: https://github.com/apps/pkg-pr-new
 name: pkg.pr.new
 on:
   push:
@@ -44,11 +17,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: pnpm install --frozen-lockfile --filter iterate-root --filter iterate... --filter @iterate-com/docs... --filter @iterate-com/voice-agent...
+      - run: pnpm install --frozen-lockfile --filter iterate-root --filter iterate...
       - run: pnpm --dir packages/iterate build
-      - run: pnpm --dir apps/docs build:package
-      - run: pnpm --dir packages/voice-agent build
       # --pnpm: pack with `pnpm pack` so publishConfig.exports (dist remap)
       # is applied — `npm pack` would ship the dev exports pointing at src/.
       # pkg.pr.new requires every monorepo package in one invocation.
-      - run: pnpm exec pkg-pr-new publish --pnpm ./packages/iterate ./apps/docs ./packages/voice-agent
+      - run: pnpm exec pkg-pr-new publish --pnpm ./packages/iterate

@@ -10,7 +10,7 @@ import {
 const now = new Date("2026-09-04T05:41:00Z");
 const runUrl = "https://github.com/iterate/iterate/actions/runs/1";
 const links =
-  "<https://github.com/iterate/iterate/tree/main/apps/os/tasks/do-duration-leak|incident docs> <https://github.com/iterate/iterate/actions/runs/1|workflow run> ($12.50/M GB-s, 1000 DO-hours ≈ $5.60)";
+  "<https://github.com/iterate/iterate/tree/6a9a48e2a/apps/os/tasks/do-duration-leak|incident docs> <https://github.com/iterate/iterate/actions/runs/1|workflow run> ($12.50/M GB-s, 1000 DO-hours ≈ $5.60)";
 
 test("the headline is one sentence about $/day; the table and the breach are replies", () => {
   const thread = renderDailyThread({

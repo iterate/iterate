@@ -65,7 +65,7 @@ async function refresh() {
     // Default to all current and future projects; project-bound clients keep their ceiling.
     state.all = !view.projectBound;
     // The project form's first draft: the person's first organization, or — with none yet — a
-    // new one named from their name or email (apps/auth's heuristic); the onboarding step's slug
+    // new one named from their name or email; the onboarding step's slug
     // starts by following that name.
     state.draft.org = view.orgs[0]?.id || "";
     if (!view.orgs.length) state.draft.newOrg = view.suggestedOrganizationName;

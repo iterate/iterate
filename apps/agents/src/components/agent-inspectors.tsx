@@ -1,4 +1,4 @@
-// The traces, apps/os's inspector sheets rebuilt over the page's own event array: the LLM request
+// The traces, the platform's inspector sheets rebuilt over the page's own event array: the LLM request
 // (what the model was sent, what it answered, what the loop derived), the script execution (the
 // code, its settlement, what the agent was told), and a raw event with Prev/Next paging. One Sheet,
 // URL-backed by the route's search params, so any trace is a shareable link. The Events view is

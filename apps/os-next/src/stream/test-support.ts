@@ -27,7 +27,7 @@ import type { DurableObjectStorageSlice } from "./stream.ts";
 /** THE PROCESSOR HARNESS: fold `inputs` through a processor's pure `reduce`, exactly as the engine
  *  does — start from the contract's initial state, validate each payload against the contract (a
  *  malformed KNOWN payload is SKIPPED, never reduced), reduce, thread the state — for a declarative
- *  `{ events → state }` processor spec (apps/os shape, no engine/storage/effects). Construct the
+ *  `{ events → state }` processor spec with no engine, storage, or effects. Construct the
  *  processor with `new` and hand it the events; the offsets are the input order. Ephemeral inputs are
  *  reduced like any other — the reduce decides what it folds (presence's `poke` returns undefined). */
 export function reduceProcessor<State>(

@@ -5,12 +5,8 @@ import { expect, test } from "vitest";
 
 // Scope-liveness guard: every `overrides[].files` glob in .oxlintrc.json must
 // match at least one tracked file, or the rules it arms silently enforce
-// nothing. This has happened twice: PR #1341 removed the legacy `spec/`
-// directory (and with it the spec-restricted-syntax scope), and PR #1488
-// deleted `apps/os/e2e/vitest/agents.e2e.test.ts` — the single pilot file six
-// test-style rules were scoped to — leaving the override block pointing at a
-// ghost path for a month. A failing entry here means: fix the glob, re-point
-// it at the files that replaced the deleted ones, or delete the override.
+// nothing. A failing entry here means: fix the glob, re-point it at the files
+// that replaced the deleted ones, or delete the override.
 test("every overrides[].files glob in .oxlintrc.json matches at least one tracked file", () => {
   const repoRoot = resolve(import.meta.dirname, "..");
   const config = JSON.parse(readFileSync(resolve(repoRoot, ".oxlintrc.json"), "utf8")) as {

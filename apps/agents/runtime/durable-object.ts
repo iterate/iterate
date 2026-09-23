@@ -86,7 +86,7 @@ export class AgentDurableObject extends StreamProcessorDurableObject<
   }
 
   /** A person's words: ONE `context-added`, the trigger of the next turn — with their attachments,
-   *  each stored first under this agent's path (`itx.files`, apps/os's `<path>/<8 of a uuid>-<name>`)
+   *  each stored first under this agent's path (`itx.files`, the platform's `<path>/<8 of a uuid>-<name>`)
    *  and named on the event; an image among them is what the model will see. The event is answered
    *  so a caller can wait for what follows it. */
   async message(

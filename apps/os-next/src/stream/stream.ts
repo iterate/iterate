@@ -357,7 +357,7 @@ export class Stream {
       if (paused && !PAUSE_EXEMPT_EVENT_TYPES.has(eventInput.type))
         throw codedError("STREAM_PAUSED", `stream paused: ${paused.reason}`);
       // EXPECTED OFFSET: an event carrying `offset` lands exactly there or the batch is refused —
-      // "nothing has happened since I last looked" (apps/os's optimistic-concurrency shape).
+      // "nothing has happened since I last looked".
       const offset = throughOffset + 1;
       if (expectedOffset !== undefined && expectedOffset !== offset)
         throw codedError(
@@ -606,7 +606,7 @@ export type DurableObjectStorageSlice = {
 };
 
 /** A serialized body longer than this (chars) is split across `event_chunks` rows instead of one
- *  SQLite TEXT cell (which caps around 2MB — SQLITE_TOOBIG). 512KiB matches apps/os; a body at or
+ *  SQLite TEXT cell (which caps around 2MB — SQLITE_TOOBIG). A body at or
  *  under it stays single-cell (the fast path — no chunk join on read). */
 const EVENT_CHUNK_SIZE = 512 * 1024;
 

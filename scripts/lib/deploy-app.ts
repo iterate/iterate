@@ -37,14 +37,14 @@ export interface SmokeProbe {
  *
  * This is a parameterized imperative function, not a framework: every input
  * is a plain value or a hook called exactly once at a fixed point you can
- * read below. Apps with genuinely unique steps (os's JWKS bake, auth's
- * admin seed) put them in `prepare`/`afterDeploy`; everything else is the
+ * read below. Apps with genuinely unique steps put them in
+ * `prepare`/`afterDeploy`; everything else is the
  * shared skeleton that used to be copy-pasted per app.
  */
 export async function deployApp<E extends DeployableEnv>(input: {
   /** Absolute app root (wrangler/vite commands run here). */
   appRoot: string;
-  /** e.g. "apps/os" — used in log lines. */
+  /** e.g. "apps/os-next" — used in log lines. */
   appLabel: string;
   /** The app's env map from the root envs.ts. */
   envs: Record<string, E>;
@@ -66,10 +66,10 @@ export async function deployApp<E extends DeployableEnv>(input: {
   /**
    * "vite": rm dist + `vite build` with CLOUDFLARE_ENV (the plugin snapshots
    * an env-flattened wrangler.json into dist). "checked-in-config": no build;
-   * deploy the app's committed wrangler.jsonc with `--env <name>` (tunnels).
+   * deploy the app's committed wrangler.jsonc with `--env <name>`.
    */
   build?: "vite" | "checked-in-config";
-  /** Extra env vars for the vite build (e.g. auth's inlined VITE_* values). */
+  /** Extra env vars for the Vite build. */
   buildEnv?: (ctx: EnvContext<E>) => Record<string, string>;
   /**
    * Runs after secret collection, before build/deploy: config preflights,
@@ -102,11 +102,10 @@ export async function deployApp<E extends DeployableEnv>(input: {
     secretValues: Record<string, string>,
     credentials: Record<string, string>,
   ) => Promise<void> | void;
-  /** Runs after a healthy deploy (e.g. auth's OAuth client seeding). */
+  /** Runs after a healthy deploy. */
   afterDeploy?: (ctx: EnvContext<E>, secretValues: Record<string, string>) => Promise<void> | void;
   /**
-   * Extra `wrangler deploy` args after prepare (e.g. OS's
-   * `--containers-rollout none` on warm redeploys). Called after `prepare` so
+   * Extra `wrangler deploy` args after prepare. Called after `prepare` so
    * it can depend on bootstrap results. Merged with any build-mode args.
    */
   extraDeployArgs?: (

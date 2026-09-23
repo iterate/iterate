@@ -1,6 +1,6 @@
 # Durable Objects duration alarm — hourly cost-runaway detection for both
 # Cloudflare accounts (dev/preview and prd). Runs the probe from
-# apps/os/scripts/do-duration-probe.ts via scripts/ci/do-duration-alert.ts,
+# scripts/ci/do-duration-probe.ts via scripts/ci/do-duration-alert.ts,
 # which trips on either signature of the DO billable-duration leak class
 # (apps/os/tasks/do-duration-leak/):
 #

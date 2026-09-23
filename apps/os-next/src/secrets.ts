@@ -5,7 +5,7 @@
 // host that keeps a record and runs these is the secret facet (secret/durable-object.ts); the verbs
 // that write one are `itx.secrets` (context/built-ins.ts).
 //
-// The invariant, apps/os's (apps/os/docs/adr/0005-the-secret-cell-invariant.md), carried over whole:
+// The invariant:
 // material goes in; nothing comes out except a request to a pinned host. Refresh runs INSIDE the
 // secret's own facet — a named strategy in trusted code whose exchange endpoint must itself
 // be pinned — so a credential that expires (an OAuth access token, a Waitrose session) is one secret,
@@ -115,13 +115,13 @@ export function normalizeSecretRecord(
   return { material, urls, refresh };
 }
 
-// ── the placeholder grammar ── apps/os's (apps/os/src/domains/secrets/utils.ts) for a URL or a header:
+// ── the placeholder grammar ── for a URL or a header:
 // `getSecret("/secrets/NAME")` is the whole stored value; `getSecret("/secrets/NAME", { field: "a.b" })`
 // is one dotted field of a JSON-valued secret. Double quotes, whitespace free inside the
 // parentheses; `/secrets/NAME` is the PATH `itx.secrets.set("/secrets/NAME", …)` stored. Matched as written in a
 // header, and as the URL parser percent-encodes it in a URL (`"` → %22, a space → %20, `{` → %7B, `}`
 // → %7D) — the path and the query alike; the value is spliced back into the URL as ONE component,
-// `:` kept (Telegram's `bot123:abc` path). Where this DIVERGES from apps/os: no peeling of a `Basic
+// `:` kept (Telegram's `bot123:abc` path). There is no peeling of a `Basic
 // base64(user:getSecret(…))` credential, no JSON-body template — the body is never scanned.
 const QUOTE = '(?:"|%22)';
 const SPACE = "(?:\\s|%20)*";
@@ -287,7 +287,7 @@ export function secretMaterialStringOf(material: SecretMaterial, field?: string)
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-/** Hex HMAC-SHA256 of `payload` under `key` — the webhook-signature primitive (apps/os's
+/** Hex HMAC-SHA256 of `payload` under `key` — the webhook-signature primitive
  *  `computeHmacHex`). WebCrypto, present in every isolate. */
 export async function hmacSha256Hex(key: string, payload: string | Uint8Array): Promise<string> {
   const cryptoKey = await crypto.subtle.importKey(
@@ -302,7 +302,7 @@ export async function hmacSha256Hex(key: string, payload: string | Uint8Array): 
   return [...new Uint8Array(signature)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-/** Constant-time equality of two strings (apps/os's `constantTimeStringEquals`): HMAC both under one
+/** Constant-time equality of two strings: HMAC both under one
  *  throwaway key and compare the fixed-length digests with no early exit, so neither content nor
  *  LENGTH shapes the timing — the candidate comes from an unauthenticated door. */
 export async function constantTimeEquals(expected: string, candidate: string): Promise<boolean> {
@@ -369,7 +369,7 @@ function stringField(record: Record<string, unknown>, field: string, kind: strin
   return value;
 }
 
-/** The Waitrose Android app's login mutation, verbatim (apps/os carries the same string). */
+/** The Waitrose Android app's login mutation, retained verbatim. */
 const WAITROSE_NEW_SESSION_MUTATION =
   "mutation NewSession($input: SessionInput) { generateSession(session: $input) { __typename ...SessionPayload failures { type message } } }  fragment SessionPayload on SetSessionPayload { accessToken refreshToken customerId customerOrderId customerOrderState defaultBranchId expiresIn }";
 
@@ -453,7 +453,7 @@ export async function refreshSecretMaterial(
       headers: {
         accept: "application/json",
         "content-type": "application/json",
-        // Waitrose's edge answers UA-less requests with HTTP 520 (apps/os, proven live 2026-07-07);
+        // Waitrose's edge answers UA-less requests with HTTP 520;
         // the Android app's UA is the known-good request shape.
         "user-agent": "Waitrose/3.9.1 (Android)",
       },

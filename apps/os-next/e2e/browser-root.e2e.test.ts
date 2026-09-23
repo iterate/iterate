@@ -1,4 +1,4 @@
-// browser-root.e2e.test.ts — `itx.browser` is apps/os's Browser Run root: quickAction returns the
+// browser-root.e2e.test.ts — `itx.browser` is the Browser Run root: quickAction returns the
 // action's RESULT, fetch is the raw binding. Locally the real binding is never called (shadowed).
 // Against the deployed worker the last test screenshots inline HTML.
 

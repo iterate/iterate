@@ -270,7 +270,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     fact("echoBytes", serialize(echoed).byteLength);
   },
 
-  /** A processor whose reduce KEEPS every event's payload in state (an apps/os agent keeps its
+  /** A processor whose reduce KEEPS every event's payload in state (an agent keeps its
    *  context items), pushed one commit at a time the way the DO drives a facet (each push awaited):
    *  the state grows with the log until its checkpoint no longer fits ONE storage cell — that batch
    *  is refused (coded, before any write), and every later push gap-repairs from the checkpoint (a

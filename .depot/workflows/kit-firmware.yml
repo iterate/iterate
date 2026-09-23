@@ -1,0 +1,91 @@
+name: Build Kit Firmware
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .depot/workflows/kit-firmware.yml
+      - apps/kit/firmware/**
+      - apps/kit/package.json
+      - packages/iterate/**
+      - packages/shared/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+  pull_request:
+    paths:
+      - .depot/workflows/kit-firmware.yml
+      - apps/kit/firmware/**
+      - apps/kit/package.json
+      - packages/iterate/**
+      - packages/shared/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+  workflow_dispatch: {}
+
+concurrency:
+  group: kit-firmware-${{ github.head_ref || github.ref_name || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+
+jobs:
+  build-host-firmware:
+    name: Build host firmware
+    runs-on:
+      size: 4x16
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+      # This is a build-only, host-native check. It does not download ESP-IDF,
+      # contact Cloudflare, use Doppler, or publish firmware artifacts.
+      - name: Build Kit firmware host targets
+        run: pnpm --dir apps/kit firmware:build:host
+
+  build-esp-idf-releases:
+    name: Build ESP-IDF firmware releases
+    runs-on:
+      size: 4x16
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Install ESP-IDF 5.4.2
+        env:
+          IDF_PATH: /tmp/esp-idf
+          IDF_TOOLS_PATH: /tmp/.espressif
+        run: |-
+          set -euo pipefail
+          git clone --depth 1 --recursive --branch v5.4.2 https://github.com/espressif/esp-idf.git "$IDF_PATH"
+          test "$(git -C "$IDF_PATH" rev-parse HEAD)" = "f5c3654a1c2d2a01f7f67def7a0dc48e691f63c0"
+          "$IDF_PATH/install.sh" esp32s3
+          source "$IDF_PATH/export.sh"
+          idf.py --version
+      # `firmware:release` compiles every retained ESP-IDF catalog target and
+      # checks its flash plan and configuration partition. It only writes the
+      # checkout-local cache; this job has no deploy credentials or publish step.
+      - name: Build Kit ESP-IDF firmware releases
+        working-directory: apps/kit
+        env:
+          IDF_PATH: /tmp/esp-idf
+          IDF_TOOLS_PATH: /tmp/.espressif
+        run: |-
+          set -euo pipefail
+          source "$IDF_PATH/export.sh"
+          pnpm run firmware:release

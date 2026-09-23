@@ -306,11 +306,11 @@ test("a pnpm shim for this package does not redirect source development to stale
     copyFileSync(bin, join(directory, "bin/iterate.js"));
     writeFileSync(join(directory, "package.json"), '{"type":"module"}');
     writeFileSync(
-      join(directory, "src/index.ts"),
+      join(directory, "src/cli.ts"),
       'export async function runCli() { console.log("source"); }',
     );
     writeFileSync(
-      join(directory, "dist/index.mjs"),
+      join(directory, "dist/cli.mjs"),
       'export async function runCli() { console.log("build"); }',
     );
     writeFileSync(join(directory, "node_modules/.bin/iterate"), "#!/bin/sh\n");

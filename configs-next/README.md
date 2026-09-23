@@ -1,8 +1,8 @@
 # Config repository templates for os-next
 
 Project creation copies a template's files into a new `/repos/config` repository. The project owns
-that copy: later template changes never overwrite it. This uses the same public GitHub reference
-parser and downloader as `apps/os`, in `packages/shared/src/config-repo-template`.
+that copy: later template changes never overwrite it. The public GitHub reference parser and
+downloader live in `packages/shared/src/config-repo-template`.
 
 - `default/` — minimal homepage and instructions; no agent runtime or subscriptions.
 - `with-agents/` — homepage plus the optional agents app, installed on `project/created`.

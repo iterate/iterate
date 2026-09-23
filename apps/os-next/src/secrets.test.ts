@@ -30,7 +30,7 @@ import {
 // ── substitution ── `substituteProjectSecrets`, as a table: `{ url?, headers?, resolve?, becomes }`
 // rows. Every `getSecret("/secrets/NAME")` placeholder in the URL (path and query — matched as the
 // URL parser spelled it, `"` → %22, `{ ` → %7B%20) and the headers is replaced by its value
-// (`{ field: "a.b" }` picks one string out of a JSON material — apps/os's grammar for a URL or a
+// (`{ field: "a.b" }` picks one string out of a JSON material — the grammar for a URL or a
 // header); a placeholder with no stored secret, or a field the value has no string at, refuses,
 // naming the placeholder and where it sat; substituted values are never rescanned; a NEW Request
 // only when something changed (the rebuild is WS-safe — method, Upgrade and body survive it).

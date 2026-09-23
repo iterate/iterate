@@ -1,40 +1,17 @@
-# Monorepo Doppler mapping.
-# We intentionally pin projects here but not configs:
-# local dev config names vary by user (`dev_<name>`), while many scripts pass
-# `--config` explicitly. This file exists to document and set project scope.
-#
-# `doppler run` resolves `project` from the current working directory against these `path` entries
-# (see `doppler setup`). Scripts should not hard-code `--project` unless there is a special reason.
 setup:
   - project: _shared
-    path: packages/shared/
-  - project: _shared
     path: ./
-  - project: os
-    path: apps/os/
-  # The mobile app is a client of OS deployments; its live e2e lane reads the
-  # same env (admin secret, forge key, auth issuer) as apps/os.
-  - project: os
-    path: apps/mobile/
-  - project: semaphore
-    path: apps/semaphore/
-  - project: kit
-    path: apps/kit/
-  - project: streams-example-app
-    path: apps/streams-example-app/
-  - project: auth
-    path: apps/auth/
-  - project: auth
-    path: apps/auth-example/
-  - project: tunnels
-    path: apps/tunnels/
-  - project: dummy-petshop
-    path: apps/dummy-petshop/
-  - project: docs
-    path: apps/docs/
+  - project: _shared
+    path: packages/shared/
   - project: project-worker
     path: apps/os-next/
-  - project: notes
-    path: apps/notes/
+  - project: kit
+    path: apps/kit/
+  - project: dash
+    path: apps/dash/
   - project: agents
     path: apps/agents/
+  - project: notes
+    path: apps/notes/
+  - project: voice
+    path: apps/voice/

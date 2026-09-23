@@ -21,11 +21,6 @@ export const groups: Array<{ name: string; glob: string; priority: number }> = [
   // Files with linguist-generated set in .gitattributes (e.g. pnpm-lock.yaml,
   // routeTree.gen.ts) also land here, ahead of every glob - see computeReport.
   { name: "Generated", glob: "{**/.generated/**,**/generated/**,**/*.generated.*}", priority: 9 },
-  // Mobile is its own group (not folded into Product) so a PR's mobile-app
-  // share is visible at a glance - matched before Tests/UI components too,
-  // so apps/mobile's own tests and components land here, not smeared across
-  // those groups.
-  { name: "Mobile", glob: "apps/mobile/**", priority: 2 },
   {
     name: "Tests",
     glob: "{**/*.{test,spec}.*,**/{e2e,tests,__tests__,test-helpers}/**}",
@@ -161,7 +156,7 @@ function significantLines(content: string, path: string) {
     const sourceMap: unknown = JSON.parse(transpiled.sourceMapText);
     if (
       typeof sourceMap !== "object" ||
-      sourceMap === null ||
+      !sourceMap ||
       !("mappings" in sourceMap) ||
       typeof sourceMap.mappings !== "string"
     ) {

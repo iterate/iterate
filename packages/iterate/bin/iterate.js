@@ -55,9 +55,9 @@ const findLocalModule = () => {
     const repoBin = join(repoPkg, "bin/iterate.js");
     if (existsSync(repoBin) && realpathSync(repoBin) !== selfReal) {
       // Prefer TS source in monorepo dev, fall back to dist
-      const repoSrc = join(repoPkg, "src/index.ts");
+      const repoSrc = join(repoPkg, "src/cli.ts");
       if (existsSync(repoSrc)) return repoSrc;
-      const repoDist = join(repoPkg, "dist/index.mjs");
+      const repoDist = join(repoPkg, "dist/cli.mjs");
       if (existsSync(repoDist)) return repoDist;
     }
   }
@@ -71,7 +71,7 @@ const findLocalModule = () => {
     const nmScript = join(nmRoot, "node_modules/iterate/bin/iterate.js");
     if (existsSync(nmScript) && realpathSync(nmScript) !== selfReal) {
       // Published package — use dist
-      const nmDist = join(nmRoot, "node_modules/iterate/dist/index.mjs");
+      const nmDist = join(nmRoot, "node_modules/iterate/dist/cli.mjs");
       if (existsSync(nmDist)) return nmDist;
     }
   }
@@ -85,9 +85,9 @@ if (localModule) {
   await runCli();
 } else {
   // No delegation — run our own copy.
-  // In monorepo dev: src/index.ts exists. Published: dist/index.mjs exists.
-  const srcPath = join(pkgRoot, "src/index.ts");
-  const distPath = join(pkgRoot, "dist/index.mjs");
+  // In monorepo dev: src/cli.ts exists. Published: dist/cli.mjs exists.
+  const srcPath = join(pkgRoot, "src/cli.ts");
+  const distPath = join(pkgRoot, "dist/cli.mjs");
   const modulePath = !forceBuiltPackage && existsSync(srcPath) ? srcPath : distPath;
   const { runCli } = await import(modulePath);
   await runCli();

@@ -28,9 +28,7 @@ idf.py -C apps/kit/firmware/targets/waveshare_s3_rlcd \
 ```
 
 The driver needs no vendor-example 5.5 APIs; Kit's TCP transport patch is
-incompatible with 5.5.3. `waveshare_s3_rlcd_hello` is an offline display/button
-diagnostic; **only the voice target is published on k.iterate.com**.
-Both reserve configuration at `0x410000`.
+incompatible with 5.5.3. The voice target reserves configuration at `0x410000`.
 
 Identify MAC `94:A9:90:CD:51:B8` using `tools/port-for-mac.sh`; USB paths change.
 Factory boot: `03_Fac`, IDF 5.5.2. Private 16 MiB factory-backup SHA-256:

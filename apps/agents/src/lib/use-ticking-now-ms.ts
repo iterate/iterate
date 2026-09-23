@@ -1,4 +1,4 @@
-// apps/os's ticking clock: a wall-clock subscribed via `useSyncExternalStore`, not `useState` +
+// the platform's ticking clock: a wall-clock subscribed via `useSyncExternalStore`, not `useState` +
 // `setInterval` in an effect — the snapshot is a stable scalar between ticks, and the interval
 // only runs while something is subscribed.
 import { useCallback, useState, useSyncExternalStore } from "react";

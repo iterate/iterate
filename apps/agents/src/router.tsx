@@ -28,7 +28,7 @@ export function getRouter() {
     // `_auth` layout — renders a BLANK outlet in the SSR shell and again while
     // `beforeLoad`/`loader` run on the client. Blank is bad UX and breaks the "the app always
     // reports progress" contract the e2e specs enforce (their spinner-waiter only extends waits
-    // while a spinner is visible; docs/preview-e2e-flake-hunt.md flake 21).
+    // while a spinner is visible).
     defaultPendingComponent: () => <DefaultPendingComponent />,
     // Show that feedback quickly on client-side loads too: the library defaults (1000ms before
     // pending shows, 500ms minimum once shown) leave a full second of blank panel before any

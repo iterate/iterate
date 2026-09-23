@@ -2,7 +2,7 @@
 -- who can access what." Strongly consistent (D1) — no KV list() lag. The OAuth provider keeps its own
 -- OAUTH_KV (tokens/grants/clients); this D1 is OURS.
 --
--- Org-centric (like apps/os): users belong to orgs, projects belong to orgs, access is org membership
+-- Org-centric: users belong to orgs, projects belong to orgs, access is org membership
 -- — the console, `/api` (`projects.create`) and `/mcp` create projects through the one directory door.
 --
 -- Idempotent (IF NOT EXISTS) on purpose: the e2e lane applies it into a fresh local D1 on every run and

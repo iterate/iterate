@@ -492,7 +492,7 @@ test("cursor subscriptions enable no processor and mint no facet; a row appears 
 });
 
 test("subscribe resolves without probing the receiver; an unusable target fails at its FIRST delivery, never at configure", async () => {
-  // A deliberate non-guarantee, kept on purpose (apps/os documents the same one): configure appends
+  // A deliberate non-guarantee, kept on purpose: configure appends
   // the row and returns — "the receiver learns about the subscription when its first copy arrives".
   // A fat-fingered target therefore fails LATE: the loop fails to evaluate `itx.does-not-exist` on
   // the first consumed commit (NO_ITX_EXPRESSION_MATCH) and the row DANGLES — its cursor stays at

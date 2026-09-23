@@ -1,74 +1,50 @@
 ---
 name: recreate-production
-description: Capture or restore a selected OS project after a deliberate proof-of-concept production erase.
+description: Capture or restore a selected OS Next project after a deliberate production data erase.
 ---
 
-# Recreate production
+# Recreate a production project
 
-For **OS-Next**, use `pnpm --dir apps/os-next project-seed capture|check|apply` with
-an explicit `--env`. Read [OS-Next project seeds](../../../apps/os-next/docs/project-seeds.md).
-Its archives preserve the original secret encryption binding and restore through
-normal commands into fresh project IDs. Do not run the legacy OS CLI against OS-Next.
+Use this skill only for a deliberate OS Next recovery. Read
+[Project recovery seeds](../../../apps/os-next/docs/project-seeds.md) before acting. A seed is a
+semantic snapshot of one project, not a database dump.
 
-The commands below apply to **legacy apps/os**.
-
-Use the project-seed CLI. A seed is a small semantic snapshot, not a database
-dump and not a stream export. Read
-[Project seeds](../../../apps/os/docs/project-seeds.md) before operating.
+Use `pnpm --dir apps/os-next project-seed` and always pass `--env`. Keep archives outside the
+repository. They contain encrypted secret cells and must never be committed or printed.
 
 ## Capture
 
-```bash
-pnpm --dir apps/os cli project-seed capture --project <slug>
+```sh
+pnpm --dir apps/os-next project-seed capture \
+  --env prd --project <slug> --file <absolute-path>.json
+pnpm --dir apps/os-next project-seed check \
+  --env prd --file <absolute-path>.json
 ```
 
-Direct capture defaults to `os/prd`. Pass `--environment <config>` or
-`--file <path>` when needed. The default file is
-`~/.iterate/project-seeds/<slug>.project-seed.yaml`; it is written mode 0600.
-
-Run `project-seed check --file <path> --project <slug>` and report the
-non-secret summary. Never commit or print the archive.
+Capture creates a mode-0600 archive, Git mirror, working clone, and receipt. It refuses to
+overwrite an earlier archive. Report only the non-secret counts and paths.
 
 ## Restore
 
-```bash
-doppler run --project os --config prd -- \
-  pnpm --dir apps/os cli project-seed check \
-  --file <archive.yaml> --project <slug>
-
-doppler run --project os --config prd -- \
-  pnpm --dir apps/os cli project-seed apply \
-  --file <archive.yaml> --project <slug>
+```sh
+pnpm --dir apps/os-next project-seed apply \
+  --env prd --yes-i-mean-prd --file <absolute-path>.json \
+  --organization <organization> --owners <owner-email> [...]
 ```
 
-`apply` restores Auth users, minimum organization membership, the exact project
-ID, hostnames, inbound-email senders, generic secrets, supported integrations,
-and the config repository. It is convergent and proves its GitHub/local state
-and the served config commit before returning.
-
-GitHub is authoritative. Every apply re-establishes the existing remote link
-without an initial push and imports its current default branch only when the
-local head differs. A local-only config repository comes from the archived
-file tree. Other project repositories are deliberately outside the recovery
-seed.
+`apply` creates or converges the selected project through normal project, repository, and secret
+operations. It restores the config tree, organization membership, and secrets into fresh project
+identity bindings. It verifies the Git tree, published commit, membership roles, and secret
+readback before returning.
 
 ## Boundaries
 
-- Never export, import, or replay stream histories, offsets, processor output,
-  idempotency keys, SQLite rows, or Durable Object state.
-- Secret capture reads the current encrypted secret cell only. Ciphertext
-  remains usable while the exact project/path binding and production
-  `SECRET_ENCRYPTION_KEY` remain unchanged; `apply` decrypts locally and sends
-  plaintext through the owning create/connect command for fresh encryption.
-- Supported built-in integrations are Slack, GitHub, and Google. A connected
-  unsupported integration makes capture fail instead of silently omitting it.
-- Cloudflare custom-hostname metadata is not part of the seed. The deployed
-  worker's project-hostname KV directory is the ownership and routing source of
-  truth.
-- Do not erase data, deploy workers, push GitHub changes, or perform externally
-  visible provider smokes unless the user included that action.
-- Keep the stable archive. Delete only disposable local work created during the
-  run.
-
-If `apply` fails, fix the current command or archive and rerun it. Do not repair
-around it by appending old events.
+- Do not run capture, erase, deploy, apply, or provider checks without the user's explicit request.
+- Never replay stream history, offsets, processor state, OAuth sessions, grants, other repositories,
+  R2 files, agents, or workspaces. A seed does not contain them.
+- Retain the deployment's `APP_CONFIG_SECRETS__KEY`; an archive cannot be restored without it or a
+  retained previous key.
+- Before an erase, inventory with `pnpm --dir apps/os-next erase-data --env prd --yes-i-mean-prd --dry-run`.
+  The erase and deployment are separate operations; no seed command performs either implicitly.
+- If a command fails, preserve the archive and fix the reported condition before retrying. Do not
+  attempt recovery by appending legacy events or restoring database rows.

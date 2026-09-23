@@ -46,7 +46,7 @@ import {
 import { newWebAgentPath } from "../../lib/web-agent.ts";
 
 // An agent is a conversation on its own path (`/agents/...`); everything it does is an event
-// there. This page is a window onto that log — apps/os's agent view at the size os-next carries:
+// there. This page is a window onto that log — the platform's agent view at the size os-next carries:
 // the CHAT (the shared agent-UI reducer's items: messages, and the activities that open into
 // rounds of script + result), the EVENTS (the raw log), and the TRACES (one sheet, URL-backed: an
 // LLM request, a script execution, a raw event). The project stub is held for the page's life; the
@@ -108,7 +108,7 @@ function AgentsPage() {
           installed={data.installed}
           agent={data.agent}
           onCreate={async () => {
-            // an agent is its path; a new one is born at the moment's path, as in apps/os
+            // An agent is its path; a new one is born at this moment's path.
             const path = newWebAgentPath(new Date());
             using itx = await api.projects.get(project);
             if (!data.installed) {
@@ -232,7 +232,7 @@ function useAgentLog(context: Context | undefined, path: string) {
   };
 }
 
-/** apps/os's interrupt affordance for the running turn, shared by the composer and the queued
+/** the platform's interrupt affordance for the running turn, shared by the composer and the queued
  *  panel. Null while nothing is running, so consumers gate on existence. */
 function useAgentInterrupt(args: {
   onInterrupt: (() => Promise<void>) | undefined;
@@ -351,7 +351,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
     [context],
   );
   const view = search.view || "chat";
-  // THE INTERRUPT (apps/os's): cancellation is a property of new input, never a command — a
+  // THE INTERRUPT (the platform's): cancellation is a property of new input, never a command — a
   // developer item that tells the model why its answer stopped, marked as the person's so it
   // counts as external input; the agent settles the open request as cancelled when it lands.
   const runningLlmRequestId = feed.state.live?.steps.findLast(

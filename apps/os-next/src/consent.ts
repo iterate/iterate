@@ -51,8 +51,8 @@ export type ConsentView =
        *  composes `<slug>.<hostname>` or `<origin>/<slug>/` from it; null when this deployment
        *  serves no project ingress */
       ingressRouting: IngressRouting;
-      /** the onboarding step's first draft of an organization name (apps/auth's heuristic): from
-       *  the person's display name, else their email's company domain or local part */
+      /** the onboarding step's first draft of an organization name: from the person's display name,
+       *  else their email's company domain or local part */
       suggestedOrganizationName: string;
     }
   | { kind: "redirect"; location: string }

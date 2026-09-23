@@ -121,7 +121,7 @@ export function buildReviewEvents(input: {
           finished_at: check.completed_at,
           duration_ms: durationMs(check.started_at, check.completed_at),
         },
-        check.completed_at ?? undefined,
+        check.completed_at || undefined,
       ),
     );
   }
@@ -148,7 +148,7 @@ export function buildReviewEvents(input: {
           conclusion: review.state.toLowerCase(),
           finished_at: review.submitted_at,
         },
-        review.submitted_at ?? undefined,
+        review.submitted_at || undefined,
       ),
     );
   }

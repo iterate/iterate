@@ -27,7 +27,7 @@ export const OBSERVABILITY = {
 export function writeGeneratedWranglerConfig(input: {
   /** URL of `../wrangler.jsonc` relative to the calling generator module. */
   configUrl: URL;
-  /** e.g. "apps/os" — names the app in the emitted header. */
+  /** e.g. "apps/os-next" — names the app in the emitted header. */
   appLabel: string;
   /** Extra header line(s), e.g. a pointer to the app's topology doc. */
   extraDocs?: string;
@@ -44,7 +44,7 @@ export function writeGeneratedWranglerConfig(input: {
 //
 // Regenerate:      pnpm gen:wrangler   (vite dev/build do it automatically)
 // Change an env:   edit envs.ts, not this file
-// How it all fits: docs/devops-cloudflare-doppler.md${input.extraDocs ? `, ${input.extraDocs}` : ""}
+// Deployment configuration: envs.ts${input.extraDocs ? `, ${input.extraDocs}` : ""}
 `;
   const rendered = header + JSON.stringify(input.config, null, 2) + "\n";
   const current = (() => {

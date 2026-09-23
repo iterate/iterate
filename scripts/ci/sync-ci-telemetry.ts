@@ -6,11 +6,11 @@ import { buildReviewEvents, reviewProviderKey, selectReviewSources } from "./rev
 import { collectTelemetrySources } from "./telemetry-source-sync.ts";
 
 const execFile = promisify(execFileCallback);
-const repository = process.env.GITHUB_REPOSITORY ?? "iterate/iterate";
+const repository = process.env.GITHUB_REPOSITORY || "iterate/iterate";
 const [owner, repo] = repository.split("/") as [string, string];
-const lookbackDays = Number.parseInt(process.env.CI_TELEMETRY_LOOKBACK_DAYS ?? "7", 10);
+const lookbackDays = Number.parseInt(process.env.CI_TELEMETRY_LOOKBACK_DAYS || "7", 10);
 const cutoff = Date.now() - lookbackDays * 86_400_000;
-const githubLimit = Number.parseInt(process.env.CI_TELEMETRY_GITHUB_LIMIT ?? "500", 10);
+const githubLimit = Number.parseInt(process.env.CI_TELEMETRY_GITHUB_LIMIT || "500", 10);
 const dryRun = process.argv.includes("--dry-run");
 
 async function main() {
@@ -19,7 +19,7 @@ async function main() {
     repository,
     lookbackDays,
     telemetrySyncId: process.env.GITHUB_RUN_ID
-      ? `${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT ?? "1"}`
+      ? `${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT || "1"}`
       : `local:${telemetrySyncStartedAt}`,
     collectorHeadSha: process.env.GITHUB_SHA,
     sourceGroups: [
@@ -51,7 +51,7 @@ async function main() {
 }
 
 function githubClient() {
-  const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
+  const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
   if (!token) throw new Error("GH_TOKEN is required to sync GitHub Actions and review telemetry");
   return new Octokit({ auth: token });
 }
@@ -74,7 +74,7 @@ async function githubActionsEvents(): Promise<PostHogEvent[]> {
       repository,
       automation_platform: "github-actions",
       data_source: "github-actions-api",
-      workflow_name: run.name ?? run.path,
+      workflow_name: run.name || run.path,
       workflow_path: run.path,
       workflow_run_id: String(run.id),
       workflow_run_attempt: run.run_attempt,
@@ -130,10 +130,10 @@ async function githubActionsEvents(): Promise<PostHogEvent[]> {
             step_count: job.steps?.length ?? 0,
             failed_step_count:
               job.steps?.filter(
-                (step) => !["success", "skipped", "neutral"].includes(step.conclusion ?? ""),
+                (step) => !["success", "skipped", "neutral"].includes(step.conclusion || ""),
               ).length ?? 0,
           },
-          job.completed_at ?? run.updated_at,
+          job.completed_at || run.updated_at,
         ),
       );
     }
@@ -340,7 +340,7 @@ async function depotEvents(): Promise<PostHogEvent[]> {
     ],
     environment,
   );
-  const limit = Number.parseInt(process.env.CI_TELEMETRY_DEPOT_LIMIT ?? "200", 10);
+  const limit = Number.parseInt(process.env.CI_TELEMETRY_DEPOT_LIMIT || "200", 10);
   const recent = list
     .filter(
       (workflow) => workflow.status !== "running" && Date.parse(workflow.created_at) >= cutoff,

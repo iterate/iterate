@@ -3,7 +3,7 @@ import type { SqlStorageValue } from "@cloudflare/workers-types";
 // contract and three hooks, no constructor arguments, no storage, no stream — a unit test constructs
 // it with `new`), and `ProcessorEngine`, which drives ONE such instance against a stream and a
 // storage; the SDK's `StreamProcessorDurableObject` builds one per hosted facet. The author surface
-// mirrors apps/os so processors port both ways. Node-testable; bundled into every loaded isolate as
+// is Node-testable and bundled into every loaded isolate as
 // `processor.js` (sdk/index.ts), so nothing here imports cloudflare:workers. Four concepts ride with it:
 //   events             — `StreamEventInput` / `StreamEvent`, the envelope, and the idempotency rules
 //   reduce checkpoint  — `ReduceCheckpointTable`, THE ONE spelling of a persisted reduce checkpoint
@@ -108,7 +108,7 @@ export type ProcessEventArgs<
    *  assignable to `StreamProcessor<State>` (the host's field), and only method parameters are
    *  compared bivariantly. */
   append(...events: Emitted[]): Promise<StreamEvent[]>;
-  /** The same, onto the context at `path` (apps/os's `appendTo`): a certificate cross-posted to `/`. */
+  /** The same, onto the context at `path`: a certificate cross-posted to `/`. */
   appendTo(path: string, ...events: Emitted[]): Promise<StreamEvent[]>;
   /** Hold the cursor until `work` settles; FIFO with other blockers of the SAME event. */
   blockProcessorWhile: (work: () => Promise<unknown>) => void;
@@ -707,7 +707,7 @@ export type StreamEventInput = {
   };
   /** Same key + same body = dedupe (the existing event is returned); different body = loud error. */
   idempotencyKey?: string;
-  /** OPTIONAL PRECONDITION (apps/os): land at exactly this offset or refuse the whole batch with
+  /** OPTIONAL PRECONDITION: land at exactly this offset or refuse the whole batch with
    *  OFFSET_CONFLICT — "nothing has happened since I last looked". Never stored in the body. */
   offset?: number;
   /** An EPHEMERAL event rides the stream to live subscribers but is NEVER persisted: it consumes an
@@ -723,7 +723,7 @@ export type StreamEvent = Omit<StreamEventInput, "offset"> & {
   path: string;
 };
 
-// ── idempotency (apps/os semantics, message text kept greppable across RPC hops) ──
+// ── idempotency (message text stays greppable across RPC hops) ──
 
 export function idempotencyConflictMessage(idempotencyKey: string, existingOffset: number): string {
   return `idempotency key "${idempotencyKey}" already names a different event at offset ${existingOffset}`;
@@ -958,7 +958,7 @@ export class LiveState<S> {
   }
 }
 
-// ── processor contract ── the zod CONTRACT helper (apps/os `defineProcessorContract`, focused); zod
+// ── processor contract ── the focused Zod contract helper; zod
 // rides the SDK bundle with it. A contract declares its
 // identity, reduced-state schema, the events it OWNS (`events`, keyed by the durable type string,
 // each with a zod payload schema — so the type strings and payload shapes are visible right here),

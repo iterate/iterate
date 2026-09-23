@@ -1,5 +1,5 @@
 // Hourly Durable Objects cost alarm (do-duration-probe.yml). Runs the
-// duration probe (apps/os/scripts/do-duration-probe.ts --json) against both
+// duration probe (scripts/ci/do-duration-probe.ts --json) against both
 // Cloudflare accounts and keeps ONE Slack thread per UTC day in #error-pulse.
 // The headline is one sentence, rewritten every hour: "We're spending $X/day
 // on durable objects based on current usage ($A dev/preview, $B prd)". The
@@ -21,11 +21,10 @@ import { execFileSync } from "node:child_process";
 import type { WebClient } from "@slack/web-api";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
-import type { ProbeSummary } from "../../apps/os/scripts/do-duration-probe.ts";
+import type { ProbeSummary } from "./do-duration-probe.ts";
 import { getRunUrl } from "./github.ts";
 import { getSlackClient, slackChannelIds } from "./slack.ts";
 
-const DOCS_URL = "https://github.com/iterate/iterate/tree/main/apps/os/tasks/do-duration-leak";
 /** $12.50 per million GB-seconds at 128 MB: one DO-hour is 450 GB-s. */
 const USD_PER_DO_HOUR = 0.005625;
 /** The probe runs at :41 and analytics lag ~15–20 minutes, so the previous
@@ -153,7 +152,7 @@ function probe(dopplerConfig: string, ceilingDoHours: number) {
       // prettier-ignore
       [
         "run", "--project", "os", "--config", dopplerConfig, "--",
-        "pnpm", "tsx", "apps/os/scripts/do-duration-probe.ts",
+        "pnpm", "tsx", "scripts/ci/do-duration-probe.ts",
         "--hours", String(LOOKBACK_HOURS), "--max-account-do-hours", String(ceilingDoHours), "--json",
       ],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
@@ -168,7 +167,7 @@ function probe(dopplerConfig: string, ceilingDoHours: number) {
   const lastLine = stdout.trim().split("\n").at(-1) || "";
   try {
     // The probe's --json contract: its LAST stdout line is one ProbeSummary
-    // (apps/os/scripts/do-duration-probe.ts prints it after the human report
+    // (scripts/ci/do-duration-probe.ts prints it after the human report
     // moves to stderr). Anything else — a crash before the summary, a stray
     // line — fails JSON.parse and is reported as a probe failure, so a wrong
     // shape cannot masquerade as a clean account.
@@ -205,7 +204,7 @@ export function renderDailyThread(input: {
   const replies: string[] = [];
   const pages: Array<{ label: string; text: string }> = [];
   for (const reading of input.readings) {
-    if (reading.summary === null) {
+    if (!reading.summary) {
       perAccount.push(`${reading.label}: probe failed`);
       tableRows.push([reading.label, `probe failed: ${reading.failure}`]);
       replies.push(
@@ -323,7 +322,7 @@ function usd(doHours: number) {
 
 function links(runUrl: string | null) {
   return [
-    `<${DOCS_URL}|incident docs>`,
+    `<https://github.com/iterate/iterate/tree/6a9a48e2a/apps/os/tasks/do-duration-leak|incident docs>`,
     runUrl ? `<${runUrl}|workflow run>` : null,
     "($12.50/M GB-s, 1000 DO-hours ≈ $5.60)",
   ]

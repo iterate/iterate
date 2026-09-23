@@ -105,9 +105,9 @@ static const struct iterate_kit_audio_codec_properties codec_properties = {
   .output_gain_ceiling_centi_db = 0,
 };
 
-/* The avatar is an in-firmware reader of descriptor debt, even though apps/os
- * has no dma* reader. Keep only its owed-time ISR; starvation and its saturated
- * counters belong to the shared deadline ledger. No descriptor deficit metrics.
+/* The avatar is an in-firmware reader of descriptor debt. Keep only its
+ * owed-time ISR; starvation and its saturated counters belong to the shared
+ * deadline ledger. No descriptor deficit metrics.
  */
 static DRAM_ATTR portMUX_TYPE dma_ledger_lock = portMUX_INITIALIZER_UNLOCKED;
 static volatile int32_t dma_owed_ms;

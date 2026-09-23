@@ -3,7 +3,7 @@
 // `notifications/initialized` → `tools/list` at connect, then `tools/call` per call. A server that
 // answers `initialize` with an `Mcp-Session-Id` header gets it back on every later request and a
 // DELETE on close. Responses may be plain JSON or a `text/event-stream` carrying the JSON-RPC
-// response as one `data:` event; both are read here. The shape mirrors apps/os's mcp-client.ts
+// response as one `data:` event; both are read here.
 // (tool args = one object; a result's `structuredContent` wins, else its text, JSON-parsed when it
 // parses) without the MCP SDK: the whole client is the few requests below.
 

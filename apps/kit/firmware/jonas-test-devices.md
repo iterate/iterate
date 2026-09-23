@@ -10,7 +10,7 @@ Identified on 2026-09-21. Use the ROM MAC / USB serial number as identity;
 
 Waveshare ESP32-S3 RLCD 4.2 has USB serial `94:A9:90:CD:51:B8`.
 Factory boot reported `03_Fac`, ES8311/ES7210 and the vendor's RLCD wiring;
-Jonas confirmed the Hello World display and KEY-button test on this unit.
+Jonas confirmed the display and KEY-button path on this unit.
 See its [board notes](devices/waveshare_s3_rlcd/README.md).
 
 ZECTRIX NOTE4 has USB serial `80:45:6B:38:60:84`. Factory boot identifies
@@ -43,10 +43,8 @@ tests passed. The air-path check opened a call in 2.97 seconds, transcribed
 “Hello voice assistant, please say banana, just the word banana” and played
 “Banana.” with no reported errors.
 
-Satellite1 was also rebuilt and reflashed on 2026-09-21. Its saved configuration
-still pointed at `https://os.iterate.com` and retired project
-`prj_7d0fb56f09a54a298e3ddfb106c1fb9a`; it now uses the same canonical bench
-project at `https://os.iterate2.com`, with its own project-scoped grant.
+Satellite1 was also rebuilt and reflashed on 2026-09-21. It uses the same canonical bench project at `https://os.iterate2.com`,
+with its own project-scoped grant.
 Flash hashes and all 64 host tests passed. The voice check opened a call in
 2.47 seconds and returned “Hello? Banana.”; an interruption check stopped
 its counting and returned “Stopped.” Both checks reported no errors, and

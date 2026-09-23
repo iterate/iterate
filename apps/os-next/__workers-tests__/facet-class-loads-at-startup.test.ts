@@ -1,7 +1,7 @@
 // __workers-tests__/facet-class-loads-at-startup.test.ts — `FacetHost#invoke`
 // (the one method every `itx.facets.get(...)` call lands in) mints a facet's class ONLY for a facet
 // that STARTS, so a facet that is already RUNNING never touches the Worker Loader (Cloudflare's
-// facet lifecycle; the shape apps/os took in PR #2631 after measuring the alternative — one isolate
+// facet lifecycle; one isolate
 // lookup per warm call, and a running facet unreachable for as long as the loader is unhealthy).
 //
 // Pinned in the `workers` vitest project (it runs inside workerd) because it needs the real LOADER,

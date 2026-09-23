@@ -138,7 +138,7 @@ test("first Claude consent creates the organization and project on the consent p
     // name and the first project's slug — typed "Consent Studio …", it reads consent-studio-… —
     // with where it will live. Review permissions makes both and opens the review step.
     expect(await page.getByRole("button", { name: "Authorize", exact: true }).count()).toBe(0);
-    // both start filled the way apps/auth fills them — the organization from the email's domain
+    // Both start filled from the email's domain — the organization
     // (example.com → "Example"), the slug from the organization, following it until edited
     const orgField = page.getByRole("textbox", { name: "Organization name", exact: true });
     const projectField = page.getByRole("textbox", { name: "Project slug", exact: true });
@@ -252,12 +252,14 @@ test("first Claude consent creates the organization and project on the consent p
     await otherChoice.waitFor();
     expect(await otherChoice.isChecked()).toBe(true);
     expect(await choice.isChecked()).toBe(false);
-    await expect(page.getByRole("group", { name: "Projects it may reach" })).toContainText(
-      firstOrg,
-    );
-    await expect(page.getByRole("group", { name: "Projects it may reach" })).toContainText(
-      "Second studio",
-    );
+    await page
+      .getByRole("group", { name: "Projects it may reach" })
+      .filter({ hasText: firstOrg })
+      .waitFor();
+    await page
+      .getByRole("group", { name: "Projects it may reach" })
+      .filter({ hasText: "Second studio" })
+      .waitFor();
     await choice.check();
     await otherChoice.uncheck();
     await future.check();
@@ -287,7 +289,10 @@ test("first Claude consent creates the organization and project on the consent p
     expect(new URL(page.url()).search).toBe(flow.url.search);
     await review.click();
     expect(await accountAccess.isChecked()).toBe(false);
-    await expect(page.getByRole("region", { name: "Selected projects" })).toContainText(project);
+    await page
+      .getByRole("region", { name: "Selected projects" })
+      .filter({ hasText: project })
+      .waitFor();
     await expect(page.getByRole("region", { name: "Selected projects" })).not.toContainText(
       otherProject,
     );
@@ -397,7 +402,7 @@ test("the Notes app works on its own origin and through a project config worker"
     .projects.get(project);
   // Both rules in ONE batch (an HTTP-batch session is one-shot): install the config worker, and point
   // the `notes` app label at it — so notes--<project>.<base> reaches the config worker with the app
-  // slug in x-iterate-app (the apps/os header), and it fetches through to the Notes worker.
+  // slug in x-iterate-app, and it fetches through to the Notes worker.
   await Promise.all([
     projectContext.append({
       type: "events.iterate.com/project/ingress-configured",

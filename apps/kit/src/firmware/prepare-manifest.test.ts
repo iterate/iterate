@@ -32,7 +32,7 @@ const artifactHash = "a".repeat(64);
 const configuration: DeviceConfiguration = {
   wifi: { ssid: "studio", password: "secret123" },
   iterate: {
-    baseUrl: "https://os.iterate.com",
+    baseUrl: "https://os.iterate2.com",
     projectId: "prj_voice_lab",
     projectApiKey: "itxk_test",
   },

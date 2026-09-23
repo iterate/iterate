@@ -1,4 +1,4 @@
-// examples/mini-app.ts — a SUPER-SIMPLE, no-build userspace mini-app for a clean-room project.
+// examples/mini-app.ts — a super-simple, no-build userspace mini-app for a project.
 //
 // The WHOLE app is ONE loaded WorkerEntrypoint. A project registers it with a single rewrite rule:
 //

@@ -463,7 +463,7 @@ export class IterateContextRpcTarget extends RpcTarget {
 installPrototypeInvokeFallback(IterateContextRpcTarget, ["itx"]);
 
 // ── durable object names ── the ONE place a context DO name is formatted and parsed
-// (mirrors apps/os domains/durable-object-names.ts, minimal: no query props, no global host
+// (minimal: no query props, no global host
 // yet). A context is addressed by a faux URL `{projectId}.iterate{path}`:
 //
 //   prj_demo.iterate/                     → project root

@@ -199,7 +199,7 @@ test("rich values through the longest path: Date, bytes, callbacks, RpcTarget ar
 
 // ── the Slack bridge ──
 
-/** THE ZERO-DECLARATION SHAPE (the apps/os replayPathCall idea, pushed to the client): a Proxy
+/** THE ZERO-DECLARATION SHAPE, pushed to the client: a Proxy
  *  over a bare RpcTarget forwards every unknown property straight to the LITERAL SDK instance —
  *  no per-method table, no getters; `new WebClient(token)` drops in as `sdk` unchanged. (capnweb
  *  only passes RpcTargets/functions by reference, so the bare-RpcTarget core is what crosses;

@@ -186,7 +186,7 @@ function chunkSlackBlocks(lines: string[]) {
   const chunks: string[] = [];
   for (const line of lines.flatMap((line) => splitLongLine(line, blockChars))) {
     const last = chunks.at(-1);
-    if (last !== undefined && last.length + 1 + line.length <= blockChars) {
+    if (last && last.length + 1 + line.length <= blockChars) {
       chunks[chunks.length - 1] = `${last}\n${line}`;
     } else {
       chunks.push(line);

@@ -89,7 +89,7 @@ async function askComputerName(): Promise<string> {
     placeholder: proposed,
     defaultValue: proposed,
     validate: (value) =>
-      /^[a-zA-Z][a-zA-Z0-9]*$/.test((value ?? "").trim())
+      /^[a-zA-Z][a-zA-Z0-9]*$/.test((value || "").trim())
         ? undefined
         : "Use a camelCase name: letters and digits, starting with a letter (e.g. jonasComputer).",
   });

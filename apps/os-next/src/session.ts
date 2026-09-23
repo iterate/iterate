@@ -197,7 +197,7 @@ export function publishGlobalFact(
 }
 
 /** What you authenticate into: a catalog that vends contexts. A session is NOT a context — it is
- *  the directory you reach one through (apps/os: "a session is what authenticate() returns"). */
+ *  the directory you reach one through. */
 export type SessionAuthority = {
   principal: Principal;
   /** The OAuth grant this session IS — the connection, stamped beside the principal on every event
@@ -550,7 +550,7 @@ class ProjectCollectionRpcTarget extends RpcTarget {
     // a project already created, or one whose creation is open, gets its context back and nothing
     // appended; otherwise (never requested, or the last attempt failed) the `project` processor row
     // is enabled on `/` and a NEW `project/create-requested` appended there — the row's facts, under
-    // this caller. The context is returned AT ONCE (apps/os's `waitUntilCreated: false`): the
+    // this caller. The context is returned at once: the
     // project processor (src/project/processor.ts) lands `project/created` or `project/create-failed`
     // from state at head, and the dash watches the facet's live state.
     const context = this.#context(project.id);

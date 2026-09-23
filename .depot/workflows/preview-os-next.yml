@@ -4,18 +4,14 @@
 # of the parent worker os-next-preview, runs the e2e suite against it, writes the URL and the
 # operations into the PR body, deletes it when the PR closes, and sweeps nightly.
 #
-# This workflow runs INSTEAD of the apps/os preview fleet for a PR confined to os-next
-# (scripts/preview/change-types.ts classes those paths so the planner neither deploys nor tests
-# the fleet). The paths below are the union of what deploy-os-next.yml and the four app deploy
-# workflows (dash, agents, notes, voice) deploy prd for: the apps on top are previewed alongside,
-# each only when its own paths changed since the merge-base (scripts/preview.ts `changedApps`).
-#
 # Depot registers automatic triggers when this file is on the default branch. Test a branch with:
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
 #     --workflow preview-os-next.yml --ref <branch> \
 #     --input pull-request-number=<pr> --input action=deploy
 # Every operation the PR body lists is a dispatch: action = deploy | reset | e2e | delete | sweep,
-# apps = auto | all | none (the apps on top: dash, agents, notes, voice).
+# apps = all | auto | none (the apps on top: dash, agents, notes, voice). Pull-request runs use
+# all so every client is usable against the platform preview; auto remains available for a faster
+# targeted manual redeploy once the clients are already present.
 #
 # Concurrency per PR, never cancelled: a half-applied preview is worse than a slow one (their words).
 # The only Depot secret is DOPPLER_TOKEN; Doppler project-worker/preview supplies the Cloudflare
@@ -49,8 +45,12 @@ on:
       - packages/iterate/**
       - packages/shared/**
       - packages/ui/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
       - envs.ts
       - scripts/lib/**
+      - scripts/depot-ci/**
   schedule:
     # Nightly, off the hour: what stops a force-closed PR, or a failed cleanup, from leaking a
     # preview and its D1 (cloudflare-os runs theirs at 04:37 too).
@@ -68,10 +68,10 @@ on:
         type: string
         default: deploy
       apps:
-        description: "The apps on top (dash, agents, notes, voice): auto = the ones whose paths changed since the merge-base, all = every one, none"
+        description: "The apps on top (dash, agents, notes, voice): all = every client, auto = changed clients, none"
         required: false
         type: string
-        default: auto
+        default: all
 
 concurrency:
   group: preview-os-next-${{ github.event.pull_request.number || inputs.pull-request-number || 'sweep' }}
@@ -118,7 +118,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           PREVIEW_NAME: ${{ github.head_ref }}
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
-          PREVIEW_APPS: ${{ inputs.apps || 'auto' }}
+          PREVIEW_APPS: ${{ inputs.apps || 'all' }}
         run: doppler run -- pnpm preview "$ACTION"
       # THE FULL MUTATING PROOF (docs/testing.md): this isolated preview owns the project-creating
       # e2e and browser suites. Production deployment runs only its deploy-script readiness probes.

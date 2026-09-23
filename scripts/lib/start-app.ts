@@ -22,14 +22,7 @@ import { fileURLToPath } from "node:url";
 import { Generator, getConfig } from "@tanstack/router-generator";
 import { createCli, t } from "trpc-cli";
 import { z } from "zod";
-import {
-  agentsEnvs,
-  dashEnvs,
-  envs as osEnvs,
-  notesEnvs,
-  osNextEnvs,
-  voiceEnvs,
-} from "../../envs.ts";
+import { agentsEnvs, dashEnvs, notesEnvs, osNextEnvs, voiceEnvs } from "../../envs.ts";
 import { deployApp } from "./deploy-app.ts";
 import { ensureProxiedDnsRecord } from "./deploy-helpers.ts";
 import { resolveEnvContext, type DeployableEnv } from "./env-context.ts";
@@ -67,7 +60,12 @@ export function registrableDomainOf(urlOrHostname: string): string {
  *  (`appAuth` `denyZones`) refuses to connect an app to an issuer under any of them: a project host
  *  or a custom apex is userspace and could serve a look-alike issuer. */
 function ownZones(): string[] {
-  const zones = new Set<string>();
+  // These existing userspace hosts remain untrusted issuers even after their deployment code is removed.
+  const zones = new Set([
+    "iterate.app",
+    "iterate.com",
+    ...Array.from({ length: 19 }, (_, i) => `iterate-preview-${i + 1}.app`),
+  ]);
   for (const env of Object.values(osNextEnvs)) {
     zones.add(registrableDomainOf(env.baseUrl));
     zones.add(registrableDomainOf(env.mcpBaseUrl));
@@ -78,13 +76,6 @@ function ownZones(): string[] {
   for (const envs of [dashEnvs, agentsEnvs, notesEnvs, voiceEnvs])
     for (const env of Object.values(envs) as { baseUrl: string }[])
       zones.add(registrableDomainOf(env.baseUrl));
-  // apps/os's project hosts (`<app>.<project>.iterate.app`, the preview zones) and its projects'
-  // custom apexes (`*.iterate.com` custom hostnames) are userspace too
-  for (const env of Object.values(osEnvs)) {
-    for (const base of env.projectHostnameBases) zones.add(base);
-    for (const apex of env.ownedProjectCustomApexes) zones.add(apex);
-    for (const apex of env.ownedProjectCustomApexSubdomainsOnly || []) zones.add(apex);
-  }
   return [...zones].sort();
 }
 
@@ -186,7 +177,7 @@ async function eraseData(app: StartApp, options: { env: string }) {
 
 /**
  * Regenerates src/routeTree.gen.ts with the same generator + config that @tanstack/react-start's vite
- * plugin uses (apps/auth/scripts/generate-route-tree.ts, verbatim but for the paths). `check` fails
+ * plugin uses. `check` fails
  * (and restores the original file) when the checked-in tree is stale, so route files added or renamed
  * without regenerating are caught.
  */

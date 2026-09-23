@@ -1,6 +1,6 @@
 // /projects/<project>/ — the overview: the project, its role, its site — and, while the project's own
 // creation runs, where it stands: the `project` facet's LIVE STATE on `/` (os-next src/project/),
-// rendered as apps/os's creation checklist until `project/created` lands, or as the failure the
+// rendered as apps/os-next's creation checklist until `project/created` lands, or as the failure the
 // processor reported. The frame the project's own pages fill in over time.
 import { useEffect, useState } from "react";
 import { createFileRoute, getRouteApi } from "@tanstack/react-router";
@@ -117,7 +117,7 @@ function ProjectOverview() {
   );
 }
 
-/** apps/os's "Creating project" checklist at the size os-next carries: the request is in (the
+/** apps/os-next's "Creating project" checklist at the size os-next carries: the request is in (the
  *  directory row and `project/create-requested` — this page exists because it is) and the
  *  certificate is what the project processor owes; the live state swaps this out the moment it lands. */
 function ProjectCreationProgress({ configRepoSeeded }: { configRepoSeeded: boolean }) {

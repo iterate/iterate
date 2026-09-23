@@ -957,12 +957,12 @@ async function resolveBranch(pr: string | undefined, name: string | undefined): 
   );
 }
 
-/** The flags, then the workflow's spellings — PREVIEW_PR_NUMBER, PREVIEW_APPS (auto | all | none),
+/** The flags, then the workflow's spellings — PREVIEW_PR_NUMBER, PREVIEW_APPS (all | auto | none),
  *  PREVIEW_NAME (resolveBranch) — then the defaults. */
 async function main(argv: string[]): Promise<void> {
   const parsed = parseArgs(argv);
   const pr = parsed.pr || process.env.PREVIEW_PR_NUMBER;
-  const appsMode = parsed.apps || AppsMode.parse(process.env.PREVIEW_APPS || "auto");
+  const appsMode = parsed.apps || AppsMode.parse(process.env.PREVIEW_APPS || "all");
   if (parsed.command === "sweep") return sweep((await parentContext()).cf, parsed.dryRun);
   const branch = await resolveBranch(pr, parsed.name);
   const previewName = resolvePreviewName({ name: branch, prNumber: pr });

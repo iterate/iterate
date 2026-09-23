@@ -6,10 +6,6 @@
     "jsx": "react-jsx",
     "jsxImportSource": "react",
     "types": ["node"],
-    "paths": {
-      "@iterate-com/auth-contract": ["../../apps/auth-contract/src/index.ts"],
-      "@iterate-com/ui/*": ["../ui/src/*"]
-    },
     "strict": true,
     "erasableSyntaxOnly": true,
     "verbatimModuleSyntax": true,
@@ -17,10 +13,9 @@
     "noUncheckedSideEffectImports": true,
     "rewriteRelativeImportExtensions": true,
     "sourceMap": true,
-    "outDir": "dist",
-    "rootDir": "../..",
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true
   },
-  "include": ["scripts/**/*.ts", "src/**/*.ts", "src/**/*.tsx"],
-  "exclude": ["node_modules", "dist", "src/next"]
+  "include": ["src/cli.ts", "src/next-node.ts", "src/cli.test.ts"],
+  "exclude": ["node_modules", "dist"]
 }

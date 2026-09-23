@@ -25,7 +25,6 @@ import {
   type StoredSession,
 } from "./config.ts";
 
-const OAUTH_REFRESH_SKEW_MS = 60_000;
 const isAgent =
   process.env.AGENT === "1" ||
   process.env.OPENCODE === "1" ||
@@ -137,7 +136,7 @@ const storedCredentials = async (
 const sessionNeedsRefresh = (session: StoredSession) => {
   if (!session.expiresAt) return false;
   const expiresAt = Date.parse(session.expiresAt);
-  return Number.isFinite(expiresAt) && expiresAt <= Date.now() + OAUTH_REFRESH_SKEW_MS;
+  return Number.isFinite(expiresAt) && expiresAt <= Date.now() + 60_000;
 };
 
 const credentialsForConfig = async (config: Config, name: string): Promise<SessionCredentials> => {
@@ -265,7 +264,7 @@ const startOAuthCallbackServer = async (): Promise<{
       return;
     }
 
-    const url = new URL(request.url ?? "/", `http://${LOOPBACK_HOST}`);
+    const url = new URL(request.url || "/", `http://${LOOPBACK_HOST}`);
     if (url.pathname !== LOOPBACK_CALLBACK_PATH) {
       response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
       response.end("Not found.");
@@ -386,7 +385,7 @@ const oauthTokenToSession = (
       : undefined;
   return {
     token: token.access_token,
-    refreshToken: token.refresh_token ?? existing?.refreshToken,
+    refreshToken: token.refresh_token || existing?.refreshToken,
     clientId: existing?.clientId,
     scope: token.scope,
     tokenType: token.token_type,
