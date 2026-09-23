@@ -71,8 +71,8 @@ export function durableObjectResidencyWindow(suiteEnded: Date): { start: Date; e
   return { start: new Date(start), end: new Date(start + 5 * minute) };
 }
 
-/** One query, four answers: the account's newest analytics minute and the preview's own (is the
- *  window's data in yet? durableObjectAnalyticsCoverWindow), every window minute of every object in the preview's namespaces, and every object the run touched
+/** One query, five answers: the account's newest analytics minute and the preview's newest and
+ *  oldest since the suite started (is the data in yet? durableObjectAnalyticsCoverWindow), every window minute of every object in the preview's namespaces, and every object the run touched
  *  (grouped by object alone, one row each). Every filter is also bounded by `$readAt`, the moment of
  *  the read: Cloudflare answers an identical request from a cache for minutes (measured 2026-09-23:
  *  one request returned the same stale rows from 10:38 to 10:46 while a request differing only in a
@@ -84,6 +84,9 @@ export const DURABLE_OBJECT_RESIDENCY_QUERY = `query DurableObjectResidency($acc
         dimensions { datetimeMinute }
       }
       previewNewestMinute: durableObjectsPeriodicGroups(limit: 1, filter: { namespaceId_in: $namespaceIds, datetimeMinute_geq: $suiteStarted, datetime_leq: $readAt }, orderBy: [datetimeMinute_DESC]) {
+        dimensions { datetimeMinute }
+      }
+      previewOldestMinute: durableObjectsPeriodicGroups(limit: 1, filter: { namespaceId_in: $namespaceIds, datetimeMinute_geq: $suiteStarted, datetime_leq: $readAt }, orderBy: [datetimeMinute_ASC]) {
         dimensions { datetimeMinute }
       }
       windowMinutes: durableObjectsPeriodicGroups(limit: ${DURABLE_OBJECT_ANALYTICS_ROW_LIMIT}, filter: { namespaceId_in: $namespaceIds, datetimeMinute_geq: $windowStart, datetimeMinute_lt: $windowEnd, datetime_leq: $readAt }) {
@@ -129,6 +132,9 @@ export const DurableObjectResidencyAnswer = z.object({
           previewNewestMinute: z.array(
             z.object({ dimensions: z.object({ datetimeMinute: z.string() }) }),
           ),
+          previewOldestMinute: z.array(
+            z.object({ dimensions: z.object({ datetimeMinute: z.string() }) }),
+          ),
           windowMinutes: z.array(
             z.object({
               dimensions: z.object({
@@ -149,7 +155,7 @@ export const DurableObjectResidencyAnswer = z.object({
 export type DurableObjectResidencyAnswer = z.infer<typeof DurableObjectResidencyAnswer>;
 type DurableObjectResidencyAccount = DurableObjectResidencyAnswer["data"]["viewer"]["accounts"][0];
 
-/** Is the window's data in? Two conditions, both measured 2026-09-23:
+/** Is the window's data in? Three conditions, all measured 2026-09-23:
  *  - The window's last minute is complete. A minute's rows keep landing after it ends: read one
  *    minute after the window, its last minute was missing 10 of 22 resident objects; read two
  *    minutes after, it held all 22. So the account must report the minute that starts one minute
@@ -158,20 +164,27 @@ type DurableObjectResidencyAccount = DurableObjectResidencyAnswer["data"]["viewe
  *    trail the account's by a quarter of an hour: `main-6b39ca9` showed no row at all at 16:11 for a
  *    suite that ended at 15:59, while the account was current to 16:10, and hundreds by 16:14. So
  *    the preview must report the minute before the one the suite ended in (the suite ran until then).
+ *  - ...and BACK to the suite's start: a new preview's first minutes can arrive after its later
+ *    ones. At 17:56 `pr2923-os-main-e2e-de-6dcbc1` reported rows from 17:43 to 17:54 but none for
+ *    17:41–17:42, the suite's two minutes, which later held 591 objects. So the preview's oldest row
+ *    since the suite started must be in the suite's first minute or the one after (a suite starting
+ *    in a minute's last seconds may touch its first object in the next).
  *  An idle account reports no minute at all, which is why the caller also stops waiting at a
  *  deadline, and rule 8 then fails a run the analytics never showed. */
 export function durableObjectAnalyticsCoverWindow(
   account: DurableObjectResidencyAccount,
   window: { end: Date },
-  suiteEnded: Date,
+  suite: { started: Date; ended: Date },
 ): boolean {
   const newest = account.newestMinute[0]?.dimensions.datetimeMinute;
   const previewNewest = account.previewNewestMinute[0]?.dimensions.datetimeMinute;
-  if (!newest || !previewNewest) return false;
-  const suiteEndedMinute = Math.floor(suiteEnded.getTime() / 60_000) * 60_000;
+  const previewOldest = account.previewOldestMinute[0]?.dimensions.datetimeMinute;
+  if (!newest || !previewNewest || !previewOldest) return false;
+  const minuteOf = (date: Date) => Math.floor(date.getTime() / 60_000) * 60_000;
   return (
     Date.parse(newest) >= window.end.getTime() + 60_000 &&
-    Date.parse(previewNewest) >= suiteEndedMinute - 60_000
+    Date.parse(previewNewest) >= minuteOf(suite.ended) - 60_000 &&
+    Date.parse(previewOldest) <= minuteOf(suite.started) + 60_000
   );
 }
 

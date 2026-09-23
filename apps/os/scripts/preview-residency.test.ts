@@ -105,51 +105,48 @@ describe("rule 2: five whole minutes, five minutes after the suite ended", () =>
     expect(DURABLE_OBJECT_RESIDENCY_QUERY).toContain(
       "filter: { namespaceId_in: $namespaceIds, datetimeMinute_geq: $suiteStarted, datetimeMinute_lt: $suiteEnded, datetime_leq: $readAt }",
     );
+    // the preview's own data, both ends of it since the suite started
+    for (const order of ["datetimeMinute_DESC", "datetimeMinute_ASC"])
+      expect(DURABLE_OBJECT_RESIDENCY_QUERY).toContain(
+        `filter: { namespaceId_in: $namespaceIds, datetimeMinute_geq: $suiteStarted, datetime_leq: $readAt }, orderBy: [${order}]`,
+      );
   });
 });
 
-test.each([
-  {
-    newestMinute: "2026-09-23T10:11:00Z",
-    previewNewestMinute: "2026-09-23T09:59:00Z",
-    covers: true,
-  },
-  {
-    newestMinute: "2026-09-23T10:13:00Z",
-    previewNewestMinute: "2026-09-23T09:58:00Z",
-    covers: true,
-  },
-  // the window's last minute (10:09) is still filling in while 10:10 is the newest
-  {
-    newestMinute: "2026-09-23T10:10:00Z",
-    previewNewestMinute: "2026-09-23T09:59:00Z",
-    covers: false,
-  },
-  {
-    newestMinute: "2026-09-23T10:09:00Z",
-    previewNewestMinute: "2026-09-23T09:59:00Z",
-    covers: false,
-  },
-  { newestMinute: undefined, previewNewestMinute: "2026-09-23T09:59:00Z", covers: false },
-  // the account is current but this new preview's own data trails it (main-6b39ca9, 2026-09-23)
-  {
-    newestMinute: "2026-09-23T10:11:00Z",
-    previewNewestMinute: "2026-09-23T09:52:00Z",
-    covers: false,
-  },
-  { newestMinute: "2026-09-23T10:11:00Z", previewNewestMinute: undefined, covers: false },
-])(
-  "the window (10:05–10:10, suite ended 09:59:40) is in once the account reports the minute after next and the preview its suite's end: account $newestMinute, preview $previewNewestMinute → $covers",
-  ({ newestMinute, previewNewestMinute, covers }) => {
-    const minute = (at: string | undefined) => (at ? [{ dimensions: { datetimeMinute: at } }] : []);
+test.each<{ account?: string; oldest?: string; newest?: string; covers: boolean }>(
+  // prettier-ignore
+  [
+    { account: "10:11", oldest: "09:50", newest: "09:59", covers: true },
+    { account: "10:13", oldest: "09:50", newest: "09:58", covers: true },
+    // the suite's first object was touched in the minute after it started
+    { account: "10:11", oldest: "09:51", newest: "09:59", covers: true },
+    // the window's last minute (10:09) is still filling in while 10:10 is the newest
+    { account: "10:10", oldest: "09:50", newest: "09:59", covers: false },
+    { account: "10:09", oldest: "09:50", newest: "09:59", covers: false },
+    { account: undefined, oldest: "09:50", newest: "09:59", covers: false },
+    // the account is current but this new preview's own data trails it (main-6b39ca9, 2026-09-23)
+    { account: "10:11", oldest: "09:50", newest: "09:52", covers: false },
+    { account: "10:11", oldest: undefined, newest: undefined, covers: false },
+    // the preview's later minutes are in but not the suite's first ones (pr2923, 2026-09-23)
+    { account: "10:11", oldest: "09:52", newest: "10:09", covers: false },
+  ],
+)(
+  "the window (10:05–10:10, suite 09:50:30–09:59:40) is in once the account reports the minute after next and the preview both ends of its suite: account $account, preview $oldest → $newest → $covers",
+  ({ account: accountNewest, oldest, newest, covers }) => {
+    const minute = (at: string | undefined) =>
+      at ? [{ dimensions: { datetimeMinute: `2026-09-23T${at}:00Z` } }] : [];
     const account = {
-      newestMinute: minute(newestMinute),
-      previewNewestMinute: minute(previewNewestMinute),
+      newestMinute: minute(accountNewest),
+      previewNewestMinute: minute(newest),
+      previewOldestMinute: minute(oldest),
       windowMinutes: [],
       runObjects: [],
     };
     expect(
-      durableObjectAnalyticsCoverWindow(account, window, new Date("2026-09-23T09:59:40Z")),
+      durableObjectAnalyticsCoverWindow(account, window, {
+        started: new Date("2026-09-23T09:50:30Z"),
+        ended: new Date("2026-09-23T09:59:40Z"),
+      }),
     ).toBe(covers);
   },
 );
@@ -224,6 +221,7 @@ describe("rules 3–8: the verdict", () => {
       account: {
         newestMinute: [],
         previewNewestMinute: [],
+        previewOldestMinute: [],
         windowMinutes: windowMinutes(...minutes),
         runObjects: runObjects(runObjectCount),
       },
@@ -261,6 +259,7 @@ describe("rules 3–8: the verdict", () => {
       account: {
         newestMinute: [],
         previewNewestMinute: [],
+        previewOldestMinute: [],
         windowMinutes: windowMinutes(`${name} ns-context 60 60 60 60 60`),
         runObjects: runObjects(500),
       },
@@ -275,6 +274,7 @@ describe("rules 3–8: the verdict", () => {
       account: {
         newestMinute: [],
         previewNewestMinute: [],
+        previewOldestMinute: [],
         windowMinutes: [],
         runObjects: runObjects(10_000),
       },
@@ -291,6 +291,7 @@ describe("rules 3–8: the verdict", () => {
       account: {
         newestMinute: [],
         previewNewestMinute: [],
+        previewOldestMinute: [],
         windowMinutes: windowMinutes(
           "prj_b.iterate/ ns-context 60 60 60 60 0",
           "prj_a.iterate/ ns-context 60 60 60 60 60",
@@ -313,6 +314,7 @@ describe("the rendered verdict (the job log and the PR body)", () => {
       account: {
         newestMinute: [],
         previewNewestMinute: [],
+        previewOldestMinute: [],
         windowMinutes: windowMinutes(...minutes),
         runObjects: runObjects(507),
       },
@@ -361,6 +363,7 @@ describe("the GraphQL answer", () => {
             {
               newestMinute: [{ dimensions: { datetimeMinute: "2026-09-23T10:09:00Z" } }],
               previewNewestMinute: [{ dimensions: { datetimeMinute: "2026-09-23T09:59:00Z" } }],
+              previewOldestMinute: [{ dimensions: { datetimeMinute: "2026-09-23T09:50:00Z" } }],
               windowMinutes: windowMinutes("prj_a.iterate/ ns-context 60"),
               runObjects: runObjects(1),
             },
