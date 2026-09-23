@@ -27,9 +27,12 @@ violation does not change its age. Blame measures when the line last changed,
 not when the surrounding code first became a violation.
 
 Rules keep their metadata, listeners, options, messages, suggestions and fixes.
-Suppressed reports do not apply fixes. Git runs lazily on the first report and
-is reused for subsequent reports from that rule on that file. Each new rule
-creation reads fresh history/source, including oxlint autofix passes.
+Suppressed reports do not apply fixes. Git runs lazily on the first report. One
+lint process blames each file text once for every grandfathered rule that
+reports on it, and asks each repository once whether HEAD exists and whether the
+clone is shallow: a Git spawn costs about 80 ms inside oxlint. New text (an edit,
+an autofix pass) is blamed afresh. A commit made while a long-lived process
+holds an unchanged text can only leave its lines checked.
 
 Files without history and reports without a known start line are checked.
 Shallow boundary lines are also checked because their true age is unknown;

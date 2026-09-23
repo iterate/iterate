@@ -11,6 +11,17 @@ previews / prd, and the canonical env vars — see [Testing](testing.md).
   with object rows) over snapshots
 - Tests are colocated next to source files as `*.test.ts`
 
+## Test-style lint rules
+
+Every `*.test.ts(x)` is linted for the legacy e2e lane's style: flat files with
+top-level `test(...)` calls (no `describe`), helpers below the tests, no
+lifecycle hooks, no `vi.mock`, `test` rather than `it`, and
+`expect(object).toMatchObject({ property })` rather than
+`expect(object.property).toBe(...)`. Existing lines are grandfathered; new and
+changed lines comply. [The rules and what to write instead](../lint/test-style-rules.md)
+cover ordered rows (`test.sequential`), gated suites (`test.skipIf`), disposable
+fixtures (`using`/`await using`) and the os unit lane's `cloudflare:workers` shim.
+
 ## Table-based Testing with test.for
 
 Use `test.for` with object rows for table-driven tests: a `name` per row,

@@ -218,6 +218,17 @@
       }
     },
     {
+      "files": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "iterate/helpers-after-tests": "error",
+        "iterate/no-describe": "error",
+        "iterate/no-lifecycle-hooks": "error",
+        "iterate/no-vi-mock": "error",
+        "iterate/prefer-object-property-match": "error",
+        "iterate/prefer-test-over-it": "error"
+      }
+    },
+    {
       "files": ["**/routes/**"],
       "rules": {
         "react/only-export-components": "off"

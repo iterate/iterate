@@ -11,13 +11,14 @@
 //               client, ALL files in parallel AND all tests within a file concurrent (`--sequence.concurrent`
 //               on the `e2e` script: a ROOT-ONLY option, see below) — every test mints its own project,
 //               and what a test measures it measures on its own contexts; the run's floor is its slowest
-//               TEST. A file whose rows genuinely need an order says so itself (`describe.sequential`)
+//               TEST. A file whose rows genuinely need an order says so itself (`test.sequential` rows)
 //   • bench   — vitest's benchmark runner (tinybench) over the same client + worker (`pnpm bench`),
 //               files one at a time so scenarios never share the wire; `BENCH_OUT=<file.json>` writes
 //               the raw samples
 // Package test scripts run the Vite build before Vitest starts. Global setup refreshes generated
 // modules for unit tests and fixtures. Browser E2E is Playwright (playwright.config.ts + specs/**).
 
+import { fileURLToPath } from "node:url";
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { defineConfig, type Plugin } from "vitest/config";
 import { BaseSequencer, type TestSpecification } from "vitest/node";
@@ -83,8 +84,17 @@ export default defineConfig({
           name: "unit",
           include: ["src/**/*.test.ts", "examples/**/*.test.ts", "scripts/*.test.ts"],
           // The edge and DO modules reach the control plane, whose OAuth provider imports
-          // cloudflare:workers; inlined so the unit tests' `vi.mock("cloudflare:workers")` covers it.
+          // cloudflare:workers; inlined so the alias below (and older files' `vi.mock`) covers it.
           server: { deps: { inline: ["@cloudflare/workers-oauth-provider"] } },
+        },
+        // A module whose only platform dependency is a base class loads in node through this shim,
+        // with no `vi.mock("cloudflare:workers")` in the test file (lint/test-style-rules.md).
+        resolve: {
+          alias: {
+            "cloudflare:workers": fileURLToPath(
+              new URL("./src/test/cloudflare-workers-shim.ts", import.meta.url),
+            ),
+          },
         },
       },
       {
@@ -129,7 +139,7 @@ export default defineConfig({
           // TESTS IN ONE FILE CONCURRENT TOO: each one opens its own sessions (support/client.ts keeps
           // them per test, support/setup.ts disposes that test's alone) against its own project, so the
           // only thing two rows share is the worker under test. A file that reads worker-global state —
-          // its own worker's logs, one seeded context it also resets — marks itself `describe.sequential`.
+          // its own worker's logs, one seeded context it also resets — marks those rows `test.sequential`.
           // `sequence.concurrent` is ROOT-ONLY (vitest copies the root value into every project and
           // ignores the project's — a project-level `sequence: { concurrent: true }` here did nothing,
           // 2026-09-21), so the `e2e` script passes `--sequence.concurrent`. `maxConcurrency` IS per
