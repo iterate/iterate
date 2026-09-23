@@ -3,7 +3,7 @@
 
 import { readFileSync, readdirSync } from "node:fs";
 import { RpcTarget, newHttpBatchRpcResponse } from "capnweb";
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { codedError } from "iterate/next/lib";
 import type { WaitForEventFilter } from "iterate/next/api";
 import type { StreamEvent, StreamEventInput } from "iterate/next/stream/processor";
@@ -12,8 +12,10 @@ import {
   type LibraryItx,
   type LibraryRoots,
   executeScript,
+  RUN_DEADLINE_MS,
   runScript,
   runScriptModule,
+  runSettlementOf,
 } from "./library.ts";
 import { connectToCapnweb } from "./library/capnweb.ts";
 import { connectToMcp, type McpConnectionRpcTarget } from "./library/mcp.ts";
@@ -375,8 +377,66 @@ describe("run", () => {
     expect(module["cap.js"]).toContain("export default class extends WorkerEntrypoint");
     expect(module["cap.js"]).toContain("async run() {");
     expect(module["cap.js"]).toContain("const itx = this.env.ITX.get();");
-    expect(module["cap.js"]).toContain("return await script(itx);");
+    expect(module["cap.js"]).toContain("return await Promise.race([");
+    expect(module["cap.js"]).toContain("script(itx),");
     expect(module["cap.js"]).toContain("itx[Symbol.dispose]?.();");
+  });
+
+  /** THE MODULE, RUN: the text the loader gets, imported here as a module with its one import
+   *  stood in for (`WorkerEntrypoint`, which only hands `env` over), so its `run()` executes exactly
+   *  as written — under fake timers. `disposals()` counts the script's itx being disposed. */
+  async function loadedRun(
+    script: string,
+  ): Promise<{ run: () => Promise<unknown>; disposals: () => number }> {
+    let disposals = 0;
+    const { "cap.js": source } = runScriptModule(script);
+    const standIn = source.replace(
+      'import { WorkerEntrypoint } from "cloudflare:workers";',
+      "class WorkerEntrypoint { constructor(ctx, env) { this.env = env; } }",
+    );
+    const { default: Entrypoint } = await import(
+      /* @vite-ignore */ `data:text/javascript,${encodeURIComponent(standIn)}`
+    );
+    const itx = { [Symbol.dispose]: () => (disposals += 1) };
+    const entrypoint = new Entrypoint({}, { ITX: { get: () => itx } });
+    return { run: () => entrypoint.run(), disposals: () => disposals };
+  }
+
+  test("the module's run() races the script against RUN_DEADLINE_MS in its own isolate: a script that never settles is given up on at the deadline — the call ends, the itx is disposed, no timer is left", async () => {
+    vi.useFakeTimers();
+    try {
+      const { run, disposals } = await loadedRun("async () => new Promise(() => {})");
+      let outcome: unknown;
+      void run().then(
+        () => (outcome = "resolved"),
+        (error: Error) => (outcome = error.message),
+      );
+      await vi.advanceTimersByTimeAsync(RUN_DEADLINE_MS - 1);
+      expect(outcome).toBeUndefined();
+      expect(disposals()).toBe(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(outcome).toBe("itx.run: the script did not finish within 10 minutes");
+      expect(disposals()).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("the module's run(): a script that finishes (or throws) settles the call at once and clears its deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const finishes = await loadedRun("async () => 42");
+      expect(await finishes.run()).toBe(42);
+      expect(finishes.disposals()).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+      const throws = await loadedRun("async () => { throw new Error('nope') }");
+      await expect(throws.run()).rejects.toThrow("nope");
+      expect(throws.disposals()).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("executeScript (the runner's call) loads that module through itx.workers.get and calls run() with no arguments", async () => {
@@ -408,6 +468,42 @@ describe("run", () => {
     expect(runs()).toBe(0);
   });
 
+  test("the wait is bounded: no settlement a minute past the deadline gives up with WAIT_TIMEOUT, so the caller's call — and the context it holds — is not held open", async () => {
+    vi.useFakeTimers();
+    try {
+      const timeouts: number[] = [];
+      const itx = {
+        builtins: {
+          append: async (...events: StreamEventInput[]) =>
+            events.map((event, i) => ({ ...event, offset: 10 + i, createdAt: "t", path: "/" })),
+          // A log where no settlement ever lands: every wait times out, on its own timeout.
+          waitForEvent: (filter: WaitForEventFilter) => {
+            timeouts.push(filter.timeoutMs!);
+            return new Promise((_, reject) =>
+              setTimeout(() => reject(codedError("WAIT_TIMEOUT", "no event")), filter.timeoutMs),
+            );
+          },
+        },
+      } as unknown as LibraryItx;
+      let outcome: unknown;
+      void runScript(itx, "async () => new Promise(() => {})").catch(
+        (error: unknown) => (outcome = error),
+      );
+      await vi.advanceTimersByTimeAsync(RUN_DEADLINE_MS + 60_000 - 1);
+      expect(outcome).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(outcome).toMatchObject({
+        code: "WAIT_TIMEOUT",
+        message: "itx.run: no settlement of run 10 within 11 minutes",
+      });
+      // re-armed at the cap, the last wait only for what was left
+      expect(timeouts).toEqual([120_000, 120_000, 120_000, 120_000, 120_000, 60_000]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("a failed settlement rejects with its error, the failure kind on the rejection", async () => {
     const { itx } = host([
       settledAt(11, 10, { status: "failed", error: "boom", failureKind: "interrupted" }),
@@ -432,6 +528,109 @@ describe("run", () => {
     await expect(runScript(itx, undefined)).rejects.toThrow(/itx\.run\(script/);
     expect(loaded).toEqual([]);
     expect(appended).toEqual([]);
+  });
+});
+
+// ── the runner's settlement ── `runSettlementOf(execution)`, what the context's runner appends as
+// `run-settled` (iterate-context-durable-object.ts `#executeRun`): the value through the JSON
+// boundary and RELEASED (a Workers-RPC result carries a disposer holding its callee), or the failure —
+// `deadline` once RUN_DEADLINE_MS has passed, whoever gave up first, else `runtime`. Fake timers.
+
+describe("the runner's settlement", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  /** A value carrying a disposer, as a Workers-RPC result or stub does; `releases()` counts calls. */
+  function releasable<T extends object>(value: T): { value: T; releases: () => number } {
+    let releases = 0;
+    return {
+      value: Object.assign(value, { [Symbol.dispose]: () => (releases += 1) }),
+      releases: () => releases,
+    };
+  }
+  const DEADLINE_ERROR =
+    "itx.run: the script did not finish within 10 minutes; it may have partly run, and it is not run again";
+
+  test.for([
+    ["plain data", { n: 1 }, { status: "succeeded", result: { n: 1 } }],
+    [
+      "a live value (a function: a stub over RPC — JSON has no text for it)",
+      () => 1,
+      { status: "succeeded" },
+    ],
+    ["data carrying a live value", { n: 1, f: () => 1 }, { status: "succeeded", result: { n: 1 } }],
+  ] as const)(
+    "%s: settled succeeded, the value released exactly once",
+    async ([, value, settlement]) => {
+      const result = releasable(value);
+      expect(await runSettlementOf(Promise.resolve(result.value))).toEqual(settlement);
+      expect(result.releases()).toBe(1);
+    },
+  );
+
+  test.for([
+    ["undefined: no result", async () => undefined, { status: "succeeded" }],
+    ["an empty string is a result", async () => "", { status: "succeeded", result: "" }],
+    [
+      "a bigint JSON refuses: a runtime failure",
+      async () => 10n,
+      {
+        status: "failed",
+        error: "Do not know how to serialize a BigInt",
+        failureKind: "runtime",
+      },
+    ],
+    [
+      "the script threw",
+      async () => {
+        throw new Error("nope");
+      },
+      { status: "failed", error: "nope", failureKind: "runtime" },
+    ],
+  ] satisfies [string, () => Promise<unknown>, unknown][])(
+    "%s",
+    async ([, execute, settlement]) => {
+      expect(await runSettlementOf(execute())).toEqual(settlement);
+    },
+  );
+
+  test("a script still running at RUN_DEADLINE_MS is settled `deadline` then, not a moment before — and nothing is left armed", async () => {
+    let settlement: unknown;
+    void runSettlementOf(new Promise(() => {})).then((settled) => (settlement = settled));
+    await vi.advanceTimersByTimeAsync(RUN_DEADLINE_MS - 1);
+    expect(settlement).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settlement).toEqual({
+      status: "failed",
+      error: DEADLINE_ERROR,
+      failureKind: "deadline",
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("the loaded run() giving up on its own clock (or a redirect's runner on its own) is the deadline too — whoever gives up first — while a failure before it stays `runtime`", async () => {
+    const givesUpAt = (ms: number) =>
+      new Promise((_, reject) => setTimeout(() => reject(new Error("gave up")), ms));
+    const [atDeadline, before] = [
+      runSettlementOf(givesUpAt(RUN_DEADLINE_MS)),
+      runSettlementOf(givesUpAt(RUN_DEADLINE_MS - 1)),
+    ];
+    await vi.advanceTimersByTimeAsync(RUN_DEADLINE_MS);
+    expect(await atDeadline).toEqual({
+      status: "failed",
+      error: DEADLINE_ERROR,
+      failureKind: "deadline",
+    });
+    expect(await before).toEqual({ status: "failed", error: "gave up", failureKind: "runtime" });
+  });
+
+  test("a value that lands after the deadline is still released", async () => {
+    const late = releasable(() => 1);
+    const settlement = runSettlementOf(
+      new Promise((resolve) => setTimeout(() => resolve(late.value), RUN_DEADLINE_MS + 5_000)),
+    );
+    await vi.advanceTimersByTimeAsync(RUN_DEADLINE_MS + 5_000);
+    expect(await settlement).toMatchObject({ failureKind: "deadline" });
+    expect(late.releases()).toBe(1);
   });
 });
 

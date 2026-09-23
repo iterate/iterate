@@ -85,6 +85,15 @@ test("a held cd(path) handle does not keep the context resident", async () => {
   );
 }, 90_000);
 
+// A SCRIPT'S RESULT crosses Workers RPC from its loaded isolate into the context's runner, and a live
+// value in it (a function) arrives as a stub. The runner releases it once serialized (library.ts
+// `runSettlementOf`); dropped undisposed, it held the context (workers lane: context-runs.test.ts).
+test("a run whose script returned a live value does not keep its context resident", async () => {
+  const itx = openItx(freshCtx("residency_run_result"));
+  expect(await itx.run("async () => ({ n: 1, f: () => 1 })")).toEqual({ n: 1 });
+  expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(IDLES);
+}, 90_000);
+
 // A FACET reaches its own context the other way round: through the SDK's `withItx` on the loopback
 // entrypoint — the repo facet's `itx.cfArtifacts.get(path).remote()`, the collection's
 // `itx.cd(path)…waitForEvent`. A step such a round trip left holding the context's session kept
