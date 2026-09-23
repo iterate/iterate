@@ -29,6 +29,9 @@ type Workflow = {
   jobs: Record<string, WorkflowJob>;
   permissions?: Record<string, string>;
   on?: {
+    pull_request?: {
+      paths?: string[];
+    };
     push?: {
       branches?: string[];
       paths?: string[];
@@ -73,7 +76,6 @@ const deploymentWorkflows = [
     group: "deploy-os-next-production",
     jobs: {
       deploy: { size: "4x16", timeoutMinutes: 30 },
-      e2e: { size: "4x16", timeoutMinutes: 30 },
       notify: { size: "2x8", timeoutMinutes: 10 },
     },
   },
@@ -130,6 +132,34 @@ describe("Depot deployment safety", () => {
     const workflow = loadWorkflow(".depot/workflows/deploy-tunnels.yml");
 
     expect(workflow.on?.push?.paths).toContain(".depot/workflows/deploy-tunnels.yml");
+  });
+
+  it("runs OS-Next and Notes stateful proofs only against an isolated preview", () => {
+    const osNextProduction = loadWorkflow(".depot/workflows/deploy-os-next.yml");
+    const notesProduction = loadWorkflow(".depot/workflows/deploy-notes.yml");
+    const preview = loadWorkflow(".depot/workflows/preview-os-next.yml");
+    const previewScript = readFileSync(
+      resolve(repoRoot, "apps/os-next/scripts/preview.ts"),
+      "utf8",
+    );
+
+    expect(osNextProduction.jobs).not.toHaveProperty("e2e");
+    expect(notesProduction.jobs.deploy.steps?.map((step) => step.name)).not.toContain(
+      "Verify Notes sign-in, save and reload",
+    );
+    expect(preview.on?.pull_request?.paths).toEqual(
+      expect.arrayContaining([
+        ".depot/workflows/deploy-os-next.yml",
+        ".depot/workflows/deploy-notes.yml",
+      ]),
+    );
+    expect(
+      preview.jobs.deploy.steps?.find(
+        (step) => step.name === "Run the e2e suite against the preview",
+      )?.run,
+    ).toBe("doppler run -- pnpm preview e2e");
+    expect(previewScript).toContain('cwd: path.resolve(ROOT, "../notes")');
+    expect(previewScript).toContain("NOTES_BASE_URL: notesPreview.url");
   });
 
   it("installs the pinned ESP-IDF release before preparing Kit firmware", () => {
