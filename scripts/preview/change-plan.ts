@@ -13,11 +13,12 @@ export async function planPreview(
   const changes = classifyChanges(history.changedFiles(history.head));
   const commits = history.throughMergeBase();
 
-  // A branch that only changed os-next leaves main's apps/os tree untouched,
-  // and os-next proves itself in its own per-PR workflow. So: consult no
-  // evidence, deploy nothing, test nothing, and above all settle nothing — a
-  // green here would be evidence a later apps/os commit could inherit without
-  // anything ever having been deployed or tested.
+  // A branch that only changed os-next (and the apps on top of it) leaves
+  // everything the fleet imports untouched, and os-next proves itself in its
+  // own per-PR workflow. So: consult no evidence, deploy nothing, test
+  // nothing, and above all settle nothing — a green here would be evidence a
+  // later apps/os commit could inherit without anything ever having been
+  // deployed or tested.
   if (isOsNextOnly(history.changedSinceMergeBase()))
     return { action: "skip", changes, reason: "Only os-next changed since the merge-base." };
 
