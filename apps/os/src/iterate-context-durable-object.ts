@@ -45,11 +45,8 @@ import {
 } from "iterate/next/principal";
 import type { RewriteRuleListEntry, StreamPage } from "iterate/next/api";
 import { projectUrlOf } from "iterate/next/project-ingress";
-import {
-  normalizeControlEvent,
-  RunRequested,
-  type RunSettlement,
-} from "./stream/core-processor.ts";
+import { RunRequested, type RunSettlement } from "iterate/next/stream/run";
+import { normalizeControlEvent } from "./stream/core-processor.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   itxExpressionEndingInFetch,

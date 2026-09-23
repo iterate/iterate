@@ -15,7 +15,7 @@ import {
 import { codedError, errorCode, resolveContextPath, withTimeout } from "iterate/next/lib";
 import type { Caller } from "iterate/next/principal";
 import type { EventInput, StreamEvent } from "iterate/next/stream/processor";
-import type { RunSettled, RunSettlement } from "./stream/core-processor.ts";
+import type { RunSettled, RunSettlement } from "iterate/next/stream/run";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import { RepoContract } from "./repo/contract.ts";
 import type { RepoDurableObject } from "./repo/durable-object.ts";
