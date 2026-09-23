@@ -22,5 +22,6 @@ Read when relevant:
 - [Testing](docs/testing.md) · [Vitest patterns](docs/vitest-patterns.md)
 - [Depot CI](docs/depot-ci.md): workflows, runs, logs, artifacts, and waiting on checks
 - TypeScript style: [coding style](docs/coding-style.md) · [conventions](docs/typescript-conventions.md) · [code rules](docs/jonasland-rules.md) · [identifiers](docs/identifiers.md)
+- [Frontend development](docs/frontend-development.md) for the client apps (dash, agents, notes, voice)
 - [Brand and tone of voice](docs/brand-and-tone-of-voice.md) for user-facing copy
 - [Instruction maintenance](docs/writing-agent-docs.md): instructions live in `AGENTS.md` files only
