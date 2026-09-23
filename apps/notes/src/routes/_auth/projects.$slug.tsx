@@ -1,6 +1,8 @@
 import { createFileRoute, useRouterState } from "@tanstack/react-router";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { z } from "zod";
+import type { AuthenticatedApp } from "iterate/next/app";
+import { useLiveState } from "iterate/next/react";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import {
   Breadcrumb,
@@ -77,6 +79,42 @@ function NotesPage() {
 
 const Commit = z.object({ commitOid: z.string().nullable(), changedPaths: z.array(z.string()) });
 
+/** The project facet's live state, the one field this page reads: where the project's own creation
+ *  stands (null for a project born before the saga existed). */
+const ProjectLive = z.looseObject({
+  creation: z.object({ status: z.enum(["requested", "created", "failed"]) }).nullable(),
+});
+
+/** The project's root context as the page holds it: `api.projects.get(id)`, a capnweb stub. */
+type ProjectContext = Awaited<ReturnType<AuthenticatedApp["api"]["projects"]["get"]>>;
+
+/** The project's root context, held for the page's life and disposed on unmount (the dash's
+ *  overview holds its own the same way). */
+function useProjectContext(api: AuthenticatedApp["api"], projectId: string) {
+  const [context, setContext] = useState<ProjectContext>();
+  useEffect(() => {
+    let disposed = false;
+    let held: ProjectContext | undefined;
+    (async () => {
+      const stub = await api.projects.get(projectId);
+      // an unmount mid-await comes before the handle the await returns
+      if (disposed) {
+        stub[Symbol.dispose]();
+        return;
+      }
+      held = stub;
+      // A capnweb stub is a callable proxy: handed to a state setter directly, React would take it
+      // for an updater and CALL it (an empty method call the server refuses).
+      setContext(() => stub);
+    })().catch(() => undefined); // the loader resolved the project already; a refusal leaves Save waiting
+    return () => {
+      disposed = true;
+      held?.[Symbol.dispose]();
+    };
+  }, [api, projectId]);
+  return context;
+}
+
 function Editor({
   project,
   initial,
@@ -91,6 +129,21 @@ function Editor({
   const [status, setStatus] = useState(tip ? `At commit ${tip.slice(0, 7)}` : "Not committed yet");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  // A project is usable once its creation saga lands `project/created`: until then the saga is still
+  // seeding the config repo, and a commit here races it ("the commit was refused: stale ref").
+  // The project facet's live state says where creation stands, the same signal the dash's overview
+  // reads; a project born before the saga existed has no creation record and is ready.
+  const context = useProjectContext(api, project);
+  const live = useLiveState<unknown>(context, {
+    key: "project",
+    door: async () =>
+      z
+        .object({ rev: z.number(), state: z.unknown() })
+        .parse(await context!.invoke("itx.facets.get('project').liveSnapshot()")),
+  });
+  const creation = ProjectLive.safeParse(live.value).data?.creation;
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- null is a project with no creation record (ready); undefined is the live state not yet loaded (not ready)
+  const ready = creation === null || creation?.status === "created";
   async function save(event: FormEvent) {
     event.preventDefault();
     setPending(true);
@@ -134,11 +187,15 @@ function Editor({
         />
       </Field>
       <div className="flex flex-wrap items-center gap-4">
-        <Button type="submit" disabled={pending}>
+        <Button type="submit" disabled={pending || !ready}>
           Save
         </Button>
         <span role="status" className="text-sm text-muted-foreground">
-          {status}
+          {ready
+            ? status
+            : creation?.status === "failed"
+              ? "This project could not be set up."
+              : "Setting up this project…"}
         </span>
       </div>
       {error ? (
