@@ -35,8 +35,8 @@ export type MemberRemoved = z.infer<typeof MemberRemoved>;
 
 export const OrganizationContract = defineProcessorContract({
   slug: "organization",
-  // 2: the record grew `secrets`; 3: `members` — who belongs, and as what — folded from the
-  // membership facts the control plane lands here.
+  // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
+  // is what re-reduces every existing root log.
   version: "3",
   description:
     "The organization's record: created, renamed, deleted, its members, every project created in it, and the catalog of its own secrets.",

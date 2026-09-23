@@ -63,9 +63,8 @@ export type ConsentApproved = z.infer<typeof ConsentApproved>;
 
 export const AccountContract = defineProcessorContract({
   slug: "account",
-  // 2: the state grew tokens, ended grants and consents (the control-plane facts); 3: `secrets`, the
-  // user's own secrets' catalog; 4: `memberships` (the organizations the person belongs to, folded
-  // from the membership facts the control plane lands here) and `grantUses`.
+  // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
+  // is what re-reduces every existing root log.
   version: "4",
   description:
     "The user's account: authentications, personal access tokens, ended and used grants, consents, the organizations the person belongs to, and the catalog of the user's own secrets.",

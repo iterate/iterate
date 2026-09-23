@@ -18,11 +18,8 @@ import { SecretCatalog, SecretContract } from "../secret/contract.ts";
 
 export const ProjectContract = defineProcessorContract({
   slug: "project",
-  // 2: the catalog grew `agents`; 3: `mcpConnections`; 4: the state grew `creation`, and the certificates
-  // it folds were renamed (`repo/created`, `agent/created`); 5: the catalog grew `secrets`; 6: the state
-  // grew `configRepoTip` — the apex follows the config repo's commits. A checkpoint reduced under an
-  // older version is reused as-is by the engine, so the bump is what re-reduces every existing root log.
-  // 7: removed the MCP connection catalog; MCP runs directly on the project root.
+  // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
+  // is what re-reduces every existing root log.
   version: "8",
   description:
     "The project: where its own creation stands, and the catalog of every repo, workspace and secret born under it (from the certificates cross-posted to /).",
