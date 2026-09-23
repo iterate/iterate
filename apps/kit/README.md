@@ -109,6 +109,9 @@ before release:
 pnpm firmware:test:host
 ```
 
+Host tests need cmake and are not part of Kit's `pnpm test`, which runs the
+installer's Vitest suite; CI's Test job runs both on every PR.
+
 For board structure, hardware requirements, target builds and air-path proof,
 see the [firmware guide](./firmware/README.md). The installer does not replace
 that hardware validation.

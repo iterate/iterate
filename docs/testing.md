@@ -24,7 +24,7 @@ Run commands from the repository root unless stated otherwise.
 | `pnpm test`                              | Workspace unit tests, including OS unit and Workers projects                 |
 | `pnpm e2e`                               | OS integration suite; local Worker unless a deployed target is configured    |
 | `pnpm spec`                              | Root browser specs: one project per app host, plus the issuer at phone width |
-| `pnpm --dir apps/kit firmware:test:host` | Firmware host tests                                                          |
+| `pnpm --dir apps/kit firmware:test:host` | Kit firmware host tests (needs cmake; not part of `pnpm test`)               |
 
 > [!NOTE]
 > A quarantined suite is called out here, in a CAUTION box naming the skip,
@@ -112,7 +112,7 @@ streams example app's CI coverage to 3 of ~37 tests while the rest rotted).
 | OS e2e           | `pnpm e2e`                                                      | `apps/os/e2e/*.e2e.test.ts`, `apps/agents/e2e/`                                                      | Preview OS **e2e** job, every preview deploy — full suite, against the PR's preview                                                         | One real worker (local workerd by default, the deployed worker with `WORKER_BASE_URL`), every file a capnweb client at `/api` exactly like a production client; files in parallel and tests within a file concurrent. |
 | Playwright specs | `pnpm spec`                                                     | `specs/` (root `playwright.config.ts`, one project per app host: `os`, `os-phone`, `notes`, `suite`) | Preview OS **e2e** job — the `os`, `os-phone` and `suite` projects, side by side with OS e2e                                                | Browser-level product flows: issuer sign-in and consent (plus a phone-width project), the issuer's server functions, the project mini-app, and the Dash, Agents, Notes and Voice flows as they move into `specs/`.    |
 | Notes specs      | `pnpm spec --project notes` (`NOTES_BASE_URL`, `DEMO_BASE_URL`) | `specs/notes/`                                                                                       | Preview OS **e2e** job, in the same `pnpm spec` run, against the preview's Notes app; a missing `NOTES_BASE_URL` fails in CI, skips locally | Save a note and read it after reload, signed in by the fixture (`createFixture(…, { app })`); Notes sessions on its own origin, ended in the Dash, against the preview pair.                                          |
-| Kit host         | `pnpm --dir apps/kit firmware:test:host` (part of Kit's `test`) | `apps/kit/firmware/tests/`                                                                           | Depot **Test** workflow, every PR (through `pnpm test`)                                                                                     | Firmware logic compiled for the host and run under CTest.                                                                                                                                                             |
+| Kit host         | `pnpm --dir apps/kit firmware:test:host` (needs cmake)          | `apps/kit/firmware/tests/`                                                                           | Depot **Test** workflow, every PR (its own step after `pnpm test`)                                                                          | Firmware logic compiled for the host and run under CTest.                                                                                                                                                             |
 | Kit ESP builds   | `node apps/kit/scripts/firmware-release.ts build …`             | `apps/kit/firmware/targets/`, `apps/kit/scripts/firmware-release.ts`                                 | **Kit Firmware** workflow, firmware PRs and main (not required)                                                                             | Builds each changed board with ESP-IDF (active), checks its flash layout, its inputs and an unchanged tree; main publishes the releases.                                                                              |
 | Dummy petshop    | `pnpm test` (its unit suite)                                    | `apps/dummy-petshop/src/`                                                                            | Depot **Test** workflow; the fixture itself deploys from `main` (Deploy dummy-petshop)                                                      | The OAuth/API fixture the OS secret and connection e2e rows dial (`PETSHOP_BASE_URL`, default `https://dummy-petshop.iterate.workers.dev`).                                                                           |
 | Soak             | `pnpm --dir apps/os e2e:soak --runs N` (`WORKER_BASE_URL`)      | `apps/os/scripts/e2e-soak.ts`                                                                        | **Manual** — dispatch `os-next-e2e-soak.yml`; a measurement, not a gate                                                                     | The e2e suite N times against one deployed worker, tallying every row that did not pass every time.                                                                                                                   |
@@ -121,9 +121,11 @@ streams example app's CI coverage to 3 of ~37 tests while the rest rotted).
 
 The normal Depot **Test** workflow runs `pnpm test` from the repo root. That
 recursively runs every workspace's `test` script, including the `iterate` CLI,
-Kit's host tests and dummy-petshop's unit suite. OS's `test`, `e2e` and
-`bench` scripts run the Vite build first, so every lane tests the built
-worker. Live tests belong to preview CI instead: the Preview OS workflow's
+Kit's and dummy-petshop's unit suites. Kit's firmware host tests are a separate
+step of the same job (`pnpm --dir apps/kit firmware:test:host`), so `pnpm test`
+runs on machines without cmake; that step runs even when `pnpm test` fails.
+OS's `test`, `e2e` and `bench` scripts run the Vite build first, so every lane
+tests the built worker. Live tests belong to preview CI instead: the Preview OS workflow's
 `e2e` job runs the OS e2e project and `pnpm spec` side by side against the
 PR's preview (`apps/os/scripts/preview.ts` `runE2e`; it calls
 `vitest run --project e2e` directly so the preview's built `dist/` stays

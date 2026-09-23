@@ -30,7 +30,18 @@ esac
 doc="${CLAUDE_PROJECT_DIR:-$PWD}/docs/pull-requests.md"
 [ -f "$doc" ] || exit 0
 
-hash=$(shasum "$doc" | cut -c1-8)
+# SHA-1 either way: `shasum` (macOS, Perl's Digest::SHA) defaults to it, and Linux coreutils
+# ships only `sha1sum`. Both print the same "<hex>  <file>" line. With neither, block: Claude Code
+# lets any exit code other than 2 through, so a failed hash would silently open the gate.
+if command -v shasum >/dev/null; then
+  sha1=shasum
+elif command -v sha1sum >/dev/null; then
+  sha1=sha1sum
+else
+  echo "pr-guidance-gate: need shasum or sha1sum to hash docs/pull-requests.md" >&2
+  exit 2
+fi
+hash=$("$sha1" "$doc" | cut -c1-8)
 case "$input" in
   *"PR_GUIDANCE_HASH=$hash"*) exit 0 ;;
 esac
