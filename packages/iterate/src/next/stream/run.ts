@@ -6,8 +6,9 @@ export const RunRequested = z.object({ code: z.string().min(1) });
 export type RunRequested = z.infer<typeof RunRequested>;
 /** `events.iterate.com/context/run-settled`: `requestOffset` names the request; `settlement` is
  *  what the script returned (JSON — a round trip drops what JSON cannot carry) or how it failed —
- *  `runtime` (the script threw, or returned what the log refuses) or `interrupted` (the context
- *  restarted before it finished; it is not run again). */
+ *  `runtime` (the script threw, or returned what the log refuses), `deadline` (it had not finished
+ *  when its time ran out; it may have partly run) or `interrupted` (the context restarted before it
+ *  finished). A failed run is never run again. */
 export const RunSettled = z.object({
   requestOffset: z.number().int().positive(),
   settlement: z.discriminatedUnion("status", [
@@ -15,7 +16,7 @@ export const RunSettled = z.object({
     z.object({
       status: z.literal("failed"),
       error: z.string(),
-      failureKind: z.enum(["runtime", "interrupted"]),
+      failureKind: z.enum(["runtime", "deadline", "interrupted"]),
     }),
   ]),
 });

@@ -9,5 +9,5 @@ export default defineConfig({
       ),
     },
   },
-  test: { include: ["src/next/**/*.test.{ts,tsx}"] },
+  test: { include: ["src/cli.test.ts", "src/next/**/*.test.{ts,tsx}"] },
 });

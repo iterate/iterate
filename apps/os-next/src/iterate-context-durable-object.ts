@@ -32,7 +32,7 @@ import {
   type ItxExpressionInput,
   InvokeHandle,
   RpcStubHandle,
-  itxHandleReferenceOf,
+  itxAnswerDetachedFromSession,
   normalizedItxExpression,
 } from "iterate/next/expression";
 import {
@@ -60,7 +60,7 @@ import {
   RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
   type BorrowedRpcStub,
 } from "./context/rpc-stubs.ts";
-import { buildLibrary, executeScript, type LibraryItx } from "./library.ts";
+import { buildLibrary, executeScript, runSettlementOf, type LibraryItx } from "./library.ts";
 import { STREAM_ALARM_TRACE_EVENT, Stream, type ReachableContext } from "./stream/stream.ts";
 import { AlarmCoordinator } from "./alarm-coordinator.ts";
 import {
@@ -470,43 +470,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         },
       ]);
     try {
-      let settlement: RunSettlement;
-      try {
-        // THE JSON BOUNDARY: the value crossed Workers RPC; a round trip keeps what the log carries
-        // (undefined and functions drop; a bigint or a cycle throws — a runtime failure like any other).
-        // WHERE a requested script runs is this context's own `itx.run` row: here by default (the
-        // implicit row), elsewhere when a row REDIRECTS it — the agent's `itx.run ⇒
-        // itx.builtins.cd('<agent>/sandbox').builtins.run` sends its scripts to a child whose table
-        // is the scripts' alone (configured by the installed app). A redirect is one more request-and-settle
-        // there. A mask on `run` (a jail's bare null) says what code HERE may spell — never where a
-        // request already on this log executes: it runs here.
-        let redirect: ItxExpression | undefined;
-        try {
-          const resolvedRun = this.#itxExpressionResolver.resolve(["itx", ["run", code]]).at(-1)!;
-          const runsHere =
-            resolvedRun.length === 3 &&
-            resolvedRun[1] === "builtins" &&
-            itxExpressionStepName(resolvedRun[2]) === "run";
-          if (!runsHere) redirect = resolvedRun;
-        } catch (error) {
-          if (errorCode(error) !== "NO_ITX_EXPRESSION_MATCH") throw error;
-        }
-        const json = JSON.stringify(
-          redirect
-            ? await this.#itxExpressionResolver.invoke(redirect)
-            : await executeScript(this.#libraryItx, code),
-        );
-        // `json` is absent only for a value JSON has no text for (undefined, a function): the log
-        // then carries no result. (An empty STRING result serializes to `""`, two chars — truthy.)
-        const result: unknown = json ? JSON.parse(json) : undefined;
-        settlement = { status: "succeeded", result };
-      } catch (error) {
-        settlement = {
-          status: "failed",
-          error: String(error instanceof Error ? error.message : error).slice(0, 8_000),
-          failureKind: "runtime",
-        };
-      }
+      // Settled within RUN_DEADLINE_MS, its value released (library.ts `runSettlementOf`).
+      const settlement = await runSettlementOf(this.#scriptExecution(code));
       try {
         settle(settlement);
       } catch (error) {
@@ -523,6 +488,29 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     } finally {
       this.#scriptRunsInFlight.delete(requestOffset);
     }
+  }
+
+  /** A requested script's execution. WHERE it runs is this context's own `itx.run` row: here by
+   *  default (the implicit row), elsewhere when a row REDIRECTS it — the agent's `itx.run ⇒
+   *  itx.builtins.cd('<agent>/sandbox').builtins.run` sends its scripts to a child whose table is the
+   *  scripts' alone (configured by the installed app). A redirect is one more request-and-settle
+   *  there. A mask on `run` (a jail's bare null) says what code HERE may spell — never where a
+   *  request already on this log executes: it runs here. */
+  async #scriptExecution(code: string): Promise<unknown> {
+    let redirect: ItxExpression | undefined;
+    try {
+      const resolvedRun = this.#itxExpressionResolver.resolve(["itx", ["run", code]]).at(-1)!;
+      const runsHere =
+        resolvedRun.length === 3 &&
+        resolvedRun[1] === "builtins" &&
+        itxExpressionStepName(resolvedRun[2]) === "run";
+      if (!runsHere) redirect = resolvedRun;
+    } catch (error) {
+      if (errorCode(error) !== "NO_ITX_EXPRESSION_MATCH") throw error;
+    }
+    return redirect
+      ? this.#itxExpressionResolver.invoke(redirect)
+      : executeScript(this.#libraryItx, code);
   }
 
   /** The own-context adapter used by built-ins: a loopback (`itx.cd(<own path>)`, the config
@@ -565,6 +553,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     env: this.env,
     deployId: this.#appConfig.deployId,
     ingressRouting: this.#appConfig.urls.ingressRouting,
+    dashOrigin: this.#appConfig.urls.dash,
     platformOrigin: () => this.#platformOrigin,
     signFileUrl: async (input) => {
       const platformOrigin = this.#platformOrigin;
@@ -920,11 +909,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   ): Promise<unknown> {
     this.#stream.appendWakeRecord("request");
     const result = await this.#invokeInProcess(call, args, caller);
-    // A HANDLE LEAVES AS THE EXPRESSION THAT NAMES IT (expression.ts `itxHandleReferenceOf`): a live
-    // handle crossing this door would hold a Workers-RPC session — and this actor — open for as long as
-    // the caller kept it. The caller mints its own over the reference; every later verb is one whole
-    // call back through here. A lent client stub is the one handle that crosses as itself.
-    return itxHandleReferenceOf(result, normalizedItxExpression(call), args) ?? result;
+    // THE CALLER'S SESSION ENDS WITH THE CALL, WHATEVER IT KEEPS (expression.ts
+    // `itxAnswerDetachedFromSession`): every Workers-RPC caller of this actor — the edge (capnweb
+    // /api, a loaded worker's or a facet's `env.ITX`), /mcp, a sibling's `cd` — arrives through this
+    // method, so this actor enforces it here, whatever the caller disposes: a live answer leaves as
+    // the expression that names it, data a hop below answered with leaves as a copy.
+    return itxAnswerDetachedFromSession(result, normalizedItxExpression(call), args);
   }
 
   /** The same call for THIS isolate's own callers — the library's itx, a facet's or a loaded worker's

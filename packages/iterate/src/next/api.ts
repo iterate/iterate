@@ -1,3 +1,4 @@
+import type { Ai } from "@cloudflare/workers-types";
 // next/api.ts — THE API AN APP DIALS: the shapes of os-next's `/api` root, the session it vends and a
 // context's surface, as a capnweb client sees them. DECLARED here, never generated, and never the
 // platform's classes: os-next asserts that `IterateRpcTarget` satisfies `IterateApi` and that
@@ -119,6 +120,19 @@ export type SecretCatalogEntry = {
   createdAt: string;
 };
 
+/** The input an agent gives `itx.secrets.collectFromUser`: the write-only secret path, the
+ * origins its material may reach, and the short explanation the authenticated collection form
+ * shows its user. */
+export type CollectSecretInput = {
+  path: string;
+  egress: { urls: string[] };
+  description?: string;
+};
+
+/** A secret collection link. Sending this asks the person to authenticate to the intended
+ * Iterate instance; it is not itself permission to write a secret. */
+export type CollectSecretLink = { path: string; url: string };
+
 /** A context (a project, a user, an organization): every `itx` root, reached through `invoke`. */
 
 export interface IterateContextApi {
@@ -171,6 +185,10 @@ export interface IterateContextApi {
     ): Promise<{ path: string }>;
     delete(path: string): Promise<{ path: string }>;
     list(): Promise<SecretCatalogEntry[]>;
+    /** Build the authenticated Dash link where a person enters a value an agent must never see in
+     * chat. The link fixes the project, platform instance, secret path and egress pin. If called
+     * from an agent context, a successful submission messages that same agent with the path only. */
+    collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink>;
   };
   /** The table this context resolves against, described — the tree a model reads. `list()` follows a
    *  bare hop row into the context it names (a Durable Object hop, hence async). */
@@ -217,11 +235,13 @@ export interface IterateContextApi {
   provide(input: RewriteRuleConfigured): Promise<{ [Symbol.dispose](): void }>;
   provide(
     match: ItxExpressionInput,
-    target: ItxExpressionInput | null,
+    // Expressions, null, or live RPC references (RpcTarget / callable), serialized by capnweb.
+    target: unknown,
   ): Promise<{ [Symbol.dispose](): void }>;
   /** A script — the text of `async (itx) => { … }` — run once against this context, on its log:
    *  `context/run-requested` under the caller, the context's runner, `run-settled` (JSON in, JSON
-   *  out); resolves with the result or rejects with the settlement's error. Never re-run. */
+   *  out); resolves with the result or rejects with the settlement's error. Never re-run. A script
+   *  still running ten minutes after it started is settled failed (`failureKind: "deadline"`). */
   run(script: string): Promise<unknown>;
   /** The project's repos, workspaces and agents as domain objects — one shape each: `get(path)` is
    *  the entity's facet on the context at `path` (its verbs, plus the typed `append` on that
@@ -371,6 +391,8 @@ export interface IterateSessionApi {
       project: string;
       orgId?: string;
       configRepoTemplate?: string;
+      /** Operator-only recovery: retain the source project identity from a project seed. */
+      restoreProjectId?: string;
     }): Promise<IterateContextApi>;
   };
   organizations: { get(orgId: string): Promise<IterateContextApi> };

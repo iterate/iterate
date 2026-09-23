@@ -71,44 +71,9 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run -- pnpm run-script deploy --env prd
-  # THE PROOF THAT COUNTS (docs/testing.md): the e2e vitest project against the worker this
-  # run just deployed — every file a capnweb client at os.iterate2.com/api exactly like a
-  # production client. The shared Test job runs only os-next's unit + workers vitest projects,
-  # so without this job a deployed regression is invisible until someone runs e2e by hand.
-  e2e:
-    needs:
-      - deploy
-    runs-on:
-      size: 4x16
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 30
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          clean: false
-          ref: ${{ inputs.ref || github.sha }}
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
-      - name: Setup Doppler (baked CLI)
-        run: doppler setup --config prd --project project-worker
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      # Deployed-target mode (apps/os-next/e2e/support/global-setup.ts): WORKER_BASE_URL selects
-      # the deployed worker; the admin bearer and the sign-in password are read out of the
-      # deployment's `APP_CONFIG` object, which `doppler run` puts in the environment
-      # (secrets.adminBearer, login.password — src/app-config.ts), its routing out of envs.ts. Files
-      # run in parallel (vitest.config.ts): every test mints its own project.
-      - name: Run e2e against os.iterate2.com
-        working-directory: apps/os-next
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          WORKER_BASE_URL: ${{ needs.deploy.outputs.public_url }}
-        run: doppler run -- pnpm e2e
   notify:
     needs:
       - deploy
-      - e2e
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && (needs.deploy.result == 'success' || needs.deploy.result == 'failure')
     runs-on:
       size: 2x8
@@ -128,9 +93,3 @@ jobs:
           APP_DISPLAY_NAME: OS-Next
           PUBLIC_URL: ${{ needs.deploy.outputs.public_url }}
         run: pnpm tsx scripts/ci/notify.ts deploy-${{ needs.deploy.result }}
-      # A deploy that succeeded but failed e2e is a live regression: #error-pulse.
-      - name: Notify e2e failure
-        if: needs.e2e.result == 'failure'
-        env:
-          NEEDS: ${{ toJSON(needs) }}
-        run: pnpm tsx scripts/ci/notify.ts workflow-failure

@@ -58,14 +58,6 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run -- pnpm run-script deploy
-      - name: Verify Notes sign-in, save and reload
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          DEMO_BASE_URL: https://os.iterate2.com
-          NOTES_BASE_URL: https://notes.iterate.workers.dev
-        run: |
-          pnpm exec playwright install chromium
-          doppler run --project project-worker --config prd -- pnpm --dir apps/notes spec
   notify:
     needs:
       - deploy

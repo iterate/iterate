@@ -33,6 +33,7 @@
     "isolatedModules": true,
     "erasableSyntaxOnly": true,
     "rewriteRelativeImportExtensions": true,
+    "allowImportingTsExtensions": true,
     "declaration": true,
     "emitDeclarationOnly": true,
     "rootDir": "src/next",

@@ -502,7 +502,8 @@ class ProjectCollectionRpcTarget extends RpcTarget {
     return this.#input.directory.reachableProjects(this.#reach);
   }
 
-  /** Create the project named `project` (slugified into its hostname label; its id is minted —
+  /** Create the project named `project` (slugified into its hostname label; its id is minted unless
+   * an administrator restores an archived id —
    *  the returned context's `whoami()` says it, so does `list()`) — in the user's org (the first
    *  by name when they have several, created on first use when they have none), or in the
    *  deployment's own org for the admin secret — and vend its root context. A grant narrowed to
@@ -516,18 +517,21 @@ class ProjectCollectionRpcTarget extends RpcTarget {
     project: string;
     orgId?: string;
     configRepoTemplate?: string;
+    restoreProjectId?: string;
   }): Promise<IterateContextRpcTarget> {
     const data = z
       .object({
         project: z.string(),
         orgId: z.string().optional(),
         configRepoTemplate: z.string().transform(normalizeConfigRepoTemplateReference).optional(),
+        restoreProjectId: z.string().optional(),
       })
       .parse(input);
     const project = await this.#input.directory.createProject(
       this.#reach,
       data.project,
       data.orgId,
+      data.restoreProjectId,
     );
     // The fact of it, on the organization it was created in (idempotent on the project: the same
     // org's same slug again is the same project).

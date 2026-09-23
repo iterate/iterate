@@ -286,9 +286,19 @@ export async function apply(options: {
       )
       .flatMap((row) => row.results);
     if (orgs.length > 1) throw new Error(`Organization name ${organization} is ambiguous.`);
-    const existing = (await admin.projects.list()).find((project) => project.slug === seed.project);
+    const projects = await admin.projects.list();
+    const existing = projects.find((project) => project.slug === seed.project);
     if (existing && existing.orgId !== orgs[0]?.id)
       throw new Error("Existing project belongs to another organization; refusing to move it.");
+    const idOwner = projects.find((project) => project.id === seed.source.projectId);
+    if (idOwner && (idOwner.slug !== seed.project || idOwner.orgId !== orgs[0]?.id))
+      throw new Error(
+        `Archived project id ${seed.source.projectId} already belongs to ${idOwner.slug} in another project or organization.`,
+      );
+    if (existing && existing.id !== seed.source.projectId)
+      throw new Error(
+        `Project ${seed.project} exists with id ${existing.id}, not archived id ${seed.source.projectId}.`,
+      );
     const org = orgs[0] || (await operator.createOrg(organization));
     for (const member of members) {
       const user = await rpc
@@ -307,9 +317,18 @@ export async function apply(options: {
         }),
       });
     }
-    const root = existing
-      ? await operator.projects.get(existing.id)
-      : await operator.projects.create({ project: seed.project, orgId: org.id });
+    if (!existing)
+      await admin.projects.create({
+        project: seed.project,
+        orgId: org.id,
+        restoreProjectId: seed.source.projectId,
+      });
+    const root = await operator.projects.get(seed.source.projectId);
+    const identity = z
+      .object({ projectId: z.string(), projectSlug: z.string().optional() })
+      .parse(await root.whoami());
+    if (identity.projectId !== seed.source.projectId || identity.projectSlug !== seed.project)
+      throw new Error(`Project identity mismatch after restoring ${seed.project}.`);
     const deadline = Date.now() + 120_000;
     for (;;) {
       const snapshot = z
@@ -389,7 +408,7 @@ export async function apply(options: {
         throw new Error(`Membership readback failed for ${member.email}.`);
     }
     console.log(
-      `Restored ${seed.project} into ${organization}: exact Git tree ${seed.config.tree}, ${secrets.length} verified secrets, ${members.length} verified memberships. Commit ${committed.commitOid}.`,
+      `Restored ${seed.project} (${seed.source.projectId}) into ${organization}: exact Git tree ${seed.config.tree}, ${secrets.length} verified secrets, ${members.length} verified memberships. Commit ${committed.commitOid}.`,
     );
   });
 }

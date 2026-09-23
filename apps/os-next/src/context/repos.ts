@@ -50,23 +50,50 @@ interface ArtifactListResult {
  *  `get(path).createToken(...)` ACROSS the /api hop exactly like the real binding's handle — a plain
  *  object cannot (its `createToken` closure is NonPipelinable and fails to serialize; expression.ts's
  *  `InvokeHandle`). It adds `remote()`, the git-over-HTTPS URL of this repo — the platform knows the
- *  account and namespace; the repo facet does not. */
+ *  account and namespace; the repo facet does not. It holds the repo's NAME, never the binding's
+ *  handle: a handle is a live Workers-RPC stub, and one kept here held this actor's session to
+ *  Artifacts — and the actor — open until the next deploy (2026-09-23). Each verb takes a handle and
+ *  releases it (`withArtifactRepoHandle`). */
 export class ScopedArtifactRepoRpcTarget extends RpcTarget {
-  readonly #handle: ArtifactRepoHandle;
+  readonly #namespace: ArtifactsNamespace;
+  readonly #name: string;
   readonly #remote: string;
-  constructor(handle: ArtifactRepoHandle, remote: string) {
+  constructor(namespace: ArtifactsNamespace, name: string, remote: string) {
     super();
-    this.#handle = handle;
+    this.#namespace = namespace;
+    this.#name = name;
     this.#remote = remote;
   }
   createToken(scope: "read" | "write", ttlSeconds: number): Promise<ArtifactToken> {
-    return this.#handle.createToken(scope, ttlSeconds);
+    return withArtifactRepoHandle(this.#namespace, this.#name, (handle) =>
+      handle.createToken(scope, ttlSeconds),
+    );
   }
   /** `https://<account>.artifacts.cloudflare.net/git/<namespace>/<project>.<name>.git` (the binding's
    *  own word) — what a git client POSTs `git-upload-pack` / `git-receive-pack` under, the token as
    *  the basic-auth password. */
   remote(): string {
     return this.#remote;
+  }
+}
+
+/** One binding handle for one verb, released after, its answer copied out: the handle and the answer
+ *  object (facet-host.ts `#call` says why) each keep this actor's session to Artifacts open until
+ *  disposed. */
+async function withArtifactRepoHandle<T>(
+  namespace: ArtifactsNamespace,
+  name: string,
+  verb: (handle: ArtifactRepoHandle) => Promise<T>,
+): Promise<T> {
+  const handle = await namespace.get(name);
+  try {
+    const answer = await verb(handle);
+    const copy = structuredClone(answer);
+    // The real answer and handle are disposable (Workers-RPC); a test's fake may not be.
+    (answer as Partial<Disposable>)[Symbol.dispose]?.();
+    return copy;
+  } finally {
+    (handle as Partial<Disposable>)[Symbol.dispose]?.();
   }
 }
 
@@ -141,17 +168,24 @@ export function projectScopedArtifacts(input: {
       // The probe is what a read does — a handle AND a token, since either may be where the binding
       // says "not found"; anything else (an outage, an auth failure) surfaces as what it is.
       try {
-        await (await input.namespace.get(name)).createToken("read", PROBE_TOKEN_TTL_SECONDS);
+        await withArtifactRepoHandle(input.namespace, name, (handle) =>
+          handle.createToken("read", PROBE_TOKEN_TTL_SECONDS),
+        );
         return { created: false };
       } catch (error) {
         if (!isRepoNotFound(error)) throw error;
       }
-      await input.namespace.create(name);
+      // The result carries the repo's initial credential, unread — and, a Workers-RPC result, a disposer.
+      const created = await input.namespace.create(name);
+      (created as Partial<Disposable>)[Symbol.dispose]?.();
       return { created: true };
     },
     get: async (path) => {
-      const handle = await input.namespace.get(boundName(path));
-      return new ScopedArtifactRepoRpcTarget(handle, (await handle.info()).remote);
+      const name = boundName(path);
+      const { remote } = await withArtifactRepoHandle(input.namespace, name, (handle) =>
+        handle.info(),
+      );
+      return new ScopedArtifactRepoRpcTarget(input.namespace, name, remote);
     },
     list: async (options) => {
       const page = await input.namespace.list(options);

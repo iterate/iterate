@@ -103,3 +103,38 @@ for (const [label, message] of Object.entries(platformFailures)) {
     expect(rows.map((row) => row.hostedFacet.restarts)).toEqual([1]); // the one restart, on the row
   });
 }
+
+test("concurrent stale start failures do not retire the replacement generation twice", async () => {
+  const source = {
+    "cap.js": `
+import { DurableObject } from "cloudflare:workers";
+export class Racing extends DurableObject {
+  #releaseBothStarts = function () {};
+  #bothStarts = new Promise(
+    function (resolve) {
+      this.#releaseBothStarts = resolve;
+    }.bind(this),
+  );
+
+  async run() {
+    const n = Number(this.ctx.storage.kv.get("n") || 0) + 1;
+    this.ctx.storage.kv.put("n", n);
+    if (n <= 2) {
+      if (n === 2) this.#releaseBothStarts();
+      await this.#bothStarts;
+      throw new Error("internal error; reference = race");
+    }
+    return { n };
+  }
+}`,
+  };
+  const s = stub("prj_facet_race");
+  const call = () =>
+    s.invoke(["itx", "facets", ["get", "race", { source, className: "Racing" }], ["run"]]);
+  const [a, b] = await Promise.all([call(), call()]);
+  expect(a).toMatchObject({ n: expect.any(Number) });
+  expect(b).toMatchObject({ n: expect.any(Number) });
+  expect(
+    await runInDurableObject(s, (_i, state) => state.storage.kv.get("facet:race:restarts")),
+  ).toBe(1);
+});

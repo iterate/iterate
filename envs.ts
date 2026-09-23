@@ -76,6 +76,10 @@ export interface OsNextEnv {
    *  hostname (its registrable domain's zone must exist in the account), ensure-resources the proxied
    *  DNS record. Belongs in the project's own runtime config, not here. */
   temporaryCustomHostnames?: Record<string, string>;
+  /** Registrable domains in this account which host entries in `temporaryCustomHostnames`.
+   * They receive their own Worker route and proxied DNS record, rather than becoming a
+   * Cloudflare-for-SaaS hostname on a project-host zone. */
+  ownedProjectCustomApexes?: string[];
   /** The project-host zones this deployment serves as a Cloudflare for SaaS provider (the zone's
    *  fallback origin, `cname.<zone>`, is the deployment's).
    *  A `temporaryCustomHostnames` key whose zone lives in ANOTHER Cloudflare account is a CUSTOM
@@ -120,7 +124,9 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
     // Each apex is its project's: the config worker's `fetch` serves it. Every zone must exist in
     // the prd account for the route to deploy; the DNS record appears on `ensure-resources --env prd`.
     temporaryCustomHostnames: {
-      // iterate2.com is a zone of this account: its own route and DNS record
+      // These two zones are in this account: each has its own route and DNS record.
+      // iterate.com deliberately moves the public Iterate site from legacy OS to OS-Next.
+      "iterate.com": "iterate",
       "iterate2.com": "iterate",
       // these three zones live in OTHER Cloudflare accounts: Cloudflare for SaaS custom hostnames on
       // iterate2.app (below), each apex CNAMEd by its owner to cname.iterate2.app
@@ -128,6 +134,7 @@ export const osNextEnvs: Record<string, OsNextEnv> = {
       "lispwoso.com": "lispwoso",
       "templestein.com": "templestein",
     },
+    ownedProjectCustomApexes: ["iterate.com"],
     cloudflareForSaasProjectHostnameBases: ["iterate2.app"],
     artifactsNamespace: "project-worker-prd-repos",
     resourceNamePrefix: "project-worker-prd",

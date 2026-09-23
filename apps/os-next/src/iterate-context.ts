@@ -32,6 +32,7 @@ import {
   type ItxExpressionInput,
   installPrototypeInvokeFallback,
   registerPipelinedRpcBrand,
+  registerRpcSessionBrand,
 } from "iterate/next/expression";
 import type { IterateContextApi, RewriteRuleConfigured } from "iterate/next/api";
 import {
@@ -515,11 +516,22 @@ export const DurableObjectNameCodec = {
 // The native workerd brands the step walk threads unawaited (expression.ts `PIPELINED_RPC_BRANDS` —
 // it cannot import cloudflare:workers itself). A call step yields an RpcPromise; a PROPERTY step on
 // one yields an RpcProperty — both pipeline, so both register. The cast bridges a workers-types gap:
-// the runtime exports both (verified by probe) but the .d.ts doesn't.
-const { RpcPromise: NativeRpcPromise, RpcProperty: NativeRpcProperty } =
-  cloudflareWorkers as unknown as Record<"RpcPromise" | "RpcProperty", abstract new () => unknown>;
+// the runtime exports these and `RpcStub` (verified by probe) but the .d.ts doesn't.
+const {
+  RpcStub: NativeRpcStub,
+  RpcPromise: NativeRpcPromise,
+  RpcProperty: NativeRpcProperty,
+} = cloudflareWorkers as unknown as Record<
+  "RpcStub" | "RpcPromise" | "RpcProperty",
+  abstract new () => unknown
+>;
 registerPipelinedRpcBrand(NativeRpcPromise);
 registerPipelinedRpcBrand(NativeRpcProperty);
+// All three HOLD A SESSION until disposed (expression.ts `RPC_SESSION_BRANDS`): what a walk steps past
+// is released once its answer is in, and a stub never leaves a context's `invoke` live.
+registerRpcSessionBrand(NativeRpcStub);
+registerRpcSessionBrand(NativeRpcPromise);
+registerRpcSessionBrand(NativeRpcProperty);
 // capnweb's own promises pipeline the same way, and the library's `itx.connectToCapnweb` puts them
 // in the walk (library.ts): a remote chain `.a().b(x)` must stay unawaited between steps or
 // a one-shot batch session dies after its first message. A capnweb RpcStub is not a promise; it

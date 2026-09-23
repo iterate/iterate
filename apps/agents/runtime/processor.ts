@@ -22,6 +22,7 @@
 // delivery over the same fold re-derives it, so an attempt lost to an eviction costs nothing, and every
 // append is idempotency-keyed so a retry appends nothing twice.
 import { z } from "zod";
+import { errorCode } from "iterate/next/lib";
 import {
   type ConsumedEvent,
   type EmittedEventInput,
@@ -225,6 +226,7 @@ async function drainSse(
   onEvent: (event: unknown) => void,
 ): Promise<void> {
   const reader = body.getReader();
+  let completed = false;
   const cancel = () => void reader.cancel().catch(() => undefined);
   if (signal.aborted) cancel();
   signal.addEventListener("abort", cancel, { once: true });
@@ -237,11 +239,13 @@ async function drainSse(
       .map((line) => line.slice("data:".length).trim())
       .join("\n");
     if (data === "" || data === "[DONE]") return;
+    let event: unknown;
     try {
-      onEvent(JSON.parse(data));
+      event = JSON.parse(data);
     } catch {
-      onEvent(data);
+      event = data;
     }
+    onEvent(event);
   };
   try {
     for (;;) {
@@ -254,22 +258,18 @@ async function drainSse(
     }
     buffered += decoder.decode();
     if (buffered.trim()) frame(buffered);
+    completed = true;
   } finally {
     signal.removeEventListener("abort", cancel);
+    // A parser error (for example, a `response.failed` event) stops this consumer before the
+    // producer has necessarily finished.  Cancel the local body in that case: otherwise the
+    // byte bridge can be left waiting forever on its next backpressured write.
+    // Do not await this cancellation. The producer may be awaiting the write whose chunk this
+    // reader just rejected, and awaiting both sides would turn the error path into a deadlock.
+    if (!completed) void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
   if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
-}
-
-/** Race an un-abortable dial against the caller's signal (the platform's `raceAbort`): the caller regains
- *  control the moment it aborts — an interruption, the expiry, the idle watchdog — while the orphaned
- *  dial finishes into the void; a stream already open is cancelled by `drainSse` itself. */
-function raceAbort<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
-  if (signal.aborted) return Promise.reject(signal.reason || new Error("aborted"));
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(signal.reason || new Error("aborted"));
-    signal.addEventListener("abort", onAbort, { once: true });
-    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
-  });
 }
 
 /** The conversation as the Responses API takes it: `input` items with text and image parts. */
@@ -316,6 +316,14 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       /** The host's bindings: `AI` for a partner model on Cloudflare's billing, and the app config
        *  the gateway metadata is read from. */
       /** The Workers AI binding — the partner-model route (an `openai/…` model) goes through it. */
+      /** The host bridges raw provider bodies through awaited byte RPC. */
+      runModel(
+        path: string,
+        model: string,
+        input: unknown,
+        options: unknown,
+        signal: AbortSignal,
+      ): Promise<unknown>;
       /** The clock and the wait, injected only so a unit test can make the debounce instant. */
       now?: () => number;
       sleep?: (ms: number) => Promise<void>;
@@ -806,7 +814,14 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     );
     try {
       const { path } = await this.#identity();
-      const tree = await this.deps.withItx((itx) => itx.cd(`${path}/sandbox`).rewriteRules.list());
+      const tree = await this.deps
+        .withItx((itx) => itx.cd(`${path}/sandbox`).rewriteRules.list())
+        .catch((error: unknown) => {
+          // A fully masked sandbox deliberately denies introspection too. Give the model no
+          // advertised tools; prose replies still work. Transport/runtime failures remain errors.
+          if (errorCode(error) === "NO_ITX_EXPRESSION_MATCH") return [];
+          throw error;
+        });
       const items = state.contextItems.filter((item) => item.offset < open.requestedAtOffset);
       // The images the model will see: read now, the freshest bytes at the request; one that is
       // gone (deleted meanwhile) is named instead of shown.
@@ -904,6 +919,10 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       } catch (error) {
         // The interrupt path's story — it settled the request itself.
         if (controller.signal.reason instanceof InterruptedError) return;
+        // `#stream` can reject after it has handed the byte transport a local Response (for
+        // example, on an in-band provider failure). Stop that producer before recording the
+        // settlement, rather than leaving its next backpressured write alive in waitUntil.
+        controller.abort(error);
         await settle({
           status: "failed",
           errorMessage: String(error instanceof Error ? error.message : error).slice(0, 4_000),
@@ -948,8 +967,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
    *  event); the call answers the whole text once the stream ends, with the usage the provider
    *  reported. Aborting `signal` stops the stream; the call then rejects.
    *
-   *  Two routes by the model's name. A `@cf/…` model is Workers AI through `itx.ai` (the binding
-   *  under THIS context's rules — a test lends a fake there), streamed when the binding streams.
+   *  Two routes by the model's name. The host invokes Workers AI under this context's rules and
+   *  relays any raw body through an app-owned byte transport. A `@cf/…` answer may be streamed or
+   *  whole JSON.
    *  Anything else is OpenAI's Responses API as a Workers AI partner model on Cloudflare's billing
    *  — no key, ours or a project's — the FAST reading of a reasoning model: low effort, with its
    *  summary streamed. */
@@ -965,17 +985,14 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     onChunk(chunk: unknown, textDelta: string): void;
   }): Promise<{ text: string; usage?: LlmUsage }> {
     if (model.startsWith("@cf/")) {
-      // workers-types keys `run`'s inputs and outputs by model-name literal; the model is
-      // configuration here (any name the account can reach), so the call is made through the
-      // binding's runtime shape and the answer is validated below rather than trusted from a type.
-      const raw: unknown = await raceAbort(
+      // The model is configuration, so the transport result is validated below rather than trusted.
+      const { path } = await this.#identity();
+      const raw: unknown = await this.deps.runModel(
+        path,
+        model,
+        { messages, stream: true },
+        undefined,
         signal,
-        this.deps.withItx((itx) =>
-          (itx.ai as unknown as { run(model: string, inputs: unknown): Promise<unknown> }).run(
-            model,
-            { messages, stream: true },
-          ),
-        ),
       );
       if (raw instanceof ReadableStream) {
         let text = "";
@@ -1012,31 +1029,24 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     // which no catalog input type names. Nothing is trusted from either: the answer is a Response
     // checked for status and parsed event by event below.
     const { projectId, path } = await this.#identity();
-    const raw: unknown = await raceAbort(
+    const raw: unknown = await this.deps.runModel(
+      path,
+      `openai/${model}`,
+      {
+        input: responsesInput(messages),
+        stream: true,
+        store: false,
+        reasoning: { effort: "low", summary: "auto" },
+      },
+      {
+        returnRawResponse: true,
+        gateway: {
+          id: AI_GATEWAY_ID,
+          skipCache: true,
+          metadata: { projectId, streamPath: path, context: "agent-turn" },
+        },
+      },
       signal,
-      this.deps.withItx((itx) =>
-        itx.ai.run(
-          `openai/${model}` as Parameters<Ai["run"]>[0],
-          {
-            input: responsesInput(messages),
-            stream: true,
-            store: false,
-            reasoning: { effort: "low", summary: "auto" },
-          } as never,
-          {
-            returnRawResponse: true,
-            gateway: {
-              id: AI_GATEWAY_ID,
-              skipCache: true,
-              metadata: {
-                projectId,
-                streamPath: path,
-                context: "agent-turn",
-              },
-            },
-          },
-        ),
-      ),
     );
     if (!(raw instanceof Response))
       throw new Error(`model ${model}: Workers AI did not answer with the raw response`);

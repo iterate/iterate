@@ -1,7 +1,7 @@
 {
   "name": "iterate",
   "version": "0.3.0",
-  "description": "SDK for the Iterate context platform",
+  "description": "CLI and SDK for Iterate OS Next",
   "license": "Apache-2.0",
   "type": "module",
   "repository": {
@@ -15,6 +15,7 @@
   },
   "keywords": [
     "iterate",
+    "cli",
     "sdk",
     "capnweb"
   ],
@@ -36,7 +37,8 @@
     "./next/oauth-scopes": "./src/next/oauth-scopes.ts",
     "./next/project-ingress": "./src/next/project-ingress.ts",
     "./next/oauth": "./src/next/client/oauth.ts",
-    "./next/stream/run": "./src/next/stream/run.ts"
+    "./next/stream/run": "./src/next/stream/run.ts",
+    "./next/node": "./src/next-node.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -101,16 +103,22 @@
         "types": "./dist/next/stream/run.d.ts",
         "import": "./dist/next/stream/run.mjs",
         "default": "./dist/next/stream/run.mjs"
+      },
+      "./next/node": {
+        "types": "./dist/next-node.d.ts",
+        "import": "./dist/next-node.mjs"
       }
     }
   },
   "files": [
+    "bin",
     "dist",
-    "README.md"
+    "README.md",
+    "menubar"
   ],
   "scripts": {
-    "build": "tsdown && tsc -p tsconfig.next.json",
-    "typecheck": "tsc --noEmit -p tsconfig.next.json",
+    "build": "tsdown && tsc -p tsconfig.next.json && tsc -p tsconfig.cli.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.next.json && tsc --noEmit -p tsconfig.cli.json",
     "test": "vitest run --reporter=default --reporter=../shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "prepack": "pnpm build"
   },
@@ -119,7 +127,11 @@
     "json5": "^2.2.3",
     "oauth4webapi": "^3.8.5",
     "react": "^19.2.7",
-    "zod": "4.5.4"
+    "zod": "4.5.4",
+    "@clack/prompts": "^1.0.0",
+    "@orpc/server": "1.13.14",
+    "trpc-cli": "0.15.1",
+    "ws": "8.19.0"
   },
   "peerDependencies": {
     "react": "^19.1.0"
@@ -134,6 +146,10 @@
     "react-dom": "^19.2.7",
     "tsdown": "0.22.2",
     "typescript": "^5.9.3",
-    "vitest": "4.0.15"
+    "vitest": "4.0.15",
+    "@types/ws": "^8.18.1"
+  },
+  "bin": {
+    "iterate": "./bin/iterate.js"
   }
 }

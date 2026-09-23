@@ -1,3 +1,4 @@
+import type { SqlStorageValue } from "@cloudflare/workers-types";
 // stream/processor.ts — THE PROCESSOR: `StreamProcessor`, the PURE class an author writes (a
 // contract and three hooks, no constructor arguments, no storage, no stream — a unit test constructs
 // it with `new`), and `ProcessorEngine`, which drives ONE such instance against a stream and a

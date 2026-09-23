@@ -65,9 +65,10 @@ export function toAgentEvent(raw: unknown, streamPath: string): Event | null {
  *  offset>` for a codemode script, `reply:<that offset>` for the plain-response handler (the
  *  processor's idempotency key says which) — and one any other caller asked for (`itx.run` on the
  *  agent's path) is `run:<its offset>`; its `context/run-settled` names the request by offset, so the
- *  settlement takes the same id. A run never expires on os-next (a restart settles it interrupted),
- *  so `expiresAt` is the ten-minute display deadline the reducer's inferred close needs; the request's
- *  offset rides along as `requestOffset`, what a settlement's developer item names (`actor`). */
+ *  settlement takes the same id. `expiresAt` is the run's deadline — os-next's runner settles a
+ *  script still running ten minutes after it started as failed (`deadline`, os-next library.ts
+ *  RUN_DEADLINE_MS) — which the reducer's inferred close needs; the request's offset rides along as
+ *  `requestOffset`, what a settlement's developer item names (`actor`). */
 export function adaptContextRuns(events: readonly Event[]): Event[] {
   const executionIdByRequestOffset = new Map<number, string>();
   return events.map((event) => {
@@ -104,7 +105,7 @@ export function adaptContextRuns(events: readonly Event[]): Event[] {
           settlement:
             settlement.status === "failed"
               ? {
-                  // `interrupted`: the context restarted mid-run — the script may have run.
+                  // `interrupted` (the context restarted mid-run) or `deadline`: the script may have run.
                   phase: "execution",
                   executionMayHaveOccurred: true,
                   cancellation: "not-applicable",

@@ -194,11 +194,12 @@ export abstract class StreamProcessorDurableObject<
     }));
   }
 
-  /** ONE pipelined round trip on the itx scope, then RELEASE it: `env.ITX.get()` and the call
-   *  pipelined on it PIN THE PARENT DO until GC (the "GC is too late" defect the DO's facet door
-   *  fixes in the other direction). Await the answer — plain data, the wire already copied it —
-   *  then dispose the call AND the get. Protected: a host with methods of its own (the workspace,
-   *  src/workspace/durable-object.ts) reaches its context the same way. */
+  /** ONE pipelined round trip on the itx scope, then release it: await the answer — plain data, the
+   *  wire already copied it — then dispose the call AND the get. Hygiene, not what keeps the context
+   *  evictable: the context's own `invoke` ends every inbound session with the call, whatever a
+   *  caller keeps (expression.ts `itxAnswerDetachedFromSession`), so an intermediate left undisposed
+   *  here holds only the stateless loopback call. Protected: a host with methods of its own (the
+   *  workspace, src/workspace/durable-object.ts) reaches its context the same way. */
   protected async withItx<T>(call: (itx: Scope) => T): Promise<Awaited<T>> {
     const itx = this.#itxEntrypoint().get();
     const result = call(itx);

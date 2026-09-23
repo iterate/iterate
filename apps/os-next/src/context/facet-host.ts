@@ -18,6 +18,7 @@ import {
   type ItxExpression,
   type ItxExpressionInput,
   walkSteps,
+  releaseRpcSessions,
   FacetHandle,
 } from "iterate/next/expression";
 import {
@@ -87,6 +88,7 @@ type MaterializedFacet = {
   facet: Fetcher;
   retireLoadedIdentity?: () => void;
   startupFailed: () => boolean;
+  generation: number;
 };
 
 export class FacetHost {
@@ -98,6 +100,8 @@ export class FacetHost {
    *  hands the loader the SAME object, so its identity-keyed content hash (worker-loader.ts) runs once
    *  per source per incarnation, not once per push. */
   readonly #facetStartupMemoByName = new Map<string, FacetSpec>();
+  /** A late failure may only retire the container it called, never its replacement. */
+  readonly #facetGenerationByName = new Map<string, number>();
   /** The in-flight count the test-only `releasePins` respects: aborting a facet mid-REDUCE is exactly the stall a
    *  reduce would have to repair from the log — never cause it. */
   #facetWorkInFlight = 0;
@@ -346,25 +350,36 @@ export class FacetHost {
       try {
         return await this.#call(materialized, name, itxExpressionSteps);
       } catch (error) {
-        if (!isFacetStartPlatformFailure(error) || materialized.startupFailed()) throw error;
+        const retiredByPeer =
+          error instanceof Error &&
+          error.message === "platform failure at facet start — restarting" &&
+          this.#facetGeneration(name) !== materialized.generation;
+        if ((!isFacetStartPlatformFailure(error) && !retiredByPeer) || materialized.startupFailed())
+          throw error;
         // The platform failure (the predicate's doc): restart the facet AND retire its loaded
         // identity (the cached entry is what stays broken), then the call once more, cold. One
         // extra attempt, never a loop — a second failure is the caller's. The retry re-delivers a
         // pushed batch: durables are offset-guarded by the engine, ephemerals are not (a duplicate
         // beats a lost batch; at-least-once is the facet contract). Counted on the facet's row and
         // logged, never swallowed, so the platform condition stays queryable without a log grep.
-        this.#abortFacetIfRunning(name, "platform failure at facet start — restarting");
-        this.#liveFacetNames.delete(name);
-        materialized.retireLoadedIdentity?.();
-        const restarts = this.restarts(name) + 1;
-        this.#deps.ctx.storage.kv.put(`facet:${name}:restarts`, restarts);
-        console.warn({
-          event: "facet.platform-failure-retry",
-          namespace: "iterate-context",
-          name,
-          restarts,
-          message: error.message,
-        });
+        if (this.#facetGeneration(name) === materialized.generation) {
+          this.#abortFacetIfRunning(
+            name,
+            "platform failure at facet start — restarting",
+            materialized.generation,
+          );
+          this.#liveFacetNames.delete(name);
+          materialized.retireLoadedIdentity?.();
+          const restarts = this.restarts(name) + 1;
+          this.#deps.ctx.storage.kv.put(`facet:${name}:restarts`, restarts);
+          console.warn({
+            event: "facet.platform-failure-retry",
+            namespace: "iterate-context",
+            name,
+            restarts,
+            message: error.message,
+          });
+        }
         return await this.#call(
           await this.#materialize(name, firstPartyClassName, facetStartupMemo),
           name,
@@ -463,7 +478,12 @@ export class FacetHost {
       }
     });
     this.#liveFacetNames.add(name); // live from here
-    return { facet, retireLoadedIdentity, startupFailed: () => startupFailed };
+    return {
+      facet,
+      retireLoadedIdentity,
+      startupFailed: () => startupFailed,
+      generation: this.#facetGenerationByName.get(name) ?? 0,
+    };
   }
 
   /** One call on the container under the watchdog: the steps walked receiver-preservingly — a
@@ -473,13 +493,19 @@ export class FacetHost {
    *  or whose startup threw is aborted: its pending call rejects, the counter drains, the next call
    *  re-materializes it. */
   async #call(
-    { facet, startupFailed }: MaterializedFacet,
+    { facet, startupFailed, generation }: MaterializedFacet,
     name: string,
     itxExpressionSteps: ItxExpression,
   ): Promise<unknown> {
-    const call = walkSteps({ value: facet, receiver: undefined }, itxExpressionSteps).then(
-      (walked) => walked.value,
-    );
+    // Every step the walk went PAST (`repos()` in `repos().create(path)`, when one call walks several
+    // steps on the facet — a subscription target's, a handle's own `invoke`) holds a session onto the
+    // facet, and so this actor, until disposed: released once the call settles, below.
+    const rpcSessionsSteppedPast: unknown[] = [];
+    const call = walkSteps(
+      { value: facet, receiver: undefined },
+      itxExpressionSteps,
+      rpcSessionsSteppedPast,
+    ).then((walked) => walked.value);
     let result: unknown;
     try {
       // The label PRINTS the whole pushed batch (JSON5 + key-sort) — built lazily, so a facet
@@ -494,13 +520,19 @@ export class FacetHost {
       );
     } catch (error) {
       if (errorCode(error) === "TIMEOUT") {
-        this.#abortFacetIfRunning(name, "call timed out");
-        this.#liveFacetNames.delete(name);
+        if (this.#facetGeneration(name) === generation) {
+          this.#abortFacetIfRunning(name, "call timed out", generation);
+          this.#liveFacetNames.delete(name);
+        }
       } else if (startupFailed()) {
-        this.#abortFacetIfRunning(name, "startup failed");
-        this.#liveFacetNames.delete(name);
+        if (this.#facetGeneration(name) === generation) {
+          this.#abortFacetIfRunning(name, "startup failed", generation);
+          this.#liveFacetNames.delete(name);
+        }
       }
       throw error;
+    } finally {
+      releaseRpcSessions(rpcSessionsSteppedPast);
     }
     // A Workers-RPC RESULT object carries a disposer that references the FACET until disposed or
     // GC'd — and GC is too late for the release: an aborted facet stayed referenced through every
@@ -572,12 +604,18 @@ export class FacetHost {
   }
 
   /** Abort a facet that is running; one that is not (already released, never started) is nothing. */
-  #abortFacetIfRunning(name: string, reason: string): void {
+  #abortFacetIfRunning(name: string, reason: string, expectedGeneration?: number): void {
+    const generation = this.#facetGeneration(name);
+    if (expectedGeneration !== undefined && expectedGeneration !== generation) return;
     try {
       this.#deps.ctx.facets.abort(name, reason);
+      this.#facetGenerationByName.set(name, generation + 1);
     } catch {
       /* facet not running */
     }
+  }
+  #facetGeneration(name: string): number {
+    return this.#facetGenerationByName.get(name) ?? 0;
   }
 
   /** Delete a facet, storage included (there is no delete verb: a removed hosting row ends here). A
@@ -586,6 +624,7 @@ export class FacetHost {
     if (name === CoreContract.slug)
       throw new Error(`"${name}" is the core reduce — always on, never a facet`);
     this.#deps.ctx.facets.delete(name);
+    this.#facetGenerationByName.set(name, this.#facetGeneration(name) + 1);
     this.#claimFacetAlarm(name, null);
     this.#facetRevived(name);
     this.#deps.ctx.storage.kv.delete(`facet:${name}`);

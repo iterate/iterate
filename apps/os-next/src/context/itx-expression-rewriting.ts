@@ -41,6 +41,7 @@ import {
   callOn,
   InvokeHandle,
   walkSteps,
+  releaseRpcSessions,
   normalizedItxExpression,
   containsItxExpressionHole,
   isItxExpressionHole,
@@ -67,7 +68,7 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
   url: "this project's public URL over HTTP — the apex or an app's, at a path: `url({ app?, path? })`; only from a session that reached the platform on an origin",
   kv: "key-value strings, the project's own: `kv.get(k)` · `kv.put(k, v)` · `kv.list(prefix)` · `kv.delete(k)`",
   secrets:
-    'names only, never values: `secrets.list()`; a `getSecret("/secrets/x")` placeholder in an outbound request is substituted at egress; `secrets.verifyHmac(path, { payload, signature })` checks a webhook\'s HMAC-SHA256 hex signature without revealing the secret',
+    'names only, never values: `secrets.list()`; `secrets.collectFromUser({ path, egress, description? })` returns an authenticated collection link; a `getSecret("/secrets/x")` placeholder in an outbound request is substituted at egress; `secrets.verifyHmac(path, { payload, signature })` checks a webhook\'s HMAC-SHA256 hex signature without revealing the secret',
   ai: "Workers AI, verbatim: `ai.run(model, inputs)`",
   browser: 'browser rendering: `browser.quickAction("markdown", { url })`',
   r2: "the object store, verbatim (`files` is the friendlier surface)",
@@ -747,10 +748,21 @@ export class ItxExpressionResolver {
       const result = await value.invoke(rewritten.slice(3));
       return extraArgs.length > 0 ? await callOn(result, undefined, extraArgs) : result;
     }
-    const { value, receiver } = await walkSteps(
-      { value: this.#builtIns, receiver: undefined },
-      rewritten.slice(2),
-    );
-    return extraArgs.length > 0 ? await callOn(value, receiver, extraArgs) : value;
+    // What the walk steps PAST that holds a Workers-RPC session — the collection stub a facet answered
+    // `repos()` with, walked on for `.list()`; a loaded worker's `make()` walked on for `.ping()` — is
+    // this actor's to release once the answer is in: kept, it held the facet or the worker, and so
+    // this actor, open until the next deploy (a project's root after every `repos.create`,
+    // 2026-09-23). The answer itself is the caller's.
+    const rpcSessionsSteppedPast: unknown[] = [];
+    try {
+      const { value, receiver } = await walkSteps(
+        { value: this.#builtIns, receiver: undefined },
+        rewritten.slice(2),
+        rpcSessionsSteppedPast,
+      );
+      return extraArgs.length > 0 ? await callOn(value, receiver, extraArgs) : await value;
+    } finally {
+      releaseRpcSessions(rpcSessionsSteppedPast);
+    }
   }
 }

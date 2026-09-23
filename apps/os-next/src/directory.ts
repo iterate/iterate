@@ -207,12 +207,27 @@ ORDER BY o.name ASC;`,
      * selected member organization. Without a selection, use the user's first/default organization
      * or the admin organization. Fixed project grants cannot create projects. Repeating a name in
      * its owning organization is idempotent (the row comes back); another organization is refused. */
-    async createProject(reach: Reach, name: string, orgId?: string): Promise<Project> {
+    async createProject(
+      reach: Reach,
+      name: string,
+      orgId?: string,
+      restoreProjectId?: string,
+    ): Promise<Project> {
       if (typeof reach === "object" && "projectIds" in reach)
         throw codedError(
           "FORBIDDEN",
           `this session is ${describeReach(reach)} — creating a project needs a signed-in user or the admin secret`,
         );
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- an empty supplied restore ID must be rejected, never silently mint a different identity
+      if (restoreProjectId !== undefined) {
+        if (reach !== "every")
+          throw codedError(
+            "FORBIDDEN",
+            "preserving a project id during restore requires the admin secret",
+          );
+        if (!/^prj_[a-zA-Z0-9_-]+$/.test(restoreProjectId))
+          throw codedError("INVALID_INPUT", "restored project id is invalid");
+      }
       const slug = projectSlug(name);
       if (!slug) throw new Error("project name is empty or invalid");
       let org: Org | null | undefined;
@@ -237,9 +252,23 @@ FROM orgs o WHERE o.id = ?;`,
       if (existing) {
         if (existing.orgId !== org.id)
           throw codedError("PROJECT_NAME_TAKEN", `project name '${slug}' is already taken`);
+        if (restoreProjectId && existing.id !== restoreProjectId)
+          throw codedError(
+            "IDENTITY_CONFLICT",
+            `project '${slug}' exists with id ${existing.id}, not restored id ${restoreProjectId}`,
+          );
         return existing;
       }
-      const id = `prj_${crypto.randomUUID().replaceAll("-", "")}`;
+      const id = restoreProjectId || `prj_${crypto.randomUUID().replaceAll("-", "")}`;
+      const idOwner = restoreProjectId && (await d1Directory.getProject(restoreProjectId));
+      if (idOwner) {
+        // Another identical restore may have committed since the initial slug lookup.
+        if (idOwner.slug === slug && idOwner.orgId === org.id) return idOwner;
+        throw codedError(
+          "IDENTITY_CONFLICT",
+          `restored project id ${restoreProjectId} already belongs to '${idOwner.slug}'`,
+        );
+      }
       try {
         await db
           .prepare(`INSERT INTO projects (id, slug, org_id) VALUES (?, ?, ?);`)
@@ -247,11 +276,22 @@ FROM orgs o WHERE o.id = ?;`,
           .run();
         return { id, slug, orgId: org.id };
       } catch (error) {
-        // two creates racing on one slug: the unique slug refuses the second, which reads the first
-        if (!/UNIQUE constraint failed: projects\.slug/.test(String(error))) throw error;
+        // A concurrent restore can lose either unique index. Read the slug's winner before
+        // deciding: the exact same archive converges, a different archived identity refuses.
+        if (!/UNIQUE constraint failed: projects\.(?:id|slug)/.test(String(error))) throw error;
         const winner = await d1Directory.getProject(slug);
-        if (!winner || winner.orgId !== org.id)
+        if (!winner) {
+          if (/UNIQUE constraint failed: projects\.id/.test(String(error)))
+            throw codedError("IDENTITY_CONFLICT", `restored project id ${id} is already in use`);
+          throw error;
+        }
+        if (winner.orgId !== org.id)
           throw codedError("PROJECT_NAME_TAKEN", `project name '${slug}' is already taken`);
+        if (restoreProjectId && winner.id !== restoreProjectId)
+          throw codedError(
+            "IDENTITY_CONFLICT",
+            `project '${slug}' was created with id ${winner.id}, not restored id ${restoreProjectId}`,
+          );
         return winner;
       }
     },

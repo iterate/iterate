@@ -31,6 +31,10 @@ on:
       - reopened
       - closed
     paths:
+      # A production-workflow change must exercise this isolated deployment:
+      # production runs deploy's non-mutating readiness probes only.
+      - .depot/workflows/deploy-os-next.yml
+      - .depot/workflows/deploy-notes.yml
       - .depot/workflows/preview-os-next.yml
       - apps/os-next/**
       - configs-next/**
@@ -116,9 +120,8 @@ jobs:
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
           PREVIEW_APPS: ${{ inputs.apps || 'all' }}
         run: doppler run -- pnpm preview "$ACTION"
-      # THE PROOF THAT COUNTS (docs/testing.md): the same e2e suite deploy-os-next.yml runs against
-      # prd after every merge, against this PR's preview — in this job, on this checkout, so the
-      # suite starts the second the preview answers.
+      # THE FULL MUTATING PROOF (docs/testing.md): this isolated preview owns the project-creating
+      # e2e and browser suites. Production deployment runs only its deploy-script readiness probes.
       - name: Run the e2e suite against the preview
         working-directory: apps/os-next
         env:
