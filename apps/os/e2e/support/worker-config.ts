@@ -19,8 +19,8 @@ export const E2E_LOGIN_PASSWORD = "e2e-password";
  *  them with a Host header). */
 export const E2E_INGRESS_ROUTING: IngressRouting = { type: "subdomains", hostname: "localhost" };
 
-/** Vite's local built config patched with absolute paths and test credentials. The directory D1
- *  and OAuth KV remain local. `ingressRouting` chooses subdomains or paths for project requests. */
+/** Vite's local built config patched with absolute paths and test credentials. The control-plane
+ *  Durable Object and OAuth KV remain local. `ingressRouting` chooses subdomains or paths for project requests. */
 export function e2eWorkerConfig(
   platformOrigin = "http://127.0.0.1",
   ingressRouting: IngressRouting = E2E_INGRESS_ROUTING,

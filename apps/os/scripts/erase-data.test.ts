@@ -6,8 +6,6 @@ const fixture = vi.hoisted(() => ({
   branchNamespaces: false,
   retainBindings: false,
   sharedConsumer: false,
-  unknownTable: false,
-  directoryEmpty: false,
   operations: [] as string[],
   stores: new Map<string, string[]>(),
   cf: vi.fn(),
@@ -41,8 +39,6 @@ beforeEach(() => {
   fixture.branchNamespaces = false;
   fixture.retainBindings = false;
   fixture.sharedConsumer = false;
-  fixture.unknownTable = false;
-  fixture.directoryEmpty = false;
   fixture.operations = [];
   fixture.stores = new Map([
     ["oauth", ["old-grant", "old-client"]],
@@ -54,22 +50,12 @@ beforeEach(() => {
     if (route === "/workers/scripts")
       return [{ id: "os-next-preview" }, ...(fixture.sharedConsumer ? [{ id: "old-worker" }] : [])];
     if (route === "/workers/scripts/old-worker/settings")
-      return { bindings: [{ name: "DB", type: "d1", id: "directory" }] };
+      return { bindings: [{ name: "OAUTH_KV", type: "kv_namespace", namespace_id: "oauth" }] };
     if (route.endsWith("/settings"))
-      return { bindings: fixture.retainBindings ? [{ name: "DB", type: "d1" }] : [] };
+      return {
+        bindings: fixture.retainBindings ? [{ name: "OAUTH_KV", type: "kv_namespace" }] : [],
+      };
     const body = init?.body ? JSON.parse(String(init.body)) : {};
-    if (route.includes("/d1/")) {
-      if (body.sql.includes("sqlite_master"))
-        return [{ results: [{ name: fixture.unknownTable ? "legacy_secrets" : "users" }] }];
-      if (body.sql.startsWith("SELECT"))
-        return Array.from(body.sql.matchAll(/SELECT/g), () => ({
-          results: [{ row_count: fixture.directoryEmpty ? 0 : 1 }],
-        }));
-      expect(fixture.parked).toBe(true);
-      fixture.operations.push("clear-directory");
-      fixture.directoryEmpty = true;
-      return [];
-    }
     expect(fixture.parked).toBe(true);
     const store = route.includes("/oauth/")
       ? "oauth"
@@ -95,7 +81,7 @@ beforeEach(() => {
       cloudflareAccountId: "test-account",
       resourceNamePrefix: "os-next-preview",
       artifactsNamespace: "os-next-preview-repos",
-      resources: { directoryDbId: "directory", oauthKvId: "oauth", itxKvId: "itx" },
+      resources: { oauthKvId: "oauth", itxKvId: "itx" },
     },
   });
   vi.stubGlobal(
@@ -146,20 +132,17 @@ test("stops writers first and verifies all data stores empty, including later KV
   await erased;
   expect(fixture.operations).toEqual([
     "retire",
-    "clear-directory",
     "clear-oauth",
     "clear-itx",
     "clear-files",
     "clear-repos",
   ]);
-  expect(fixture.directoryEmpty).toBe(true);
   expect([...fixture.stores.values()].flat()).toEqual([]);
 });
-test("remaining Durable Objects prevent directory and resource deletion", async () => {
+test("remaining Durable Objects prevent resource deletion", async () => {
   fixture.retainNamespace = true;
   await expect(eraseData({ env: "preview" })).rejects.toThrow("namespaces remain");
   expect(fixture.operations).toEqual(["retire"]);
-  expect(fixture.directoryEmpty).toBe(false);
 });
 test("a preview parent with branch namespaces cannot be erased by class name", async () => {
   fixture.branchNamespaces = true;
@@ -169,11 +152,6 @@ test("a preview parent with branch namespaces cannot be erased by class name", a
 test("another worker sharing a data store prevents all mutations", async () => {
   fixture.sharedConsumer = true;
   await expect(eraseData({ env: "preview" })).rejects.toThrow("Other workers still use");
-  expect(fixture.operations).toEqual([]);
-});
-test("unknown legacy tables cannot silently survive a purported complete erase", async () => {
-  fixture.unknownTable = true;
-  await expect(eraseData({ env: "preview" })).rejects.toThrow("legacy_secrets");
   expect(fixture.operations).toEqual([]);
 });
 test("an active worker without Durable Objects cannot keep writing during an erase", async () => {

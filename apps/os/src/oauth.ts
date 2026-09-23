@@ -10,7 +10,10 @@ import { z } from "zod";
 import { OAuthScope, OAuthScopes } from "iterate/next/oauth-scopes";
 import { verifyAdminSecret, type Principal } from "iterate/next/principal";
 import type { Env, Handler } from "./env.ts";
-import { type Reach } from "./directory.ts";
+import type { AccountState, GrantUsed } from "./account/contract.ts";
+import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
+import { DurableObjectNameCodec } from "./iterate-context.ts";
+import { type Reach } from "./control-plane/edge.ts";
 import { appConfigOf, platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
 
 /** Encrypted by the provider. Every grant is created through parseAuthorization,
@@ -81,17 +84,36 @@ export async function parseAuthorization(env: Env, request: Request): Promise<Au
   return { ...auth, scope: scopes.data, resource: resources };
 }
 
-async function grantIsRevoked(env: Env, userId: string, grantId: string): Promise<boolean> {
-  const row = await env.DB.prepare(
-    "SELECT revoked_at FROM oauth_activity WHERE user_id = ? AND grant_id = ?",
-  )
-    .bind(userId, grantId)
-    .first<{ revoked_at: number | null }>();
-  return Boolean(row?.revoked_at);
+/** THE ACCOUNT'S STATE — the person's own record (src/account/contract.ts), read AT HEAD from the
+ *  `account` facet on `/users/<id>` (the facet catches up from its log before answering): whether
+ *  a grant has ended (`endedGrants`, the revocation truth — grants.ts lands the end there and
+ *  awaits it), when each was last used. One hop to the person's own Durable Object. */
+export async function accountStateOf(env: Env, userId: string): Promise<AccountState> {
+  const name = DurableObjectNameCodec.stringify({
+    projectId: GLOBAL_PROJECT_ID,
+    path: `/users/${userId}`,
+  });
+  // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the facet is the
+  // platform's own AccountDurableObject and `snapshot()` the engine's `{ offset, state }`. Dialed
+  // through the namespace as a value (session.ts's `contextNamespace` convention), not a raw
+  // `env.ITERATE_CONTEXT.getByName` — this read is the platform's own, after the token is verified.
+  const contextNamespace = env.ITERATE_CONTEXT;
+  const { state } = (await contextNamespace
+    .getByName(name)
+    .invoke(["itx", "facets", ["get", "account"], ["snapshot"]], [], { principal: null })) as {
+    state: AccountState;
+  };
+  return state;
 }
 
-/** Fresh primary D1 read on each admission. Provider KV expiry/deletion alone
- * cannot deny a token during propagation or a refresh racing with logout. */
+async function grantIsRevoked(env: Env, userId: string, grantId: string): Promise<boolean> {
+  return Boolean((await accountStateOf(env, userId)).endedGrants[grantId]);
+}
+
+/** A fresh read of the account on each admission — never memoized: provider KV expiry/deletion
+ * alone cannot deny a token during propagation or a refresh racing with logout, and a memo here
+ * would let a revoked grant through for its life. (The live socket's 30 s re-check, rpc.ts, is
+ * the one lag anywhere.) */
 export async function authorizationOf(env: Env, props: unknown): Promise<Authorization | null> {
   const parsed = AccessProps.safeParse(props);
   if (!parsed.success) return null;
@@ -107,7 +129,7 @@ export async function authorizationOf(env: Env, props: unknown): Promise<Authori
     return null;
   return {
     principal: { actor: grant.userId, email: grant.email },
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- `reach` is discriminated with `"projectIds" in reach` (session.ts, directory.ts) and TS narrows on that key, so a present-but-undefined key would both misread as a bound grant and break the narrowing; the conditional spread stays (grant.projects is string[] | null)
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- `reach` is discriminated with `"projectIds" in reach` (session.ts, control-plane/edge.ts) and TS narrows on that key, so a present-but-undefined key would both misread as a bound grant and break the narrowing; the conditional spread stays (grant.projects is string[] | null)
     reach: { userId: grant.userId, ...(grant.projects && { projectIds: grant.projects }) },
     // The issuer's own session is the person at the issuer, not a consent: it holds every scope,
     // whatever list it was minted with — a cookie from before a scope existed still creates
@@ -119,14 +141,48 @@ export async function authorizationOf(env: Env, props: unknown): Promise<Authori
   };
 }
 
+/** How often a grant's use is recorded: once an hour per grant per isolate, so the account's log
+ *  stays a summary and the sessions page's "last used" is right to the hour. */
+const GRANT_USE_MEMO_MS = 3600_000;
+const grantUseRecordedAt = new Map<string, number>();
+
+/** A grant's use, as a fact on the person's account (`account/grant-used`, src/account/contract.ts)
+ *  — off the response path (every caller `waitUntil`s it), at most hourly per grant per isolate. */
 export async function recordGrantUse(env: Env, grant: AccessGrant): Promise<void> {
   const now = Date.now();
-  await env.DB.prepare(`INSERT INTO oauth_activity (user_id, grant_id, last_used_at)
-VALUES (?, ?, ?) ON CONFLICT(user_id, grant_id) DO UPDATE
-SET last_used_at = MAX(COALESCE(oauth_activity.last_used_at, 0), excluded.last_used_at)
-WHERE oauth_activity.last_used_at IS NULL OR oauth_activity.last_used_at < ?`)
-    .bind(grant.userId, grant.grantId, now, now - 60_000)
-    .run();
+  const key = `${grant.userId}:${grant.grantId}`;
+  if ((grantUseRecordedAt.get(key) ?? 0) > now - GRANT_USE_MEMO_MS) return;
+  grantUseRecordedAt.set(key, now);
+  const name = DurableObjectNameCodec.stringify({
+    projectId: GLOBAL_PROJECT_ID,
+    path: `/users/${grant.userId}`,
+  });
+  const caller = {
+    principal: { actor: grant.userId, email: grant.email },
+    grant: grant.grantId,
+  };
+  const contextNamespace = env.ITERATE_CONTEXT;
+  const context = contextNamespace.getByName(name);
+  try {
+    await context.invoke(["itx", "processors", ["enable", "account"]], [], caller);
+    await context.invoke(
+      [
+        "itx",
+        [
+          "append",
+          {
+            type: "events.iterate.com/account/grant-used",
+            payload: { grantId: grant.grantId, at: now } satisfies GrantUsed,
+          },
+        ],
+      ],
+      [],
+      caller,
+    );
+  } catch (error) {
+    grantUseRecordedAt.delete(key); // the next use tries again
+    console.error("oauth.grant_use_not_recorded", { grantId: grant.grantId, error });
+  }
 }
 
 /** One provider configuration owns issuance and both resource protocols. No global
@@ -226,18 +282,14 @@ export async function authorizationForToken(
   return authorization as Authorization | null; // Assigned inside the awaited handler; TS cannot track that closure assignment.
 }
 
-/** The caller must already own this grant: a checked provider inventory row or
- * the authenticated request's grant. The D1 marker precedes KV cleanup. */
+/** The provider's rows for a grant go — AFTER its end landed on the person's account and was
+ * awaited (grants.ts): from that fact on every admission is refused (`grantIsRevoked`), so a
+ * provider cleanup that fails costs nothing but a row the provider's own expiry reaps. */
 export async function revokeGrant(
   env: Env,
   addresses: PlatformAddresses,
   grant: { userId: string; grantId: string },
-) {
-  await env.DB.prepare(`INSERT INTO oauth_activity (user_id, grant_id, revoked_at, cleanup_pending)
-VALUES (?, ?, ?, 1) ON CONFLICT(user_id, grant_id) DO UPDATE
-SET revoked_at = COALESCE(oauth_activity.revoked_at, excluded.revoked_at), cleanup_pending = 1`)
-    .bind(grant.userId, grant.grantId, Date.now())
-    .run();
+): Promise<void> {
   try {
     await oauthHelpers(env, addresses).revokeGrant(grant.grantId, grant.userId);
   } catch (error) {
@@ -246,28 +298,7 @@ SET revoked_at = COALESCE(oauth_activity.revoked_at, excluded.revoked_at), clean
       grantId: grant.grantId,
       error,
     });
-    return { cleanupPending: true };
   }
-  await env.DB.prepare(
-    "UPDATE oauth_activity SET cleanup_pending = 0 WHERE user_id = ? AND grant_id = ?",
-  )
-    .bind(grant.userId, grant.grantId)
-    .run();
-  return { cleanupPending: false };
 }
 
 const notFound: Handler = { fetch: () => new Response("Not found", { status: 404 }) };
-
-/** Completed revocation markers are kept a day past the thirty days an interactive grant can
- * last; a personal token may live years (grants.ts `mint`), but revoking one deletes its provider
- * rows outright, so the marker is not what denies it. Failed cleanup stays visible. Each hourly
- * cron does at most one thousand deletes. */
-export async function cleanGrantActivity(env: Env) {
-  const cutoff = Date.now() - 31 * 24 * 3600_000;
-  const result = await env.DB.prepare(`DELETE FROM oauth_activity WHERE rowid IN (
-SELECT rowid FROM oauth_activity WHERE cleanup_pending = 0
-AND COALESCE(last_used_at, 0) < ? AND COALESCE(revoked_at, 0) < ? LIMIT 1000)`)
-    .bind(cutoff, cutoff)
-    .run();
-  console.info("oauth.activity_cleanup", { deleted: result.meta.changes });
-}

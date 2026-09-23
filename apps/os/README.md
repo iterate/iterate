@@ -63,7 +63,7 @@ Agents, Notes, Voice); its separate `e2e` job then runs integration and browser 
 them, only once that deploy succeeded. To run it from a checkout:
 
 A platform preview is named `pr<n>-<branch slug>` under the `os-next-preview` parent Worker. It
-has its own Durable Objects, KV, R2, D1, and Artifacts namespace. Closing the PR deletes the
+has its own Durable Objects, KV, R2, and Artifacts namespace. Closing the PR deletes the
 preview and its resources. The nightly sweep also removes stale previews and orphaned resources;
 see `scripts/preview-sweep.ts` for the rules. Previews use workers.dev and have no project hosts.
 

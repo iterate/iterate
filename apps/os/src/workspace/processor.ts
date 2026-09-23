@@ -81,7 +81,6 @@ export class WorkspaceProcessor extends StreamProcessor<
     state,
     delivery,
     append,
-    appendTo,
     runInBackground,
   }: ProcessEventArgs<
     WorkspaceState,
@@ -118,7 +117,7 @@ export class WorkspaceProcessor extends StreamProcessor<
             payload: { path },
             idempotencyKey: `workspace/created:${path}`,
           };
-          await appendTo("/", certificate); // the project catalog first
+          await this.withItx((itx) => itx.cd("/").append(certificate)); // the project catalog first
           await append(certificate); // this path last: closes the obligation
         } catch (error) {
           await append({
@@ -149,7 +148,7 @@ export class WorkspaceProcessor extends StreamProcessor<
             payload: { path },
             idempotencyKey: `workspace/deleted:${path}`,
           };
-          await appendTo("/", certificate); // the project catalog first
+          await this.withItx((itx) => itx.cd("/").append(certificate)); // the project catalog first
           await append(certificate); // this path last: closes the obligation
         } finally {
           this.#deleting = false;

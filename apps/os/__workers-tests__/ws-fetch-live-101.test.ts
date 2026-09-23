@@ -33,8 +33,8 @@
 
 import { SELF } from "cloudflare:test";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
-import { beforeAll, expect, test } from "vitest";
-import { adminCredentials, applyDirectorySchema, openSession } from "./support.ts";
+import { expect, test } from "vitest";
+import { adminCredentials, openSession } from "./support.ts";
 
 /** The live provider: a fetch-shaped value that CAN fabricate a 101 (we are in workerd).
  *  Plain requests get a 200 page; upgrade requests get a WebSocketPair whose server side echoes
@@ -55,11 +55,9 @@ class LiveSite extends RpcTarget {
   }
 }
 
-beforeAll(applyDirectorySchema);
-
 /** The project `project`, created in the directory (a host is admitted by one directory read) —
  *  its root context on the admin session. */
-async function createProject(project: string): Promise<any> {
+async function createProject(project: string) {
   return (await openSession()).authenticate(adminCredentials()).projects.create({ project });
 }
 

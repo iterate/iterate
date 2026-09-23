@@ -100,9 +100,10 @@ export type PreviewResourceKind = "kv" | "r2" | "d1" | "artifacts";
 
 /** The suffix of every resource a preview owns (`previewResourceName(preview, suffix)`), by kind:
  *  the KV namespaces and the R2 bucket wrangler provisions for the template's bindings — the binding
- *  lowercased, `_` → `-` (workers-sdk `getPreviewResourceName`: `ITX_KV` → `…-itx-kv`) — and the D1
- *  and the Artifacts namespace scripts/preview.ts creates. What deletePreview deletes and the sweep
- *  recognizes. */
+ *  lowercased, `_` → `-` (workers-sdk `getPreviewResourceName`: `ITX_KV` → `…-itx-kv`) — and the
+ *  Artifacts namespace scripts/preview.ts creates. The `db` D1 is no longer created (the control plane
+ *  is a Durable Object now, not D1); its suffix stays so the sweep still recognizes and deletes the
+ *  D1s earlier previews left behind. What deletePreview deletes and the sweep recognizes. */
 export function previewResourceSuffixes(
   template = readWranglerTemplate(),
 ): Record<PreviewResourceKind, string[]> {
@@ -201,21 +202,20 @@ export function renderPullRequestSection(input: {
 const bindingOnly = (resources: { binding: string }[] | undefined) =>
   (resources || []).map(({ binding }) => ({ binding }));
 
-/** The config `wrangler preview` reads, as a pure function of Vite's built Worker config,
- *  the preview's name and its D1 — the shape of cloudflare-os's `buildPreviewConfigs`, unit-tested
+/** The config `wrangler preview` reads, as a pure function of Vite's built Worker config and
+ *  the preview's name — the shape of cloudflare-os's `buildPreviewConfigs`, unit-tested
  *  in preview.test.ts. The top level names the parent (which worker, which account, the entry, the
  *  assets) and declares the Durable Object classes as a legacy `migrations` entry: the pkg.pr.new
  *  wrangler build that provisions per-preview KV and R2 predates `exports`, and a preview
  *  deployment provisions its own namespaces from that entry. The `previews` block is the ONE
  *  preview's bindings — a preview inherits nothing from the top level, so every binding the worker
- *  reads is here: KV and R2 binding-only (auto-provisioned), the D1 scripts/preview.ts created, the
+ *  reads is here: KV and R2 binding-only (auto-provisioned) and the
  *  Artifacts namespace by name. Its `urls` name the preview's own origin, projects as paths,
  *  and its Dash when deployed; the secrets (`APP_CONFIG`, `APP_CONFIG_SECRETS__KEY`) are the parent's Previews
  *  settings, inherited. */
 export function previewWranglerConfig(input: {
   template: Record<string, any>;
   previewName: string;
-  d1DatabaseId: string;
   dashOrigin?: string;
 }) {
   const { template: base, previewName } = input;
@@ -250,11 +250,6 @@ export function previewWranglerConfig(input: {
       version_metadata: base.version_metadata,
       kv_namespaces: bindingOnly(base.kv_namespaces),
       r2_buckets: bindingOnly(base.r2_buckets),
-      d1_databases: base.d1_databases.map(({ binding }: { binding: string }) => ({
-        binding,
-        database_name: previewResourceName(previewName, "db"),
-        database_id: input.d1DatabaseId,
-      })),
       artifacts: base.artifacts.map(({ binding }: { binding: string }) => ({
         binding,
         namespace: previewResourceName(previewName, "repos"),
@@ -269,11 +264,7 @@ export function previewWranglerConfig(input: {
 }
 
 /** Write a preview config beside Vite's built config and return its path. */
-export function writePreviewWranglerConfig(input: {
-  previewName: string;
-  d1DatabaseId: string;
-  dashOrigin?: string;
-}) {
+export function writePreviewWranglerConfig(input: { previewName: string; dashOrigin?: string }) {
   const configUrl = new URL(`../${PREVIEW_CONFIG_NAME}`, import.meta.url);
   const built = JSON.parse(
     readFileSync(new URL("../dist/server/wrangler.json", import.meta.url), "utf8"),

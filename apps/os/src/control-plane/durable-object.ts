@@ -1,0 +1,85 @@
+// src/control-plane/durable-object.ts — THE CONTROL PLANE: the `CONTROL_PLANE` singleton Durable
+// Object (getByName("global")), plain methods over its database (catalog.ts, a normal DO with SQLite,
+// not D1). A read is a query; a write is the database's synchronous block wrapped in one transaction,
+// so a refusal partway leaves nothing. Reached by BINDING, not hosted as a facet of any context (so
+// nothing else can host it): control-plane/edge.ts is the worker's typed client. It touches no other
+// context — the session (session.ts) appends a project's saga request and an entity's activity to
+// its own stream after the write; the database is only the index.
+import { DurableObject } from "cloudflare:workers";
+import type { OrganizationRole } from "../organization/contract.ts";
+import { type Caller, ControlPlaneDatabase } from "./catalog.ts";
+import type { IdentityProvider } from "./contract.ts";
+
+export class ControlPlaneDurableObject extends DurableObject {
+  readonly #db = new ControlPlaneDatabase(this.ctx.storage.sql);
+
+  /** A write — the database's synchronous check-and-insert — in one transaction: it stands whole or
+   *  a refusal leaves nothing. */
+  #write<T>(write: () => T): T {
+    return this.ctx.storage.transactionSync(write);
+  }
+
+  // ── the reads ──
+
+  user(ref: string) {
+    return this.#db.user(ref);
+  }
+  users() {
+    return this.#db.users();
+  }
+  identity(provider: IdentityProvider, subject: string) {
+    return this.#db.identity(provider, subject);
+  }
+  organization(organizationId: string) {
+    return this.#db.organization(organizationId);
+  }
+  organizations() {
+    return this.#db.organizations();
+  }
+  members(organizationId: string) {
+    return this.#db.members(organizationId);
+  }
+  project(ref: string) {
+    return this.#db.project(ref);
+  }
+  projects() {
+    return this.#db.projects();
+  }
+  accessibleTo(userId: string) {
+    return this.#db.accessibleTo(userId);
+  }
+
+  // ── the writes ──
+
+  createUser(caller: Caller, input: { email: string; id?: string }) {
+    return this.#write(() => this.#db.createUser(caller, input));
+  }
+  linkIdentity(input: { provider: IdentityProvider; subject: string; email: string }) {
+    return this.#write(() => this.#db.linkIdentity(input));
+  }
+  createOrganization(caller: Caller, input: { name: string; id?: string; ownerId?: string }) {
+    return this.#write(() => this.#db.createOrganization(caller, input));
+  }
+  renameOrganization(caller: Caller, organizationId: string, name: string) {
+    return this.#write(() => this.#db.renameOrganization(caller, organizationId, name));
+  }
+  deleteOrganization(caller: Caller, organizationId: string) {
+    return this.#write(() => this.#db.deleteOrganization(caller, organizationId));
+  }
+  addMember(
+    caller: Caller,
+    organizationId: string,
+    input: { userId: string; role: OrganizationRole },
+  ) {
+    return this.#write(() => this.#db.addMember(caller, organizationId, input));
+  }
+  removeMember(caller: Caller, organizationId: string, input: { userId: string }) {
+    return this.#write(() => this.#db.removeMember(caller, organizationId, input));
+  }
+  createProject(
+    caller: Caller,
+    input: { project: string; organizationId?: string; restoreProjectId?: string },
+  ) {
+    return this.#write(() => this.#db.createProject(caller, input));
+  }
+}

@@ -324,12 +324,13 @@ describe("public protocol origins", () => {
     APP_CONFIG_URLS__OS: "https://os.iterate.com",
     APP_CONFIG_URLS__MCP: "https://mcp.iterate.com",
   };
-  /** The two bindings the edge touches before it answers a public door: the directory D1, whose
-   *  schema the worker applies at boot (a no-op here — these rows never reach the directory), and
+  /** The bindings the edge touches before it answers a public route: the registry namespace the
+   *  control plane's edge is built over (`ControlPlane`, src/control-plane/edge.ts — the singleton's
+   *  stub is taken, never dialled: these rows never reach the catalog), the context namespace, and
    *  the assets binding the issuer's pages come from (one placeholder page). */
   const bindings = {
-    // the boot-time schema (directory.ts): one batch of prepared statements, none of which matter here
-    DB: { prepare: () => ({}), batch: async () => [] },
+    CONTROL_PLANE: { getByName: () => ({}) },
+    ITERATE_CONTEXT: { getByName: () => ({}) },
     ASSETS: { fetch: async () => new Response("<!doctype html>the page") },
   };
   const request = (url: string, env: Record<string, unknown> = origins) =>

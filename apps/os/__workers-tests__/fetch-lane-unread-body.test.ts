@@ -5,10 +5,8 @@
 // these rows pin what the pipe must preserve; the error itself is proven on a deployed worker.
 
 import { SELF } from "cloudflare:test";
-import { beforeAll, expect, test } from "vitest";
-import { adminCredentials, applyDirectorySchema, openSession, SRC_ECHO_APP } from "./support.ts";
-
-beforeAll(applyDirectorySchema);
+import { expect, test } from "vitest";
+import { adminCredentials, openSession, SRC_ECHO_APP } from "./support.ts";
 
 const SRC_BODY_ECHO_APP = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";

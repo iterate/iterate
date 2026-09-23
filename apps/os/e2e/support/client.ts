@@ -130,7 +130,7 @@ export function rawSession(prepare?: (ws: WebSocket) => void): { session: any; w
 }
 
 /** THE default door: a fresh session's itx for a project ctx (its root context), authenticated with
- *  the admin secret — any project, no directory row needed (src/session.ts); it is the only door —
+ *  the admin secret — any project, no catalog row needed (src/session.ts); it is the only way in —
  *  there is no bare one. */
 export function openItx(ctx: string): any {
   return session().authenticate(adminCredentials()).projects.get(ctx);

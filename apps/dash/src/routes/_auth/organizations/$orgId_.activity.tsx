@@ -1,32 +1,32 @@
 // /organizations/<organization>/activity — the organization's record: created, renamed, the
 // projects created in it — the context view over `session.organizations.get(orgId)`'s log, with
-// the organization fold enabled on first visit. Reached from the organization's page. A sibling
-// of the settings route, not its child (the `_` in the file name): the settings page renders no outlet.
+// the organization fold enabled on first visit. Reached from the organization's page; the name is
+// the tree's (components/organization-tree.tsx), and an organization the tree does not hold is not
+// found. A sibling of the settings route, not its child (the `_` in the file name): the settings
+// page renders no outlet.
 import { useEffect, useState } from "react";
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { ContextViewState } from "@iterate-com/ui/components/context-view/context-view-search";
 import { ContextActivity, type ActivityItx } from "../../../components/context-activity.tsx";
+import { useOrganizationTreeEntry } from "../../../components/organization-tree.tsx";
 
 export const Route = createFileRoute("/_auth/organizations/$orgId_/activity")({
   // the view's every choice — mode, filter, the inspected event, the open sheet — is this URL
   validateSearch: ContextViewState,
-  beforeLoad: async ({ context, params }) => {
-    const org = (await context.api.orgs()).find((candidate) => candidate.id === params.orgId);
-    if (!org) throw notFound();
-    return { org };
-  },
   component: OrganizationActivity,
 });
 
 function OrganizationActivity() {
-  const { api, org } = Route.useRouteContext();
+  const { api } = Route.useRouteContext();
+  const { orgId } = Route.useParams();
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
+  const { org, missing } = useOrganizationTreeEntry(orgId);
   const [context, setContext] = useState<ActivityItx>();
   useEffect(() => {
     let disposed = false;
     let held: (ActivityItx & Partial<Disposable>) | undefined;
-    api.organizations.get(org.id).then(
+    api.organizations.get(orgId).then(
       (stub) => {
         // the org's context stub has the itx surface the activity view reads (log, tables, invoke)
         held = stub as unknown as ActivityItx & Partial<Disposable>;
@@ -41,13 +41,14 @@ function OrganizationActivity() {
       held?.[Symbol.dispose]?.();
       setContext(undefined);
     };
-  }, [api, org.id]);
+  }, [api, orgId]);
+  if (missing) throw notFound();
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 p-4 md:p-8">
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">
-          <Link to="/organizations/$orgId" params={{ orgId: org.id }} className="hover:underline">
-            {org.name}
+          <Link to="/organizations/$orgId" params={{ orgId }} className="hover:underline">
+            {org?.name || orgId}
           </Link>{" "}
           <span className="text-muted-foreground">· Activity</span>
         </h1>
@@ -61,7 +62,7 @@ function OrganizationActivity() {
           void navigate({ search: (previous) => ({ ...previous, ...patch }), replace: true })
         }
         itx={context}
-        title={<span className="font-mono text-xs">/organizations/{org.id}</span>}
+        title={<span className="font-mono text-xs">/organizations/{orgId}</span>}
         ensureProcessor="organization"
       />
     </div>

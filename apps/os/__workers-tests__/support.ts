@@ -1,14 +1,14 @@
 // __workers-tests__/support.ts — what every file in the workers lane (the vitest project that runs
-// INSIDE workerd, next to the worker) shares: the context DO stub by ctx name, a capnweb session
-// over SELF's /api (disposed at teardown — importing this module registers the afterAll), a live
-// value to lend (`Echo`, tagged per instance), the directory schema into this lane's empty D1, the
-// production pins' release on demand, the alarm a context owes, and the one poll-until.
+// INSIDE workerd, next to the worker) shares: the context DO stub by ctx name, the CONTROL_PLANE
+// registry stub, a capnweb session over SELF's /api (disposed at teardown — importing this module
+// registers the afterAll), a live value to lend (`Echo`, tagged per instance), the production pins'
+// release on demand, the alarm a context owes, and the one poll-until.
 import { runInDurableObject, SELF } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { afterAll } from "vitest";
-import definitionsSql from "../src/control-plane.sql?raw";
 import { RESIDENCY_WATCHDOG_WINDOW_MS } from "../src/context/residency-watchdog.ts";
+import type { ControlPlaneDurableObject } from "../src/control-plane/durable-object.ts";
 import { DurableObjectNameCodec } from "../src/iterate-context.ts";
 import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 
@@ -34,18 +34,13 @@ export class Echo extends RpcTarget {
   }
 }
 
-/** THE DIRECTORY SCHEMA (src/control-plane.sql) into this lane's D1 — fresh and empty per file — the
- *  same split-and-batch the e2e global-setup does; a file whose sessions create or list projects
- *  runs it in `beforeAll`. Idempotent (IF NOT EXISTS). */
-export async function applyDirectorySchema(): Promise<void> {
-  const db = (env as unknown as { DB: D1Database }).DB;
-  const statements = definitionsSql
-    .replace(/--.*$/gm, "")
-    .split(";")
-    .map((statement) => statement.replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-  await db.batch(statements.map((statement) => db.prepare(statement)));
-}
+/** THE REGISTRY, the `CONTROL_PLANE` singleton DO (src/control-plane/durable-object.ts): the raw
+ *  Workers-RPC stub, so a test calls its methods directly (`controlPlaneStub().project(ref)`) with no
+ *  edge or session between. Fresh per test. */
+export const controlPlaneStub = () =>
+  (
+    env as unknown as { CONTROL_PLANE: DurableObjectNamespace<ControlPlaneDurableObject> }
+  ).CONTROL_PLANE.getByName("global");
 
 /** This lane's admin bearer (wrangler.test.jsonc `APP_CONFIG_SECRETS__ADMIN_BEARER`). */
 const adminApiSecret = (): string =>
@@ -81,6 +76,11 @@ const sessions: unknown[] = [];
 /** Open a capnweb session to the worker over a BARE WebSocket upgrade on SELF.fetch (`/api` with no
  *  credential: the socket authenticates in-band) — newWebSocketRpcSession accepts the existing
  *  (accepted) socket per its typings. */
+// The RETURN is deliberately `any`: this is the shared LENDING door — callers reach through it to
+// `.provide(key, new Echo(i))`, `.provide("itx.apps.x", new LiveSite())` and other live RpcTargets,
+// which capnweb's typed `provide` param (`ClientRpcStub`, a `dup()`-bearing shape) rejects for a raw
+// RpcTarget instance. A READ caller that wants the real surface names it locally
+// (`const root: RpcStub<IterateRpcTarget> = await openSession()`), the way userSession does.
 export async function openSession(): Promise<any> {
   const res = await SELF.fetch(`https://control.test/api`, {
     headers: { Upgrade: "websocket" },

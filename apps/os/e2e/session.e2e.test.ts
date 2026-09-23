@@ -162,10 +162,12 @@ test("revoking a grant closes its live public socket and held capability within 
   }
 }, 75_000);
 
-test("projects.create({ project }) is a saga on /: the directory row, the `project` processor row, `project/create-requested` under the caller, then the processor seeds /repos/config, publishes it and lands `project/created` — the catalog and the apex say so; the same slug again appends nothing new", async () => {
+test("projects.create({ project }) writes the catalog row on global:/ and opens a saga on /: the `project` processor row, `project/create-requested` under the caller, then the processor seeds /repos/config, publishes it and lands `project/created` — the catalog and the apex say so; the same slug again is the same project and one more request, a harmless fact after the certificate", async () => {
   const slug = freshDnsSafeProjectSlug("create-saga");
   const api = session().authenticate(adminCredentials());
-  // returns AT ONCE — the request is on the log, the certificate is the processor's to land
+  // returns once the control plane holds the slug (its catalog on `global:/`, which a client
+  // cannot read) and the project's own saga is open on / under the caller; the certificate is that
+  // processor's to land
   using itx = await api.projects.create({ project: slug });
   const { projectId, projectSlug } = await itx.whoami();
   expect(projectSlug).toBe(slug);
@@ -181,8 +183,11 @@ test("projects.create({ project }) is a saga on /: the directory row, the `proje
     "events.iterate.com/project/ingress-configured",
     "events.iterate.com/project/created",
   ]);
-  expect(requested.payload).toEqual({ slug, orgId: expect.any(String) }); // the directory row's facts
-  expect(requested.source?.principal).toEqual({ actor: "admin" }); // the caller's, not the platform's
+  // the request's facts, as the edge spelled them: the slug, and the organization it landed in —
+  // the deployment's own for the admin secret
+  expect(requested.payload).toEqual({ slug, orgId: "org_admin" });
+  // appended by the edge UNDER THE ASKER (the request's own stamp), not the platform's
+  expect(requested.source?.principal).toEqual({ actor: "admin" });
   expect(created.payload).toEqual({}); // existence only
   expect(await processorNames(itx)).toContain("project");
   // the seed: the config repo in the catalog (its certificate crossed to /), its two files on main
@@ -199,17 +204,26 @@ test("projects.create({ project }) is a saga on /: the directory row, the `proje
   expect(await itx.facets.get("project").liveSnapshot()).toMatchObject({
     state: { creation: { status: "created", offset: created.offset } },
   });
-  // the same slug again: the directory row is the same project, the processor row is already
-  // there (idempotent at the door), the request is keyed — nothing new lands on / (the wake record
-  // and the alarm trace are the platform's own, not the create's, so they are left out)
+  // the same slug again: the catalog answers the SAME project (the same organization's same
+  // slug), and every answer owes / a request — after the certificate a harmless fact the saga
+  // ignores (after a failure it would be a new attempt), so exactly one event lands and the
+  // creation stays the one that landed (the wake record and the alarm trace are the platform's
+  // own, not the create's, so they are left out)
   const rows = async () =>
     (await readAll(itx))
       .filter((e) => !/\/stream\/(woken|trace\/)/.test(e.type))
-      .map((e) => `${e.offset} ${e.type}`);
+      .map((e) => ({ offset: e.offset, type: e.type }));
   const before = await rows();
   using again = await api.projects.create({ project: slug });
   expect((await again.whoami()).projectId).toBe(projectId);
-  expect(await rows()).toEqual(before);
+  const after = await rows();
+  expect(after.slice(0, before.length)).toEqual(before);
+  expect(after.slice(before.length).map((row) => row.type)).toEqual([
+    "events.iterate.com/project/create-requested",
+  ]);
+  expect(await itx.facets.get("project").liveSnapshot()).toMatchObject({
+    state: { creation: { status: "created", offset: created.offset } },
+  });
 });
 
 test("the built-in cd carries the OAuth principal to a sibling context", async () => {
@@ -349,9 +363,9 @@ test("a personal access token — one OAuth grant the account mints — is the u
   // … and ends it: the same bearer is refused on /api, /mcp and the project host at once
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- One bounded revocation on the account session.
   using ender = newHttpBatchRpcSession<IterateRpcTarget>(accountRequest());
-  expect(await ender.authenticate({ type: "from-server-cookie" }).grants.end(grant!.id)).toEqual({
-    cleanupPending: false,
-  });
+  // `grants.end` answers once `account/grant-ended` has landed on the person's account — nothing to
+  // clean up later, so nothing to return
+  await ender.authenticate({ type: "from-server-cookie" }).grants.end(grant!.id);
   const endedApi = await fetch(workerUrl("/api"), { method: "POST", headers: bearer });
   expect(endedApi.status).toBe(401);
   await endedApi.body?.cancel();

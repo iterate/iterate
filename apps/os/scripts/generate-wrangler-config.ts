@@ -58,7 +58,6 @@ export function wranglerConfig() {
     limits: _limits,
     r2_buckets: _r2,
     artifacts: _artifacts,
-    d1_databases: _d1,
     kv_namespaces: _kv,
     vars: _vars,
     ...bindings
@@ -87,7 +86,6 @@ export function wranglerConfig() {
           account_id: env.cloudflareAccountId,
           workers_dev: true,
           observability: OBSERVABILITY,
-          triggers: { crons: ["17 * * * *"] },
           routes: [
             {
               pattern: `${new URL(env.baseUrl).hostname}/*`,
@@ -130,13 +128,6 @@ export function wranglerConfig() {
           ...bindings,
           artifacts: [{ binding: "ARTIFACTS", namespace: env.artifactsNamespace }],
           r2_buckets: [{ binding: "FILES", bucket_name: `${env.resourceNamePrefix}-files` }],
-          d1_databases: [
-            {
-              binding: "DB",
-              database_name: `${env.resourceNamePrefix}-directory`,
-              database_id: env.resources.directoryDbId,
-            },
-          ],
           kv_namespaces: [
             { binding: "OAUTH_KV", id: env.resources.oauthKvId },
             { binding: "ITX_KV", id: env.resources.itxKvId },
@@ -177,12 +168,12 @@ export function viteWranglerConfig(name?: string, localDev = false) {
 
 /** THE SELF-HOST CONFIG (SELF-HOSTING.md): the same worker, the same bindings, for a deployment into
  *  an account that is not ours — no account id, no routes, no resource ids (wrangler provisions the
- *  D1, KV and R2 by name on the first deploy), projects as paths on the one workers.dev origin, the
+ *  KV and R2 by name on the first deploy), projects as paths on the one workers.dev origin, the
  *  dash ours. `urls.os` stays unset: the worker takes each request's own origin. Every secret is in
  *  the `APP_CONFIG` blob (login.password) and `APP_CONFIG_SECRETS__KEY`, put at deploy time. */
 export function selfHostWranglerConfig() {
   const base = template();
-  const { routes: _routes, d1_databases, kv_namespaces, r2_buckets, ...rest } = base;
+  const { routes: _routes, kv_namespaces, r2_buckets, ...rest } = base;
   const config = {
     ...rest,
     name: "iterate",
@@ -191,10 +182,6 @@ export function selfHostWranglerConfig() {
     r2_buckets: r2_buckets.map(({ binding }: { binding: string }) => ({
       binding,
       bucket_name: "iterate-files",
-    })),
-    d1_databases: d1_databases.map(({ binding }: { binding: string }) => ({
-      binding,
-      database_name: "iterate-directory",
     })),
     kv_namespaces: kv_namespaces.map(({ binding }: { binding: string }) => ({ binding })),
     vars: {

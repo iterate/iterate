@@ -5,7 +5,7 @@ import { cookieValueOf, signClaims, verifyClaims } from "iterate/next/principal"
 import type { Env } from "./env.ts";
 import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-config.ts";
 import { startIssuerSession } from "./issuer-session.ts";
-import { directory } from "./directory.ts";
+import { ControlPlane } from "./control-plane/edge.ts";
 
 const providers = {
   google: {
@@ -127,8 +127,9 @@ export async function identityResponse(request: Request, env: Env) {
         status: 403,
         headers,
       });
-    // Resolve the provider and stable subject together; email changes cannot change the actor.
-    const user = await directory(env.DB).upsertIdentityUser(
+    // The provider and its stable subject together name the person (the control plane's rule: link
+    // once by verified email, then by the subject); an email change cannot change the actor.
+    const user = await new ControlPlane(env.CONTROL_PLANE).linkIdentity(
       provider,
       identity.data.sub,
       identity.data.email,

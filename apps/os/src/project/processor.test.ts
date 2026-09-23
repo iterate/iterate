@@ -180,7 +180,6 @@ describe("ProjectProcessor — the apex follows the config repo", () => {
       previousState: state,
       delivery: { caughtUp: true },
       append: append as never,
-      appendTo: (async () => []) as never,
       blockProcessorWhile: () => {},
       runInBackground: (work) => void work(),
     });

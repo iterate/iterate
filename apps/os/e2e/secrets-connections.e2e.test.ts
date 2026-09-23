@@ -219,8 +219,8 @@ test("oauth-refresh-token, end to end against the petshop: discovery, consent, t
 // and the secret's Durable Object exchanges the code. From then on it is the ordinary
 // `oauth-refresh-token` secret the story above proves. No code outside that object ever held a token
 // — not even the test.
-test("beginOAuth, confidential client, in a directory-registered project: authorize URL out, the code back at the platform's callback (a project member only), the exchange inside the secret's Durable Object; then a call, expiry and refresh", async () => {
-  // a REAL project: a directory row (the console lists it), not an ad-hoc context
+test("beginOAuth, confidential client, in a catalogued project: authorize URL out, the code back at the platform's callback (a project member only), the exchange inside the secret's Durable Object; then a call, expiry and refresh", async () => {
+  // a REAL project: a row in the control plane's catalog (the console lists it), not an ad-hoc context
   const itx = openItx(await registerProject(freshDnsSafeProjectSlug("secrets-connect")));
   const petshop = petshopBaseUrl();
   const { authorization_endpoint: authorizationEndpoint, token_endpoint: tokenEndpoint } =

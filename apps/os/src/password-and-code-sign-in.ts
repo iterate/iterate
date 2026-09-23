@@ -15,7 +15,8 @@ import { codedError } from "iterate/next/lib";
 import { cookieValueOf } from "iterate/next/principal";
 import type { Env } from "./env.ts";
 import { appConfigOf } from "./app-config.ts";
-import { directory, type User } from "./directory.ts";
+import type { UserRecord } from "./control-plane/catalog.ts";
+import { ControlPlane } from "./control-plane/edge.ts";
 
 const cookieName = "__Host-itx-login";
 const cookieAttributes = "HttpOnly; Secure; SameSite=Lax; Path=/";
@@ -53,7 +54,7 @@ async function secretsEqual(candidate: string, secret: string): Promise<boolean>
   return difference === 0;
 }
 
-/** The address as the directory knows it: trimmed, lowercased, and an email at all. */
+/** The address as the control plane keys it: trimmed, lowercased, and an email at all. */
 function addressOf(email: string): string {
   const address = email.trim().toLowerCase();
   if (!z.email().safeParse(address).success) throw codedError("INVALID_INPUT", "Enter an email.");
@@ -87,7 +88,7 @@ export async function signInWithPassword(
   email: string,
   password: string,
   client: string | null = null,
-): Promise<{ user: User } | { error: string }> {
+): Promise<{ user: UserRecord } | { error: string }> {
   const secret = appConfigOf(env).login.password.exposeSecret();
   if (!secret) throw codedError("UNAUTHENTICATED", "Password sign-in is not offered here.");
   const address = addressOf(email);
@@ -101,7 +102,7 @@ export async function signInWithPassword(
     await charge(env, keys, counts);
     return { error: "That password is not right." };
   }
-  return { user: await directory(env.DB).upsertUser(address) };
+  return { user: await new ControlPlane(env.CONTROL_PLANE).ensureUser(address) };
 }
 
 // ── the mailed code ──
@@ -195,7 +196,7 @@ export async function finishLoginCode(
   env: Env,
   request: Request,
   code: string,
-): Promise<{ user: User } | { error: string; restart?: true }> {
+): Promise<{ user: UserRecord } | { error: string; restart?: true }> {
   const found = await challengeOf(env, request);
   if (!found) return { error: "That code has expired. Enter your email again.", restart: true };
   const { id, challenge } = found;
@@ -211,7 +212,7 @@ export async function finishLoginCode(
     return { error: "That code is not right. Try again." };
   }
   await env.OAUTH_KV.delete(key(id));
-  return { user: await directory(env.DB).upsertUser(challenge.email) };
+  return { user: await new ControlPlane(env.CONTROL_PLANE).ensureUser(challenge.email) };
 }
 
 /** The cookie's end — a sign-in finished, or the person starting over with another email. */

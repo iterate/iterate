@@ -1,28 +1,19 @@
 import { env, SELF, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
-import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { appSession } from "iterate/next/app-server";
 import { platformAddressesOf } from "../src/app-config.ts";
 import { authorizationForToken } from "../src/oauth.ts";
-import { directory } from "../src/directory.ts";
-import { cleanGrantActivity } from "../src/oauth.ts";
 import type { Env } from "../src/env.ts";
-import schema from "../src/control-plane.sql?raw";
+import { ControlPlane } from "../src/control-plane/edge.ts";
 
 const bindings = env as unknown as Env;
 const origin = "https://control.test";
 const encode = (value: unknown) =>
   btoa(JSON.stringify(value)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+/** The control plane as the edge holds it (src/control-plane/edge.ts) — the same reads identity.ts
+ *  links a Google sign-in through, and the catalog the links are read back from. */
+const controlPlane = () => new ControlPlane(bindings.CONTROL_PLANE);
 
-beforeAll(async () => {
-  await bindings.DB.batch(
-    schema
-      .replace(/--.*$/gm, "")
-      .split(";")
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .map((s) => bindings.DB.prepare(s)),
-  );
-});
 afterEach(() => vi.restoreAllMocks());
 
 async function identityLogin(
@@ -143,8 +134,13 @@ test("Google proves issuer identity; upstream credentials never become app token
     platformAddressesOf(bindings, new Request(`${origin}/`)),
   );
   await waitOnExecutionContext(ctx);
+  // the person's id is minted by the control plane; Google's subject names them from now on
   expect(auth?.principal).toEqual({
-    actor: expect.stringMatching(/^user_google_/),
+    actor: expect.stringMatching(/^user_[0-9a-f]{32}$/),
+    email: "verified@example.com",
+  });
+  expect(await controlPlane().identity("google", "1234567890")).toEqual({
+    id: auth?.principal.actor,
     email: "verified@example.com",
   });
   expect(auth?.grant?.kind).toBe("issuer");
@@ -158,21 +154,21 @@ test("Google proves issuer identity; upstream credentials never become app token
 });
 
 test("Google subject keeps the same principal when its verified email changes", async () => {
-  const registry = directory(bindings.DB);
-  const before = await registry.upsertIdentityUser(
-    "google",
-    "email-change-subject",
-    "before@identity.test",
-  );
-  const response = await identityLogin("google", {
-    sub: "email-change-subject",
+  expect((await identityLogin("google")).status).toBe(303);
+  const before = await controlPlane().identity("google", "1234567890");
+  expect(before).toEqual({ id: expect.stringMatching(/^user_/), email: "verified@example.com" });
+  const response = await identityLogin("google", { email: "changed@example.com" });
+  expect(response.status).toBe(303);
+  // the subject still names the same user; the email followed it
+  expect(await controlPlane().identity("google", "1234567890")).toEqual({
+    id: before!.id,
     email: "changed@example.com",
   });
-  expect(response.status).toBe(303);
-  const row = await bindings.DB.prepare("SELECT id, email FROM users WHERE id = ?")
-    .bind(before.id)
-    .first();
-  expect(row).toEqual({ id: before.id, email: "changed@example.com" });
+  expect(await controlPlane().getUser(before!.id)).toEqual({
+    id: before!.id,
+    email: "changed@example.com",
+  });
+  expect(await controlPlane().getUser("verified@example.com")).toBeNull();
 });
 
 test("wrong nonce, signature and unverified email cannot establish issuer identity", async () => {
@@ -204,45 +200,30 @@ test("an email alone never makes a session: a code follows it; only the administ
   );
 });
 
-test("activity cleanup retains recent authority and unresolved provider cleanup", async () => {
-  const old = Date.now() - 32 * 24 * 3600_000;
-  for (const [id, used, revoked, pending] of [
-    ["old-use", old, null, 0],
-    ["old-revoke", null, old, 0],
-    ["current", Date.now(), null, 0],
-    ["pending", old, old, 1],
-  ] as const)
-    await bindings.DB.prepare(
-      "INSERT INTO oauth_activity (user_id, grant_id, last_used_at, revoked_at, cleanup_pending) VALUES (?, ?, ?, ?, ?)",
-    )
-      .bind("cleanup-test", id, used, revoked, pending)
-      .run();
-  await cleanGrantActivity(bindings);
-  const rows = await bindings.DB.prepare(
-    "SELECT grant_id FROM oauth_activity WHERE user_id = ? ORDER BY grant_id",
-  )
-    .bind("cleanup-test")
-    .all();
-  expect(rows.results).toEqual([{ grant_id: "current" }, { grant_id: "pending" }]);
-});
-
 test("verified Google identity adopts a fixture account once and cannot take another linked identity", async () => {
-  const registry = directory(bindings.DB);
-  const fixture = await registry.upsertUser("fixture@identity.test");
-  const linked = await registry.upsertIdentityUser("google", "fixture-subject", fixture.email);
-  expect(linked.id).toBe(fixture.id);
+  // the rules are the control-plane processor's (src/control-plane/processor.ts `#linkIdentity`)
+  const registry = controlPlane();
+  const fixture = await registry.ensureUser("fixture@identity.test");
+  expect(fixture).toEqual({ id: expect.stringMatching(/^user_/), email: "fixture@identity.test" });
+  const linked = await registry.linkIdentity("google", "fixture-subject", fixture.email);
+  expect(linked).toEqual(fixture);
+  // a second Google identity cannot adopt an already-linked account (the processor's rule: "link
+  // once by verified email, then resolve by the provider's stable subject")
   await expect(
-    registry.upsertIdentityUser("google", "different-subject", fixture.email),
-  ).rejects.toThrow(/another linked account/);
-  const changed = await registry.upsertIdentityUser(
-    "google",
-    "fixture-subject",
-    "new@identity.test",
-  );
-  expect(changed.id).toBe(fixture.id);
-  const oldEmail = await registry.upsertUser("fixture@identity.test");
+    registry.linkIdentity("google", "different-subject", fixture.email),
+  ).rejects.toMatchObject({ code: "IDENTITY_CONFLICT" });
+  expect(await registry.identity("google", "different-subject")).toBeNull();
+  // the linked subject's email change follows it: the old address is free again
+  const changed = await registry.linkIdentity("google", "fixture-subject", "new@identity.test");
+  expect(changed).toEqual({ id: fixture.id, email: "new@identity.test" });
+  const oldEmail = await registry.ensureUser("fixture@identity.test");
   expect(oldEmail.id).not.toBe(fixture.id);
-  expect(await registry.upsertUser(changed.email)).toEqual(changed);
+  expect(await registry.ensureUser(changed.email)).toEqual(changed);
+  // but not onto an address another account holds
+  await expect(
+    registry.linkIdentity("google", "fixture-subject", oldEmail.email),
+  ).rejects.toMatchObject({ code: "IDENTITY_CONFLICT" });
+  expect(await registry.identity("google", "fixture-subject")).toEqual(changed);
 });
 
 test("Cloudflare's verified ID token creates the same revocable issuer session, with no deployment grant", async () => {
@@ -268,7 +249,7 @@ test("Cloudflare's verified ID token creates the same revocable issuer session, 
   );
   await waitOnExecutionContext(ctx);
   expect(auth?.principal).toEqual({
-    actor: expect.stringMatching(/^user_cloudflare_/),
+    actor: expect.stringMatching(/^user_[0-9a-f]{32}$/),
     email: "cloudflare@identity.test",
   });
   expect(auth?.grant?.kind).toBe("issuer");
@@ -296,49 +277,26 @@ test.for([
 );
 
 test("provider subjects are independent, while verified email links Google and Cloudflare to the same user", async () => {
-  const registry = directory(bindings.DB);
-  const google = await registry.upsertIdentityUser(
-    "google",
-    "same-subject",
-    "google-only@identity.test",
-  );
-  const cloudflare = await registry.upsertIdentityUser(
+  const registry = controlPlane();
+  const google = await registry.linkIdentity("google", "same-subject", "google-only@identity.test");
+  const cloudflare = await registry.linkIdentity(
     "cloudflare",
     "same-subject",
     "cf-only@identity.test",
   );
   expect(google.id).not.toBe(cloudflare.id);
-  const linked = await registry.upsertIdentityUser("cloudflare", "linked-cf", google.email);
-  expect(linked.id).toBe(google.id);
+  // a Cloudflare subject adopts the Google-linked person by verified email — one subject per
+  // provider, so a second Cloudflare subject cannot
+  const linked = await registry.linkIdentity("cloudflare", "linked-cf", google.email);
+  expect(linked).toEqual(google);
   await expect(
-    registry.upsertIdentityUser("cloudflare", "another-cf", google.email),
-  ).rejects.toThrow(/another linked account/);
+    registry.linkIdentity("cloudflare", "another-cf", google.email),
+  ).rejects.toMatchObject({ code: "IDENTITY_CONFLICT" });
+  // a subject linked to one person cannot take another person's email
   await expect(
-    registry.upsertIdentityUser("cloudflare", "same-subject", google.email),
-  ).rejects.toThrow(/another account/);
-});
-
-test("existing Google identity links migrate without changing users or memberships", async () => {
-  const registry = directory(bindings.DB);
-  const existing = await registry.upsertUser("legacy@identity.test", "user_google_legacy");
-  const org = await registry.createOrg(existing.id, "Legacy identity org");
-  await bindings.DB.prepare("INSERT INTO google_identities (subject, user_id) VALUES (?, ?)")
-    .bind("legacy-subject", existing.id)
-    .run();
-  for (let pass = 0; pass < 2; pass++) {
-    await bindings.DB.batch(
-      schema
-        .replace(/--.*$/gm, "")
-        .split(";")
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map((s) => bindings.DB.prepare(s)),
-    );
-    expect(await registry.upsertIdentityUser("google", "legacy-subject", existing.email)).toEqual(
-      existing,
-    );
-  }
-  expect((await registry.listOrgs(existing.id)).some((entry) => entry.id === org.id)).toBe(true);
+    registry.linkIdentity("cloudflare", "same-subject", google.email),
+  ).rejects.toMatchObject({ code: "IDENTITY_CONFLICT" });
+  expect(await registry.identity("cloudflare", "same-subject")).toEqual(cloudflare);
 });
 
 test.for(["provider mismatch", "declined consent"])(

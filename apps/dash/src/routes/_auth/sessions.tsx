@@ -191,13 +191,11 @@ function SessionsPage() {
                   {item.lastUsedAt ? new Date(item.lastUsedAt).toISOString() : "Not used yet"}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
-                  {item.cleanupPending
-                    ? "Access revoked; cleanup pending"
-                    : item.expired
-                      ? "Expired"
-                      : item.expiresAt
-                        ? new Date(item.expiresAt).toISOString()
-                        : "—"}
+                  {item.expired
+                    ? "Expired"
+                    : item.expiresAt
+                      ? new Date(item.expiresAt).toISOString()
+                      : "—"}
                 </TableCell>
                 <TableCell>
                   <Button
@@ -215,13 +213,11 @@ function SessionsPage() {
                       }
                     }}
                   >
-                    {item.cleanupPending
-                      ? "Retry cleanup"
-                      : item.expired
-                        ? "Remove"
-                        : item.kind === "Personal access token" || item.kind === "Device"
-                          ? "Revoke"
-                          : "Log out"}
+                    {item.expired
+                      ? "Remove"
+                      : item.kind === "Personal access token" || item.kind === "Device"
+                        ? "Revoke"
+                        : "Log out"}
                   </Button>
                 </TableCell>
               </TableRow>
