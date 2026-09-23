@@ -3,15 +3,16 @@
 # The fold's state is this job's own artifact, read back by the next run, kept even when the issue
 # write fails. A dispatch with dry-run=true renders without writing the issue or the state.
 #
-# PAUSED: dispatch only. The job's token is the Depot GitHub App's, which has no Issues permission,
-# so the first scheduled run (2026-09-23) got 403 "Resource not accessible by integration" on
-# PATCH issues/2580. The legacy writer used the iterate app's own token. Restore the schedule
-# ("7,22,37,52 * * * *") once the writer has a token that can write #2580.
+# #2580 is written as the iterate GitHub App (iterate[bot]), as before #2837: the writer mints an
+# installation token narrowed to writing issues in this repository. The Depot app's job token has no
+# Issues permission (403 on PATCH issues/2580). The app's key is read here only, in a workflow that
+# never runs on pull_request or push.
 name: Flake dashboard
 permissions:
   contents: read
-  issues: write
 on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
     inputs:
       dry-run:
@@ -30,7 +31,6 @@ jobs:
     timeout-minutes: 15
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      GITHUB_TOKEN: ${{ github.token }}
       GITHUB_REPOSITORY: ${{ github.repository }}
     steps:
       - name: Checkout code
@@ -40,12 +40,15 @@ jobs:
       - name: Reconcile dependencies (baked)
         run: pnpm install --frozen-lockfile --prefer-offline
       # The Depot organization token CI telemetry already uses (Doppler _shared/preview) lists and
-      # downloads the artifacts; the job's own GitHub token writes the issue.
+      # downloads the artifacts. The iterate GitHub App's id and key (Doppler os-legacy-backup/prd,
+      # where the legacy platform kept them) mint the token that writes the issue.
       - name: Fold new flake records into the dashboard issue
         run: |-
           set -euo pipefail
-          export DEPOT_TOKEN
+          export DEPOT_TOKEN GITHUB_APP_ID GITHUB_APP_PRIVATE_KEY
           DEPOT_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
+          GITHUB_APP_ID="$(doppler secrets get GITHUB_APP_ID --plain --project os-legacy-backup --config prd)"
+          GITHUB_APP_PRIVATE_KEY="$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain --project os-legacy-backup --config prd)"
           pnpm tsx scripts/ci/flake-dashboard/update.ts \
             --state-out test-results/flake-dashboard/state.json \
             --body-out test-results/flake-dashboard/body.md \

@@ -228,7 +228,7 @@ describe("Depot credential boundaries", () => {
     },
     {
       file: ".depot/workflows/flake-dashboard.yml",
-      permissions: { contents: "read", issues: "write" },
+      permissions: { contents: "read" },
     },
   ])("$file grants only its required GitHub permissions", ({ file, permissions }) => {
     expect(loadWorkflow(file).permissions).toEqual(permissions);
@@ -262,6 +262,16 @@ describe("Depot credential boundaries", () => {
     });
 
     expect(uploaders.sort()).toEqual([...SUITE_WORKFLOWS].sort());
+  });
+
+  test("the iterate GitHub App's key is read only by the flake dashboard, which never runs on a pull request or push", () => {
+    const readers = depotWorkflowFiles.filter((file) =>
+      readFileSync(resolve(repoRoot, file), "utf8").includes("GITHUB_APP_PRIVATE_KEY"),
+    );
+    expect(readers).toEqual([".depot/workflows/flake-dashboard.yml"]);
+    expect(
+      Object.keys(loadWorkflow(".depot/workflows/flake-dashboard.yml").on || {}).sort(),
+    ).toEqual(["schedule", "workflow_dispatch"]);
   });
 
   test("writes the flake dashboard with the Depot telemetry token and keeps its state only for real runs", () => {
