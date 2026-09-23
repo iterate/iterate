@@ -22,8 +22,10 @@ export const groups: Array<{ name: string; glob: string; priority: number }> = [
   // routeTree.gen.ts) also land here, ahead of every glob - see computeReport.
   { name: "Generated", glob: "{**/.generated/**,**/generated/**,**/*.generated.*}", priority: 9 },
   {
+    // the root spec suite with its harness (specs/test-support, specs/setup.ts), and the Workers
+    // lane's suites and support
     name: "Tests",
-    glob: "{**/*.{test,spec}.*,**/{e2e,tests,__tests__,test-helpers}/**}",
+    glob: "{**/*.{test,spec}.*,**/{e2e,tests,__tests__,__workers-tests__,test-helpers}/**,specs/**}",
     priority: 4,
   },
   { name: "UI components", glob: "{packages/ui/**,**/components/**}", priority: 3 },
