@@ -6,7 +6,7 @@
 // long-lived is kept anywhere else.
 //
 //   pnpm tsx scripts/ci/main-e2e-alert.ts failing-rows --dir test-results/ci-telemetry/raw
-//   NEEDS='${{ toJSON(needs) }}' pnpm tsx scripts/ci/main-e2e-alert.ts alert [--dry-run]
+//   NEEDS='${{ toJSON(needs) }}' pnpm tsx scripts/ci/main-e2e-alert.ts alert [--label "main e2e"] [--dry-run]
 import { appendFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -17,9 +17,10 @@ import { getSlackClient, slackChannelIds } from "./slack.ts";
 
 export type MainE2eState = "green" | "red";
 
-/** A page's first words: how the next run finds the last one. */
-const RED = "🔴 main e2e red";
-const GREEN = "🟢 main e2e green again";
+/** A page's first words, per run (`--label`: "main e2e", "main e2e on the prd account"): how
+ *  the next run of the same label finds the last one. */
+const red = (label: string) => `🔴 ${label} red`;
+const green = (label: string) => `🟢 ${label} green again`;
 
 /** The run's verdict from its jobs' results: red on any failure, green when every job succeeded, and
  *  none at all when a job was cancelled (a newer push superseded the run) or nothing failed but not
@@ -48,16 +49,21 @@ export function mainE2eFailingRows(artifacts: TestTelemetryArtifact[]): string[]
 }
 
 /** The state the channel last announced: the newest of this alert's pages, else green. Pure. */
-export function previousMainE2eState(messages: { text?: string; bot_id?: string }[]): MainE2eState {
+export function previousMainE2eState(
+  messages: { text?: string; bot_id?: string }[],
+  label: string,
+): MainE2eState {
   const last = messages.find(
     (message) =>
-      message.bot_id && (message.text?.startsWith(RED) || message.text?.startsWith(GREEN)),
+      message.bot_id &&
+      (message.text?.startsWith(`${red(label)} `) || message.text?.startsWith(`${green(label)} `)),
   );
-  return last?.text?.startsWith(RED) ? "red" : "green";
+  return last?.text?.startsWith(`${red(label)} `) ? "red" : "green";
 }
 
 /** The page for a change of state, or null. Pure. */
 export function mainE2ePage(input: {
+  label: string;
   previous: MainE2eState;
   verdict: MainE2eState | undefined;
   commitSha: string;
@@ -69,11 +75,12 @@ export function mainE2ePage(input: {
   if (!input.verdict || input.verdict === input.previous) return null;
   const commit = `\`${input.commitSha.slice(0, 9)}\` (${input.commitSubject})`;
   const link = input.runUrl ? `<${input.runUrl}|the run>` : "";
-  if (input.verdict === "green") return [`${GREEN} at ${commit}`, link].filter(Boolean).join("\n");
+  if (input.verdict === "green")
+    return [`${green(input.label)} at ${commit}`, link].filter(Boolean).join("\n");
   const shown = input.failingRows.slice(0, 8);
   return [
     // the mention is Jonas (./slack.ts)
-    `${RED} at ${commit} <@U067G4QRFK2>`,
+    `${red(input.label)} at ${commit} <@U067G4QRFK2>`,
     `• failed: ${input.failedJobs.join(", ") || "a job"}`,
     shown.length > 0 &&
       `• failing rows: ${shown.join("; ")}${input.failingRows.length > shown.length ? `; … and ${input.failingRows.length - shown.length} more` : ""}`,
@@ -89,7 +96,7 @@ const Needs = z.record(
   z.object({ result: z.string(), outputs: z.record(z.string(), z.string()).optional() }),
 );
 
-async function alert(dryRun: boolean): Promise<void> {
+async function alert(label: string, dryRun: boolean): Promise<void> {
   const needs = Needs.parse(JSON.parse(process.env.NEEDS || "{}"));
   const results = Object.fromEntries(
     Object.entries(needs).map(([job, need]) => [job, need.result]),
@@ -109,8 +116,9 @@ async function alert(dryRun: boolean): Promise<void> {
     oldest: String(Date.now() / 1000 - 7 * 86_400),
     limit: 999,
   });
-  const previous = previousMainE2eState(history.messages || []);
+  const previous = previousMainE2eState(history.messages || [], label);
   const page = mainE2ePage({
+    label,
     previous,
     verdict,
     commitSha,
@@ -122,7 +130,7 @@ async function alert(dryRun: boolean): Promise<void> {
     runUrl: process.env.DEPOT_JOB_URL,
   });
   console.log(JSON.stringify({ results, verdict, previous, failingRows }));
-  if (!page) return console.log("main e2e: no change of state, nothing to post");
+  if (!page) return console.log(`${label}: no change of state, nothing to post`);
   console.log(page);
   if (!dryRun) await slack.chat.postMessage({ channel, text: page });
 }
@@ -146,14 +154,17 @@ function failingRows(directory: string): void {
 
 if (isMainModule(import.meta.url)) {
   const [command, ...rest] = process.argv.slice(2);
-  const directory = rest[rest.indexOf("--dir") + 1];
+  const option = (name: string) => (rest.includes(name) ? rest[rest.indexOf(name) + 1] : undefined);
+  const directory = option("--dir");
   const done =
     command === "failing-rows" && directory
       ? Promise.resolve(failingRows(directory))
       : command === "alert"
-        ? alert(rest.includes("--dry-run"))
+        ? alert(option("--label") || "main e2e", rest.includes("--dry-run"))
         : Promise.reject(
-            new Error("usage: main-e2e-alert.ts failing-rows --dir <dir> | alert [--dry-run]"),
+            new Error(
+              "usage: main-e2e-alert.ts failing-rows --dir <dir> | alert [--label <label>] [--dry-run]",
+            ),
           );
   done.catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : String(error));

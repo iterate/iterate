@@ -49,6 +49,7 @@ test.each([
   "main was $previous, this run is $verdict → pages $pages",
   ({ previous, verdict, pages }) => {
     const page = mainE2ePage({
+      label: "main e2e",
       previous,
       verdict,
       commitSha: "0123456789abcdef",
@@ -67,6 +68,7 @@ test.each([
 test("a red page names the commit, the failed jobs and the failing rows, and mentions Jonas", () => {
   expect(
     mainE2ePage({
+      label: "main e2e",
       previous: "green",
       verdict: "red",
       commitSha: "0123456789abcdef",
@@ -95,6 +97,14 @@ test.each([
     ],
     state: "green",
   },
+  // another label's pages (the prd account's run) are not this label's state
+  {
+    messages: [
+      { bot_id: "B", text: "🔴 main e2e on the prd account red at `z`" },
+      { bot_id: "B", text: "🟢 main e2e green again at `y`" },
+    ],
+    state: "green",
+  },
   // other bots' pages and people's replies are not this alert's state
   {
     messages: [
@@ -105,7 +115,7 @@ test.each([
     state: "red",
   },
 ])("the channel's newest main e2e page is the state: $state", ({ messages, state }) => {
-  expect(previousMainE2eState(messages)).toBe(state);
+  expect(previousMainE2eState(messages, "main e2e")).toBe(state);
 });
 
 test("failing rows are the unexpected (Playwright) or failed (vitest) tests, once each", () => {
