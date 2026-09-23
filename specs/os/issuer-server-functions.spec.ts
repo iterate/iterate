@@ -66,11 +66,19 @@ test("client navigation loads sign-in through its server function and rejects ma
     f: 63,
     m: [],
   });
-  for (const payload of ["{bad", "1", "{}", "null", '"x"', frozen, rejectedPromise]) {
+  for (const payload of ["{bad", "1", "{}", "null", '"x"', rejectedPromise]) {
     const malformed = new URL(response.url());
     malformed.searchParams.set("payload", payload);
     expect((await page.request.get(malformed.href)).status(), payload).toBe(400);
   }
+  // a frozen object is still plain data (src/start.ts); the input validator reads it as no search
+  const withFrozen = new URL(response.url());
+  withFrozen.searchParams.set("payload", frozen);
+  const frozenRequested = await page.request.get(withFrozen.href, {
+    headers: { "x-tsr-serverFn": "true" },
+  });
+  expect(frozenRequested.status()).toBe(200);
+  expect(await frozenRequested.text()).not.toContain("$TSR/Error");
 
   const noPayload = new URL(response.url());
   noPayload.search = "";
