@@ -46,7 +46,8 @@ pnpm --dir apps/os-next deploy -- --env <environment>
 ```
 
 The Preview OS-Next workflow deploys a platform preview and all four hosted clients (Dash,
-Agents, Notes, Voice), then runs integration and browser checks. To run it from a checkout:
+Agents, Notes, Voice); its separate `e2e` job then runs integration and browser checks against
+them, only once that deploy succeeded. To run it from a checkout:
 
 A platform preview is named `pr<n>-<branch slug>` under the `os-next-preview` parent Worker. It
 has its own Durable Objects, KV, R2, D1, and Artifacts namespace. Closing the PR deletes the
