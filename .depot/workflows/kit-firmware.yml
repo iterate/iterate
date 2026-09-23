@@ -1,5 +1,7 @@
 name: Build Kit Firmware
 
+# Both builds read only the firmware tree, the Kit scripts that drive it and
+# the release catalog. Nothing else in the monorepo changes their output.
 on:
   push:
     branches:
@@ -8,21 +10,15 @@ on:
       - .depot/workflows/kit-firmware.yml
       - apps/kit/firmware/**
       - apps/kit/package.json
-      - packages/iterate/**
-      - packages/shared/**
-      - package.json
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
+      - apps/kit/scripts/build-firmware-assets.ts
+      - apps/kit/src/firmware/catalog.ts
   pull_request:
     paths:
       - .depot/workflows/kit-firmware.yml
       - apps/kit/firmware/**
       - apps/kit/package.json
-      - packages/iterate/**
-      - packages/shared/**
-      - package.json
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
+      - apps/kit/scripts/build-firmware-assets.ts
+      - apps/kit/src/firmware/catalog.ts
   workflow_dispatch: {}
 
 concurrency:
