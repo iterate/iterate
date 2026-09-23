@@ -56,7 +56,8 @@ pnpm firmware:sync
 checks ESP-IDF's flash plan and `iterate_kit` partition against the catalogue,
 and records a hash for each generated part. `firmware:sync` accepts only that
 current cache, copies the hashed parts into `public/firmware`, and writes ESP
-Web Tools manifests. `pnpm build` runs sync before the web build. Deployment checks every installer
+Web Tools manifests. `pnpm deploy` runs sync before the web build; a per-PR preview serves
+the installer without them. Deployment checks every installer
 route, verifies all public manifests and the catalog against the build, and
 downloads every firmware part to compare its SHA-256 with the released bytes.
 Run `pnpm exec tsx scripts/verify-firmware-assets.ts https://k.iterate.com`

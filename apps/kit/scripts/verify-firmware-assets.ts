@@ -14,7 +14,7 @@ const Manifest = z.object({
 });
 
 /** Verify the deployed bytes against the release assets used for this deployment. */
-export async function verifyFirmwareAssets(baseUrl: string, headers?: HeadersInit) {
+export async function verifyFirmwareAssets(baseUrl: string, headers?: Record<string, string>) {
   // Workers and their asset manifests can reach different locations at different
   // times. Allow two minutes of propagation, while still checking every byte.
   const maxAttempts = 25;
@@ -32,7 +32,7 @@ export async function verifyFirmwareAssets(baseUrl: string, headers?: HeadersIni
   }
 }
 
-async function verifyFirmwareAssetsOnce(baseUrl: string, headers?: HeadersInit) {
+async function verifyFirmwareAssetsOnce(baseUrl: string, headers?: Record<string, string>) {
   let parts = 0;
   let releases = 0;
   for (const device of firmwareCatalog) {

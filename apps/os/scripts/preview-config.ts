@@ -11,6 +11,7 @@ import JSON5 from "json5";
 import { osEnvs } from "../../../envs.ts";
 import { agents } from "../../agents/scripts/app.ts";
 import { dash } from "../../dash/scripts/app.ts";
+import { kit } from "../../kit/scripts/app.ts";
 import { notes } from "../../notes/scripts/app.ts";
 import { voice } from "../../voice/scripts/app.ts";
 import type { StartApp } from "../../../scripts/lib/start-app.ts";
@@ -28,7 +29,7 @@ export const PREVIEW_PARENT = osEnvs.preview!;
 export const MAX_PREVIEW_NAME_LENGTH = 28;
 
 /** The apps on top, each previewed from its own parent worker (envs.ts `<app>Envs.preview`). */
-export const APPS: StartApp[] = [dash, agents, notes, voice];
+export const APPS: StartApp[] = [dash, agents, notes, voice, kit];
 /** A path that changes every app: the SDK they are built on, the shared UI, the shared deploy
  *  scripts, the env map. An app's own paths are `apps/<name>/`. */
 export const SHARED_APP_PATHS = [

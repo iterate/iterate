@@ -734,6 +734,6 @@ marker: it runs, and turns red once the bug it pins is fixed.
 The Depot Test workflow runs workspace tests and keeps their normalized
 telemetry as a job artifact. Production deployment runs only its deploy
 script's readiness probes. The Preview OS workflow deploys a per-PR platform
-and all four hosted clients, then runs integration and browser tests.
+and all five hosted clients, then runs integration and browser tests.
 Operational changes require coherent preview state and telemetry as well as
 passing tests; see the [engineering invariant](engineering-invariants.md).

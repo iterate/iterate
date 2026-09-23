@@ -35,15 +35,15 @@ function makeOsNextWorkspace(): WorkspaceConfig {
 
 function makeKitWorkspace(): WorkspaceConfig {
   return {
-    // The worker entry is declared here, not read from wrangler.jsonc: that file is generated
-    // (gitignored, `pnpm gen:wrangler` inside kit's typecheck) and CI runs knip in parallel with
-    // typecheck, so knip's view of it would be a race.
-    entry: ["vite.config.ts", "src/worker.ts!", "scripts/**/*.ts"],
+    // The Worker entry is declared here: there is no wrangler file to read it from (the Worker
+    // config is scripts/lib/start-app.ts's, handed to the Cloudflare Vite plugin).
+    entry: ["vite.config.ts", "src/server.ts!", "scripts/**/*.ts"],
     project: ["scripts/**/*.ts", "src/**/*.{ts,tsx}!", "!dist/**!"],
     vite: false,
     wrangler: false,
-    // Tailwind backs a Vite plugin rather than a direct runtime import.
-    ignoreDependencies: ["tailwindcss"],
+    // Tailwind backs a Vite plugin rather than a direct runtime import. `cloudflare:workers` parses
+    // as the "cloudflare" package; the Workers types are named by the shared tsconfig.base.json.
+    ignoreDependencies: ["tailwindcss", "cloudflare", "@cloudflare/workers-types"],
   };
 }
 

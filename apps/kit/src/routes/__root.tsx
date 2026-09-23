@@ -1,8 +1,6 @@
-/// <reference types="vite/client" />
-import type { ReactNode } from "react";
-import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
-import appCss from "../styles.css?url";
-
+import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
+import { AppProviders } from "@iterate-com/ui/apps/providers";
+import css from "../styles.css?url";
 export const Route = createRootRoute({
   head: () => ({
     meta: [
@@ -15,34 +13,22 @@ export const Route = createRootRoute({
       { title: "Iterate Kit" },
     ],
     links: [
-      { rel: "stylesheet", href: appCss },
+      { rel: "stylesheet", href: css },
       { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
     ],
   }),
-  component: RootComponent,
-  notFoundComponent: () => (
-    <p className="text-sm text-muted-foreground">This Kit page does not exist.</p>
-  ),
-});
-
-function RootComponent() {
-  return (
-    <RootDocument>
-      <Outlet />
-    </RootDocument>
-  );
-}
-
-function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
-  return (
-    <html lang="en">
+  component: () => (
+    <html lang="en" suppressHydrationWarning>
       <head>
         <HeadContent />
       </head>
-      <body>
-        {children}
+      <body className="min-h-svh bg-background font-sans antialiased">
+        {/* light only, like every os-next app: no theme picker, no system theme */}
+        <AppProviders config={{}} devtools={null} forcedTheme="light">
+          <Outlet />
+        </AppProviders>
         <Scripts />
       </body>
     </html>
-  );
-}
+  ),
+});
