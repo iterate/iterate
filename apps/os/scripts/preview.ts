@@ -491,13 +491,25 @@ async function deployAppPreview(
   return { name: app.name, url };
 }
 
-/** The apps this run previews: --apps all, none, or (auto) the ones whose paths this PR changes. */
 /** An app on top is previewed only beside a parent on its own account: the prd account's throwaway
  *  parent has none (their parents are the dev account's). Deploy, delete and the specs all ask. */
 const isBesideParent = (app: StartApp) =>
   app.envs.preview!.cloudflareAccountId === PREVIEW_PARENT.cloudflareAccountId;
 
+/** The apps this run previews: --apps all, none, or (auto) the ones whose paths this PR changes —
+ *  of those, only the ones beside the parent, whatever PREVIEW_APPS says: the prd account's
+ *  credentials never deploy an app's preview, nor create an app's missing parent there. */
 async function appsToPreview(mode: AppsMode, prNumber: string | undefined): Promise<StartApp[]> {
+  const apps = await appsOfMode(mode, prNumber);
+  const elsewhere = apps.filter((app) => !isBesideParent(app));
+  if (elsewhere.length > 0)
+    console.log(
+      `not previewing ${elsewhere.map((app) => app.name).join(", ")}: their parents are not on ${PREVIEW_PARENT.workerName}'s account`,
+    );
+  return apps.filter(isBesideParent);
+}
+
+async function appsOfMode(mode: AppsMode, prNumber: string | undefined): Promise<StartApp[]> {
   if (mode === "all") return APPS;
   if (mode === "none") return [];
   try {
