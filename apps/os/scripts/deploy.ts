@@ -16,7 +16,6 @@ export default async function deploy(options: { env?: string } = {}) {
     resources: (env) => env.resources,
     // The private login settings and at-rest key come from Doppler. Public URLs come from envs.ts.
     requiredSecrets: ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"],
-    build: "vite",
     buildEnv: (ctx) => ({ CLOUDFLARE_ENV: "", OS_NEXT_ENV: ctx.name }),
     async prepare() {
       await build();

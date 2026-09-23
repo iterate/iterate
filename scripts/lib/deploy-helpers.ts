@@ -206,13 +206,13 @@ export async function smokeResponse(
 export async function deployWithSecrets(input: {
   /** App root the wrangler commands run in. */
   cwd: string;
-  /** Path to the wrangler config to deploy (built dist config or wrangler.jsonc). */
+  /** Path to the wrangler config to deploy (the wrangler.json the build wrote under dist/). */
   builtConfig: string;
   /** Secret name → value map shipped via --secrets-file. */
   secretValues: Record<string, string>;
   /** CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID for the wrangler process. */
   credentials: Record<string, string>;
-  /** Extra `wrangler deploy` args (e.g. `["--env", name]` for env-block configs). */
+  /** Extra `wrangler deploy` args. */
   extraDeployArgs?: string[];
 }) {
   const deployArgs = [

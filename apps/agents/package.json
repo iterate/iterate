@@ -8,7 +8,6 @@
     "typecheck": "pnpm routes:check && tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
     "test": "pnpm runtime:check && vitest run --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "deploy": "tsx scripts/app.ts deploy",
-    "gen:wrangler": "tsx scripts/app.ts generate-wrangler-config",
     "ensure-resources": "tsx scripts/app.ts ensure-resources",
     "erase-data": "tsx scripts/app.ts erase-data",
     "routes:generate": "tsx scripts/app.ts generate-route-tree",
@@ -36,8 +35,8 @@
     "capnweb": "npm:@iterate-com/capnweb@^0.12.2"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "1.54.8",
-    "@cloudflare/workers-types": "^5.20260831.1",
+    "@cloudflare/vite-plugin": "catalog:cloudflare",
+    "@cloudflare/workers-types": "catalog:cloudflare",
     "@tailwindcss/vite": "^4.3.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
@@ -46,7 +45,7 @@
     "typescript": "^5.9.3",
     "vite": "^8.0.0",
     "vitest": "^4.1.7",
-    "wrangler": "4.131.1",
+    "wrangler": "catalog:cloudflare",
     "esbuild": "^0.27.4",
     "undici": "^7.29.0"
   }

@@ -3,11 +3,7 @@ import { ownZones, startAppPreviewConfig } from "./start-app.ts";
 
 describe("a start app's preview config (a pure transform of the built wrangler.json)", () => {
   const built = {
-    configPath: "/x/wrangler.jsonc",
-    userConfigPath: "/x/wrangler.jsonc",
-    topLevelName: "notes",
-    definedEnvironments: ["preview", "prd"],
-    targetEnvironment: "preview",
+    topLevelName: "notes-preview",
     account_id: "acct",
     name: "notes-preview",
     main: "index.js",
@@ -36,15 +32,7 @@ describe("a start app's preview config (a pure transform of the built wrangler.j
       assets: built.assets,
       vars: { ITERATE_ORIGIN: "https://os.iterate.com" },
     });
-    for (const key of [
-      "exports",
-      "configPath",
-      "userConfigPath",
-      "topLevelName",
-      "definedEnvironments",
-      "targetEnvironment",
-    ])
-      expect(config).not.toHaveProperty(key);
+    for (const key of ["exports", "topLevelName"]) expect(config).not.toHaveProperty(key);
   });
 
   test("the preview's own block: the session class, observability, and the worker's vars with the issuer swapped", () => {
@@ -66,6 +54,7 @@ test("on workers.dev our own zones are our apps' hosts, not the accounts they sh
     "agents-preview.iterate-dev-preview.workers.dev",
     "agents.iterate.workers.dev",
     "dash-preview.iterate-dev-preview.workers.dev",
+    "kit-preview.iterate-dev-preview.workers.dev",
     "notes-preview.iterate-dev-preview.workers.dev",
     "notes.iterate.workers.dev",
     "os-next-preview.iterate-dev-preview.workers.dev",
