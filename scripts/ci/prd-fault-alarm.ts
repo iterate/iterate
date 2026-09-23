@@ -132,6 +132,14 @@ async function readWindow(windowEnd: Date): Promise<FaultReading> {
           type: "string",
         },
         { key: "$metadata.message", operation: "not_includes", value: unreadBody, type: "string" },
+        // A deploy: the runtime resets every Durable Object on new code and logs it as an error on
+        // each one it caught mid-call (14:32Z 2026-09-23). A request it failed still pages as a 5xx.
+        {
+          key: "$metadata.message",
+          operation: "not_includes",
+          value: "Durable Object reset because its code was updated",
+          type: "string",
+        },
       ],
       "$metadata.message",
     ),
