@@ -7,6 +7,7 @@ Run commands from the repository root unless stated otherwise.
 | `pnpm typecheck`                         | Every retained workspace                                                       |
 | `pnpm lint`                              | Source lint and applicable repository rules                                    |
 | `pnpm format:check`                      | Formatting                                                                     |
+| `pnpm knip`                              | Unused files, exports and dependencies (os-next, Kit, shared, UI, SDK/CLI)     |
 | `pnpm test`                              | Workspace unit tests, including os-next's unit and Workers projects            |
 | `pnpm e2e`                               | os-next integration suite; local Worker unless a deployed target is configured |
 | `pnpm spec`                              | Chromium issuer and mini-app browser flows, plus mobile-width authentication   |
