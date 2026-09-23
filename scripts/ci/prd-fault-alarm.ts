@@ -71,7 +71,7 @@ async function readWindow(windowEnd: Date): Promise<FaultReading> {
     throw new Error("run under doppler --project project-worker --config prd");
   // One grouped count per signal. Its rows sum to a lower bound (events without the grouped field,
   // or past 2,000 groups, drop out) — a burst still pages.
-  const rows = async (filter: object, groupBy: string): Promise<[string, number][]> => {
+  const rows = async (filters: object[], groupBy: string): Promise<[string, number][]> => {
     const response = await fetch(
       `https://api.cloudflare.com/client/v4/accounts/${account}/workers/observability/telemetry/query`,
       {
@@ -89,7 +89,7 @@ async function readWindow(windowEnd: Date): Promise<FaultReading> {
             limit: 2000,
             filters: [
               { key: "$metadata.service", operation: "eq", value: "os-next-prd", type: "string" },
-              filter,
+              ...filters,
             ],
           },
         }),
@@ -106,15 +106,27 @@ async function readWindow(windowEnd: Date): Promise<FaultReading> {
   };
   const [serverErrors, heals, errors] = await Promise.all([
     rows(
-      { key: "$workers.event.response.status", operation: "gte", value: 500, type: "number" },
+      [{ key: "$workers.event.response.status", operation: "gte", value: 500, type: "number" }],
       "$workers.event.request.url",
     ),
     rows(
-      { key: "event", operation: "includes", value: "platform-failure", type: "string" },
+      [{ key: "event", operation: "includes", value: "platform-failure", type: "string" }],
       "name",
     ),
     rows(
-      { key: "$metadata.level", operation: "eq", value: "error", type: "string" },
+      [
+        { key: "$metadata.level", operation: "eq", value: "error", type: "string" },
+        // A reset someone asked for (`itx.abort()`, apps/os-next context/built-ins.ts): the runtime
+        // logs `ctx.abort` as an uncatchable error — two lines per reset, one more per socket it
+        // closed (measured on a preview, 2026-09-23) — and the context's own log already records it
+        // as `context/aborted`, attributed. An expected outcome, not a fault.
+        {
+          key: "$metadata.message",
+          operation: "not_includes",
+          value: "itx.abort() reset the context",
+          type: "string",
+        },
+      ],
       "$metadata.message",
     ),
   ]);
