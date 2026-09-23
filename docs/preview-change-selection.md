@@ -17,9 +17,15 @@ selection and an explicit settlement signal.
 
 ## os-next is not in this pipeline
 
-`apps/os-next/**/*` and `.depot/workflows/preview-os-next.yml` are the `OsNext`
-type, listed last so it wins over Scripts, Frontend, Tests, Docs, CI and
-Generated for every path inside os-next. When the whole branch diff against the
+`apps/os-next/**/*`, the apps on top of it (`apps/dash`, `apps/agents`,
+`apps/notes`, `apps/voice`), `configs-next/**/*`, os-next's half of
+`packages/iterate` (`src/next/**/*`, `src/next-node.ts`) and the os-next
+deploy/preview workflows are the `OsNext` type, listed last so it wins over
+Scripts, Frontend, Tests, Docs, CI and Generated for every path inside them.
+Each is a path `.depot/workflows/preview-os-next.yml` previews (a table test
+checks that) and that no fleet app imports (`tsc --listFilesOnly` over the
+fleet apps and `specs/`; `envs.ts` imports one type from
+`packages/iterate/src/next`). When the whole branch diff against the
 merge-base is os-next — checked before any evidence lookup, so a red or missing
 main result cannot drag an os-next PR into a deploy — the plan is `skip`:
 `tests=false`, `deploy=false`, every downstream job skipped, and, because the
@@ -28,8 +34,9 @@ touch apps/os therefore cannot inherit a green from a run that deployed and
 tested nothing. os-next proves itself in its own per-PR Worker Previews
 workflow, [`.depot/workflows/preview-os-next.yml`](../.depot/workflows/preview-os-next.yml),
 cribbed from cloudflare-os. Anything else in the branch diff — apps/os,
-`packages/shared`, `envs.ts`, `scripts/lib` or plain docs — keeps today's
-behavior.
+`packages/shared`, `packages/ui`, the rest of `packages/iterate`, `envs.ts`,
+`scripts/lib`, the lockfile or plain docs — keeps today's behavior, even
+though the os-next preview also runs for some of them: the fleet imports them.
 
 [`change-types.ts`](../scripts/preview/change-types.ts) assigns each changed
 path one type: **last match wins**. Changes mean head versus its first parent,

@@ -1,10 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, matchesGlob } from "node:path";
 import { expect, test } from "vitest";
+import { parse as parseYaml } from "yaml";
 import { CommitHistory } from "./commit-history.ts";
 import { classifyChanges, planPreview } from "./change-plan.ts";
+import CHANGE_TYPES from "./change-types.ts";
 
 test("a docs commit inherits its failed product parent's result", async () => {
   using repo = repository();
@@ -73,10 +75,22 @@ test("os-next owns every path inside it, whatever else that path looks like", ()
       ".depot/workflows/deploy-os-next.yml",
       ".depot/workflows/deploy-notes.yml",
       ".depot/workflows/preview-os-next.yml",
+      "apps/dash/src/routes/_auth/home.tsx",
+      "apps/agents/__workers-tests__/agent-revive.test.ts",
+      "apps/notes/README.md",
+      "apps/voice/scripts/deploy.ts",
+      "configs-next/with-agents/agents.js",
+      "packages/iterate/src/next/api.ts",
+      "packages/iterate/src/next-node.ts",
       "apps/os/index.ts",
       ".depot/workflows/preview.yml",
       "envs.ts",
       "packages/shared/src/index.ts",
+      "packages/iterate/src/sdk.ts",
+      "packages/iterate/src/cli.ts",
+      "packages/ui/src/components/button.tsx",
+      "configs/default/worker.ts",
+      "pnpm-lock.yaml",
       "scripts/lib/thing.ts",
     ]),
   ).toEqual({
@@ -90,13 +104,38 @@ test("os-next owns every path inside it, whatever else that path looks like", ()
       ".depot/workflows/deploy-os-next.yml",
       ".depot/workflows/deploy-notes.yml",
       ".depot/workflows/preview-os-next.yml",
+      // The apps on top of os-next and its half of packages/iterate: no fleet app imports them.
+      "apps/dash/src/routes/_auth/home.tsx",
+      "apps/agents/__workers-tests__/agent-revive.test.ts",
+      "apps/notes/README.md",
+      "apps/voice/scripts/deploy.ts",
+      "configs-next/with-agents/agents.js",
+      "packages/iterate/src/next/api.ts",
+      "packages/iterate/src/next-node.ts",
     ],
     Product: ["apps/os/index.ts"],
     CI: [".depot/workflows/preview.yml"],
     // apps/os depends on these, so they keep deploying and testing the fleet.
-    Default: ["envs.ts", "packages/shared/src/index.ts"],
+    Default: [
+      "envs.ts",
+      "packages/shared/src/index.ts",
+      "packages/iterate/src/sdk.ts",
+      "packages/iterate/src/cli.ts",
+      "configs/default/worker.ts",
+    ],
+    Frontend: ["packages/ui/src/components/button.tsx"],
+    Generated: ["pnpm-lock.yaml"],
     Scripts: ["scripts/lib/thing.ts"],
   });
+});
+
+test("every path the planner skips as os-next is one the os-next preview runs for", () => {
+  const workflow = parseYaml(
+    readFileSync(new URL("../../.depot/workflows/preview-os-next.yml", import.meta.url), "utf8"),
+  );
+  const previewed: string[] = workflow.on.pull_request.paths;
+  const skipped = CHANGE_TYPES.OsNext.map((glob) => glob.replace("**/*", "any/file.ts"));
+  expect(skipped.filter((path) => !previewed.some((glob) => matchesGlob(path, glob)))).toEqual([]);
 });
 
 test.each([
@@ -133,25 +172,54 @@ test("an os-next branch skips even when the merge-base has no result of its own"
   ).toMatchObject({ action: "skip" });
 });
 
-test.each([["apps/os/index.ts"], ["packages/shared/src/index.ts"]])(
-  "os-next mixed with %s still deploys the fleet",
-  async (path) => {
-    using repo = repository();
-    repo.commit({ "apps/os/index.ts": "main" });
-    repo.git("switch", "-c", "feature");
-    repo.commit({ "apps/os-next/src/boot.ts": "os-next work" });
-    const head = repo.commit({
-      [path]: "shared change",
-      "apps/os-next/src/more.ts": "and os-next",
-    });
-    expect(
-      await planPreview(repo.history(), {
-        findPreviewResult: async () => null,
-        findPreviewDeployment: async () => null,
-      }),
-    ).toMatchObject({ action: "deploy", reason: expect.stringContaining(head) });
-  },
-);
+test("a #2828-shaped branch (os-next, dash, agents, its preview workflow) skips the fleet", async () => {
+  using repo = repository();
+  repo.commit({ "apps/os/index.ts": "main" });
+  repo.git("switch", "-c", "feature");
+  repo.commit({
+    "apps/os-next/src/control-plane/durable-object.ts": "control plane",
+    "apps/os-next/e2e/session.e2e.test.ts": "e2e",
+    "apps/os-next/README.md": "docs",
+    "apps/dash/src/lib/projects.ts": "dash",
+    "apps/dash/src/components/dash-nav.tsx": "dash component",
+    "apps/agents/__workers-tests__/agent-revive.test.ts": "agents test",
+    ".depot/workflows/preview-os-next.yml": "workflow",
+  });
+  repo.commit({ "packages/iterate/src/next/api.ts": "next sdk" });
+  const plan = await planPreview(repo.history(), {
+    findPreviewResult: async () => {
+      throw new Error("A skipped preview consults no ancestor result");
+    },
+    findPreviewDeployment: async () => {
+      throw new Error("A skipped preview consults no deployment");
+    },
+  });
+  expect(plan).toMatchObject({ action: "skip" });
+});
+
+test.each([
+  ["apps/os/index.ts"],
+  ["packages/shared/src/index.ts"],
+  ["packages/ui/src/components/button.tsx"],
+  ["packages/iterate/src/sdk.ts"],
+  ["envs.ts"],
+  ["pnpm-lock.yaml"],
+])("os-next mixed with %s still deploys the fleet", async (path) => {
+  using repo = repository();
+  repo.commit({ "apps/os/index.ts": "main" });
+  repo.git("switch", "-c", "feature");
+  repo.commit({ "apps/os-next/src/boot.ts": "os-next work" });
+  const head = repo.commit({
+    [path]: "shared change",
+    "apps/os-next/src/more.ts": "and os-next",
+  });
+  expect(
+    await planPreview(repo.history(), {
+      findPreviewResult: async () => null,
+      findPreviewDeployment: async () => null,
+    }),
+  ).toMatchObject({ action: "deploy", reason: expect.stringContaining(head) });
+});
 
 test("an os-next branch carrying an untested apps/os commit deploys, revert or not", async () => {
   using repo = repository();
