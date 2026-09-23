@@ -14,9 +14,9 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
     entry: [
       ...(base.entry ?? []).filter((entry) => entry !== "scripts/router.ts"),
       "e2e/vitest.config.ts",
-      "e2e/tui-test/tui-test.config.ts",
       "e2e/tui-test/run.ts",
-      "e2e/tui-test/data-layer-smoke.ts",
+      // The mobile approver still consumes OS crypto helpers after the CLI approver was removed.
+      "../mobile/src/lib/approver-core.ts",
       // The sidecar worker entries (wrangler.{worker-bundler,typechecker}.jsonc,
       // generated and gitignored — knip cannot see the configs that
       // reference them).
@@ -34,8 +34,6 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       // Used while root-level config templates are staged under apps/os for
       // typechecking; that script-driven import graph is opaque to Knip.
       "@iterate-com/docs",
-      "@opentui/core",
-      "@opentui/react",
       "iterate",
       "miniflare",
     ],
@@ -161,6 +159,9 @@ function makeIterateCliWorkspace(): WorkspaceConfig {
       "src/index.ts",
       "src/worker.ts",
       "src/cli.ts",
+      // Legacy approvals are intentionally retained, but not mounted by the OS Next CLI.
+      "src/approve.ts",
+      "src/approve-json.ts",
       "bin/iterate.js",
       "scripts/*.ts",
       "tsdown.app-clients.config.ts",

@@ -1,750 +1,441 @@
-import { execFile, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
+import { execFile } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { os } from "@orpc/server";
-import { parseRouter } from "trpc-cli";
-import { describe, expect, test, vi } from "vitest";
-import { z } from "zod/v4";
-import { listenOnFetchSafePort } from "../../shared/src/test-support/fetch-safe-port.ts";
-import {
-  buildChatCommand,
-  defaultBareInvocationToChat,
-  ensureBearerAuthHeadersForChat,
-  oauthResourceForOsBaseUrl,
-  refreshOAuthSession,
-  replaceWithInheritedProcess,
-  resolveChatProject,
-  verifyOsSession,
-} from "./cli.ts";
-
-test("chat passes its CLI/config identity to local slash-command providers", () => {
-  expect(
-    buildChatCommand({
-      agentPath: "/agents/test",
-      cliPath: "/opt/iterate/bin/iterate.js",
-      configName: "preview_3",
-      entrypointPath: "/opt/iterate/dist/agent-chat-terminal.mjs",
-      osBaseUrl: "https://os.iterate-preview-3.com",
-      projectId: "prj_test",
-    }),
-  ).toEqual({
-    command: "bun",
-    args: [
-      "/opt/iterate/dist/agent-chat-terminal.mjs",
-      "--base-url",
-      "https://os.iterate-preview-3.com",
-      "--project-id",
-      "prj_test",
-      "--agent-path",
-      "/agents/test",
-      "--cli-path",
-      "/opt/iterate/bin/iterate.js",
-      "--config-name",
-      "preview_3",
-    ],
-  });
-});
-
-const createFakeSession = (input: {
-  listError?: unknown;
-  onConnect?: (connectInput: { auth: unknown; baseUrl: string }) => void;
-  description?: { principal: string };
-  onProjectCreate?: (args: unknown, options: unknown) => void;
-  onProjectWaitUntilCreated?: () => void;
-  projects?: Array<{
-    deploymentStatus: "created" | "creating" | "failed" | "missing" | "unknown";
-    id: string;
-    organizationId: string | null;
-    organizationName: string | null;
-    organizationSlug: string | null;
-    slug: string;
-  }>;
-}) => {
-  const disposeAuthenticated = vi.fn();
-  const disposeProject = vi.fn();
-  const createSession = ((connectInput: { auth: unknown; baseUrl: string }) => {
-    input.onConnect?.(connectInput);
-    return {
-      __describe: async () => ({
-        children: {},
-        instructions: "",
-        principal: "user_test",
-        types: "",
-        ...input.description,
-      }),
-      projects: {
-        get: (_slug: string) => ({
-          create: async (args: unknown, options: unknown) => {
-            input.onProjectCreate?.(args, options);
-            return {
-              [Symbol.dispose]: disposeProject,
-            };
-          },
-          waitUntilCreated: async () => input.onProjectWaitUntilCreated?.(),
-          [Symbol.dispose]: disposeProject,
-        }),
-        list: async () => {
-          if (input.listError) throw input.listError;
-          return input.projects ?? [];
-        },
-      },
-      [Symbol.dispose]: disposeAuthenticated,
-    };
-  }) as unknown as NonNullable<Parameters<typeof verifyOsSession>[0]["createSession"]>;
-
-  return { createSession, disposeAuthenticated, disposeProject };
-};
-
-describe("oauthResourceForOsBaseUrl", () => {
-  test("uses the stable portless loopback resource for local OS dev ports", () => {
-    expect(oauthResourceForOsBaseUrl("http://localhost:54896")).toBe("http://localhost");
-    expect(oauthResourceForOsBaseUrl("http://127.0.0.1:54896")).toBe("http://127.0.0.1");
-  });
-
-  test("preserves deployed OS origins", () => {
-    expect(oauthResourceForOsBaseUrl("https://os.iterate.com/")).toBe("https://os.iterate.com");
-  });
-});
-
-describe("refreshOAuthSession", () => {
-  test("uses the same normalized loopback resource as login", async () => {
-    let body: URLSearchParams | undefined;
-    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      body =
-        init?.body instanceof URLSearchParams ? init.body : new URLSearchParams(String(init?.body));
-      return new Response(
-        JSON.stringify({
-          access_token: "new-token",
-          expires_in: 3600,
-          refresh_token: "refresh-token",
-          token_type: "Bearer",
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    });
-    vi.stubGlobal("fetch", fetch);
-
-    try {
-      await refreshOAuthSession({
-        config: {
-          authBaseUrl: "https://auth.iterate.com",
-          osBaseUrl: "http://localhost:54896",
-        },
-        session: {
-          clientId: "client-id",
-          refreshToken: "refresh-token",
-          token: "old-token",
-        },
-      });
-    } finally {
-      vi.unstubAllGlobals();
-    }
-
-    expect(fetch).toHaveBeenCalledWith(
-      "https://auth.iterate.com/api/auth/oauth2/token",
-      expect.objectContaining({ method: "POST" }),
-    );
-    expect(body?.get("resource")).toBe("http://localhost");
-  });
-});
-
-describe("verifyOsSession", () => {
-  test("authenticates against the capnweb WebSocket /api surface with a bearer token", async () => {
-    let connectInput: { auth: unknown; baseUrl: string } | undefined;
-    const fake = createFakeSession({
-      description: { principal: "user_123" },
-      onConnect: (value) => {
-        connectInput = value;
-      },
-    });
-
-    const description = await verifyOsSession({
-      authHeaders: { authorization: "Bearer token_123" },
-      baseUrl: "https://os.iterate.com/",
-      createSession: fake.createSession,
-    });
-
-    expect(connectInput).toEqual({
-      auth: { credentials: { type: "bearer", token: "token_123" } },
-      baseUrl: "https://os.iterate.com/",
-    });
-    expect(description.principal).toBe("user_123");
-    expect(fake.disposeAuthenticated).toHaveBeenCalledOnce();
-  });
-});
-
-describe("defaultBareInvocationToChat", () => {
-  test("runs generic chat for a bare invocation", () => {
-    expect(defaultBareInvocationToChat([])).toEqual(["chat"]);
-  });
-
-  test("leaves explicit commands and flags untouched", () => {
-    const explicit = ["chat", "--project", "prj_123"];
-    expect(defaultBareInvocationToChat(explicit)).toBe(explicit);
-
-    const help = ["--help"];
-    expect(defaultBareInvocationToChat(help)).toBe(help);
-  });
-});
-
-describe("replaceWithInheritedProcess", () => {
-  test("replaces the launcher process with inherited arguments and environment", () => {
-    const replacementReached = new Error("replacement reached");
-    const execve = vi.fn(
-      (_file: string, _args: string[], _environment: Record<string, string>): never => {
-        throw replacementReached;
-      },
-    );
-
-    expect(() =>
-      replaceWithInheritedProcess({
-        command: process.execPath,
-        args: ["entrypoint.mjs", "--flag"],
-        env: {
-          ITERATE_EXECVE_TEST: "inherited",
-          ITERATE_EXECVE_UNSET: undefined,
-        },
-        execve,
-      }),
-    ).toThrow(replacementReached);
-
-    expect(execve).toHaveBeenCalledOnce();
-    expect(execve).toHaveBeenCalledWith(
-      process.execPath,
-      [process.execPath, "entrypoint.mjs", "--flag"],
-      expect.objectContaining({ ITERATE_EXECVE_TEST: "inherited" }),
-    );
-    const environment = execve.mock.calls[0]?.[2];
-    expect(environment).not.toHaveProperty("ITERATE_EXECVE_UNSET");
-  });
-});
-
-describe("bin wrapper", () => {
-  test("loads repo source through Node's strip-only loader and prints help without contacting OS", async () => {
-    const binPath = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
-    const packageRoot = fileURLToPath(new URL("..", import.meta.url));
-    const requests: string[] = [];
-    await using server = createServer((request, response) => {
-      requests.push(request.url!);
-      response.writeHead(503).end("OS unavailable");
-    });
-    const port = await listenOnFetchSafePort(server);
-    using config = cliConfig(`http://127.0.0.1:${port}`);
-
-    const result = await promisify(execFile)(process.execPath, [binPath, "--help"], {
-      cwd: packageRoot,
-      encoding: "utf8",
-      env: { ...process.env, NO_COLOR: "1", XDG_CONFIG_HOME: config.directory },
-      timeout: 5000,
-    });
-
-    expect(result.stderr).not.toContain("ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX");
-    expect(`${result.stdout}\n${result.stderr}`).toContain("iterate");
-    expect(result.stdout).toContain("os");
-    expect(requests).toEqual([]);
-  });
-
-  test("OS command help still discovers the configured server's commands", async () => {
-    const requests: string[] = [];
-    await using server = createServer((request, response) => {
-      requests.push(request.url!);
-      response.setHeader("content-type", "application/json");
-      response.end(
-        JSON.stringify({
-          procedures: parseRouter({
-            router: {
-              status: os.input(z.object({})).handler(() => ({ ok: true })),
-            },
-          }),
-        }),
-      );
-    });
-    const port = await listenOnFetchSafePort(server);
-    using config = cliConfig(`http://127.0.0.1:${port}`);
-    const binPath = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
-
-    const result = await promisify(execFile)(process.execPath, [binPath, "os", "--help"], {
-      encoding: "utf8",
-      env: { ...process.env, NO_COLOR: "1", XDG_CONFIG_HOME: config.directory },
-      timeout: 5000,
-    });
-
-    expect(result.stdout).toContain("Available subcommands: status");
-    expect(requests).toEqual(["/api/trpc-cli-procedures"]);
-  });
-
-  test("npx-style execution uses the published package instead of repo source", () => {
-    const sourceBinPath = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
-    const packageRoot = fileURLToPath(new URL("..", import.meta.url));
-    const tempRoot = mkdtempSync(join(tmpdir(), "iterate-bin-test-"));
-    const fakePackageRoot = join(tempRoot, "node_modules", "iterate");
-    const fakeBinDir = join(fakePackageRoot, "bin");
-    const fakeDistDir = join(fakePackageRoot, "dist");
-    const fakeBinPath = join(fakeBinDir, "iterate.js");
-
-    try {
-      mkdirSync(fakeBinDir, { recursive: true });
-      mkdirSync(fakeDistDir, { recursive: true });
-      writeFileSync(join(fakePackageRoot, "package.json"), '{"type":"module"}\n');
-      writeFileSync(fakeBinPath, readFileSync(sourceBinPath));
-      writeFileSync(
-        join(fakeDistDir, "index.mjs"),
-        "export async function runCli() { console.log('fake published dist'); }\n",
-      );
-
-      const result = spawnSync(process.execPath, [fakeBinPath], {
-        cwd: packageRoot,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          npm_command: "exec",
-          npm_lifecycle_event: "npx",
-        },
-      });
-
-      expect(result.status, result.stderr || result.stdout).toBe(0);
-      expect(result.stdout.trim()).toBe("fake published dist");
-    } finally {
-      rmSync(tempRoot, { force: true, recursive: true });
-    }
-  });
-
-  test("the PTY harness can force the built artifact while running inside the repo", () => {
-    const sourceBinPath = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
-    const packageRoot = fileURLToPath(new URL("..", import.meta.url));
-    const tempRoot = mkdtempSync(join(tmpdir(), "iterate-bin-test-"));
-    const fakePackageRoot = join(tempRoot, "node_modules", "iterate");
-    const fakeBinDir = join(fakePackageRoot, "bin");
-    const fakeDistDir = join(fakePackageRoot, "dist");
-    const fakeBinPath = join(fakeBinDir, "iterate.js");
-
-    try {
-      mkdirSync(fakeBinDir, { recursive: true });
-      mkdirSync(fakeDistDir, { recursive: true });
-      writeFileSync(join(fakePackageRoot, "package.json"), '{"type":"module"}\n');
-      writeFileSync(fakeBinPath, readFileSync(sourceBinPath));
-      writeFileSync(
-        join(fakeDistDir, "index.mjs"),
-        "export async function runCli() { console.log('forced built dist'); }\n",
-      );
-
-      const result = spawnSync(process.execPath, [fakeBinPath], {
-        cwd: packageRoot,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          ITERATE_FORCE_BUILT_PACKAGE: "1",
-          npm_command: "",
-          npm_lifecycle_event: "",
-        },
-      });
-
-      expect(result.status, result.stderr || result.stdout).toBe(0);
-      expect(result.stdout.trim()).toBe("forced built dist");
-    } finally {
-      rmSync(tempRoot, { force: true, recursive: true });
-    }
-  });
-
-  test("normal installed execution still delegates to repo source", () => {
-    const sourceBinPath = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
-    const packageRoot = fileURLToPath(new URL("..", import.meta.url));
-    const tempRoot = mkdtempSync(join(tmpdir(), "iterate-bin-test-"));
-    const fakePackageRoot = join(tempRoot, "node_modules", "iterate");
-    const fakeBinDir = join(fakePackageRoot, "bin");
-    const fakeDistDir = join(fakePackageRoot, "dist");
-    const fakeBinPath = join(fakeBinDir, "iterate.js");
-
-    try {
-      mkdirSync(fakeBinDir, { recursive: true });
-      mkdirSync(fakeDistDir, { recursive: true });
-      writeFileSync(join(fakePackageRoot, "package.json"), '{"type":"module"}\n');
-      writeFileSync(fakeBinPath, readFileSync(sourceBinPath));
-      writeFileSync(
-        join(fakeDistDir, "index.mjs"),
-        "export async function runCli() { console.log('fake published dist'); }\n",
-      );
-
-      const result = spawnSync(process.execPath, [fakeBinPath, "--help"], {
-        cwd: packageRoot,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          NO_COLOR: "1",
-          npm_command: "",
-          npm_lifecycle_event: "",
-        },
-      });
-
-      expect(result.status, result.stderr || result.stdout).toBe(0);
-      expect(result.stdout).not.toContain("fake published dist");
-      expect(`${result.stdout}\n${result.stderr}`).toContain("Iterate CLI");
-    } finally {
-      rmSync(tempRoot, { force: true, recursive: true });
-    }
-  });
-});
-
-describe("ensureBearerAuthHeadersForChat", () => {
-  test("uses an existing bearer session without logging in", async () => {
-    const login = vi.fn();
-    await expect(
-      ensureBearerAuthHeadersForChat({
-        getAuthHeaders: async () => ({ authorization: "Bearer token_123" }),
-        login,
-        osBaseUrl: "https://os.iterate.com",
-      }),
-    ).resolves.toEqual({ authorization: "Bearer token_123" });
-
-    expect(login).not.toHaveBeenCalled();
-  });
-
-  test("logs in when the stored session is not usable as a bearer token", async () => {
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    const login = vi.fn();
-    const getAuthHeaders = vi
-      .fn<() => Promise<{ authorization?: string; cookie?: string }>>()
-      .mockResolvedValueOnce({ cookie: "session=old" })
-      .mockResolvedValueOnce({ authorization: "Bearer token_new" });
-
-    await expect(
-      ensureBearerAuthHeadersForChat({
-        getAuthHeaders,
-        login,
-        osBaseUrl: "https://os.iterate.com",
-      }),
-    ).resolves.toEqual({ authorization: "Bearer token_new" });
-
-    expect(login).toHaveBeenCalledOnce();
-    expect(consoleError).toHaveBeenCalledWith(
-      "Stored session for https://os.iterate.com cannot be used for chat. Starting browser login...",
-    );
-    consoleError.mockRestore();
-  });
-});
-
-describe("resolveChatProject", () => {
-  test("uses the only created accessible project when no config default is set", async () => {
-    const fake = createFakeSession({
-      projects: [
-        {
-          deploymentStatus: "created",
-          id: "prj_only",
-          organizationId: null,
-          organizationName: null,
-          organizationSlug: null,
-          slug: "only",
-        },
-      ],
-    });
-
-    await expect(
-      resolveChatProject({
-        auth: { credentials: { type: "bearer", token: "token_123" } },
-        baseUrl: "https://os.iterate.com",
-        configName: "prd",
-        configPath: "/tmp/config.json",
-        createSession: fake.createSession,
-      }),
-    ).resolves.toBe("prj_only");
-  });
-
-  test("sets up the only missing accessible project before selecting it for chat", async () => {
-    let createArgs: unknown;
-    let createOptions: unknown;
-    const fake = createFakeSession({
-      onProjectCreate: (args, options) => {
-        createArgs = args;
-        createOptions = options;
-      },
-      projects: [
-        {
-          deploymentStatus: "missing",
-          id: "prj_missing",
-          organizationId: null,
-          organizationName: null,
-          organizationSlug: null,
-          slug: "missing",
-        },
-      ],
-    });
-
-    await expect(
-      resolveChatProject({
-        auth: { credentials: { type: "bearer", token: "token_123" } },
-        baseUrl: "https://os.iterate.com",
-        configName: "prd",
-        configPath: "/tmp/config.json",
-        createSession: fake.createSession,
-      }),
-    ).resolves.toBe("prj_missing");
-
-    expect(createArgs).toEqual({
-      projectId: "prj_missing",
-    });
-    expect(createOptions).toBeUndefined();
-    expect(fake.disposeProject).toHaveBeenCalledOnce();
-  });
-
-  test("resolves and sets up a configured project slug when it is missing", async () => {
-    let createArgs: unknown;
-    let createOptions: unknown;
-    const fake = createFakeSession({
-      onProjectCreate: (args, options) => {
-        createArgs = args;
-        createOptions = options;
-      },
-      projects: [
-        {
-          deploymentStatus: "missing",
-          id: "prj_default",
-          organizationId: null,
-          organizationName: null,
-          organizationSlug: null,
-          slug: "default",
-        },
-      ],
-    });
-
-    await expect(
-      resolveChatProject({
-        auth: { credentials: { type: "bearer", token: "token_123" } },
-        baseUrl: "https://os.iterate.com",
-        configName: "prd",
-        configPath: "/tmp/config.json",
-        configuredDefaultProject: "default",
-        createSession: fake.createSession,
-      }),
-    ).resolves.toBe("prj_default");
-
-    expect(createArgs).toEqual({
-      projectId: "prj_default",
-    });
-    expect(createOptions).toBeUndefined();
-  });
-
-  test("passes the organization slug when setting up a missing project", async () => {
-    let createArgs: unknown;
-    let createOptions: unknown;
-    const fake = createFakeSession({
-      onProjectCreate: (args, options) => {
-        createArgs = args;
-        createOptions = options;
-      },
-      projects: [
-        {
-          deploymentStatus: "missing",
-          id: "prj_org_project",
-          organizationId: "org_123",
-          organizationName: "Acme",
-          organizationSlug: "acme",
-          slug: "org-project",
-        },
-      ],
-    });
-
-    await expect(
-      resolveChatProject({
-        auth: { credentials: { type: "bearer", token: "token_123" } },
-        baseUrl: "https://os.iterate.com",
-        configName: "prd",
-        configPath: "/tmp/config.json",
-        createSession: fake.createSession,
-      }),
-    ).resolves.toBe("prj_org_project");
-
-    expect(createArgs).toEqual({
-      organizationSlug: "acme",
-      projectId: "prj_org_project",
-    });
-    expect(createOptions).toBeUndefined();
-  });
-
-  test("waits for the only creating project before selecting it for chat", async () => {
-    const onProjectWaitUntilCreated = vi.fn();
-    const fake = createFakeSession({
-      onProjectWaitUntilCreated,
-      projects: [
-        {
-          deploymentStatus: "creating",
-          id: "prj_creating",
-          organizationId: null,
-          organizationName: null,
-          organizationSlug: null,
-          slug: "creating",
-        },
-      ],
-    });
-
-    await expect(
-      resolveChatProject({
-        auth: { credentials: { type: "bearer", token: "token_123" } },
-        baseUrl: "https://os.iterate.com",
-        configName: "prd",
-        configPath: "/tmp/config.json",
-        createSession: fake.createSession,
-      }),
-    ).resolves.toBe("prj_creating");
-
-    expect(onProjectWaitUntilCreated).toHaveBeenCalledOnce();
-    expect(fake.disposeProject).toHaveBeenCalledOnce();
-  });
-
-  test("rejects a project whose creation failed", async () => {
-    const fake = createFakeSession({
-      projects: [
-        {
-          deploymentStatus: "failed",
-          id: "prj_failed",
-          organizationId: null,
-          organizationName: null,
-          organizationSlug: null,
-          slug: "failed",
-        },
-      ],
-    });
-
-    await expect(
-      resolveChatProject({
-        auth: { credentials: { type: "bearer", token: "token_123" } },
-        baseUrl: "https://os.iterate.com",
-        configName: "prd",
-        configPath: "/tmp/config.json",
-        createSession: fake.createSession,
-      }),
-    ).rejects.toThrow(/creation failed/);
-  });
-
-  test("rejects a configured project slug that is not accessible", async () => {
-    const fake = createFakeSession({
-      projects: [
-        {
-          deploymentStatus: "created",
-          id: "prj_other",
-          organizationId: null,
-          organizationName: null,
-          organizationSlug: null,
-          slug: "other",
-        },
-      ],
-    });
-
-    await expect(
-      resolveChatProject({
-        auth: { credentials: { type: "bearer", token: "token_123" } },
-        baseUrl: "https://os.iterate.com",
-        configName: "prd",
-        configPath: "/tmp/config.json",
-        configuredDefaultProject: "missing-slug",
-        createSession: fake.createSession,
-      }),
-    ).rejects.toThrow(
-      /Project "missing-slug" was not found among accessible projects.*other \(prj_other, created\)/,
-    );
-  });
-
-  test("passes through a configured project id that is not in the project list", async () => {
-    const fake = createFakeSession({ projects: [] });
-
-    await expect(
-      resolveChatProject({
-        auth: { credentials: { type: "bearer", token: "token_123" } },
-        baseUrl: "https://os.iterate.com",
-        configName: "prd",
-        configPath: "/tmp/config.json",
-        configuredDefaultProject: "prj_manual",
-        createSession: fake.createSession,
-      }),
-    ).resolves.toBe("prj_manual");
-  });
-
-  test("uses an explicit project id without enumerating accessible projects", async () => {
-    const onConnect = vi.fn();
-    const fake = createFakeSession({
-      listError: new Error("project catalog must not be queried"),
-      onConnect,
-    });
-
-    await expect(
-      resolveChatProject({
-        auth: { credentials: { type: "bearer", token: "token_123" } },
-        baseUrl: "https://os.iterate.com",
-        configName: "prd",
-        configPath: "/tmp/config.json",
-        explicitProject: "prj_explicit",
-        createSession: fake.createSession,
-      }),
-    ).resolves.toBe("prj_explicit");
-
-    expect(onConnect).not.toHaveBeenCalled();
-  });
-
-  test("does not bypass project resolution when listing accessible projects fails", async () => {
-    const fake = createFakeSession({ listError: new Error("list exploded") });
-
-    await expect(
-      resolveChatProject({
-        auth: { credentials: { type: "bearer", token: "token_123" } },
-        baseUrl: "https://os.iterate.com",
-        configName: "prd",
-        configPath: "/tmp/config.json",
-        configuredDefaultProject: "default",
-        createSession: fake.createSession,
-      }),
-    ).rejects.toThrow(
-      /could not list accessible projects.*cannot resolve slugs or recover auth-known projects.*list exploded/,
-    );
-  });
-
-  test("keeps asking for an explicit project when multiple projects are accessible", async () => {
-    const fake = createFakeSession({
-      projects: [
-        {
-          deploymentStatus: "created",
-          id: "prj_one",
-          organizationId: null,
-          organizationName: null,
-          organizationSlug: null,
-          slug: "one",
-        },
-        {
-          deploymentStatus: "created",
-          id: "prj_two",
-          organizationId: null,
-          organizationName: null,
-          organizationSlug: null,
-          slug: "two",
-        },
-      ],
-    });
-
-    await expect(
-      resolveChatProject({
-        auth: { credentials: { type: "bearer", token: "token_123" } },
-        baseUrl: "https://os.iterate.com",
-        configName: "prd",
-        configPath: "/tmp/config.json",
-        createSession: fake.createSession,
-      }),
-    ).rejects.toThrow(/Accessible projects: one \(prj_one, created\), two \(prj_two, created\)/);
-  });
-});
-
-function cliConfig(osBaseUrl: string) {
-  const directory = mkdtempSync(join(tmpdir(), "iterate-cli-config-"));
+import { newWebSocketRpcSession, RpcTarget } from "capnweb";
+import { WebSocketServer } from "ws";
+import { expect, test, vi } from "vitest";
+import { oauthResourceForOsBaseUrl, refreshOAuthSession } from "./cli.ts";
+import { connectOsNext } from "./next-node.ts";
+import { Config } from "./config.ts";
+import { MyComputer } from "./use-my-computer.ts";
+
+const bin = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
+function cliConfig(baseUrl: string) {
+  const directory = mkdtempSync(join(tmpdir(), "iterate-next-cli-"));
   mkdirSync(join(directory, "iterate"));
   writeFileSync(
     join(directory, "iterate/config.json"),
-    JSON.stringify({ default: "test", configs: { test: { osBaseUrl } } }),
+    JSON.stringify({
+      default: "test",
+      configs: { test: { osBaseUrl: baseUrl, session: { token: "test-token" } } },
+    }),
   );
-  return {
-    directory,
-    [Symbol.dispose]() {
-      rmSync(directory, { recursive: true, force: true });
-    },
-  };
+  return { directory, [Symbol.dispose]: () => rmSync(directory, { recursive: true, force: true }) };
 }
+function runCli(directory: string, args: string[]) {
+  return promisify(execFile)(process.execPath, [bin, ...args], {
+    env: {
+      ...process.env,
+      XDG_CONFIG_HOME: directory,
+      NO_COLOR: "1",
+      APP_CONFIG_ADMIN_API_SECRET: "",
+      ITERATE_BEARER_TOKEN: "",
+    },
+    timeout: 10_000,
+  });
+}
+
+test(
+  "bare invocation and all command help work offline; retired commands are absent",
+  { timeout: 20_000 },
+  async () => {
+    using config = cliConfig("http://127.0.0.1:1");
+    for (const args of [
+      [],
+      ["--help"],
+      ["itx", "run", "--help"],
+      ["use-my-computer", "--help"],
+      ["menubar", "--help"],
+      ["repl", "--help"],
+    ]) {
+      const { stdout } = await runCli(config.directory, args);
+      expect(stdout).toContain("iterate");
+      expect(stdout).not.toMatch(/\b(chat|approve|daemon)\b/);
+    }
+    await expect(runCli(config.directory, ["chat"])).rejects.toThrow();
+  },
+);
+
+test("OAuth uses OS Next's API audience including the local port", () => {
+  expect(Config.parse({}).osBaseUrl).toBe("https://os.iterate2.com");
+  expect(oauthResourceForOsBaseUrl("http://localhost:54896/")).toBe("http://localhost:54896/api");
+  expect(oauthResourceForOsBaseUrl("https://os.iterate2.com")).toBe("https://os.iterate2.com/api");
+});
+
+test("refresh goes to the same OS Next issuer and rejects malformed tokens", async () => {
+  const fetch = vi
+    .fn()
+    .mockResolvedValue(
+      new Response(JSON.stringify({ access_token: "new-token", expires_in: 3600 })),
+    );
+  vi.stubGlobal("fetch", fetch);
+  try {
+    const input = {
+      config: Config.parse({ osBaseUrl: "http://localhost:54896" }),
+      session: { token: "old-token", clientId: "client", refreshToken: "refresh" },
+    };
+    expect(await refreshOAuthSession(input)).toMatchObject({
+      token: "new-token",
+      refreshToken: "refresh",
+    });
+    expect(fetch.mock.calls[0][0]).toBe("http://localhost:54896/oauth2/token");
+    expect(fetch.mock.calls[0][1].body.get("resource")).toBe("http://localhost:54896/api");
+    fetch.mockResolvedValueOnce(new Response("{}"));
+    await expect(refreshOAuthSession(input)).rejects.toThrow();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+test(
+  "CLI authenticates and runs inline/file/stdin scripts exactly once over the OS Next protocol",
+  { timeout: 30_000 },
+  async () => {
+    const calls: unknown[] = [];
+    class Context extends RpcTarget {
+      cd(path: string) {
+        calls.push({ path });
+        return new Context();
+      }
+      run(script: string) {
+        calls.push({ script });
+        if (script.includes("throw")) throw new Error("script failed");
+        return { answer: 42 };
+      }
+    }
+    class Projects extends RpcTarget {
+      list() {
+        return [{ id: "prj_test", slug: "demo", orgId: "org_test" }];
+      }
+      get(project: string) {
+        calls.push({ project });
+        return new Context();
+      }
+    }
+    class Session extends RpcTarget {
+      whoami() {
+        return { actor: "user_test" };
+      }
+      get projects() {
+        return new Projects();
+      }
+    }
+    class Root extends RpcTarget {
+      authenticate(auth: unknown) {
+        calls.push({ auth });
+        return new Session();
+      }
+    }
+    const server = new WebSocketServer({ port: 0 });
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    server.on("connection", (socket) => {
+      newWebSocketRpcSession(socket as unknown as WebSocket, new Root());
+    });
+    const address = server.address();
+    if (typeof address === "string" || !address) throw new Error("No port");
+    using config = cliConfig(`http://127.0.0.1:${address.port}`);
+    try {
+      expect((await runCli(config.directory, ["ping"])).stdout).toContain("user_test");
+      const interactive = promisify(execFile)(
+        process.execPath,
+        [bin, "repl", "--project", "demo"],
+        {
+          env: {
+            ...process.env,
+            XDG_CONFIG_HOME: config.directory,
+            APP_CONFIG_ADMIN_API_SECRET: "",
+            ITERATE_BEARER_TOKEN: "",
+          },
+          timeout: 10_000,
+        },
+      );
+      interactive.child.stdin!.write("await itx.run('async () => 42')\n");
+      let replTranscript = "";
+      let sentExit = false;
+      interactive.child.stdout!.on("data", (chunk) => {
+        replTranscript += chunk.toString();
+        if (!sentExit && replTranscript.includes("42")) {
+          sentExit = true;
+          interactive.child.stdin!.end("typeof itx\ntypeof RpcTarget\n.clear\ntypeof itx\n.exit\n");
+        }
+      });
+      const replOutput = (await interactive).stdout;
+      expect(replOutput).toContain("42");
+      expect(replOutput).toContain("'function'");
+      expect(replOutput).not.toContain("undefined");
+      const sessionRepl = promisify(execFile)(process.execPath, [bin, "repl"], {
+        env: {
+          ...process.env,
+          XDG_CONFIG_HOME: config.directory,
+          APP_CONFIG_ADMIN_API_SECRET: "",
+          ITERATE_BEARER_TOKEN: "",
+        },
+        timeout: 10_000,
+      });
+      sessionRepl.child.stdin!.write("await itx.whoami()\n");
+      let sessionOutput = "";
+      let sessionExited = false;
+      sessionRepl.child.stdout!.on("data", (chunk) => {
+        sessionOutput += chunk.toString();
+        if (!sessionExited && sessionOutput.includes("user_test")) {
+          sessionExited = true;
+          sessionRepl.child.stdin!.end(".exit\n");
+        }
+      });
+      expect((await sessionRepl).stdout).toContain("user_test");
+      calls.length = 0;
+      const result = await runCli(config.directory, [
+        "itx",
+        "run",
+        "--context",
+        "/demo",
+        "--eval",
+        "return 42;",
+      ]);
+      expect(result.stdout).toContain("42");
+      expect(calls).toEqual([
+        { auth: { type: "bearer", token: "test-token" } },
+        { project: "prj_test" },
+        { path: "/demo" },
+        { script: "async (itx) => {\nreturn 42;\n}" },
+      ]);
+      const file = join(config.directory, "script.js");
+      writeFileSync(file, "return 42;");
+      expect(
+        (await runCli(config.directory, ["itx", "run", "--project", "demo", "--file", file]))
+          .stdout,
+      ).toContain("42");
+      const stdinResult = promisify(execFile)(
+        process.execPath,
+        [bin, "itx", "run", "--file", "-"],
+        {
+          env: {
+            ...process.env,
+            XDG_CONFIG_HOME: config.directory,
+            APP_CONFIG_ADMIN_API_SECRET: "",
+            ITERATE_BEARER_TOKEN: "",
+          },
+          timeout: 10_000,
+        },
+      );
+      stdinResult.child.stdin!.end("return 42;");
+      expect((await stdinResult).stdout).toContain("42");
+      calls.length = 0;
+      await expect(
+        runCli(config.directory, ["itx", "run", "--eval", "throw new Error('oops')"]),
+      ).rejects.toThrow();
+      expect(calls.filter((call) => "script" in (call as object))).toHaveLength(1);
+      calls.length = 0;
+      await expect(
+        runCli(config.directory, ["itx", "run", "--eval", "return 1", "--file", file]),
+      ).rejects.toThrow();
+      expect(calls).toEqual([]);
+    } finally {
+      for (const socket of server.clients) socket.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  },
+);
+
+test("computer is an RPC target with discoverable local methods", () => {
+  const computer = new MyComputer();
+  expect(computer).toBeInstanceOf(RpcTarget);
+  expect(computer.__describe().types).toContain("runSwift");
+});
+
+test("failed authentication releases the websocket", async () => {
+  class Root extends RpcTarget {
+    authenticate() {
+      throw new Error("Invalid token");
+    }
+  }
+  const server = new WebSocketServer({ port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  server.on("connection", (socket) =>
+    newWebSocketRpcSession(socket as unknown as WebSocket, new Root()),
+  );
+  const address = server.address();
+  if (typeof address === "string" || !address) throw new Error("No port");
+  try {
+    await expect(
+      connectOsNext({
+        baseUrl: `http://localhost:${address.port}`,
+        auth: { type: "bearer", token: "bad" },
+      }),
+    ).rejects.toThrow("Invalid token");
+    await vi.waitFor(() => expect(server.clients.size).toBe(0));
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test(
+  "config commands redact credentials and changing servers removes the old session",
+  { timeout: 15_000 },
+  async () => {
+    using config = cliConfig("http://127.0.0.1:1");
+    for (const command of ["get", "current"]) {
+      expect((await runCli(config.directory, ["config", command])).stdout).not.toContain(
+        "test-token",
+      );
+    }
+    const result = await runCli(config.directory, [
+      "config",
+      "set",
+      "--name",
+      "test",
+      "--os-base-url",
+      "http://localhost:2",
+      "--default-project",
+      "demo",
+    ]);
+    expect(result.stdout).not.toContain("test-token");
+    expect((await runCli(config.directory, ["config", "get"])).stdout).toContain("demo");
+    await expect(runCli(config.directory, ["ping"])).rejects.toThrow("Not logged in");
+  },
+);
+
+test("a pnpm shim for this package does not redirect source development to stale dist", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "iterate-bin-test-"));
+  try {
+    for (const path of ["bin", "src", "dist", "node_modules/.bin"])
+      mkdirSync(join(directory, path), { recursive: true });
+    copyFileSync(bin, join(directory, "bin/iterate.js"));
+    writeFileSync(join(directory, "package.json"), '{"type":"module"}');
+    writeFileSync(
+      join(directory, "src/index.ts"),
+      'export async function runCli() { console.log("source"); }',
+    );
+    writeFileSync(
+      join(directory, "dist/index.mjs"),
+      'export async function runCli() { console.log("build"); }',
+    );
+    writeFileSync(join(directory, "node_modules/.bin/iterate"), "#!/bin/sh\n");
+    symlinkSync(directory, join(directory, "node_modules/iterate"));
+    for (const [force, expected] of [
+      ["0", "source"],
+      ["1", "build"],
+    ]) {
+      const result = await promisify(execFile)(
+        process.execPath,
+        [join(directory, "bin/iterate.js")],
+        {
+          cwd: directory,
+          env: {
+            ...process.env,
+            ITERATE_FORCE_BUILT_PACKAGE: force,
+            npm_command: "",
+            npm_lifecycle_event: "",
+          },
+          timeout: 5000,
+        },
+      );
+      expect(result.stdout.trim()).toBe(expected);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an authentication timeout closes the transport without an unhandled RPC rejection", async () => {
+  const entered = Promise.withResolvers<void>();
+  class Root extends RpcTarget {
+    authenticate() {
+      entered.resolve();
+      return new Promise<never>(() => {});
+    }
+  }
+  const server = new WebSocketServer({ port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  server.on("connection", (socket) =>
+    newWebSocketRpcSession(socket as unknown as WebSocket, new Root()),
+  );
+  const address = server.address();
+  if (typeof address === "string" || !address) throw new Error("No port");
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const pending = connectOsNext({
+      baseUrl: `http://localhost:${address.port}`,
+      auth: { type: "bearer", token: "stalled" },
+    });
+    const rejected = expect(pending).rejects.toThrow("OS Next authentication timed out");
+    await entered.promise;
+    await vi.advanceTimersByTimeAsync(20_000);
+    await rejected;
+    vi.useRealTimers();
+    await vi.waitFor(() => expect(server.clients.size).toBe(0));
+  } finally {
+    vi.useRealTimers();
+    for (const socket of server.clients) socket.terminate();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("computer activity pairs a failed call with its completion", async () => {
+  const events: unknown[] = [];
+  const computer = new MyComputer((event) => events.push(event));
+  await expect(computer.ask({ question: "A question", buttons: [] })).rejects.toThrow("1–3");
+  expect(events).toEqual([
+    { type: "call", id: 1, method: "ask", summary: "A question" },
+    { type: "call-done", id: 1, ok: false },
+  ]);
+});
+
+test("menu-bar sharing releases its provision on stdin EOF", { timeout: 15_000 }, async () => {
+  let released = false;
+  class Provision extends RpcTarget {
+    [Symbol.dispose]() {
+      released = true;
+    }
+  }
+  class Project extends RpcTarget {
+    provide() {
+      return new Provision();
+    }
+  }
+  class Projects extends RpcTarget {
+    get() {
+      return new Project();
+    }
+  }
+  class Session extends RpcTarget {
+    get projects() {
+      return new Projects();
+    }
+  }
+  class Root extends RpcTarget {
+    authenticate() {
+      return new Session();
+    }
+  }
+  const server = new WebSocketServer({ port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  server.on("connection", (socket) => {
+    // ws implements the DOM WebSocket interface capnweb consumes.
+    newWebSocketRpcSession(socket as unknown as WebSocket, new Root());
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("No port");
+  const source = `
+    import { connectOsNext } from ${JSON.stringify(new URL("./next-node.ts", import.meta.url).href)};
+    import { shareMyComputer } from ${JSON.stringify(new URL("./use-my-computer.ts", import.meta.url).href)};
+    using connection = await connectOsNext({ baseUrl: "http://127.0.0.1:${address.port}", auth: { type: "bearer", token: "test" } });
+    await shareMyComputer({ connection, project: "demo", name: "testComputer", json: true });
+  `;
+  try {
+    const child = promisify(execFile)(process.execPath, ["--input-type=module", "--eval", source], {
+      timeout: 10_000,
+    });
+    child.child.stdin!.end();
+    expect((await child).stdout.trim()).toBe(
+      JSON.stringify({ type: "status", loggedIn: true, name: "testComputer" }),
+    );
+    await expect.poll(() => released).toBe(true);
+  } finally {
+    for (const client of server.clients) client.terminate();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

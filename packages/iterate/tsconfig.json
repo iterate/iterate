@@ -4,7 +4,7 @@
     "module": "nodenext",
     "lib": ["esnext", "dom"],
     "jsx": "react-jsx",
-    "jsxImportSource": "@opentui/react",
+    "jsxImportSource": "react",
     "types": ["node"],
     "paths": {
       "@iterate-com/auth-contract": ["../../apps/auth-contract/src/index.ts"],

@@ -141,10 +141,10 @@ export async function enrollKey(input: {
   log?: (message: string) => void;
 }): Promise<StoredApprovalKey> {
   const key =
-    input.existing ??
+    input.existing ||
     (await createApprovalKey({
       projectId: input.projectId,
-      label: `${process.env.USER ?? "user"}@${process.platform}`,
+      label: `${process.env.USER || "user"}@${process.platform}`,
       software: input.softwareKey,
       log: input.log,
     }));
@@ -175,9 +175,9 @@ export async function decide(input: {
   reason?: string;
   signature?: string;
 }): Promise<void> {
-  const signs = input.key !== null && input.verdicts.includes("approve");
+  const signs = Boolean(input.key) && input.verdicts.includes("approve");
   let signature = input.signature;
-  if (signature === undefined && signs) {
+  if (!signature && signs) {
     signature = await signApprovalMessage(
       input.key!,
       messageFor(input.projectId, input.offset, input.payload, input.verdicts),
@@ -190,7 +190,7 @@ export async function decide(input: {
     approvalRequestEventOffset: input.offset,
     verdicts: [...input.verdicts],
     decidedBy: "human" as const,
-    ...(reason && { reason }),
+    reason,
     ...(signs && { keyId: input.key!.keyId, signature }),
   };
   // The exact submission is replay-safe, while a corrected verdict, key, or
@@ -257,6 +257,7 @@ export async function reconcileBacklog(stream: RpcStub<Stream>): Promise<{
         settledIndexes.set(ref, indexes);
       } else if (
         !decisions.has(ref) &&
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- Legacy event payloads are asserted above, not validated; retain this runtime boundary check.
         Array.isArray(payload.verdicts) &&
         payload.verdicts.length === requests.get(ref)?.requests.length
       ) {
@@ -278,7 +279,7 @@ export async function reconcileBacklog(stream: RpcStub<Stream>): Promise<{
   // Map iteration is insertion order — paged ascending — so this is oldest first.
   for (const [offset, payload] of requests) {
     const verdicts = decisions.get(offset) ?? null;
-    if (verdicts !== null) {
+    if (verdicts) {
       const approved = verdicts.flatMap((verdict, index) => (verdict === "approve" ? [index] : []));
       if (approved.length === 0) continue; // all-reject (human or expiry) — terminal
       const settled = settledIndexes.get(offset) ?? new Set<number>();
@@ -300,7 +301,6 @@ export async function reconcileBacklog(stream: RpcStub<Stream>): Promise<{
  * bounded one-shot waits so no single RPC spans it.
  */
 const SETTLEMENT_WINDOW_MS = 120_000;
-const SETTLEMENT_CHUNK_MS = 25_000;
 
 /**
  * Read back what the egress door did with a decided batch: released (an
@@ -333,7 +333,7 @@ export async function awaitSettlement(
           afterOffset: cursor,
           eventTypes: [EVENT.settled, EVENT.decided],
           predicate: forThisBatch,
-          timeoutMs: Math.min(deadline - Date.now(), SETTLEMENT_CHUNK_MS),
+          timeoutMs: Math.min(deadline - Date.now(), 25_000),
         });
       } catch (error) {
         if (
@@ -358,6 +358,7 @@ export async function awaitSettlement(
       if (typeof payload.index !== "number") continue;
       outcomes.set(payload.index, {
         status: typeof payload.status === "number" ? payload.status : null,
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- Legacy event payloads are asserted above, not validated; retain this runtime boundary check.
         error: typeof payload.error === "string" ? payload.error : null,
       });
     }

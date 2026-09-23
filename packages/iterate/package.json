@@ -66,7 +66,8 @@
     "./next/oauth-scopes": "./src/next/oauth-scopes.ts",
     "./next/project-ingress": "./src/next/project-ingress.ts",
     "./next/oauth": "./src/next/client/oauth.ts",
-    "./next/stream/run": "./src/next/stream/run.ts"
+    "./next/stream/run": "./src/next/stream/run.ts",
+    "./next/node": "./src/next-node.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -266,15 +267,19 @@
         "types": "./dist/next/stream/run.d.ts",
         "import": "./dist/next/stream/run.mjs",
         "default": "./dist/next/stream/run.mjs"
+      },
+      "./next/node": {
+        "types": "./dist/next-node.d.ts",
+        "import": "./dist/next-node.mjs"
       }
     }
   },
   "files": [
     "bin",
     "dist",
-    "menubar",
     "README.md",
-    "THIRD_PARTY_NOTICES.md"
+    "THIRD_PARTY_NOTICES.md",
+    "menubar"
   ],
   "scripts": {
     "build": "node scripts/build.ts",
@@ -284,8 +289,8 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.0.0",
+    "@cloudflare/workers-types": "^5.20260831.1",
     "@iterate-com/capnweb": "^0.10.0",
-    "@orpc/client": "1.13.14",
     "@orpc/server": "1.13.14",
     "@tanstack/react-query": "^5.101.2",
     "capnweb": "npm:@iterate-com/capnweb@0.12.2",
@@ -298,10 +303,6 @@
     "yaml": "^2.9.0",
     "zod": "4.5.4"
   },
-  "optionalDependencies": {
-    "@opentui/core": "0.4.5",
-    "@opentui/react": "0.4.5"
-  },
   "peerDependencies": {
     "@tanstack/react-query": "^5",
     "octokit": "^5.0.5",
@@ -313,8 +314,6 @@
     }
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20260831.1",
-    "@iterate-com/ui": "workspace:*",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

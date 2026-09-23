@@ -88,25 +88,13 @@ export default defineConfig([
     clean: false,
   },
   {
-    entry: ["src/index.ts", "src/stream-tui/agent-chat-terminal.tsx"],
+    entry: ["src/index.ts"],
     format: "esm",
-    // The CLI + TUI are STANDALONE PROCESS artifacts (bin/iterate spawns the
-    // TUI as its own bun process; nothing imports these files in-process). The
-    // TUI carries its own private copy of the keeper — module-state sharing
-    // with the library entries is a non-goal across process boundaries — but
-    // react/react-query must stay EXTERNAL here: @opentui/react (the renderer,
-    // also external) owns the hook dispatcher, and an inlined react is a
-    // second copy → invalid-hook-call at first render (proven by the PTY
-    // spec). Their runtime presence comes from being real dependencies; the
-    // peer declaration is what makes a consuming app's copy win.
     dts: {
       resolver: "tsc",
     },
     sourcemap: true,
     clean: false,
-    // The native half of `iterate approve` ships as Swift source, compiled
-    // on the user's Mac on first use (see approval-keys.ts).
-    copy: [{ from: "src/enclave-approver.swift", to: "dist" }],
   },
   {
     entry: ["src/worker.ts"],
@@ -167,13 +155,13 @@ export default defineConfig([
     // splits their shared modules (the session keeper, live-state) into common
     // chunks, so every importable entry shares ONE keeper module instance in
     // the published artifact — separate objects would inline a private copy
-    // each and fork the one-socket module state. (The TUI bundle above is the
-    // deliberate exception: a spawned-process artifact, never imported.) No
+    // each and fork the one-socket module state. No
     // dts here for the same reason as sdk (the generated contract crashes
     // rolldown-plugin-dts); declarations come from `tsc -p tsconfig.sdk.json`.
     entry: {
       client: "src/client.ts",
       node: "src/node.ts",
+      "next-node": "src/next-node.ts",
       "sdk/capnweb": "src/sdk/capnweb/index.ts",
       "sdk/capnweb/react": "src/sdk/capnweb/react.tsx",
       "sdk/itx/react": "src/sdk/itx/react.ts",

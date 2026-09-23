@@ -29,7 +29,7 @@ function fakeStream(log: StreamEvent[]): RpcStub<Stream> {
           (args.eventTypes?.includes(event.type) ?? true) &&
           (args.predicate?.(event) ?? true),
       );
-      if (hit === undefined) {
+      if (!hit) {
         await new Promise((resolve) => setTimeout(resolve, 5));
         throw new Error("Timed out waiting for stream event");
       }

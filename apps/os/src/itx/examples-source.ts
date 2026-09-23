@@ -26,13 +26,7 @@ import type { ItxExample, ItxExampleRuntime } from "./examples.ts";
 // The only bindings the array evaluation needs before it (const initializers
 // do not hoist); the helper FUNCTIONS the entries call are declared below the
 // array and do.
-const ALL_RUNTIMES: ItxExampleRuntime[] = [
-  "browser",
-  "node",
-  "cli",
-  "run-script",
-  "project-worker",
-];
+const ALL_RUNTIMES: ItxExampleRuntime[] = ["browser", "node", "run-script", "project-worker"];
 
 /**
  * Runtimes that hold a LIVE caller-owned session for the whole call: live
@@ -41,14 +35,14 @@ const ALL_RUNTIMES: ItxExampleRuntime[] = [
  * — its Runs execute server-side as scope scripts — so these entries are
  * reading material there.
  */
-const LIVE_SESSION_RUNTIMES: ItxExampleRuntime[] = ["node", "cli"];
+const LIVE_SESSION_RUNTIMES: ItxExampleRuntime[] = ["node"];
 
 /**
  * Entries the unattended matrix skips for practical reasons (remote models,
  * connected accounts, long latency) but which are structurally fine to run
  * interactively — including from the project REPL.
  */
-const INTERACTIVE_RUNTIMES: ItxExampleRuntime[] = ["browser", "node", "cli"];
+const INTERACTIVE_RUNTIMES: ItxExampleRuntime[] = ["browser", "node"];
 
 /** The recursive MIME tree of a Gmail message payload (`format: "full"`);
  * body bytes are base64url in `body.data`. Used by gmail-search-inbox. */
@@ -174,7 +168,7 @@ return await itx.projects.get(pid).__describe();
     title: "Discover and notify an enrolled phone",
     description:
       "Every phone enrolled for this project is a durable itx.devices member. List safe metadata, choose a device, then append the ordinary notification-requested event. The server-side device processor calls Expo/APNs while the app is suspended and journals ticket, receipt, expiry, rejection, or uncertain outcomes on /devices/<deviceId>.",
-    runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
+    runtimes: ["browser", "node", "run-script", "project-worker"],
     fn: async (
       itx,
       vars: { body?: string; deviceId?: string; operationId?: string; title?: string },
@@ -243,7 +237,7 @@ return await itx.projects.get(pid).__describe();
     title: "Run a script server-side with itx.runScript",
     description:
       "runScript ships an `async (itx) => { … }` source string into the project's script isolate — the exact mechanism agent codemode uses. The execution leaves a two-event record (script-run-requested/-completed) on the scope's stream.",
-    runtimes: ["browser", "node", "cli", "project-worker"],
+    runtimes: ["browser", "node", "project-worker"],
     fn: async (itx) => {
       const execution = await itx.capabilityHost.runScript(`async (itx) => {
   const description = await itx.__describe();

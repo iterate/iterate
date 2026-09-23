@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// `iterate approve --menubar` — build (on first use) and launch the menu-bar
-// approver app.
+// `iterate menubar` — build (on first use) and launch the menu-bar
+// app.
 //
 // The published package ships only the Swift SOURCE (packages/iterate/menubar);
 // this compiles it with swiftc on the user's Mac, cached by source hash next to
@@ -39,7 +39,7 @@ export async function launchMenubarApp(input: {
   if (process.platform !== "darwin") {
     throw new Error("The menu-bar app is macOS-only.");
   }
-  const log = input.log ?? (() => {});
+  const log = input.log || (() => {});
   const menubarDir = join(import.meta.dirname, "..", "menubar");
   const binPath = join(import.meta.dirname, "..", "bin", "iterate.js");
 
@@ -73,17 +73,18 @@ export async function launchMenubarApp(input: {
         args: [binPath],
         config: input.configName,
         project: input.project,
+        xdgConfigHome: process.env.XDG_CONFIG_HOME,
       },
       null,
       2,
     )}\n`,
   );
 
-  const open = await run("open", [APP_PATH]);
+  const open = await run("open", ["-a", APP_PATH, join(CONFIG_DIR, "menubar.json")]);
   if (open.exitCode !== 0) throw new Error(`Could not launch the app: ${open.stderr.trim()}`);
   log(`Launched Iterate for project "${input.project}" (config ${input.configName}).`);
   log(
-    "It lives in your menu bar — click the 𝑖 to sign in, approve requests, and " +
+    "It lives in your menu bar — click the 𝑖 to sign in and " +
       "share your computer with the project's agents.",
   );
 }

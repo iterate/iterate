@@ -1,3 +1,4 @@
+import type { Ai } from "@cloudflare/workers-types";
 // next/api.ts — THE API AN APP DIALS: the shapes of os-next's `/api` root, the session it vends and a
 // context's surface, as a capnweb client sees them. DECLARED here, never generated, and never the
 // platform's classes: os-next asserts that `IterateRpcTarget` satisfies `IterateApi` and that
@@ -234,7 +235,8 @@ export interface IterateContextApi {
   provide(input: RewriteRuleConfigured): Promise<{ [Symbol.dispose](): void }>;
   provide(
     match: ItxExpressionInput,
-    target: ItxExpressionInput | null,
+    // Expressions, null, or live RPC references (RpcTarget / callable), serialized by capnweb.
+    target: unknown,
   ): Promise<{ [Symbol.dispose](): void }>;
   /** A script — the text of `async (itx) => { … }` — run once against this context, on its log:
    *  `context/run-requested` under the caller, the context's runner, `run-settled` (JSON in, JSON

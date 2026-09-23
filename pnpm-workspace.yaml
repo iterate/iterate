@@ -19,7 +19,6 @@ catalogs:
 minimumReleaseAge: 1440
 
 minimumReleaseAgeExclude:
-  - '@opentui/*'
   - miniflare
   - wrangler
   - workerd

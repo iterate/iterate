@@ -65,7 +65,10 @@ const findLocalModule = () => {
   // 2. Check for a local node_modules install
   const nmRoot = findUp("node_modules/.bin/iterate");
   if (nmRoot) {
-    const nmScript = join(nmRoot, "node_modules/.bin/iterate");
+    // pnpm's .bin entry is a shell shim, so compare the package's actual bin.
+    // Comparing the shim itself mistakes our own package for another install
+    // and sends repository development to a stale dist build.
+    const nmScript = join(nmRoot, "node_modules/iterate/bin/iterate.js");
     if (existsSync(nmScript) && realpathSync(nmScript) !== selfReal) {
       // Published package — use dist
       const nmDist = join(nmRoot, "node_modules/iterate/dist/index.mjs");

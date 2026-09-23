@@ -88,7 +88,7 @@ export async function createApprovalKey(input: {
   software?: boolean;
   log?: (message: string) => void;
 }): Promise<StoredApprovalKey> {
-  const log = input.log ?? (() => {});
+  const log = input.log || (() => {});
   const useEnclave = input.software !== true && process.platform === "darwin";
   let key: StoredApprovalKey;
   if (useEnclave) {
@@ -238,7 +238,7 @@ async function ensureEnclaveApprover(): Promise<string> {
  * STDIN — argv is world-readable via ps, so the key blob never goes there.
  */
 async function runJson(command: string, args: string[], stdin?: object): Promise<unknown> {
-  const result = await run(command, args, stdin === undefined ? undefined : JSON.stringify(stdin));
+  const result = await run(command, args, stdin ? JSON.stringify(stdin) : undefined);
   if (result.exitCode !== 0) {
     throw new Error(
       `${command} ${args[0]} failed (exit ${result.exitCode}): ${result.stderr.trim() || "no output"}`,

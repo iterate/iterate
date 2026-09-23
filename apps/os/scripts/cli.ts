@@ -7,7 +7,6 @@ import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 
 export * as configRepo from "./reset-config-repo.ts";
 export * as dev from "./dev.ts";
-export * as itx from "./itx.ts";
 export * as projectSeed from "./project-seed.ts";
 export * as session from "./session.ts";
 export * as voicelab from "./voicelab/index.ts";

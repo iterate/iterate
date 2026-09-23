@@ -1,12 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Iterate — a small macOS menu-bar app. Today it's the human-in-the-loop
-// approver for a project's egress.
+// companion for sign-in and computer sharing on OS Next.
+// The legacy approval watcher and UI remain dormant.
 //
-// Deliberately a THIN shell over the iterate CLI: it owns nothing but the
-// menu-bar icon and the dropdown. All transport, auth, streams, key storage,
-// and enclave signing live in `iterate approve --json`, which this app spawns
-// and talks to over stdio (NDJSON events in, {offset,decision} out). See
-// approve-json.ts for the protocol.
+// A thin shell over `iterate ping`, `iterate login`, and
+// `iterate use-my-computer --json`. The CLI owns authentication and transport.
+// Legacy approval models are retained below but are not started on OS Next.
 //
 // Single file, compiled with swiftc and wrapped in a minimal .app bundle by
 // build-menubar-app.sh — no Xcode project, no asset catalog: the 𝑖 icon is
@@ -29,6 +28,7 @@ struct MenuBarConfig: Codable {
   var config: String?  // iterate config name, e.g. "preview1"
   var project: String?  // project id or slug
   var cwd: String?  // working directory to spawn in
+  var xdgConfigHome: String? = nil
 
   static func load() -> MenuBarConfig {
     let path = ("~/.config/iterate/menubar.json" as NSString).expandingTildeInPath
@@ -82,7 +82,7 @@ final class ApprovalController: ObservableObject {
   /// actionable banners; otherwise notify() falls back to osascript.
   var notificationsAuthorized = false
 
-  private let config = MenuBarConfig.load()
+  private var config = MenuBarConfig.load()
   private var process: Process?
   private var loginProcess: Process?
   private var stdinHandle: FileHandle?
@@ -93,7 +93,59 @@ final class ApprovalController: ObservableObject {
   private var reconnectAttempts = 0
   private var generation = 0  // bumped on every stop(); voids stale queued reconnects
 
+  func configure(_ next: MenuBarConfig) {
+    stop()
+    loginProcess?.terminationHandler = nil
+    loginProcess?.terminate()
+    loginProcess = nil
+    loggedIn = false
+    principal = nil
+    project = nil
+    lastError = nil
+    config = next
+    start()
+  }
+
+  // OS Next has no approval transport. Keep the legacy watcher below dormant;
+  // use a bounded CLI authentication check for the menu bar's sign-in state.
   func start() {
+    stop()
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = [config.command] + config.argv(for: ["ping"], includeProject: false)
+    if let cwd = config.cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+    if let home = config.xdgConfigHome {
+      var environment = ProcessInfo.processInfo.environment
+      environment["XDG_CONFIG_HOME"] = home
+      process.environment = environment
+    }
+    process.standardOutput = FileHandle.nullDevice
+    let session = generation
+    process.terminationHandler = { [weak self] child in
+      DispatchQueue.main.async {
+        guard let self, self.generation == session else { return }
+        self.process = nil
+        self.loggedIn = child.terminationStatus == 0
+        self.connected = self.loggedIn
+        self.principal = self.loggedIn ? "Signed in" : nil
+        self.project = self.config.project
+        self.lastError = self.loggedIn ? nil : "Sign in or check your connection."
+      }
+    }
+    do {
+      try process.run()
+      self.process = process
+      DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+        guard let self, self.generation == session, process.isRunning else { return }
+        process.terminate()
+      }
+    } catch {
+      loggedIn = false
+      lastError = "Could not launch iterate: \(error.localizedDescription)"
+    }
+  }
+
+  private func startLegacyApprovalWatcher() {
     stop()
     sawStatus = false
     sessionStart = Date()
@@ -101,6 +153,11 @@ final class ApprovalController: ObservableObject {
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     process.arguments = [config.command] + config.argv(for: ["approve", "--json"])
     if let cwd = config.cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+    if let home = config.xdgConfigHome {
+      var environment = ProcessInfo.processInfo.environment
+      environment["XDG_CONFIG_HOME"] = home
+      process.environment = environment
+    }
 
     let stdout = Pipe()
     let stdin = Pipe()
@@ -199,6 +256,11 @@ final class ApprovalController: ObservableObject {
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     process.arguments = [config.command] + config.argv(for: ["login"], includeProject: false)
     if let cwd = config.cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+    if let home = config.xdgConfigHome {
+      var environment = ProcessInfo.processInfo.environment
+      environment["XDG_CONFIG_HOME"] = home
+      process.environment = environment
+    }
     process.terminationHandler = { [weak self] _ in
       Task { @MainActor in
         self?.loginProcess = nil
@@ -391,7 +453,7 @@ final class ComputerController: ObservableObject {
   /// display list still keeps the indicator honest.
   var inUse: Bool { activeCalls > 0 }
 
-  private let config = MenuBarConfig.load()
+  private var config = MenuBarConfig.load()
   private var process: Process?
   private var stdinHandle: FileHandle?
   private var stdoutHandle: FileHandle?
@@ -411,6 +473,11 @@ final class ComputerController: ObservableObject {
       .store(in: &cancellables)
   }
 
+  func configure(_ next: MenuBarConfig) {
+    stop()  // revoke the old project's share before accepting a new project
+    config = next
+  }
+
   /// Turn sharing on or off — safe to drive straight from a Toggle binding.
   func setEnabled(_ on: Bool) {
     guard on != enabled else { return }
@@ -426,6 +493,11 @@ final class ComputerController: ObservableObject {
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     process.arguments = [config.command] + config.argv(for: ["use-my-computer", "--json"])
     if let cwd = config.cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+    if let home = config.xdgConfigHome {
+      var environment = ProcessInfo.processInfo.environment
+      environment["XDG_CONFIG_HOME"] = home
+      process.environment = environment
+    }
 
     let stdout = Pipe()
     let stdin = Pipe()  // held open so the child lives; closing it stops sharing
@@ -581,7 +653,7 @@ struct DropdownView: View {
       header
       Divider()
       if controller.requests.isEmpty {
-        Text(controller.loggedIn ? "No requests waiting." : "Sign in to start approving.")
+        Text("Approvals are not available on OS Next yet.")
           .foregroundStyle(.secondary)
           .font(.callout)
           .padding(.vertical, 4)
@@ -681,7 +753,7 @@ struct DropdownView: View {
         if let project = controller.project {
           Text(project).font(.caption).foregroundStyle(.secondary)
         }
-        Text(controller.keyLabel.map { "signing with \($0)" } ?? "approvals are unsigned — enroll a key")
+        Text("OS Next")
           .font(.caption2).foregroundStyle(.secondary)
       }
     }
@@ -756,22 +828,32 @@ enum ApprovalNotifications {
 // MARK: - App
 
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+  private var receivedConfiguration = false
+
+  // `open -a Iterate.app menubar.json` delivers this even to a running app.
+  // Unlike launch arguments it can safely retarget the existing menu bar.
+  func application(_ sender: NSApplication, openFiles filenames: [String]) {
+    do {
+      guard filenames.count == 1, let path = filenames.first else {
+        throw CocoaError(.fileReadInvalidFileName)
+      }
+      let data = try Data(contentsOf: URL(fileURLWithPath: path))
+      let config = try JSONDecoder().decode(MenuBarConfig.self, from: data)
+      ComputerController.shared.configure(config)
+      ApprovalController.shared.configure(config)
+      receivedConfiguration = true
+      sender.reply(toOpenOrPrint: .success)
+    } catch {
+      ApprovalController.shared.lastError = "Could not load configuration: \(error.localizedDescription)"
+      sender.reply(toOpenOrPrint: .failure)
+    }
+  }
+
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)  // menu-bar only, no dock icon
 
-    // Actionable notifications are best-effort: only an app with a stable
-    // signing identity gets authorization. If it's granted we upgrade from the
-    // osascript ping to rich Approve/Reject banners; if not, nothing breaks.
-    if Bundle.main.bundleIdentifier != nil {
-      let center = UNUserNotificationCenter.current()
-      center.delegate = self
-      ApprovalNotifications.register(center)
-      center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
-        DispatchQueue.main.async { ApprovalController.shared.notificationsAuthorized = granted }
-      }
-    }
-
-    ApprovalController.shared.start()  // connect at launch, not on first open
+    // Approval notifications stay dormant until OS Next supports approvals.
+    if !receivedConfiguration { ApprovalController.shared.start() }
     // Computer sharing is opt-in — it stays idle until the human flips it on.
   }
 

@@ -8,6 +8,7 @@
     "src/sdk.ts",
     "src/client.ts",
     "src/node.ts",
+    "src/next-node.ts",
     "src/starter-apps/flake-dashboard/contract.ts",
     "src/starter-apps/flake-dashboard/index.ts",
     "src/starter-apps/github-ai-linter/index.ts",

@@ -29,24 +29,19 @@ Put the environment bootstrap in a small, documented TypeScript script:
 From an app directory that has Doppler setup:
 
 ```bash
-pnpm cli itx --help
+pnpm cli --help
 ```
 
 Target a specific config explicitly:
 
 ```bash
-doppler run --config prd -- pnpm cli itx --help
-doppler run --config preview_3 -- pnpm cli itx --help
+doppler run --config prd -- pnpm cli --help
+doppler run --config preview_3 -- pnpm cli --help
 ```
 
-Local operational commands should also live under `pnpm cli`, not as
-environment-pinning package scripts. For example, running an itx script goes
-through the local script router:
-
-```bash
-pnpm cli itx run --eval 'return await itx.whoami()'
-doppler run --project os --config prd -- pnpm cli itx run --eval 'return await itx.whoami()'
-```
+Local operational commands live under `pnpm cli`, not environment-pinning
+package scripts. The old `pnpm cli itx` wrapper is retired; use the published
+OS Next CLI's `iterate repl` or `iterate itx run` against OS Next.
 
 Do not put `--project os` or `--config prd` in the default script. That makes
 plain local commands surprisingly target production and bypasses the user's
