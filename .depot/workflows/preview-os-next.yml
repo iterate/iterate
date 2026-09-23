@@ -281,6 +281,29 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           overwrite: true
+      # THE BROWSER EVIDENCE (docs/depot-ci.md#browser-reports-from-artifacts), whatever the suite's
+      # outcome: everything the run wrote under test-results/ — each failed spec's trace.zip,
+      # screenshot and error-context.md under playwright-output/, playwright-results.json, the
+      # telemetry — and Playwright's HTML report on its own. `depot ci artifacts download` fetches
+      # either; `pnpm exec playwright show-report` / `show-trace` open them.
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-os-test-artifacts
+          path: test-results
+          include-hidden-files: true
+          if-no-files-found: error
+          overwrite: true
+      - name: Upload public Playwright HTML report
+        if: ${{ always() && hashFiles('test-results/playwright-html/index.html') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-playwright-report
+          path: test-results/playwright-html
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
 
   # AFTER EVERY SUITE, on a small runner so the big one is not held idle through the wait: the
   # residency gate (apps/os/scripts/preview-residency.ts) waits until the Durable Object

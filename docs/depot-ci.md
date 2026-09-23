@@ -476,10 +476,20 @@ failures, and the check keeps the actual test outcome: a report link means the
 report is available, nothing more. Links use Depot artifact UUIDs and expire
 with their 30-day retention. Upload only files intended to be public.
 
-Today the Preview OS e2e job prints Playwright's report into the job log after
-Vitest's and uploads no HTML report. The Test workflow uploads
-`unit-test-telemetry` and `flake-records-unit`; fetch those with
-`depot ci artifacts` as shown above.
+The Preview OS e2e job prints Playwright's report into the job log after
+Vitest's, and uploads two artifacts even when the suite fails:
+
+- `public-playwright-report`: Playwright's HTML report
+  (`test-results/playwright-html`), kept 30 days.
+- `preview-os-test-artifacts`: all of `test-results/`. Each failed spec's
+  `trace.zip`, screenshot and `error-context.md` are under
+  `playwright-output/<test>/`, next to `playwright-results.json` and the
+  telemetry.
+
+Fetch either with `depot ci artifacts` as shown above, unzip, and open it with
+`pnpm exec playwright show-report <dir>` or
+`pnpm exec playwright show-trace <trace.zip>`. The Test workflow uploads
+`unit-test-telemetry` and `flake-records-unit`.
 
 The legacy preview finalizer uploaded the merged Playwright HTML directory as
 `public-playwright-report`. The legacy platform's `iterate` config project

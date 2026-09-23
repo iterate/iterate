@@ -458,6 +458,31 @@ describe("Depot validation capacity", () => {
     },
   );
 
+  test("the preview e2e job keeps the browser evidence, whatever the suite's outcome", () => {
+    const steps = loadWorkflow(".depot/workflows/preview-os-next.yml").jobs.e2e?.steps ?? [];
+    const playwrightConfig = readFileSync(resolve(repoRoot, "playwright.config.ts"), "utf8");
+    const suite = steps.find((step) => step.run?.includes("pnpm preview e2e"));
+    const results = steps.find((step) => step.with?.name === "preview-os-test-artifacts");
+    const report = steps.find((step) => step.with?.name === "public-playwright-report");
+
+    // the root config writes per-test output (traces, screenshots, error context) and the HTML
+    // report under the directory the job uploads
+    expect(playwrightConfig).toContain('outputDir: "test-results/playwright-output"');
+    expect(playwrightConfig).toContain('outputFolder: "test-results/playwright-html"');
+    expect(results).toMatchObject({
+      if: "always()",
+      uses: "actions/upload-artifact@v4",
+      with: expect.objectContaining({ path: "test-results" }),
+    });
+    expect(report).toMatchObject({
+      if: expect.stringContaining("always()"),
+      uses: "actions/upload-artifact@v4",
+      with: expect.objectContaining({ path: "test-results/playwright-html" }),
+    });
+    expect(steps.indexOf(suite!)).toBeLessThan(steps.indexOf(results!));
+    expect(steps.indexOf(suite!)).toBeLessThan(steps.indexOf(report!));
+  });
+
   test("labels unit artifacts with the exact checked-out pull-request head", () => {
     const runTests = loadWorkflow(".depot/workflows/test.yml").jobs.test.steps?.find(
       (step) => step.name === "Run Tests",

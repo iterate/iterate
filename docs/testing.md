@@ -356,9 +356,12 @@ for it. The Playwright config additionally honors the Playwright-conventional
   `playwright-results.json`.
 - **Preview CI** writes the deployed preview's summary to
   `apps/os/output/preview.json` and the URLs into the PR body. Its `e2e` job
-  uploads `preview-test-telemetry` (the canonical telemetry of both runners)
-  and the `flake-records-specs` and `flake-records-preview-e2e` artifacts,
-  even when a suite fails.
+  uploads `preview-test-telemetry` (the canonical telemetry of both runners),
+  the `flake-records-specs` and `flake-records-preview-e2e` artifacts, the
+  Playwright HTML report (`public-playwright-report`) and all of
+  `test-results/` (`preview-os-test-artifacts`: failed specs' traces,
+  screenshots and error context), even when a suite fails. Fetch them with
+  `depot ci artifacts` ([Depot CI](depot-ci.md#browser-reports-from-artifacts)).
 
 ## Where test helpers live
 
