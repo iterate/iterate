@@ -13,7 +13,16 @@ type PreviewWorkflow = {
       name?: string;
       needs?: string | string[];
       "runs-on"?: { size?: string };
-      steps?: Array<{ id?: string; run?: string; if?: string; uses?: string }>;
+      outputs?: Record<string, string>;
+      steps?: Array<{
+        id?: string;
+        name?: string;
+        run?: string;
+        if?: string;
+        uses?: string;
+        with?: { ref?: string };
+        env?: Record<string, string>;
+      }>;
     }
   >;
 };
@@ -31,6 +40,27 @@ describe("the OS-Next preview workflow", () => {
     expect(preview.jobs.e2e.steps?.map((step) => step.run)).toContain(
       "doppler run -- pnpm preview e2e",
     );
+  });
+
+  test("deploys the PR merged into main, and e2e and residency use that very commit", () => {
+    const deploySteps = preview.jobs.deploy.steps || [];
+    const resolve = deploySteps.findIndex((step) => step.id === "tested");
+    const deploy = deploySteps.findIndex((step) => step.run?.includes('pnpm preview "$ACTION"'));
+    expect(deploySteps[resolve]?.run).toBe("node scripts/ci/preview-tested-commit.ts");
+    // resolved before anything is installed or deployed from the checkout
+    expect(resolve).toBeLessThan(
+      deploySteps.findIndex((step) => step.name === "Reconcile dependencies (baked)"),
+    );
+    expect(resolve).toBeLessThan(deploy);
+    expect(deploySteps[deploy]?.env?.PREVIEW_TESTED_COMMIT).toBe(
+      "${{ steps.tested.outputs.description }}",
+    );
+    expect(preview.jobs.deploy.outputs?.["tested-sha"]).toBe("${{ steps.tested.outputs.sha }}");
+    const checkoutRef = (jobId: string) =>
+      preview.jobs[jobId]?.steps?.find((step) => step.uses === "actions/checkout@v4")?.with?.ref;
+    expect(checkoutRef("e2e")).toMatch(/^\$\{\{ needs\.deploy\.outputs\.tested-sha \|\| /);
+    expect(preview.jobs.e2e.outputs?.["tested-sha"]).toBe("${{ steps.tested-sha.outputs.sha }}");
+    expect(checkoutRef("residency")).toBe("${{ needs.e2e.outputs.tested-sha }}");
   });
 
   test("reads the preview's residency after every suite, then always releases it, in that order", () => {

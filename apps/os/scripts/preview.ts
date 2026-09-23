@@ -197,19 +197,30 @@ function requireEnv(name: string): string {
   return value;
 }
 
+/** A GitHub 5xx is asked again twice, 5 s apart: every call here is a read or a whole-body write,
+ *  so a repeat is harmless, and one 500 had failed a residency job whose gate had passed (#2911). */
 async function github<T = unknown>(route: string, init: { method?: string; body?: unknown } = {}) {
-  const response = await fetch(`https://api.github.com${route}`, {
-    method: init.method || "GET",
-    headers: {
-      accept: "application/vnd.github+json",
-      authorization: `Bearer ${requireEnv("GITHUB_TOKEN")}`,
-      "user-agent": "os-next-preview",
-      ...(init.body !== undefined && { "content-type": "application/json" }),
-    },
-    body: init.body === undefined ? undefined : JSON.stringify(init.body),
-  });
+  const method = init.method || "GET";
+  let response: Response;
+  for (let attempt = 1; ; attempt++) {
+    response = await fetch(`https://api.github.com${route}`, {
+      method,
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${requireEnv("GITHUB_TOKEN")}`,
+        "user-agent": "os-next-preview",
+        ...(init.body !== undefined && { "content-type": "application/json" }),
+      },
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    });
+    if (response.status < 500 || attempt === 3) break;
+    console.log(
+      `GitHub ${method} ${route} answered ${response.status}; asking again (${attempt}/3)`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
   if (!response.ok) {
-    throw new Error(`GitHub ${init.method || "GET"} ${route} failed with ${response.status}`);
+    throw new Error(`GitHub ${method} ${route} failed with ${response.status}`);
   }
   // GitHub's REST shapes are stable and documented; each caller declares the two or three fields it reads.
   return (await response.json()) as T;
@@ -648,6 +659,8 @@ async function deployPreview(
       slug,
       dashboardUrl: `https://dash.cloudflare.com/${PREVIEW_PARENT.cloudflareAccountId}/workers/services/view/${PREVIEW_PARENT.workerName}/production/previews/${slug}`,
       apps: appPreviews,
+      // the workflow's scripts/ci/preview-tested-commit.ts: the PR merged into main, or the head alone
+      testedCommit: process.env.PREVIEW_TESTED_COMMIT,
     };
     mkdirSync(OUTPUT_DIR, { recursive: true });
     writeFileSync(path.join(OUTPUT_DIR, "preview.json"), `${JSON.stringify(summary, null, 2)}\n`);
@@ -850,22 +863,26 @@ async function residencyGate(
       await sleepUntil(Date.now() + 15_000);
     }
   };
-  // The window's last minute is complete about two minutes after the window ends (measured
-  // 2026-09-23; durableObjectAnalyticsCoverWindow). An idle account reports no newer minute at all,
-  // so the wait also ends five minutes after the window does.
+  // The window's last minute is complete about two minutes after the window ends, and a new
+  // preview's own data can trail the account's by a quarter of an hour (measured 2026-09-23;
+  // durableObjectAnalyticsCoverWindow). An idle account reports no newer minute at all, so the wait
+  // also ends fifteen minutes after the window does.
   const firstRead = window.end.getTime() + 2 * 60_000;
-  const deadline = window.end.getTime() + 5 * 60_000;
+  const deadline = window.end.getTime() + 15 * 60_000;
   console.log(
     `suite ${suite.started.toISOString()} → ${suite.ended.toISOString()}; reading the window ${window.start.toISOString()} → ${window.end.toISOString()} over ${namespaces.length} namespaces of ${previewName}, from ${new Date(firstRead).toISOString()}`,
   );
   await sleepUntil(firstRead);
   let account = await read();
-  while (!durableObjectAnalyticsCoverWindow(account, window) && Date.now() < deadline) {
+  while (
+    !durableObjectAnalyticsCoverWindow(account, window, suite.ended) &&
+    Date.now() < deadline
+  ) {
     await sleepUntil(Date.now() + 30_000);
     account = await read();
   }
   console.log(
-    `the account's newest analytics minute: ${account.newestMinute[0]?.dimensions.datetimeMinute ?? "none since the window started"}`,
+    `the account's newest analytics minute: ${account.newestMinute[0]?.dimensions.datetimeMinute ?? "none since the window started"}; the preview's: ${account.previewNewestMinute[0]?.dimensions.datetimeMinute ?? "none since the suite started"}`,
   );
   const verdict = durableObjectResidencyVerdict({ account, namespaces, window });
   console.log(`\n${renderDurableObjectResidency(verdict)}\n`);
