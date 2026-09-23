@@ -107,7 +107,7 @@ const repoRoot = resolve(import.meta.dirname, "..");
 const pluginPath = join(repoRoot, "lint", "oxlint-plugin-iterate.ts");
 const oxlintBin = join(repoRoot, "node_modules", ".bin", "oxlint");
 
-/** Same fixture shape as oxlint-plugin-itx-script.test.ts: a temp project
+/** Same fixture shape as oxlint-type-aware-plugin.test.ts: a temp project
  * with the real plugin armed, linted by the real oxlint binary. */
 function createOxlintFixture() {
   const root = mkdtempSync(join(tmpdir(), "iterate-oxlint-icon-button-"));
