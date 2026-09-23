@@ -128,6 +128,28 @@ export const osEnvs: Record<string, OsEnv> = {
       itxKvId: "82406b38cf9949048097dde599a0087c",
     },
   },
+  // THE PRD ACCOUNT'S THROWAWAY PARENT (.depot/workflows/main-os-e2e-prd-account.yml): main's e2e
+  // run repeated on the production Cloudflare account, in case that account's platform differs.
+  // Each run is a Worker Preview of this ONE fixed worker (workers are never deleted, so it is
+  // redeployed, never multiplied) with resources of its own, created and deleted by the run:
+  // nothing of prd's — no directory, no projects, no route or hostname, workers.dev only —
+  // and apps/os/scripts/preview-prd-guard.ts refuses any config that names a live prd resource.
+  // Doppler `prd` supplies the account's Cloudflare credentials only; the preview's app secrets
+  // are the `preview` config's test identities. Its own resources are never provisioned.
+  "prd-account-e2e": {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "os-prd-account-e2e",
+    baseUrl: "https://os-prd-account-e2e.iterate.workers.dev",
+    mcpBaseUrl: "https://os-prd-account-e2e.iterate.workers.dev/mcp",
+    ingressRouting: { type: "paths" },
+    artifactsNamespace: UNPROVISIONED,
+    resourceNamePrefix: "os-prd-account-e2e",
+    resources: {
+      oauthKvId: UNPROVISIONED,
+      itxKvId: UNPROVISIONED,
+    },
+  },
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
