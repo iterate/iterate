@@ -765,7 +765,7 @@ export class SubscriptionDelivery {
         try {
           const reserveChars = behindTheDurableMark
             ? CURSOR_READ_BUDGET_CHARS
-            : RECENT_EPHEMERALS_BUDGET_CHARS;
+            : Math.max(RECENT_EPHEMERALS_BUDGET_CHARS, this.#stream.recentEphemeralsChars());
           await this.#cursorReadCharsInFlight.acquire(reserveChars);
           inFlightRoomHeld = reserveChars;
           // A durable that landed while an at-mark row waited for room put it behind the mark: this
@@ -794,6 +794,25 @@ export class SubscriptionDelivery {
             );
             return;
           }
+          // Ephemerals the ring let go of before this row read them are lost to it (nothing
+          // redelivers an ephemeral) — and said, as a dropped push is.
+          const owedAfterOffset = Math.max(cursor.confirmedOffset, row.configuredAtOffset);
+          const lostThroughOffset = Math.max(
+            0,
+            ...(row.consumes ?? []).map(
+              (type) => this.#stream.evictedEphemeralThroughOffset(type) ?? 0,
+            ),
+          );
+          if (lostThroughOffset > owedAfterOffset)
+            console.warn({
+              event: "delivery.cursor.ephemerals-evicted",
+              namespace: "subscription-delivery",
+              message:
+                "a cursor subscriber did not keep up: the ring let go of ephemerals it had not read",
+              name,
+              owedAfterOffset,
+              lostThroughOffset,
+            });
           // What this delivery hands over: the log's proof, or the head ephemeral past it — an
           // offset that lives in memory only, which is where the cursor keeps it.
           const through = Math.max(page.scannedThroughOffset, page.events.at(-1)?.offset ?? 0);

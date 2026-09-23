@@ -36,7 +36,11 @@ import { codedError } from "iterate/next/lib";
 import type { StreamEvent, ScannedRange } from "iterate/next/stream/processor";
 import { AlarmCoordinator } from "../alarm-coordinator.ts";
 import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
-import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
+import {
+  RECENT_EPHEMERALS_BUDGET_CHARS,
+  Stream,
+  type DurableObjectStorageSlice,
+} from "./stream.ts";
 import { SubscriptionDelivery } from "./subscription-delivery.ts";
 import { normalizeControlEvent } from "./core-processor.ts";
 
@@ -1116,6 +1120,61 @@ describe("the delivery loop's claim on the DO's alarm (`deadlines()`): exactly t
       ["s", { confirmedOffset: durable.offset, attempt: 0 }],
     ]);
     expect(rig.delivery.deadlines()).toEqual([]);
+  });
+
+  test("an ephemeral over the ring's whole budget reaches a caught-up cursor row, as it reaches a push row", async () => {
+    const rig = parkedSinkRig();
+    rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+    await settled();
+    await rig.release(); // caught up, at the durable mark
+    rig.stream.append({
+      type: "demo/ping",
+      ephemeral: true,
+      payload: { n: 2, blob: "x".repeat(RECENT_EPHEMERALS_BUDGET_CHARS + 1024) },
+    });
+    await settled();
+    const delivered = rig.pushes.slice();
+    await rig.release();
+    expect(delivered, "a cursor row should receive an ephemeral over the ring's budget").toEqual([
+      [1],
+      [2],
+    ]);
+  });
+
+  test("ephemerals the ring evicts before a busy cursor row reads them are reported, as the push lane reports its drops", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const rig = parkedSinkRig();
+      rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+      await settled(); // n=1 is in flight, parked
+      // ~400 KiB each: the third evicts the first from the 1 MiB ring before the row reads on
+      const [lost] = rig.stream.append({
+        type: "demo/ping",
+        ephemeral: true,
+        payload: { n: 2, blob: "x".repeat(400 * 1024) },
+      });
+      for (const n of [3, 4])
+        rig.stream.append({
+          type: "demo/ping",
+          ephemeral: true,
+          payload: { n, blob: "x".repeat(400 * 1024) },
+        });
+      await rig.release(); // acks n=1; the loop reads the ring, which no longer holds n=2
+      await rig.release();
+      expect(rig.pushes).toEqual([[1], [3, 4]]); // the loss itself is the contract
+      expect(
+        warn,
+        "the ring's eviction of ephemerals a cursor row had not read should be reported",
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "delivery.cursor.ephemerals-evicted",
+          name: "s",
+          lostThroughOffset: lost.offset,
+        }),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test("a pass that finds a call in flight WAITS for it: the deadline it leaves is derived after the ack — never a claim now past, never one for a row since caught up", async () => {
