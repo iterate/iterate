@@ -166,6 +166,18 @@ describe("the preview's wrangler config (a pure transform of wrangler.base.jsonc
       "os-next-preview-pr123-feature-foo-db",
     );
   });
+
+  test("a deployed Dash is available to secret collection link generation", () => {
+    const dashOrigin = "https://pr123-feature-foo-dash-preview.iterate-dev-preview.workers.dev";
+    const withDash = previewWranglerConfig({
+      template,
+      previewName: "pr123-feature-foo",
+      d1DatabaseId: "d1-id",
+      dashOrigin,
+    });
+    expect(withDash.previews.vars.APP_CONFIG_URLS__DASH).toBe(dashOrigin);
+    expect(config.previews.vars).not.toHaveProperty("APP_CONFIG_URLS__DASH");
+  });
 });
 
 describe("which apps on top a change touches (cloudflare-os previews all; ours only the changed)", () => {
