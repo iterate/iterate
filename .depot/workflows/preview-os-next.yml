@@ -1,8 +1,12 @@
 # ONE PREVIEW PER PULL REQUEST of apps/os-next, on Cloudflare Worker Previews — the shape of
 # cloudflare/cloudflare-os's .github/workflows/preview.yml, cut down to one worker and run on Depot.
-# The script is apps/os-next/scripts/preview.ts; it deploys a preview named `pr<n>-<branch slug>`
-# of the parent worker os-next-preview, runs the e2e suite against it, writes the URL and the
-# operations into the PR body, deletes it when the PR closes, and sweeps nightly.
+# The script is apps/os-next/scripts/preview.ts. One job per operation, named for when it runs:
+#   deploy              every push: deploys a preview named `pr<n>-<branch slug>` of the parent
+#                       worker os-next-preview and writes the URL and the operations into the PR body
+#   e2e                 after deploy succeeds: the e2e suite and the Playwright specs against it
+#   delete (PR closed)  deletes the preview and everything it owned
+#   sweep (nightly)     deletes previews whose PR closed without a delete, or that went stale
+# On a push, "delete" and "sweep" skip by design; "e2e" skips only when deploy did not succeed.
 #
 # Depot registers automatic triggers when this file is on the default branch. Test a branch with:
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
@@ -11,7 +15,8 @@
 # Every operation the PR body lists is a dispatch: action = deploy | reset | e2e | delete | sweep,
 # apps = all | auto | none (the apps on top: dash, agents, notes, voice). Pull-request runs use
 # all so every client is usable against the platform preview; auto remains available for a faster
-# targeted manual redeploy once the clients are already present.
+# targeted manual redeploy once the clients are already present. action=deploy or reset runs the
+# deploy job and then e2e, as a push does; action=e2e runs e2e alone.
 #
 # Concurrency per PR, never cancelled: a half-applied preview is worse than a slow one (their words).
 # The only Depot secret is DOPPLER_TOKEN; Doppler project-worker/preview supplies the Cloudflare
@@ -88,7 +93,7 @@ env:
 
 jobs:
   deploy:
-    name: Preview OS-Next / deploy
+    name: deploy
     if: >-
       (github.event_name == 'pull_request' && github.event.action != 'closed') ||
       (github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '' && (inputs.action == 'deploy' || inputs.action == 'reset'))
@@ -120,24 +125,19 @@ jobs:
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
           PREVIEW_APPS: ${{ inputs.apps || 'all' }}
         run: doppler run -- pnpm preview "$ACTION"
-      # THE FULL MUTATING PROOF (docs/testing.md): this isolated preview owns the project-creating
-      # e2e and browser suites. Production deployment runs only its deploy-script readiness probes.
-      - name: Run the e2e suite against the preview
-        working-directory: apps/os-next
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          PREVIEW_NAME: ${{ github.head_ref }}
-          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
-          E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: doppler run -- pnpm preview e2e
 
-  # The suite alone, against the live preview: dispatch with action=e2e.
+  # THE FULL MUTATING PROOF (docs/testing.md): this isolated preview owns the project-creating
+  # e2e and browser suites. Production deployment runs only its deploy-script readiness probes.
+  # It runs after every deploy that succeeded, and alone against the live preview on a dispatch
+  # with action=e2e, where deploy is skipped: `always()` is what lets it start behind a skipped
+  # deploy, `needs.deploy.result` what keeps it off a failed or cancelled one.
   e2e:
-    name: Preview OS-Next / e2e
+    name: e2e
+    needs: deploy
     if: >-
-      github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '' && inputs.action == 'e2e'
+      always() &&
+      (needs.deploy.result == 'success' ||
+      (github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '' && inputs.action == 'e2e'))
     runs-on:
       size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
@@ -166,7 +166,7 @@ jobs:
         run: doppler run -- pnpm preview e2e
 
   cleanup:
-    name: Preview OS-Next / delete
+    name: delete (PR closed)
     if: >-
       (github.event_name == 'pull_request' && github.event.action == 'closed') ||
       (github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '' && inputs.action == 'delete')
@@ -199,7 +199,7 @@ jobs:
         run: doppler run -- pnpm preview delete
 
   sweep:
-    name: Preview OS-Next / sweep
+    name: sweep (nightly)
     if: >-
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_dispatch' && inputs.action == 'sweep')
