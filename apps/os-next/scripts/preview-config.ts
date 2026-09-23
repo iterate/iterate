@@ -88,9 +88,29 @@ export function previewUrl(previewName: string): string {
 export const previewResourceName = (previewName: string, binding: string): string =>
   `${PREVIEW_PARENT.workerName}-${previewName}-${binding}`;
 
+/** The account resources a preview owns: the four kinds `previewResourceSuffixes` names. */
+export type PreviewResourceKind = "kv" | "r2" | "d1" | "artifacts";
+
+/** The suffix of every resource a preview owns (`previewResourceName(preview, suffix)`), by kind:
+ *  the KV namespaces and the R2 bucket wrangler provisions for the template's bindings — the binding
+ *  lowercased, `_` → `-` (workers-sdk `getPreviewResourceName`: `ITX_KV` → `…-itx-kv`) — and the D1
+ *  and the Artifacts namespace scripts/preview.ts creates. What deletePreview deletes and the sweep
+ *  recognizes. */
+export function previewResourceSuffixes(
+  template = readWranglerTemplate(),
+): Record<PreviewResourceKind, string[]> {
+  const suffix = ({ binding }: { binding: string }) => binding.toLowerCase().replaceAll("_", "-");
+  return {
+    kv: template.kv_namespaces.map(suffix),
+    r2: template.r2_buckets.map(suffix),
+    d1: ["db"],
+    artifacts: ["repos"],
+  };
+}
+
 /** The preview a per-preview resource name encodes — `previewResourceName`'s inverse — or undefined
  *  for a name of another shape: the parent's own (`os-next-preview-repos`), another worker's,
- *  another binding's. How the sweep reads a leftover D1 or Artifacts namespace (scripts/preview.ts). */
+ *  another binding's. How the sweep reads a leftover resource (scripts/preview-sweep.ts). */
 export function previewNameOfResource(resourceName: string, binding: string): string | undefined {
   const prefix = `${PREVIEW_PARENT.workerName}-`;
   const suffix = `-${binding}`;
@@ -234,11 +254,11 @@ export function writePreviewWranglerConfig(input: {
   return writeGeneratedWranglerConfig({
     configUrl: new URL(`../${PREVIEW_CONFIG_NAME}`, import.meta.url),
     appLabel: "apps/os-next (one per-PR Worker Preview; scripts/preview.ts)",
-    config: previewWranglerConfig({
-      template: JSON5.parse(
-        readFileSync(new URL("../wrangler.base.jsonc", import.meta.url), "utf8"),
-      ),
-      ...input,
-    }),
+    config: previewWranglerConfig({ template: readWranglerTemplate(), ...input }),
   });
+}
+
+/** wrangler.base.jsonc, the template every preview's config and resource names derive from. */
+function readWranglerTemplate(): Record<string, any> {
+  return JSON5.parse(readFileSync(new URL("../wrangler.base.jsonc", import.meta.url), "utf8"));
 }

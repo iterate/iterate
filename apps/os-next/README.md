@@ -190,6 +190,10 @@ previews itself: a preview named `pr<n>-<branch slug>` is a branch of the parent
 KV, R2, D1 and an Artifacts namespace of its own (all deleted with it), at `https://pr<n>-<slug>-os-next-preview.iterate-dev-preview.workers.dev`.
 `.depot/workflows/preview-os-next.yml` deploys it on every push, runs `pnpm e2e` against it, writes the
 URL and the operations below into the PR body, deletes it when the PR closes, and sweeps nightly.
+The sweep deletes a preview whose PR is closed, a preview named without a PR number once a day has
+passed since its last deploy and no open PR's branch carries its name, and any preview a week past
+its last deploy; then every KV namespace, R2 bucket, D1 and Artifacts namespace named for a preview
+that no longer exists. The rules, and the table that pins them, are `scripts/preview-sweep.ts`.
 Previews live on workers.dev and have no project hosts; the e2e rows that need one skip.
 
 `scripts/preview.ts` is the whole thing (run in this directory, under the parent's Doppler config):
