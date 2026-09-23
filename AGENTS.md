@@ -19,6 +19,7 @@ pnpm spec                # platform browser specs
 Read when relevant:
 
 - [Repository map](README.md) · [Platform](apps/os/README.md) · [Kit firmware](apps/kit/firmware/AGENTS.md)
+- [Dev environments](docs/dev-environments.md): local dev, per-PR previews, and acting as users and operators
 - [Testing](docs/testing.md) · [Vitest patterns](docs/vitest-patterns.md)
 - TypeScript style: [coding style](docs/coding-style.md) · [conventions](docs/typescript-conventions.md) · [code rules](docs/jonasland-rules.md) · [identifiers](docs/identifiers.md)
 - [Brand and tone of voice](docs/brand-and-tone-of-voice.md) for user-facing copy
