@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import { previewResourceSuffixes, type PreviewResourceKind } from "./preview-config.ts";
 import {
   planPreviewSweep,
+  supersededMainPreviews,
   type PreviewSweepInput,
   type PullRequestState,
 } from "./preview-sweep.ts";
@@ -153,4 +154,20 @@ describe("which resources are orphans (rules 4–6); previews soak and pr2847-x 
     expect(plan.previews).toEqual([expect.objectContaining({ name: "pr7-x", verdict: "stale" })]);
     expect(plan.orphans).toEqual([]);
   });
+});
+
+test.each<[string, string[], string, string[]]>([
+  // a cancelled run's leftover goes; the run's own stays
+  ["one superseded", ["main-44db0e6", "main-7ea6741"], "main-7ea6741", ["main-44db0e6"]],
+  [
+    "several",
+    ["main-aaaaaaa", "main-bbbbbbb", "main-ccccccc"],
+    "main-ccccccc",
+    ["main-aaaaaaa", "main-bbbbbbb"],
+  ],
+  // PR previews and hand-named ones are never main's, even when they begin `main-`
+  ["PR and branch previews", ["pr7-x", "main-branch", "main", "soak"], "main-7ea6741", []],
+  ["only the run's own", ["main-7ea6741"], "main-7ea6741", []],
+])("main's superseded throwaway previews: %s", (_label, names, current, superseded) => {
+  expect(supersededMainPreviews(names, current)).toEqual(superseded);
 });

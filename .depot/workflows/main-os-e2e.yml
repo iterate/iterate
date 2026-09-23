@@ -2,9 +2,10 @@
 # deploys a THROWAWAY Worker Preview of apps/os named `main-<short sha>`, with fresh resources of its
 # own (KV, R2, Artifacts namespace, Durable Object namespaces) and the four clients on top, runs
 # the e2e suite, the browser specs and the residency gate against it, then DELETES the preview and
-# everything it created. Nothing it makes outlives the run: a cancelled or failed run still deletes
-# (the `delete` job runs always), and the nightly sweep of preview-os-next.yml deletes a PR-less
-# preview a day after its last deploy as the backstop.
+# everything it created. A failed run still deletes (the `delete` job runs always). A cancelled
+# run's queued jobs are cancelled with it, `delete` included, so the run that superseded it deletes
+# every other `main-<sha>` preview before it deploys; the nightly sweep of preview-os-next.yml
+# deletes a PR-less preview a day after its last deploy as the backstop.
 #
 # A newer push cancels the run in progress: only the latest main is tested. The `alert` job pages
 # #error-pulse only when main changes state — once when it goes red, naming the failing rows, once
@@ -114,6 +115,14 @@ jobs:
         run: doppler setup --config preview --project project-worker
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      # cancel-in-progress cancels a superseded run's queued jobs, its `always()` delete included
+      # (main-44db0e6, 2026-09-23): this run deletes every other `main-<sha>` preview first.
+      - name: Delete superseded runs' previews
+        working-directory: apps/os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          PREVIEW_NAME: ${{ steps.name.outputs.preview-name }}
+        run: doppler run -- pnpm preview delete-superseded
       - name: Deploy the throwaway preview
         working-directory: apps/os
         env:
