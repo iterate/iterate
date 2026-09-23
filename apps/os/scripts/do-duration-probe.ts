@@ -28,6 +28,8 @@
 //   --json                    human report moves to stderr; stdout carries one
 //                             ProbeSummary JSON line (for the CI alert wrapper)
 
+import { z } from "zod";
+
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (value === undefined || value === "") throw new Error(`Missing required env var ${name}`);
@@ -201,11 +203,15 @@ async function topNamespacesInTrailingHour(input: {
     `https://api.cloudflare.com/client/v4/accounts/${input.accountTag}/workers/durable_objects/namespaces?per_page=1000`,
     { headers: { Authorization: `Bearer ${input.apiToken}` } },
   );
-  // The same `{ success, result }` envelope as proveCredentials below; only
-  // `id` and `name` are read. A drifted shape leaves every namespace under
-  // its bare id — less readable, never a wrong number.
-  const listing = (await response.json()) as { result?: Array<{ id: string; name: string }> };
-  const names = new Map((listing.result || []).map((namespace) => [namespace.id, namespace.name]));
+  // Only `id` and `name` are read. A listing that fails or drifts in shape
+  // leaves every namespace under its bare id: less readable, never a wrong
+  // number and never a lost reading.
+  const listing = z
+    .object({ result: z.array(z.object({ id: z.string(), name: z.string() })) })
+    .safeParse(await response.json().catch(() => null));
+  const names = new Map(
+    (listing.success ? listing.data.result : []).map((namespace) => [namespace.id, namespace.name]),
+  );
   return rows.map((row) => ({
     namespace: names.get(row.dimensions.namespaceId) || row.dimensions.namespaceId,
     doHours: Math.round(row.sum.activeTime / 3600e6),
