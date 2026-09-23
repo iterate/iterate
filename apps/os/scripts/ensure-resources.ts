@@ -100,8 +100,8 @@ export default async function ensureResources(options: { env?: string } = {}) {
           ssl: {
             method: current.ssl.method,
             type: current.ssl.type,
-            ...(current.ssl.wildcard === undefined ? {} : { wildcard: current.ssl.wildcard }),
-            settings: current.ssl.settings ?? ssl.settings,
+            wildcard: current.ssl.wildcard,
+            settings: current.ssl.settings || ssl.settings,
           },
         }),
       });

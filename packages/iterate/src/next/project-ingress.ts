@@ -83,7 +83,7 @@ export function customProjectHostOf(
   const wildcardMatch =
     suffix && normalized.endsWith(suffix) ? normalized.slice(0, -suffix.length) : null;
   const project =
-    exact ?? (wildcardMatch && !wildcardMatch.includes(".") ? wildcard?.project : null);
+    exact || (wildcardMatch && !wildcardMatch.includes(".") ? wildcard?.project : null);
   return project ? { app: null, project } : null;
 }
 
